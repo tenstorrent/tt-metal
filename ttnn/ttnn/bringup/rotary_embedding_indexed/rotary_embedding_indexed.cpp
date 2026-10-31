@@ -5,6 +5,7 @@
 #include "rotary_embedding_indexed.hpp"
 
 #include "device/rotary_embedding_indexed_device_operation.hpp"
+#include "device/rope_chain_device_operation.hpp"
 
 namespace ttnn::operations::bringup::rotary_embedding_indexed {
 
@@ -24,7 +25,35 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<ttnn::Tensor>& concat_prefix,
     bool uniform,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<CoreCoord> max_grid) {
+    std::optional<CoreCoord> max_grid,
+    uint32_t input_heads,
+    const std::optional<tt::tt_metal::Layout>& output_layout,
+    const std::optional<tt::tt_metal::DataType>& output_dtype,
+    uint32_t group_heads) {
+    const bool chain = input_heads > 0 || output_layout.has_value() || output_dtype.has_value() || group_heads > 1 ||
+                       input.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+    if (chain) {  // bring-up chain mode (P.22): one fused program, device/rope_chain_device_operation.hpp
+        TT_FATAL(
+            kv_actual_global == 0 && !seq_subshard_axis.has_value() && !concat_prefix.has_value(),
+            "rotary_embedding_indexed chain mode (input_heads / output_layout / output_dtype / group_heads / a "
+            "ROW_MAJOR input) needs kv_actual_global 0, no seq_subshard_axis and no concat_prefix");
+        TT_FATAL(rotary_dim.has_value(), "rotary_embedding_indexed chain mode needs rotary_dim");
+        return ttnn::prim::bringup::rotary_embedding_indexed_chain(
+            input,
+            cos,
+            sin,
+            trans_mat,
+            input_heads,
+            *rotary_dim,
+            rotary_offset,
+            output_layout.value_or(tt::tt_metal::Layout::TILE),
+            output_dtype.value_or(input.dtype()),
+            group_heads,
+            memory_config,
+            compute_kernel_config,
+            output_tensor,
+            max_grid);
+    }
     return ttnn::prim::bringup::rotary_embedding_indexed(
         input,
         cos,

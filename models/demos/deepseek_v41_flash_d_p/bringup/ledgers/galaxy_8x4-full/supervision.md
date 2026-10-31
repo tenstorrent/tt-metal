@@ -1198,3 +1198,4 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
 - 10:52 F237 (framework, to fix): a released fix is placed before the first OPEN task (here the old FIX.13), not before the next runnable one, so P.21 started ahead of FIX.16. Aborted P.21 attempt 1 (no edits), P.21 deps += FIX.16, F236 committed.
 - 13:00 P.21: agent did #9 #7 #8, deferred #10 (two new kernels); the A/B was INVALID (TINY_KERNELS in tasks.yaml ab, not in the code). Removed it from P.21's ab, decide --rerun (no agent), #10 queued as P.24 after P.23; run --until P.24.
 - 14:20 P.21 ACCEPTED (delegation): -120 launches, device -1.1 / -1.4, wall -5.6 / -13.2 ms a chunk at 50k / 500k, accuracy unchanged; host gain below the estimate (~30 ms expected).
+- 16:20 P.22 ACCEPTED (delegation): device -16.1 / -11.6, wall -26.0 / -24.2, host -35 / -31 ms a chunk at 50k / 500k, -296 launches, accuracy unchanged. 50k chunk now ~235 ms wall / ~180 ms device.

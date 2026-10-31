@@ -324,7 +324,8 @@ def reserve_forks(model) -> None:
         if blk.kv.stock:
             blk.kv.rope_site = "fork.rope.kv"
             _reserve_fork(mesh, "fork.rope.kv", [1, 1, prow, blk.kv.k1 - blk.kv.k0], bf16)
-        if att is not None and att.stock and att.sp32:
+        # (ROPE_CHAINS=on, P.22: the q / output chains write sparse_sdpa's q and attn.oa, no rope outputs to keep)
+        if att is not None and att.stock and att.sp32 and settings.get("ROPE_CHAINS") != "on":
             att.rope_sites = ("fork.rope.q", "fork.rope.o")
             for s in att.rope_sites:
                 _reserve_fork(mesh, s, [1, att.h_l, q, att.d], bf16)

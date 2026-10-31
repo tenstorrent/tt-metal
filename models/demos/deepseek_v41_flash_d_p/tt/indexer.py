@@ -64,7 +64,7 @@ from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_dtype, gemm_input, tp_sum
 from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
-from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads, rope_stock
+from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_chain, rope_chains, rope_heads, rope_stock
 from .settings import settings
 
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
@@ -315,6 +315,8 @@ class TtIndexer:
         q = mm.linear(qq, self.wq_b, site="indexer.wq_b", dtype=qdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         if qq is not qr:  # (ATTN_SP32=on: qr itself when it is already the matmul's dtype)
             dealloc(qq)
+        if self.stock and rope_chains():
+            return self._query_chain(q, start)
         if self.stock:
             return self._query_stock(q, start)
         if self.rope.pairs is not None:
@@ -330,6 +332,33 @@ class TtIndexer:
         if out is not qr_:
             dealloc(qr_)
         return out
+
+    def _query_chain(self, q: ttnn.Tensor, start: int) -> ttnn.Tensor:
+        """ROPE_CHAINS=on (P.22): wq_b's bf16 output [1, 1, Sq, nh hd] (consumed) -> the index queries [1, nh, Sq, hd]
+        in ONE fork call (tt/rope.rope_chain): each head read straight from wq_b's tile columns, its [.., 64] tail
+        roped; INDEX_Q_FORMAT=bfp4: written as bfloat4_b rounded to nearest even (bfp_round's rule, bit for bit; the
+        caller's _round is skipped), under LOWBIT_HOST=on into the layer's persistent query buffer
+        (``self._q_kept``)."""
+        cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
+        self._q_kept = False
+        chain = {"input_heads": self.nh}
+        out = None
+        if self.q_bfp4:
+            chain["output_dtype"] = ttnn.bfloat4_b
+            if self.lowbit_host:  # (the buffer _round would have written: same key)
+                shape = (1, self.nh, int(q.shape[-2]), self.hd)
+                key = ("query", shape)
+                out = self._rounded.get(key)
+                if out is None:
+                    out = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(list(shape)), ttnn.bfloat4_b, ttnn.TILE_LAYOUT, self.mesh, DRAM
+                    )
+                    self._rounded[key] = out
+                self._q_kept = True
+        r = rope_chain(q, cos, sin, self.rope.trans, self.hd - self.rd, out=out, **chain)
+        self.rope.free(cos, sin)
+        dealloc(q)
+        return r
 
     def _query_stock(self, q: ttnn.Tensor, start: int) -> ttnn.Tensor:
         """ROPE_IMPL=on (P.17): wq_b's bf16 output [1, 1, Sq, nh hd] (consumed) -> the index queries [1, nh, Sq, hd]
@@ -381,7 +410,9 @@ class TtIndexer:
         w = self.gates(x)
         q = self.query(qr, start)
         q_kept = False  # (LOWBIT_HOST=on: q is the layer's persistent bfp_round buffer, never freed)
-        if self.q_bfp4:  # INDEX_Q_FORMAT=bfp4: the roped query on the bfloat4_b grid (nearest even)
+        if self.q_bfp4 and q.dtype == ttnn.bfloat4_b:  # ROPE_CHAINS=on (P.22): the rope wrote it rounded
+            q_kept = self._q_kept
+        elif self.q_bfp4:  # INDEX_Q_FORMAT=bfp4: the roped query on the bfloat4_b grid (nearest even)
             q4, q_kept = self._round(q, "query")
             dealloc(q)
             q = q4

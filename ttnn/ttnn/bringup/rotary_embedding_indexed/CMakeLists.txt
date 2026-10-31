@@ -29,6 +29,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/rotary_embedding_indexed_device_operation.cpp
+        device/rope_chain_device_operation.cpp
         rotary_embedding_indexed.cpp
 )
 

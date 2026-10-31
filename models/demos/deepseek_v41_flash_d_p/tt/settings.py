@@ -739,6 +739,19 @@ TABLE = {
         "and kv_actual_global 0 every chip reads row 0, so the programs are identical). Same kernels, same values. "
         "off = the stock ttnn.experimental.deepseek_prefill.rotary_embedding_indexed (32 programs a call on 8x4)",
     ),
+    "ROPE_CHAINS": Setting(
+        "on",
+        ("on", "off"),
+        "P.22 (galaxy 8x4, owner pick 2026-10-31, opportunities #2 and #4; ROPE_IMPL=on, ATTN_SP32_PROJ=on): on = the "
+        "RoPE chains as single ops of the fork ttnn.bringup.rotary_embedding_indexed (chain options input_heads / "
+        "output_layout / output_dtype / group_heads): the attention q reads each head straight from wq_b's [1, 1, S, "
+        "H 512] TILE output and writes sparse_sdpa's ROW_MAJOR q (no nlp_create_q_heads_split, no untilize); the "
+        "attention output reads sparse_sdpa's ROW_MAJOR output and writes wo_a's grouped bfloat8_b input (no "
+        "to_layout, nlp_concat_heads or typecast); the indexer q reads wq_b's output and writes the bfloat4_b query "
+        "rounded to nearest even (no split, no bfp_round). Same arithmetic, same bytes (fork tests "
+        "tests/unit/test_chain.py, bit-identical on 8x4). off = split -> rope -> untilize, to_layout -> rope -> "
+        "nlp_concat_heads -> typecast, split -> rope -> bfp_round (the path before P.22)",
+    ),
     "PREPARED_ALL": Setting(
         "on",
         ("on", "off"),

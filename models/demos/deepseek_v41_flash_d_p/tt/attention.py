@@ -87,7 +87,7 @@ from .common import (
     sum_cols,
 )
 from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
-from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads, rope_stock
+from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_chain, rope_chains, rope_heads, rope_stock
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
 
@@ -1164,11 +1164,10 @@ class TtWindowAttention:
         dealloc(ti)
         return q
 
-    def _q_stock(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """ROPE_IMPL=on (P.17): q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] bf16, checkpoint
-        (interleaved) order: the softmax scale 512^-0.5 folded into the bf16 cast of the input (one rounding, as the
-        cast was), wq_b writing bf16, the heads split by nlp_create_q_heads_split, ONE stock rotary op on the [.., 64]
-        tails with the nope prepended (tt/rope.rope_stock)."""
+    def _q_proj(self, q_resid: ttnn.Tensor) -> ttnn.Tensor:
+        """ROPE_IMPL=on (P.17): q_resid -> wq_b's bf16 output [1, 1, rows, H/TP 512] (every head of a chip's rows under
+        ATTN_SP32_PROJ): the softmax scale 512^-0.5 folded into the bf16 cast of the input (one rounding, as the cast
+        was), wq_b writing bf16."""
         # GEMM_INPUTS (FIX.7): the scale's multiply writes wq_b's input in bfloat8_b (the reference's fp8 act quant)
         # HOST_ALLOC=on (P.15): xq and qb written into load-time outputs (tt/host_alloc.py), when their spec has one
         if self.q_prescaled and q_resid.dtype == gemm_dtype():
@@ -1201,6 +1200,13 @@ class TtWindowAttention:
         )
         if xq is not q_resid:  # (the step's input: the block frees it)
             dealloc(xq)
+        return qb
+
+    def _q_stock(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """ROPE_IMPL=on (P.17): q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] bf16, checkpoint
+        (interleaved) order: wq_b (``_q_proj``), the heads split by nlp_create_q_heads_split, ONE stock rotary op on
+        the [.., 64] tails with the nope prepended (tt/rope.rope_stock)."""
+        qb = self._q_proj(q_resid)
         qn, qr = ttnn.bringup.nlp_create_q_heads_split(
             qb, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM, max_grid=max_grid()
         )
@@ -1219,6 +1225,23 @@ class TtWindowAttention:
             # (ATTN_SP32=on, P.10: q_resid is already the chip's own rows)
             if self.geo.tp > 1 and q_resid.shape[-2] != self.geo.q_rows:
                 xr = ttnn.mesh_partition(q_resid, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+            if rope_chains():
+                # ROPE_CHAINS=on (P.22): ONE fork call reads each head straight from wq_b's output (tile columns
+                # 16 h .. 16 h + 15), ropes its tail and writes sparse_sdpa's ROW_MAJOR q (no split, no untilize)
+                qb = self._q_proj(xr)
+                if xr is not q_resid:
+                    dealloc(xr)
+                q_rm = rope_chain(
+                    qb,
+                    cos,
+                    sin,
+                    self.rope.trans,
+                    self.d - self.rd,
+                    input_heads=self.h_l,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                dealloc(qb)
+                return q_rm
             qb = self._q_stock(xr, cos, sin)
             if xr is not q_resid:
                 dealloc(xr)
@@ -1287,6 +1310,24 @@ class TtWindowAttention:
     def _out(self, o_rm: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """sparse_sdpa output [1, H, S/(SP TP), 512] bf16 ROW_MAJOR -> attn_out [1, 1, S/SP, H/TP] (fp32; bf16 under
         ATTN_GLUE=on with CCL_IMPL=fabric_bf16)."""
+        if self.sp32 and rope_chains():
+            # ROPE_CHAINS=on (P.22): ONE fork call reads sparse_sdpa's ROW_MAJOR output, applies the inverse rope and
+            # writes wo_a's input: the heads of a wo_a group side by side, in its GEMM dtype (bfloat8_b packed as
+            # ttnn.typecast packs it; no to_layout, nlp_concat_heads or typecast)
+            rows = o_rm.shape[2]
+            odt = gemm_dtype()
+            out = host_alloc.out(self.mesh, "attn.oa", [1, self.g_l, rows, self.hpg * self.d], odt)  # (HOST_ALLOC)
+            oa = rope_chain(
+                o_rm,
+                cos,
+                sin,
+                self.rope.trans_inv,
+                self.d - self.rd,
+                out=out,
+                output_dtype=odt,
+                group_heads=self.hpg,
+            )
+            return self._out_wo(oa, rows)
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(o_rm))
         if self.sp32:  # ATTN_SP32_PROJ=on (P.9): every head of the chip's rows stays here
             oq = rope_stock(
@@ -1357,6 +1398,11 @@ class TtWindowAttention:
         oa = gemm_input(og, host_alloc.out(self.mesh, "attn.oa", og.shape, gemm_dtype()))  # (HOST_ALLOC, P.15)
         if oa is not og:
             dealloc(og)
+        return self._out_wo(oa, rows)
+
+    def _out_wo(self, oa: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+        """wo_a's input [1, G/TP, S/SP, hpg 512] in its GEMM dtype (consumed) -> wo_a -> wo_b -> attn_out (as
+        ``_out_proj``)."""
         # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it; GEMM_INPUTS=bfp8
         # (FIX.7): it writes wo_b's input as bfloat8_b (the reference's fp8 act quant of wo_b's input) directly
         ydt = gemm_dtype() if (self.glue and bf16_activations()) else ttnn.float32
