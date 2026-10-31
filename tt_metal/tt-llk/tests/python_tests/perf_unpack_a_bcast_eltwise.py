@@ -11,15 +11,10 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    DEST_SYNC,
-    MATH_FIDELITY,
-    MATH_OP,
-    SRCA_REUSE_COUNT,
-    TILE_COUNT,
-)
+from test_unpack_a_bcast_eltwise import run_unpack_a_bcast_eltwise
+
+# Custom unpack dvalid signaling supports only end-to-end and pack-isolated runs.
+_PERF_RUN_TYPES = [PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE]
 
 
 @skip_for_blackhole
@@ -36,6 +31,8 @@ from helpers.test_variant_parameters import (
         [128, 32],
         [64, 128],
     ],
+    run_types=[_PERF_RUN_TYPES],
+    is_perf=[True],
 )
 def test_perf_col_tile_sdpa(
     perf_report,
@@ -45,36 +42,22 @@ def test_perf_col_tile_sdpa(
     math_fidelity,
     input_dimensions,
     srca_reuse_count,
+    run_types,
+    is_perf,
 ):
 
     # MathFidelity is only used for Elwmul
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    tile_count = input_dimensions[0] * input_dimensions[1] // 1024
-
-    configuration = PerfConfig(
-        "sources/unpack_a_bcast_eltwise_perf.cpp",
+    run_unpack_a_bcast_eltwise(
         formats,
-        # For now only L1_TO_L1 and PACK_ISOLATE are supported because of custom usage of dvalid signals
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE],
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
-            DEST_SYNC(),
-        ],
-        runtimes=[TILE_COUNT(tile_count), SRCA_REUSE_COUNT(srca_reuse_count)],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
+        mathop,
         dest_acc=dest_acc,
+        math_fidelity=math_fidelity,
+        input_dimensions=input_dimensions,
+        srca_reuse_count=srca_reuse_count,
+        run_types=run_types,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
-
-    configuration.run(perf_report, run_count=10)
