@@ -528,7 +528,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto& groups = placement.at(coord).untilizers;
 
     // TT_CMBF2D_IDLE=1 is a measurement mode: only the collector is built, so the routed expert is timed as
-    // overlapped, released and reporting as usual, but with no combine traffic beside it.
+    // overlapped, released and reporting as usual, but with no combine traffic beside it. Read once per process,
+    // so it needs no place in the program hash: every program a process builds agrees with its cached ones.
     static const bool idle =
         std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
 

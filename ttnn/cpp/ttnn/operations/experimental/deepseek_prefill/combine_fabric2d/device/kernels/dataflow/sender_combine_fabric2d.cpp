@@ -38,8 +38,9 @@ constexpr bool LAUNCH_CREDIT = false;
 constexpr bool LAUNCH_CREDIT = true;
 #endif
 
-// Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
-// regardless, so this only sets how finely that reader can pipeline within a chunk.
+// Forwarded tokens per channel between `vc_arrived` bumps to the downstream reader. Whatever is left of a batch
+// is announced as soon as this sender runs out of slots to send, so this only sets how finely that reader can
+// pipeline a channel.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
 // Final writes between bumps of the downstream reader's receive count. Nothing waits on that count until
 // the end of the stream, so this only bounds how many header-only packets it costs; the tail is bumped when
@@ -157,9 +158,8 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
         // the bump batch is FWD_BUMP_EVERY, so a producer that fills a channel without completing a batch
         // would never tell the consumer those pages are there -- and that consumer is the only source of
-        // the credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward
-        // used to rule out by forcing a bump on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
+        // the credits the producer is now waiting on: deadlock. A channel has no chunk end to force a bump
+        // at, so this announce is what rules it out.
         //
         // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
@@ -200,10 +200,9 @@ void take_launch_credit() {
     noc_semaphore_inc(get_noc_addr(ct.launch_credit_addr), 0u - 1u);
 }
 
-// Add `count` to a semaphore on the downstream reader's core: `fwd_arrived` for pages of its forwarding
-// region, `final_arrived` for tokens written straight into its chip's output. A chunk's last page always
-// forces a `fwd_arrived` bump: that reader consumes a whole chunk before moving on, so leaving the tail
-// uncounted would strand it. The flush makes the far router drain the writes ahead of the bump first.
+// Add `count` to a semaphore on the downstream reader's core: `vc_arrived[v]` for pages of its channel v,
+// `final_arrived` for tokens written straight into its chip's output. The flush makes the far router drain the
+// writes ahead of the bump first.
 template <typename FabricSender>
 void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_bump =
