@@ -712,10 +712,6 @@ public:
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
         }
-        // Appended only when it changes what gets built, so other cache keys stay unchanged.
-        if (get_watcher_debug_delay() && get_watcher_debug_delay_targets_eth()) {
-            compile_hash_str += "_delay_eth";
-        }
         if (get_brisc_firmware_variant() == BriscFirmwareVariant::Blaze) {
             compile_hash_str += "_blaze_runtime_reload_";
             compile_hash_str += get_brisc_firmware_header();
