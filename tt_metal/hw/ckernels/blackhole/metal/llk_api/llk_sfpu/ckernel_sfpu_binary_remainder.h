@@ -223,6 +223,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // Compute remainder = a - floor(a/b) * b
     sfpi::vFloat result = a - floor_div * b;
 
+    v_if(sfpi::abs(floor_div) == sfpi::vFloat(0.0f)) { result = a + sfpi::vFloat(0.0f); }
+    v_endif;
+
     // Sign correction: remainder must match the sign of b (or be zero).
     // XOR of the float bit-patterns detects sign mismatch via the MSB,
     // avoiding a compound conditional with four comparisons and an OR.
@@ -233,16 +236,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     }
     v_endif;
 
-    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
-    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
+    sfpi::vFloat diff = a - (floor_div + sfpi::vFloat(1.0f)) * b;
+    v_if(b < sfpi::vFloat(0.0f)) {
+        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
         v_endif;
     }
-    v_endif;
-    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
+    v_else {
+        v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
         v_endif;
     }
     v_endif;
