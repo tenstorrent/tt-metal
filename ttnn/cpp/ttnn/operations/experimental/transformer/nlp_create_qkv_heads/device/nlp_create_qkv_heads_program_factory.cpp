@@ -577,15 +577,22 @@ ShardedArgs build_sharded_core_args(
     args.k_section_offset = k_section_offset;
     args.v_section_offset = v_section_offset;
     args.k_num_tiles = k_num_tiles;
-    args.num_cores_x = num_cores_x;
 
-    args.noc_x_coords.reserve(num_cores_x);
-    for (uint32_t x = 0; x < num_cores_x; ++x) {
-        args.noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
+    const auto& input_grid = input_tensor.shard_spec().value().grid;
+    const auto input_box = input_grid.bounding_box();
+    const uint32_t in_x0 = input_box.start_coord.x;
+    const uint32_t in_y0 = input_box.start_coord.y;
+    const uint32_t in_cores_x = input_box.end_coord.x - in_x0 + 1;
+    const uint32_t in_cores_y = input_box.end_coord.y - in_y0 + 1;
+    args.num_cores_x = in_cores_x;
+
+    args.noc_x_coords.reserve(in_cores_x);
+    for (uint32_t x = 0; x < in_cores_x; ++x) {
+        args.noc_x_coords.push_back(device->worker_core_from_logical_core({in_x0 + x, in_y0}).x);
     }
-    args.noc_y_coords.reserve(num_cores_y);
-    for (uint32_t y = 0; y < num_cores_y; ++y) {
-        args.noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
+    args.noc_y_coords.reserve(in_cores_y);
+    for (uint32_t y = 0; y < in_cores_y; ++y) {
+        args.noc_y_coords.push_back(device->worker_core_from_logical_core({in_x0, in_y0 + y}).y);
     }
 
     uint32_t remote_q_head_start_idx = 0;
@@ -613,8 +620,8 @@ ShardedArgs build_sharded_core_args(
         };
 
         remote_q_read += per_risc0_out_q_heads;
-        q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
-        q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
+        q_y = (remote_q_read / per_core_in_q_heads) / in_cores_x;
+        q_x = (remote_q_read / per_core_in_q_heads) % in_cores_x;
         remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
 
         // Writer-config instance: the remaining heads, written after the reader instance's.
@@ -628,8 +635,8 @@ ShardedArgs build_sharded_core_args(
 
         if (per_risc1_out_q_heads > 0) {
             remote_q_read += per_risc1_out_q_heads;
-            q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
-            q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
+            q_y = (remote_q_read / per_core_in_q_heads) / in_cores_x;
+            q_x = (remote_q_read / per_core_in_q_heads) % in_cores_x;
             remote_q_head_start_idx = (per_risc1_out_q_heads + remote_q_head_start_idx) % per_core_in_q_heads;
         }
 
@@ -639,8 +646,8 @@ ShardedArgs build_sharded_core_args(
 
         if (e.read_kv_heads) {
             remote_kv_read += per_core_out_kv_heads;
-            kv_y = (remote_kv_read / per_core_in_kv_heads) / num_cores_x;
-            kv_x = (remote_kv_read / per_core_in_kv_heads) % num_cores_x;
+            kv_y = (remote_kv_read / per_core_in_kv_heads) / in_cores_x;
+            kv_x = (remote_kv_read / per_core_in_kv_heads) % in_cores_x;
             remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
         }
 
