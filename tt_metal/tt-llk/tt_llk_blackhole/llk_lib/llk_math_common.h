@@ -16,16 +16,25 @@ using namespace ckernel::math;
 /**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
- * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, and programs FP32 dest
- * accumulation mode. Applies HW-bug workarounds (disables debug feature bit 11) for INT8 math and for the
- * UInt16-with-FP32-dest combination.
+ * Sets ZEROACC bank auto-detect, enables INT8 math when either source is Int8/Int32, programs FP32 dest
+ * accumulation mode for the FPU and the SFPU, clears the SrcA/SrcB ALU format override fields, and establishes
+ * the operand-driven Src zero-substitution baseline. No debug-feature workaround is applied here.
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
- * @note The SFPU reads ALU_FORMAT_SPEC_REG1_SrcB (the SrcB ALU format, programmed unpack-side on Blackhole, not here) to
- *       interpret data it loads from DEST. For SFPU work, ensure that format's exponent family (BF16 vs FP16) matches
- *       the data in DEST (tt-llk #951).
+ * @note The Blackhole LLK does not program ALU_FORMAT_SPEC_REG1_SrcB anywhere (the unpack-side ALU RMW in
+ *       cunpack_common.h writes only the SrcA/SrcB-unsigned and stochastic-rounding bits). Per the SFPLOAD/SFPSTORE
+ *       ISA pages, both instructions in default mode (MOD0_FMT_SRCB) access DEST as FP32 when ALU_ACC_CTRL_SFPU_Fp32_enabled is
+ *       set (written here); otherwise the exponent family (BF16 vs FP16) resolves from the reset value of REG1_SrcB,
+ *       because this function clears the SrcB_val/SrcB_override bits below and SFPU_DEST_FMT_Enable is never set.
+ *       SFPU kernels that need a different DEST exponent family should use an explicit SFPLOAD/SFPSTORE mode,
+ *       which leaves no config behind: for Float16 / Float16_b, GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>()
+ *       in llk_defs.h picks FP16A / FP16B, or FP32 under fp32 dest accumulation (block-float and Lf8 formats return
+ *       DEFAULT from it, i.e. the config-dependent access; ckernel_sfpu_reduce_custom.h uses FP16B directly for its
+ *       16-bit-only path). A kernel that instead programs REG1_SrcB, SrcB_override/SrcB_val or SFPU_DEST_FMT
+ *       owns that state and must restore it: nothing in the LLK rewrites REG1_SrcB or clears SFPU_DEST_FMT_Enable,
+ *       and the override bits are cleared again only by this function, not by the per-operand reconfig paths below.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
@@ -171,7 +180,12 @@ inline void _llk_math_pack_sync_init_()
 }
 
 // Following functions do not need to program ALU_FORMAT_SPEC_REG0_SrcA/ALU_FORMAT_SPEC_REG1_SrcB
-// for blackhole since ALU format is inferred
+// for blackhole: the FPU takes the per-bank implied source format while DISABLE_IMPLIED_SRCA_FMT and
+// DISABLE_IMPLIED_SRCB_FMT are clear (the transpose-dest, datacopy and custom reduce paths set the SrcA one
+// around their own format programming and clear it again), and the
+// SFPU's default-mode DEST read is FP32 when SFPU_Fp32_enabled is set, otherwise follows REG1_SrcB at its
+// reset value (overrides cleared, SFPU_DEST_FMT_Enable never set; see the _llk_math_hw_configure_ note above);
+// none of these comes from srca/srcb_data_format here.
 /**
  * @brief Reconfigure the math thread for a new source A data format.
  *
