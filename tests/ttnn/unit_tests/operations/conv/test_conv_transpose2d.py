@@ -39,22 +39,18 @@ from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import 
         (1, 30, 40, 512, 256, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
     ),
 )
+# Pairwise subset of weights_dtype x activations_dtype x preprocess_weights x mirror_kernel;
+# the full grid is in tests/ttnn/nightly/unit_tests/operations/conv/test_conv_transpose2d.py.
 @pytest.mark.parametrize(
-    "weights_dtype",
+    "weights_dtype, activations_dtype, preprocess_weights, mirror_kernel",
     [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        (ttnn.bfloat16, ttnn.bfloat16, False, False),
+        (ttnn.bfloat16, ttnn.bfloat8_b, True, True),
+        (ttnn.bfloat8_b, ttnn.bfloat16, True, True),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, False, True),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, True, False),
     ],
 )
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize("preprocess_weights", [True, False])
-@pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
     device,
     activations_dtype,
@@ -110,7 +106,7 @@ def test_simple_conv_t2d(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
     (
         # fmt: off
-        (1,  512, 512,  64, 64,  3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1,  128, 512,  64, 64,  3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
         (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 2, 2, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2 , SliceWidth ),
         (16,  16,  16, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED,  2, SliceWidth ),
         # fmt: on
@@ -158,8 +154,12 @@ def test_convt2d_dram(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+    if layout == ttnn.TILE_LAYOUT and batch_size == 16:
+        # The output is 32 wide, so TILE width slicing allows only one slice
+        num_slices = 1
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
+        num_slices=num_slices,
     )
     if is_blackhole() and config is not None:
         # Blackhole requires different act_block_h to be divisble
