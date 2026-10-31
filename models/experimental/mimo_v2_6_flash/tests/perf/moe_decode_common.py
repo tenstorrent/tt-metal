@@ -49,8 +49,8 @@ def config():
     return MiMoConfig.from_model_path(MODEL_PATH)
 
 
-def build_moe(row, cfg, cache_tag, expert_dtype, ckpt=None):
-    """MoE layer LAYER from the tensor cache (``ckpt`` fills a cold cache)."""
+def build_moe(row, cfg, cache_tag, expert_dtype, ckpt=None, users=USERS):
+    """MoE layer LAYER from the tensor cache (``ckpt`` fills a cold cache), serving ``users`` decode slots."""
     router = experts = None
     if ckpt is not None:
         router = ckpt.router(LAYER)
@@ -64,15 +64,18 @@ def build_moe(row, cfg, cache_tag, expert_dtype, ckpt=None):
         cache_dir=os.path.join(CACHE_ROOT, cache_tag),
         expert_dtype=expert_dtype,
     )
-    moe.set_decode_users(USERS)
+    moe.set_decode_users(users)
     return moe
 
 
-def device_inputs(row, x_rows):
-    """x_rows [USERS, hidden] -> (x [1, 1, 32, hidden] bf16, token mask [1, 1, 32, 1]) on the row."""
+def device_inputs(row, x_rows, active=None):
+    """x_rows [users, hidden] -> (x [1, 1, 32, hidden] bf16, token mask [1, 1, 32, 1]) on the row; ``active`` (bool
+    [users]): the slots that hold a token (default: every row), the others idle (mask 0)."""
     x = torch.zeros(32, x_rows.shape[-1])
     x[: x_rows.shape[0]] = x_rows
-    mask = (torch.arange(32) < x_rows.shape[0]).to(torch.bfloat16).reshape(1, 1, 32, 1)
+    on = torch.zeros(32, dtype=torch.bool)
+    on[: x_rows.shape[0]] = True if active is None else torch.as_tensor(active)
+    mask = on.to(torch.bfloat16).reshape(1, 1, 32, 1)
     rep = ttnn.ReplicateTensorToMesh(row)
     x_tt = ttnn.from_torch(
         x.reshape(1, 1, 32, -1).bfloat16(), device=row, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
@@ -100,3 +103,39 @@ def golden_moe_inputs(cfg, ckpt):
 
 def checkpoint(cfg):
     return MiMoCheckpoint(MODEL_PATH, cfg)
+
+
+def prompt_starts(cfg):
+    """Row offset of each golden prompt in golden_moe_inputs' rows, and the prompts' lengths."""
+    golden = torch.load(GOLDEN)
+    lengths = [h.shape[1] for h in golden["hidden"]]
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+    return starts, lengths
+
+
+def verify_steps(cfg, steps):
+    """Speculative-verify shaped steps of 8 decode slots over the golden rows: (name, row indices [8] (-1: idle)).
+
+    - one_request: 4 consecutive tokens of one prompt in slots 0-3 (a request with 3 drafts), slots 4-7 idle;
+    - two_requests: 4 consecutive tokens of two prompts in slots 0-3 and 4-7;
+    - plain4 / plain8: 4 / 8 tokens of different prompts (plain decode of distinct requests).
+    Consecutive tokens share experts (4 select ~23 distinct, 8 of two requests ~37)."""
+    starts, lengths = prompt_starts(cfg)
+    windows = [(p, o) for p, n in enumerate(lengths) for o in range(0, n - 3, 4)]
+    out = []
+    for s in range(steps):
+        (pa, oa), (pb, ob) = windows[s % len(windows)], windows[(s * 5 + 3) % len(windows)]
+        a = [starts[pa] + oa + j for j in range(4)]
+        b = [starts[pb] + ob + j for j in range(4)]
+        distinct = [starts[p] + (3 * s + 5 * j + 1) % lengths[p] for j, p in enumerate((s + k) % 8 for k in range(8))]
+        out.append(("one_request", a + [-1] * 4))
+        out.append(("two_requests", a + b))
+        out.append(("plain4", distinct[:4] + [-1] * 4))
+        out.append(("plain8", distinct))
+    return out
+
+
+def step_inputs(row, inputs, idx):
+    """(x, mask) of one verify_steps step: rows ``idx`` of ``inputs``, -1 slots idle (zero rows, mask 0)."""
+    x_rows = torch.stack([inputs[i] if i >= 0 else torch.zeros(inputs.shape[-1]) for i in idx])
+    return device_inputs(row, x_rows, [i >= 0 for i in idx])
