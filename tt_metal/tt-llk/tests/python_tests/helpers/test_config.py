@@ -1963,6 +1963,7 @@ class TestConfig:
             fd.write(coverage_stream)
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
+    BRISC_JUST_BOOTED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
     # Wormhole: the _start addresses of the loaded TRISC ELFs, written again before every launch (device_setup copies them
     # into the TRISC reset PCs and the TRISCs clear them).
@@ -2026,6 +2027,7 @@ class TestConfig:
                 verify_write=True,
             )
             TestConfig.BRISC_ELF_LOADED = True
+            TestConfig.BRISC_JUST_BOOTED = True
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"

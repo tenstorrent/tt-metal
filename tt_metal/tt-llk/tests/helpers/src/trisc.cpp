@@ -58,6 +58,10 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
+#if defined(ARCH_WORMHOLE) && !defined(COVERAGE)
+int main(void) __attribute__((noinline));
+#endif
+
 int main(void)
 {
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
@@ -123,11 +127,36 @@ int main(void)
 #endif
 }
 
+#if defined(ARCH_WORMHOLE) && !defined(COVERAGE)
+extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_profile_instrument_function)) void kernel_end_tail()
+{
+    main();
+#if defined(LLK_TRISC_MATH)
+    constexpr std::uint32_t PACK_MAILBOX_INDEX = 2;
+    constexpr std::uint64_t SETTLE_CYCLES      = 4096;
+
+    mailbox_t pack_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start) + PACK_MAILBOX_INDEX;
+    while (ckernel::load_blocking(pack_mailbox) != ckernel::KERNEL_COMPLETE)
+    {
+    }
+    const std::uint64_t settle_start = ckernel::read_wall_clock();
+    while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
+    {
+    }
+    (void)ckernel::load_blocking(pack_mailbox);
+#endif
+}
+#endif
+
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
 {
     do_crt0();
 
+#if defined(ARCH_WORMHOLE) && !defined(COVERAGE)
+    kernel_end_tail();
+#else
     main();
+#endif
 
 #ifdef COVERAGE
     gcov_dump();
