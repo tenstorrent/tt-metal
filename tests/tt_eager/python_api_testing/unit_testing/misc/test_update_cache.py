@@ -511,26 +511,24 @@ class TestUpdateCacheFP32:
 
 
 @pytest.mark.parametrize(
-    "mesh_shape,seq_len,expected_seq_len_local,expected_layout",
+    "mesh_shape,seq_len,expected_seq_len_local",
     [
-        ((2, 4), 1024, 512, "ND_SHARDED"),  # 512/32 = 16 shards across 8 banks → 2 shards/bank → ND_SHARDED
-        ((8, 4), 1024, 128, "HEIGHT_SHARDED"),  # 128/32 = 4 shards across 8 banks → ≤1 shard/bank → HEIGHT_SHARDED
+        ((2, 4), 1024, 512),
+        ((8, 4), 1024, 128),
     ],
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("op_type", ["fill", "fill_cache_for_user", "update"])
 class TestUpdateCacheWithKVPE:
-    def test_kvpe_cache_op(
-        self, op_type, mesh_shape, seq_len, expected_seq_len_local, expected_layout, input_dtype, device
-    ):
+    def test_kvpe_cache_op(self, op_type, mesh_shape, seq_len, expected_seq_len_local, input_dtype, device):
         """Test fill/update cache operations with KVPE cache created by init_kvpe_cache.
 
-        Uses ND_SHARDED cache with ROUND_ROBIN_1D across 8 DRAM banks.
-        The cache layout behavior depends on mesh size:
-        - 2x4 mesh (seq_len=1024, seq_len_local=512): 512/32 = 16 shards → 2 shards/bank → ND_SHARDED
-        - 8x4 mesh (seq_len=1024, seq_len_local=128): 128/32 = 4 shards → ≤1 shard/bank → HEIGHT_SHARDED
+        Uses ND_SHARDED cache with ROUND_ROBIN_1D across the DRAM banks. The cache normalises to HEIGHT_SHARDED
+        only when it has at most one shard per bank, so the expected layout depends on the bank count
+        (8 on a full Blackhole, fewer on DRAM-harvested parts such as P100a).
         """
 
+        from models.demos.common.prefill.runners.migration import get_num_dram_banks
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
         kvpe_cache_head_dim = 32
@@ -550,12 +548,12 @@ class TestUpdateCacheWithKVPE:
             num_kvpe_cache_layers=num_kvpe_cache_layers,
         )
 
-        if expected_layout == "ND_SHARDED":
-            expected_layout_enum = ttnn.TensorMemoryLayout.ND_SHARDED
-        elif expected_layout == "HEIGHT_SHARDED":
-            expected_layout_enum = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        else:
-            raise ValueError(f"Unexpected expected_layout value: {expected_layout}")
+        num_shards = num_kvpe_cache_layers * expected_seq_len_local // 32
+        expected_layout_enum = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if num_shards <= get_num_dram_banks(mesh_device)
+            else ttnn.TensorMemoryLayout.ND_SHARDED
+        )
         assert tt_cache.memory_config().memory_layout == expected_layout_enum, (
             f"Expected cache layout to be {expected_layout_enum}, " f"but got {tt_cache.memory_config().memory_layout}"
         )
@@ -565,7 +563,7 @@ class TestUpdateCacheWithKVPE:
 
         logger.info(f"Cache memory config: {tt_cache.memory_config()}")
         logger.info(f"Cache shape: {tt_cache.shape}")
-        logger.info(f"Expected layout: {expected_layout}")
+        logger.info(f"Expected layout: {expected_layout_enum}")
         logger.info(f"Operation type: {op_type}")
 
         seq_len_local = seq_len // mesh_shape[sp_axis]
