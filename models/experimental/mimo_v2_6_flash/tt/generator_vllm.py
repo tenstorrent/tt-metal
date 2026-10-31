@@ -1580,7 +1580,7 @@ class MiMoV2ForCausalLM:
                     kept.add(lane)
                     if stale:
                         drafts[r] = committed_tokens[r, m - 1].to(torch.int32)
-                        valid[r] = num_drafts
+                        valid[r] = min(num_drafts, source.width - 1)
                     continue
                 chained = self.chained[lane].get(r)
                 hit = chained is not None
@@ -1606,7 +1606,7 @@ class MiMoV2ForCausalLM:
                 self._check_chained(lane, drafts[r], host)
                 continue
             drafts[r] = host
-            valid[r] = num_drafts
+            valid[r] = min(num_drafts, source.width - 1)
         planned = sum(not hit for *_, hit in jobs)
         self.chain_stats["chained"] += hits
         self.chain_stats["host"] += planned
