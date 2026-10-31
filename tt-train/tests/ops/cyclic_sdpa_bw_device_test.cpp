@@ -4243,8 +4243,20 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
     if (const char* env = std::getenv("TRANSPORT_VARIANTS"); env != nullptr) {
         only = env;
     }
-    const auto wanted = [&](const std::string& key) {
-        return only.empty() || only.find(key) != std::string::npos;
+    // A variant runs if any comma-separated token of TRANSPORT_VARIANTS is a
+    // substring of its name.
+    const auto wanted = [&](const std::string& name) {
+        if (only.empty()) {
+            return true;
+        }
+        std::stringstream ss(only);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            if (!token.empty() && name.find(token) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
     };
     std::vector<std::pair<std::string, TransportConfig>> variants;
     {
@@ -4265,8 +4277,11 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
         c.directional_noc = true;
         variants.emplace_back("relay-dir-full", c);
         c.compute = false;
+        variants.emplace_back("relay-dir-move", c);
         c.stat_work = false;
         variants.emplace_back("relay-dir-move-nostat", c);
+        c.dram_skip = 1;
+        variants.emplace_back("relay-dir-move-nostat-noreload", c);
         c.dram_skip = 2;
         variants.emplace_back("relay-dir-move-nostat-nodram", c);
         c = TransportConfig{};
