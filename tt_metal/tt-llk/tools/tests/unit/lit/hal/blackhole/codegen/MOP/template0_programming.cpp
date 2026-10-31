@@ -8,6 +8,7 @@
 
 // Compare each HAL function with its adjacent reference_ function. Disable
 // identical-code folding so both bodies are emitted independently.
+// Every if_clear shape is programmed without and with a matching otherwise.
 
 #include <cstdint>
 
@@ -31,12 +32,129 @@ inline constexpr std::uint32_t OP_B      = 0x10005000;
 inline constexpr std::uint32_t OP_SKIP_A = 0x10006000;
 inline constexpr std::uint32_t OP_SKIP_B = 0x10007000;
 
-extern "C" __attribute__((noinline, used)) void program_all_groups()
+// {a0}: a set mask bit issues a NOP SkipA0 unless otherwise gives one.
+extern "C" __attribute__((noinline, used)) void program_a0()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 0;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[7] = TT_OP_NOP;
+}
+
+extern "C" __attribute__((noinline, used)) void program_a0_otherwise()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0), mop::otherwise(OP_SKIP_A)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0_otherwise()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 0;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[7] = OP_SKIP_A;
+}
+
+// {a0, b}: InsnB is enabled; a set mask bit issues NOP SkipA0 and SkipB unless otherwise gives them.
+extern "C" __attribute__((noinline, used)) void program_a0_b()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_B)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0_b()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 1;
+    mop_cfg[2] = OP_B;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[7] = TT_OP_NOP;
+    mop_cfg[8] = TT_OP_NOP;
+}
+
+extern "C" __attribute__((noinline, used)) void program_a0_b_otherwise()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_B), mop::otherwise(OP_SKIP_A, OP_SKIP_B)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0_b_otherwise()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 1;
+    mop_cfg[2] = OP_B;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[7] = OP_SKIP_A;
+    mop_cfg[8] = OP_SKIP_B;
+}
+
+// {a0, a1, a2, a3}: InsnA1-3 are enabled.
+extern "C" __attribute__((noinline, used)) void program_a0_a3()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0_a3()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 2;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[4] = OP_A1;
+    mop_cfg[5] = OP_A2;
+    mop_cfg[6] = OP_A3;
+    mop_cfg[7] = TT_OP_NOP;
+}
+
+extern "C" __attribute__((noinline, used)) void program_a0_a3_otherwise()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3), mop::otherwise(OP_SKIP_A)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0_a3_otherwise()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 2;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[4] = OP_A1;
+    mop_cfg[5] = OP_A2;
+    mop_cfg[6] = OP_A3;
+    mop_cfg[7] = OP_SKIP_A;
+}
+
+// {a0, a1, a2, a3, b}: both optional groups are enabled.
+extern "C" __attribute__((noinline, used)) void program_a0_a3_b()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3, OP_B)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a0_a3_b()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 3;
+    mop_cfg[2] = OP_B;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[4] = OP_A1;
+    mop_cfg[5] = OP_A2;
+    mop_cfg[6] = OP_A3;
+    mop_cfg[7] = TT_OP_NOP;
+    mop_cfg[8] = TT_OP_NOP;
+}
+
+extern "C" __attribute__((noinline, used)) void program_a0_a3_b_otherwise()
 {
     mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3, OP_B), mop::otherwise(OP_SKIP_A, OP_SKIP_B)));
 }
 
-extern "C" __attribute__((noinline, used)) void reference_program_all_groups()
+extern "C" __attribute__((noinline, used)) void reference_program_a0_a3_b_otherwise()
 {
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
@@ -48,54 +166,6 @@ extern "C" __attribute__((noinline, used)) void reference_program_all_groups()
     mop_cfg[6] = OP_A3;
     mop_cfg[7] = OP_SKIP_A;
     mop_cfg[8] = OP_SKIP_B;
-}
-
-// A set mask bit issues a NOP SkipA0 when otherwise is omitted.
-extern "C" __attribute__((noinline, used)) void program_a0_only()
-{
-    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0)));
-}
-
-extern "C" __attribute__((noinline, used)) void reference_program_a0_only()
-{
-    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
-    ckernel::mop_sync();
-    mop_cfg[1] = 0;
-    mop_cfg[3] = OP_A0;
-    mop_cfg[7] = TT_OP_NOP;
-}
-
-extern "C" __attribute__((noinline, used)) void program_b_group()
-{
-    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_B), mop::otherwise(OP_SKIP_A, OP_SKIP_B)));
-}
-
-extern "C" __attribute__((noinline, used)) void reference_program_b_group()
-{
-    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
-    ckernel::mop_sync();
-    mop_cfg[1] = 1;
-    mop_cfg[2] = OP_B;
-    mop_cfg[3] = OP_A0;
-    mop_cfg[7] = OP_SKIP_A;
-    mop_cfg[8] = OP_SKIP_B;
-}
-
-extern "C" __attribute__((noinline, used)) void program_a123_group()
-{
-    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3), mop::otherwise(OP_SKIP_A)));
-}
-
-extern "C" __attribute__((noinline, used)) void reference_program_a123_group()
-{
-    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
-    ckernel::mop_sync();
-    mop_cfg[1] = 2;
-    mop_cfg[3] = OP_A0;
-    mop_cfg[4] = OP_A1;
-    mop_cfg[5] = OP_A2;
-    mop_cfg[6] = OP_A3;
-    mop_cfg[7] = OP_SKIP_A;
 }
 
 // The argument count fixes the shape, so runtime operations keep the flags constant.

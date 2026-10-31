@@ -32,6 +32,28 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_short()
     TTI_MOP(0 /*mop_type*/, 3 /*loop_count*/, 0x5 /*zmask_lo16_or_loop_count*/);
 }
 
+// The high mask bits are read from the 17th iteration or a mask wider than 16 bits.
+extern "C" __attribute__((noinline, used)) void run_template0_boundary()
+{
+    Template0Runner::run<16, 0xffff>();
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_template0_boundary()
+{
+    TTI_MOP(0 /*mop_type*/, 15 /*loop_count*/, 0xffff /*zmask_lo16_or_loop_count*/);
+}
+
+extern "C" __attribute__((noinline, used)) void run_template0_past_boundary()
+{
+    Template0Runner::run<17, 0x5>();
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_template0_past_boundary()
+{
+    TTI_MOP_CFG(0 /*zmask_hi16*/);
+    TTI_MOP(0 /*mop_type*/, 16 /*loop_count*/, 0x5 /*zmask_lo16_or_loop_count*/);
+}
+
 extern "C" __attribute__((noinline, used)) void run_template0_long_count()
 {
     Template0Runner::run<128, 0x5>();
@@ -113,6 +135,26 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_
     TT_MOP(0 /*mop_type*/, count - 1, mask & 0xffff);
 }
 
+extern "C" __attribute__((noinline, used)) void run_template0_runtime_count_preset(const std::uint32_t count)
+{
+    Template0Runner::run<0x12345, mop::MaskHigh::Preset>(count);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_count_preset(const std::uint32_t count)
+{
+    TT_MOP(0 /*mop_type*/, count - 1, 0x2345 /*zmask_lo16_or_loop_count*/);
+}
+
+extern "C" __attribute__((noinline, used)) void run_template0_runtime_mask_preset(const std::uint32_t mask)
+{
+    Template0Runner::run_with_runtime_mask<32, mop::MaskHigh::Preset>(mask);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_mask_preset(const std::uint32_t mask)
+{
+    TT_MOP(0 /*mop_type*/, 31 /*loop_count*/, mask & 0xffff);
+}
+
 extern "C" __attribute__((noinline, used)) void configure_runtime_mask_high(const std::uint32_t mask)
 {
     Template0Runner::configure_mask_high(mask);
@@ -131,6 +173,16 @@ extern "C" __attribute__((noinline, used)) std::uint32_t get_template0_operation
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_template0_operation()
 {
     return TT_OP_MOP(0 /*mop_type*/, 2 /*loop_count*/, 0x5 /*zmask_lo16_or_loop_count*/);
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t get_template0_boundary_operation()
+{
+    return Template0Runner {.count = 16, .mask = 0xffff}.operation();
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_template0_boundary_operation()
+{
+    return TT_OP_MOP(0 /*mop_type*/, 15 /*loop_count*/, 0xffff /*zmask_lo16_or_loop_count*/);
 }
 
 // With MaskHigh::Preset only the low 16 mask bits are encoded.
