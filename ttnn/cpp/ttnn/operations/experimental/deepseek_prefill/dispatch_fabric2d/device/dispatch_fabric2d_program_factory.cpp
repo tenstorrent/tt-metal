@@ -296,6 +296,14 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         const auto work_by_stream = generate_assignments(chip_ids, pos, args.num_links);
         const uint32_t linearized = ccl::common::get_linearized_index(coord, mesh->get_view());
 
+        // Every stream core of this chip. Each sender signals all of them once its share of the metadata output
+        // is zeroed.
+        std::vector<uint32_t> stream_noc_words;
+        for (const auto& [stream, self] : placement.at(coord)) {
+            stream_noc_words.push_back(static_cast<uint32_t>(self.worker_virtual.x));
+            stream_noc_words.push_back(static_cast<uint32_t>(self.worker_virtual.y));
+        }
+
         tt::tt_metal::ProgramDescriptor desc;
         for (const auto& [stream, self] : placement.at(coord)) {
             const auto& downstream = placement.at(self.downstream_coord).at(stream);
@@ -325,8 +333,18 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 "sender_dispatch_fabric2d.cpp";
             snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-            snd.compile_time_args =
-                dspf2d::SenderCtArgs(token_bytes, self, downstream, returning, l1, plan).to_ct_word_arr();
+            snd.compile_time_args = dspf2d::SenderCtArgs(
+                                        token_bytes,
+                                        self,
+                                        downstream,
+                                        returning,
+                                        l1,
+                                        plan,
+                                        stream_count(args.num_links),
+                                        static_cast<uint32_t>(tensor_return_value[1].buffer()->num_pages()),
+                                        meta_bytes)
+                                        .to_ct_word_arr(stream_noc_words);
+            tt::tt_metal::TensorAccessorArgs(tensor_return_value[1].buffer()).append_to(snd.compile_time_args);
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 // NOC_1 routes -Y first, so a worker one core row from its eth core reaches it in a single hop.
@@ -410,10 +428,10 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             desc.kernels.push_back(std::move(rdr));
             desc.kernels.push_back(std::move(index_kernel));
 
-            // The four RISCs hand off through these. Program semaphores, because the runtime writes the
-            // initial value on every launch, so a RISC never reads a value left by an earlier or aborted
-            // launch as a signal.
-            for (uint32_t id = 0; id < dspf2d::INDEX_SEMAPHORES; id++) {
+            // The four RISCs hand off through these, and the chip's senders count the metadata clear on the
+            // last. Program semaphores, because the runtime writes the initial value on every launch, so a RISC
+            // never reads a value left by an earlier or aborted launch as a signal.
+            for (uint32_t id = 0; id < dspf2d::PROGRAM_SEMAPHORES; id++) {
                 desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                     .id = id,
                     .core_type = tt::CoreType::WORKER,
@@ -434,6 +452,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             // The call above fills the vector but does not attach it to the kernel.
             tt::tt_metal::KernelDescriptor::RTArgList snd_rt_list;
             snd_rt_list.append(snd_rt);
+            snd_rt_list.push_back(tensor_return_value[1].buffer());
             desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, snd_rt_list);
         }
         if (untilize.has_value() &&

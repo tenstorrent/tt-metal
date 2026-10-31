@@ -98,7 +98,7 @@ void prebuild_routes() {
 // sub-device to finish the one before.
 //
 // Sent before this kernel waits on the reader or on any other chip, so the credit never depends on this
-// launch making progress.
+// launch making progress. The only wait before it is for this chip's metadata clear, which waits on nothing.
 template <typename FabricSender>
 void grant_launch_credit(FabricSender& fabric) {
     volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
@@ -225,6 +225,24 @@ void drain_fabric(FabricSender& fabric) {
     fabric.wait_for_empty_write_slot();
 }
 
+// Zero this stream's share of the chip's metadata output, then tell every stream core of the chip. The output
+// is freshly allocated, so a page no token is written to would otherwise keep whatever the address last held.
+void clear_metadata(uint32_t meta_addr) {
+    static_assert(ct.meta_page_bytes <= MEM_ZEROS_SIZE, "a metadata page is written from the zero region in one go");
+    const auto meta_acc = TensorAccessor(dspf2d::SenderCtArgs::meta_args, meta_addr);
+    const uint32_t from = (ct.meta_pages * ct.stream) / ct.num_streams;
+    const uint32_t to = (ct.meta_pages * (ct.stream + 1u)) / ct.num_streams;
+    for (uint32_t page = from; page < to; page++) {
+        noc_async_write(MEM_ZEROS_BASE, meta_acc.get_noc_addr(page), ct.meta_page_bytes);
+    }
+    noc_async_write_barrier();
+    for (uint32_t s = 0; s < ct.num_streams; s++) {
+        const uint32_t x = kernel_compile_time_args[dspf2d::SenderCtArgs::stream_noc_base + 2u * s];
+        const uint32_t y = kernel_compile_time_args[dspf2d::SenderCtArgs::stream_noc_base + 2u * s + 1u];
+        noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(dspf2d::kSemMetaCleared)), 1);
+    }
+}
+
 void kernel_main() {
     std::size_t rt_args_idx = 0;
     uint32_t num_connections = get_arg_val<uint32_t>(rt_args_idx++);
@@ -232,8 +250,14 @@ void kernel_main() {
         tt::tt_fabric::RoutingPlaneConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION>(
         rt_args_idx, num_connections);
     auto& fabric = fabric_connections.get(0).sender;
+    const uint32_t meta_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     prebuild_routes();
+    clear_metadata(meta_addr);
+    // Every write into this chip's outputs from another chip comes from a sender that took one of this chip's
+    // launch credits, so granting only after the whole chip's metadata is zeroed keeps those writes after it.
+    noc_semaphore_wait_min(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dspf2d::kSemMetaCleared)), ct.num_streams);
     grant_launch_credit(fabric);
     // Once per launch, so the credits stay in step with the launches: every stream has at least its CMD_END
     // entry. The reader publishes its first entry only after building its tables, so the credit has usually

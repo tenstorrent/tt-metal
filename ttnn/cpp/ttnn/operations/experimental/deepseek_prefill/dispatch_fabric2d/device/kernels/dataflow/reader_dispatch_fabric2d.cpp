@@ -529,6 +529,8 @@ void kernel_main() {
     // Local tokens go last because they never leave the chip, while earlier pages have chips downstream waiting.
     {
         DeviceZoneScopedN("dspf2d_local");
+        // The local writes land in this chip's metadata output, which the chip's senders zero first.
+        routing_index::wait_at_least(dspf2d::kSemMetaCleared, 2 * ct.num_links);
         local_phase(c, queue, in_acc, out_acc, meta_acc);
     }
 
