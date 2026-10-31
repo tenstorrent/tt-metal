@@ -472,7 +472,12 @@ Never:
   rung, one plain profile each) at `runs/<run>/ab/<task>/table.md` and waits for the owner; bring the owner the table
   and record their answer with `orchestrator decide --task <id> --accept|--reject`, then resume;
 - change the spec without asking (a spec edit voids the intake approval; re-approve on their word);
-- run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
+- run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds);
+- let any reset happen without the owner's word: no `/tmp/tt-device-*.dirty` file, no run started so the safe runner
+  resets the box (DeepSeek-V4.1 FIX.15, 2026-10-31: an agent touched the dirty file to get a whole-box reset);
+- brief single-card device jobs on a Galaxy while a mesh run depends on the box (agents' rule 19): a hung single-card
+  job gets a single-card reset, which breaks the mesh (cluster discovery fails) until the whole box is reset. The
+  single-card matmul sweep (P.19) carries this risk: run it only with the owner's yes or on another box.
 
 Report briefly on each gate the person would care about; say plainly what you decided, stopped or rejected, and why.
 The orchestrator re-exports the dashboards after every gate. Publishing is yours: only an interactive session can

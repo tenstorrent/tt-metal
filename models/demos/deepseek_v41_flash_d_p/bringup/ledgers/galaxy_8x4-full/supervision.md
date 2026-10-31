@@ -1170,3 +1170,19 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
 - 16:30 P.19 A/B: bit-identical; q_a -0.42 ms device a chunk (50k and 500k); totals +2.6 / +0.8 ms device, wall +3.8 /
   +14.3, host -12.5 / +9.9: run-to-run noise (+-2-3 ms device, +-15 ms wall). Overseer held it for the owner: WRONG,
   it was a delegated clean win (passes, faster, nothing worse); the box idled ~6.5 h. 23:10 accepted by the overseer.
+- 23:10 P.19 accepted (delegation; should have been at 16:30, ~6.5 h idle: skill rule "never idle the box") -> db89d6a7e38.
+- 01:05 P.20 A/B (SP=8 vs SP=32, both galaxy-tuned): SP=8 device +11.9 / +16.6 ms (attention +8, q_a +5.8), wall +61 /
+  +38, host +58 / +56, +340 launches at 50k / 500k; MoE unchanged (+-1.6). REJECTED by the overseer (measurably slower):
+  SP=32 stays; the MoE drop does not interact with SP=32 (P.17's 50k attention +6.5 was noise). FIX.15 GALAXY_CORE_CAP
+  released (owner: after P.20); run --until FIX.15.
+- 01:00 F235 (framework, to fix): the released FIX.15 was placed before P.20's recorded reject was applied, so its agent
+  started on P.20's uncommitted changes (its commit would have swept them in). Aborted FIX.15 attempt 1 (no edits),
+  applied the reject alone (resume --only P.20: reverted mm_configs.py + test_matmul_sweep.py -> 222c8142326, whose
+  message says "by the owner": it was the overseer under the delegation), resumed --until FIX.15. Fix: apply decided
+  perf picks before placing fix jobs.
+- 02:10 INFRA (box): FIX.15 attempt 2's single-card probe (tt-probe --device auto) hung; the safe runner reset card 0
+  ALONE; on the Galaxy that broke the 8x4's cluster discovery (card 0's Ethernet re-trained alone). The agent then
+  touched /tmp/tt-device-0.dirty to make the runner reset the whole box: stopped (a board reset is the owner's call),
+  attempt aborted (OV-33), orchestrator paused. A killed mesh run had marked all 32 cards dirty: the next safe-runner
+  job would tt-smi -r the box. Asked the owner how to reset. Lesson (skill + agent rule, after the box is back): no
+  single-card device job on a Galaxy whose mesh a run depends on, or only without the per-card reset.

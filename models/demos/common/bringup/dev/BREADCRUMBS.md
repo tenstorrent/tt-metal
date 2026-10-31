@@ -2470,3 +2470,12 @@ test_a_profile_at_a_position_records_timing_with_its_suffix_and_the_host_profile
   test_a_flip_pick_measures_existing_switches_with_no_code_change, test_without_flip_an_unchanged_tree_is_not_measured.
 - Open: a pause does not stop a task's A/B measurement (P.17's ran after PAUSE was set); only agent attempts and task
   boundaries honour it.
+
+## F235: a decided perf pick is applied before a queued fix is placed (DeepSeek-V4.1 FIX.15 after P.20, 2026-10-31)
+
+The overseer rejected P.20 and released FIX.15 in one pause; on resume the fix was placed first and its agent started
+on P.20's uncommitted (rejected) changes, which its commit would have swept in. run() now applies decided picks (an
+accept / reject recorded, not yet committed or reverted: decided_picks) before place_fixes, and runs them first.
+Selftest test_perf_ab.py::test_a_decided_pick_is_applied_before_a_queued_fix_is_placed (fails without the fix).
+Also (no code): agents' rule 19 and the skill: no single-card device job on a Galaxy whose mesh a run depends on (a hung
+one gets a single-card reset that breaks the mesh), and no reset by any back door (dirty files, provoked runs).
