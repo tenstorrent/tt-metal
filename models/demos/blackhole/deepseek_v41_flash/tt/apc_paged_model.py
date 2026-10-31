@@ -157,6 +157,7 @@ class PagedApc:
         self.noc = set()  # users whose request never commits (image prompt)
         self.plen = {}  # user -> total prompt length (zone / tip rule)
         self.ks = self.hs = None
+        self.host_fallback = os.environ.get("DSV41_APC_PAGED_HOST", "0") == "1"
         self._auto_n = itertools.count()
         self.stats = dict(hits=0, hit_tokens=0, lost=0, restores=0, restore_s=0.0, commits=0, commit_s=0.0, saves=0)
         self.ktok = {}  # user -> (torch tensor id, numpy view) of the prompt tokens (key tokens of the chain)
@@ -265,6 +266,13 @@ class PagedApc:
             self.noc.add(user)
         else:
             self.noc.discard(user)
+
+    def owns(self, user):
+        """True for a text request this cache serves and feeds: the host snapshot tier then neither restores into it nor snapshots it. A host restore turns the request anonymous (``restore_users`` releases and
+        re-admits the user), so its chunks are never committed and the paged cache starves (measured: all commits on the one row that computed cold); with ``DSV41_APC_PAGED_HOST=1`` the host tier keeps
+        serving paged-managed requests too (index miss -> host snapshot), at that price. Image and anonymous users always use the host tier.
+        """
+        return not self.host_fallback and user in self.rid and user not in self.auto and user not in self.noc
 
     def drop_user(self, user):
         """the request of ``user`` is over (release_user / a new prompt of the user): refcounts and private pages go back to the index"""

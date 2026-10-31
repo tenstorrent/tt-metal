@@ -2037,7 +2037,11 @@ class Model:
                 img_cont = (
                     apc is not None and bool(vis) and apc.images_enabled()
                 )  # (image users: a continuation piece may also restore a deeper snapshot, DSV41_APC_IMAGES=1)
-                cand = [it for it in wave if it[2] == 0 or (img_cont and it[0] in vis)]
+                cand = [
+                    it
+                    for it in wave
+                    if (it[2] == 0 or (img_cont and it[0] in vis)) and not (pa is not None and pa.owns(it[0]))
+                ]  # (a text request the paged cache owns neither restores from nor feeds the host tier: DSV41_APC_PAGED_HOST)
                 if apc is not None and cand:
                     t_apc += apc.finish_pending()  # (a lookup must see every snapshot taken so far)
                     new_ = self._apc_restore_wave(
@@ -2177,7 +2181,11 @@ class Model:
                     ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
                         for it in part:
                             b, t, st, e = it
-                            if s0_of(it, k) + C <= e and (not (vis and b in vis) or apc.images_enabled()):
+                            if (
+                                s0_of(it, k) + C <= e
+                                and (not (vis and b in vis) or apc.images_enabled())
+                                and not (pa is not None and pa.owns(b))
+                            ):
                                 t_apc0 = time.perf_counter()
                                 full_ = not rep or zone.get(b, 0) == 0
                                 vs_ = vis.get(b) if vis else None

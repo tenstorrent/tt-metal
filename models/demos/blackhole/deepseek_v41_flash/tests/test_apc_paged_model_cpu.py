@@ -271,3 +271,15 @@ def test_pool_pages_total_unchanged(pa):
             for u in list(pa.rid):
                 pa.model.pool.release(u)
             pa.idx.check()
+
+
+def test_host_tier_is_bypassed_only_for_users_the_paged_cache_owns(pa):
+    pa.model.pool.release(0)
+    pa.bind_new(0, "T", 2048)
+    pa.model.pool.release(1)
+    pa.bind_new(1, "I", 2048, nocommit=True)  # image prompt
+    pa.model.pool.release(2)
+    pa.model.pool.admit(2, 2049)  # anonymous (warm-up, compaction, legacy callers)
+    assert pa.owns(0) and not pa.owns(1) and not pa.owns(2) and not pa.owns(3)
+    pa.host_fallback = True  # DSV41_APC_PAGED_HOST=1
+    assert not pa.owns(0)
