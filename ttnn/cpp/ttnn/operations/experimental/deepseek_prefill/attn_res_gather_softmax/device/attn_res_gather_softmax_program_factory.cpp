@@ -42,9 +42,10 @@ constexpr uint32_t kStatsPerRow = 2;
 // Ceiling on the gather's staging buffer, in tiles.
 constexpr uint32_t kMaxStageTiles = 64;
 
-// Fold cores per token row-tile. Two puts a core's share at half a row, which is
-// the widest split whose share still divides the row width.
-constexpr uint32_t kFoldCoresPerRow = 2;
+// The most cores a token row is split across. Both passes take a core's runs from DRAM
+// once and hold them, so more chunks shorten every core's share of the reads; the
+// row's leader then sums one partial pair per chunk, which is what bounds it.
+constexpr uint32_t kMaxChunksPerRow = 4;
 // The common runtime args. Everything a cache hit patches is here, so a hit costs a
 // handful of writes per program rather than a handful per core.
 enum ReaderCommonArg : uint32_t {
@@ -130,12 +131,9 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     const auto& stats = tensor_args.stats;
     auto& output = tensor_return_value.at(0);
 
-    // A deferred residual write, settled inside pass one against the very rows it is
-    // about to be reduced over. Pass two then folds the settled stream by distributing
-    // the row weight over the two addends — `b*(prefix + pending)` as `b*prefix +
-    // b*pending`, two MACs into the accumulator it already uses — so nothing has to wait
-    // on the settled tiles reaching DRAM. Only the reduce needs them summed for real:
-    // a sum of squares does not distribute.
+    // A deferred residual write, settled inside pass one against the very runs it is
+    // about to be reduced over. The settled runs stay resident on their core, so the fold
+    // in pass two weights them directly.
     const bool fuse_add = tensor_args.pending.has_value();
     const auto& pending = fuse_add ? tensor_args.pending.value() : running_sum;
     auto& total = fuse_add ? tensor_return_value.at(1) : output;
@@ -183,14 +181,11 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     tt::tt_metal::Program program{};
     const auto grid = mesh_device->compute_with_storage_grid_size();
 
-    // Two splits, because the two passes carry different amounts of parallelism. A
-    // row's statistics reduce along the whole of its width, so the core that reduces a
-    // row is the only one that can produce it: pass one is capped at Ht cores however
-    // large the grid. The fold is tied to nothing once the row weights exist — every
-    // output tile is independent — so pass two splits by tile across the rest of the
-    // grid. Splitting the fold by row as well would leave 90 of 110 cores idle through
-    // the part of the op that moves all the data.
-    const uint32_t num_output_tiles = Ht * Wt;
+    // One split for both passes (see `kernels/attn_res_core_runs.hpp`): a unit is a run of
+    // one token row, and a core reduces its runs in pass one and folds the same runs in
+    // pass two, so the stream is read from DRAM once and held between the passes. A row
+    // is cut into as many runs as the grid seats, up to `kMaxChunksPerRow` and only into
+    // runs that divide it; where even whole rows outnumber the cores, a core takes several.
     const auto grid_cores =
         corerange_to_cores(CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1})), std::nullopt, /*row_wise=*/true);
     TT_FATAL(grid_cores.size() > 1, "attn_res_gather_softmax needs a grid with more than one core");
@@ -198,41 +193,30 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // One core is held back for the fabric connection. It cannot double as a worker:
     // a link admits a single sender, and that core's two dataflow RISCs are already
     // the reader and the writer.
-    const auto max_fold_cores = static_cast<uint32_t>(grid_cores.size() - 1);
-
-    // The fold is not run on the whole grid, because a core's share of the output has
-    // to divide the row width to be worth having: the scalars a row needs are fetched
-    // once per row a core touches, so a share that straddles a boundary pays twice for
-    // the same run of tiles. Only a share that divides `Wt` avoids it, and of those the
-    // half-row is the widest — beyond it the split adds cores without shortening the
-    // work each one still has to fetch for. Falls back to a whole row per core, then to
-    // a ragged split, where the grid cannot seat the aligned choice.
-    uint32_t fold_core_budget = kFoldCoresPerRow * Ht;
-    if (fold_core_budget > max_fold_cores) {
-        fold_core_budget = Ht;
+    const auto max_cores = static_cast<uint32_t>(grid_cores.size() - 1);
+    uint32_t chunks_per_row = 1;
+    for (uint32_t c = kMaxChunksPerRow; c > 1; --c) {
+        if (Wt % c == 0 && Ht * c <= max_cores) {
+            chunks_per_row = c;
+            break;
+        }
     }
-    fold_core_budget = std::min(fold_core_budget, max_fold_cores);
-    const CoreRangeSet fold_grid = num_cores_to_corerangeset(fold_core_budget, grid, /*row_wise=*/true);
-    const auto [num_fold_cores, all_fold_cores, fold_group_1, fold_group_2, tiles_per_core_1, tiles_per_core_2] =
-        tt::tt_metal::split_work_to_cores(fold_grid, num_output_tiles, /*row_wise=*/true);
-    const auto [num_stat_cores, all_stat_cores, stat_group_1, stat_group_2, rows_per_core_1, rows_per_core_2] =
-        tt::tt_metal::split_work_to_cores(grid, Ht, /*row_wise=*/true);
-
-    // Both splits hand out cores row-wise from the origin and Wt >= 1, so the
-    // statistics cores are a prefix of the fold cores. The kernels rely on that: a core
-    // that produced statistics is the one that waits for the gather, and a core that
-    // did not still has to be released by it.
-    TT_FATAL(
-        num_stat_cores <= num_fold_cores && all_fold_cores.contains(all_stat_cores),
-        "the {} statistics cores must be a subset of the {} fold cores",
-        num_stat_cores,
-        num_fold_cores);
-
-    const auto fold_cores = corerange_to_cores(all_fold_cores, std::nullopt, /*row_wise=*/true);
+    const uint32_t chunk_tiles = Wt / chunks_per_row;
+    const uint32_t num_units = Ht * chunks_per_row;
+    const uint32_t units_per_core = (num_units + max_cores - 1) / max_cores;
+    const uint32_t num_cores = (num_units + units_per_core - 1) / units_per_core;
+    // A split row is one unit per core: a row's leader sums its chunks' pairs as they
+    // arrive, which assumes each of them is a core of its own.
+    TT_FATAL(chunks_per_row == 1 || units_per_core == 1, "a split row must take one core per chunk");
+    const CoreRangeSet unit_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+    const auto worker_cores = corerange_to_cores(unit_cores, std::nullopt, /*row_wise=*/true);
     const CoreCoord gather_core = grid_cores.back();
     const CoreRangeSet gather_core_set{CoreRange(gather_core, gather_core)};
-    TT_FATAL(!all_fold_cores.contains(gather_core), "the gather core must hold no fold work");
-    const CoreRangeSet all_cores = all_fold_cores.merge(gather_core_set);
+    TT_FATAL(!unit_cores.contains(gather_core), "the gather core must hold no rows");
+    const CoreRangeSet all_cores = unit_cores.merge(gather_core_set);
+    // The cores that park a row's statistics and announce it to the gather core: every
+    // core where rows are whole, a row's leader where they are split.
+    const uint32_t num_parking_cores = chunks_per_row == 1 ? num_cores : Ht;
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Validation
@@ -259,19 +243,22 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         kStatsPerPartial * ring_size,
         input_shape[-2]);
 
-    // Sized for a statistics core, and allocated on every fold core: the pass-one
-    // buffers sit unused on the cores that only fold, which is what lets one kernel
-    // binary and one buffer layout serve both roles.
-    const uint32_t l1_per_core = Wt * wide_tile_size                         // partial
-                                 + Wt * wide_tile_size                       // running_sum
-                                 + Wt * wide_tile_size                       // q, resident
-                                 + Wt * wide_tile_size                       // the reduce's transformed row
-                                 + (fuse_add ? 3 * Wt * wide_tile_size : 0)  // pending, the sum, the sum again
-                                 + scalar_tile_size                          // the reduce scaler
-                                 + kScalars * scalar_tile_size               // shift, mass, gathered statistics
-                                 + kRowWeights * scalar_tile_size + kStatsPerRow * scalar_tile_size +
-                                 packed_tiles * scalar_tile_size  // the packed statistics
-                                 + 2 * output_tile_size;
+    // A core's runs stay resident from pass one to the fold: the partial, and the stream
+    // they are reduced over, settled or not. The settled stream's second copy and the
+    // pending write only ever hold the run in flight.
+    const uint32_t resident_tiles = units_per_core * chunk_tiles;
+    const uint32_t l1_per_core =
+        resident_tiles * wide_tile_size                                         // partial
+        + resident_tiles * wide_tile_size                                       // running_sum
+        + chunk_tiles * wide_tile_size                                          // q, resident
+        + chunk_tiles * wide_tile_size                                          // the reduce's transformed run
+        + (fuse_add ? (resident_tiles + 2 * chunk_tiles) * wide_tile_size : 0)  // the sum, its copy, pending
+        + scalar_tile_size                                                      // the reduce scaler
+        + kScalars * scalar_tile_size                                           // shift, mass, gathered statistics
+        + kRowWeights * scalar_tile_size                                        // the row weights
+        + kStatsPerRow * (chunks_per_row + 1) * scalar_tile_size                // the run's and row's pairs
+        + packed_tiles * scalar_tile_size                                       // the packed statistics
+        + 2 * output_tile_size;
     TT_FATAL(
         l1_per_core <= mesh_device->l1_size_per_core(),
         "attn_res_gather_softmax needs {} B of L1 per core at Wt {} but the core has {} B",
@@ -291,30 +278,33 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
             return tt::tt_metal::CreateCircularBuffer(program, cores, config);
         };
 
-    make_cb(tt::CBIndex::c_0, all_fold_cores, Wt, wide_tile_size, wide_data_format);     // partial
-    make_cb(tt::CBIndex::c_1, all_fold_cores, 1, scalar_tile_size, scalar_data_format);  // reduce scaler
-    make_cb(tt::CBIndex::c_2, all_fold_cores, Wt, wide_tile_size, wide_data_format);     // q
-    make_cb(tt::CBIndex::c_3, all_fold_cores, Wt, wide_tile_size, wide_data_format);     // running_sum
-    make_cb(tt::CBIndex::c_4, all_fold_cores, kRowWeights, scalar_tile_size, scalar_data_format);
-    make_cb(tt::CBIndex::c_5, all_fold_cores, kScalars, scalar_tile_size, scalar_data_format);
-    make_cb(tt::CBIndex::c_6, all_fold_cores, Wt, wide_tile_size, wide_data_format);  // reduce input
-    make_cb(tt::CBIndex::c_7, all_fold_cores, kStatsPerRow, scalar_tile_size, scalar_data_format);
-    make_cb(tt::CBIndex::c_16, all_fold_cores, 2, output_tile_size, output_data_format);
+    make_cb(tt::CBIndex::c_0, unit_cores, resident_tiles, wide_tile_size, wide_data_format);  // partial
+    make_cb(tt::CBIndex::c_1, unit_cores, 1, scalar_tile_size, scalar_data_format);           // reduce scaler
+    make_cb(tt::CBIndex::c_2, unit_cores, chunk_tiles, wide_tile_size, wide_data_format);     // q
+    make_cb(tt::CBIndex::c_3, unit_cores, resident_tiles, wide_tile_size, wide_data_format);  // running_sum
+    make_cb(tt::CBIndex::c_4, unit_cores, kRowWeights, scalar_tile_size, scalar_data_format);
+    make_cb(tt::CBIndex::c_5, unit_cores, kScalars, scalar_tile_size, scalar_data_format);
+    make_cb(tt::CBIndex::c_6, unit_cores, chunk_tiles, wide_tile_size, wide_data_format);  // reduce input
+    make_cb(tt::CBIndex::c_7, unit_cores, kStatsPerRow, scalar_tile_size, scalar_data_format);
+    make_cb(tt::CBIndex::c_16, unit_cores, 2, output_tile_size, output_data_format);
     // A worker's scratch for the packed statistics: the two columns it parks in pass
     // one, and the whole gathered set it collects in pass two.
-    make_cb(tt::CBIndex::c_13, all_fold_cores, packed_tiles, scalar_tile_size, scalar_data_format);
+    make_cb(tt::CBIndex::c_13, unit_cores, packed_tiles, scalar_tile_size, scalar_data_format);
+    if (chunks_per_row > 1) {
+        // A row leader's: its other chunks' pairs, written in by them, and the row's sum.
+        // Allocated on every core, so the senders find it at their own copy's address.
+        make_cb(
+            tt::CBIndex::c_14, unit_cores, kStatsPerRow * (chunks_per_row - 1), scalar_tile_size, scalar_data_format);
+        make_cb(tt::CBIndex::c_15, unit_cores, kStatsPerRow, scalar_tile_size, scalar_data_format);
+    }
 
     if (fuse_add) {
-        make_cb(tt::CBIndex::c_10, all_fold_cores, Wt, wide_tile_size, wide_data_format);  // pending
-        // The settled row, packed twice from one dest register: a circular buffer has a
-        // single consumer, and the row is needed by the two reduces here and by the
-        // writer that parks it in DRAM. Both hold a whole row so the writer barriers
-        // once per row rather than once per tile.
-        //
-        // Only summing needs them, so they are the one buffer pair not allocated on the
-        // fold-only cores: the fold reads the two addends and distributes the weight.
-        make_cb(tt::CBIndex::c_11, all_stat_cores, Wt, wide_tile_size, wide_data_format);
-        make_cb(tt::CBIndex::c_12, all_stat_cores, Wt, wide_tile_size, wide_data_format);
+        make_cb(tt::CBIndex::c_10, unit_cores, chunk_tiles, wide_tile_size, wide_data_format);  // pending
+        // The settled run, packed twice from one dest register: a circular buffer has a
+        // single consumer. One copy stays resident for the reduces and the fold; the
+        // writer parks the other in DRAM as the stream the caller carries forward.
+        make_cb(tt::CBIndex::c_11, unit_cores, resident_tiles, wide_tile_size, wide_data_format);
+        make_cb(tt::CBIndex::c_12, unit_cores, chunk_tiles, wide_tile_size, wide_data_format);
     }
 
     // The gather core holds no operand — one route header and one increment header per
@@ -337,22 +327,16 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // program on this chip.
     const auto ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     const auto done_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    // A row leader's count of its other chunks' pairs.
+    const auto chunk_sem_id = tt::tt_metal::CreateSemaphore(program, unit_cores, 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                              Kernels
     ////////////////////////////////////////////////////////////////////////////
-    // Each fold core derives its runs of both splits from its own position (see
+    // Each core derives its units from its own position (see
     // `kernels/attn_res_core_runs.hpp`), so the split rides in compile-time args and a
     // launch ships no per-core runtime args at all.
-    const std::array<uint32_t, 8> core_runs_ct_args = {
-        grid.x,
-        num_stat_cores,
-        stat_group_1.num_cores(),
-        rows_per_core_1,
-        rows_per_core_2,
-        fold_group_1.num_cores(),
-        tiles_per_core_1,
-        tiles_per_core_2};
+    const std::array<uint32_t, 5> split_ct_args = {grid.x, units_per_core, num_units, chunks_per_row, chunk_tiles};
 
     // `pending` aliases running_sum where no write was handed in, so the accessor list is
     // the same length either way and the kernel's compile-time offsets do not move. The
@@ -362,27 +346,27 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*partial.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*pending.buffer()).append_to(reader_ct_args);
-    reader_ct_args.insert(reader_ct_args.end(), core_runs_ct_args.begin(), core_runs_ct_args.end());
+    reader_ct_args.insert(reader_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         std::string(kKernelDir) + "dataflow/reader_attn_res_gather_softmax.cpp",
-        all_fold_cores,
+        unit_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     std::vector<uint32_t> writer_ct_args = {
-        Wt, ring_size, Ht, ready_sem_id, done_sem_id, static_cast<uint32_t>(fuse_add)};
+        Wt, ring_size, Ht, ready_sem_id, done_sem_id, static_cast<uint32_t>(fuse_add), chunk_sem_id};
     TensorAccessorArgs(*stats.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*shift.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*mass.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*total.buffer()).append_to(writer_ct_args);
-    writer_ct_args.insert(writer_ct_args.end(), core_runs_ct_args.begin(), core_runs_ct_args.end());
+    writer_ct_args.insert(writer_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         std::string(kKernelDir) + "dataflow/writer_attn_res_gather_softmax.cpp",
-        all_fold_cores,
+        unit_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     std::vector<uint32_t> compute_ct_args = {
@@ -391,12 +375,12 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
         std::bit_cast<uint32_t>(operation_attributes.eps),
         static_cast<uint32_t>(fuse_add)};
-    compute_ct_args.insert(compute_ct_args.end(), core_runs_ct_args.begin(), core_runs_ct_args.end());
+    compute_ct_args.insert(compute_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
     tt::tt_metal::CreateKernel(
         program,
         std::string(kKernelDir) + "compute/attn_res_gather_softmax.cpp",
-        all_fold_cores,
+        unit_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -404,8 +388,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_ct_args});
 
-    std::vector<uint32_t> gather_ct_args = {
-        ring_size, Ht, static_cast<uint32_t>(num_stat_cores), ready_sem_id, done_sem_id, stage_tiles};
+    std::vector<uint32_t> gather_ct_args = {ring_size, Ht, num_parking_cores, ready_sem_id, done_sem_id, stage_tiles};
     TensorAccessorArgs(*stats.buffer()).append_to(gather_ct_args);
 
     auto gather_kernel_id = tt::tt_metal::CreateKernel(
@@ -426,45 +409,34 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
          partial.buffer()->address(),
          q.buffer()->address(),
          pending.buffer()->address()});
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program,
-        writer_kernel_id,
-        {site_offsets.shift,
-         site_offsets.mass,
-         stats.buffer()->address(),
-         shift.buffer()->address(),
-         mass.buffer()->address(),
-         output.buffer()->address(),
-         total.buffer()->address(),
-         my_rank,
-         gather_physical.x,
-         gather_physical.y});
+    std::vector<uint32_t> writer_common = {
+        site_offsets.shift,
+        site_offsets.mass,
+        stats.buffer()->address(),
+        shift.buffer()->address(),
+        mass.buffer()->address(),
+        output.buffer()->address(),
+        total.buffer()->address(),
+        my_rank,
+        gather_physical.x,
+        gather_physical.y};
+    if (chunks_per_row > 1) {
+        // Each row's leader, its chunk 0 core, where the row's other chunks send their pairs.
+        for (uint32_t g = 0; g < Ht; ++g) {
+            const auto leader = mesh_device->worker_core_from_logical_core(worker_cores.at(g * chunks_per_row));
+            writer_common.push_back((leader.x << 16) | leader.y);
+        }
+    }
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, writer_common);
 
-    // The closed form the kernels use, checked against the split it stands in for.
-    uint32_t start_row = 0;
-    uint32_t start_tile = 0;
-    for (uint32_t i = 0; i < num_fold_cores; ++i) {
-        const CoreCoord& core = fold_cores.at(i);
-        const uint32_t rows =
-            (i < num_stat_cores) ? (stat_group_1.contains(core) ? rows_per_core_1 : rows_per_core_2) : 0;
-        const uint32_t tiles = fold_group_1.contains(core) ? tiles_per_core_1 : tiles_per_core_2;
-        const uint32_t linear = core.y * grid.x + core.x;
-        const bool stat_core = linear < num_stat_cores;
-        const uint32_t stat_1 = stat_group_1.num_cores();
-        const uint32_t fold_1 = fold_group_1.num_cores();
+    // The closed form the kernels use, checked against the cores it stands in for.
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const CoreCoord& core = worker_cores.at(i);
         TT_FATAL(
-            linear == i && (stat_core ? (linear < stat_1 ? rows_per_core_1 : rows_per_core_2) : 0) == rows &&
-                (!stat_core ||
-                 (linear < stat_1 ? linear * rows_per_core_1
-                                  : stat_1 * rows_per_core_1 + (linear - stat_1) * rows_per_core_2) == start_row) &&
-                (linear < fold_1 ? tiles_per_core_1 : tiles_per_core_2) == tiles &&
-                (linear < fold_1 ? linear * tiles_per_core_1
-                                 : fold_1 * tiles_per_core_1 + (linear - fold_1) * tiles_per_core_2) == start_tile,
-            "fold core {} (#{}) does not take the run its position implies; the kernels would read the wrong tiles",
+            core.y * grid.x + core.x == i,
+            "core {} (#{}) does not take the units its position implies; the kernels would read the wrong tiles",
             core,
             i);
-        start_row += rows;
-        start_tile += tiles;
     }
 
     // The release is a multicast per rectangle of the fold set rather than one
@@ -472,7 +444,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // wake-up latency. The gather core sits outside every rectangle by construction,
     // so it is not among the destinations it counts.
     std::vector<uint32_t> release_args;
-    const auto fold_ranges = all_fold_cores.merge_ranges().ranges();
+    const auto fold_ranges = unit_cores.merge_ranges().ranges();
     for (const auto& range : fold_ranges) {
         const auto start_physical = mesh_device->worker_core_from_logical_core(range.start_coord);
         const auto end_physical = mesh_device->worker_core_from_logical_core(range.end_coord);
