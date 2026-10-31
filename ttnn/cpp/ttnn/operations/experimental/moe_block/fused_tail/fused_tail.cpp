@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/operations/experimental/moe_block/common/l1_budget.hpp"
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"
 
 #include "device/fused_tail_device_operation.hpp"
@@ -51,7 +52,7 @@ const EnginePlanPtr& engine_plan(MoEBlockResources& resources, uint32_t wtb, std
             *dims.latent_dim,
             dims.emb_dim / G,
             wtb,
-            engine_l1_cap(resources.mesh_device()));
+            free_cb_l1_bytes(resources.mesh_device(), kL1KeptLater, kArenaMax));
     });
     TT_FATAL(
         plan->geom.wtb == wtb, "fused_tail: the engine was planned for {} B W' tiles, got {}", plan->geom.wtb, wtb);

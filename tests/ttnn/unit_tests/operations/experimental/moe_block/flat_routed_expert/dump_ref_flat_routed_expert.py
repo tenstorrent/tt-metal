@@ -4,7 +4,7 @@
 (ttnn.bringup.flat_routed_expert via FlatRoutedExpert in mstaletovic/moe-trim). Run in that tree's environment on one
 Blackhole chip of a Galaxy:
 
-    pytest -q <this file>        (MOE_BLOCK_REFS: where to write; default as ref_harness)
+    MOE_BLOCK_REFS=<refs root> pytest -q <this file>        (MOE_BLOCK_REFS: where to write; required)
 
 Each case is one chip at the Galaxy 8x4 per-chip load (the flat expert runs the same program on every chip, chip by
 chip, with no fabric): the seeded inputs (flat_cases.case_inputs), the plain op's y, the plan's layout facts, and the
@@ -36,6 +36,7 @@ cases = _load("flat_cases", HERE / "flat_cases.py")
 HOST_CALLS = 50
 
 
+@pytest.mark.skipif(not harness.refs_available(), reason="set MOE_BLOCK_REFS (where to write the cases)")
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("case", cases.REF_CASES, ids=[cases.case_name(*c) for c in cases.REF_CASES])

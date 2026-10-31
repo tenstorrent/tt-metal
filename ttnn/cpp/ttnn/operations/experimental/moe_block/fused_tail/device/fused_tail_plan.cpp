@@ -7,9 +7,7 @@
 #include <algorithm>
 #include <numeric>
 
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -510,14 +508,6 @@ std::map<std::pair<ChipCoord, TailDir>, std::vector<uint32_t>> row_links(const M
         }
     }
     return out;
-}
-
-uint32_t engine_l1_cap(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const auto base = mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const auto top = mesh_device.lowest_occupied_compute_l1_address().value_or(base + mesh_device.l1_size_per_core());
-    const uint64_t free = top > base ? top - base : 0;
-    const uint64_t cap = free > kKeptLater ? (free - kKeptLater) / 64 * 64 : 0;
-    return static_cast<uint32_t>(std::min<uint64_t>(kArenaMax, cap));
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_tail

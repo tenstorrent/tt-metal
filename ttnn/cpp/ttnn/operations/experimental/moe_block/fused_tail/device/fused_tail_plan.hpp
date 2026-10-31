@@ -27,10 +27,6 @@
 
 #include "ttnn/operations/experimental/moe_block/common/mesh_routing.hpp"
 
-namespace tt::tt_metal::distributed {
-class MeshDevice;
-}
-
 namespace ttnn::operations::experimental::moe_block {
 class MoEBlockResources;
 }
@@ -135,7 +131,6 @@ std::shared_ptr<const TailA2APlan> make_tail_a2a_plan(MoEBlockResources& resourc
 // ---- TailEngine ----
 inline constexpr uint32_t kXT = 4;  // a step's exchange: up to 3 partial tiles + the half's sum of squares
 inline constexpr uint32_t kArenaMax = 1400 * 1024;
-inline constexpr uint32_t kKeptLater = 44 * 1024;  // L1 the block takes after the tail is planned
 inline constexpr uint32_t kGY = 10;
 inline constexpr uint32_t kLandGroup = 3;  // WG: one fused landed increment a 3 columns' shares
 inline constexpr uint32_t kPortGroup = 8;  // PG: packets a port group
@@ -190,9 +185,5 @@ std::shared_ptr<const TailEnginePlan> make_tail_engine_plan(
 
 // The fabric link ids toward each row neighbour (MeshPlan's X+ / X- ports).
 std::map<std::pair<ChipCoord, TailDir>, std::vector<uint32_t>> row_links(const MeshPlan& plan);
-
-// L1 left for program CBs: the allocator's lowest occupied L1 address minus its base, less kKeptLater, capped at
-// kArenaMax (TailEngine's cap).
-uint32_t engine_l1_cap(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_tail
