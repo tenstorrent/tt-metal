@@ -1616,13 +1616,12 @@ void copy_interleaved_buffer_to_completion_queue(
 }
 
 // Functions used to copy buffer data from completion queue into user space
-std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
+ReadBufferDescriptor generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer) {
     // Increment the src_page_index after the Read Buffer Descriptor has been populated
     // for the current core/txn
     dispatch_params.src_page_index += dispatch_params.pages_per_txn;
-    return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
-        std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
+    return ReadBufferDescriptor(
         buffer.page_size(),
         dispatch_params.padded_page_size,
         dst,
@@ -1632,10 +1631,9 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_r
         dispatch_params.core_page_mapping);
 }
 
-std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
+ReadBufferDescriptor generate_interleaved_buffer_read_descriptor(
     void* dst, const BufferReadDispatchParams& dispatch_params, Buffer& buffer) {
-    return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
-        std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
+    return ReadBufferDescriptor(
         buffer.page_size(),
         dispatch_params.padded_page_size,
         dst,

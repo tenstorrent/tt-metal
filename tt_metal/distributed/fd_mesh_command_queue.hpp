@@ -28,6 +28,7 @@ class FDMeshCQTestAccessor;
 
 namespace tt::tt_metal {
 class Device;
+struct ReadCoreDataDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -96,7 +97,7 @@ private:
     // 1. Event ID management.
     // 2. Bypass mode tracker.
     SystemMemoryManager& reference_sysmem_manager();
-    MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
+    MultiProducerSingleConsumerQueue<ReadBufferDescriptor>& get_read_descriptor_queue(IDevice* device);
 
     void submit_core_data_memcpy_request(
         const ReadCoreDataDescriptor& read_descriptor,
@@ -154,10 +155,10 @@ private:
 
     // TODO: Explore other thread-safe data-structures for these queues.
     // Main thread submits request to the completion queue reader through this queue
-    MultiProducerSingleConsumerQueue<MeshCompletionReaderVariant> completion_queue_reads_;
+    MultiProducerSingleConsumerQueue<std::shared_ptr<MeshCompletionReaderVariant>> completion_queue_reads_;
     // Main thread pushes to a queue per physical device, specifying the buffer read configuration that
     // must be used by the completion queue reader. Only used for reading buffer data from the Mesh.
-    std::unordered_map<uint32_t, std::unique_ptr<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>>
+    std::unordered_map<uint32_t, std::unique_ptr<MultiProducerSingleConsumerQueue<ReadBufferDescriptor>>>
         read_descriptors_;
     // CV used by main thread to notify completion queue reader of work
     std::condition_variable reader_thread_cv_;

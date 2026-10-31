@@ -300,7 +300,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
     for (auto device_id : mesh_device_->get_device_ids()) {
         read_descriptors_.emplace(
-            device_id, std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
+            device_id, std::make_unique<MultiProducerSingleConsumerQueue<ReadBufferDescriptor>>());
     }
 }
 
@@ -1112,8 +1112,7 @@ void FDMeshCommandQueue::read_completion_queue() {
     }
 }
 
-MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::get_read_descriptor_queue(
-    IDevice* device) {
+MultiProducerSingleConsumerQueue<ReadBufferDescriptor>& FDMeshCommandQueue::get_read_descriptor_queue(IDevice* device) {
     return *(read_descriptors_[device->id()]);
 }
 
@@ -1128,12 +1127,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 
         for (int i = 0; i < num_reads; i++) {
             buffer_dispatch::copy_completion_queue_data_into_user_space(
-                std::get<ReadBufferDescriptor>(*(read_descriptor_queue.pop())),
-                mmio_device_id,
-                channel,
-                id_,
-                device->sysmem_manager(),
-                exit_condition_);
+                read_descriptor_queue.pop(), mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition_);
         }
     };
 
