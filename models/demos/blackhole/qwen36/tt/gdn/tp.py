@@ -959,7 +959,21 @@ class TPGatedDeltaNet:
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
-        if self._gdn_fuse_out:
+        if self._gdn_fuse_out and getattr(self.args, "num_devices", 1) == 1:
+            # Single chip: nlp_concat_heads selects the full compute grid and its STATIC dataflow
+            # buffers scale with the per-core shard. At TP=1 the activation is TP times wider per chip
+            # than at TP=4, so on [1,Nv,2048,Dv] it wants 1684864 B against the 1572864 B L1 maximum
+            # (measured). The op exposes no grid or program-config argument, so the fix is to not use
+            # it: the head->token relayout below is the same permutation done with a reshape + permute,
+            # which the caller's placement (_L1, already DRAM above the L1 seq ceiling) sizes.
+            n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            ttnn.deallocate(o)
+            n = ttnn.reshape(n, (1, Nv, T, Dv))
+            # [1,Nv,T,Dv] -> [1,T,Nv,Dv] -> [1,T,Nv*Dv]: the same element order nlp_concat_heads emits.
+            n = ttnn.permute(n, (0, 2, 1, 3), memory_config=_L1)
+            out_f = ttnn.reshape(n, (1, T, self.value_dim_tp), memory_config=_L1)
+            ttnn.deallocate(n)
+        elif self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
             # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
@@ -1016,9 +1030,15 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
-        out = tpc.tp_reduce_scatter(
-            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        if getattr(self.args, "num_devices", 1) == 1:
+            # Single chip: the out-projection is not row-parallel, so there is one partial and nothing
+            # to reduce. tp_reduce_scatter is a collective and would dereference tt_ccl, which is None
+            # here (layer.py passes None at num_devices == 1). Hand the partial back directly.
+            out = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG) if partial.memory_config() != ttnn.DRAM_MEMORY_CONFIG else partial
+        else:
+            out = tpc.tp_reduce_scatter(
+                partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         if return_state:
             return out, captured[0], captured[1]
         return out

@@ -26,7 +26,11 @@ DECODE_STEPS = 4
 def test_gdn_prefill_tp1(mesh_device, seq_len):
     args, li, _, old, tp = _build(mesh_device, max_seq_len=4096)
     tp.use_fused_recurrent_decode = True
-    chunk = args.gdn_chunk_size
+    # layer.py sets this for the real model (TP=1 has no mesh axis to all-gather along); the test
+    # builds the module directly, so without this it exercises an AGMM path production never takes.
+    tp._fuse_agmm = False
+    # gdn_chunk_size is set by _init_tp_config, so it lives on the TP=1 args, not the single-device ones.
+    chunk = args.tp1_args(mesh_device).gdn_chunk_size
 
     def host(out, rows):
         return ttnn.to_torch(out).float().reshape(-1, args.dim)[:rows]
@@ -36,7 +40,9 @@ def test_gdn_prefill_tp1(mesh_device, seq_len):
         ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device) for _ in range(2)
     )
     o_old = old.forward(x_old, mode="chunk", chunk_size=chunk, valid_len=None)
-    o_tp = tp.forward_prefill(x_tp, chunk_size=chunk, capture_state=True, carry_state=False)
+    # capture_state saves the final rec/conv state for the decode steps below, which requires the
+    # persistent buffers: carry_state must be True (tp.py asserts this).
+    o_tp = tp.forward_prefill(x_tp, chunk_size=chunk, capture_state=True, carry_state=True)
     prefill_pcc = compute_pcc(host(o_old, seq_len), host(o_tp, seq_len))
     ttnn.deallocate(o_old)
     ttnn.deallocate(o_tp)
