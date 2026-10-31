@@ -1,0 +1,15 @@
+Total [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+29.11,MinimalMatmulDeviceOperation (in0:dram_interleaved),55571.59,20,Other,48.28,58.61,54.36,3.18,54.33
+14.99,SDPAOperation (in0:dram_interleaved),28615.49,4,Compute,,,,,
+14.49,LayerNormDeviceOperation (in0:dram_interleaved),27648.73,24,Compute,,,,,
+8.17,BinaryNgDeviceOperation (in0:dram_interleaved),15595.43,16,Compute,,,,,
+6.59,TypecastDeviceOperation (in0:dram_interleaved),12574.56,32,TM,,,,,
+6.20,SliceDeviceOperation (in0:dram_interleaved),11825.07,25,TM,,,,,
+4.47,ReduceScatterMinimalAsyncDeviceOperation (in0:dram_interleaved),8536.77,8,CCL,,,,,
+4.26,AllGatherAsyncDeviceOperation (in0:dram_interleaved),8135.78,8,CCL,,,,,
+3.66,RotaryEmbeddingDeviceOperation (in0:dram_interleaved),6984.81,8,Compute,,,,,
+3.14,TransposeDeviceOperation (in0:dram_interleaved),5991.71,16,TM,,,,,
+1.92,ConcatDeviceOperation (in0:dram_interleaved),3663.10,1,TM,,,,,
+1.51,NlpCreateHeadsDeviceOperation (in0:dram_interleaved),2874.85,4,TM,,,,,
+1.31,NLPConcatHeadsDeviceOperation (in0:dram_interleaved),2503.42,4,TM,,,,,
+0.18,PagedFillCacheDeviceOperation (in0:dram_interleaved),350.79,8,Other,,,,,

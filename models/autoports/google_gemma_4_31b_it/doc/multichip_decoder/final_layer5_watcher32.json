@@ -1,0 +1,76 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38418880,
+      "largest_contiguous_bytes_free_per_bank": 4188727680
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 41813440,
+      "largest_contiguous_bytes_free_per_bank": 4188727680
+    },
+    "decode_eager_host_us": 7039.435673505068,
+    "prefill_warm_host_us": 133816.20502332225,
+    "decode_trace_host_us": 6988.497937527427,
+    "trace_replays": 129,
+    "stress_replays": 128,
+    "trace_id": "MeshTraceId(0)",
+    "captures": 1,
+    "interleaved_other_cache_prefill": true
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 11017664,
+      "largest_contiguous_bytes_free_per_bank": 4250694528
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 11866304,
+      "largest_contiguous_bytes_free_per_bank": 4250694528
+    },
+    "decode_eager_host_us": 4108.544342064609,
+    "prefill_warm_host_us": 52685.03201659769,
+    "decode_trace_host_us": 3834.9310079865973,
+    "trace_replays": 129,
+    "stress_replays": 128,
+    "trace_id": "MeshTraceId(1)",
+    "captures": 1,
+    "interleaved_other_cache_prefill": true
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    0.9999121488392003,
+    0.9999144660110368
+  ],
+  "unused_pages_unchanged": true,
+  "stress_min_pcc": 0.9999726818067646,
+  "stress_final_pcc": 0.9999850982768163,
+  "prefill_pcc": 0.9999888738317363,
+  "decode_pcc": 0.9999857155505767,
+  "layer_type": "full_attention",
+  "batch": 32,
+  "seq": 33,
+  "residual": "replicated",
+  "candidate": null
+}

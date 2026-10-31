@@ -1,0 +1,34 @@
+{
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "0",
+    "--seq",
+    "33",
+    "--batch",
+    "32",
+    "--inputs",
+    "bringup/artifacts/optimized_decoder_layer0_inputs.pt",
+    "--replicated",
+    "--result",
+    "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_stress32.json",
+    "--stress"
+  ],
+  "source_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py": "f872f4c7f8141f0ff546148e1262391ac07f2f2e7b2c312055fb2cb5d648a982",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "e798abcf508367ba7f526135e99bf167f475ce6ad5c17cbc52c2399e68afb73c",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/multichip_candidate.py": "1c6bedad9aee52c68ed3605e11807ea5d2d531678047e8318c2ce86b25dde640"
+  },
+  "semantic_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py": "0d562de5d75e9d40c3acafb1cdd013ff243bdc308ea52c7a24cd3f632ce1e1b8",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "57d10493879c0997bc4bcadbc63834693408da0a15f8515db8b11d64a20fb9ba",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "af4cbb98e8fa0ccff14d1a2e2266707a6d87b0ca4d951d538c47d485dfff1d14",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/multichip_candidate.py": "335d65d13a42abf03025510813a65f1f10d4657e1e198c72085044a9fa5671a9"
+  },
+  "env": {
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": null
+  }
+}

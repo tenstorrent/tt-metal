@@ -1,0 +1,88 @@
+{
+  "layer_types": {
+    "sliding_attention": {
+      "layers": 50,
+      "weight_bytes_per_device_layer": 72187904,
+      "kv_bytes_per_token_device": 2176
+    },
+    "full_attention": {
+      "layers": 10,
+      "weight_bytes_per_device_layer": 80257024,
+      "kv_bytes_per_token_device": 1088
+    }
+  },
+  "decoder_weights_per_device": 4411965440,
+  "embedding_head_reserve_per_device": 1409286144,
+  "full_cache_bytes_per_token_device": 119680,
+  "full_context_kv_per_device": 31373393920,
+  "trace_activation_reserve_per_device": 2147483648,
+  "capacity_basis": "Analytical BFP4 tile payload (576 bytes/1024 elements), BFP8 KV (1088 bytes/1024), BF16 norms. Sliding cyclic pool2048; global full prefix. Allocator reconciliation is separate.",
+  "advertised_context": 262144,
+  "total_estimate_per_device": 39813220352,
+  "sliding_physical_tokens": 2048,
+  "windowed_kv_per_device": 3074949120,
+  "windowed_total_per_device": 11514775552,
+  "batch_context_capacity": [
+    {
+      "batch": 1,
+      "context": 32768,
+      "estimated_bytes": 9019164672
+    },
+    {
+      "batch": 1,
+      "context": 262144,
+      "estimated_bytes": 11514775552
+    },
+    {
+      "batch": 8,
+      "context": 32768,
+      "estimated_bytes": 13074532352
+    },
+    {
+      "batch": 8,
+      "context": 262144,
+      "estimated_bytes": 33039419392
+    },
+    {
+      "batch": 16,
+      "context": 32768,
+      "estimated_bytes": 17709238272
+    },
+    {
+      "batch": 16,
+      "context": 262144,
+      "estimated_bytes": 57639012352
+    },
+    {
+      "batch": 32,
+      "context": 32768,
+      "estimated_bytes": 26978650112
+    },
+    {
+      "batch": 32,
+      "context": 262144,
+      "estimated_bytes": 106838198272
+    }
+  ],
+  "allocator_reconciliation": {
+    "sliding_attention": {
+      "measured_setup_bytes_per_device": 80039424,
+      "estimated_weight_tile_payload_bytes": 72187904,
+      "setup_overhead_bytes": 7851520,
+      "cache_allocation_bytes": 4665344,
+      "available_dram_bytes_per_device": 34178731008,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_batch1.json"
+    },
+    "full_attention": {
+      "measured_setup_bytes_per_device": 88108544,
+      "estimated_weight_tile_payload_bytes": 80257024,
+      "setup_overhead_bytes": 7851520,
+      "cache_allocation_bytes": 4595712,
+      "available_dram_bytes_per_device": 34178731008,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_batch1.json"
+    }
+  },
+  "decoder_setup_overhead_per_device": 471091200,
+  "setup_overhead_basis": "Measured setup allocation less weight tile payload; includes persistent CCL buffers for B1/8/16/32, setup indices and allocator rounding. Scaled by layer counts, separate from activation/trace reserve.",
+  "b1_full_prompt_8GiB_reserve_total": 17957226496
+}

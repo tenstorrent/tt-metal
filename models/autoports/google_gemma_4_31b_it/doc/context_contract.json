@@ -118,5 +118,65 @@
   },
   "optimized_memory_evidence": "optimized_decoder/memory_ledger.json",
   "optimized_persistent_attention_copies": 1,
-  "optimized_decode_k_chunk": "sliding64 capped to valid capacity divisibility; full32"
+  "optimized_decode_k_chunk": "sliding64 capped to valid capacity divisibility; full32",
+  "multichip_plan": {
+    "status": "validated",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "hardware": "4 Blackhole P300_X2 ASICs",
+    "advertised_context": 262144,
+    "per_device_layer_kv_bytes_at_advertised_context": {
+      "sliding_attention": 570425344,
+      "full_attention": 285212672
+    },
+    "decoder_weight_bytes_per_device_estimate": 4411965440,
+    "reserved_trace_activation_bytes_estimate": 2147483648,
+    "full_stack_unbounded_kv_total_bytes_estimate": 39813220352,
+    "sliding_cache_plan": "Use private cyclic pages for sliding layers; 2048-token physical capacity retains previous1024 plus current1024 prefill chunk. Full attention retains262144. Maximum-context and modulo-wrap validation passed; no capability reduction.",
+    "full_stack_windowed_total_bytes_estimate": 11514775552,
+    "evidence": "multichip_decoder/memory_plan.json",
+    "topology": "Ring",
+    "sliding_physical_tokens": 2048,
+    "decoder_setup_overhead_bytes_per_device": 471091200,
+    "validation": {
+      "sliding_attention": [
+        {
+          "prefill_tokens": 262143,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999249569079192,
+          "decode_pcc": 0.9999507131095386,
+          "comparison": "last32 prefill rows and decode, after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_context262143.json"
+        },
+        {
+          "prefill_tokens": 262144,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999246485258172,
+          "decode_pcc": 0.9999517927587646,
+          "comparison": "last32 prefill rows and decode, after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_context262144.json"
+        }
+      ],
+      "full_attention": [
+        {
+          "prefill_tokens": 262143,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999838288829098,
+          "decode_pcc": 0.9999905049362066,
+          "comparison": "last32 prefill rows and decode, after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_context262143.json"
+        },
+        {
+          "prefill_tokens": 262144,
+          "decode_position": 262143,
+          "prefill_pcc": 0.999983991016227,
+          "decode_pcc": 0.9999905049362066,
+          "comparison": "last32 prefill rows and decode, after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_context262144.json"
+        }
+      ]
+    }
+  }
 }

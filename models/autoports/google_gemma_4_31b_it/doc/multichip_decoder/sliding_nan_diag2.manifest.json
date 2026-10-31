@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "0",
+    "--seq",
+    "4096",
+    "--inputs",
+    "bringup/artifacts/optimized_decoder_layer0_inputs262144.pt",
+    "--candidate",
+    "{\"gather_before_norm\":true,\"ccl8\":true,\"diagnose\":true}",
+    "--result",
+    "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/sliding_nan_diag2.json"
+  ],
+  "source_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py": "a6d97be926c17975472acd2969ce9347583516d741951bbbb8d00f6be6ea702d",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "90a50b067c74322cd91d65a04e7d2827c22946b3510a638e2a2ea31654f0c8eb",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6"
+  },
+  "env": {
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": null
+  }
+}

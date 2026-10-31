@@ -1,0 +1,43 @@
+{
+  "1": {
+    "decode_eager_host_us": 1248.043670784682,
+    "prefill_warm_host_us": 22466.55896306038,
+    "decode_trace_host_us": 916.5091014438076,
+    "trace_replays": 129
+  },
+  "4": {
+    "decode_eager_host_us": 1761.9956634007394,
+    "prefill_warm_host_us": 12607.390992343426,
+    "decode_trace_host_us": 458.31505485693924,
+    "trace_replays": 129
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "prefill_pcc": 0.9998992491380215,
+  "decode_pcc": 0.9999446302702819,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "carry_reduced": true,
+    "pad_mlp": true,
+    "ccl8": true,
+    "ccl8_prefill_only": true,
+    "geometry": {
+      "self_attn.qkv_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      }
+    }
+  }
+}

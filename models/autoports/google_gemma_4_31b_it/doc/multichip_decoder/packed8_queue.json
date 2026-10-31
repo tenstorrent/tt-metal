@@ -1,0 +1,62 @@
+[
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_candidates",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--cyclic",
+      "--names",
+      "finalpacked8"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_candidates",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--cyclic",
+      "--names",
+      "finalpacked8"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_candidates",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--cyclic",
+      "--names",
+      "finalpacked8"
+    ],
+    "exit": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_candidates",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--cyclic",
+      "--names",
+      "finalpacked8"
+    ],
+    "exit": 0
+  }
+]

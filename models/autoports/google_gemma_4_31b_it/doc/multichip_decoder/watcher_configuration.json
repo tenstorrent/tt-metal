@@ -1,0 +1,6 @@
+{
+  "TT_METAL_WATCHER": "10",
+  "TT_METAL_WATCHER_DISABLE_ETH": "1",
+  "reason": "Source-built ACTIVE_ETH instrumentation requires29264 bytes but kernel config buffer holds26624; prescribed optimize/device skill retry. Worker-core checks retained; Ethernet instrumentation unavailable for this build.",
+  "failed_attempt": "watcher_eth_limit.log"
+}

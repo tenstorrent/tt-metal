@@ -1,0 +1,72 @@
+[
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/check_multichip_stack.py",
+    "measured_source_sha256": "fe7a4074c8d74d10fc545df4f9c28640eab011af827040a74a82e1a35a9be84f",
+    "committed_source_sha256": "6bc9a21e39fba61c708e42a2849d9561246d059b17a0ca102baf7db23febb954",
+    "non_import_ast_sha256": "69371394665ae5e29755b344b54820b1aad86bb04c18fbb957ba534320baaaf6",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/multichip_memory_plan.py",
+    "measured_source_sha256": "83132223576381e01029acffaddcd75bf35da3ccb176435532e2db191fef9d3d",
+    "committed_source_sha256": "6cf23b31bbe786ab3b1b09ab58e64828917914b1af20d80ca389f178a2b4fbdb",
+    "non_import_ast_sha256": "aecf3be3bc7bf1550615eb542d806c19c7aaef8ba60b540a3295c8372419c05c",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/recover_multichip.py",
+    "measured_source_sha256": "d9e8c1f3e4d74781d905633e16000950a391241c05d041b9d995b6405c289da8",
+    "committed_source_sha256": "ef941792045f1be063500a5b44092a45f454a660416628466a652bd0c03eb280",
+    "non_import_ast_sha256": "6f987e6c08101c43870187521c1c69f6e3f4d42ece9443288c931ffb1d079340",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/run_multichip_candidates.py",
+    "measured_source_sha256": "9b9f9772b6844814a11a5e30b723254533d619adc4b31ec5366237d30d513e8a",
+    "committed_source_sha256": "12644854c675ed7f1a5a9db09c3d3fd979e66dff1724961b3c686964b5e8aaab",
+    "non_import_ast_sha256": "b727ac862b1b2c60fd25c6640a9e47c792faa5c5da339de045b9d575ea87ea7c",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py",
+    "measured_source_sha256": "f872f4c7f8141f0ff546148e1262391ac07f2f2e7b2c312055fb2cb5d648a982",
+    "committed_source_sha256": "856a955bb0d9d519ef5a76476c51a7bb07fe6fb7d7437a5c0d55ff1193b6af43",
+    "non_import_ast_sha256": "821acfa0ba25a05a8b655ad33ce347d05de599533efcd16509b75897be998150",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/run_multichip_profiles.py",
+    "measured_source_sha256": "44609e5c2bc6d536820d0560737a62070e23833db49bae9eea0d438a1a1f8446",
+    "committed_source_sha256": "f280c5bcafc4cb86413d1feec42b8dc1f4bfc50325155eccd93a636cd129ca4a",
+    "non_import_ast_sha256": "bbcd4ec1370900cdd3c4d381200586a658371aac99b63f7753e5e48f9afd7c09",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/run_multichip_validation.py",
+    "measured_source_sha256": "954848f4db72ea67d0a8182e966336526c4af0c4515d3491a650e1a7429b4e58",
+    "committed_source_sha256": "cc4527e293c015c2d6a14dc27c1bfdf6605785f2f1aef0f8923a2f1462465938",
+    "non_import_ast_sha256": "98fc706d85fc87bfd928391d2c3294c98e12b968b9ff7a66a4aa35e9899af6a6",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/summarize_multichip_stage.py",
+    "measured_source_sha256": "6a22c9ddd0bd720a945ea10c6e590c6f5d3813e7fbdc0e7d5bf3c27ab5099c45",
+    "committed_source_sha256": "58dd8053f349f59760f2f02feadaa58573f755638fc406f91a492b036c058a02",
+    "non_import_ast_sha256": "601d1dbf6bf0f3e17d7a67dc3193dd2fcbd52bf5b7da4e23c3902d5a592992f0",
+    "change": "Repository hooks: formatting/import ordering and unused imports only; non-import AST identical."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+    "measured_source_sha256": "e798abcf508367ba7f526135e99bf167f475ce6ad5c17cbc52c2399e68afb73c",
+    "committed_source_sha256": "bd32984c751bd0c7b7800e0144207cba6442473f4a15587cd47328e6467fb07c",
+    "non_import_ast_sha256": "b809cd44d8b59b2ba13fd89490b3fb8f8fe8b16fa1406757c6888e5d3451c904",
+    "change": "Formatting/import order and removal of unused HF constant reexports. Profile harness now imports those identical pinned constants directly from optimized baseline; numerical path unchanged."
+  },
+  {
+    "source": "models/autoports/google_gemma_4_31b_it/tests/profile_multichip_decoder.py",
+    "measured_source_sha256": "618685ca0878302dc0a0ad4c28bf3f53cdc193d798a4cfe0b654e640c9828cb1",
+    "non_import_ast_sha256": "5c901cde5aa61a4c48aa9ca223e4876b4007a021c1d2af20f284646d3eed3563",
+    "change": "Imports pinned HF constants directly from optimized baseline; same constant values and identical computational AST. Full module import verified without devices.",
+    "committed_source_sha256": "fde48e743333cbc3957c73c22c07ba3b04c5d0a44438c7638164cb4a39d9035f"
+  }
+]

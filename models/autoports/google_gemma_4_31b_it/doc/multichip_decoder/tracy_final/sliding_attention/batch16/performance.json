@@ -1,0 +1,653 @@
+{
+  "ccl_runtime_rows": [
+    {
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "global_call_counts": [
+        "464896",
+        "464897",
+        "464898",
+        "464899"
+      ],
+      "payload_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_DRAM_INTERLEAVED",
+      "output_memory": "DEV_0_DRAM_INTERLEAVED",
+      "axis": 3,
+      "topology": "Ring",
+      "num_links": 2,
+      "num_workers_per_link": 2,
+      "num_buffers_per_channel": 1,
+      "chunks_per_sync": "factory shape heuristic; see ccl_report.md",
+      "persistent_output": true,
+      "persistent_intermediate": "yes, RS helper-created staging and penult",
+      "max_device_kernel_us": 19.318,
+      "attributes": "{'chunks_per_sync': 'std::nullopt'; 'cluster_axis': 'std::nullopt'; 'compute_kernel_config': 'std::nullopt'; 'dim': '3'; 'fabric_nodes': '{(M0; D0); (M0; D1); (M0; D3); (M0; D2)}'; 'has_barrier_semaphore': 'true'; 'mesh_shape': 'MeshShape([1; 4])'; 'num_buffers_per_channel': '1'; 'num_links': '2'; 'num_workers_per_link': '2'; 'optional_intermediate_mem_config': 'std::nullopt'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'ring_size': '4'; 'sub_device_id': '0'; 'topology': 'Topology::Ring'; 'using_persistent_buffers': 'true'}",
+      "decision": "kept; persistent and topology controls measured"
+    },
+    {
+      "op": "AllGatherAsyncDeviceOperation",
+      "global_call_counts": [
+        "465920",
+        "465921",
+        "465922",
+        "465923"
+      ],
+      "payload_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_DRAM_INTERLEAVED",
+      "output_memory": "DEV_0_DRAM_INTERLEAVED",
+      "axis": 3,
+      "topology": "Ring",
+      "num_links": 2,
+      "num_workers_per_link": 2,
+      "num_buffers_per_channel": 1,
+      "chunks_per_sync": "factory shape heuristic; see ccl_report.md",
+      "persistent_output": true,
+      "persistent_intermediate": "not exposed by AG API",
+      "max_device_kernel_us": 15.217,
+      "attributes": "{'barrier_semaphore_present': 'true'; 'chunks_per_sync': 'std::nullopt'; 'cluster_axis': 'std::nullopt'; 'dim': '3'; 'num_buffers_per_channel': '1'; 'num_links': '2'; 'num_workers_per_link': '2'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'reverse_order': 'false'; 'ring_size': '4'; 'sub_core_grid': 'std::nullopt'; 'sub_device_id': 'std::nullopt'; 'topology': 'Topology::Ring'; 'use_all_gather_async_llama_sharded': 'false'; 'use_all_gather_async_via_broadcast': 'false'; 'use_optimal_ccl_for_llama': 'false'; 'using_persistent_buffers': 'true'}",
+      "decision": "kept; persistent and topology controls measured"
+    },
+    {
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "global_call_counts": [
+        "481280",
+        "481281",
+        "481282",
+        "481283"
+      ],
+      "payload_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_DRAM_INTERLEAVED",
+      "output_memory": "DEV_0_DRAM_INTERLEAVED",
+      "axis": 3,
+      "topology": "Ring",
+      "num_links": 2,
+      "num_workers_per_link": 2,
+      "num_buffers_per_channel": 1,
+      "chunks_per_sync": "factory shape heuristic; see ccl_report.md",
+      "persistent_output": true,
+      "persistent_intermediate": "yes, RS helper-created staging and penult",
+      "max_device_kernel_us": 17.164,
+      "attributes": "{'chunks_per_sync': 'std::nullopt'; 'cluster_axis': 'std::nullopt'; 'compute_kernel_config': 'std::nullopt'; 'dim': '3'; 'fabric_nodes': '{(M0; D0); (M0; D1); (M0; D3); (M0; D2)}'; 'has_barrier_semaphore': 'true'; 'mesh_shape': 'MeshShape([1; 4])'; 'num_buffers_per_channel': '1'; 'num_links': '2'; 'num_workers_per_link': '2'; 'optional_intermediate_mem_config': 'std::nullopt'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'ring_size': '4'; 'sub_device_id': '0'; 'topology': 'Topology::Ring'; 'using_persistent_buffers': 'true'}",
+      "decision": "kept; persistent and topology controls measured"
+    },
+    {
+      "op": "AllGatherAsyncDeviceOperation",
+      "global_call_counts": [
+        "482304",
+        "482305",
+        "482306",
+        "482307"
+      ],
+      "payload_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_DRAM_INTERLEAVED",
+      "output_memory": "DEV_0_DRAM_INTERLEAVED",
+      "axis": 3,
+      "topology": "Ring",
+      "num_links": 2,
+      "num_workers_per_link": 2,
+      "num_buffers_per_channel": 1,
+      "chunks_per_sync": "factory shape heuristic; see ccl_report.md",
+      "persistent_output": true,
+      "persistent_intermediate": "not exposed by AG API",
+      "max_device_kernel_us": 15.007,
+      "attributes": "{'barrier_semaphore_present': 'true'; 'chunks_per_sync': 'std::nullopt'; 'cluster_axis': 'std::nullopt'; 'dim': '3'; 'num_buffers_per_channel': '1'; 'num_links': '2'; 'num_workers_per_link': '2'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'reverse_order': 'false'; 'ring_size': '4'; 'sub_core_grid': 'std::nullopt'; 'sub_device_id': 'std::nullopt'; 'topology': 'Topology::Ring'; 'use_all_gather_async_llama_sharded': 'false'; 'use_all_gather_async_via_broadcast': 'false'; 'use_optimal_ccl_for_llama': 'false'; 'using_persistent_buffers': 'true'}",
+      "decision": "kept; persistent and topology controls measured"
+    }
+  ],
+  "layer_type": "sliding_attention",
+  "batch": 16,
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "concurrency": 16
+  },
+  "prefill_device_us": 157937.56444444443,
+  "decode_device_us": 569.1429517575592,
+  "prefill_useful_flops": 64699655782400,
+  "decode_dram_bytes": 469175040.0,
+  "peak_flops_per_s": 2654208000000000.0,
+  "peak_dram_bytes_per_s": 2048000000000.0,
+  "prefill_flops_pct": 15.434109596325934,
+  "decode_dram_pct": 40.25164052239487,
+  "peak_basis": "Four Blackhole ASICs in the P300_X2 mesh, each: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+  "source": "warmed_layer_tracy",
+  "evidence": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/tracy_final/sliding_attention/batch16/profile/reports/2026_10_31_00_33_22/ops_perf_results_2026_10_31_00_33_22.csv",
+  "device_window_basis": "Maximum per-device FW end minus FW start across ALL layer ops, including gaps, for all4 participating devices. Chip clocks are not assumed synchronized. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+  "ns_per_cycle": 0.7407407472720282,
+  "prefill_device_ops": 724,
+  "decode_replay_count": 128,
+  "captured_body_op_count": 200,
+  "replay_op_ids_match_capture": true,
+  "decode_ops_per_replay": 200,
+  "decode_min_device_us": 551.9966611775824,
+  "decode_max_device_us": 600.5875337669853,
+  "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once across all4 devices, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+  "matmul_runtime_rows": [
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "qkv_local",
+      "weight_shape": [
+        5376,
+        4096
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 35.149,
+      "fraction_of_whole_layer_pct": 6.226637168997805,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=5;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "o_local",
+      "weight_shape": [
+        2048,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 23.493,
+      "fraction_of_whole_layer_pct": 4.161779481955829,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=8;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 44.526,
+      "fraction_of_whole_layer_pct": 7.887770536481729,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 46.362,
+      "fraction_of_whole_layer_pct": 8.213017509148944,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "down_local",
+      "weight_shape": [
+        5632,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 52.276,
+      "fraction_of_whole_layer_pct": 9.260681232653255,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=11;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "qkv_local",
+      "weight_shape": [
+        5376,
+        4096
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 34.699,
+      "fraction_of_whole_layer_pct": 6.146919773736233,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=5;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "o_local",
+      "weight_shape": [
+        2048,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 23.472,
+      "fraction_of_whole_layer_pct": 4.158059336843622,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=8;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 44.136,
+      "fraction_of_whole_layer_pct": 7.818682127255033,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 47.914,
+      "fraction_of_whole_layer_pct": 8.487953947917745,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "down_local",
+      "weight_shape": [
+        5632,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 51.884,
+      "fraction_of_whole_layer_pct": 9.191238523892062,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=11;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "qkv_local",
+      "weight_shape": [
+        5376,
+        4096
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 34.883,
+      "fraction_of_whole_layer_pct": 6.179515330909854,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=5;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "o_local",
+      "weight_shape": [
+        2048,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 23.285,
+      "fraction_of_whole_layer_pct": 4.1249323303682575,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=8;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 44.189,
+      "fraction_of_whole_layer_pct": 7.828071064919172,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 47.299,
+      "fraction_of_whole_layer_pct": 8.379006841060262,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "down_local",
+      "weight_shape": [
+        5632,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 51.885,
+      "fraction_of_whole_layer_pct": 9.19141567365931,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=11;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "qkv_local",
+      "weight_shape": [
+        5376,
+        4096
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 34.641,
+      "fraction_of_whole_layer_pct": 6.136645087235852,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=5;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "o_local",
+      "weight_shape": [
+        2048,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 23.535,
+      "fraction_of_whole_layer_pct": 4.169219772180242,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=8;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 44.418,
+      "fraction_of_whole_layer_pct": 7.8686383616189515,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 48.381,
+      "fraction_of_whole_layer_pct": 8.570682889222534,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=7;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    },
+    {
+      "op": "MatmulDeviceOperation",
+      "role": "down_local",
+      "weight_shape": [
+        5632,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "input_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+      "output_memory": "DEV_0_L1_WIDTH_SHARDED",
+      "fidelity": "LoFi",
+      "first_replay_duration_us": 52.115,
+      "fraction_of_whole_layer_pct": 9.232160120126336,
+      "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'in0_column_offset': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=11;per_core_M=1;per_core_N=22;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+    }
+  ],
+  "prefill_matmul_runtime_rows": [
+    {
+      "role": "qkv_local",
+      "weight_shape": [
+        5376,
+        4096
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "fidelity": "LoFi",
+      "attributes": "{'chunks': '1'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'config': 'MinimalMatmulConfig(M_block_size=4;K_block_size=8;N_block_size=16;subblock_h=1;subblock_w=8;compute_with_storage_grid_size=11-10)'; 'dim': '-1'; 'fuse_swiglu': 'false'; 'fused_activation': 'std::nullopt'; 'fused_ternary_scalar': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'}",
+      "count": 16,
+      "kernel_us": 31017.199999999997
+    },
+    {
+      "role": "o_local",
+      "weight_shape": [
+        2048,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "fidelity": "LoFi",
+      "attributes": "{'chunks': '1'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'config': 'MinimalMatmulConfig(M_block_size=4;K_block_size=8;N_block_size=16;subblock_h=1;subblock_w=8;compute_with_storage_grid_size=11-10)'; 'dim': '-1'; 'fuse_swiglu': 'false'; 'fused_activation': 'std::nullopt'; 'fused_ternary_scalar': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'}",
+      "count": 16,
+      "kernel_us": 24045.916999999998
+    },
+    {
+      "role": "gate_or_up_local",
+      "weight_shape": [
+        5376,
+        5632
+      ],
+      "input_dtype": "BFLOAT16",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT8_B",
+      "fidelity": "LoFi",
+      "attributes": "{'chunks': '1'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'config': 'MinimalMatmulConfig(M_block_size=4;K_block_size=8;N_block_size=16;subblock_h=1;subblock_w=8;compute_with_storage_grid_size=11-10)'; 'dim': '-1'; 'fuse_swiglu': 'false'; 'fused_activation': 'std::nullopt'; 'fused_ternary_scalar': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT8_B'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'}",
+      "count": 32,
+      "kernel_us": 95523.74599999997
+    },
+    {
+      "role": "down_local",
+      "weight_shape": [
+        5632,
+        5632
+      ],
+      "input_dtype": "BFLOAT8_B",
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "fidelity": "LoFi",
+      "attributes": "{'chunks': '1'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'config': 'MinimalMatmulConfig(M_block_size=4;K_block_size=8;N_block_size=16;subblock_h=1;subblock_w=8;compute_with_storage_grid_size=11-10)'; 'dim': '-1'; 'fuse_swiglu': 'false'; 'fused_activation': 'std::nullopt'; 'fused_ternary_scalar': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'}",
+      "count": 16,
+      "kernel_us": 49522.77399999999
+    }
+  ],
+  "prefill_sdpa_runtime_rows": [
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 1213.799,
+      "attributes": "{'chunk_start_idx': '0'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 1222.356,
+      "attributes": "{'chunk_start_idx': '0'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 1207.921,
+      "attributes": "{'chunk_start_idx': '0'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 1197.007,
+      "attributes": "{'chunk_start_idx': '0'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2114.408,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2122.538,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2033.151,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2032.501,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2126.406,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2130.684,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2030.004,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2031.842,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2136.629,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2135.652,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2032.857,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    },
+    {
+      "op": "SDPAOperation",
+      "device_kernel_us": 2034.833,
+      "attributes": "{'chunk_start_idx': '1024'; 'chunk_start_idx_tensor': 'std::nullopt'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'output_concat_heads': 'false'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=8-8;sub_core_grids=std::nullopt;q_chunk_size=128;k_chunk_size=128;exp_approx_mode=std::nullopt;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'sliding_window_size': '1024'; 'use_mla': 'false'; 'windowed_mode': 'WindowedMode::None'; 'windowed_q_token_offset': '0'}"
+    }
+  ],
+  "decode_sdpa_attributes": "{'cache_position_modulo': '2048'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'cur_pos': '{}'; 'head_dim_v': 'std::nullopt'; 'is_causal': 'true'; 'k_chunk_size': '64'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'paged_attention': 'true'; 'paged_cache_geometry': 'PagedCacheGeometryOverride(block_size=0;num_kv_heads=0)'; 'program_config': 'SDPAProgramConfig(compute_with_storage_grid_size=11-10;sub_core_grids=std::nullopt;q_chunk_size=0;k_chunk_size=64;exp_approx_mode=0;max_cores_per_head_batch=16;max_k_splits=1;matmul_math_fidelity=std::nullopt;segmented_accumulation=0)'; 'scale': '1'; 'share_cache': 'std::nullopt'; 'sliding_window_size': '1024'; 'spec_multi_pos_tiles': '0'; 'use_mla': 'std::nullopt'}",
+  "kv_cache_dtype": "BFLOAT8_B",
+  "bandwidth_lower_bound_us": 207.872,
+  "bandwidth_lower_bound_basis": "One read of projection weights plus active K/V at theoretical DRAM peak; excludes other ops, communication, and compute. Not a latency prediction.",
+  "aggregate_four_device_op_kernel_sum_us": 2152.0143515625,
+  "dram_components": {
+    "weight_parameter_bytes_reference_only": 283115520.0,
+    "active_kv": 142606336.0,
+    "ordinary_op_physical_io": 317621504.0,
+    "ordinary_io_by_op": {
+      "InterleavedToShardedDeviceOperation": 6750208,
+      "LayerNormDeviceOperation": 5636096,
+      "ReshardDeviceOperation": 0,
+      "MatmulDeviceOperation": 283115520.0,
+      "ShardedToInterleavedDeviceOperation": 2752512,
+      "NLPCreateQKVHeadsDecodeDeviceOperation": 0,
+      "RotaryEmbeddingHfDeviceOperation": 0,
+      "SdpaDecodeDeviceOperation": 1082624,
+      "ReshapeViewDeviceOperation": 1572864,
+      "SliceDeviceOperation": 0,
+      "ReduceScatterMinimalAsyncDeviceOperation": 10518528,
+      "AllGatherAsyncDeviceOperation": 6193152,
+      "BinaryNgDeviceOperation": 0
+    },
+    "cache_tile_update": 8912896.0,
+    "page_table": 34304
+  }
+}

@@ -1,0 +1,554 @@
+{
+  "final_layer0_batch1.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 4096,
+    "prefill_pcc": 0.9999195872825545,
+    "decode_pcc": 0.9999410571681029,
+    "cache_pcc": [
+      1.0,
+      1.0
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_batch16.json": {
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "seq": 4096,
+    "prefill_pcc": 0.9999240443955472,
+    "decode_pcc": 0.9999416325438173,
+    "cache_pcc": [
+      1.0,
+      0.9999999999999998
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_batch32.json": {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "seq": 4096,
+    "prefill_pcc": 0.9999196950064736,
+    "decode_pcc": 0.9999515656944986,
+    "cache_pcc": [
+      1.0,
+      1.0
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_batch8.json": {
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "seq": 4096,
+    "prefill_pcc": 0.9999232260429046,
+    "decode_pcc": 0.9999539470883445,
+    "cache_pcc": [
+      1.0,
+      1.0
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_context262143.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 262143,
+    "prefill_pcc": 0.9999249569079192,
+    "decode_pcc": 0.9999507131095386,
+    "cache_pcc": [
+      0.9999716272203015,
+      0.9999782560891133
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_context262144.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 262144,
+    "prefill_pcc": 0.9999246485258172,
+    "decode_pcc": 0.9999517927587646,
+    "cache_pcc": [
+      0.9999716272203015,
+      0.9999782560891133
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_cyclic4097.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 4097,
+    "prefill_pcc": 0.999919116200979,
+    "decode_pcc": 0.9999524173107681,
+    "cache_pcc": [
+      0.999986333195507,
+      0.9999874663671854
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9998378276028227,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length1023.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 1023,
+    "prefill_pcc": 0.9999173553302809,
+    "decode_pcc": 0.9999289941916247,
+    "cache_pcc": [
+      0.9999734381682557,
+      0.9999774253404455
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length1024.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 1024,
+    "prefill_pcc": 0.9999173603760648,
+    "decode_pcc": 0.9999475465773513,
+    "cache_pcc": [
+      0.9999765472703114,
+      0.999977869596871
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length1025.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 1025,
+    "prefill_pcc": 0.9999173854319948,
+    "decode_pcc": 0.9999466937190301,
+    "cache_pcc": [
+      0.999976708702139,
+      0.9999781378996239
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length2049.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 2049,
+    "prefill_pcc": 0.9999185824063715,
+    "decode_pcc": 0.9999221528206018,
+    "cache_pcc": [
+      0.9999766001691444,
+      0.9999778035372152
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length31.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 31,
+    "prefill_pcc": 0.999914053388699,
+    "decode_pcc": 0.9999183887309744,
+    "cache_pcc": [
+      0.9999796687356783,
+      0.9999778501855641
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length32.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 32,
+    "prefill_pcc": 0.9999144996618392,
+    "decode_pcc": 0.9999593031837228,
+    "cache_pcc": [
+      0.9999796900265163,
+      0.9999778709075391
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_length33.json": {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "seq": 33,
+    "prefill_pcc": 0.999914610092217,
+    "decode_pcc": 0.9999578411669692,
+    "cache_pcc": [
+      0.9999796160026405,
+      0.9999777883874825
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_stress32.json": {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "seq": 33,
+    "prefill_pcc": 0.9999159440077793,
+    "decode_pcc": 0.9999538276665255,
+    "cache_pcc": [
+      0.999977381853787,
+      0.9999777883873873
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9998721152269984,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_watcher32.json": {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "seq": 33,
+    "prefill_pcc": 0.9999159440077793,
+    "decode_pcc": 0.9999538276665255,
+    "cache_pcc": [
+      0.9999858473585016,
+      0.9999875555209422
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9998721152269984,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer0_wrap2047.json": {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "seq": 2047,
+    "prefill_pcc": 0.9999194018114301,
+    "decode_pcc": 0.9999353607278567,
+    "cache_pcc": [
+      0.9999669152100666,
+      0.9999736899673257
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9999211705805261,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_batch1.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 4096,
+    "prefill_pcc": 0.9999899664722814,
+    "decode_pcc": 0.9999923113704402,
+    "cache_pcc": [
+      0.9998407624151685,
+      0.9998454999712449
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_batch16.json": {
+    "layer_type": "full_attention",
+    "batch": 16,
+    "seq": 4096,
+    "prefill_pcc": 0.9999899117412894,
+    "decode_pcc": 0.9999884994711496,
+    "cache_pcc": [
+      0.9998407624151686,
+      0.9998454999712453
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_batch32.json": {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "seq": 4096,
+    "prefill_pcc": 0.9999898525353806,
+    "decode_pcc": 0.999990302465445,
+    "cache_pcc": [
+      0.9998407624151685,
+      0.9998454999712453
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_batch8.json": {
+    "layer_type": "full_attention",
+    "batch": 8,
+    "seq": 4096,
+    "prefill_pcc": 0.9999899527883517,
+    "decode_pcc": 0.999992418710124,
+    "cache_pcc": [
+      0.9998407624151684,
+      0.9998454999712449
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_context262143.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 262143,
+    "prefill_pcc": 0.9999838288829098,
+    "decode_pcc": 0.9999905049362066,
+    "cache_pcc": [
+      0.9999703730989297,
+      0.9999743082099244
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_context262144.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 262144,
+    "prefill_pcc": 0.999983991016227,
+    "decode_pcc": 0.9999905049362066,
+    "cache_pcc": [
+      0.9999703730989297,
+      0.9999743082099244
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_cyclic4097.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 4097,
+    "prefill_pcc": 0.9999912144515902,
+    "decode_pcc": 0.9999913671023685,
+    "cache_pcc": [
+      0.9999083645440622,
+      0.9999129217360965
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9999562499029434,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length1023.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 1023,
+    "prefill_pcc": 0.9999896302505156,
+    "decode_pcc": 0.9999918603949578,
+    "cache_pcc": [
+      0.9999726327722792,
+      0.9999756944546275
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length1024.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 1024,
+    "prefill_pcc": 0.9999896298314215,
+    "decode_pcc": 0.9999913363154931,
+    "cache_pcc": [
+      0.999970627447092,
+      0.9999740925315995
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length1025.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 1025,
+    "prefill_pcc": 0.999989625983258,
+    "decode_pcc": 0.9999881647924916,
+    "cache_pcc": [
+      0.9999708266583808,
+      0.9999740582699409
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length2049.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 2049,
+    "prefill_pcc": 0.9999899477315538,
+    "decode_pcc": 0.999991245927638,
+    "cache_pcc": [
+      0.9999713862512195,
+      0.9999748002973495
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length31.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 31,
+    "prefill_pcc": 0.9999894018911616,
+    "decode_pcc": 0.9999960858637589,
+    "cache_pcc": [
+      0.9999721013004743,
+      0.9999738611827756
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length32.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 32,
+    "prefill_pcc": 0.9999891922760901,
+    "decode_pcc": 0.9999867027772399,
+    "cache_pcc": [
+      0.9999720788416543,
+      0.9999741334561261
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_length33.json": {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "seq": 33,
+    "prefill_pcc": 0.9999888159664935,
+    "decode_pcc": 0.9999858353952934,
+    "cache_pcc": [
+      0.9999725865828645,
+      0.9999744933227317
+    ],
+    "unused_pages_unchanged": true,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_stress32.json": {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "seq": 33,
+    "prefill_pcc": 0.9999888738317363,
+    "decode_pcc": 0.9999857155505767,
+    "cache_pcc": [
+      0.9999712522639271,
+      0.9999744933230453
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9999726818067646,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_watcher32.json": {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "seq": 33,
+    "prefill_pcc": 0.9999888738317363,
+    "decode_pcc": 0.9999857155505767,
+    "cache_pcc": [
+      0.9999121488392003,
+      0.9999144660110368
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9999726818067646,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  },
+  "final_layer5_wrap2047.json": {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "seq": 2047,
+    "prefill_pcc": 0.9999898161529325,
+    "decode_pcc": 0.9999866284204043,
+    "cache_pcc": [
+      0.9999629359545116,
+      0.9999650558576526
+    ],
+    "unused_pages_unchanged": true,
+    "stress_min_pcc": 0.9999839529370321,
+    "runtime_fallback_audit": {
+      "throw_exception_on_fallback": true,
+      "prefill_decode_host_conversion_guard": true
+    }
+  }
+}

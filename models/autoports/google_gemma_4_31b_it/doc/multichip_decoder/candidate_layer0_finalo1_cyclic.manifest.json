@@ -1,0 +1,30 @@
+{
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "0",
+    "--seq",
+    "4096",
+    "--inputs",
+    "bringup/artifacts/optimized_decoder_layer0_inputs262144.pt",
+    "--replicated",
+    "--candidate",
+    "{\"carry_reduced\": true, \"pad_mlp\": true, \"ccl8\": true, \"ccl8_prefill_only\": true, \"ring_all\": true, \"persistent_ccl\": true, \"geometry\": {\"self_attn.o_proj\": {\"cores\": 8, \"block\": 8, \"readers\": 1}, \"self_attn.qk_proj\": {\"cores\": 8, \"block\": 21, \"readers\": 2}}}",
+    "--result",
+    "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/candidate_layer0_finalo1_cyclic.json",
+    "--batch",
+    "1",
+    "--cyclic"
+  ],
+  "source_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py": "685f40421f331fc3385b1ad8b7fe68a3f09cbdee317d1e8e989326837ae426b0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "1927d5fbf1fa9326ea60b171bb4142315b427b67479fa628a5b7d12495f931ac",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/multichip_candidate.py": "d6044e9da74b42573b4235ccee547dd38a88e0b284ff4066b46831337d2f41f5"
+  },
+  "env": {
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": null
+  }
+}

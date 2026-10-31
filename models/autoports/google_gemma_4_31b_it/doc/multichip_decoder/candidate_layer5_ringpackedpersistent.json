@@ -1,0 +1,74 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38418880,
+      "largest_contiguous_bytes_free_per_bank": 4188727680
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 40716736,
+      "largest_contiguous_bytes_free_per_bank": 4188727680
+    },
+    "decode_eager_host_us": 1267.5166750947635,
+    "prefill_warm_host_us": 32201.809051912278,
+    "decode_trace_host_us": 1017.4673984693072,
+    "trace_replays": 129
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 11019712,
+      "largest_contiguous_bytes_free_per_bank": 4246434688
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 11594176,
+      "largest_contiguous_bytes_free_per_bank": 4246434688
+    },
+    "decode_eager_host_us": 1543.5186796821654,
+    "prefill_warm_host_us": 14049.217978026718,
+    "decode_trace_host_us": 485.2703200413089,
+    "trace_replays": 129
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    0.9999758853785818,
+    0.9999789194381725
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999899270516561,
+  "decode_pcc": 0.9999934283878498,
+  "layer_type": "full_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "carry_reduced": true,
+    "pad_mlp": true,
+    "ccl8": true,
+    "ccl8_prefill_only": true,
+    "ring_all": true,
+    "packed_mlp": true,
+    "persistent_ccl": true
+  }
+}

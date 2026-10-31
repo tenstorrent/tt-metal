@@ -1,0 +1,84 @@
+{
+  "seq": 33,
+  "prefill_pcc": 0.9999290048087268,
+  "decode_pcc": 0.9999535362527165,
+  "interfaces": {
+    "1": [
+      {
+        "prefill_shape": [
+          1,
+          1,
+          33,
+          5376
+        ],
+        "decode_shape": [
+          1,
+          1,
+          1,
+          5376
+        ],
+        "prefill_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "decode_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "dtype": "DataType.BFLOAT16"
+      },
+      {
+        "prefill_shape": [
+          1,
+          1,
+          33,
+          5376
+        ],
+        "decode_shape": [
+          1,
+          1,
+          1,
+          5376
+        ],
+        "prefill_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "decode_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "dtype": "DataType.BFLOAT16"
+      }
+    ],
+    "4": [
+      {
+        "prefill_shape": [
+          1,
+          1,
+          33,
+          5376
+        ],
+        "decode_shape": [
+          1,
+          1,
+          1,
+          5376
+        ],
+        "prefill_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "decode_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "dtype": "DataType.BFLOAT16"
+      },
+      {
+        "prefill_shape": [
+          1,
+          1,
+          33,
+          5376
+        ],
+        "decode_shape": [
+          1,
+          1,
+          1,
+          5376
+        ],
+        "prefill_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "decode_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+        "dtype": "DataType.BFLOAT16"
+      }
+    ]
+  },
+  "layer_order": [
+    "sliding_attention",
+    "full_attention"
+  ],
+  "boundary_conversion": false
+}

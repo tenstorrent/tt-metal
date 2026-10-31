@@ -1,0 +1,81 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 34396608,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38992320,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "decode_eager_host_us": 1231.6083496746917,
+    "prefill_warm_host_us": 22409.1190029867,
+    "decode_trace_host_us": 916.5591013697849,
+    "trace_replays": 129
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 10011072,
+      "largest_contiguous_bytes_free_per_bank": 4245190528
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 10594240,
+      "largest_contiguous_bytes_free_per_bank": 4245190528
+    },
+    "decode_eager_host_us": 1667.3749972445269,
+    "prefill_warm_host_us": 11438.139015808702,
+    "decode_trace_host_us": 430.40749233114184,
+    "trace_replays": 129
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    1.0,
+    1.0
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999206625105527,
+  "decode_pcc": 0.9999410571681029,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "carry_reduced": true,
+    "pad_mlp": true,
+    "ccl8": true,
+    "ccl8_prefill_only": true,
+    "ring_all": true,
+    "persistent_ccl": true,
+    "packed_mlp": true,
+    "geometry": {
+      "self_attn.qk_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      }
+    }
+  }
+}

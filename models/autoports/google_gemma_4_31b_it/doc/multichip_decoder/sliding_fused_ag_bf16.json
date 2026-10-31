@@ -1,0 +1,65 @@
+{
+  "1": {
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 34396608,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38992320,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "decode_eager_host_us": 1192.7380110137165,
+    "prefill_warm_host_us": 22544.208040926605,
+    "decode_trace_host_us": 916.4596408481884,
+    "trace_replays": 129
+  },
+  "4": {
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 14725568,
+      "largest_contiguous_bytes_free_per_bank": 4253837056
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 15874496,
+      "largest_contiguous_bytes_free_per_bank": 4253837056
+    },
+    "decode_eager_host_us": 1893.937005661428,
+    "prefill_warm_host_us": 10981.103987433016,
+    "decode_trace_host_us": 1094.8048516183917,
+    "trace_replays": 129
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    0.9999242351544176,
+    0.9999144859989636
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999389715757986,
+  "decode_pcc": 0.9999320458087267,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "sharded",
+  "candidate": {
+    "fused_ag": true,
+    "ring_all": true,
+    "pad_mlp": true,
+    "ag_bf16_output": true
+  }
+}

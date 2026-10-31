@@ -1,0 +1,11 @@
+# Raw local profiler and watcher captures; compact summaries retain provenance.
+*.tracy
+*_perf_report_stacked.png
+profile_initial/.logs/
+profile_initial/reports/
+tracy_final/**/profile/
+*_watcher_logs/
+watcher_eth_limit_logs/
+triage_fused.txt
+host_stack.txt
+triage_baseline_summary.txt

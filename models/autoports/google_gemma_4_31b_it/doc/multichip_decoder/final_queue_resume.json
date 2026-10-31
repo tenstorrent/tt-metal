@@ -1,0 +1,45 @@
+[
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_validation",
+      "--group",
+      "watcher"
+    ],
+    "exit": 0,
+    "watcher_disable_eth": "1"
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.check_multichip_stack",
+      "--ring",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/stack.json"
+    ],
+    "exit": 0,
+    "watcher_disable_eth": null
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_validation",
+      "--group",
+      "context"
+    ],
+    "exit": 0,
+    "watcher_disable_eth": null
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_profiles"
+    ],
+    "exit": 0,
+    "watcher_disable_eth": null
+  }
+]

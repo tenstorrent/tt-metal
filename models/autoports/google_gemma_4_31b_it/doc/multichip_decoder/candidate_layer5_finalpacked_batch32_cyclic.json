@@ -1,0 +1,81 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38418880,
+      "largest_contiguous_bytes_free_per_bank": 4188727680
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 110331328,
+      "largest_contiguous_bytes_free_per_bank": 4116815232
+    },
+    "decode_eager_host_us": 3171.9763258782527,
+    "prefill_warm_host_us": 1021722.3910149187,
+    "decode_trace_host_us": 2793.1416952924337,
+    "trace_replays": 129
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 11019712,
+      "largest_contiguous_bytes_free_per_bank": 4246434688
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 28997824,
+      "largest_contiguous_bytes_free_per_bank": 4228456576
+    },
+    "decode_eager_host_us": 1783.3223294777174,
+    "prefill_warm_host_us": 403036.028961651,
+    "decode_trace_host_us": 933.9994767287862,
+    "trace_replays": 129
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    0.9998407624151685,
+    0.9998454999712453
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999898175422509,
+  "decode_pcc": 0.999990302465445,
+  "layer_type": "full_attention",
+  "batch": 32,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "carry_reduced": true,
+    "pad_mlp": true,
+    "ccl8": true,
+    "ccl8_prefill_only": true,
+    "ring_all": true,
+    "persistent_ccl": true,
+    "packed_mlp": true,
+    "geometry": {
+      "self_attn.qk_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      }
+    }
+  }
+}

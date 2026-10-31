@@ -1,0 +1,36 @@
+{
+  "1": {
+    "decode_eager_host_us": 1257.7053275890648,
+    "prefill_warm_host_us": 22515.76300477609,
+    "decode_trace_host_us": 916.519241854985,
+    "trace_replays": 129
+  },
+  "4": {
+    "decode_eager_host_us": 1520.9666647327442,
+    "prefill_warm_host_us": 12643.649999517947,
+    "decode_trace_host_us": 458.7014450407878,
+    "trace_replays": 129
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "prefill_pcc": 0.9999065172743948,
+  "decode_pcc": 0.999933458622267,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "carry_reduced": true,
+    "pad_mlp": true,
+    "ccl8": "attention",
+    "ccl8_prefill_only": true
+  }
+}

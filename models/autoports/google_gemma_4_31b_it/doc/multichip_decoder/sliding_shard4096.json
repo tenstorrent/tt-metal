@@ -1,0 +1,18 @@
+{
+  "1": {
+    "decode_eager_host_us": 1248.7886706367135,
+    "decode_trace_host_us": 916.3563436231925,
+    "trace_replays": 129
+  },
+  "4": {
+    "decode_eager_host_us": 2114.6009870183966,
+    "decode_trace_host_us": 724.1745784085651,
+    "trace_replays": 129
+  },
+  "prefill_pcc": 0.9999477427625975,
+  "decode_pcc": 0.9999396206178093,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "sharded"
+}

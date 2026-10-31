@@ -1,0 +1,14 @@
+{
+  "1": {
+    "decode_eager_host_us": 1088.2726637646556
+  },
+  "4": {
+    "decode_eager_host_us": 1544.8893342788022
+  },
+  "prefill_pcc": 0.9999312905540105,
+  "decode_pcc": 0.9999558721167807,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 33,
+  "residual": "sharded"
+}

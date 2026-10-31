@@ -1,0 +1,46 @@
+{
+  "1": {
+    "decode_eager_host_us": 1275.2283364534378,
+    "prefill_warm_host_us": 22387.448989320546,
+    "decode_trace_host_us": 916.4876641989395,
+    "trace_replays": 129
+  },
+  "4": {
+    "decode_eager_host_us": 1423.0496793364484,
+    "prefill_warm_host_us": 12709.310976788402,
+    "decode_trace_host_us": 491.60978915097076,
+    "trace_replays": 129
+  },
+  "prefill_pcc": 0.9999516738669252,
+  "decode_pcc": 0.9999375138221053,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "carry_reduced": true,
+    "pad_mlp": true,
+    "geometry": {
+      "self_attn.qkv_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 22,
+        "readers": 2
+      }
+    }
+  }
+}

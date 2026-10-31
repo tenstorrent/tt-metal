@@ -1,0 +1,20 @@
+{
+  "source": "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/tracy_final/full_attention/batch16/profile/reports/2026_10_31_00_40_24/ops_perf_results_2026_10_31_00_40_24.csv",
+  "source_sha256": "5a7aca1c65291689cf4c602332eb2b77f4fce1df0e8320ce3a1e1207511a4f06",
+  "trace_id": "0",
+  "replay_session": "22",
+  "device_us": 744.0677880448031,
+  "ops": 200,
+  "selection": "complete replay nearest median duration among128",
+  "incoming_boundary_latency_excluded": {
+    "0:OP TO OP LATENCY [ns]": "144607",
+    "0:OP TO OP LATENCY BR/NRISC START [ns]": "144607",
+    "1:OP TO OP LATENCY [ns]": "144596",
+    "1:OP TO OP LATENCY BR/NRISC START [ns]": "144596",
+    "2:OP TO OP LATENCY [ns]": "145297",
+    "2:OP TO OP LATENCY BR/NRISC START [ns]": "145297",
+    "3:OP TO OP LATENCY [ns]": "144250",
+    "3:OP TO OP LATENCY BR/NRISC START [ns]": "144250"
+  },
+  "all_internal_timestamps_and_latencies_preserved": true
+}
