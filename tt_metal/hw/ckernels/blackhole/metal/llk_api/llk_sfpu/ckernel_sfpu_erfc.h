@@ -65,12 +65,15 @@ inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)
-        sfpi::vFloat ax = sfpi::min(sfpi::abs(x), 5.0f);
+        sfpi::vFloat ax = sfpi::min(sfpi::abs(sfpi::setsgn(x, 1)), 5.0f);
         sfpi::vFloat r =
             piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE, false, true>(
                 ERFC_LUT, ax);
         // erfc(-x) = 2 - erfc(x)
-        v_if(x < 0.0f) { r = 2.0f - r; }
+        v_if(x < 0.0f) {
+            r = -r;
+            r += 2.0f;
+        }
         v_endif;
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
