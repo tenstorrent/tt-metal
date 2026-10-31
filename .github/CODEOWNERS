@@ -602,6 +602,7 @@ ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # TTNN Graph Report
 tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
+tests/ttnn/nightly/unit_tests/base_functionality/test_graph_report_resnet50.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
 
 # models
