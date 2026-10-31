@@ -682,6 +682,9 @@ std::string ComputeKernel::config_hash() const {
     if (this->config_.enable_trisc2_rvv) {
         hash += "_rvv";
     }
+    if (this->config_.bfp8_pack_precise) {
+        hash += "_bfp8_pack_precise";
+    }
     return hash;
 }
 
