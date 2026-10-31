@@ -291,6 +291,10 @@ class TtDSparkDrafter:
         # (eight per-rank reads were 2.5 to 4.5 ms a round); None: the per-rank reads
         self.gather_sp = None
         self.gathered = False  # ``out`` is the gathered tile (``read_ranks`` reads chip 0's)
+        # V41_DECODE_REPLAY_SYNC=0 (the decoders' flag): no device sync between the staging
+        # and the replay; the copies and the replay are on one command queue, in order (the sync waited 2.8 ms
+        # for the one-page copy to land)
+        self.replay_sync = os.environ.get("V41_DECODE_REPLAY_SYNC", "1") == "1"
         self._staged_use_tap32 = None  # the ``use_tap32`` value the buffer holds (copied when it changes)
         self._tap_is_zero = False  # the ``tap`` buffer holds the zero tap (no copy needed for a zero host tap)
         self.captures: dict[int, tuple] = {}  # the standalone call's capture per block count
@@ -815,7 +819,8 @@ class TtDSparkDrafter:
                 self.captures[blocks] = self._capture()
             controller, out = self.captures[blocks]
             tick = self._tick("run")
-            ttnn.synchronize_device(self.mesh_device)
+            if self.replay_sync:
+                ttnn.synchronize_device(self.mesh_device)
             tick("sync")
             t0 = time.time()
             controller.replay(blocking=False)
