@@ -151,6 +151,10 @@ class PagedApc:
             free_users=self._free_users,
             strict_zone_equal=os.environ.get("DSV41_APC_PAGED_ZONE_EQ", "0") == "1",
             halo_budget=int(os.environ.get("DSV41_APC_PAGED_HALO_BUDGET", "32")),
+            xrow=os.environ.get("DSV41_APC_PAGED_XROW", "0")
+            == "1",  # M3: cross-row copy of the blocks of a busy row (default off)
+            xrow_min=int(os.environ.get("DSV41_APC_PAGED_XROW_MIN", "2048")),
+            xrow_max=int(os.environ.get("DSV41_APC_PAGED_XROW_MAX", "65536")),
         )
         self.rid = {}  # user -> bound request id
         self.auto = set()  # users whose request is anonymous (no commits)
@@ -159,7 +163,20 @@ class PagedApc:
         self.ks = self.hs = None
         self.host_fallback = os.environ.get("DSV41_APC_PAGED_HOST", "0") == "1"
         self._auto_n = itertools.count()
-        self.stats = dict(hits=0, hit_tokens=0, lost=0, restores=0, restore_s=0.0, commits=0, commit_s=0.0, saves=0)
+        self.stats = dict(
+            hits=0,
+            hit_tokens=0,
+            lost=0,
+            restores=0,
+            restore_s=0.0,
+            commits=0,
+            commit_s=0.0,
+            saves=0,
+            xrow=0,
+            xrow_tokens=0,
+            xrow_s=0.0,
+            xrow_failed=0,
+        )
         self.ktok = {}  # user -> (torch tensor id, numpy view) of the prompt tokens (key tokens of the chain)
         self.image_token_id = None
         self.hook = AP.ApcPagedHook(self.idx, self._key_tokens)
@@ -329,6 +346,10 @@ class PagedApc:
                         plan = self.idx.bind(rid, st, user=b, prompt_len=tot if tot is not None else e)
                     except ValueError:
                         plan = None
+                    if (
+                        plan is not None and plan.xrow_src >= 0
+                    ):  # cross-row hit: copy the donor row's blocks into this row first
+                        plan = self.xrow_copy(b, rid, plan, t, e)
                 if plan is not None and plan.hit_tokens == st:
                     self.rid[b], self.plen[b] = rid, int(tot if tot is not None else e)
                     self.auto.discard(b)
@@ -376,6 +397,152 @@ class PagedApc:
         self.stats["restores"] += len(hits)
         self.stats["restore_s"] += dt
         return dt
+
+    # ---- cross-row hit (M3, DSV41_APC_PAGED_XROW=1): host-staged copy of the blocks of a donor row into the row of the new request ---------------------------------------
+    def xrow_copy(self, b, rid, plan, tokens, e):
+        """The best hit of request ``rid`` lives on mesh row ``plan.xrow_src`` (no free user there); user ``b`` is on another row and holds fresh private pages (``plan.page_ids``). Read the donor blocks
+        to the host (latents of the pool pages, key store slots, the tip's halo slots), write them into this row (latents scatter into the new pages, keys / halos through ``key_save`` /
+        ``halo_copy`` from staging tensors into freshly allocated store slots), publish the blocks in this row's index and return the now LOCAL plan (``xrow_finish``), which the usual ``restore`` then
+        executes. Eager launches between replays on CQ 0, no CCL. -> HitPlan, or None (the request is dropped from the index, the caller recomputes from 0).
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as PO
+        from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as PC
+        from models.demos.blackhole.deepseek_v41_flash.tt.kv_paged import PageLayout
+
+        t0 = time.perf_counter()
+        m = self.model
+        md, rows, cols, U = m.md, m.rows, m.cols, m.U
+        sri, dst, hit, C = plan.xrow_src, b // U, plan.hit_tokens, GRID
+        try:
+            src = self.idx.xrow_source(rid)
+            assert src, "no donor blocks"
+            nb = len(src)
+            tok = np.ascontiguousarray(torch.as_tensor(tokens).long().reshape(-1).numpy())
+            # 1. read the donor blocks (row sri)
+            pt = torch.tensor([p for _, pages, *_ in src for p in pages], dtype=torch.long)
+            lat = {}
+            for s_ in PO.SOURCES:
+                if s_ in m.layer_ids:
+                    n_ = hit // PO.SRC_RATIO[s_]
+                    phys = PageLayout().phys_rows(pt, PO.SOURCES.index(s_), torch.arange(n_)).long()
+                    lat[s_] = PC.gather_pool_rows(m, sri, phys)
+            pend = []
+            for i, (_, _, kslot, _, _, _) in enumerate(src):
+                for lid in self.ks.store:
+                    R = self.ks.geom[lid].nrb * 32
+                    part = ttnn.slice(self.ks.store[lid], [kslot, 0, 0, 0], [kslot + 1, 1, R, APS.IDIM])
+                    pend.append(
+                        (
+                            lid,
+                            i,
+                            [
+                                ttnn.from_device(ttnn.get_device_tensors(part)[sri * cols + c], blocking=False)
+                                for c in range(cols)
+                            ],
+                            part,
+                        )
+                    )
+            tip = src[-1]
+            hpend = {}
+            for pn in self.hs.store:
+                slot = tip[3] if pn == "A" else tip[4]
+                if slot >= 0:
+                    NL = len(self.hs.layers[pn])
+                    sl = ttnn.slice(
+                        self.hs.store[pn], [slot * NL, 0, 0, 0], [(slot + 1) * NL, 1, APS.WINDOW, APS.HEAD_DIM]
+                    )
+                    hpend[pn] = (ttnn.from_device(ttnn.get_device_tensors(sl)[sri * cols], blocking=False), sl)
+            ttnn.synchronize_device(md)
+            keys = {}
+            for lid, i, hs_, part in pend:
+                keys[(lid, i)] = [ttnn.to_torch(h).reshape(-1, APS.IDIM).clone() for h in hs_]
+                ttnn.deallocate(part)
+            halos = {}
+            for pn, (h, sl) in hpend.items():
+                halos[pn] = ttnn.to_torch(h).reshape(-1, APS.WINDOW, APS.HEAD_DIM).clone()
+                ttnn.deallocate(sl)
+            # 2. this row: the page table first, then the latents into the new pages
+            m.pool.allocs[dst].adopt(b, plan.page_ids)
+            m.pool.sync_page_table()
+            for s_, l_ in lat.items():
+                n_ = l_.shape[0]
+                PC.scatter_rows_mesh(m, m.pool.pool, {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)})
+            # 3. one copy chunk per donor block: key store slot (+ the tip's halo slots) in this row, filled by the save kernels from staging tensors
+            cps = []
+            for i, (_, _, _, ha, hb, bz) in enumerate(src):
+                last = i == nb - 1
+                cp = self.idx.begin_chunk(
+                    rid, i * C, (i + 1) * C, tok, e, copy=(last and ha >= 0, last and hb >= 0, bz)
+                )
+                if cp is not None:
+                    cps.append((i, cp))
+            shard = ttnn.ShardTensor2dMesh(md, dims=(0, 1), mesh_shape=(rows, cols))
+            rep0 = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
+            keep = []
+            for i, cp in cps:
+                if cp.key_slot >= 0:
+                    vals = [None] * (rows * U)
+                    vals[b] = cp.key_slot
+                    self.ks.set_save(vals)
+                    stage = {}
+                    for lid in self.ks.store:
+                        R = self.ks.geom[lid].nrb * 32
+                        host = torch.zeros(rows * U, cols, R, APS.IDIM, dtype=torch.bfloat16)
+                        for c in range(cols):
+                            host[b, c] = keys[(lid, i)][c]
+                        stage[lid] = ttnn.from_torch(
+                            host,
+                            device=md,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=shard,
+                        )
+                    self.ks.save(stage)
+                    keep += list(stage.values())
+                for pn, slot in (("A", cp.halo_a), ("B", cp.halo_b)):
+                    if slot >= 0 and pn in halos:
+                        vals = [None] * (rows * U)
+                        vals[b] = slot
+                        self.hs.set_save(pn, vals)
+                        st_ = {}
+                        for j, lid in enumerate(self.hs.layers[pn]):
+                            host = torch.zeros(rows * U, 1, APS.WINDOW, APS.HEAD_DIM, dtype=torch.bfloat16)
+                            host[b, 0] = halos[pn][j]
+                            st_[lid] = ttnn.from_torch(
+                                host,
+                                device=md,
+                                dtype=ttnn.bfloat16,
+                                layout=ttnn.TILE_LAYOUT,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                mesh_mapper=rep0,
+                            )
+                        self.hs.save(pn, st_)
+                        keep += list(st_.values())
+                # (the save kernels read their tables and staging tensors when they RUN: the table of the next block is only written after this launch is enqueued, h2d is ordered on the queue)
+            ttnn.synchronize_device(md)
+            for x in keep:
+                ttnn.deallocate(x)
+            for _, cp in cps:
+                self.idx.finish_chunk(cp)
+            new = self.idx.xrow_finish(rid)
+            if new is None:
+                raise RuntimeError("a receiving block is missing after the copy")
+        except Exception as ex:  # (the request recomputes from 0; the index forgets it)
+            self.stats["xrow_failed"] += 1
+            self.log(
+                f"APC paged: cross-row copy for request {rid} (donor row {sri} -> row {dst}, {hit} tokens) failed: {ex!r}"
+            )
+            self.idx.release(rid)
+            return None
+        dt = time.perf_counter() - t0
+        self.stats["xrow"] += 1
+        self.stats["xrow_tokens"] += hit
+        self.stats["xrow_s"] += dt
+        self.log(
+            f"APC paged: cross-row hit {hit} tokens copied row {sri} -> row {dst} in {dt * 1e3:.0f} ms ({nb} blocks)"
+        )
+        return new
 
     def engram_history(self, hits, items):
         """the n-gram history of the hit users on the host (pure function of the tokens, as ``prefix_cache.restore_users``)"""

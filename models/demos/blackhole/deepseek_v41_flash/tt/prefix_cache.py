@@ -375,6 +375,31 @@ def read_pool_latents(model, b, src, n, lo=0):
     return torch.cat(out) if len(out) > 1 else out[0]
 
 
+def gather_pool_rows(model, r, phys):
+    """pool rows ``phys`` (torch long [n], physical row ids of mesh row ``r``) -> torch bf16 [n, 512]; pieces of 16384 rows, read from one chip of the row (an fp8 pool is converted to bf16)"""
+    pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
+    _check_pool(pool)
+    shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
+    outs = []
+    for a in range(0, int(phys.numel()), 16384):
+        m = min(16384, int(phys.numel()) - a)
+        ids = torch.zeros(rows, 1, 1, m, dtype=torch.int64)
+        ids[r, 0, 0] = phys[a : a + m]
+        d_ids = ttnn.from_torch(
+            ids.to(torch.int32),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        g = _gather_pool(pool, d_ids)
+        outs.append(ttnn.to_torch(ttnn.get_device_tensors(g)[r * cols]).reshape(m, 512).clone())
+        ttnn.deallocate(g)
+        ttnn.deallocate(d_ids)
+    return torch.cat(outs) if len(outs) > 1 else outs[0]
+
+
 def read_pool_latents_begin(model, b, src, n, lo=0):
     """``read_pool_latents`` without waiting: [(rows m, host tensor handle)] of the gathers (pieces of 16384 rows), enqueued on CQ 0 and freed right after their reads (see ``snapshot_begin``)."""
     pool, md, rows, cols = model.pool, model.md, model.rows, model.cols

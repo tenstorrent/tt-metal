@@ -80,10 +80,15 @@ class HitPlan:
     key_slots: tuple = ()
     halo_a: int = -1
     halo_b: int = -1
+    xrow_src: int = (
+        -1
+    )  # cross-row hit (DSV41_APC_PAGED_XROW): the mesh row that HOLDS the blocks (block_ids / key_slots / halo_* name slots of THAT row, page_ids are fresh private pages of ``row``)
 
     @property
-    def src_row(self):  # row-local cache (M1): the data lives on the row that runs the request
-        return self.row
+    def src_row(
+        self,
+    ):  # row-local cache (M1): the data lives on the row that runs the request; cross-row (M3): on ``xrow_src``
+        return self.row if self.xrow_src < 0 else self.xrow_src
 
 
 @dataclass
@@ -155,6 +160,7 @@ class _Req:
         self.cps = []
         self.chain = None
         self.prompt_len = 0
+        self.xsrc = None  # cross-row hit: the donor blocks (also in ``held`` until ``xrow_finish``)
 
 
 def _locked(fn):
@@ -205,6 +211,9 @@ class BlockIndex:
         halo_budget=0,
         strict_spans=False,
         strict_zone_equal=False,
+        xrow=False,
+        xrow_min=2048,
+        xrow_max=65536,
     ):
         if chunk % page:
             raise ValueError(f"chunk {chunk} is not a multiple of the page {page}")
@@ -220,6 +229,13 @@ class BlockIndex:
             strict_zone_equal
         )  # halo B valid only if b_zone == p0_new (exact), instead of b_zone <= p0_new
         self.caps = dict(pages=int(pages_per_row), key=int(key_slots), a=int(halo_a), b=int(halo_b))
+        # cross-row hits (M3): a request whose best hit sits on a row without a free user is planned on a row that has one and the blocks are COPIED there (``xrow_*``); only when the copy gains at
+        # least ``xrow_min`` tokens over the best local hit
+        self.xrow, self.xrow_min, self.xrow_max = (
+            bool(xrow),
+            int(xrow_min),
+            int(xrow_max),
+        )  # (xrow_max: the host-staged copy is not worth it, and reads too many slots, beyond this many tokens)
         self._lock = threading.RLock()
         self._events = []
         self._listeners = []
@@ -232,6 +248,7 @@ class BlockIndex:
         self.counters = dict(
             lookups=0, hits=0, hit_tokens=0, lost=0, binds=0, misses_bound=0, commits=0, dup_commits=0, upgrades=0,
             ev_block=0, ev_halo_a=0, ev_halo_b=0, out_of_pages=0, resets=0, expired=0, busy_loss=0, busy_loss_tokens=0, halo_loss=0, halo_loss_tokens=0,
+            xrow_plans=0, xrow_tokens=0, xrow_done=0, xrow_failed=0, xrow_nopages=0,
         )  # fmt: skip
 
     # ---- listeners ---------------------------------------------------------------------------------------------------------------------------------------
@@ -442,6 +459,7 @@ class BlockIndex:
         chain = Chain(self.chunk, salt).extend(_as_i64(key_tokens), top)
         digests = chain.digests
         best = (0, -1, None, None)  # hit, row, path, free users
+        deep = (0, -1, None)  # the deepest hit of any row, free user or not (cross-row copy source)
         any_hit = (
             depth
         ) = 0  # diagnostics: the deepest hit of any row (ignoring free users) and the deepest block chain (ignoring halos)
@@ -449,6 +467,8 @@ class BlockIndex:
             free = self._free_users(ri, fin_users)
             hit, path = self._lookup_row(ri, digests, num_tokens, max_hit, spans)
             any_hit = max(any_hit, hit)
+            if hit > deep[0]:
+                deep = (hit, ri, path)
             depth = max(depth, self._depth * self.chunk)
             if not free:
                 continue
@@ -461,6 +481,10 @@ class BlockIndex:
         if depth > any_hit:
             self.counters["halo_loss"] += 1
             self.counters["halo_loss_tokens"] += depth - any_hit
+        if self.xrow and deep[0] - hit >= self.xrow_min and deep[0] <= self.xrow_max:
+            xp = self._plan_xrow(req_id, chain, num_tokens, deep, ri, fin_users)
+            if xp is not None:
+                return xp
         if not hit:
             return HitPlan()
         row = self._rows[ri]
@@ -491,6 +515,113 @@ class BlockIndex:
         self._reqs[req_id] = req
         self.counters["hits"] += 1
         self.counters["hit_tokens"] += hit
+        return req.plan
+
+    def _plan_xrow(self, req_id, chain, num_tokens, deep, best_row, fin_users):
+        """cross-row hit: the deepest hit (``deep``) is on row ``sri`` that has no free user (or a shallower one is local). Reserve a user on another row, allocate fresh private pages there for the whole hit
+        and pin the donor blocks; the model copies the data (pages, key slots, tip halos) and calls ``xrow_finish``. -> HitPlan or None (no receiving row / no pages).
+        """
+        dhit, sri, spath = deep
+        dst = best_row if best_row >= 0 and best_row != sri else -1
+        if dst < 0:
+            cands = [(len(self._free_users(r, fin_users)), r) for r in range(self.rows) if r != sri]
+            cands = [c for c in cands if c[0] > 0]
+            if not cands:
+                return None
+            dst = max(cands)[1]
+        free = self._free_users(dst, fin_users)
+        if not free:
+            return None
+        try:
+            pages = self._alloc_pages(dst, dhit // self.page)
+        except OutOfPages:
+            self.counters["xrow_nopages"] += 1
+            return None
+        user = min(free)
+        req = _Req(req_id, "planned", dst, user, self.clock() + self.ttl)
+        req.chain, req.prompt_len = chain, num_tokens
+        req.priv.update(pages)
+        srow = self._rows[sri]
+        for blk in spath:
+            blk.refs += 1
+            req.held.append(blk)
+            self._touch(srow, blk, halos=blk is spath[-1])
+        tip = spath[-1]
+        tip.halo_pins += 1
+        req.halo_pins.append(tip)
+        req.xsrc = list(spath)
+        req.plan = HitPlan(
+            hit_tokens=dhit,
+            row=dst,
+            user=user,
+            block_ids=tuple(b.id for b in spath),
+            page_ids=tuple(pages),
+            key_slots=tuple(b.key_slot for b in spath),
+            halo_a=tip.halo_a,
+            halo_b=tip.halo_b if dhit > zone_start(num_tokens, self.zone, self.chunk) else -1,
+            xrow_src=sri,
+        )
+        self._reserved[user] = req_id
+        self._reqs[req_id] = req
+        self.counters["xrow_plans"] += 1
+        self.counters["xrow_tokens"] += dhit
+        return req.plan
+
+    @_locked
+    def xrow_source(self, req_id):
+        """the donor blocks of a cross-row plan: [(block id, page ids, key slot, halo A slot, halo B slot, b_zone)] in chain order, or None"""
+        req = self._reqs.get(req_id)
+        if req is None or req.xsrc is None:
+            return None
+        return [(b.id, tuple(b.pages), b.key_slot, b.halo_a, b.halo_b, b.b_zone) for b in req.xsrc]
+
+    @_locked
+    def xrow_finish(self, req_id):
+        """after the model copied the data and published every receiving block (``begin_chunk(copy=...)`` + ``finish_chunk``): unpin the donor, hold the receiving blocks and rewrite the plan to the
+        receiving row's own slots (a normal local hit). -> that HitPlan, or None when a receiving block is missing (the caller drops the request: recompute from 0).
+        """
+        req = self._reqs.get(req_id)
+        if req is None or req.xsrc is None:
+            return None
+        for blk in req.xsrc:
+            blk.refs -= 1
+            if blk in req.held:
+                req.held.remove(blk)
+            if blk.state == "dead" and blk.refs == 0:
+                self._rows[blk.row].free_pages.extend(reversed(blk.pages))
+                blk.state = "gone"
+        for blk in req.halo_pins:
+            blk.halo_pins -= 1
+        req.halo_pins = []
+        req.xsrc = None
+        old = req.plan
+        n = old.hit_tokens // self.chunk
+        row = self._rows[req.row]
+        path = [row.blocks.get(d) for d in req.chain.digests[:n]]
+        if not path or any(b is None or b.state != "live" for b in path) or path[-1].halo_a < 0:
+            self.counters["xrow_failed"] += 1
+            return None
+        for blk in path:
+            if blk not in req.held:
+                blk.refs += 1
+                req.held.append(blk)
+        self._touch(row, path[-1])
+        for blk in path:
+            self._touch(row, blk, halos=blk is path[-1])
+        tip = path[-1]
+        tip.halo_pins += 1
+        req.halo_pins.append(tip)
+        req.plan = HitPlan(
+            hit_tokens=old.hit_tokens,
+            row=req.row,
+            user=req.user,
+            block_ids=tuple(b.id for b in path),
+            page_ids=old.page_ids,
+            key_slots=tuple(b.key_slot for b in path),
+            halo_a=tip.halo_a,
+            halo_b=tip.halo_b if old.halo_b >= 0 else -1,
+        )
+        self.counters["xrow_done"] += 1
         return req.plan
 
     @_locked
@@ -585,7 +716,8 @@ class BlockIndex:
 
     # ---- chunk commit ---------------------------------------------------------------------------------------------------------------------------------
     @_locked
-    def begin_chunk(self, req_id, start, end, key_tokens, prompt_len, salt=b"", spans=None):
+    def begin_chunk(self, req_id, start, end, key_tokens, prompt_len, salt=b"", spans=None, copy=None):
+        """``copy`` (cross-row copy of a donor block, see ``_plan_xrow``): (want halo A, want halo B, b_zone of the donor's halo B); the halo policy is replaced by it, an existing block is left alone"""
         req = self._reqs.get(req_id)
         if req is None or req.state != "bound":
             raise KeyError(f"request {req_id!r} is not bound")
@@ -610,7 +742,12 @@ class BlockIndex:
         if self.halo_budget > 0:
             thin = max(thin, -(-(int(prompt_len) // c) // self.halo_budget))
         want_halo = tip or (i % thin == 0)
+        if copy is not None:
+            want_halo = bool(copy[0])
         blk = row.blocks.get(key)
+        if blk is not None and copy is not None:
+            self._touch(row, blk, halos=False)
+            return None
         if blk is not None:  # dup: only halos can be added
             self._touch(row, blk, halos=want_halo)
             self.counters["dup_commits"] += 1
@@ -648,14 +785,17 @@ class BlockIndex:
             row.free_key.append(ks)
             return None
         ha = self._alloc_halo_a(ri) if want_halo else -1
-        hb = self._alloc_halo_b(ri) if (full and ha >= 0) else -1
+        if copy is None:
+            hb = self._alloc_halo_b(ri) if (full and ha >= 0) else -1
+        else:
+            hb = self._alloc_halo_b(ri) if (copy[1] and ha >= 0) else -1
         self._bid += 1
         blk = _Block(self._bid, ri, i, key, parent, list(req.pages[(i - 1) * self.ppc : i * self.ppc]), ks)
         blk.refs = 1  # the creator
         blk.halo_a, blk.halo_b = ha, hb
         row.pending[key] = blk
-        blk.b_zone = z_new
-        cp = ChunkPlan(req_id, ri, i, ks, ha, hb, full, False, blk, zone=z_new)
+        blk.b_zone = z_new if copy is None else int(copy[2])
+        cp = ChunkPlan(req_id, ri, i, ks, ha, hb, full, False, blk, zone=z_new if copy is None else int(copy[2]))
         req.cps.append(cp)
         return cp
 
