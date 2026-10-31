@@ -479,6 +479,20 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 **Catalog.** `DSV41_APC_IMAGES: "1"` in all deepseek_v41 entries (B=4, B=8, B=16; text and vision).
 
+## 8.20 APC host tier on the 512 grid (M0', `DSV41_APC_GRID=512`)
+
+**What changed.** The prefix cache snapshots on the 512-token grid instead of only at powers of two: a tip snapshot at the end of every prompt (and a second tip), a zone point per prompt (honouring the bounded-replay zone rule: a snapshot past the zone start is only partial), and a divergence point where the prompt leaves a chain seen before (lineage thinning: a new tip supersedes older tips of its own chain). The snapshots live in a host store (budget 50 GiB). `tt/apc_grid.py` (`GridPolicy.plan`), `tt/prefix_cache.py`; CPU tests `tests/test_apc_grid.py`, `tests/test_prefix_store.py`. Needs `DSV41_APC_DEFER=1` (the code default; the plan is consulted in `begin_snapshot`, no extra host sync). `DSV41_APC_GRID_LADDER` (extra divergence points) stays 0; `DSV41_APC_GRID_FILE` (live switch file, 0 = grid snapshots off) is not set.
+
+**With images (8.19).** The plan of an image prompt is made on the image-aware key chain (token chain with one content-hash value per image span), the chain `begin_snapshot` keys with, so image prompts get tip / zone / divergence snapshots too. Text-only plans are identical with the image code present (`tests/test_apc_grid_images.py`). The combination of image keys and the grid is verified on CPU only; device verification is part of the rc3 end to end.
+
+**Measured** (host .45, rc2 image): shared 30k-token system prompt 10.6 -> 3.75 s per request after the first; 32k resend 10.8 -> 3.2 s; 8 agents with 6k + 3.9k per turn 16.7 -> 11.0 s mean TTFT after turn 1. Cold prefill costs +0.28 s at 16k and +0.5 s (2.5 %) at 32k. Host store: 22 GiB at 506 snapshots of the 50 GiB budget.
+
+**Limits.** Hits only at or below the new prompt's zone-start floor ((end - 2560) / 512) * 512, so a prompt that grows by less than about 2.6k tokens per turn gains little.
+
+**Boot cost, not measured.** `warm_apc` compiles every multiple of 512 up to `DSV41_WARM_APC_GRID_MAX=32768` (default); the extra boot time is unmeasured and must be checked at the rc3 boot.
+
+**Catalog.** `DSV41_APC_GRID: "512"` in all deepseek_v41 entries (B=4, B=8, B=16; text and vision).
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
