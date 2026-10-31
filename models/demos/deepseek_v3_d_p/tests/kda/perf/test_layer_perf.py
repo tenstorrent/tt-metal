@@ -70,7 +70,7 @@ _PERF_REFERENCE_MS = {
 _DEVICE_PERF_MARGIN = 0.05
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.437,
+        "SP4xTP1": 1.37,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -82,7 +82,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 1.456
+_GALAXY_PERF_REFERENCE_MS = 1.422
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
@@ -297,6 +297,34 @@ def _trace_device_samples_ms(
     return [wall for wall, _ in samples], [device for _, device in samples]
 
 
+def _untraced_wall_samples_ms(
+    mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, actual_start: int, actual_end: int | None
+) -> list[float]:
+    """_trace_wall_samples_ms with layer.forward() in place of the trace replay."""
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
+    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
+    state = _allocate_state(layer)
+
+    def call() -> None:
+        output, next_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
+        ttnn.deallocate(output)
+        deallocate_state(next_state)
+
+    try:
+        call()
+        ttnn.synchronize_device(mesh_device)
+        samples_ms = []
+        for _ in range(_TIMING_SAMPLES):
+            start = time.perf_counter()
+            for _ in range(_REPETITIONS):
+                call()
+            ttnn.synchronize_device(mesh_device)
+            samples_ms.append((time.perf_counter() - start) * 1e3 / _REPETITIONS)
+        return samples_ms
+    finally:
+        deallocate_state(state)
+
+
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
@@ -338,10 +366,13 @@ def _trace_device_samples_ms(
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("traced", [True, False], ids=["traced", "untraced"])
+@pytest.mark.uncollect_if(pred=lambda mesh_device, traced, **_: not traced and mesh_device != (8, 4))
 def test_synthetic_kimi_k3_perf(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    traced: bool,
 ) -> None:
     """Gate checkpoint-free production K3 latency on LoudBox, QuietBox and Galaxy."""
     mesh_shape = tuple(mesh_device.shape)
@@ -379,16 +410,20 @@ def test_synthetic_kimi_k3_perf(
         samples_ms, device_samples_ms = _trace_device_samples_ms(
             mesh_device, layer, hidden_tt, actual_start=actual_start, actual_end=actual_end
         )
-    else:
+    elif traced:
         samples_ms, _ = _trace_wall_samples_ms(
             mesh_device, layer, hidden_tt, _REPETITIONS, actual_start=actual_start, actual_end=actual_end
         )
+        device_samples_ms = None
+    else:
+        samples_ms = _untraced_wall_samples_ms(mesh_device, layer, hidden_tt, actual_start, actual_end)
         device_samples_ms = None
     median_wall_ms = statistics.median(samples_ms)
     median_device_ms = None if device_samples_ms is None else statistics.median(device_samples_ms)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
         "layout": layout,
+        "traced": traced,
         "sequence": sequence,
         "num_heads": layer.config.num_heads * layer.tensor_parallel_size,
         "actual_start": actual_start,
@@ -415,9 +450,10 @@ def test_synthetic_kimi_k3_perf(
     within_band = (
         abs(gated_ms - gated_reference_ms) <= gated_reference_ms * gated_margin if gated_reference_ms else None
     )
+    mode = "" if traced else "_untraced"
     emit_perf_metrics(
-        f"kimi_k3_kda_layer_{layout}",
-        f"Kimi-K3 KDA layer perf ({layout})",
+        f"kimi_k3_kda_layer_{layout}{mode}",
+        f"Kimi-K3 KDA layer perf ({layout}{mode})",
         {**result, "gated": gated, "within_band": within_band if gated else None},
     )
     if report_only:

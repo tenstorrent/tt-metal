@@ -127,7 +127,8 @@ case "${MODEL}" in
     SC1_NUM_LAYERS=24
     # sc1 is sc4's stage 0, so it opens sc4's slots.
     SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
+      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
     # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
