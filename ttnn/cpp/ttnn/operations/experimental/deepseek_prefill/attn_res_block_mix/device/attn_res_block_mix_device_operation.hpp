@@ -37,6 +37,7 @@ std::array<Tensor, 3> attn_res_block_mix(
     uint32_t num_sites,
     float inv_hidden_size,
     float eps,
+    uint32_t num_closed_sites,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 

@@ -37,7 +37,9 @@ void bind_attn_res_block_mix(nb::module_& mod) {
             partials side by side, each with the sum of squares in column 0 and query r's
             dot in column 1 + r — `attn_res_block_stats` after an all-gather. `partials` is
             `[R, 1, N, d]` and `shift` and `mass` are `[R, 1, N, 1]` float32, the layouts
-            `attn_res_gather_softmax` reads. Blackhole only.
+            `attn_res_gather_softmax` reads. The leading `num_closed_sites` sites have
+            nothing live to fold in: their partials come out divided by their mass, which
+            is the read's value. Blackhole only.
         )doc",
         &ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix::attn_res_block_mix,
         nb::arg("sealed"),
@@ -46,6 +48,7 @@ void bind_attn_res_block_mix(nb::module_& mod) {
         nb::arg("num_sites"),
         nb::arg("inv_hidden_size"),
         nb::arg("eps"),
+        nb::arg("num_closed_sites") = 0,
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }

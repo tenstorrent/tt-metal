@@ -34,11 +34,8 @@ def reference(stats, v, num_sites):
     return partials, site_major(shift), site_major(mass)
 
 
-@pytest.mark.parametrize("planes", [[1], [6], [6, 1], [3, 1, 1, 2]], ids=lambda p: "+".join(map(str, p)))
-@pytest.mark.parametrize("num_sites", [1, 24])
-@pytest.mark.parametrize("num_partials", [1, 4])
-@pytest.mark.parametrize("num_tokens", [64, 640])
-def test_attn_res_block_mix(device, planes, num_sites, num_partials, num_tokens):
+def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
+    """The op's outputs and the reference's, as torch tensors."""
     torch.manual_seed(0)
     num_candidates = sum(planes)
     snapshots = [torch.randn(1, s, num_tokens, SHARD_WIDTH).bfloat16() for s in planes]
@@ -55,18 +52,42 @@ def test_attn_res_block_mix(device, planes, num_sites, num_partials, num_tokens)
         num_sites=num_sites,
         inv_hidden_size=1.0 / HIDDEN_SIZE,
         eps=EPS,
+        num_closed_sites=num_closed,
     )
-
-    partials, shift, mass = reference(stats, torch.cat(snapshots, dim=1).float(), num_sites)
     assert tuple(tt_partials.shape) == (num_sites, 1, num_tokens, SHARD_WIDTH)
     assert tuple(tt_shift.shape) == tuple(tt_mass.shape) == (num_sites, 1, num_tokens, 1)
 
+    partials, shift, mass = reference(stats, torch.cat(snapshots, dim=1).float(), num_sites)
+    got = tuple(ttnn.to_torch(t).float() for t in (tt_partials, tt_shift, tt_mass))
+    return got, (partials, shift, mass)
+
+
+@pytest.mark.parametrize("planes", [[1], [6], [6, 1], [3, 1, 1, 2]], ids=lambda p: "+".join(map(str, p)))
+@pytest.mark.parametrize("num_sites", [1, 24])
+@pytest.mark.parametrize("num_partials", [1, 4])
+@pytest.mark.parametrize("num_tokens", [64, 640])
+def test_attn_res_block_mix(device, planes, num_sites, num_partials, num_tokens):
+    (out, tt_shift, tt_mass), (partials, shift, mass) = run_mix(device, planes, num_sites, num_partials, num_tokens)
+
     # Scores multiply through tf32 operands, and the weights reach the MAC as bf16.
-    torch.testing.assert_close(ttnn.to_torch(tt_shift), shift, rtol=3e-3, atol=3e-3)
-    torch.testing.assert_close(ttnn.to_torch(tt_mass), mass, rtol=3e-2, atol=3e-2)
-    out = ttnn.to_torch(tt_partials).float()
+    torch.testing.assert_close(tt_shift, shift, rtol=3e-3, atol=3e-3)
+    torch.testing.assert_close(tt_mass, mass, rtol=3e-2, atol=3e-2)
     passed, pcc = comp_pcc(partials, out, 0.9999)
     assert passed, f"partials PCC {pcc}"
     # Elementwise, a partial sums up to C unit-scale values with weights that are bf16 at the
     # MAC and carry the scores' tf32 error through exp: ~2^-8 of up to C * 4, so 0.1.
     torch.testing.assert_close(out, partials, rtol=2e-2, atol=1e-1)
+
+
+@pytest.mark.parametrize("planes", [[1], [6, 1]], ids=lambda p: "+".join(map(str, p)))
+@pytest.mark.parametrize("num_sites, num_closed", [(1, 1), (25, 1), (25, 3)])
+def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):
+    """A closed site's partial is its read, the mixture over its mass; the rest are unchanged."""
+    (out, _, _), (partials, _, mass) = run_mix(device, planes, num_sites, 4, 640, num_closed=num_closed)
+
+    reads = partials[:num_closed] / mass[:num_closed]
+    passed, pcc = comp_pcc(reads, out[:num_closed], 0.9999)
+    assert passed, f"closed reads PCC {pcc}"
+    # A weighted mean of unit-scale values, its weights bf16 at the MAC: ~2^-8 of a few units.
+    torch.testing.assert_close(out[:num_closed], reads, rtol=2e-2, atol=3e-2)
+    torch.testing.assert_close(out[num_closed:], partials[num_closed:], rtol=2e-2, atol=1e-1)

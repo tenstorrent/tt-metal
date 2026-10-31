@@ -530,7 +530,7 @@ class TtAttnRes(LightweightModule):
         """
         return self.one_pass_squares and self.stats_dtype == ttnn.float32 and len(queries) < ttnn.TILE_SIZE
 
-    def _inter_block_fused(self, sealed, queries):
+    def _inter_block_fused(self, sealed, queries, num_closed):
         """`inter_block` as three dispatches: both statistics in one pass over the sealed set,
         one collective, and the scoring and the mixture in a second pass.
 
@@ -550,7 +550,12 @@ class TtAttnRes(LightweightModule):
         ttnn.deallocate(local)
 
         partials, site_shifts, site_masses = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
-            sealed, stats, num_sites=len(queries), inv_hidden_size=1.0 / self.hidden_size, eps=self.eps
+            sealed,
+            stats,
+            num_sites=len(queries),
+            inv_hidden_size=1.0 / self.hidden_size,
+            eps=self.eps,
+            num_closed_sites=num_closed,
         )
         ttnn.deallocate(stats)
         return partials, site_shifts, site_masses
@@ -661,7 +666,7 @@ class TtAttnRes(LightweightModule):
         the score chain's output to hand it over."""
         return ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(v, weights, dim=1)
 
-    def inter_block(self, sealed, queries):
+    def inter_block(self, sealed, queries, num_closed=0):
         """Sealed-snapshot half of the mixture, for every read site in a block.
 
         Everything that does not depend on the read site runs once for the whole
@@ -681,6 +686,9 @@ class TtAttnRes(LightweightModule):
                 empty — the walk places no read site before the first seal, so every
                 executed read has one.
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
+            num_closed: how many leading sites have no live stream to fold in. Their read
+                is the sealed set's mixture alone, so their partials come out normalized,
+                `sum_i e_i v_i / sum_i e_i`, and `read_closed` takes them as they are.
 
         Returns:
             The partials `[R, 1, N, d/tp_factor]`, each site's holding `sum_i e_i v_i`,
@@ -692,16 +700,30 @@ class TtAttnRes(LightweightModule):
         sealed = as_sealed_list(sealed)
         assert sealed, "inter_block needs a sealed snapshot to score against"
         if self._fuses_scores(queries):
-            return self._inter_block_fused(sealed, queries)
+            return self._inter_block_fused(sealed, queries, num_closed)
         if len(sealed) == 1:
-            return self._inter_block_composed(sealed[0], queries)
+            return self._inter_block_composed(sealed[0], queries, num_closed)
         # The composed chain takes the set as one tensor.
         whole = ttnn.concat(sealed, dim=1)
-        batches = self._inter_block_composed(whole, queries)
+        batches = self._inter_block_composed(whole, queries, num_closed)
         ttnn.deallocate(whole)
         return batches
 
-    def _inter_block_composed(self, block_residual, queries):
+    def _close_sites(self, exponentials, site_masses, num_closed):
+        """Site-major weights with the leading `num_closed` sites' over their mass, consuming
+        `exponentials`: a closed site's mixture is then its read."""
+        head, head_masses = exponentials[:num_closed], site_masses[:num_closed]
+        closed = ttnn.div(head, head_masses)
+        ttnn.deallocate(head)
+        ttnn.deallocate(head_masses)
+        if num_closed == exponentials.shape[0]:
+            ttnn.deallocate(exponentials)
+            return closed
+        tail = exponentials[num_closed:]
+        ttnn.deallocate(exponentials)
+        return self._concat_sites([closed, tail], dim=0)
+
+    def _inter_block_composed(self, block_residual, queries, num_closed):
         """`inter_block` from ttnn primitives, for configurations the fused ops do not take."""
         reciprocal_rms = self._reciprocal_rms(block_residual)
         dots = self._dots_by_site(block_residual, queries)
@@ -724,6 +746,8 @@ class TtAttnRes(LightweightModule):
         exponentials = self._site_major(exponentials)
         site_shifts = self._site_major(site_shifts)
         site_masses = self._site_major(site_masses)
+        if num_closed:
+            exponentials = self._close_sites(exponentials, site_masses, num_closed)
 
         # `merge` reads these alongside the live stream's statistics through one
         # circular buffer, which is one unpack configuration and so one dtype.
@@ -736,6 +760,12 @@ class TtAttnRes(LightweightModule):
 
         ttnn.deallocate(exponentials)
         return partials, site_shifts, site_masses
+
+    @staticmethod
+    def read_closed(partial, site):
+        """A closed site's read, `[1, 1, N, d/tp_factor]`: its partial, which `inter_block`
+        already normalized. Copied out so the caller owns it apart from the batch."""
+        return ttnn.slice(partial, [site, 0, 0, 0], [site + 1, *list(partial.shape)[1:]])
 
     def merge(self, partial, shift, mass, running_sum, q, site=0, pending=None):
         """Fold the live stream into a precomputed sealed-snapshot partial.

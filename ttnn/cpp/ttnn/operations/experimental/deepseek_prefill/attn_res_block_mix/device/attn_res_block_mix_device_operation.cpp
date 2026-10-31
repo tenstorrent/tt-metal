@@ -73,6 +73,11 @@ void AttnResBlockMixDeviceOperation::validate_on_program_cache_miss(
         "AttnResBlockMix mixes {} sites, but a statistics tile column holds the sum of squares and at most {}",
         args.num_sites,
         TILE_WIDTH - 1);
+    TT_FATAL(
+        args.num_closed_sites <= args.num_sites,
+        "AttnResBlockMix closes {} of its {} sites",
+        args.num_closed_sites,
+        args.num_sites);
 }
 
 AttnResBlockMixDeviceOperation::spec_return_value_t AttnResBlockMixDeviceOperation::compute_output_specs(
@@ -110,12 +115,14 @@ std::array<Tensor, 3> attn_res_block_mix(
     uint32_t num_sites,
     float inv_hidden_size,
     float eps,
+    uint32_t num_closed_sites,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::AttnResBlockMixDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_sites = num_sites,
+        .num_closed_sites = num_closed_sites,
         .inv_hidden_size = inv_hidden_size,
         .eps = eps,
         .output_mem_config = output_mem_config,

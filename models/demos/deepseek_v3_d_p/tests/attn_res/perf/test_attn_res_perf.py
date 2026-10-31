@@ -6,10 +6,10 @@ The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
 
   * **Boundary layer** (the rank's first): the most expensive AttnRes layer of the stack, and every AttnRes
-    program it has — the 1-site `inter_block` over the inherited set for the read that straddles the rank
-    boundary, the pre-attention read, the seal (the largest concat of any full block), the 24-site
-    `inter_block` at the largest sealed count of any full block, past the statistics fold's threshold, and the
-    post-attention read. The last block has one more snapshot but only 9 layers, so it batches 19 sites, not 24.
+    program it has — the seal of the inherited live stream, the 25-site `inter_block` at the largest sealed
+    count of any full block, which carries the read that straddles the rank boundary as its first site, that
+    read copied out of the batch, and the post-attention read. The last block has one more snapshot but only 9
+    layers, so it batches 19 sites, not 24.
   * **Ordinary layer** (the ones after it): two reads, each settling the module write the walk deferred into
     it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model, which the boundary
     layer alone weights at under 10%.
