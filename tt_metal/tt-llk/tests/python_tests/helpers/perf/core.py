@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
-from ..chip_architecture import ChipArchitecture
+from ..chip_architecture import ChipArchitecture, get_chip_architecture
 from ..counters import read_counters
 from ..device import BootMode
 from ..format_config import FormatConfig
@@ -1006,8 +1006,25 @@ class PerfConfig(TestConfig):
         # Every Wormhole kernel ends with the pack TRISC as the last L1 port-3 requester (trisc.cpp), so every
         # kernel starts from that arbiter state, except the first one on a core in this process: it follows
         # whatever ran there before. The first test runs its first kernel once unrecorded so that one does too.
+        # RC experiment: LLK_PORT3_MODE = pack (default) | math | none picks the last port-3 requester at the end
+        # of each kernel (trisc.cpp reads it from overlay stream 4 scratch). Same ELFs for every mode.
+        port3_mode = {"none": 0, "math": 1, "pack": 2}[
+            os.environ.get("LLK_PORT3_MODE", "pack")
+        ]
+        if (
+            not TestConfig.TEST_TARGET.run_simulator
+            and get_chip_architecture() == ChipArchitecture.WORMHOLE
+        ):
+            from helpers.device_io import write_words_to_device
+
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                0xFFB40000 + 4 * 0x1000 + 248 * 4,
+                [port3_mode],
+            )
         if (
             PerfConfig.TEST_COUNTER == 1
+            and port3_mode != 0
             and not TestConfig.TEST_TARGET.run_simulator
             and os.environ.get("LLK_PORT3_FIRST", "1") != "0"
         ):
