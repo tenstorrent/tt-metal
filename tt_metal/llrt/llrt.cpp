@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -74,10 +75,23 @@ const CachedBinary& get_cached_binary(
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
+    while (!inserted && !slot->second) {
+        cache.cvar.wait(lock, [&] {
+            auto it = cache.map.find(path);
+            return it == cache.map.end() || bool(it->second);
+        });
+        std::tie(slot, inserted) = cache.map.try_emplace(path);
+    }
     const CachedBinary* ptr = nullptr;
     if (inserted) {
         // We're the first with PATH. Create and insert.
         lock.unlock();
+        auto drop_slot = [&path](BinaryCache* c) {
+            std::lock_guard guard(c->mutex);
+            c->map.erase(path);
+            c->cvar.notify_all();
+        };
+        std::unique_ptr<BinaryCache, decltype(drop_slot)> drop_slot_on_throw(&cache, drop_slot);
         // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
         // place for XIP), then pack the device image.
         ll_api::ElfFile elf;
@@ -94,6 +108,7 @@ const CachedBinary& get_cached_binary(
             update_callback(image);
         }
         auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
+        drop_slot_on_throw.release();
 
         lock.lock();
         // maps have iterator stability, so SLOT is still valid.
@@ -103,10 +118,6 @@ const CachedBinary& get_cached_binary(
         // all. Should be a rare event anyway.
         cache.cvar.notify_all();
     } else {
-        if (!slot->second) {
-            // Someone else is creating the initial entry, wait for them.
-            cache.cvar.wait(lock, [=] { return bool(slot->second); });
-        }
         ptr = slot->second.get();
         TT_ASSERT(ptr->image.get_loading() == loading);
     }
