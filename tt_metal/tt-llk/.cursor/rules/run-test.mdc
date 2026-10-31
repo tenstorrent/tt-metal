@@ -70,8 +70,7 @@ If `--arch` is not provided, infer in this order:
 
    1. Verify the venv exists at `tests/.venv/bin/activate`.
       If it does NOT exist, run from the tt-llk worktree root:
-          cd tests && CHIP_ARCH={arch} ./setup_testing_env.sh
-      The CHIP_ARCH env var is REQUIRED — setup builds arch-specific bits.
+          cd tests && source ./setup_external_testing_env.sh
 
    2. Then invoke the runner with the worktree path and arch:
           bash .cursor/scripts/run_test.sh {command} \
