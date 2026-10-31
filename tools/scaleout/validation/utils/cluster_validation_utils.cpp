@@ -1167,7 +1167,9 @@ void handle_workload_timeout(
             *context.get_cluster().get_cluster_desc(),
             context.get_distributed_context_ptr(),
             context.rtoptions().get_target_device(),
-            true);
+            true,
+            true,
+            validation_config.check_fw_bundle_version);
         ctx.physical_system_descriptor.merge(std::move(new_psd));
 
         log_output_rank0("Generating Global System Descriptor in-memory");
