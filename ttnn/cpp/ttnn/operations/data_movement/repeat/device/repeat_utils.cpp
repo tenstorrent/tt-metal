@@ -59,6 +59,20 @@ uint64_t trailing_row_volume(const ttnn::Shape& shape, int32_t repeat_dim) {
     return v;
 }
 
+// True when the [upper, repeat, lower, width] view native puts a row-major tensor in, for a repeat along repeat_dim,
+// has the tensor's own shape, so the view returns the tensor as it is.
+bool upper_repeat_view_keeps_shape(const ttnn::Shape& shape, int32_t repeat_dim) {
+    const auto rank = static_cast<int32_t>(shape.rank());
+    if (rank != 4 || repeat_dim < 0 || repeat_dim >= rank - 1) {
+        return false;
+    }
+    uint64_t upper = 1;
+    for (int32_t i = 0; i < repeat_dim; ++i) {
+        upper *= static_cast<uint64_t>(shape[i]);
+    }
+    return upper == shape[0] && shape[repeat_dim] == shape[1] && trailing_row_volume(shape, repeat_dim) == shape[2];
+}
+
 }  // namespace
 
 bool is_replication_locally_contained(
@@ -87,16 +101,45 @@ bool is_replication_locally_contained(
     return group_size != 0 && (per_core_rows % group_size) == 0;
 }
 
+bool is_unaligned_row_major_shard_page(const MemoryConfig& memory_config, uint32_t element_size) {
+    if (!memory_config.is_sharded() || !memory_config.shard_spec().has_value()) {
+        return false;
+    }
+    return (memory_config.shard_spec()->shape[1] * element_size) % hal::get_l1_alignment() != 0;
+}
+
 bool is_native_repeat_sharding(
     const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<MemoryConfig>& output_memory_config,
     int32_t repeat_dim,
-    uint32_t num_repeats) {
+    uint32_t num_repeats,
+    bool unaligned_rows_native) {
     if (!side_native(input_spec.memory_config(), input_spec.layout())) {
         return false;
     }
     if (is_unevenly_sharded(input_spec)) {
         return false;
+    }
+    if (input_spec.layout() == Layout::ROW_MAJOR) {
+        const auto& shard = input_spec.memory_config().shard_spec()->shape;
+        // A row narrower than its shard is one padded page, and repeat's views keep that width padding.
+        // A split row whose final shard is partial stays on codegen or the composite path, unless repeat's
+        // view leaves its shape unchanged: native then repeats the tensor as it is, as on main.
+        const bool narrow_row = input_spec.logical_shape()[-1] < shard[1];
+        if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1] &&
+            !upper_repeat_view_keeps_shape(input_spec.logical_shape(), repeat_dim)) {
+            return false;
+        }
+        // Codegen and the composite path copy unaligned WIDTH/BLOCK pages that split a row faster than the staged
+        // kernel. A row on one page needs no staging and stays eligible, as on main: codegen then places its output as
+        // native would, and native takes it where codegen does not apply.
+        const bool split_row = shard[1] < input_spec.padded_shape()[-1];
+        const auto layout = input_spec.memory_config().memory_layout();
+        if (!narrow_row && split_row && !unaligned_rows_native &&
+            (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+            input_spec.compute_page_size_bytes() % hal::get_l1_alignment() != 0) {
+            return false;
+        }
     }
     // TILE input: reject non-tile-aligned H/W (native tile path requires alignment).
     if (input_spec.layout() == tt::tt_metal::Layout::TILE) {
@@ -106,11 +149,13 @@ bool is_native_repeat_sharding(
             return false;
         }
     }
-    // RM WIDTH/BLOCK last-dim: reject (ttnn::view breaks shard width).
+    // RM last-dim: reject WIDTH/BLOCK (ttnn::view breaks shard width), and a row narrower than its shard, whose padding
+    // the last-dim view drops (a HEIGHT shard then throws or writes misaligned NoC transfers).
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR && repeat_dim >= 0 &&
         repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
         const auto in_layout = input_spec.memory_config().memory_layout();
-        if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_spec.logical_shape()[-1] < input_spec.memory_config().shard_spec()->shape[1]) {
             return false;
         }
     }

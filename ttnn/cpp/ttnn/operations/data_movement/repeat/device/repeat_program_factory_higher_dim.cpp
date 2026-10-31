@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 
@@ -65,13 +66,29 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + page_size_bytes;
 
     // TILE/sharded -> tile; RM sharded -> rm_sharded; RM interleaved -> rm_interleaved.
     const bool is_tile_native = operation_attributes.m_tile_page_size_bytes > 0;
     const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
     const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
-    const bool needs_alignment_cb = !is_tile_native && !src_sharded && !dst_sharded;
+    // Split rows need staging for unaligned pages or when squeezing removes the row axis used by the
+    // direct sharded reader. Aligned multi-row distributions retain the direct transfer path.
+    const auto needs_shard_staging = [page_size_bytes](const Buffer* buffer) {
+        const auto& distribution = buffer->buffer_distribution_spec();
+        return distribution && page_size_bytes > buffer->page_size() &&
+               (buffer->page_size() != buffer->aligned_page_size() ||
+                distribution->tensor_shape_in_pages().rank() == 1);
+    };
+    const bool stage_shard_pages =
+        !is_tile_native && (needs_shard_staging(src_buffer) || needs_shard_staging(dst_buffer));
+    const bool needs_alignment_cb = !is_tile_native && ((!src_sharded && !dst_sharded) || stage_shard_pages);
+    // Split shard pages are streamed, so scratch space does not grow with the full tensor row.
+    constexpr uint32_t max_staged_transfer_bytes = 2048;
+    const uint32_t scratch_page_size_bytes =
+        stage_shard_pages ? std::min(page_size_bytes, max_staged_transfer_bytes) : page_size_bytes;
+    // Reserve one alignment for rounding the scratch base and one for matching the NoC address.
+    // At the cap: at most 64 + 63 + 2048 = 2175 bytes are addressed in the 2176-byte scratchpad.
+    const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + scratch_page_size_bytes;
 
     // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
     // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.
@@ -89,7 +106,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
         .unique_id = SRC0,
         .size_per_node = cb_size_bytes,  // entry_size * num_entries (1)
     });
-    // Second buffer only for interleaved RM (write-alignment scratchpad).
+    // Alignment staging for interleaved RM or split shard pages.
     if (needs_alignment_cb) {
         scratchpads.push_back(ScratchpadSpec{
             .unique_id = SRC1,
@@ -107,6 +124,9 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     std::filesystem::path kernel_source;
     if (is_tile_native) {
         kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_tile.cpp";
+    } else if (stage_shard_pages) {
+        kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_sharded_staged.cpp";
     } else if (src_sharded || dst_sharded) {
         kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_sharded.cpp";
     } else {
@@ -123,6 +143,9 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args =
             {{"original_page_size_bytes", page_size_bytes},
+             {"source_page_size_bytes", static_cast<uint32_t>(src_buffer->page_size())},
+             {"dest_page_size_bytes", static_cast<uint32_t>(dst_buffer->page_size())},
+             {"staging_page_size_bytes", scratch_page_size_bytes},
              {"LOWER_DIMS", number_of_lower_pages},
              {"REP_DIM", number_of_rep_dim_pages}},
         .runtime_arg_schema =
