@@ -679,17 +679,26 @@ class FusedStream:
                 total_size=pages * tile.get_tile_size(dtype), core_ranges=gate_up.core_ranges, format_descriptors=[fmt]
             )
 
-        # gate_up's CBs, sized for every half (the writer's stage is unused here: the reader routes)
+        # gate_up's CBs, sized for every half; the writer's stage and the pair streams' routing CBs go unused here.
+        # Two halves keep L1 under the persistent L1 buffers (~1 MB of CBs on a bank core): [8, 32] routing-weight
+        # tiles, a 64-tile h ring (the writer drains it once its weight tiles are pushed: cb_wt holds every listing's,
+        # so the ring cannot deadlock) and one weight block less in the ring.
+        two = halves == 2
+        self.num_buffers = gate_up.NUM_BUFFERS - 1 if two else gate_up.NUM_BUFFERS
+        assert gate_up.IN_FLIGHT < self.num_buffers
+        self.wt_tiny = 1 if two else 0
         resized = {
             gate_up.cb_x: gu_cb(gate_up.cb_x, ttnn.bfloat16, tiny, halves * gate_up.kt),
-            gate_up.cb_h: gu_cb(gate_up.cb_h, ttnn.bfloat16, tiny, self.num_pairs),
+            gate_up.cb_w: gu_cb(gate_up.cb_w, ttnn.bfloat4_b, full, self.num_buffers * gate_up.block_tiles),
+            gate_up.cb_h: gu_cb(gate_up.cb_h, ttnn.bfloat16, tiny, min(self.num_pairs, 64) if two else self.num_pairs),
             gate_up.cb_rstage: gu_cb(gate_up.cb_rstage, ttnn.float32, full, self.stage_pages),
-            gate_up.cb_wt: gu_cb(gate_up.cb_wt, ttnn.bfloat16, full, self.num_pairs),
+            gate_up.cb_wt: gu_cb(gate_up.cb_wt, ttnn.bfloat16, tiny if two else full, self.num_pairs),
         }
+        unused = {gate_up.cb_wstage, gate_up.cb_route, gate_up.cb_sel, gate_up.cb_local}
         base = []
         for desc in gate_up.cbs:
             index = desc.format_descriptors[0].buffer_index
-            if index == gate_up.cb_wstage:
+            if index in unused:
                 continue
             base.append(resized.get(index, desc))
         self.cbs = base + [
@@ -737,7 +746,7 @@ class FusedStream:
             gu.packet_bytes,
             gu.packets_per_block,
             gu.expert_bytes,
-            gu.NUM_BUFFERS,
+            self.num_buffers,
             gu.IN_FLIGHT,
             self.stage_pages,
             *route_ct,
@@ -775,6 +784,7 @@ class FusedStream:
             0,
             gu.expert_tiles * TILE,
             self.halves,
+            self.wt_tiny,
         ]
         compute_ct = [
             gu.cb_x,

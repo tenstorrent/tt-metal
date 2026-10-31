@@ -51,6 +51,7 @@ void kernel_main() {
     constexpr uint32_t signal_sem = get_compile_time_arg_val(21);
     constexpr uint32_t experts = get_compile_time_arg_val(22);
     constexpr uint32_t halves = get_compile_time_arg_val(23);  // row halves: 1, or 2 (users rows .. 2 * rows - 1 too)
+    constexpr bool wt_tiny = get_compile_time_arg_val(24) == 1;  // routing-weight tiles [rows, 32], else 32 x 32
     constexpr uint32_t bf16_tile_bytes = 2048;
     constexpr uint32_t tiny_face_bytes = rows * mimo_moe::kFaceDim * 2;  // rows 0..rows-1 of one face
     constexpr uint32_t tiny_bytes = 2 * tiny_face_bytes;
@@ -123,7 +124,9 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(x, y, ready_addr), 1);
     }
 
-    // Weight tiles (bf16 32 x 32; only rows 0..rows-1 are packed, the rest is never read): row u of faces 0 and 1.
+    // Weight tiles (bf16 32 x 32, or [rows, 32] tiny tiles; only rows 0..rows-1 are packed, the rest is never read):
+    // row u of faces 0 and 1.
+    constexpr uint32_t wt_face1 = wt_tiny ? tiny_face_bytes : mimo_moe::kBf16FaceBytes;
     for (uint32_t j = 0; j < n; j++) {
         cb_reserve_back(cb_wt, 1);
         const uint32_t wt = get_write_ptr(cb_wt);
@@ -141,7 +144,7 @@ void kernel_main() {
             const uint32_t pair = (bits << 16) | bits;
             volatile tt_l1_ptr uint32_t* f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wt + u * row_bytes);
             volatile tt_l1_ptr uint32_t* f1 =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wt + mimo_moe::kBf16FaceBytes + u * row_bytes);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wt + wt_face1 + u * row_bytes);
             for (uint32_t c = 0; c < mimo_moe::kFaceDim / 2; c++) {
                 f0[c] = pair;
                 f1[c] = pair;
