@@ -267,7 +267,9 @@ class TtSparseAttention(TtWindowAttention):
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
         cls = g.start_class(start)
-        src = ttnn.concat([table.index[cls], mine], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the window ids in the chip's own region
+        win = self.tables.region_index[cls] if self.region is not None else table.index[cls]
+        src = ttnn.concat([win, mine], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         if mine is not topk:
             dealloc(mine)
         # every window full: the top-k's own sentinel tail ends the list; CKV_FORMAT=bfp4_rows: ROW_BFP4 takes the
@@ -287,8 +289,13 @@ class TtSparseAttention(TtWindowAttention):
         assert self.INTERLEAVED, "the table holds the rows as stored (interleaved rope tail)"
         assert table is not None, "STATIC_TABLES=on: the KV source's compressed cache was built without its table"
         cos, sin = self._rope_rows(start, g.chunk)
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18): this layer's per-chip region [carry | own rows] (tt/attention)
+        if self.region is not None:
+            assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_tiles reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+            self._window_region(kv, start, end, cache)
+            window = self.region
         # WINDOW_KV_FORMAT=bfp8_blocks: [carry | chunk] into the shared window blocks (tt/attention.WindowTables)
-        if self.win8 and self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11): each SP row packs its own rows
+        elif self.win8 and self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11): each SP row packs its own rows
             assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
             self._window_packed(kv, start, end, cache)
             window = self.tables.window_blocks()
@@ -340,6 +347,7 @@ class TtSparseAttention(TtWindowAttention):
         if self.static:
             return self._static(q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources)
         assert not self.win8, "WINDOW_KV_FORMAT=bfp8_blocks needs STATIC_TABLES=on"
+        assert self.region is None, "WINDOW_KV_FORMAT=bfp8_tiles needs STATIC_TABLES=on"
         cos, sin = self._rope_rows(start, s)
         window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
         shared = memo is not None and sources is not None

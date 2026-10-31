@@ -1193,3 +1193,4 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   CHEAP_BUNDLE (#9 #7 #8 #10), P.22 ROPE_CHAINS (#2 #4, + K.1), P.23 OWN_ROWS (#1, + K.1); each item behind its own
   setting. First the profile measurement: F236 framework hook (model.steady_state(start) before timed runs) after P.18
   commits + FIX.16 STEADY_STATE_PROFILE (DS41 hook) held until then.
+- 10:30 P.18 ACCEPTED (delegation): device -10.0 / -9.3, wall -28.7 / -33.8 ms a chunk at 50k / 500k, -280 launches, accuracy unchanged. Prefill tok/s estimate script: /scratch/dnijemcevic/opportunities/prefill_tps.py (today ~18k, all opts ~25-28k, + layers 21-39 on the tail ~44-52k tok/s per Galaxy).
