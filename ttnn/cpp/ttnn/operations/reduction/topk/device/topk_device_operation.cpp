@@ -48,6 +48,12 @@ tt::DataFormat index_cb_data_format_for(
     return (resolve_index_dtype(args, tensor_args) == DataType::UINT16) ? tt::DataFormat::UInt16
                                                                         : tt::DataFormat::UInt32;
 }
+
+// The multi-core factory is built on the ProgramDescriptor API with circular buffers, which Quasar does not
+// run (Quasar firmware sets up only Metal 2.0 dataflow buffers). Quasar always takes the single-core factory,
+// which is built on the Metal 2.0 ProgramSpec API. Shared by select_program_factory and
+// validate_on_program_cache_miss so the two cannot disagree on which factory runs.
+bool multicore_factory_supported_on_arch(const tt::ARCH arch) { return arch != tt::ARCH::QUASAR; }
 }  // namespace
 
 /**
@@ -88,6 +94,9 @@ tt::DataFormat index_cb_data_format_for(
  *    - Split size must meet minimum dimension per core requirements
  *    - Must be genuinely multi-core beneficial (require > 1 core)
  *
+ * 5. ARCHITECTURE: not Quasar (multicore_factory_supported_on_arch)
+ *    - The multi-core factory uses the ProgramDescriptor API, which Quasar does not run
+ *
  * If any condition fails, falls back to single-core execution.
  *
  * @param args Operation attributes (K, dimension, memory config, core grids)
@@ -110,6 +119,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const uint32_t num_tile_rows = input_shape.volume() / reduced_width / tile_height;
     bool multicore_supported = topk_multicore_structurally_eligible(reduced_width, num_tile_rows, args.k);
+    multicore_supported &= multicore_factory_supported_on_arch(input_tensor.device()->arch());
 
     // The multi-core path takes the first (and only supported) core range below; a
     // malformed grid (zero or multiple ranges) falls back to single-core here and is
@@ -303,6 +313,26 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             input_tensor_dtype);
     }
 
+    // On Quasar the sort runs only on BFLOAT16 values with 16-bit indices. On Quasar a 32-bit tile is
+    // transposed only through unpack-to-dest, and the kernels switch the unpacker between the value and the
+    // index buffers with reconfig_data_format_srca, which on Quasar rejects a 32-bit unpack-to-dest buffer
+    // (#63025). FLOAT32 values always come with 32-bit indices, so both are ruled out. Quasar also has no
+    // BFLOAT8_B data format.
+    if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+        TT_FATAL(
+            input_tensor_dtype == DataType::BFLOAT16,
+            "TopK on Quasar supports only BFLOAT16 input, got: {}. FLOAT32 needs 32-bit buffers that the Quasar "
+            "unpacker reconfiguration does not support yet (#63025), and Quasar has no BFLOAT8_B data format.",
+            input_tensor_dtype);
+        const DataType resolved_index_dtype = resolve_index_dtype(args, tensor_args);
+        TT_FATAL(
+            resolved_index_dtype == DataType::UINT16,
+            "TopK on Quasar supports only UINT16 indices, but this call needs {} indices (a padded reduced "
+            "dimension wider than 65536, or a 32-bit indices tensor or preallocated indices tensor). 32-bit "
+            "indices need 32-bit buffers that the Quasar unpacker reconfiguration does not support yet (#63025).",
+            resolved_index_dtype);
+    }
+
     ReduceOpDeviceGridValidationOptions topk_grid_opts;
     topk_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids;
     topk_grid_opts.sub_grid_label = "sub_core_grids";
@@ -321,14 +351,16 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     // preallocated UINT16 output); UINT32/INT32 outputs use the 32-bit path with a correspondingly larger tile.
     bool uint16_output = (resolve_index_dtype(args, tensor_args) == DataType::UINT16);
 
-    // Try multi-core execution first when the shape/K structure is multi-core
-    // eligible — the same shared predicate select_program_factory uses, so the
-    // allocator-aware L1 check and the core-range validation below cover exactly
-    // the shapes that will actually run the multi-core factory.
+    // Try multi-core execution first when the architecture runs the multi-core
+    // factory and the shape/K structure is multi-core eligible. These are the same
+    // shared predicates select_program_factory uses, so the allocator-aware L1 check
+    // and the core-range validation below cover exactly the shapes that will
+    // actually run the multi-core factory.
     const uint32_t reduced_width = input_shape[args.dim];
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const uint32_t num_tile_rows = input_shape.volume() / reduced_width / tile_height;
-    if (topk_multicore_structurally_eligible(reduced_width, num_tile_rows, args.k)) {
+    if (multicore_factory_supported_on_arch(input_tensor.device()->arch()) &&
+        topk_multicore_structurally_eligible(reduced_width, num_tile_rows, args.k)) {
         auto* device = input_tensor.device();
 
         // Set up data formats for memory cost calculations
@@ -363,7 +395,7 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             can_run = ttnn::prim::verify_single_core_cost(input_tensor, args.k, uint16_output);
         }
     } else {
-        // Dimension too small for multi-core, check single-core feasibility
+        // Multi-core is not used, check single-core feasibility
         can_run = ttnn::prim::verify_single_core_cost(input_tensor, args.k, uint16_output);
     }
 
