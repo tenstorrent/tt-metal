@@ -124,6 +124,840 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool RECIPROCAL, bool FAST_APPROX>
 inline void _calculate_sqrt_internal_() {
+    if constexpr (
+        APPROXIMATION_MODE == false && fp32_dest_acc_en == false && RECIPROCAL == false && FAST_APPROX == false) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 0);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG5,
+                p_sfpu::LREG7,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x7FC0);
+            TTI_SFPCOMPC(0, 0, 0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG4, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG2,
+                p_sfpu::LREG6,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPDIVP2(0xFFF, p_sfpu::LREG4, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 2);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 4);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 6);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_INCRWC(0, 8, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 4; d < ITERATIONS; d += 4) {
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+                TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG0,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 0);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+                TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG0,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 2);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+                TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG0,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 4);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+                TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG0,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPLOAD(p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_UINT16, ADDR_MOD_3, 6);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_INCRWC(0, 8, 0, 0);
+            }
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == false && fp32_dest_acc_en == false && RECIPROCAL == false && FAST_APPROX == true) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG7, 2);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG7, p_sfpu::LREG7, 1);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+            TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG2,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG7,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+            TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG6,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_INCRWC(0, 4, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 2; d < ITERATIONS - 2; d += 2) {
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG7,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFP_STOCH_RND(
+                    0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+                TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+                TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+                TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+                TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+                TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+                TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG6,
+                    p_sfpu::LREG3,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG0,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFP_STOCH_RND(
+                    0, 0, p_sfpu::LCONST_0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_INCRWC(0, 4, 0, 0);
+            }
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG7,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPNOP;
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+            TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG6,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_INCRWC(0, 4, 0, 0);
+
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == false && fp32_dest_acc_en == true && RECIPROCAL == false && FAST_APPROX == false) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG4, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x7FC0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG4,
+                p_sfpu::LREG6,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+            TTI_SFPNOP;
+            TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG4,
+                p_sfpu::LREG6,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+            TTI_SFPNOP;
+            TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG4,
+                p_sfpu::LREG6,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+            TTI_SFPNOP;
+            TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG4,
+                p_sfpu::LREG6,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+            TTI_SFPNOP;
+            TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_INCRWC(0, 8, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 4; d < ITERATIONS; d += 4) {
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG4,
+                    p_sfpu::LREG6,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+                TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+                TTI_SFPNOP;
+                TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG4,
+                    p_sfpu::LREG6,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+                TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+                TTI_SFPNOP;
+                TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG4,
+                    p_sfpu::LREG6,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+                TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+                TTI_SFPNOP;
+                TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG4,
+                    p_sfpu::LREG6,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+                TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, 0);
+                TTI_SFPNOP;
+                TTI_SFPDIVP2(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 1);
+                TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_INCRWC(0, 8, 0, 0);
+            }
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == false && fp32_dest_acc_en == true && RECIPROCAL == false && FAST_APPROX == true) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG7, 2);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG7, p_sfpu::LREG7, 1);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+            TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG2,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG7,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+            TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG6,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_INCRWC(0, 4, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 2; d < ITERATIONS - 2; d += 2) {
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG7,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+                TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+                TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+                TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+                TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+                TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+                TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+                TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+                TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG6,
+                    p_sfpu::LREG3,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPIADD(
+                    0x000,
+                    p_sfpu::LREG12,
+                    p_sfpu::LREG0,
+                    sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+                TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_INCRWC(0, 4, 0, 0);
+            }
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG7,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPNOP;
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 2);
+            TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+            TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG6,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_INCRWC(0, 4, 0, 0);
+
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == true && fp32_dest_acc_en == false && RECIPROCAL == false && FAST_APPROX == false) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG1,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG2,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x7FC0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_INCRWC(0, 8, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 4; d < ITERATIONS; d += 4) {
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFP_STOCH_RND(
+                    0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFP_STOCH_RND(
+                    0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFP_STOCH_RND(
+                    0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFP_STOCH_RND(
+                    0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_INCRWC(0, 8, 0, 0);
+            }
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == true && fp32_dest_acc_en == false && RECIPROCAL == false && FAST_APPROX == true) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_REPLAY(0, 15, 1, 1);
+            TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG3,
+                p_sfpu::LREG2,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 1; d < ITERATIONS; d++) {
+                TTI_REPLAY(0, 15, 0, 0);
+            }
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == true && fp32_dest_acc_en == true && RECIPROCAL == false && FAST_APPROX == false) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_REPLAY(0, 16, 1, 1);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG1,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG2,
+                p_sfpu::LREG3,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPABS_MOD1_FLOAT);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x7FC0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+            TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_REPLAY(0, 16, 0, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+            TTI_INCRWC(0, 8, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 4; d < ITERATIONS; d += 4) {
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+                TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_REPLAY(0, 16, 0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 6);
+                TTI_INCRWC(0, 8, 0, 0);
+            }
+            return;
+        }
+    }
+    if constexpr (
+        APPROXIMATION_MODE == true && fp32_dest_acc_en == true && RECIPROCAL == false && FAST_APPROX == true) {
+        if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
+            TTI_REPLAY(0, 14, 1, 1);
+            TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG0, 2);
+            TTI_SFPSHFT(0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG12,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
+            TTI_SFPIADD(
+                0x000,
+                p_sfpu::LREG3,
+                p_sfpu::LREG2,
+                sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 2
+            for (int d = 1; d < ITERATIONS; d++) {
+                TTI_REPLAY(0, 14, 0, 0);
+            }
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
