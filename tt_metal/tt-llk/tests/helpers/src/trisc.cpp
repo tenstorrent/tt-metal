@@ -94,8 +94,12 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
-    llk_profiler::reset();
+    // RC memset knock-out b0hc2 = b0h + c2: no device clear (host zeroes the buffers), then the pack TRISC makes one
+    // L1 load in the barrier action.
+    llk_profiler::reset_state();
     llk_profiler::sync_threads();
+    llk_barrier::rendezvous(
+        llk_barrier::is_action_thread(), [] { (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(mailboxes_start)); });
 #endif
 
     {

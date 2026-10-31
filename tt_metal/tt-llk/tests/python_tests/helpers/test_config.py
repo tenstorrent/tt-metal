@@ -1953,6 +1953,14 @@ class TestConfig:
                 f"{VARIANT_ELF_DIR} has no {', '.join(missing)}: the variant did not compile, so it is not run"
             )
 
+        # RC memset knock-out b0h: the device no longer clears its profiler buffers; the host does, over NoC.
+        for buffer_address in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                buffer_address,
+                [0] * TestConfig.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
+            )
+
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
         if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
