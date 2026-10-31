@@ -4186,6 +4186,9 @@ class Qwen36Model:
             # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
             return logits
         logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+        if self.num_devices == 1 and os.environ.get("QWEN36_1C_UNPAD_LOGITS") == "1":
+            # The host reads these logits every step; read the real rows, not the whole 32-row tile.
+            logits = ttnn.untilize_with_unpadding(logits, output_tensor_end=[d - 1 for d in logits.shape])
         return logits, None
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
