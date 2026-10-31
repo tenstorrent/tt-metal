@@ -153,6 +153,7 @@ class SpecChain:
             GROUP_WORDS,
             int(self.layer_inputs is not None),  # planned: the MTP drafter's planned program (LayerInputs)
             SERIAL_WRITES,
+            GROUP_SLOTS,
         ]
         kernel = _kernel("spec_chain.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, _ranges(cores))])

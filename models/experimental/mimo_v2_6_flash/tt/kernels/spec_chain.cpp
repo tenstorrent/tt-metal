@@ -115,7 +115,7 @@ void kernel_main() {
     constexpr uint32_t planned = get_compile_time_arg_val(30);
     // Mode 3's serial position rows: row k holds the slots j with j % SR == k (reference/spec_decode.py SERIAL_WRITES).
     constexpr uint32_t SR = get_compile_time_arg_val(31);
-    constexpr uint32_t GS = S / G;                                  // a draft group's slots
+    constexpr uint32_t GS = get_compile_time_arg_val(32);           // a draft group's slots (the widest group's)
     constexpr uint32_t cgw = 4 + GS;                                // a chain block's words
     constexpr uint32_t draft_words = 1 + D;                         // a group's drafts section
     static_assert(G >= 1 && (G * GS == S || (G == 4 && GS == 4 && S == 8)) && D + 1 == GS);
