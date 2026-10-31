@@ -292,13 +292,21 @@ TestResult mem_bench_multi_mmio_devices(
     for ([[maybe_unused]] auto _ : state) {
         std::map<int, Program> programs;                  // device : programs
         std::map<int, CoreRange> configured_core_ranges;  // device : cores
+        const bool is_writer = ctx.number_writer_kernels > 0;
         for (const auto& [device_id, device] : devices) {
             programs[device_id] = CreateProgram();
             Program& pgm = programs[device_id];
             auto device_hugepage_size = get_hugepage_size(device_id);
             configured_core_ranges.insert(
                 {device_id,
-                 configure_kernels(device.get(), pgm, ctx, 0, ctx.number_reader_kernels, false, device_hugepage_size)
+                 configure_kernels(
+                     device.get(),
+                     pgm,
+                     ctx,
+                     0,
+                     is_writer ? ctx.number_writer_kernels : ctx.number_reader_kernels,
+                     is_writer,
+                     device_hugepage_size)
                      .value()});
         }
 
@@ -346,6 +354,26 @@ TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& stat
         0,                                      // Threads
         static_cast<int>(state.range(2)),       // Readers on each device
         0,                                      // Writers
+        false,                                  // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
+    };
+
+    return mem_bench_multi_mmio_devices(state, devices, ctx);
+}
+
+// Multi MMIO devices writing on the same NUMA node.
+TestResult mem_bench_multi_mmio_devices_writing_same_node(benchmark::State& state) {
+    // Node 0
+    auto device_ids = get_device_ids_for_multi_device_same_node(g_user_device_id);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+
+    Context ctx{
+        devices,
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        0,                                      // Readers
+        static_cast<int>(state.range(2)),       // Writers on each device
         false,                                  // Enable host copy
         0,                                      // Iterations is managed by the benchmark framework
     };
@@ -504,6 +532,14 @@ void register_full_benchmark_suite() {
         });
     ::benchmark::RegisterBenchmark(
         "Multiple MMIO Devices Reading (Same NUMA node)", mem_bench_multi_mmio_devices_reading_same_node)
+        ->Apply(global_bench_args)
+        ->ArgsProduct({
+            {1_GB},
+            {32_KB},
+            {1, 2},
+        });
+    ::benchmark::RegisterBenchmark(
+        "Multiple MMIO Devices Writing (Same NUMA node)", mem_bench_multi_mmio_devices_writing_same_node)
         ->Apply(global_bench_args)
         ->ArgsProduct({
             {1_GB},
