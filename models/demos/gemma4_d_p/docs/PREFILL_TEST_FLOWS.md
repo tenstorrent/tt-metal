@@ -167,12 +167,12 @@ TTNN readback slices the populated prefix, untilizes a temporary copy to BF16 ro
 - **Next-token likelihood:** scored on the host while the KV is read back.
 
 ```bash
-pytest 'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' -sv
+pytest 'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-full-8x4]' -sv
 ```
 
-Replace `256k` with `8k`, `16k` or `128k` to select another context. `GEMMA4_TEST_CHUNK_SIZE` selects the chunk size. `GEMMA4_ACCURACY_DATASETS=name,...` limits the run to some datasets; by default it runs all of them. `GEMMA4_GPU_TRACE_ROOT` reads the datasets from another copy, for example `/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p`, which is much faster than `/mnt/models`. The final-layer stream is still read through each trace's `source_trace_dir`. With `PREFILL_SUMMARIES` set, each dataset's `gemma4_slot0.json`, `likelihood.json` and `hidden_samples.safetensors` are written under `$PREFILL_SUMMARIES/gemma4_d_p_prefill_accuracy/`.
+`full` prefills each dataset over all its tokens. Replace it with `8k`, `16k` or `128k` to prefill only that many tokens of every dataset that holds them. If the length is not a multiple of the chunk size, the last chunk is right-padded as in serving. `GEMMA4_TEST_CHUNK_SIZE` selects the chunk size. `GEMMA4_ACCURACY_DATASETS=name,...` limits the run to some datasets; by default it runs all of them. `GEMMA4_GPU_TRACE_ROOT` reads the datasets from another copy, for example `/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p`, which is much faster than `/mnt/models`. The final-layer stream is still read through each trace's `source_trace_dir`. With `PREFILL_SUMMARIES` set, each dataset's `gemma4_slot0.json`, `likelihood.json` and `hidden_samples.safetensors` are written under `$PREFILL_SUMMARIES/gemma4_d_p_prefill_accuracy/`.
 
-Each dataset in `DATASETS` names a GPU trace prepared with [`prepare_gpu_reference.py`](../tt/runners/prepare_gpu_reference.py), with its own PCC and likelihood limits. Its source capture must also keep the final decoder layer's output stream (`decoder_output_layer_59`), which the likelihood check scores against. A dataset with fewer tokens than the requested context is skipped. Text of a different kind, such as code, has a different likelihood profile, so a new dataset needs limits measured on it.
+Each dataset in `DATASETS` names a GPU trace prepared with [`prepare_gpu_reference.py`](../tt/runners/prepare_gpu_reference.py), with its own PCC and likelihood limits. Runs over a shorter prefix get their own limits, because their scores come from a different set of positions: KV PCC uses every position in the run, and the likelihood check uses every 16th position plus the whole last chunk. Its source capture must also keep the final decoder layer's output stream (`decoder_output_layer_59`), which the likelihood check scores against. A dataset with fewer tokens than the requested context is skipped. Text of a different kind, such as code, has a different likelihood profile, so a new dataset needs limits measured on it.
 
 ### Next-token likelihood
 
@@ -186,7 +186,7 @@ The test prints the report and writes it to `likelihood.json`. Each depth bin (0
 
 The last prompt position gets its own line, since its logits are a served request's first output token. At 256K that position has no gold token, so only top-1 agreement and KL are reported for it.
 
-Each bin must meet the dataset's `likelihood_limits`. For the Gutenberg trace they were set from main at chunks 2048, 4096 and 8192 over the 8K, 16K, 128K and 256K contexts, with room for run-to-run variation, and they fail a known long-context regression. The last position is reported but not gated.
+Each bin must meet the likelihood limits of the run's tier (full length or prefix). For the Gutenberg trace they were set from main at chunks 2048, 4096 and 8192 over the 8K, 16K, 128K and 256K contexts, with room for run-to-run variation, and they fail a known long-context regression. The last position is reported but not gated.
 
 Compare any two runs, for example build A against build B or one chunk size against another. Runs at different chunk sizes are scored on the positions both hold:
 

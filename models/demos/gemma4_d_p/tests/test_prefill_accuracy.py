@@ -24,6 +24,7 @@ import torch
 
 from models.common.weight_cache import weight_cache_is_complete
 from models.demos.common.prefill.adapter import PrefillRunParams
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 from models.demos.gemma4_d_p.tests.scripts.likelihood import (
     HIDDEN_SAMPLES,
     HiddenSampler,
@@ -48,26 +49,56 @@ GPU_TRACES = Path(os.getenv("GEMMA4_GPU_TRACE_ROOT", "/mnt/models/huggingface/gp
 
 
 @dataclass(frozen=True)
-class Dataset:
-    trace_dir: Path
+class Limits:
     min_per_head_pcc: float
     min_overall_pcc: float
     max_overall_rrmse: float
     # Per depth bin, keyed by its first position: minimum top-1 agreement, maximum mean ΔNLL and maximum
     # mean top-20 KL against the GPU reference. Text of another kind needs its own measured limits.
-    likelihood_limits: dict
+    likelihood: dict
+
+
+@dataclass(frozen=True)
+class Dataset:
+    trace_dir: Path
+    # Prefix runs get their own limits, because their scores come from a different set of positions: KV PCC uses
+    # every position in the run, and the likelihood check uses every 16th position plus the whole last chunk.
+    full_limits: Limits
+    prefix_limits: Limits
 
 
 DATASETS = {
     "gutenberg": Dataset(
         trace_dir=GPU_TRACES / "gutenberg-135",
-        min_per_head_pcc=0.928,
-        min_overall_pcc=0.978,
-        max_overall_rrmse=0.208,
-        # Across chunks 2048 / 4096 / 8192 and the 8K-256K contexts, main scores no lower than 0.894 / 0.878 / 0.894
-        # top-1 and no higher than 0.316 / 0.346 / 0.342 ΔNLL and 0.151 / 0.213 / 0.158 KL. The fast gate GELU lets
-        # same-build 256K runs differ by up to about 0.006 top-1, 0.03 ΔNLL and 0.02 KL; the limits leave room for it.
-        likelihood_limits={0: (0.87, 0.36, 0.18), 8192: (0.86, 0.39, 0.24), 65536: (0.87, 0.39, 0.19)},
+        # Set from main's worst values over chunks 2048 / 4096 / 8192 at 8K, 16K, 128K and 256K, with margin.
+        full_limits=Limits(
+            min_per_head_pcc=0.928,
+            min_overall_pcc=0.978,
+            max_overall_rrmse=0.208,
+            likelihood={0: (0.87, 0.36, 0.18), 8192: (0.86, 0.39, 0.24), 65536: (0.87, 0.39, 0.19)},
+        ),
+        prefix_limits=Limits(
+            min_per_head_pcc=0.905,
+            min_overall_pcc=0.978,
+            max_overall_rrmse=0.208,
+            likelihood={0: (0.87, 0.36, 0.18), 8192: (0.85, 0.48, 0.28), 65536: (0.87, 0.41, 0.21)},
+        ),
+    ),
+    "code_run": Dataset(
+        trace_dir=GPU_TRACES / "hf-gemma4-31b-coding-example-transformed",
+        # Set from main's worst values over chunks 2048 / 4096 / 8192 at 8K, 16K and full length, with margin.
+        full_limits=Limits(
+            min_per_head_pcc=0.885,
+            min_overall_pcc=0.97,
+            max_overall_rrmse=0.23,
+            likelihood={0: (0.94, 0.03, 0.05), 8192: (0.95, 0.04, 0.04), 65536: (0.95, 0.04, 0.04)},
+        ),
+        prefix_limits=Limits(
+            min_per_head_pcc=0.83,
+            min_overall_pcc=0.96,
+            max_overall_rrmse=0.27,
+            likelihood={0: (0.94, 0.03, 0.05), 8192: (0.95, 0.04, 0.04), 65536: (0.95, 0.04, 0.04)},
+        ),
     ),
 }
 
@@ -80,18 +111,23 @@ def selected_datasets():
 
 
 def load_token_ids(adapter, dataset, context_len):
-    """The dataset's token IDs, after checking it can be scored at ``context_len``; None if too short."""
+    """(token IDs, length to score) for the dataset, or None if it holds fewer than ``context_len`` tokens.
+
+    A ``context_len`` of None scores all of its tokens.
+    """
     metadata = json.loads((dataset.trace_dir / "metadata.json").read_text())
     assert metadata["model_id"] == adapter.hf_model_id, f"{dataset.trace_dir} was captured from another model"
     assert metadata["layout"] == PREPARED_GPU_TRACE_LAYOUT, f"Prepare {dataset.trace_dir} with prepare_gpu_reference"
     assert metadata["n_layers"] == Gemma4ServiceConfig.NUM_LAYERS
-    if len(metadata["token_ids"]) < context_len:
+    token_ids = metadata["token_ids"]
+    context_len = context_len or len(token_ids)
+    if len(token_ids) < context_len:
         return None
     for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
         assert (dataset.trace_dir / "kv_cache" / f"layer_{layer}.safetensors").is_file(), f"Missing layer {layer} KV"
     *_, stream = gpu_final_layer_stream(dataset.trace_dir)
     assert stream["row_count"] >= context_len, f"{dataset.trace_dir}: final-layer stream is shorter than its tokens"
-    return metadata["token_ids"]
+    return token_ids, context_len
 
 
 def run_params(adapter):
@@ -117,24 +153,29 @@ def run_params(adapter):
 def prefill(runtime, kv_cache, token_ids, sampler):
     chunk = Gemma4ServiceConfig.CHUNK_SIZE
     for start in range(0, len(token_ids), chunk):
+        end = min(start + chunk, len(token_ids))
+        # The last chunk is right-padded with the producer's sentinel, as in serving.
+        tokens = token_ids[start:end] + [MTP_PAD_TOKEN_ID] * (start + chunk - end)
         runtime.prefill_chunk(
-            runtime.make_chunk_input(token_ids[start : start + chunk]),
+            runtime.make_chunk_input(tokens),
             kv_cache,
             slot_id=0,
             actual_start=start,
-            actual_end=start + chunk,
+            actual_end=end,
         )
-        sampler.add_chunk(runtime.output, start, start + chunk)
+        sampler.add_chunk(runtime.output, start, end)
 
 
 def compare_kv(kv_cache, context_len, trace_dir, output_dir):
     staging = {}
+    # The cache is read in whole chunks; positions past context_len hold the last chunk's padding.
+    padded_len = -(-context_len // Gemma4ServiceConfig.CHUNK_SIZE) * Gemma4ServiceConfig.CHUNK_SIZE
 
     def read_heads(layer):
         cache = kv_cache.layers[layer]
         tensors = ((0, cache.kv),) if hasattr(cache, "kv") else ((4, cache.k), (20, cache.v))
         for config_start, tensor in tensors:
-            for head, actual in enumerate(read_cache_tensor(tensor, 0, context_len, staging)):
+            for head, actual in enumerate(read_cache_tensor(tensor, 0, padded_len, staging)[:, :context_len]):
                 yield config_start + head, actual
 
     # compare_slot_cache writes its report to PREFILL_PCC_SUMMARY_DIR, which the caller points at output_dir.
@@ -142,22 +183,22 @@ def compare_kv(kv_cache, context_len, trace_dir, output_dir):
     return json.loads((output_dir / "gemma4_slot0.json").read_text())
 
 
-def kv_criteria(report, dataset):
+def kv_criteria(report, limits):
     """(name, required, achieved, passed) rows, in the form ``check_limits`` returns."""
     overall, worst = report["error_metrics"]["overall"], report["worst_head"]
     return [
         (
             "Minimum per-head PCC",
-            f">= {dataset.min_per_head_pcc:.6f}",
+            f">= {limits.min_per_head_pcc:.6f}",
             worst["pcc"],
-            worst["pcc"] >= dataset.min_per_head_pcc,
+            worst["pcc"] >= limits.min_per_head_pcc,
         ),
-        ("Overall PCC", f">= {dataset.min_overall_pcc:.6f}", overall["pcc"], overall["pcc"] >= dataset.min_overall_pcc),
+        ("Overall PCC", f">= {limits.min_overall_pcc:.6f}", overall["pcc"], overall["pcc"] >= limits.min_overall_pcc),
         (
             "Overall RRMSE",
-            f"< {dataset.max_overall_rrmse:.6f}",
+            f"< {limits.max_overall_rrmse:.6f}",
             overall["relative_rmse"],
-            overall["relative_rmse"] < dataset.max_overall_rrmse,
+            overall["relative_rmse"] < limits.max_overall_rrmse,
         ),
     ]
 
@@ -211,7 +252,8 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
     print(f"Worst head: layer={worst['layer']} head={worst['head']} type={worst['cache_type']} PCC={worst['pcc']:.6f}")
     print(f"\nNext-token likelihood vs GPU reference\n{format_report(likelihood)}", flush=True)
 
-    return print_criteria(name, kv_criteria(kv, dataset) + check_limits(likelihood, dataset.likelihood_limits))
+    limits = dataset.full_limits if context_len == len(token_ids) else dataset.prefix_limits
+    return print_criteria(name, kv_criteria(kv, limits) + check_limits(likelihood, limits.likelihood))
 
 
 @torch.no_grad()
@@ -219,7 +261,8 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
 @parametrize_mesh_with_fabric(
     [Gemma4ServiceConfig.MESH_SHAPE], device_params_extra={"trace_region_size": TRACE_REGION_SIZE}
 )
-@pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
+# "full" runs each dataset at its own length; a fixed length runs every dataset that holds that many tokens.
+@pytest.mark.parametrize("context_len", [8192, 16384, 131072, None], ids=["8k", "16k", "128k", "full"])
 def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypatch):
     adapter = Gemma4PrefillAdapter()
     hf_config = adapter.load_hf_config()
@@ -233,12 +276,12 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypat
     assert weight_cache_is_complete(cache, **identity), f"Missing or incompatible TT weight cache: {cache}"
     # Check every dataset before the model is built, so a bad one fails in seconds, not minutes.
     datasets = {
-        name: (dataset, token_ids)
+        name: (dataset, *loaded)
         for name, dataset in selected_datasets().items()
-        if (token_ids := load_token_ids(adapter, dataset, context_len)) is not None
+        if (loaded := load_token_ids(adapter, dataset, context_len)) is not None
     }
     if not datasets:
-        pytest.skip(f"No selected dataset holds {context_len} tokens")
+        pytest.skip(f"No selected dataset holds {context_len or 'full'} tokens")
     output_root = tmp_path
     if summaries := os.getenv("PREFILL_SUMMARIES"):
         output_root = Path(summaries) / "gemma4_d_p_prefill_accuracy" / request.node.name
@@ -251,9 +294,9 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypat
     runtime.capture_trace(kv_cache)
     failures = []
     try:
-        for name, (dataset, token_ids) in datasets.items():
+        for name, (dataset, token_ids, dataset_len) in datasets.items():
             monkeypatch.setenv("PREFILL_PCC_SUMMARY_DIR", str(output_root / name))
-            failures += check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, output_root / name)
+            failures += check_dataset(runtime, kv_cache, name, dataset, token_ids, dataset_len, output_root / name)
     finally:
         runtime.release_trace()
     if failures:
