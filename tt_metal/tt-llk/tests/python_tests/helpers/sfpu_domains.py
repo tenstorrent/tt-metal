@@ -978,7 +978,8 @@ SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         MathOperation.I0,
         MathOperation.Hardshrink,
         # The comparison family answers on the SFPU's total order, not IEEE's unordered
-        # compare: +NaN ranks above every finite value, so a clamp lands on its bound.
+        # compare: +NaN ranks above every finite value. UnaryMin, Clamp and Hardtanh now
+        # propagate NaN; the relu family still lands a NaN on its bound.
         MathOperation.UnaryGt,
         MathOperation.UnaryGe,
         MathOperation.UnaryMin,
@@ -1116,8 +1117,8 @@ def specials_after_nan_sign_gate(
 
 
 # Cat B for the binary SFPU family: the golden defines an answer for a non-finite
-# operand on every specials-safe cell. The comparisons and max/min answer on the SFPU's
-# total order rather than IEEE's unordered compare, which BinarySFPUGolden models.
+# operand on every specials-safe cell. max/min propagate NaN and the comparisons answer
+# IEEE's unordered compare; BinarySFPUGolden models both.
 BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
     {
         # SFPMAD arithmetic, IEEE for a non-finite input.
@@ -1125,7 +1126,7 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
         MathOperation.SfpuElwrsub,
-        # A bare SFPSWAP with no NaN guard: +NaN is the maximum, -NaN the minimum.
+        # SFPSWAP, then a NaN operand replaces the result: NaN propagates.
         MathOperation.SfpuBinaryMax,
         MathOperation.SfpuBinaryMin,
         # These reject a NaN operand before comparing, leaving the pre-stored default.

@@ -202,21 +202,13 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     """Cross product of ±0, ±1, ±inf, +NaN and -NaN for ttnn.minimum /
     ttnn.maximum.
 
-    bfloat16 dest uses SFPSWAP, which orders operands by sign-magnitude bits,
-    and packing never writes a NaN: a NaN comes back as the infinity of its
-    own sign and is ordered as one. +NaN (0x7FC0, the canonical NaN) acts as
-    +inf, -NaN (0xFFC0) as -inf. Operand order does not change this:
-    minimum(nan, x) matches minimum(x, nan). torch returns NaN for every row.
-
-    | a    | b    | ttnn bf16 minimum | ttnn bf16 maximum | torch |
-    |------|------|-------------------|-------------------|-------|
-    | x    | +NaN | x                 | +inf              | NaN   |
-    | x    | -NaN | -inf              | x                 | NaN   |
-    | +NaN | +NaN | +inf              | +inf              | NaN   |
-    | -NaN | -NaN | -inf              | -inf              | NaN   |
-    | +NaN | -NaN | -inf              | +inf              | NaN   |
-
-    x is any non-NaN value, ±inf included.
+    Both propagate NaN (issue #51470): the kernel returns a NaN wherever either operand is
+    NaN, in both operand orders and for either NaN sign. The bfloat16 store packs a NaN as
+    an infinity. On Blackhole the binary kernel emits the canonical +NaN, so -NaN (0xFFC0)
+    comes back as +inf too; on Wormhole the kernel keeps the operand NaN, whose sign the inf
+    follows (x with +NaN gives +inf and x with -NaN gives -inf in either order; a +NaN, -NaN
+    pair gives -inf for maximum and +inf for minimum), so there only the infinity is checked.
+    torch returns NaN for every such row.
 
     Dest packing also drops the zero sign bit: every zero result is +0, e.g.
     minimum(1, -0) and min(+0, -0) give +0 where IEEE gives -0.
@@ -229,18 +221,18 @@ def test_minmax_special_values(device, ttnn_op, is_max):
 
     inf = torch.tensor(float("inf"), dtype=torch.bfloat16)
 
-    def as_signed_inf(t):
-        return torch.where(torch.isnan(t), torch.where(torch.signbit(t), -inf, inf), t)
-
-    a_cmp, b_cmp = as_signed_inf(input_a), as_signed_inf(input_b)
-
-    expected = torch.maximum(a_cmp, b_cmp) if is_max else torch.minimum(a_cmp, b_cmp)
+    expected = torch.maximum(input_a, input_b) if is_max else torch.minimum(input_a, input_b)
+    is_nan = torch.isnan(expected)
+    expected = torch.where(is_nan, inf, expected)
     expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
 
     tt_a = ttnn.from_torch(input_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b = ttnn.from_torch(input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn_op(tt_a, tt_b))
 
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        assert torch.isinf(result[is_nan]).all()
+        expected, result = expected[~is_nan], result[~is_nan]
     assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
     zero = result == 0
     assert not torch.signbit(result[zero]).any()

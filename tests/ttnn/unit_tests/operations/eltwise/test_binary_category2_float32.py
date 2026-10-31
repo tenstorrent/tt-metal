@@ -28,8 +28,8 @@ Category 2: binary comparison + min/max
 | 5  | ttnn.gt       | a > b                   | exact                                    |
 | 6  | ttnn.ge       | a >= b                  | exact                                    |
 | 7  | ttnn.isclose  | abs(a - b) <= tolerance | exact after the dest FTZ exception       |
-| 8  | ttnn.minimum  | elementwise min         | exact; NaN ordered by its sign bit       |
-| 9  | ttnn.maximum  | elementwise max         | exact; NaN ordered by its sign bit       |
+| 8  | ttnn.minimum  | elementwise min         | exact; NaN propagates                    |
+| 9  | ttnn.maximum  | elementwise max         | exact; NaN propagates                    |
 
 The relational ops are covered tensor-tensor and tensor-scalar; the inplace
 variants are covered tensor-tensor only.
@@ -188,26 +188,13 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     """Cross product of ±0, ±1, ±2.5, ±inf, +NaN and -NaN for ttnn.minimum /
     ttnn.maximum at float32, compared by bit pattern.
 
-    The float32 kernel is one SFPSWAP in min/max mode with no NaN handling.
-    It orders operands by their sign-magnitude bits, so a NaN acts as the
-    largest value if its sign bit is clear and the smallest if it is set.
-    The selected operand's bits are passed through unchanged.
+    The float32 kernel orders operands by their sign-magnitude bits with
+    SFPSWAP and passes the selected operand's bits through unchanged.
 
-    1) NaN: neither op propagates NaN the way torch does. Which op looks
-       right depends on the NaN's sign bit (+NaN is 0x7FC00000, the canonical
-       NaN; -NaN is 0xFFC00000, the x86 default NaN). torch returns NaN for
-       every row.
-
-    | a    | b    | device minimum | device maximum |
-    |------|------|----------------|----------------|
-    | x    | +NaN | x              | +NaN           |
-    | +NaN | x    | x              | +NaN           |
-    | x    | -NaN | -NaN           | x              |
-    | -NaN | x    | -NaN           | x              |
-    | +NaN | -NaN | -NaN           | +NaN           |
-
-    x is any non-NaN value, ±inf included. Checked on device for x = ±0,
-    ±1, ±2.5, ±inf.
+    1) NaN: both ops propagate NaN (issue #51470), in either operand position
+       and for either NaN sign, as torch does. The NaN bits are not checked:
+       the Blackhole SFPLOADMACRO path emits the canonical +NaN (0x7FC00000)
+       through SFPMAD, while the Wormhole loop keeps the operand's NaN.
 
     2) ±0 pairs: the device is sign-aware as in IEEE 754-2019, because -0
        orders below +0. torch just returns an operand, and which one depends
@@ -250,10 +237,12 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     key_a, key_b = _sign_magnitude_key(input_a), _sign_magnitude_key(input_b)
     pick_a = (key_a > key_b) if is_max else (key_a < key_b)
     expected = torch.where(pick_a, input_a, input_b)
+    expected_nan = torch.isnan(input_a) | torch.isnan(input_b)
+    expected = torch.where(expected_nan, _POS_NAN, expected)
 
     result_bits = result.view(torch.int32)
     expected_bits = expected.view(torch.int32)
-    mismatch = result_bits != expected_bits
+    mismatch = torch.where(expected_nan, ~torch.isnan(result), result_bits != expected_bits)
     assert not mismatch.any(), "bit-pattern mismatches (a, b, expected, device): " + ", ".join(
         f"({input_a[i, j].item()}, {input_b[i, j].item()}, {expected[i, j].item()}, {result[i, j].item()})"
         for i, j in torch.nonzero(mismatch).tolist()
