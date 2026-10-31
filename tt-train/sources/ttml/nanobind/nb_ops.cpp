@@ -669,6 +669,8 @@ void py_module(nb::module_& m) {
             "not supported.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
+        py_unary.def("sigmoid", &ttml::ops::sigmoid, nb::arg("tensor"));
+        py_unary.def("tanh", &ttml::ops::tanh, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
             "polynorm3",
