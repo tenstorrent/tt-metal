@@ -22,6 +22,8 @@ struct PagedFillCacheDeviceOperation {
     using operation_attributes_t = PagedFillCacheParams;
     using tensor_args_t = PagedFillCacheInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
+    // The device-operation topology hook currently accepts this exact vector type.
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PagedFillCacheProgramFactory, PagedFillCacheMeshWorkloadFactory>;
 
@@ -33,6 +35,8 @@ struct PagedFillCacheDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
