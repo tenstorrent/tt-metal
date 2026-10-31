@@ -49,6 +49,21 @@ on:
         required: false
         default: false
         type: boolean
+      node-list-artifact:
+        description: "Artifact of this run holding nodes.txt; the tests set LLK_PERF_NODE_LIST to it (blank = none)"
+        required: false
+        default: ""
+        type: string
+      stage2-baseline-ref:
+        description: "Merge gate: after stage 1, each leg re-measures its regressions against the merge baseline at this ref (blank = off)"
+        required: false
+        default: ""
+        type: string
+      stage2-thresholds:
+        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "module_thresholds": ...}}; only these arches run stage 2'
+        required: false
+        default: "{}"
+        type: string
       debug-symbols:
         description: "Build the ELFs with -g"
         required: false
@@ -236,8 +251,52 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  stage2-baseline:
+    name: "Stage 2: read the merge baseline"
+    if: ${{ inputs.stage2-baseline-ref != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            .github
+            tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - run: pip install pandas snowflake-connector-python cryptography
+      - name: Read the baseline from the warehouse
+        env:
+          SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+          SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+          SNOWFLAKE_WAREHOUSE: PUBLIC
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          MATCH_REF: ${{ inputs.stage2-baseline-ref }}
+          LLK_PERF_WAREHOUSE_TABLE: ${{ vars.LLK_PERF_WAREHOUSE_TABLE }}
+          STAGE2_THRESHOLDS: ${{ inputs.stage2-thresholds }}
+        run: |
+          COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF" | paste -sd, -) || COMMITS=""
+          for ARCH in $(python3 -c 'import json, os; print(*json.loads(os.environ["STAGE2_THRESHOLDS"]))'); do
+            python3 tt_metal/tt-llk/perf/baseline_from_warehouse.py \
+              --arch "$ARCH" --pipeline merge_baseline --speed-of-light "$SPEED_OF_LIGHT" \
+              --exclude-workflow-run "$GITHUB_RUN_ID" --commits "$COMMITS" --wait-minutes 0 \
+              --out "stage2-baseline/${ARCH}/baseline.csv" --metadata "stage2-baseline/${ARCH}/baseline_metadata.json" \
+              || echo "::warning::No ${ARCH} merge baseline; its legs skip stage 2."
+          done
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-perf-stage2-baseline${{ inputs.artifact-suffix }}
+          path: stage2-baseline/
+
   llk-perf-exec:
-    needs: [load-test-matrix, build-images, llk-perf-shadow-compile]
+    needs: [load-test-matrix, build-images, llk-perf-shadow-compile, stage2-baseline]
     if: >-
       ${{ !cancelled() && inputs.architecture != 'quasar' && needs.build-images.result == 'success'
           && needs.load-test-matrix.result == 'success' && needs.load-test-matrix.outputs.matrix != '[]' }}
@@ -253,7 +312,7 @@ jobs:
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Record the job start
-        if: ${{ inputs.shadow-compile-runner != '' }}
+        if: ${{ inputs.shadow-compile-runner != '' || inputs.stage2-baseline-ref != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
@@ -282,6 +341,15 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      - name: Download the node list
+        if: ${{ inputs.node-list-artifact != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.node-list-artifact }}
+          path: ${{ runner.temp }}/node-list
+      - name: Point the tests at the node list
+        if: ${{ inputs.node-list-artifact != '' }}
+        run: echo "LLK_PERF_NODE_LIST=$RUNNER_TEMP/node-list/nodes.txt" >> "$GITHUB_ENV"
       - name: "Offload: install zstd"
         id: offload-zstd
         if: ${{ inputs.offload-compile && inputs.shadow-compile-runner != '' }}
@@ -380,6 +448,50 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true
+
+      # Stage 2 runs in the leg's spare time, after the official upload, so it adds no board job.
+      - name: "Stage 2: download the merge baseline"
+        id: stage2-baseline
+        if: ${{ success() && inputs.stage2-baseline-ref != '' && fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH] }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: llk-perf-stage2-baseline${{ inputs.artifact-suffix }}
+          path: ${{ runner.temp }}/stage2-baseline
+      - name: "Stage 2: re-measure this leg's regressions at 5 code positions"
+        if: ${{ steps.stage2-baseline.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
+          MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
+        run: |
+          # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
+          export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
+          # The container runs as another user than the checkout's owner; stage 2 fetches the base with git.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # The script stops measuring at the deadline. This limit also covers its other steps (git fetch, compare),
+          # with 30 s past the deadline to write the result, so stage 2 cannot run the leg into its timeout.
+          LEFT=$(( LLK_STAGE2_DEADLINE + 30 - $(date +%s) ))
+          if (( LEFT < 60 )); then
+            echo "::warning::No time left for stage 2 in this leg."
+            exit 0
+          fi
+          LLK_STAGE2_BASE_REF="${{ inputs.stage2-baseline-ref }}" timeout -k 10 "$LEFT" \
+            tests/run_llk_perf_merge_stage2.sh "$RUNNER_TEMP/stage2-baseline/$CHIP_ARCH" "$RUNNER_TEMP/stage2" \
+            || echo "::warning::Stage 2 did not finish in this leg (exit $?); the gate report counts this leg as missing."
+      - name: "Stage 2: upload the result"
+        if: ${{ !cancelled() && steps.stage2-baseline.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-perf-stage2-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          # One search path: with two, upload-artifact uploaded only one of the files in the leg container.
+          path: ${{ runner.temp }}/stage2/stage2.*
+          if-no-files-found: ignore
 
       # Shadow steps: after the official upload, report-only, llk-shadow-* artifacts only.
       - name: "Shadow: check the time left"
