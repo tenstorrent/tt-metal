@@ -223,3 +223,32 @@ def test_min_h_axis_split(device, dtype, shape):
     tt_output = ttnn.min(tt_input, dim=-2)
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert_equal(torch_ref, ttnn.to_torch(tt_output))
+
+
+# Shapes that take the W split: few tile rows (NC*Ht) and Wt at or above the split threshold.
+_TILE_W_SPLIT_SHAPES = [
+    (1, 1, 32, 8192),  # one tile row, Wt=256 (the threshold)
+    (1, 1, 32, 128256),  # Llama-3 vocabulary, uneven last block
+    (1, 1, 64, 10000),  # two tile rows, non-aligned W
+    (2, 3, 32, 9000),  # NC=6, non-aligned W
+]
+
+
+# fp32 fast_and_approximate_mode is refused, so only the accurate SFPU path splits.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("shape", _TILE_W_SPLIT_SHAPES)
+def test_min_w_axis_split(device, dtype, shape):
+    """W reduce on wide TILE input with few tile rows: column blocks on separate cores."""
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    # Positive input: an overhang filled with zero would win the min.
+    torch_input = torch.rand(shape, dtype=torch_dtype) + 1.0
+    torch_ref = torch.amin(torch_input.float(), dim=-1).to(torch_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # A value that would win if implicit tile padding reached the reduce.
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
+
+    tt_output = ttnn.min(tt_input, dim=-1)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_ref, ttnn.to_torch(tt_output))
