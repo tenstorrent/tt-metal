@@ -731,9 +731,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_TENSIX_DISPATCH_CORES=1
         case EnvVarID::TT_METAL_TENSIX_DISPATCH_CORES:
             this->use_quasar_tensix_dispatch_cores = is_env_enabled(value);
-            log_info(
-                tt::LogDevice,
-                "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
+            if (this->use_quasar_tensix_dispatch_cores) {
+                log_info(
+                    tt::LogDevice,
+                    "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
+            }
             break;
 
         // TT_METAL_NOC_ATT

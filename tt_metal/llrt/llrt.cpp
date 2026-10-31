@@ -601,9 +601,12 @@ void send_msg_to_eth_mailbox(
 
     // Must write args first.
     // Pad remaining args to zero
+    TT_FATAL(args.size() <= max_args, "Ethernet mailbox takes at most {} args, got {}", max_args, args.size());
     args.resize(max_args, 0);
-    uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, 0);
-    cluster.write_reg(args.data(), tt_cxy_pair(device_id, virtual_core), first_arg_addr);
+    // write_reg writes one word, so write each slot of the window.
+    for (uint32_t i = 0; i < max_args; i++) {
+        cluster.write_reg(&args[i], target, hal.get_eth_fw_mailbox_arg_addr(mailbox_index, i));
+    }
     cluster.l1_barrier(device_id);
 
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
