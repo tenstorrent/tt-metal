@@ -69,12 +69,12 @@ def check_pack() -> int:
     rows = [(a, b, o, sy, fi, h, w, kt, thr, 32, 32, False, bool(l1)) for a, b, o, acc, sy, fi, h, w, kt, thr, l1 in grid._grid()]
     rows += [(a, b, o, sy, fi, h, w, kt, thr, 32, 32, False, bool(l1)) for a, b, o, acc, sy, fi, h, w, kt, thr, l1, nb in grid2._grid2()]
     rows += [(a, b, o, sy, fi, rt, ct, kt, 0, r0, c1, True, False) for a, b, o, acc, sy, fi, r0, c1, rt, ct, kt in grid2._tiny_rows()]
-    fm = ["F16b", "B8", "B4", "F32"]
+    fm = ["F16b", "B8", "B4", "F32", "F16", "B8x", "B2"]
     fis = ["LoFi", "HiFi2", "HiFi3", "HiFi4"]
     dims = (1, 2, 3, 4, 5, 8)
     shapes = ((32, 32), (4, 32), (16, 32), (32, 16))
-    cross = list(itertools.product(fm, fm, fm, "HF", fis, dims, dims, (1, 2, 8), (0, 4), shapes, (False, True), (False, True)))
-    cross = [(a, b, o, sy, fi, rt, ct, kt, thr, sh[0], sh[1], d, l1) for a, b, o, sy, fi, rt, ct, kt, thr, sh, d, l1 in cross]
+    cross = list(itertools.product(fm, fm, fm, "HF", fis, dims, dims, (1, 2, 8), (0, 2, 3, 4), shapes, (False, True), (False, True)))
+    cross = [(a, b, o, sy, fi, rt, ct, kt, thr, sh[0], sh[1], d, l1) for a, b, o, sy, fi, rt, ct, kt, thr, sh, d, l1 in cross[::7]]
     allrows = rows + cross
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "llk_defs.h").write_text(STUB)

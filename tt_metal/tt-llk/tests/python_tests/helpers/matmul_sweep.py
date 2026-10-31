@@ -104,8 +104,9 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     ]
 
 
-_PACK_SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32"}
-_PACK_GRID_FORMATS = frozenset(_PACK_SHORT)
+_PACK_SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2"}
+_PACK_LLKX_FORMATS = frozenset(_PACK_SHORT)
+_PACK_GRID_FORMATS = frozenset({DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float32})
 # (fidelity, output, A, B, rt, ct): blocks of three or more K tiles where the closed block pack reads slower than the per-tile pack (matmul_pack_per_tile_cells in llk_matmul_forms.h)
 _PACK_PER_TILE_ROWS = (
     ('HiFi2', 'B4', 'B4', 'F32', 1, 3),
@@ -429,6 +430,191 @@ _PACK_PER_TILE_ROWS = (
     ('LoFi', 'F32', 'F32', 'F32', 8, 1),
 )
 _PACK_PER_TILE = frozenset(_PACK_PER_TILE_ROWS)
+# (fidelity, output, A, B, rt, ct, throttle): cells of the LLK-only sweep where the block pack read slower than the per-tile pack (matmul_pack_llkx_per_tile_cells in llk_matmul_forms.h)
+_PACK_LLKX_PER_TILE_ROWS = (
+    ('HiFi2', 'B2', 'B2', 'B2', 1, 3, 0),
+    ('HiFi2', 'B2', 'B2', 'B4', 1, 3, 0),
+    ('HiFi2', 'B2', 'B2', 'B8', 1, 3, 0),
+    ('HiFi2', 'B2', 'B4', 'B2', 3, 1, 0),
+    ('HiFi2', 'B2', 'B4', 'F16b', 1, 3, 0),
+    ('HiFi2', 'B2', 'B8', 'F16b', 1, 3, 0),
+    ('HiFi2', 'B2', 'F16b', 'B2', 3, 1, 0),
+    ('HiFi2', 'B2', 'F16b', 'B4', 1, 3, 0),
+    ('HiFi2', 'B2', 'F16b', 'B8', 1, 3, 0),
+    ('HiFi2', 'B2', 'F32', 'B2', 1, 8, 0),
+    ('HiFi2', 'B2', 'F32', 'B8', 1, 2, 0),
+    ('HiFi2', 'B2', 'F32', 'F16b', 3, 1, 0),
+    ('HiFi2', 'B4', 'B8', 'F32', 1, 4, 2),
+    ('HiFi2', 'B4', 'F32', 'B4', 2, 2, 2),
+    ('HiFi2', 'B4', 'F32', 'F16b', 1, 5, 2),
+    ('HiFi2', 'B4', 'F32', 'F32', 2, 2, 2),
+    ('HiFi2', 'B8x', 'F16', 'F16', 1, 3, 0),
+    ('HiFi2', 'B8x', 'F16', 'F16', 3, 1, 0),
+    ('HiFi2', 'B8', 'B4', 'B2', 1, 3, 0),
+    ('HiFi2', 'B8', 'B4', 'B4', 1, 8, 2),
+    ('HiFi2', 'B8', 'B4', 'B8', 2, 1, 2),
+    ('HiFi2', 'B8', 'B4', 'F16b', 2, 4, 2),
+    ('HiFi2', 'B8', 'B8', 'B2', 2, 1, 0),
+    ('HiFi2', 'B8', 'B8', 'B8', 2, 2, 2),
+    ('HiFi2', 'B8', 'B8', 'F32', 2, 2, 2),
+    ('HiFi2', 'B8', 'F16b', 'F16b', 2, 2, 2),
+    ('HiFi2', 'B8', 'F32', 'F16b', 1, 5, 2),
+    ('HiFi2', 'F16', 'B8x', 'B8x', 2, 1, 0),
+    ('HiFi2', 'F16', 'B8x', 'F16', 2, 1, 0),
+    ('HiFi2', 'F16', 'B8', 'B8', 2, 1, 0),
+    ('HiFi2', 'F16', 'F16', 'B8x', 2, 1, 0),
+    ('HiFi2', 'F16', 'F16', 'F16', 2, 1, 0),
+    ('HiFi2', 'F16', 'F16b', 'F16b', 2, 1, 0),
+    ('HiFi2', 'F16', 'F32', 'F32', 2, 1, 0),
+    ('HiFi2', 'F16b', 'B2', 'B8', 2, 1, 0),
+    ('HiFi2', 'F16b', 'B4', 'B4', 2, 3, 2),
+    ('HiFi2', 'F16b', 'B4', 'B8', 2, 1, 3),
+    ('HiFi2', 'F16b', 'B4', 'F32', 2, 1, 3),
+    ('HiFi2', 'F16b', 'B8x', 'B8x', 1, 3, 0),
+    ('HiFi2', 'F16b', 'B8x', 'B8x', 2, 1, 0),
+    ('HiFi2', 'F16b', 'B8x', 'F16', 2, 1, 0),
+    ('HiFi2', 'F16b', 'F16', 'B8x', 2, 1, 0),
+    ('HiFi2', 'F16b', 'F16', 'F16', 2, 1, 0),
+    ('HiFi2', 'F16b', 'F32', 'B8', 2, 1, 3),
+    ('HiFi2', 'F16b', 'F32', 'F16b', 1, 2, 3),
+    ('HiFi2', 'F32', 'B4', 'B8', 1, 6, 2),
+    ('HiFi2', 'F32', 'B4', 'F16b', 1, 4, 2),
+    ('HiFi2', 'F32', 'B8', 'F16b', 3, 2, 2),
+    ('HiFi2', 'F32', 'B8', 'F32', 1, 8, 2),
+    ('HiFi2', 'F32', 'F32', 'B2', 1, 6, 0),
+    ('HiFi2', 'F32', 'F32', 'F32', 5, 1, 2),
+    ('HiFi2', 'F32', 'F32', 'F32', 5, 1, 3),
+    ('HiFi3', 'B2', 'B4', 'B4', 1, 3, 0),
+    ('HiFi3', 'B4', 'B4', 'F32', 2, 2, 2),
+    ('HiFi3', 'B4', 'B8', 'F32', 1, 2, 2),
+    ('HiFi3', 'B4', 'F16b', 'F32', 2, 2, 2),
+    ('HiFi3', 'B4', 'F32', 'B8', 2, 4, 2),
+    ('HiFi3', 'B8', 'B4', 'B8', 1, 7, 2),
+    ('HiFi3', 'B8', 'B4', 'F16b', 1, 2, 2),
+    ('HiFi3', 'B8', 'B4', 'F16b', 1, 7, 2),
+    ('HiFi3', 'B8', 'B4', 'F32', 1, 8, 2),
+    ('HiFi3', 'B8', 'B8', 'B4', 4, 1, 2),
+    ('HiFi3', 'B8', 'B8', 'F16b', 2, 1, 2),
+    ('HiFi3', 'B8', 'B8', 'F32', 1, 2, 2),
+    ('HiFi3', 'B8', 'F16b', 'B4', 2, 1, 2),
+    ('HiFi3', 'B8', 'F16b', 'B8', 2, 1, 2),
+    ('HiFi3', 'B8', 'F16b', 'F16b', 1, 2, 2),
+    ('HiFi3', 'B8', 'F16b', 'F16b', 7, 1, 2),
+    ('HiFi3', 'B8', 'F16b', 'F32', 1, 4, 2),
+    ('HiFi3', 'B8', 'F32', 'B4', 2, 2, 2),
+    ('HiFi3', 'B8', 'F32', 'F16b', 2, 1, 2),
+    ('HiFi3', 'B8', 'F32', 'F32', 1, 2, 2),
+    ('HiFi3', 'F16b', 'B8', 'B4', 1, 5, 2),
+    ('HiFi3', 'F16b', 'B8', 'B8', 1, 2, 2),
+    ('HiFi3', 'F16b', 'F16b', 'B8', 4, 1, 2),
+    ('HiFi3', 'F16b', 'F32', 'F32', 1, 2, 2),
+    ('HiFi3', 'F32', 'B4', 'B2', 1, 2, 0),
+    ('HiFi3', 'F32', 'B4', 'F32', 2, 1, 3),
+    ('HiFi3', 'F32', 'B8x', 'B8x', 2, 1, 0),
+    ('HiFi3', 'F32', 'B8x', 'F16', 2, 1, 0),
+    ('HiFi3', 'F32', 'B8', 'B4', 2, 2, 2),
+    ('HiFi3', 'F32', 'B8', 'F32', 2, 3, 2),
+    ('HiFi3', 'F32', 'F16', 'B8x', 2, 1, 0),
+    ('HiFi3', 'F32', 'F16', 'F16', 2, 1, 0),
+    ('HiFi3', 'F32', 'F16b', 'B2', 1, 2, 0),
+    ('HiFi3', 'F32', 'F16b', 'F16b', 1, 2, 3),
+    ('HiFi3', 'F32', 'F32', 'B8', 2, 3, 2),
+    ('HiFi4', 'B4', 'B8', 'F32', 1, 2, 2),
+    ('HiFi4', 'B4', 'B8', 'F32', 2, 2, 2),
+    ('HiFi4', 'B4', 'F16b', 'F32', 2, 2, 2),
+    ('HiFi4', 'B4', 'F32', 'F16b', 7, 1, 2),
+    ('HiFi4', 'B4', 'F32', 'F32', 3, 1, 2),
+    ('HiFi4', 'B8', 'B4', 'B4', 1, 4, 2),
+    ('HiFi4', 'B8', 'B4', 'B8', 2, 1, 2),
+    ('HiFi4', 'B8', 'B4', 'F32', 4, 1, 2),
+    ('HiFi4', 'B8', 'B8', 'F16b', 2, 3, 2),
+    ('HiFi4', 'B8', 'F16b', 'B4', 1, 2, 2),
+    ('HiFi4', 'B8', 'F16b', 'B4', 1, 5, 2),
+    ('HiFi4', 'B8', 'F16b', 'B8', 1, 2, 2),
+    ('HiFi4', 'B8', 'F16b', 'B8', 1, 5, 2),
+    ('HiFi4', 'B8', 'F16b', 'F32', 1, 4, 2),
+    ('HiFi4', 'B8', 'F32', 'B4', 1, 4, 2),
+    ('HiFi4', 'B8', 'F32', 'B8', 1, 4, 2),
+    ('HiFi4', 'B8', 'F32', 'F32', 2, 1, 2),
+    ('HiFi4', 'F16b', 'B4', 'B4', 1, 5, 2),
+    ('HiFi4', 'F16b', 'B8', 'B8', 1, 5, 2),
+    ('HiFi4', 'F16b', 'F16b', 'B8', 2, 1, 2),
+    ('HiFi4', 'F16b', 'F16b', 'F32', 2, 3, 2),
+    ('HiFi4', 'F16b', 'F32', 'B8', 2, 1, 2),
+    ('HiFi4', 'F32', 'B4', 'F16b', 1, 2, 2),
+    ('HiFi4', 'F32', 'B8', 'B8', 1, 6, 2),
+    ('HiFi4', 'F32', 'B8', 'F32', 1, 2, 2),
+    ('HiFi4', 'F32', 'B8', 'F32', 2, 1, 2),
+    ('HiFi4', 'F32', 'F16b', 'B4', 1, 4, 2),
+    ('HiFi4', 'F32', 'F16b', 'B4', 6, 1, 2),
+    ('HiFi4', 'F32', 'F16b', 'B8', 1, 4, 2),
+    ('HiFi4', 'F32', 'F16b', 'F16b', 1, 2, 2),
+    ('HiFi4', 'F32', 'F16b', 'F32', 2, 2, 2),
+    ('HiFi4', 'F32', 'F32', 'B8', 2, 1, 2),
+    ('HiFi4', 'F32', 'F32', 'F32', 2, 3, 2),
+    ('LoFi', 'B2', 'B2', 'B4', 1, 8, 0),
+    ('LoFi', 'B2', 'B2', 'B4', 2, 4, 0),
+    ('LoFi', 'B2', 'B2', 'B8', 1, 6, 0),
+    ('LoFi', 'B2', 'B2', 'F16b', 2, 4, 0),
+    ('LoFi', 'B2', 'B2', 'F32', 2, 4, 0),
+    ('LoFi', 'B2', 'F16b', 'B2', 1, 6, 0),
+    ('LoFi', 'B2', 'F16b', 'B4', 1, 3, 0),
+    ('LoFi', 'B2', 'F16b', 'B4', 1, 6, 0),
+    ('LoFi', 'B2', 'F16b', 'F32', 1, 6, 0),
+    ('LoFi', 'B2', 'F32', 'B4', 1, 4, 0),
+    ('LoFi', 'B2', 'F32', 'F16b', 2, 1, 0),
+    ('LoFi', 'B2', 'F32', 'F32', 1, 2, 0),
+    ('LoFi', 'B2', 'F32', 'F32', 2, 2, 0),
+    ('LoFi', 'B4', 'B2', 'F32', 2, 3, 0),
+    ('LoFi', 'B4', 'B4', 'B2', 4, 2, 0),
+    ('LoFi', 'B4', 'B4', 'B4', 2, 1, 2),
+    ('LoFi', 'B4', 'B8', 'B2', 1, 3, 0),
+    ('LoFi', 'B4', 'B8', 'B4', 1, 2, 2),
+    ('LoFi', 'B4', 'B8', 'F16b', 3, 1, 3),
+    ('LoFi', 'B4', 'B8', 'F32', 1, 2, 2),
+    ('LoFi', 'B4', 'F16b', 'F32', 2, 1, 2),
+    ('LoFi', 'B4', 'F32', 'B8', 1, 8, 2),
+    ('LoFi', 'B8x', 'B8x', 'F16', 4, 1, 0),
+    ('LoFi', 'B8x', 'F16', 'B8x', 1, 7, 0),
+    ('LoFi', 'B8x', 'F16', 'B8x', 4, 1, 0),
+    ('LoFi', 'B8x', 'F16', 'B8x', 6, 1, 0),
+    ('LoFi', 'B8', 'B8', 'B4', 1, 2, 2),
+    ('LoFi', 'B8', 'F16b', 'B4', 1, 3, 2),
+    ('LoFi', 'B8', 'F16b', 'B8', 1, 3, 2),
+    ('LoFi', 'B8', 'F16b', 'B8', 2, 4, 2),
+    ('LoFi', 'B8', 'F32', 'F32', 2, 2, 2),
+    ('LoFi', 'B8', 'F32', 'F32', 2, 2, 3),
+    ('LoFi', 'F16', 'B8x', 'F16', 2, 1, 0),
+    ('LoFi', 'F16', 'B8x', 'F16', 3, 1, 0),
+    ('LoFi', 'F16', 'B8x', 'F16', 6, 1, 0),
+    ('LoFi', 'F16', 'F16', 'B8x', 1, 7, 0),
+    ('LoFi', 'F16', 'F16', 'B8x', 1, 8, 0),
+    ('LoFi', 'F16', 'F32', 'F32', 4, 1, 0),
+    ('LoFi', 'F16b', 'B8', 'B2', 4, 2, 0),
+    ('LoFi', 'F16b', 'B8', 'F16b', 2, 2, 2),
+    ('LoFi', 'F16b', 'B8', 'F32', 1, 2, 2),
+    ('LoFi', 'F16b', 'F16', 'B8x', 1, 8, 0),
+    ('LoFi', 'F16b', 'F16b', 'B2', 2, 1, 0),
+    ('LoFi', 'F16b', 'F32', 'B8', 1, 2, 2),
+    ('LoFi', 'F16b', 'F32', 'B8', 1, 2, 3),
+    ('LoFi', 'F16b', 'F32', 'B8', 2, 3, 3),
+    ('LoFi', 'F16b', 'F32', 'F16b', 2, 1, 2),
+    ('LoFi', 'F32', 'B2', 'B4', 2, 3, 0),
+    ('LoFi', 'F32', 'B2', 'B8', 1, 4, 0),
+    ('LoFi', 'F32', 'B2', 'F16b', 1, 6, 0),
+    ('LoFi', 'F32', 'B4', 'B8', 1, 2, 2),
+    ('LoFi', 'F32', 'B8x', 'F16', 6, 1, 0),
+    ('LoFi', 'F32', 'B8', 'B2', 4, 1, 0),
+    ('LoFi', 'F32', 'B8', 'B4', 1, 8, 2),
+    ('LoFi', 'F32', 'B8', 'F16b', 2, 1, 2),
+    ('LoFi', 'F32', 'F16', 'B8x', 1, 3, 0),
+    ('LoFi', 'F32', 'F16', 'B8x', 1, 8, 0),
+    ('LoFi', 'F32', 'F16', 'F16', 1, 8, 0),
+    ('LoFi', 'F32', 'F16b', 'B4', 2, 1, 2),
+    ('LoFi', 'F32', 'F16b', 'B8', 2, 1, 2),
+    ('LoFi', 'F32', 'F32', 'F32', 1, 5, 3),
+)
+_PACK_LLKX_PER_TILE = frozenset(_PACK_LLKX_PER_TILE_ROWS)
 
 
 def matmul_pack_per_tile_cell(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, throttle=0, in0_tile_r_dim=32, in1_tile_c_dim=32) -> bool:
@@ -568,6 +754,24 @@ class MatmulPackForm(int):
         return obj
 
 
+def _matmul_pack_form_ext(value, formats, dest_sync, math_fidelity, rt_dim, ct_dim, throttle, in0_tile_r_dim, in1_tile_c_dim, l1_acc):
+    """The block pack of the LLK-only sweep for the blocks _matmul_pack_form_value leaves on the per-tile pack (matmul_pack_form_k in llk_matmul_forms.h)."""
+    if (
+        value == 0
+        and dest_sync == DestSync.Half
+        and rt_dim * ct_dim >= 2
+        and in0_tile_r_dim == 32
+        and in1_tile_c_dim == 32
+        and not l1_acc
+        and throttle in (0, 2, 3)
+        and (throttle in (2, 3) or any(f not in _PACK_GRID_FORMATS for f in (formats.input_format, formats.input_format_B, formats.output_format)))
+        and all(f in _PACK_LLKX_FORMATS for f in (formats.input_format, formats.input_format_B, formats.output_format))
+        and (math_fidelity.name, _PACK_SHORT[formats.output_format], _PACK_SHORT[formats.input_format], _PACK_SHORT[formats.input_format_B], rt_dim, ct_dim, throttle) not in _PACK_LLKX_PER_TILE
+    ):
+        return 2 if formats.output_format.is_block_float() else 1
+    return value
+
+
 def matmul_pack_form(
     formats: FormatConfig,
     dest_sync: DestSync,
@@ -583,6 +787,7 @@ def matmul_pack_form(
 ) -> int:
     """Output pack form of the Blackhole matmul kernels: the python mirror of matmul_pack_form_k in llk_matmul_forms.h (0 per tile, 1 one block run, 2 the closed block, 4 the dense run)."""
     value = _matmul_pack_form_value(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, in0_tile_r_dim, in1_tile_c_dim, throttle, dense_pages, l1_acc)
+    value = _matmul_pack_form_ext(value, formats, dest_sync, math_fidelity, rt_dim, ct_dim, throttle, in0_tile_r_dim, in1_tile_c_dim, l1_acc)
     return MatmulPackForm(
         value,
         (

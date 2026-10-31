@@ -1024,10 +1024,229 @@ constexpr bool matmul_pack_per_tile_block(const MathFidelity fidelity, const Dat
     return false;
 }
 
+struct matmul_pack_llkx_cell
+{
+    MathFidelity fidelity;
+    DataFormat out;
+    DataFormat in_a;
+    DataFormat in_b;
+    std::uint8_t rt, ct, throttle;
+};
+// Cells of the LLK-only space (Float16, Bfp8 and Bfp2_b operands, throttle 2 and 3) where the block pack read slower than the per-tile pack
+// (any K and accumulate): the other blocks of the sweep take the block pack, which read faster on 3400 of 4100 of them.
+inline constexpr matmul_pack_llkx_cell matmul_pack_llkx_per_tile_cells[] = {
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Bfp2_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Bfp4_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Bfp8_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Bfp4_b, DataFormat::Bfp2_b, 3, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp2_b, 3, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Bfp2_b, 1, 8, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float16_b, 3, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 4, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 2, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 1, 5, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Float16, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Float16, 3, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp2_b, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 8, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 4, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 2},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, 1, 5, 2},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Bfp8, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Float16, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16, DataFormat::Float32, DataFormat::Float32, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp2_b, DataFormat::Bfp8_b, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 3, 2},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 1, 3},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 1, 3},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp8, DataFormat::Bfp8, 1, 3, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp8, DataFormat::Bfp8, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Bfp8, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Float16, DataFormat::Bfp8, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Float16, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 3},
+    {MathFidelity::HiFi2, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 3},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 1, 6, 2},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 4, 2},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 3, 2, 2},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 8, 2},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp2_b, 1, 6, 0},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 5, 1, 2},
+    {MathFidelity::HiFi2, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 5, 1, 3},
+    {MathFidelity::HiFi3, DataFormat::Bfp2_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 0},
+    {MathFidelity::HiFi3, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 4, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 1, 7, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 7, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 7, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 5, 2},
+    {MathFidelity::HiFi3, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 4, 1, 2},
+    {MathFidelity::HiFi3, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp2_b, 1, 2, 0},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 1, 3},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Bfp8, DataFormat::Bfp8, 2, 1, 0},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Bfp8, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 2, 2},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 3, 2},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Float16, DataFormat::Bfp8, 2, 1, 0},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Float16, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp2_b, 1, 2, 0},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 3},
+    {MathFidelity::HiFi3, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 3, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 7, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 4, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 4, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 3, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 5, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 5, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 1, 4, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 4, 2},
+    {MathFidelity::HiFi4, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 2},
+    {MathFidelity::HiFi4, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 5, 2},
+    {MathFidelity::HiFi4, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 2, 3, 2},
+    {MathFidelity::HiFi4, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 6, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 4, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 6, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 4, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::HiFi4, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 3, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Bfp4_b, 1, 8, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Bfp4_b, 2, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Bfp8_b, 1, 6, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Float16_b, 2, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Float32, 2, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp2_b, 1, 6, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 6, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Bfp4_b, 1, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float32, 1, 2, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float32, 2, 2, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp2_b, DataFormat::Float32, 2, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp2_b, 4, 2, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 1, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 3, 1, 3},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 8, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float16, 4, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Bfp8, 1, 7, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Bfp8, 4, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Bfp8, 6, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 3, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 3, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 4, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 2, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 2, 2, 3},
+    {MathFidelity::LoFi, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float16, 2, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float16, 3, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float16, 6, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8, 1, 7, 0},
+    {MathFidelity::LoFi, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8, 1, 8, 0},
+    {MathFidelity::LoFi, DataFormat::Float16, DataFormat::Float32, DataFormat::Float32, 4, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 4, 2, 0},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float16, DataFormat::Bfp8, 1, 8, 0},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp2_b, 2, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 3},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 3, 3},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp2_b, DataFormat::Bfp4_b, 2, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp2_b, DataFormat::Bfp8_b, 1, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp2_b, DataFormat::Float16_b, 1, 6, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 1, 2, 2},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp8, DataFormat::Float16, 6, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 4, 1, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 8, 2},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float16, DataFormat::Bfp8, 1, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float16, DataFormat::Bfp8, 1, 8, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float16, DataFormat::Float16, 1, 8, 0},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 5, 3},
+};
+
+constexpr bool matmul_pack_llkx_format(const DataFormat f)
+{
+    return f == DataFormat::Float16 || f == DataFormat::Float16_b || f == DataFormat::Float32 || f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
+}
+
+// The LLK-only space: a Float16, Bfp8 or Bfp2_b operand or output, or throttle 2 or 3 (the grid sweep covers the other blocks, which keep matmul_pack_form_base_k).
+constexpr bool matmul_pack_llkx_space(const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t throttle)
+{
+    const auto grid = [](const DataFormat f) { return f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Float32; };
+    return throttle == 2 || throttle == 3 || !grid(in_a) || !grid(in_b) || !grid(out);
+}
+
+constexpr bool matmul_pack_llkx_per_tile(const MathFidelity fidelity, const DataFormat out, const DataFormat in_a, const DataFormat in_b, const std::uint32_t rt, const std::uint32_t ct,
+                                         const std::uint32_t throttle)
+{
+    for (const matmul_pack_llkx_cell& c : matmul_pack_llkx_per_tile_cells)
+    {
+        if (c.fidelity == fidelity && c.out == out && c.in_a == in_a && c.in_b == in_b && c.rt == rt && c.ct == ct && c.throttle == throttle)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles (dense_pages only: the perf sweep, where the
 // output address does not change the pack timing). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
 // harness (matmul_pack_form of matmul_sweep.py mirrors it) and of the keyed llk_matmul_block_pack.
-constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
@@ -1091,6 +1310,22 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
     }
     return (small || block_float_out) ? 2 : 1;
 }
+
+// The output pack form of a matmul block: matmul_pack_form_base_k, and for the blocks it leaves on the per-tile pack at half sync (two or more full tiles, throttle 0, 2 or 3, no packer L1 accumulate,
+// Float and block float formats) the block pack of the LLK-only sweep: the plain block run, the closed block for a block float output, except the cells of matmul_pack_llkx_per_tile_cells.
+constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
+                                 const bool l1_acc = false)
+{
+    const int base = matmul_pack_form_base_k(fidelity, half_sync, throttle, kt, rt, ct, in_a, in_b, out, r0, c1, dense_pages, l1_acc);
+    if (base == 0 && half_sync && rt * ct >= 2 && r0 == 32 && c1 == 32 && !l1_acc && (throttle == 0 || throttle == 2 || throttle == 3) && matmul_pack_llkx_format(in_a) && matmul_pack_llkx_format(in_b) &&
+        matmul_pack_llkx_format(out) && matmul_pack_llkx_space(in_a, in_b, out, throttle) && !matmul_pack_llkx_per_tile(fidelity, out, in_a, in_b, rt, ct, throttle))
+    {
+        return matmul_format_block_float(out) ? 2 : 1;
+    }
+    return base;
+}
+
 
 // Half sync single K tile blocks of Float32 output from Bfp8 operands (5-bit exponent) where the half sync end fold of the HiFi phase end reads slower than main's separate phase end.
 inline constexpr matmul_grid_main_cell matmul_end_fold_off_cells[] = {
