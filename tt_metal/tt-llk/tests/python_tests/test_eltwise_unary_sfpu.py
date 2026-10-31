@@ -1036,7 +1036,7 @@ def test_eltwise_unary_sfpu_polygamma_order(
         pytest.skip(
             reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
         )
-    eltwise_unary_sfpu(
+    res_tensor, golden_tensor = eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         dest_acc,
@@ -1045,15 +1045,17 @@ def test_eltwise_unary_sfpu_polygamma_order(
         FastMode.No,
         input_dimensions,
         spec_A=_polygamma_stimuli_spec(polygamma_order),
-        custom_atol=0.0,
-        # atol is 0 so a flushed lane fails outright at a relative error of 1. The rtol is loose
-        # because the sweep reaches the last binades before underflow, where the Euler-Maclaurin
-        # corrections themselves flush: measured worst case there is 2.0% for float32 at order 11
-        # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
-        custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
         polygamma_order=polygamma_order,
         return_golden=True,
     )
+    # rtol covers the last binades before underflow, where Euler-Maclaurin terms flush
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        custom_atol=0.0,
+        custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
+    ), "polygamma order sweep failed the atol=0 gate"
 
 
 @parametrize(
