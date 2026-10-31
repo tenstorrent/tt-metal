@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -186,6 +187,63 @@ FORCE_INLINE void copy(InDFB& in, OutDFB& out, uint32_t tiles) {
     out.push_back(tiles);
 }
 
+// Summaries arrive in complement form (E = A - I). Copy a group's E [Kt, Kt] to out as A = E + I in FP32: the identity
+// tile (UnpackToDest, exact) is added on the diagonal tiles in FP32 DST.
+template <uint32_t Kt, typename InDFB, typename IdentityDFB, typename OutDFB>
+FORCE_INLINE void copy_complement(InDFB& in, IdentityDFB& identity, OutDFB& out) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t identity_id = identity.get_id();
+    const uint32_t out_id = out.get_id();
+    out.reserve_back(Kt * Kt);
+    reconfig_data_format_srca(in_id);
+    for (uint32_t row = 0; row < Kt; ++row) {
+        for (uint32_t column = 0; column < Kt; ++column) {
+            tile_regs_acquire();
+            copy_init(in_id);
+            copy_tile(in_id, row * Kt + column, 0);
+            if (row == column) {
+                reconfig_data_format_srca(in_id, identity_id);
+                copy_init(identity_id);
+                copy_tile(identity_id, 0, 1);
+                reconfig_data_format_srca(identity_id, in_id);
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, out_id, row * Kt + column);
+            tile_regs_release();
+        }
+    }
+    out.push_back(Kt * Kt);
+}
+
+// out = lhs + rhs as an SFPU add of two FP32 DST operands.
+template <typename LhsDFB, typename RhsDFB, typename OutDFB>
+FORCE_INLINE void add(LhsDFB& lhs, RhsDFB& rhs, OutDFB& out, uint32_t tiles) {
+    const uint32_t lhs_id = lhs.get_id();
+    const uint32_t rhs_id = rhs.get_id();
+    const uint32_t out_id = out.get_id();
+    out.reserve_back(tiles);
+    reconfig_data_format_srca(lhs_id);
+    for (uint32_t tile = 0; tile < tiles; ++tile) {
+        tile_regs_acquire();
+        copy_init(lhs_id);
+        copy_tile(lhs_id, tile, 0);
+        reconfig_data_format_srca(lhs_id, rhs_id);
+        copy_init(rhs_id);
+        copy_tile(rhs_id, tile, 1);
+        reconfig_data_format_srca(rhs_id, lhs_id);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_id, tile);
+        tile_regs_release();
+    }
+    out.push_back(tiles);
+}
+
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
@@ -204,6 +262,7 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer tail_affine(dfb::tail_affine);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     DataflowBuffer reset_b(dfb::reset_b);
+    DataflowBuffer identity(dfb::identity);
 
     kda_chronology::Topology topology{};
     {
@@ -215,6 +274,7 @@ TT_KERNEL void compute(uint32_t group) {
         return;
     }
     const uint32_t reset_group = topology.reset_group(G);
+    identity.wait_front(1);
     initial_a.wait_front(affine_a_tiles);
     const bool reset_worker = group == reset_group;
     if (!reset_worker) {
@@ -223,22 +283,25 @@ TT_KERNEL void compute(uint32_t group) {
     if (reset_worker) {
         const bool aligned_reset = topology.split_in_group(G) == 0;
         tail_entry_states.wait_front(affine_b_tiles);
+        // The reset worker's own transform is (0, seed) in A form: its zero A, written by dataflow, discards the
+        // prefix entering it.
+        copy(initial_a, to_remote_a, affine_a_tiles);
         if (aligned_reset) {
-            copy(tail_entry_states, reset_b, affine_b_tiles);
+            copy(tail_entry_states, to_remote_b, affine_b_tiles);
         } else {
+            // The tail transform is in complement form: seed = E @ S + B + S.
             tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
             matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_entry_states, reset_b);
+            reset_b.wait_front(affine_b_tiles);
+            add(reset_b, tail_entry_states, to_remote_b, affine_b_tiles);
+            reset_b.pop_front(affine_b_tiles);
         }
-        reset_b.wait_front(affine_b_tiles);
-        copy(initial_a, to_remote_a, affine_a_tiles);
-        copy(reset_b, to_remote_b, affine_b_tiles);
-        reset_b.pop_front(affine_b_tiles);
         if (!aligned_reset) {
             tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
         }
         tail_entry_states.pop_front(affine_b_tiles);
     } else {
-        copy(initial_a, to_remote_a, affine_a_tiles);
+        copy_complement<Kt>(initial_a, identity, to_remote_a);
         copy(initial_b, to_remote_b, affine_b_tiles);
     }
     initial_a.pop_front(affine_a_tiles);

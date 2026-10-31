@@ -47,6 +47,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const m2::KernelSpecName dataflow_kernel_name{"dataflow"};
     const m2::KernelSpecName compute_kernel_name{"compute"};
     const m2::DFBSpecName initial_dfb{"initial"};
+    const m2::DFBSpecName initial_exact_dfb{"initial_exact"};
+    const m2::DFBSpecName state_exact_dfb{"state_exact"};
     const m2::DFBSpecName a_dfb{"a"};
     const m2::DFBSpecName b_dfb{"b"};
     const m2::DFBSpecName product_dfb{"product"};
@@ -71,9 +73,12 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     constexpr auto fp32 = tt::DataFormat::Float32;
     const uint32_t a_tiles = Kt * Kt;
     const uint32_t state_tiles = Kt * Vt;
-    // 384 KiB per core at the production K = V = 128; validation checks chain_affine_transforms_l1_bytes against L1.
+    // 576 KiB per core (BF16 transforms) at the production K = V = 128; validation checks
+    // chain_affine_transforms_l1_bytes against L1.
     m2::Group<m2::DataflowBufferSpec> dfbs = {
         make_dfb(initial_dfb, state_tiles, fp32),
+        make_dfb(initial_exact_dfb, state_tiles, fp32),
+        make_dfb(state_exact_dfb, 2 * state_tiles, fp32),
         make_dfb(a_dfb, chain_affine_transforms_transform_buffers * a_tiles, transform_format),
         make_dfb(b_dfb, chain_affine_transforms_transform_buffers * state_tiles, transform_format),
         make_dfb(product_dfb, state_tiles, fp32),
@@ -89,6 +94,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
         .dfb_bindings =
             {
                 m2::ProducerOf(initial_dfb, "initial"),
+                m2::ProducerOf(initial_exact_dfb, "initial_exact"),
                 m2::ProducerOf(a_dfb, "a"),
                 m2::ProducerOf(b_dfb, "b"),
                 m2::ConsumerOf(out_dfb, "out"),
@@ -117,6 +123,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     compute_hw.unpack_modes[initial_dfb] = tt::tt_metal::UnpackMode::UnpackToSrc;
     compute_hw.unpack_modes[state_dfb] = tt::tt_metal::UnpackMode::UnpackToSrc;
     compute_hw.unpack_modes[product_dfb] = tt::tt_metal::UnpackMode::UnpackToDest;
+    compute_hw.unpack_modes[initial_exact_dfb] = tt::tt_metal::UnpackMode::UnpackToDest;
+    compute_hw.unpack_modes[state_exact_dfb] = tt::tt_metal::UnpackMode::UnpackToDest;
     m2::KernelSpec compute{
         .unique_id = compute_kernel_name,
         .source =
@@ -126,6 +134,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
         .dfb_bindings =
             {
                 m2::ConsumerOf(initial_dfb, "initial"),
+                m2::ConsumerOf(initial_exact_dfb, "initial_exact"),
+                m2::ProducerOf(state_exact_dfb, "state_exact"),
+                m2::ConsumerOf(state_exact_dfb, "state_exact"),
                 m2::ConsumerOf(a_dfb, "a"),
                 m2::ConsumerOf(b_dfb, "b"),
                 m2::ProducerOf(product_dfb, "product"),

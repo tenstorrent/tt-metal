@@ -15,11 +15,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
     KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
-    KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     KDA_HIGH_BW_PREFIX_GATHER_LINKS,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
@@ -50,14 +48,6 @@ def _group_summary_memory_config(
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-
-
-@dataclass(frozen=True)
-class AffineTransform:
-    """State-space affine map ``state -> a @ state + b``."""
-
-    a: ttnn.Tensor
-    b: ttnn.Tensor
 
 
 @dataclass(frozen=True)
@@ -225,24 +215,6 @@ def _scan_chunks(
     return RecurrenceResult(output=output, final_state=final_states)
 
 
-def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
-    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the prefix gathers."""
-    transform_a, transform_b = transform.a, transform.b
-    batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
-    value_dim = transform_b.shape[-1]
-    # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
-    # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
-    packed = ttnn.concat(
-        [
-            ttnn.reshape(transform_a, (1, batch_heads, key_dim, key_dim)),
-            ttnn.reshape(transform_b, (1, batch_heads, key_dim, value_dim)),
-        ],
-        dim=3,
-        memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
-    )
-    return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
-
-
 def _sp_links(device: ttnn.MeshDevice, sequence_parallel_axis: int) -> int:
     """Ethernet links between neighbours on the SP axis; 0 for a system the link table does not know."""
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
@@ -265,7 +237,7 @@ def distributed_prefix(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
-    ``packed`` is this chip's BF16 [1, BH, K, K+V] transform of [A | B] rows. The transforms are
+    ``packed`` is this chip's BF16 [1, BH, K, K+V] transform of complement-form [E | B] rows. The transforms are
     gathered as BF16; ``chain_affine_transforms`` derives the order from ``actual_start`` and
     applies them with FP32 accumulation. Return the local entry state and the replicated final
     carry on each independent TP line.
@@ -415,7 +387,8 @@ def _partition_prefix(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    a, b = ttnn.experimental.kda.reduce_affine_transforms(
+    # The reduction publishes the packed complement form [E | B] that the prefix gathers.
+    packed = ttnn.experimental.kda.reduce_affine_transforms(
         summaries,
         groups_per_head,
         local_rows=local_rows,
@@ -426,7 +399,7 @@ def _partition_prefix(
         compute_kernel_config=compute_config.affine_prefix,
     )
     return distributed_prefix(
-        pack_transform(AffineTransform(a, b)),
+        packed,
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.affine_prefix,
@@ -615,7 +588,7 @@ class KDARecurrence:
             self._summary_memory = _group_summary_memory_config(
                 device, self._summary_tail, batch * heads * self._groups, key_dim, value_dim
             )
-        # A persistent, replicated output for high_bw_all_gather of the per-rank packed [A | B] summaries; only the
+        # A persistent, replicated output for high_bw_all_gather of the per-rank packed [E | B] summaries; only the
         # one-group-per-head summary gathers them directly.
         self._gather_buffer = None
         if (

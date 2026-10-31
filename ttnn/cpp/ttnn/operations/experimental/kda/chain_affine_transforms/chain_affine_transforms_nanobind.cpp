@@ -17,15 +17,17 @@ void bind_chain_affine_transforms(nb::module_& mod) {
         R"doc(
         Apply one affine state transition per sequence-parallel rank in chronological order.
 
-        ``transforms`` holds every rank's packed transition ``[A | B]`` gathered along the
+        ``transforms`` holds every rank's packed transition in complement form ``[E | B]``,
+        ``E = A - I``, gathered along the
         sequence-parallel axis in physical rank order. Starting from ``initial_state``, the
         transitions are applied in chronological order, the order of ranks starting at the
         rank that holds the first token of the chunk:
 
-            S_{s+1} = A_{rank(s)} @ S_s + B_{rank(s)},   rank(s) = (first_rank + s) mod P
+            S_{s+1} = S_s + (E_{rank(s)} @ S_s + B_{rank(s)}),   rank(s) = (first_rank + s) mod P
 
-        Each step is a matmul that accumulates the whole key dimension in FP32, followed by an
-        FP32 add. Returns this rank's entry state ``S_c``, where ``c`` is the
+        Each step is a matmul that accumulates the whole key dimension in FP32, followed by
+        FP32 adds of B and of an exact copy of S_s, so the state is never rounded to a source
+        register's precision. Requires ``fp32_dest_acc_en``. Returns this rank's entry state ``S_c``, where ``c`` is the
         rank's chronological index, and the completed carry ``S_P``.
 
         Args:

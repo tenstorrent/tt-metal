@@ -61,21 +61,18 @@ _PRODUCTION_PERF_EXPECTED_DURATION_NS = {"dram-head": 46_120, "nd-sharded-l1-hea
 
 def _reduce_affine_transforms_ops(
     summaries: torch.Tensor | ttnn.Tensor,
-    outputs: tuple[torch.Tensor | ttnn.Tensor, ...],
+    output: torch.Tensor | ttnn.Tensor,
 ) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
-    if len(outputs) != 2:
-        raise ValueError("affine-transform reduction requires two outputs")
-    if len(summaries.shape) != 4 or any(len(tensor.shape) != 3 for tensor in outputs):
+    if len(summaries.shape) != 4 or len(output.shape) != 4 or output.shape[0] != 1:
         raise ValueError("affine-transform reduction tensor shapes are inconsistent")
-    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in (summaries, *outputs)):
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in (summaries, output)):
         raise ValueError("affine-transform reduction tensor shapes must be positive")
 
-    batch_heads, key_dim, output_key_dim = tuple(outputs[0].shape)
-    value_dim = tuple(outputs[1].shape)[-1]
+    _, batch_heads, key_dim, output_row_width = tuple(output.shape)
+    value_dim = output_row_width - key_dim
     slots, transforms, summary_rows, row_width = tuple(summaries.shape)
     if (
-        key_dim != output_key_dim
-        or tuple(outputs[1].shape) != (batch_heads, key_dim, value_dim)
+        value_dim <= 0
         or slots not in (1, 2)
         or transforms % batch_heads
         or (summary_rows, row_width) != (key_dim, key_dim + value_dim)
@@ -95,27 +92,24 @@ def _reduce_affine_transforms_ops(
 
 def _reduce_affine_transforms_performance(
     summaries: ttnn.Tensor,
-    outputs: tuple[ttnn.Tensor, ...],
+    output: ttnn.Tensor,
     *,
     measured_ns: float,
     math_fidelity: ttnn.MathFidelity,
 ) -> perf_model.KdaPerformance:
-    fpu, sfpu = _reduce_affine_transforms_ops(summaries, outputs)
+    fpu, sfpu = _reduce_affine_transforms_ops(summaries, output)
     return perf_model.performance(
         fpu=fpu,
         sfpu=sfpu,
         inputs=(summaries,),
-        outputs=outputs,
+        outputs=(output,),
         measured_ns=measured_ns,
         math_fidelity=math_fidelity,
     )
 
 
 def test_reduce_affine_transforms_work_golden() -> None:
-    fpu, sfpu = _reduce_affine_transforms_ops(
-        torch.empty((2, 2, 2, 3)),
-        (torch.empty((1, 2, 2)), torch.empty((1, 2, 1))),
-    )
+    fpu, sfpu = _reduce_affine_transforms_ops(torch.empty((2, 2, 2, 3)), torch.empty((1, 1, 2, 3)))
 
     assert fpu == perf_model.FpuOps(matrix_flops=24, add_ops=2)
     assert sfpu == perf_model.SfpuOps()
@@ -169,9 +163,22 @@ def _oracle(
 
 
 def _pack(a: torch.Tensor, b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
-    """Packed [slots, N, K, K+V] summaries of [A | B] rows. A tail slot is NaN: the reduction must never read it."""
-    head = torch.cat([a, b], dim=-1)
+    """Packed [slots, N, K, K+V] summaries of complement-form [E | B] rows, E = A - I. A tail slot is NaN: the
+    reduction must never read it."""
+    head = torch.cat([a - torch.eye(a.shape[-1]), b], dim=-1)
     return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
+
+
+def _split(output: ttnn.Tensor | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The packed [1, B*H, K, K+V] rows [E | B] as the transform (A, B), A = E + I (exact in FP32 for BF16 E).
+
+    Accuracy is judged on A, whose error the HiFi2 composition sets; relative to the smaller E the same error reads
+    several times larger. The complement form's own precision is covered in test_padding_prefix.py.
+    """
+    host = (ttnn.to_torch(output) if isinstance(output, ttnn.Tensor) else output).float()
+    assert host.dim() == 4 and host.shape[0] == 1, f"packed output shape {tuple(host.shape)}"
+    key_dim = host.shape[2]
+    return host[0, :, :, :key_dim] + torch.eye(key_dim), host[0, :, :, key_dim:]
 
 
 def _summary_memory_config(
@@ -231,7 +238,7 @@ def _run(
     actual_start: ttnn.Tensor,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+) -> ttnn.Tensor:
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.reduce_affine_transforms(
             summaries,
@@ -292,12 +299,11 @@ def test_reduce_affine_transforms_contract_and_trace(
     snapshot = ttnn.to_torch(summaries_tt).clone()
 
     first = _run(summaries_tt, groups_per_head, actual_start=zero_actual_start)
-    for output, shape in zip(first, ((batch_heads, key_dim, key_dim), (batch_heads, key_dim, value_dim)), strict=True):
-        assert output.dtype == ttnn.float32
-        assert output.layout == ttnn.TILE_LAYOUT
-        assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-        assert tuple(ttnn.to_torch(output).shape) == shape
-        assert output.buffer_address() != summaries_tt.buffer_address()
+    assert first.dtype == ttnn.bfloat16
+    assert first.layout == ttnn.TILE_LAYOUT
+    assert first.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert tuple(first.shape) == (1, batch_heads, key_dim, key_dim + value_dim)
+    assert first.buffer_address() != summaries_tt.buffer_address()
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced = _run(summaries_tt, groups_per_head, actual_start=zero_actual_start)
@@ -306,12 +312,11 @@ def test_reduce_affine_transforms_contract_and_trace(
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
 
-    for name, golden, actual_tt, traced_tt in zip(("A", "B"), (expected_a, expected_b), first, traced, strict=True):
-        actual = ttnn.to_torch(actual_tt)
+    for name, golden, actual in zip(("A", "B"), (expected_a, expected_b), _split(first), strict=True):
         assert_accurate(
             golden, actual, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.02
         )
-        assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
+    assert_bit_identical(ttnn.to_torch(first), ttnn.to_torch(traced), name="trace replay")
 
     after = ttnn.to_torch(summaries_tt)
     assert_bit_identical(snapshot[0], after[0], name="head slot immutability")
@@ -344,12 +349,12 @@ def test_reduce_affine_transforms_shape_accuracy(
     expected = _oracle(a, b, batch_heads, groups_per_head)
     summaries_tt = _device_summaries(a, b, device, summary_dtype, slots=2, placement=placement)
 
-    outputs = _run(summaries_tt, groups_per_head, actual_start=zero_actual_start)
+    output = _run(summaries_tt, groups_per_head, actual_start=zero_actual_start)
 
-    for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
+    for name, golden, actual in zip(("A", "B"), expected, _split(output), strict=True):
         assert_accurate(
             golden,
-            ttnn.to_torch(output),
+            actual,
             name=f"{summary_dtype} shape-sweep reduced {name}",
             pcc_threshold=0.999,
             nrmse_threshold=0.01,
@@ -366,7 +371,7 @@ def test_reduce_affine_transforms_is_device_deterministic(
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
 
     def run() -> tuple[ttnn.Tensor, ...]:
-        return _run(summaries_tt, case.groups_per_head, actual_start=zero_actual_start)
+        return (_run(summaries_tt, case.groups_per_head, actual_start=zero_actual_start),)
 
     reference_outputs, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     assert_equal(
@@ -374,7 +379,7 @@ def test_reduce_affine_transforms_is_device_deterministic(
         mismatch_marker,
         name=f"{summary_dtype} reduced outputs device-side exact-value determinism marker",
     )
-    for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
+    for name, golden, output in zip(("A", "B"), expected, _split(outputs[0]), strict=True):
         assert_accurate(
             golden, output, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.02
         )
@@ -399,14 +404,12 @@ def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(
 
     assert device.num_program_cache_entries() == entries
     assert device_a.buffer_address() != device_b.buffer_address()
-    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(output_a, output_b, strict=True))
+    assert output_a.buffer_address() != output_b.buffer_address()
     expected_a = _oracle(*host_a, case.batch_heads, case.groups_per_head)
     expected_b = _oracle(*host_b, case.batch_heads, case.groups_per_head)
-    for name, golden_a, golden_b, actual_a_tt, actual_b_tt in zip(
-        ("A", "B"), expected_a, expected_b, output_a, output_b, strict=True
+    for name, golden_a, golden_b, actual_a, actual_b in zip(
+        ("A", "B"), expected_a, expected_b, _split(output_a), _split(output_b), strict=True
     ):
-        actual_a = ttnn.to_torch(actual_a_tt)
-        actual_b = ttnn.to_torch(actual_b_tt)
         assert_accurate(
             golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.02
         )
@@ -437,12 +440,7 @@ def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaul
         summaries_tt, case.groups_per_head, compute_kernel_config=explicit_config, actual_start=zero_actual_start
     )
     assert device.num_program_cache_entries() == entries
-    for name, implicit_output, explicit_output in zip(("A", "B"), implicit, explicit, strict=True):
-        assert_bit_identical(
-            ttnn.to_torch(implicit_output),
-            ttnn.to_torch(explicit_output),
-            name=f"{name} implicit vs explicit compute defaults",
-        )
+    assert_bit_identical(ttnn.to_torch(implicit), ttnn.to_torch(explicit), name="implicit vs explicit compute defaults")
 
 
 def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_program(
@@ -465,30 +463,44 @@ def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_progra
     )
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
-    for name, golden, exact_output, approximate_output in zip(("A", "B"), expected, exact, approximate, strict=True):
-        assert_accurate(
-            golden, ttnn.to_torch(exact_output), name=f"{name} exact math", pcc_threshold=0.999, nrmse_threshold=0.02
-        )
+    for name, golden, exact_output, approximate_output in zip(
+        ("A", "B"), expected, _split(exact), _split(approximate), strict=True
+    ):
+        assert_accurate(golden, exact_output, name=f"{name} exact math", pcc_threshold=0.999, nrmse_threshold=0.02)
         assert_accurate(
             golden,
-            ttnn.to_torch(approximate_output),
+            approximate_output,
             name=f"{name} approximate math",
             pcc_threshold=0.999,
             nrmse_threshold=0.003,
         )
 
 
+@pytest.mark.parametrize(
+    ("unsupported_config", "message"),
+    [
+        (
+            ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, packer_l1_acc=True),
+            "packer_l1_acc=true is unsupported",
+        ),
+        (
+            ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False),
+            "fp32_dest_acc_en=false is unsupported",
+        ),
+    ],
+    ids=["packer-l1-acc", "bf16-dest"],
+)
 def test_reduce_affine_transforms_rejects_unsupported_compute_config(
-    zero_actual_start, device: ttnn.Device, expect_error: Callable
+    zero_actual_start,
+    device: ttnn.Device,
+    expect_error: Callable,
+    unsupported_config: ttnn.DeviceComputeKernelConfig,
+    message: str,
 ) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
     summaries_tt = _device_summaries(*host, device)
-    unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
-    )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         _run(
             summaries_tt, case.groups_per_head, compute_kernel_config=unsupported_config, actual_start=zero_actual_start
         )
@@ -522,7 +534,7 @@ def test_reduce_affine_transforms_production_performance(
         dst_full_sync_en=False,
     )
 
-    def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def run() -> ttnn.Tensor:
         return _run(
             summaries_tt,
             case.groups_per_head,
@@ -530,20 +542,15 @@ def test_reduce_affine_transforms_production_performance(
             actual_start=zero_actual_start,
         )
 
-    outputs, perf_record = profile_realtime_program(device, run)
+    output, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
-    assert tuple(tuple(output.shape) for output in outputs) == (
-        (case.batch_heads, case.key_dim, case.key_dim),
-        (case.batch_heads, case.key_dim, case.value_dim),
-    )
-    assert all(output.dtype == ttnn.float32 for output in outputs)
-    for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
-        assert_accurate(
-            golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.015
-        )
+    assert tuple(output.shape) == (1, case.batch_heads, case.key_dim, case.key_dim + case.value_dim)
+    assert output.dtype == ttnn.bfloat16
+    for name, golden, actual in zip(("A", "B"), expected, _split(output), strict=True):
+        assert_accurate(golden, actual, name=f"production reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.015)
     performance = _reduce_affine_transforms_performance(
         summaries_tt,
-        outputs,
+        output,
         measured_ns=duration_ns,
         math_fidelity=ttnn.MathFidelity.HiFi2,
     )
@@ -573,10 +580,8 @@ def test_reduce_affine_transforms_matches_composed_ttnn_baseline(zero_actual_sta
     with ttnn.manage_config("throw_exception_on_fallback", True):
         composed = _composed_ttnn_baseline(a, b, device, batch_heads, groups_per_head)
     ttnn.synchronize_device(device)
-    for name, golden, fused_tt, composed_tt in zip(("A", "B"), expected, fused, composed, strict=True):
-        assert_accurate(
-            golden, ttnn.to_torch(fused_tt), name=f"fused {name}", pcc_threshold=0.999, nrmse_threshold=0.02
-        )
+    for name, golden, fused_host, composed_tt in zip(("A", "B"), expected, _split(fused), composed, strict=True):
+        assert_accurate(golden, fused_host, name=f"fused {name}", pcc_threshold=0.999, nrmse_threshold=0.02)
         assert_accurate(
             golden, ttnn.to_torch(composed_tt), name=f"composed TTNN {name}", pcc_threshold=0.999, nrmse_threshold=0.004
         )
@@ -675,9 +680,10 @@ def test_reduce_affine_transforms_rejects_invalid_configuration(
     with expect_error(RuntimeError, "groups_per_head must be positive"):
         _run(summaries_tt, 0, actual_start=zero_actual_start)
 
+    # A shard shape that fits the packed [1, 1, 32, 64] output, so the op's own layout check rejects it.
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        [32, 32],
+        [32, 64],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)

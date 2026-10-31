@@ -144,7 +144,7 @@ PackedSummaryShape check_packed_summaries(const Tensor& summaries, std::string_v
     TT_FATAL(
         key_dim > 0 && shape[3] > key_dim && key_dim % tt::constants::TILE_WIDTH == 0 &&
             shape[3] % tt::constants::TILE_WIDTH == 0,
-        "{}: summary rows must be [A | B] with positive, tile-aligned K and V",
+        "{}: summary rows must be [E | B] with positive, tile-aligned K and V",
         operation_name);
     return {
         .slots = static_cast<uint32_t>(shape[0]),
@@ -157,6 +157,16 @@ void check_compute_config(const DeviceComputeKernelConfig& config, std::string_v
     TT_FATAL(
         !config.packer_l1_acc,
         "{}: packer_l1_acc=true is unsupported because the compute kernel does not accumulate through L1",
+        operation_name);
+}
+
+void check_fp32_state_compute_config(
+    const DeviceComputeKernelConfig& config, tt::ARCH arch, std::string_view operation_name) {
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, config);
+    TT_FATAL(
+        fp32_dest_acc_en,
+        "{}: fp32_dest_acc_en=false is unsupported because the recurrent state is carried in FP32 through DST",
         operation_name);
 }
 
