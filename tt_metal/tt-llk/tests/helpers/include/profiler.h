@@ -108,6 +108,22 @@ __attribute__((always_inline)) inline void reset()
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
 
+// RC memset knock-out: reset() split into the pointer/epoch part and the buffer clear, plus a partial clear.
+__attribute__((always_inline)) inline void reset_state()
+{
+    buffer               = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+    epoch_ptr            = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
+    write_idx            = 0;
+    reserved_words_count = 0;
+
+    *epoch_ptr = 0;
+}
+
+__attribute__((always_inline)) inline void clear_buffer(std::uint32_t words = BUFFER_LENGTH)
+{
+    memset(buffer[TRISC_ID], 0, words * sizeof(buffer[TRISC_ID][0]));
+}
+
 __attribute__((always_inline)) inline bool is_buffer_full()
 {
     // the buffer is considered full when there is not enough space to store:
