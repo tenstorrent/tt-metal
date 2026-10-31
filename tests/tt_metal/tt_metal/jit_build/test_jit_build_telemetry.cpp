@@ -78,7 +78,10 @@ protected:
         if (!tel.is_enabled()) {
             tel.enable();
         }
+        tel.set_logging_enabled(logging_before_);
     }
+
+    const bool logging_before_ = BuildCacheTelemetry::inst().logging_enabled();
 };
 
 TEST_F(BuildCacheTelemetryTest, DoubleEnablePreservesCounters) {
@@ -411,6 +414,41 @@ TEST_F(JitBuildWindowTest, WindowIsNotRecordedWhileTelemetryIsDisabled) {
 }
 
 // --- Busy clocks and kernel config buffer headroom ---
+
+TEST_F(JitBuildWindowTest, DeviceWriteRecordsItsBytesAndOneBusyStretch) {
+    auto& tel = BuildCacheTelemetry::inst();
+    tel.set_logging_enabled(true);
+    const auto& bytes = tel.get_or_register_metric(std::string(kSlowDispatchWrites.bytes), "B");
+    const auto& busy = tel.get_or_register_metric(std::string(kSlowDispatchWrites.busy));
+    const double bytes_before = bytes.snapshot().total;
+    const uint32_t busy_before = busy.snapshot().count;
+    {
+        ScopedDeviceWrite write(kSlowDispatchWrites, 4096);
+    }
+    EXPECT_EQ(bytes.snapshot().total - bytes_before, 4096);
+    EXPECT_EQ(busy.snapshot().count, busy_before + 1);
+    EXPECT_THROW(
+        {
+            ScopedDeviceWrite write(kSlowDispatchWrites, 1);
+            throw std::runtime_error("write failed");
+        },
+        std::runtime_error);
+    EXPECT_EQ(busy.snapshot().count, busy_before + 2) << "a failed write still closes its busy stretch";
+}
+
+TEST_F(JitBuildWindowTest, DeviceWriteRecordsNothingWhileLoggingIsOff) {
+    auto& tel = BuildCacheTelemetry::inst();
+    tel.set_logging_enabled(false);
+    const auto& bytes = tel.get_or_register_metric(std::string(kSlowDispatchWrites.bytes), "B");
+    const auto& busy = tel.get_or_register_metric(std::string(kSlowDispatchWrites.busy));
+    const uint32_t bytes_before = bytes.snapshot().count;
+    const uint32_t busy_before = busy.snapshot().count;
+    {
+        ScopedDeviceWrite write(kSlowDispatchWrites, 4096);
+    }
+    EXPECT_EQ(bytes.snapshot().count, bytes_before);
+    EXPECT_EQ(busy.snapshot().count, busy_before);
+}
 
 TEST_F(JitBuildWindowTest, BusyCountsOverlapOnceSkipsIdleGapsAndRecordsPeak) {
     using namespace std::chrono_literals;

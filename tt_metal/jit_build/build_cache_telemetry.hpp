@@ -85,6 +85,10 @@ public:
     void enable();
     void disable();
     bool is_enabled() const { return impl_ != nullptr; }
+    // True with TT_METAL_LOG_JIT_TELEMETRY=1: dump_metrics() then logs every metric and the summary, and buffer
+    // writes, too frequent to time otherwise, are recorded (see ScopedDeviceWrite). Tests can switch it.
+    bool logging_enabled() const { return logging_enabled_.load(std::memory_order_relaxed); }
+    void set_logging_enabled(bool enabled) { logging_enabled_.store(enabled, std::memory_order_relaxed); }
 
     void record_compile(uint32_t num_srcs, uint32_t num_compiled);
     void record_cache_hit();
@@ -146,6 +150,7 @@ private:
     BuildCacheTelemetry();
     ~BuildCacheTelemetry();
     std::unique_ptr<BuildCacheTelemetryImpl> impl_;
+    std::atomic<bool> logging_enabled_;
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
     // Name -> token index into owned_tokens_; guarded by owned_tokens_mutex_ alongside the vector.
     std::unordered_map<std::string, TelemetryToken*> tokens_by_name_;
@@ -189,6 +194,21 @@ inline constexpr std::string_view kProgramBuildBusy = "program_build_busy";
 // Host time inside ProgramImpl::compile: the builds plus hashing, cache checks and binary loading.
 inline constexpr std::string_view kProgramCompileBusy = "program_compile_busy";
 
+// Busy clock, bytes metric and summary label for host-to-device buffer writes under one dispatch mode.
+struct DeviceWriteStreams {
+    std::string_view busy;
+    std::string_view bytes;
+    std::string_view label;
+    // Whether the busy clock covers the transfer, so the summary can show a rate. Under fast dispatch it stops once
+    // the data is handed to the command queue, or once the command is issued for a pinned upload, which the device
+    // reads from host memory afterwards.
+    bool times_transfer;
+};
+inline constexpr DeviceWriteStreams kFastDispatchWrites{
+    "device_write_busy.fd", "device_write_bytes.fd", "device writes, fast dispatch", false};
+inline constexpr DeviceWriteStreams kSlowDispatchWrites{
+    "device_write_busy.sd", "device_write_bytes.sd", "device writes, slow dispatch", true};
+
 // Times the scope it lives in on the busy clock named `clock`. Pass one of the constants above: the name is
 // read again when the scope ends, so it must outlive the scope.
 class ScopedBusyClock {
@@ -228,6 +248,17 @@ private:
     std::chrono::steady_clock::time_point start_;
     // The scope is also busy time on kJitBuildBusy.
     ScopedBusyClock busy_{kJitBuildBusy};
+};
+
+// Times one host-to-device buffer write on `streams.busy` and adds its size to `streams.bytes`, while telemetry
+// logging is on; otherwise it only checks that flag. Under fast dispatch this is the time to hand the data to the
+// command queue, which waits only when the queue is full, so it ends before the last data lands on the device.
+class ScopedDeviceWrite {
+public:
+    ScopedDeviceWrite(const DeviceWriteStreams& streams, uint64_t bytes);
+
+private:
+    std::optional<ScopedBusyClock> busy_;
 };
 
 // Invokes `fn(args...)` and records how long it took (in ms) in `token`, forwarding both the

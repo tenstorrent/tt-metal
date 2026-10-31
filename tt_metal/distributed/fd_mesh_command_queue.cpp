@@ -65,6 +65,7 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
+#include "jit_build/build_cache_telemetry.hpp"
 #if defined(TT_UMD_BUILD_SIMULATION)
 #include "buffers/simulator_direct_write.hpp"
 #endif
@@ -826,6 +827,8 @@ bool FDMeshCommandQueue::write_shard_to_device(
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
+    ScopedDeviceWrite write_telemetry(
+        kFastDispatchWrites, host_bytes_written(*shard_view, region_value.size, logical_core_filter));
 
 #if defined(TT_UMD_BUILD_SIMULATION)
     const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{

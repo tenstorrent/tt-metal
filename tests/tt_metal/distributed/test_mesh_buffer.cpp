@@ -66,6 +66,7 @@
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
+#include "tt_metal/jit_build/build_cache_telemetry.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -1984,8 +1985,22 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [newest]() { return HostBuffer(newest); });
+    // Writes are recorded only while telemetry logging is on. Sum both dispatch modes: silicon runs this fixture
+    // under fast dispatch, the emulator under slow.
+    auto& telemetry = BuildCacheTelemetry::inst();
+    const bool logging_before = telemetry.logging_enabled();
+    telemetry.set_logging_enabled(true);
+    const auto bytes = [&telemetry] {
+        return telemetry.get_or_register_metric(std::string(kFastDispatchWrites.bytes), "B").snapshot().total +
+               telemetry.get_or_register_metric(std::string(kSlowDispatchWrites.bytes), "B").snapshot().total;
+    };
+    const double bytes_before = bytes();
     tt::tt_metal::experimental::core_subset_write::enqueue_write(
         mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
+    telemetry.set_logging_enabled(logging_before);
+    // Only the filtered core's pages count as written.
+    const auto& pages_per_core = test_config.num_pages_per_core;
+    EXPECT_EQ(bytes() - bytes_before, pages_per_core.height() * pages_per_core.width() * test_config.page_size());
 
     std::vector<uint32_t> dst_vec;
     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);

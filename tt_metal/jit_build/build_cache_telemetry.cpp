@@ -104,7 +104,8 @@ struct BuildCacheTelemetryImpl {
     std::map<std::string, TightestProgram, std::less<>> tightest_programs;
 };
 
-BuildCacheTelemetry::BuildCacheTelemetry() {
+BuildCacheTelemetry::BuildCacheTelemetry() :
+    logging_enabled_(tt::parse_env<bool>("TT_METAL_LOG_JIT_TELEMETRY", false)) {
     enable();
     build_window_token_ = &get_or_register_metric("jit_build_window");
     build_peak_in_flight_token_ = &get_or_register_metric("jit_build_peak_in_flight", "builds");
@@ -331,6 +332,15 @@ ScopedBusyClock::~ScopedBusyClock() {
     BuildCacheTelemetry::inst().note_busy_end(clock_, start_, std::chrono::steady_clock::now());
 }
 
+ScopedDeviceWrite::ScopedDeviceWrite(const DeviceWriteStreams& streams, uint64_t bytes) {
+    auto& telemetry = BuildCacheTelemetry::inst();
+    if (!telemetry.logging_enabled()) {
+        return;
+    }
+    busy_.emplace(streams.busy);
+    telemetry.get_or_register_metric(std::string(streams.bytes), "B").record(static_cast<double>(bytes));
+}
+
 void BuildCacheTelemetry::log_compile_summary() const {
     if (!impl_) {
         return;
@@ -404,21 +414,32 @@ namespace {
 // Headline rows of the logged summary. The caller holds impl.token_registry_mutex and
 // impl.summary_mutex.
 SummaryRows summarize(const BuildCacheTelemetryImpl& impl) {
-    // Total of the metric named `name`, in seconds: the busy and compile metrics record milliseconds.
-    const auto seconds_of = [&](std::string_view name) {
+    // Total of the metric named `name`.
+    const auto total_of = [&](std::string_view name) {
         for (const auto* token : impl.registered_tokens) {
             if (token->name() == name) {
-                return token->snapshot().total / 1e3;
+                return token->snapshot().total;
             }
         }
         return 0.0;
     };
+    // The busy and compile metrics record milliseconds.
+    const auto seconds_of = [&](std::string_view name) { return total_of(name) / 1e3; };
     SummaryRows rows;
     for (const auto& [clock, label] :
          {std::pair{kProgramBuildBusy, "program build from descriptor"},
           std::pair{kProgramCompileBusy, "program compile (host waiting)"}}) {
         if (auto it = impl.busy_clocks.find(clock); it != impl.busy_clocks.end() && it->second.intervals > 0) {
             rows.emplace_back(label, fmt::format("{:.1f} s, {} programs", seconds_of(clock), it->second.intervals));
+        }
+    }
+    for (const auto& [busy, bytes, label, times_transfer] : {kFastDispatchWrites, kSlowDispatchWrites}) {
+        if (const double write_s = seconds_of(busy); write_s > 0) {
+            const double gb = total_of(bytes) / 1e9;
+            rows.emplace_back(
+                label,
+                times_transfer ? fmt::format("{:.2f} GB in {:.1f} s ({:.2f} GB/s)", gb, write_s, gb / write_s)
+                               : fmt::format("{:.2f} GB enqueued in {:.1f} s", gb, write_s));
         }
     }
     // The JIT build clock has one interval per JitBuildState::build call, closed however the call ends,
@@ -512,7 +533,7 @@ void BuildCacheTelemetry::dump_metrics() const {
     // One info line per token, and the per-target metrics register dozens of them, so every
     // tt-metal process would print a wall of output at exit. Off by default; opt in with
     // TT_METAL_LOG_JIT_TELEMETRY=1, mirroring the TT_METAL_LOG_KERNEL_COMPILE gate in build.cpp.
-    static const bool log_tokens = tt::parse_env<bool>("TT_METAL_LOG_JIT_TELEMETRY", false);
+    const bool log_tokens = logging_enabled();
     SummaryRows summary;
     {
         std::lock_guard summary_lk(impl_->summary_mutex);

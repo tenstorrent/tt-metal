@@ -29,6 +29,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "jit_build/build_cache_telemetry.hpp"
 #ifdef TT_METAL_USE_EMULE
 #include <thread>
 #endif
@@ -152,6 +153,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
 
     auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    ScopedDeviceWrite write_telemetry(
+        kSlowDispatchWrites, host_bytes_written(*shard_view, region_value.size, logical_core_filter));
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
