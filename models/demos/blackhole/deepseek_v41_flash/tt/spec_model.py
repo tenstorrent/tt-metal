@@ -272,10 +272,15 @@ class SpecRunner:
         # sampled verify (adapter): a round with sampled rows replays three traces, A (verify block -> logits) | S (the in-trace sampler draws every block row) | B (accept / commit / draft over the
         # drawn ids), instead of the single trace; the persistent buffers are allocated here, before any trace
         self.pack_mono = self.pack_b = None
+        self.tid_sm = None  # masked trace S (grammar bias before the sampler), only with DSV41_STRUCTURED_SPEC=1
+        self.grammar_packed = (
+            None  # int32 [B * n, 4040] (tt/grammar_mask.permute_to_runner layout) for the NEXT round, or None
+        )
         self.sampled, self.tid_a, self.tid_s, self.tid_b = self.samp is not None, None, None, None
         self.sample_stats = {"rows": 0}
         if self.sampled:
             self.dec.alloc_sampled()
+        self.mask_on = self.sampled and getattr(self.dec, "mask_buf", None) is not None
         self.log = model.log
         model.log_dram("spec: after runner build (views + drafter)")
         self.log(f"spec runner built: k={k} n={n} T={self.T} rows/mesh-row ({time.time() - t0:.0f}s)")
@@ -394,13 +399,24 @@ class SpecRunner:
         self._use(base)
         self.dec.set_force(-1 if force is None else force)
         self._feed(X, base)
+        gp = self.grammar_packed
+        if gp is not None:
+            if not self.mask_on:
+                raise ValueError(
+                    "a grammar mask needs DSV41_STRUCTURED_SPEC=1 and the in-trace sampler (DSV41_INTRACE_SAMPLE=1)"
+                )
+            if (
+                self.sample_cfg is None
+            ):  # a masked round always runs the split round; no sampled row = all rows greedy (the sampler's greedy rows are the exact masked argmax)
+                self.sample_cfg = dict(temperature=0.0, top_k=0, top_p=1.0, gens=torch.Generator().manual_seed(0))
+            self.dec.set_mask(gp)
         if self.sample_cfg is not None:
             if not self.sampled:
                 raise ValueError("sampled rows need the in-trace sampler (DSV41_INTRACE_SAMPLE=1, the default)")
             # sampled rows: verify | sample | accept-commit-draft, three replays and one synchronization (a round without sampled rows replays the single trace: the greedy fast path)
             self._set_sample_params()
             ttnn.execute_trace(self.md, self.tid_a, cq_id=0, blocking=False)
-            self.tid_s.replay()
+            (self.tid_sm if gp is not None else self.tid_s).replay()
             ttnn.execute_trace(self.md, self.tid_b, cq_id=0, blocking=False)
             if hostopt.on("READBACK"):
                 hs = self._rb_issue(self.pack_b)
@@ -505,6 +521,9 @@ class SpecRunner:
                 if i == 0:  # (the sampler does not depend on the context)
                     dec.forward_sampler(False)
                     dec.forward_sampler(True)
+                    if self.mask_on:
+                        dec.forward_sampler(False, masked=True)
+                        dec.forward_sampler(True, masked=True)
                 dec.forward_tail()
                 ttnn.synchronize_device(self.md)
                 dec.restore_states(self.snaps)
@@ -527,10 +546,11 @@ class SpecRunner:
         """bind the traces of the smallest position bucket that covers the block rows (base + n) of every user."""
         P = self.bucket_for(int(base.max()) + self.n + 1)
         t = self.tr[P]
-        self.tid, self.tid_a, self.tid_s, self.tid_b, self.pack_mono, self.pack_b = (
+        self.tid, self.tid_a, self.tid_s, self.tid_sm, self.tid_b, self.pack_mono, self.pack_b = (
             t["tid"],
             t["tid_a"],
             t["tid_s"],
+            t.get("tid_sm"),
             t["tid_b"],
             t["pack_mono"],
             t["pack_b"],
@@ -544,7 +564,7 @@ class SpecRunner:
         self.tr = {}
         for P in self.bucket_list():
             self.set_bucket(P)
-            t = {"tid_a": None, "tid_b": None, "tid_s": None, "pack_mono": None, "pack_b": None}
+            t = {"tid_a": None, "tid_b": None, "tid_s": None, "tid_sm": None, "pack_mono": None, "pack_b": None}
             if os.environ.get("DSV41_SPEC_PRECAPTURE_WARM", "1") == "1":
                 # one eager step of every traced function right before its capture (programs that were missing from the program cache at a 1M context after the prefill / decode
                 # captures: "Cannot load new binaries during trace capture"); state restored after each
@@ -568,6 +588,9 @@ class SpecRunner:
                 ttnn.end_trace_capture(self.md, t["tid_a"], cq_id=0)
                 t["tid_s"] = SamplerTraces(self.samp)  # (reads the logits buffer of THIS bucket's verify trace)
                 t["tid_s"].capture(dec.forward_sampler)
+                if self.mask_on:  # the same sampler behind the grammar bias (replayed by a round that carries a mask)
+                    t["tid_sm"] = SamplerTraces(self.samp)
+                    t["tid_sm"].capture(lambda fast: dec.forward_sampler(fast, masked=True))
                 t["tid_b"] = ttnn.begin_trace_capture(self.md, cq_id=0)
                 dec.forward_tail()
                 ttnn.end_trace_capture(self.md, t["tid_b"], cq_id=0)
@@ -607,8 +630,10 @@ class SpecRunner:
                     ttnn.release_trace(self.md, t[name])
             if t.get("tid_s") is not None:
                 t["tid_s"].release()
+            if t.get("tid_sm") is not None:
+                t["tid_sm"].release()
         self.tr = {}
-        self.tid = self.tid_a = self.tid_s = self.tid_b = None
+        self.tid = self.tid_a = self.tid_s = self.tid_sm = self.tid_b = None
         self.pack_mono = self.pack_b = None
 
     # ---- hand-off: drafter seeding ----------------------------------------------------------------------------------------------

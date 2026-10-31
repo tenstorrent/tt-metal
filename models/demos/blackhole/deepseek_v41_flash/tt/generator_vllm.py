@@ -191,6 +191,10 @@ def _sampling_capabilities():
     return {"max_device_top_k": 1}
 
 
+def _struct_mask_on():
+    return os.environ.get("DSV41_STRUCTURED_SPEC", "0") == "1" or os.environ.get("DSV41_STRUCT_MASK", "0") == "1"
+
+
 @_register_mm
 class DeepseekV41ForCausalLM(SupportsMultiModal):
     """tt-vllm-plugin model class (see the module docstring)."""
@@ -217,6 +221,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         # declares the greedy-only verify (``max_device_top_k = 1``: sampled requests use the plugin's host sampler).
         **_sampling_capabilities(),
         "supports_device_penalties": False,
+        # structured outputs on the speculative verify round (MODEL_MASK_NOTES.md, plugin interface STRUCTURED_SPEC_INTERFACE.md): the plugin hands a packed grammar bitmask to the verify call;
+        # needs DSV41_STRUCTURED_SPEC=1 (default off) and a speculative launch
+        "supports_verify_grammar_bitmask": _struct_mask_on(),
         # speculative decoding through the plugin's model-owned drafter contract (``speculative_config`` method custom_class): see ``spec_plan`` and the SPECULATIVE DECODING section
         "supports_spec_decode": True,
         "spec_requirements": ["device_propose"],
@@ -749,6 +756,16 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             self.spec_isl_max = int(os.environ.get("DSV41_VLLM_SPEC_ISL_MAX", str(1 << 30)))
             self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
         self.sample_stats = {"rows": 0}
+        # the plugin reads this once at runner init: True = every verify runner of the launch holds the persistent grammar mask buffer + masked sampler trace (else M0 behaviour)
+        self.verify_grammar_enabled = bool(
+            self.spec is not None
+            and _struct_mask_on()
+            and all(
+                getattr(r, "mask_on", False)
+                for r in (self.spec.all_runners() if hasattr(self.spec, "all_runners") else [self.spec])
+                + list(self.spec_buckets.values())
+            )
+        )
         self.vision = self.vbook = None  # image input (init_vision, DSV41_VISION=1)
         self.gens = {}  # seeded per-request generators by model user
         self.rng = torch.Generator().manual_seed(int(os.environ.get("DSV41_VLLM_SAMPLE_SEED", "9472")))
@@ -1685,6 +1702,27 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             f"DSV4.1 spec seeding of {len(items)} rows (interleaved prefill) took {time.perf_counter() - t0:.2f} s"
         )
 
+    def _grammar_for_runner(self, block, runner, rows, nv_l, B, n):
+        """The plugin's packed mask block [W, n_plugin, 4040] -> the runner's int32 [B * n, 4040] (row ``r * n + j``), or None when no live row is restricted.
+        M1: a restricted row must carry no drafts (nv = 0: the round commits the masked sample of column 0 only; the device mask applies at column 0).
+        M2 (DSV41_STRUCTURED_M2=1): per-position masks, a restricted row may carry drafts; columns j = the grammar state after j drafts.
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt import grammar_mask as GM
+
+        if not getattr(runner, "mask_on", False):
+            raise ValueError(
+                "grammar_bitmask on a verify call, but DSV41_STRUCTURED_SPEC is off / the runner has no mask buffer"
+            )
+        live = [x[0] for x in rows]
+        if not GM.has_structured_row(block, live):
+            return None
+        m2 = os.environ.get("DSV41_STRUCTURED_M2", "0") == "1"
+        if not m2:
+            for i in live:
+                if bool((block[i, 0] != GM.ALL_ONES).any()) and int(nv_l[i]) != 0:
+                    raise ValueError(f"row {i}: a structured row offered {nv_l[i]} drafts (M1 verifies it with none)")
+        return GM.permute_to_runner(block, [(x[0], x[3]) for x in rows], B, n, kv=n - 1, column0_only=not m2)
+
     def _spec_verify(
         self,
         tokens,
@@ -1694,6 +1732,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         spec_mode=None,
         slot_remap=None,
         sampling_params=None,
+        grammar_bitmask=None,
         **kwargs,
     ):
         from vllm_tt_plugin.spec_decode import VerifyOutput
@@ -1790,10 +1829,17 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         ):
             self._ab_done = True
             self._ab_compare(tokens, base, rows)
+        gpk = None
+        if grammar_bitmask is not None:
+            gpk = self._grammar_for_runner(grammar_bitmask, runner, rows, nv_l, B, n)
         t0 = time.perf_counter()
         runner.sample_cfg = cfg  # None = greedy rows (the traced sampler then holds / gets greedy parameters)
-        a, mm, d = runner._round(X, base, force)
-        runner.sample_cfg = None
+        runner.grammar_packed = gpk  # None = the unmasked rounds; else the masked trace S (DSV41_STRUCTURED_SPEC=1)
+        try:
+            a, mm, d = runner._round(X, base, force)
+        finally:
+            runner.sample_cfg = None
+            runner.grammar_packed = None
         t1 = time.perf_counter()
         if self.spec_adapt is not None:
             self.spec.note_round(kv, 1e3 * (t1 - t0))

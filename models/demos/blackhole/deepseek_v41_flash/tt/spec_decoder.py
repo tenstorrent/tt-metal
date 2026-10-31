@@ -107,6 +107,17 @@ class SpecVerifier(DSV41Decoder):
         ]
 
 
+def struct_mask_on():
+    """Structured-output grammar masks in the verify round (MODEL_MASK_NOTES.md): ``DSV41_STRUCTURED_SPEC=1`` (the plugin interface's name) or its alias ``DSV41_STRUCT_MASK=1``; default OFF."""
+    return os.environ.get("DSV41_STRUCTURED_SPEC", "0") == "1" or os.environ.get("DSV41_STRUCT_MASK", "0") == "1"
+
+
+MASK_VOCAB = 129280
+MASK_NEG = (
+    -1.0e30
+)  # bias of a disallowed token (finite: the shared sampler's bf16 top-32 / exp() see 0 weight, no inf - inf NaN); allowed tokens get exactly +0.0
+
+
 TAP_LAYERS = (37, 38, 39)  # dspark_target_layer_ids
 TOP2 = (
     os.environ.get("DSV41_SPEC_TOP2", "0") == "1"
@@ -237,6 +248,66 @@ class SpecDecoder(SpecVerifier):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(2, None), mesh_shape=(rows, cols)),
         )
+        self.mask_buf = None
+        if struct_mask_on():
+            self.alloc_mask()
+
+    # ---- grammar mask (MODEL_MASK_NOTES.md) --------------------------------------------------------------------------------------------------------------------------------
+    def alloc_mask(self):
+        """Persistent packed grammar mask int32 [rows*T, 4040] (row = block row ``u * n + j`` of mesh row r at ``r * T + u * n + j``; bit b of word w = token 32 w + b allowed), sharded
+        ``dims=(0, 1)``: every device holds its mesh row's T rows x the 505 words of its 16160-token vocab column. All ones (= no restriction) until the first upload. Allocated before any trace;
+        updated in place (``set_mask``). Only the masked sampler trace (``forward_sampler(masked=True)``) reads it."""
+        rows, cols = tuple(self.md.shape)
+        T = self.U * self.n
+        words = (MASK_VOCAB + 31) // 32
+        assert words % cols == 0, f"{words} mask words do not split over {cols} columns"
+        self._mask_map = ttnn.ShardTensor2dMesh(self.md, dims=(0, 1), mesh_shape=(rows, cols))
+        self.mask_words = words
+        self.mask_buf = ttnn.from_torch(
+            torch.full((rows * T, words), -1, dtype=torch.int32),
+            device=self.md,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._mask_map,
+        )
+        self.mask_shifts = ttnn.from_torch(
+            torch.arange(32, dtype=torch.int32),
+            device=self.md,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+        )
+
+    def set_mask(self, packed):
+        """Host: upload ``packed`` int32 [rows*T, 4040] (``tt/grammar_mask.permute_to_runner`` layout) into the persistent buffer, in place (before the round that reads it)."""
+        rows, cols = tuple(self.md.shape)
+        T = self.U * self.n
+        packed = torch.as_tensor(packed)
+        assert packed.dtype == torch.int32 and tuple(packed.shape) == (rows * T, self.mask_words), (
+            packed.dtype,
+            tuple(packed.shape),
+        )
+        host = ttnn.from_torch(
+            packed.contiguous(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._mask_map,
+        )
+        ttnn.copy_host_to_device_tensor(host, self.mask_buf)
+
+    def mask_bias(self):
+        """Device: packed words -> fp32 bias [1,1,T,16160] (0.0 allowed, MASK_NEG disallowed) of this device's vocab column. Same unpack as the upstream sampler's grammar path (shift by arange(32), and 1)."""
+        T = self.U * self.n
+        w = self.mask_buf.shape[-1]
+        packed = ttnn.reshape(self.mask_buf, (T, w, 1))
+        bits = ttnn.bitwise_and(ttnn.bitwise_right_shift(packed, self.mask_shifts), 1)
+        bits = ttnn.reshape(bits, (1, 1, T, w * 32))
+        allowed = ttnn.typecast(ttnn.to_layout(bits, ttnn.TILE_LAYOUT), ttnn.float32)
+        return ttnn.add(
+            ttnn.multiply(allowed, -MASK_NEG), MASK_NEG
+        )  # 1 * 1e30 - 1e30 == 0.0 exactly; 0 * 1e30 - 1e30 = -1e30
 
     def forward_verify(self):
         """Trace A of the split round: verify block -> logits (kept for trace S) + hidden taps into ``hidden_buf``."""
@@ -245,10 +316,12 @@ class SpecDecoder(SpecVerifier):
         self.logits = logits  # (kept alive: the input of the sampler trace)
         return logits
 
-    def forward_sampler(self, fast=False):
-        """Trace S of the sampled round: every block row draws its own token over the logits of trace A (tt/device_sampler.py, per-row parameters uploaded before the round; greedy rows = exact argmax)
+    def forward_sampler(self, fast=False, masked=False):
+        """``masked``: the grammar bias of ``mask_buf`` is added to the fp32 logits once, BEFORE the sampler (the shared top-32 / greedy argmax only see allowed tokens).
+        Trace S of the sampled round: every block row draws its own token over the logits of trace A (tt/device_sampler.py, per-row parameters uploaded before the round; greedy rows = exact argmax)
         into ``a_in``, the ids of the accept rule of trace B."""
-        ttnn.copy(self.samp.run(self.logits, self.samp.params, fast), self.a_in)
+        logits = ttnn.add(self.logits, self.mask_bias()) if masked else self.logits
+        ttnn.copy(self.samp.run(logits, self.samp.params, fast), self.a_in)
 
     def forward_tail(self):
         """Trace B of the split round: accept (rule of ``forward``) over the host-chosen ids ``a_in``, commit, drafter. Same ``pack`` as ``forward``."""
