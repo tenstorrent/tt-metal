@@ -11,11 +11,14 @@ TEXT = -1
 
 
 class VisionSeq:
-    def __init__(self, types, spans):
+    def __init__(self, types, spans, keys=None):
         """``types`` [L] int (TEXT = -1 outside image spans, >= 0 inside: ``image_processor`` token types); ``spans`` [(start position, rows [n, dim] bf16)] (the
-        rows of the whole span, delimiters included)."""
+        rows of the whole span, delimiters included); ``keys``: the content hash (hex) of each span's image (prefix caching keys: tt/prefix_cache.py ``key_tokens``) or None.
+        """
         self.types = torch.as_tensor(types, dtype=torch.int64)
         self.spans = [(int(s), r) for s, r in spans]
+        self.keys = None if keys is None else list(keys)
+        assert self.keys is None or len(self.keys) == len(self.spans)
         for s, r in self.spans:
             assert bool((self.types[s : s + r.shape[0]] >= 0).all()), f"span at {s} is not inside image tokens"
         self.dim = self.spans[0][1].shape[1] if self.spans else 0
@@ -82,7 +85,7 @@ class VisionBook:
 
     def __init__(self, vision, image_token_id, cache_images=None):
         self.vision, self.image_token_id = vision, image_token_id
-        self.seqs, self._rows = {}, {}
+        self.seqs, self._rows, self._ikeys = {}, {}, {}  # _ikeys: user -> {image index -> content hash}
         # encoder rows of recent images by content (an image that comes again, e.g. a shared system image or a retry, skips the tower): LRU of DSV41_VISION_CACHE entries (~10 MB each), 0 = off
         import collections
         import os
@@ -94,6 +97,7 @@ class VisionBook:
     def drop(self, p):
         self.seqs.pop(p, None)
         self._rows.pop(p, None)
+        self._ikeys.pop(p, None)
 
     def get(self, p):
         return self.seqs.get(p)
@@ -136,13 +140,14 @@ class VisionBook:
             for h, w in vit:
                 offs.append(offs[-1] + h * w)
             rows = self._rows.setdefault(p, {})
+            ikeys = self._ikeys.setdefault(p, {})
             todo = {}
             for j in range(len(starts)):
                 if j in rows:
                     continue
                 h, w = vit[j]
                 patches = pv[offs[j] : offs[j + 1]].reshape(h * w, 3, a.patch, a.patch)
-                key = self._key(patches, h, w)
+                key = ikeys[j] = self._key(patches, h, w)
                 if key in self._cache:
                     self._cache.move_to_end(key)
                     self.hits += 1
@@ -175,6 +180,6 @@ class VisionBook:
                 t = VP._ip.image_token_types(*llm[j])
                 types[s : s + t.numel()] = t
                 spans.append((s, self._rows[p][j]))
-            self.seqs[p] = VisionSeq(types, spans)
+            self.seqs[p] = VisionSeq(types, spans, [self._ikeys[p][j] for j in range(len(starts))])
             out[p] = self.seqs[p]
         return out

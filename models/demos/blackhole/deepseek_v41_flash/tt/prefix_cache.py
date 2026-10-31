@@ -286,6 +286,9 @@ class PrefixSnapshot:
     # bounded replay (DSV41_PF_REPLAY): False when the user ran only layers 0..20 on the chunks before ``s`` (the halos of layers >= 21 are stale: the snapshot may only be restored when the continuation starts
     # at or before the first replay chunk of its own prompt, which ignores those halos). True: every layer ran on every chunk (the usual snapshot).
     full: bool = True
+    # prefix-cache KEY tokens when the prompt has images (DSV41_APC_IMAGES): ``toks`` with the positions of every image span replaced by a value derived from the image's content hash
+    # (``key_tokens``): two prompts with the same text and different images get different keys. None: the key is made from ``toks`` (text prompts: unchanged).
+    ktoks: object = None
 
     @property
     def nbytes(self):
@@ -675,9 +678,47 @@ def restore_users(model, snap, bs):
     # 4. Engram history (host, pure function of the tokens)
     if model.host_rows is not None:
         st = model.hasher.st
+        row = st.token_map[snap.toks]
+        iid = getattr(getattr(model, "apc", None), "image_token_id", None)
+        if (
+            iid is not None and PrefixCache.images_enabled()
+        ):  # image positions are cached as DEAD by the live path (``token_mask`` of the Engram hasher): no n-gram spans an image
+            row = torch.where(snap.toks == iid, torch.full_like(row, int(st.DEAD)), row)
         for b in bs:
-            st.cache[b, :s] = st.token_map[snap.toks]
+            st.cache[b, :s] = row
     return time.perf_counter() - t0
+
+
+def image_spans(vs):
+    """[(start, length, content hash)] of the images of a ``VisionSeq`` (None / without keys -> None)."""
+    if vs is None or getattr(vs, "keys", None) is None:
+        return None
+    return [(int(st), int(r.shape[0]), k) for (st, r), k in zip(vs.spans, vs.keys)]
+
+
+def key_tokens(tokens, spans, image_token_id):
+    """Key tokens of a prompt with images: ``tokens`` (1-D) where every image span [start, start + n) holds ONE value derived from the image's content hash (a negative int64, so it never equals
+    a vocabulary id) instead of the shared placeholder id. -> (key tokens, ok); ok is False when the prompt has image placeholders that no span explains (never cache such a prompt).
+    """
+    import hashlib
+
+    t = torch.as_tensor(tokens).long().reshape(-1).clone()
+    covered = 0
+    for st, n, k in spans or []:
+        if st + n > t.numel():
+            continue  # (a span not fully inside the tokens given: it is not part of any key below)
+        v = -1 - int.from_bytes(
+            hashlib.sha256(bytes.fromhex(k) if len(k) % 2 == 0 else k.encode()).digest()[:7], "little"
+        )
+        t[st : st + n] = v
+        covered += n
+    ok = int((t == image_token_id).sum()) == 0 if image_token_id is not None else True
+    return t, ok
+
+
+def straddles(spans, B):
+    """Does an image span cross position B (start < B < start + n)? No snapshot may be taken at such a position (the state would hold half an image)."""
+    return any(st < B < st + n for st, n, _ in spans or [])
 
 
 # ---- host store -------------------------------------------------------------------------------------------------------------------------------------------
@@ -713,7 +754,7 @@ class PrefixStore:
         return old is not None and (old.full or not full)
 
     def put(self, snap):
-        key = self.key(snap.toks, snap.s)
+        key = self.key(snap.toks if snap.ktoks is None else snap.ktoks, snap.s)
         if key in self.snaps:
             old = self.snaps[key]
             if old.full or not snap.full:
@@ -807,6 +848,26 @@ class PrefixCache:
             return k <= int(self.policy)
         return k > 0 and (k & (k - 1)) == 0
 
+    @staticmethod
+    def images_enabled():
+        """``DSV41_APC_IMAGES=1``: prompts with images use / feed the cache (keys carry the image content hashes). Default 0: image prompts bypass the cache."""
+        import os
+
+        return os.environ.get("DSV41_APC_IMAGES", "0") == "1"
+
+    def _keyed(self, tokens, n, vs, B=None):
+        """-> the tokens [:n] to KEY with (text prompts: ``tokens`` itself), or None when this prompt must not use the cache here (image prompt with the switch off, no image keys, an image
+        span crossing ``B`` (snapshot position) or placeholders no span explains)."""
+        if not self._has_image(tokens, n):
+            return tokens
+        if not self.images_enabled():
+            return None
+        spans = image_spans(vs)
+        if spans is None or (B is not None and straddles(spans, B)):
+            return None
+        kt, ok = key_tokens(torch.as_tensor(tokens).reshape(-1)[:n], spans, self.image_token_id)
+        return kt if ok else None
+
     def _has_image(self, tokens, n):
         return self.image_token_id is not None and bool(
             (torch.as_tensor(tokens).reshape(-1)[:n] == self.image_token_id).any()
@@ -820,15 +881,16 @@ class PrefixCache:
 
         return os.environ.get("DSV41_APC_DEFER", "1") == "1"
 
-    def begin_snapshot(self, b, B, tokens, full=True):
+    def begin_snapshot(self, b, B, tokens, full=True, vs=None):
         if not self.active() or not self.wants(B):
             return
-        if self._has_image(tokens, B):
+        kt = self._keyed(tokens, B, vs, B)
+        if kt is None:
             self.stats["skipped_vision"] += 1
             return
-        key = self.store.key(tokens, B)
+        key = self.store.key(kt, B)
         pend = self.__dict__.setdefault("pending", [])
-        if self.store.has(tokens, B, full) or any(k == key and f_ >= full for _, k, (_, _, _, f_) in pend):
+        if self.store.has(kt, B, full) or any(k == key and f_ >= full for _, k, (_, _, _, f_) in pend):
             return
         t0 = time.perf_counter()
         try:
@@ -837,6 +899,8 @@ class PrefixCache:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
             return
+        if kt is not tokens:
+            p.snap.ktoks = torch.as_tensor(kt).long().reshape(-1)[:B].clone()
         pend.append((p, key, (b, B, time.perf_counter() - t0, bool(full))))
 
     def finish_pending(self):
@@ -869,19 +933,22 @@ class PrefixCache:
             f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s {how} [enqueue {t_dev:.3f}]; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
         )
 
-    def maybe_snapshot(self, b, B, tokens, full=True):
+    def maybe_snapshot(self, b, B, tokens, full=True, vs=None):
         if not self.active() or not self.wants(B):
             return
-        if self._has_image(tokens, B):
+        kt = self._keyed(tokens, B, vs, B)
+        if kt is None:
             self.stats["skipped_vision"] += 1
             return
         t_h0 = time.perf_counter()
-        if self.store.has(tokens, B, full):
+        if self.store.has(kt, B, full):
             return
         t_h1 = time.perf_counter()
         try:
             snap = snapshot_user(self.m, b, B, tokens)
             snap.full = bool(full)
+            if kt is not tokens:
+                snap.ktoks = torch.as_tensor(kt).long().reshape(-1)[:B].clone()
         except ApcUnsupported as e:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
@@ -904,14 +971,18 @@ class PrefixCache:
             f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s [has {t_h1 - t_h0:.3f}, device reads + host copy {t_p0 - t_h1:.3f}, put {t_p1 - t_p0:.3f}]; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
         )
 
-    def lookup(self, b, tokens, end, zone=None):
-        """-> the deepest usable snapshot for user b's prompt (end = this call's end position), else None. ``zone``: first replay chunk start of the prompt (bounded replay) or None."""
+    def lookup(self, b, tokens, end, zone=None, vs=None, min_s=0):
+        """-> the deepest usable snapshot for user b's prompt (end = this call's end position), else None. ``zone``: first replay chunk start of the prompt (bounded replay) or None.
+        ``vs``: the user's ``VisionSeq`` (image prompts, DSV41_APC_IMAGES=1); ``min_s``: only a snapshot deeper than this is of use (a continuation piece that already holds state up to it).
+        """
         if not self.active():
             return None
-        if self._has_image(tokens, end):
+        kt = self._keyed(tokens, end, vs)
+        if kt is None:
             self.stats["skipped_vision"] += 1
             return None
-        return self.store.lookup(tokens, end, end, margin=self.margin, zone=zone)
+        snap = self.store.lookup(kt, end, end, margin=self.margin, zone=zone)
+        return snap if snap is not None and snap.s > min_s else None
 
     def restore_group(self, snap, bs):
         t = restore_users(self.m, snap, bs)
