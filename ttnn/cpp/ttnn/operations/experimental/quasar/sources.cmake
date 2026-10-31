@@ -11,6 +11,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     pad/pad.hpp
     tilize/tilize.hpp
     move/move.hpp
+    ccl/all_gather/all_gather.hpp
     untilize_with_unpadding/untilize_with_unpadding.hpp
     slice/slice.hpp
     transpose/transpose.hpp
@@ -116,6 +117,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     reshard/device/reshard_program_factory_same_width.cpp
     reshard/device/nd_reshard_program_factory_copy_pages.cpp
     reshard/device/nd_reshard_program_factory_copy_local.cpp
+    # ccl/all_gather (Quasar-native intra-chip all-gather)
+    ccl/all_gather/all_gather.cpp
+    ccl/all_gather/device/all_gather_device_operation.cpp
+    ccl/all_gather/device/all_gather_program_factory.cpp
     # move
     move/move.cpp
     move/device/move_device_operation.cpp
@@ -251,6 +256,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     pad/pad_nanobind.cpp
     tilize/tilize_nanobind.cpp
     move/move_nanobind.cpp
+    ccl/all_gather/all_gather_nanobind.cpp
     untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
     slice/slice_nanobind.cpp
     transpose/transpose_nanobind.cpp
