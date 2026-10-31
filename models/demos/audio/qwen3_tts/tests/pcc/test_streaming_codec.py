@@ -20,6 +20,7 @@ import torch
 from models.common.utility_functions import comp_pcc
 from models.demos.audio.qwen3_tts.tests.reference_helpers import codebook_size
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_codec import (
+    LENGTH_BUCKET,
     STREAM_WINDOW,
     StreamingCodecDecoder,
     preprocess_codec_parameters,
@@ -85,3 +86,19 @@ def test_reference_frames_are_context_only(device, codes, expect_error):
     with expect_error(ValueError, "skip <= frames"):
         stream.decode(codes[..., : STREAM_WINDOW + 1], {})
     stream.release()
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_a_wider_window_takes_a_first_chunk_past_the_default(device, codes):
+    """A longer reference prefix widens the Code2Wav stage's window (`stream_window`)."""
+    window = STREAM_WINDOW + LENGTH_BUCKET
+    stream = StreamingCodecDecoder(device, preprocess_codec_parameters(device), window=window)
+    whole = stream.codec.decode(codes[..., :window], bucket=1).reshape(-1)
+    stream.warmup()
+    new = stream.decode(codes[..., :window], {}, skip=window - STEADY)
+    stream.release()
+
+    assert new.numel() == STEADY * stream.upsample
+    passed, pcc = comp_pcc(whole[-new.numel() :], new, STREAM_PCC)
+    print(f"\n  window {window}, first chunk {window} frames: PCC {pcc}")
+    assert passed, f"PCC {pcc} < {STREAM_PCC}"
