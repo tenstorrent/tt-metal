@@ -139,20 +139,20 @@ ProgramDescriptor build_descriptor_at(
         desc.cbs.push_back(
             make_cb(CBIndex::c_5, all_cores, (chunks_per_row - 1) * num_candidates, out_tile_size, out_format));
     }
-    // A row leader counts each other run's candidates, one field per run; the gather core
-    // counts each candidate's parked rows, one field per candidate.
+    // A row leader counts each other run's candidates, one field per run; the gather cores
+    // count each row's parked candidates, one field per row.
     const uint32_t chunk_field_width = std::bit_width(num_candidates);
     TT_FATAL(
         (chunks_per_row - 1) * chunk_field_width <= 32,
         "a row leader counts {} runs' candidates in one semaphore",
         chunks_per_row - 1);
     desc.semaphores.push_back(SemaphoreDescriptor{.id = kChunkSem, .core_ranges = all_cores, .initial_value = 0});
-    const uint32_t row_field_width = std::bit_width(Ht);
-    const uint32_t row_sem_words = (num_candidates + 32 / row_field_width - 1) / (32 / row_field_width);
+    const uint32_t row_field_width = chunk_field_width;
+    const uint32_t row_sem_words = (Ht + 32 / row_field_width - 1) / (32 / row_field_width);
     const CoreRangeSet gather_core_set = gather_cores_of(grid, num_gather_cores);
     const auto gather_cores = corerange_to_cores(gather_core_set, std::nullopt, /*row_wise=*/true);
     if (gathers) {
-        TT_FATAL(kRowSem + row_sem_words <= 16, "the gather core counts {} candidates' rows", num_candidates);
+        TT_FATAL(kRowSem + row_sem_words <= 16, "the gather cores count {} rows' candidates", Ht);
         TT_FATAL(!all_cores.intersects(gather_core_set), "the gather cores must hold no rows");
         for (uint32_t w = 0; w < row_sem_words; ++w) {
             desc.semaphores.push_back(

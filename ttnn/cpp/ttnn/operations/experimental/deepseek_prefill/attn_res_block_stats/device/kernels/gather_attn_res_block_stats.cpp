@@ -7,9 +7,10 @@
 //
 // What crosses is this rank's tile column of the gathered statistics, written into the same
 // column on each peer; peers fill this chip's other columns symmetrically, so the gathered
-// tensor is complete once every peer's arrivals have landed. It goes out a candidate at a
-// time: the row leaders park a candidate's rows as they sum them and count them here, so a
-// candidate's rows are on the wire while the grid is still reducing the next one.
+// tensor is complete once every peer's arrivals have landed. It goes out as it is parked: a
+// row's leader parks the row's candidates in order and counts them here, and whatever is
+// parked is sent, so the rows of cores that finish early are on the wire while the slowest
+// are still reducing.
 //
 // A route is a multicast along one direction of the axis, reaching every peer that lies
 // that way, so a page crosses each link once however many peers are beyond it. A core opens
@@ -41,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(0);
     constexpr uint32_t Ht = get_compile_time_arg_val(1);
     constexpr uint32_t num_candidates = get_compile_time_arg_val(2);
-    // The per-candidate counts of parked rows, from this semaphore on.
+    // The per-row counts of parked candidates, from this semaphore on.
     constexpr uint32_t row_sem_id = get_compile_time_arg_val(3);
     constexpr AttnResProgressFields row_fields{get_compile_time_arg_val(4)};
     // The arrivals this core waits for: one from the same link's gather core of each peer.
@@ -101,35 +102,46 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_multicast_route(inc_headers[r], route_info);
     }
 
-    // A candidate's rows, as soon as every row leader has parked its sum: read back in one
-    // batch behind one barrier, then multicast both ways at the same page.
-    stage_buf.reserve_back(Ht);
+    // Whatever is parked and not yet sent, in batches: read back behind one barrier, then
+    // multicast both ways at the same page. A page is this core's when it falls to its link.
+    constexpr uint32_t kBatch = 16;
+    stage_buf.reserve_back(kBatch);
     const uint32_t stage_base = stage_buf.get_write_ptr();
-    for (uint32_t c = 0; c < num_candidates; ++c) {
-        auto* parked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(row_sem_id + row_fields.word(c)));
-        while (row_fields.count(*parked, c) < Ht) {
-            invalidate_l1_cache();
+    uint32_t sent[Ht] = {};
+    uint32_t pending = 0;
+    for (uint32_t page = 0; page < num_candidates * Ht; ++page) {
+        pending += page % num_links == link;
+    }
+    uint32_t batch_pages[kBatch];
+    while (pending > 0) {
+        uint32_t batch = 0;
+        for (uint32_t g = 0; g < Ht && batch < kBatch; ++g) {
+            const uint32_t parked = row_fields.count(
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(row_sem_id + row_fields.word(g))), g);
+            for (; sent[g] < parked && batch < kBatch; ++sent[g]) {
+                const uint32_t index = sent[g] * Ht + g;
+                if (index % num_links == link) {
+                    batch_pages[batch++] = index * ring_size + my_rank;
+                }
+            }
         }
-        for (uint32_t g = link; g < Ht; g += num_links) {
+        if (batch == 0) {
+            invalidate_l1_cache();
+            continue;
+        }
+        for (uint32_t i = 0; i < batch; ++i) {
             noc.async_read(
-                gathered,
-                stage_buf,
-                tile_bytes,
-                {.page_id = (c * Ht + g) * ring_size + my_rank},
-                {.offset_bytes = g * tile_bytes});
+                gathered, stage_buf, tile_bytes, {.page_id = batch_pages[i]}, {.offset_bytes = i * tile_bytes});
         }
         noc.async_read_barrier();
-        for (uint32_t g = 0; g < Ht; ++g) {
-            const uint32_t page = (c * Ht + g) * ring_size + my_rank;
-            if (g % num_links != link) {
-                continue;
-            }
+        for (uint32_t i = 0; i < batch; ++i) {
             for (uint32_t r = 0; r < num_routes; ++r) {
-                tt::tt_fabric::linear::to_noc_unicast_write(tile_bytes, payload_headers[r], page, gathered);
+                tt::tt_fabric::linear::to_noc_unicast_write(tile_bytes, payload_headers[r], batch_pages[i], gathered);
                 perform_payload_send<true, true>(
-                    fabric_connections.get(r).sender, stage_base + g * tile_bytes, tile_bytes, payload_headers[r]);
+                    fabric_connections.get(r).sender, stage_base + i * tile_bytes, tile_bytes, payload_headers[r]);
             }
         }
+        pending -= batch;
     }
 
     // The peer's copy of the arrival semaphore: same logical core there, one program shape

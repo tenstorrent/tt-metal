@@ -104,8 +104,10 @@ void kernel_main() {
                     const uint32_t gather_core = get_common_arg_val<uint32_t>(kGatherArgs + l);
                     noc_semaphore_inc(
                         get_noc_addr(
-                            gather_core >> 16, gather_core & 0xFFFF, get_semaphore(gather_sem_id + row_fields.word(c))),
-                        row_fields.increment(c));
+                            gather_core >> 16,
+                            gather_core & 0xFFFF,
+                            get_semaphore(gather_sem_id + row_fields.word(unit.row))),
+                        row_fields.increment(unit.row));
                 }
             } else {
                 noc.async_writes_flushed();
