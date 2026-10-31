@@ -1925,7 +1925,6 @@ class TestConfig:
             fd.write(coverage_stream)
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
-    # Set when run_elf_files has just booted BRISC; the perf harness reruns that kernel and clears it.
     BRISC_JUST_BOOTED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
     # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`

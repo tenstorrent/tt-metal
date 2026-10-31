@@ -110,14 +110,6 @@ int main(void)
 }
 
 #if defined(ARCH_WORMHOLE) && !defined(COVERAGE)
-// On Wormhole the math and pack TRISCs share one L1 port. Its round-robin arbiter keeps its last grant across
-// kernels (a TRISC soft reset does not clear it), and an L1_TO_L1 kernel settles into one of two access rhythms
-// depending on that grant. So the perf numbers of a kernel depended on which TRISC made the last L1 access in the
-// kernel that ran before it. Here the math TRISC always makes that access: after main it waits for the pack TRISC's
-// completion mailbox (its last L1 store), waits until the pack TRISC runs its end loop from the icache, and then
-// loads one L1 word. The packer is idle by then (tensix_sync in main).
-// This code is in its own section, placed after all other code (sections.ld), and _start jumps to it with an
-// instruction of the same size as the old end loop. So no other code moves, and the kernel timing does not change.
 extern "C" [[noreturn]] __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_profile_instrument_function)) void kernel_end_tail()
 {
 #if defined(LLK_TRISC_MATH)

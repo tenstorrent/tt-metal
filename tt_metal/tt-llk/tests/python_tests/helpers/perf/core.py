@@ -1037,10 +1037,6 @@ class PerfConfig(TestConfig):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
-                # A kernel starts from state that the kernel before it left on the core. The first kernel after a
-                # BRISC boot (the first one of this worker, or a later one after a failed bring-up) follows unknown
-                # work on the core and a cold BRISC. Run it again and keep only the second run: it follows the same
-                # kernel, which on Wormhole ends in a fixed state (see kernel_end_tail in trisc.cpp).
                 if TestConfig.BRISC_JUST_BOOTED:
                     TestConfig.BRISC_JUST_BOOTED = False
                     self.write_runtimes_to_L1()
