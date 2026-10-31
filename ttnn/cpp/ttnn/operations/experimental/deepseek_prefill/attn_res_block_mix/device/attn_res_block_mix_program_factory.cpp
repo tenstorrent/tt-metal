@@ -47,7 +47,9 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const auto& stats = tensor_args.stats;
     const auto& first = tensor_args.sealed.front();
     auto* device = stats.device();
-    auto& [partials, shift, mass] = tensor_return_value;
+    auto& partials = tensor_return_value.at(0);
+    auto& shift = tensor_return_value.at(1);
+    auto& mass = tensor_return_value.at(2);
 
     const auto value_format = datatype_to_dataformat_converter(first.dtype());
     const auto value_tile_size = tt::tile_size(value_format);
@@ -61,6 +63,10 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const uint32_t num_partials = stats.padded_shape()[3] / TILE_WIDTH;
     const uint32_t num_sites = operation_attributes.num_sites;
     const uint32_t num_closed_sites = operation_attributes.num_closed_sites;
+    const uint32_t num_open_sites = num_sites - num_closed_sites;
+    // The closed sites' reads. Where there are none the accessor aliases the partials, so
+    // the kernels' compile-time offsets hold either way and nothing is written through it.
+    auto& closed = num_closed_sites > 0 ? tensor_return_value.at(3) : partials;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -102,7 +108,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
                                  + weight_tiles * value_tile_size                     // per-site weights
                                  + 2 * sites_per_group * value_tile_size              // even groups' partials
                                  + sites_per_group * max_run * value_tile_size        // an odd group's partials
-                                 + num_sites * stats_tile_size                        // scalar staging
+                                 + num_open_sites * stats_tile_size                   // scalar staging
                                  + (num_closed_sites > 0 ? 3 * stats_tile_size : 0);  // normalizing closed sites
     TT_FATAL(
         l1_per_core <= device->l1_size_per_core(),
@@ -134,7 +140,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     // buffer holds a whole group: compute must be able to finish one without waiting on it.
     cb(CBIndex::c_18, 2 * sites_per_group, value_tile_size, value_format);        // even groups
     cb(CBIndex::c_19, sites_per_group * max_run, value_tile_size, value_format);  // odd groups
-    cb(CBIndex::c_24, num_sites, stats_tile_size, stats_format);            // scalar staging, never pushed
+    cb(CBIndex::c_24, num_open_sites, stats_tile_size, stats_format);             // scalar staging, never pushed
     if (num_closed_sites > 0) {
         // A closed site's weights are its exponentials over its mass: compute keeps the mass,
         // and turns it into a per-site factor that is 1 / mass in the closed sites' columns
@@ -156,10 +162,12 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     TensorAccessorArgs(*stats.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*first.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*partials.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*closed.buffer()).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = {num_sites, Ht, sites_per_group, num_groups};
+    std::vector<uint32_t> writer_ct_args = {num_sites, Ht, sites_per_group, num_groups, num_closed_sites};
     writer_ct_args.insert(writer_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
     TensorAccessorArgs(*partials.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(*closed.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*shift.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*mass.buffer()).append_to(writer_ct_args);
 
@@ -180,6 +188,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     KernelDescriptor::RTArgList reader_common;
     reader_common.push_back(stats.buffer());
     reader_common.push_back(partials.buffer());
+    reader_common.push_back(closed.buffer());
     for (const auto& snapshot : tensor_args.sealed) {
         for (uint32_t plane = 0; plane < snapshot.padded_shape()[1]; ++plane) {
             reader_common.push_back(snapshot.buffer());
@@ -201,7 +210,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     writer.core_ranges = all_cores;
     writer.compile_time_args = std::move(writer_ct_args);
     writer.config = WriterConfigDescriptor{};
-    writer.emplace_common_runtime_args({partials.buffer(), shift.buffer(), mass.buffer()});
+    writer.emplace_common_runtime_args({partials.buffer(), closed.buffer(), shift.buffer(), mass.buffer()});
 
     // The scores, the shift and the closed sites' mass, mask and factor are only ever copied
     // into dest, never fed to the FPU, so they unpack straight to it rather than being cut to

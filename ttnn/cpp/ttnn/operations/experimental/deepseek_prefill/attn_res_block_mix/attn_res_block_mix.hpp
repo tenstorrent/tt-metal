@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -26,12 +25,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix {
 // `[R, 1, N, 1]` float32 twice, the layouts `attn_res_gather_softmax` reads per site.
 //
 // The leading `num_closed_sites` sites have no live stream to fold in, so their read is the
-// mixture alone: their partials come out divided by their mass, `partial[r] / mass[r]`, which
-// is the read's value.
+// mixture alone, `partial[r] / mass[r]`: those come back as a fourth output,
+// `[num_closed_sites, 1, N, d]`, and the first three hold only the open sites.
 //
 // `sealed` is the sealed set as it was sealed, one or more `[1, S_i, N, d]` tensors whose
 // planes in order are the C candidates. Each candidate tile is read once for all R sites.
-std::array<ttnn::Tensor, 3> attn_res_block_mix(
+std::vector<ttnn::Tensor> attn_res_block_mix(
     const std::vector<ttnn::Tensor>& sealed,
     const ttnn::Tensor& stats,
     uint32_t num_sites,

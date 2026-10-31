@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <array>
+#include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -13,7 +13,7 @@
 namespace ttnn::experimental::prim {
 
 struct AttnResBlockMixProgramFactory {
-    using tensor_return_value_t = std::array<Tensor, 3>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const AttnResBlockMixParams& operation_attributes,

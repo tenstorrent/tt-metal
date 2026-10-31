@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -17,8 +16,8 @@ namespace ttnn::experimental::prim {
 struct AttnResBlockMixDeviceOperation {
     using operation_attributes_t = AttnResBlockMixParams;
     using tensor_args_t = AttnResBlockMixInputs;
-    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 3>;
-    using tensor_return_value_t = std::array<Tensor, 3>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<AttnResBlockMixProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -31,7 +30,7 @@ struct AttnResBlockMixDeviceOperation {
 
 namespace ttnn::prim {
 
-std::array<Tensor, 3> attn_res_block_mix(
+std::vector<Tensor> attn_res_block_mix(
     const std::vector<Tensor>& sealed,
     const Tensor& stats,
     uint32_t num_sites,

@@ -551,7 +551,7 @@ class TtAttnRes(LightweightModule):
         stats = self._all_gather(local)
         ttnn.deallocate(local)
 
-        partials, site_shifts, site_masses = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+        outputs = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
             sealed,
             stats,
             num_sites=len(queries),
@@ -560,7 +560,7 @@ class TtAttnRes(LightweightModule):
             num_closed_sites=num_closed,
         )
         ttnn.deallocate(stats)
-        return partials, site_shifts, site_masses
+        return tuple(outputs)
 
     def _dots_by_site(self, v, queries):
         """[1, C, N, d/tp] against R queries -> [1, C, N, R], globally summed.
@@ -689,15 +689,16 @@ class TtAttnRes(LightweightModule):
                 executed read has one.
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
             num_closed: how many leading sites have no live stream to fold in. Their read
-                is the sealed set's mixture alone, so their partials come out normalized,
-                `sum_i e_i v_i / sum_i e_i`, and `read_closed` takes them as they are.
+                is the sealed set's mixture alone, `sum_i e_i v_i / sum_i e_i`, and comes
+                back whole rather than as a batch entry.
 
         Returns:
             The partials `[R, 1, N, d/tp_factor]`, each site's holding `sum_i e_i v_i`,
-            and the shifts and masses `[R, 1, N, 1]`, all batched over read sites in
-            the online-softmax convention `e_i = exp(s_i - m)`. `merge` takes the
-            batches whole and names the site; keep them alive until the block's last
-            read.
+            and the shifts and masses `[R, 1, N, 1]`, all batched over the open read
+            sites in the online-softmax convention `e_i = exp(s_i - m)`. `merge` takes
+            the batches whole and names the site; keep them alive until the block's last
+            read. With `num_closed`, a fourth: the closed sites' reads,
+            `[num_closed, 1, N, d/tp_factor]`, and the batches start at the first open site.
         """
         sealed = as_sealed_list(sealed)
         assert sealed, "inter_block needs a sealed snapshot to score against"
@@ -761,13 +762,14 @@ class TtAttnRes(LightweightModule):
         partials = self._mix(block_residual, exponentials)
 
         ttnn.deallocate(exponentials)
-        return partials, site_shifts, site_masses
-
-    @staticmethod
-    def read_closed(partial, site):
-        """A closed site's read, `[1, 1, N, d/tp_factor]`: its partial, which `inter_block`
-        already normalized. Copied out so the caller owns it apart from the batch."""
-        return ttnn.slice(partial, [site, 0, 0, 0], [site + 1, *list(partial.shape)[1:]])
+        if not num_closed:
+            return partials, site_shifts, site_masses
+        # The closed sites' weights were normalized above, so their mixture is the read.
+        split = lambda batch: (batch[:num_closed], batch[num_closed:])
+        (closed, partials_open), (_, shifts_open), (_, masses_open) = map(split, (partials, site_shifts, site_masses))
+        for tensor in (partials, site_shifts, site_masses):
+            ttnn.deallocate(tensor)
+        return partials_open, shifts_open, masses_open, closed
 
     def merge(self, partial, shift, mass, running_sum, q, site=0, pending=None):
         """Fold the live stream into a precomputed sealed-snapshot partial.

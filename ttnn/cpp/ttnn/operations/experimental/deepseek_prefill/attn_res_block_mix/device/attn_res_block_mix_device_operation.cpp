@@ -74,8 +74,8 @@ void AttnResBlockMixDeviceOperation::validate_on_program_cache_miss(
         args.num_sites,
         TILE_WIDTH - 1);
     TT_FATAL(
-        args.num_closed_sites <= args.num_sites,
-        "AttnResBlockMix closes {} of its {} sites",
+        args.num_closed_sites < args.num_sites,
+        "AttnResBlockMix closes {} of its {} sites, and needs at least one open",
         args.num_closed_sites,
         args.num_sites);
 }
@@ -85,31 +85,37 @@ AttnResBlockMixDeviceOperation::spec_return_value_t AttnResBlockMixDeviceOperati
     const auto& first = tensor_args.sealed.front();
     const uint32_t num_tokens = first.logical_shape()[2];
     const uint32_t width = first.logical_shape()[3];
+    const uint32_t num_open = args.num_sites - args.num_closed_sites;
+    const auto wide_layout =
+        operations::TensorLayout(first.dtype(), operations::PageConfig(Layout::TILE), args.output_mem_config);
     const auto scalar_layout =
         operations::TensorLayout(DataType::FLOAT32, operations::PageConfig(Layout::TILE), args.output_mem_config);
-    return {
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape({args.num_sites, 1, num_tokens, width}),
-            operations::TensorLayout(first.dtype(), operations::PageConfig(Layout::TILE), args.output_mem_config)),
-        tt::tt_metal::TensorSpec(ttnn::Shape({args.num_sites, 1, num_tokens, 1}), scalar_layout),
-        tt::tt_metal::TensorSpec(ttnn::Shape({args.num_sites, 1, num_tokens, 1}), scalar_layout)};
+    spec_return_value_t specs = {
+        tt::tt_metal::TensorSpec(ttnn::Shape({num_open, 1, num_tokens, width}), wide_layout),
+        tt::tt_metal::TensorSpec(ttnn::Shape({num_open, 1, num_tokens, 1}), scalar_layout),
+        tt::tt_metal::TensorSpec(ttnn::Shape({num_open, 1, num_tokens, 1}), scalar_layout)};
+    if (args.num_closed_sites > 0) {
+        specs.push_back(
+            tt::tt_metal::TensorSpec(ttnn::Shape({args.num_closed_sites, 1, num_tokens, width}), wide_layout));
+    }
+    return specs;
 }
 
 AttnResBlockMixDeviceOperation::tensor_return_value_t AttnResBlockMixDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.stats.device();
-    return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device)};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(args, tensor_args)) {
+        outputs.push_back(create_device_tensor(spec, device));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-std::array<Tensor, 3> attn_res_block_mix(
+std::vector<Tensor> attn_res_block_mix(
     const std::vector<Tensor>& sealed,
     const Tensor& stats,
     uint32_t num_sites,
