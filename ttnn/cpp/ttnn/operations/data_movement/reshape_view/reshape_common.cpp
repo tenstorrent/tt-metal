@@ -17,6 +17,7 @@ tt::tt_metal::Shape infer_dims_for_reshape(const ttnn::Tensor& tensor, ttsl::Spa
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     bool has_zero = false;
+    bool volume_overflows = false;
     for (auto index = 0; index < shape.size(); ++index) {
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
@@ -32,9 +33,16 @@ tt::tt_metal::Shape infer_dims_for_reshape(const ttnn::Tensor& tensor, ttsl::Spa
             if (shape[index] == 0) {
                 has_zero = true;
             }
-            new_volume *= shape[index];
+            if (!volume_overflows && __builtin_mul_overflow(new_volume, shape[index], &new_volume)) {
+                volume_overflows = true;
+            }
         }
     }
+    if (has_zero) {
+        new_volume = 0;
+    }
+    TT_FATAL(
+        has_zero || !volume_overflows, "Invalid arguments to reshape: the volume of the new shape overflows int64");
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
         for (const auto& s : shape) {

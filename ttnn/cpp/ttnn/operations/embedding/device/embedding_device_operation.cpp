@@ -60,6 +60,11 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             const auto& shard_spec = operation_attributes.output_mem_config.shard_spec();
             TT_FATAL(shard_spec.has_value(), "Sharded memory config must have a shard spec");
             TT_FATAL(
+                shard_spec->shape[0] > 0 && shard_spec->shape[1] > 0,
+                "Shard shape must be non-zero, got [{}, {}]",
+                shard_spec->shape[0],
+                shard_spec->shape[1]);
+            TT_FATAL(
                 shard_spec->shape[0] % TILE_HEIGHT == 0,
                 "Shard height {} must be a multiple of tile height {} to have the output tensor tilized",
                 shard_spec->shape[0],

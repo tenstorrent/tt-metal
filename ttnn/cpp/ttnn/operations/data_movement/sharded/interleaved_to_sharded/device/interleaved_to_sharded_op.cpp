@@ -22,6 +22,9 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
+    if (input_tensor.padded_shape()[-1] == 0) {
+        return {false, fmt::format("Input tensor width must be greater than 0, got shape {}", input_tensor.padded_shape())};
+    }
 
     // Reject dtype/layout combinations that would hard-fail during tt::tt_metal::TensorSpec construction in compute_output_specs().
     // These low-precision packed formats require tiled layout.

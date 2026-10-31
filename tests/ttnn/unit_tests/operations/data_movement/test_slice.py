@@ -2358,3 +2358,12 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+def test_slice_tensor_args_rejects_zero_num_devices(device, expect_error):
+    # The tensor-args path splits slice_dim by num_devices.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    starts = ttnn.from_torch(torch.tensor([0, 0, 0, 0]), device=device)
+    ends = ttnn.from_torch(torch.tensor([1, 1, 32, 64]), device=device)
+    with expect_error(RuntimeError, "num_devices must be greater than 0"):
+        ttnn.slice(x, starts, ends, slice_dim=2, num_devices=0)

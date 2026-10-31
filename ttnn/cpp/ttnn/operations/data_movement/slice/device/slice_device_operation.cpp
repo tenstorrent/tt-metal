@@ -253,6 +253,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
 
         uint32_t slice_dimension = args.slice_dim.value();
         uint32_t num_parts = args.num_devices.value();
+        TT_FATAL(num_parts > 0, "num_devices must be greater than 0");
 
         for (uint32_t i = 0; i < out_shape.size(); i++) {
             out_shape[i] = input_tensor.logical_shape()[i];
