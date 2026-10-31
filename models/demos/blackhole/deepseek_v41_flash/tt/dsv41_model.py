@@ -1895,6 +1895,13 @@ class Model:
         up1 = self._up1
         if self.Up != self.U or int(chunk) != up1["C"] or self.__dict__.get("_up1_off"):
             return False
+        sw = os.environ.get("DSV41_PF_UP1_FILE")  # live switch for A/B in one server: the file holds 0 / 1
+        if sw:
+            try:
+                if open(sw).read().strip() == "0":
+                    return False
+            except OSError:
+                pass
         apc, pa = getattr(self, "apc", None), self.__dict__.get("apc_paged")
 
         def has_hit(b, t, e):
@@ -1965,6 +1972,10 @@ class Model:
             pm.use_dyn(up1["main"])
             t_back = time.perf_counter() - t_b
         tm["up1"] = 1.0
+        n_ = self.__dict__.setdefault("_up1_n", [0])
+        n_[0] += 1
+        if n_[0] <= 3 or n_[0] % 200 == 0:
+            self.log(f"prefill on the one-slot context: users {sorted(int(it[0]) for it in items)} (call {n_[0]})")
         tm["up1_pick_s"], tm["up1_enter_s"], tm["up1_back_s"] = t_pick, t_sw, t_back
         self.timing = tm
         return res
