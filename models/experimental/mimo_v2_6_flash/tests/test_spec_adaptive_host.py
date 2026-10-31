@@ -11,7 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import ADAPTIVE, DRAFT_GROUPS, pass_width
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    ADAPTIVE,
+    ADAPTIVE_WIDE_ROWS,
+    DRAFT_GROUPS,
+    pass_width,
+)
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
 
 pytestmark = pytest.mark.skipif(not ADAPTIVE, reason="run with MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=adaptive")
@@ -57,6 +62,7 @@ def test_a_relay_pass_at_the_right_width_changes_nothing():
     assert m.chain_stats == {"width_changes": 0, "width_holds": 0} and m.group_owners[0][:2] == [0, 1]
 
 
+@pytest.mark.skipif(ADAPTIVE_WIDE_ROWS != 2, reason="8 slots: a third request narrows the groups to 2 slots")
 def test_a_relay_pass_narrows_keeping_the_groups():
     # Two requests in groups 0 and 1 of 4 slots chain on while a third joins: groups of 2 slots, the relayed rows
     # keep groups 0 and 1 (and their rings), the third takes a free group.
