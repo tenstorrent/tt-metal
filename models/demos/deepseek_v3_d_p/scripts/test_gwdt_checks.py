@@ -351,6 +351,13 @@ def test_missing_node_ids_matches_tree_names():
     assert missing_node_ids(wanted, ["test_x[p1]"]) == ["b/u.py::test_y[q]"]
 
 
+def test_base_env_disables_pinned_memory_cache(tmp_path, monkeypatch):
+    from gwdt_steps import base_env
+
+    monkeypatch.setenv("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES", "4294967296")
+    assert base_env(tmp_path)["TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"] == "0"
+
+
 def _fake_collect(monkeypatch, steps):
     import gwdt_steps
 
