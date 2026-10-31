@@ -505,6 +505,14 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 **Catalog.** No env change (the switches default as above).
 
+## 8.22 Structured outputs, model-side grammar mask (M1 / M2; switches default OFF, not in the catalog)
+
+**What changed.** The speculative verify round can apply a grammar mask on device (`tt/spec_decoder.py`, `tt/spec_model.py`, `tt/generator_vllm.py`; design and device results in `MODEL_MASK_NOTES.md`). A packed int32 mask buffer `[rows*T, 4040]` is allocated in `alloc_sampled` before the trace capture; a second sampler trace per bucket (masked trace S) adds the grammar bias, which is built from ttnn ops (no C++). An all-ones mask is bit-identical to no mask, and unmasked rounds are untouched. The spec runner keeps trace A's logits buffer per bucket (`cur_logits`); masked rounds are counted in the spec stats line. M2 (`verify_grammar_positions`): per-position masks, so a restricted row may carry drafts.
+
+**Switches (all default OFF).** `DSV41_STRUCTURED_SPEC=1` (alias `DSV41_STRUCT_MASK=1`; needs a speculative launch and the in-trace sampler `DSV41_INTRACE_SAMPLE=1`), `DSV41_STRUCTURED_M2=1` (needs the first). They pair with the plugin's `VLLM_TT_STRUCTURED_SPEC` (off, 8.21). Not set in the catalog yet.
+
+**Verified** on B=16 and B=8 / 1M (device check files in `tests/struct_mask_device/`; M2 model side verified). **Cost:** a masked round costs about +5 ms on a 99 ms round at B=16; with 4 structured workers the plain users go 38 -> 28 tok/s/user (the M0 narrow path of 8.21 gives 101 -> 41 tok/s for 4 streams). Tests: `tests/test_struct_mask_model_cpu.py`, `tests/test_grammar_mask_cpu.py`.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
