@@ -320,8 +320,8 @@ def test_matmul_fail_reruns_throttled(tmp_path, monkeypatch, key):
     r = _nd_step(key).run(Ctx(tmp_path, tmp_path, False), state)
     d = tmp_path / key.replace(":", "/")
     assert r.status == Status.FAIL and state.log == str(d / "log_01")
-    assert calls[3:] == calls[:3] and calls[0] == "tt-smi -glx_reset_auto"
-    assert [log for log, _ in seen] == [
+    assert calls[3:6] == calls[:3] and calls[0] == "tt-smi -glx_reset_auto"
+    assert [log for log, _ in seen[:6]] == [
         d / "reset.log",
         d / "log_01",
         d / "tt-smi.json",
@@ -330,8 +330,10 @@ def test_matmul_fail_reruns_throttled(tmp_path, monkeypatch, key):
         d / "tt-smi_02.json",
     ]
     assert "TT_MM_THROTTLE_PERF" not in seen[1][1] and seen[4][1]["TT_MM_THROTTLE_PERF"] == "5"
-    assert state.rerun.result.status == Status.FAIL and state.rerun.log == str(d / "log_02")
-    assert state.rerun.env == {"TT_MM_THROTTLE_PERF": "5"} and state.rerun.end >= state.rerun.start
+    first = state.fallbacks[0]
+    assert first.result.status == Status.FAIL and first.log == str(d / "log_02")
+    assert first.env == {"TT_MM_THROTTLE_PERF": "5"} and first.opts == [] and first.end >= first.start
+    assert len(state.fallbacks) == (2 if key == "matmul:minimal" else 1)
     if key == "matmul:mcast-ack":
         assert seen[4][1]["TMPDIR"] == str(d / "tmp_02")
     else:
@@ -354,7 +356,40 @@ def test_matmul_hang_reruns_and_keeps_first_result(tmp_path, monkeypatch):
     state = State()
     r = _nd_step("matmul:minimal").run(Ctx(tmp_path, tmp_path, False), state)
     assert r.status == Status.HANG and state.log == str(tmp_path / "matmul" / "minimal" / "log_01")
-    assert state.rerun.result == Result(Status.PASS, "1 passed")
+    assert state.fallbacks[0].result == Result(Status.PASS, "1 passed")
+
+
+def test_minimal_second_fallback_caps_grid_without_throttle(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State
+
+    seen = []
+    calls = _fake_sh(monkeypatch, 0, lambda cmd, log, env: seen.append((log, env)))
+    state = State()
+    r = _nd_step("matmul:minimal").run(Ctx(tmp_path, tmp_path, False), state)
+    d = tmp_path / "matmul" / "minimal"
+    assert r.status == Status.FAIL and len(calls) == 9
+    assert [log for log, _ in seen[6:]] == [d / "reset_03.log", d / "log_03", d / "tt-smi_03.json"]
+    assert calls[7] == calls[1] + " '--grid-size' '11x10'"
+    assert "TT_MM_THROTTLE_PERF" not in seen[7][1]
+    assert seen[7][1]["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"].endswith(
+        f"--llm-output-path={d / 'crash_triage_03.csv'}; kill -9 $PPID"
+    )
+    second = state.fallbacks[1]
+    assert second.env == {} and second.opts == ["--grid-size", "11x10"]
+    assert second.result.status == Status.FAIL and second.log == str(d / "log_03")
+
+
+def test_minimal_first_fallback_pass_skips_second(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State
+
+    def write(cmd, log, env):
+        if "TT_MM_THROTTLE_PERF" in env:
+            log.write_text("=== 1 passed in 250s ===\n")
+
+    calls = _fake_sh(monkeypatch, 0, write)
+    state = State()
+    assert _nd_step("matmul:minimal").run(Ctx(tmp_path, tmp_path, False), state).status == Status.FAIL
+    assert len(calls) == 6 and [f.result.status for f in state.fallbacks] == [Status.PASS]
 
 
 def test_matmul_pass_does_not_rerun(tmp_path, monkeypatch):
@@ -363,7 +398,7 @@ def test_matmul_pass_does_not_rerun(tmp_path, monkeypatch):
     calls = _fake_sh(monkeypatch, 0, lambda cmd, log, env: log.write_text("=== 1 passed in 9s ===\n"))
     state = State()
     assert _nd_step("matmul:ff1").run(Ctx(tmp_path, tmp_path, False), state).status == Status.PASS
-    assert len(calls) == 3 and state.rerun is None
+    assert len(calls) == 3 and state.fallbacks == []
 
 
 def test_matmul_co_does_not_rerun(tmp_path, monkeypatch):
@@ -372,10 +407,10 @@ def test_matmul_co_does_not_rerun(tmp_path, monkeypatch):
     calls = _fake_sh(monkeypatch, 0)
     state = State()
     assert _nd_step("matmul:ff1").run(Ctx(tmp_path, tmp_path, True), state).status == Status.FAIL
-    assert len(calls) == 1 and state.rerun is None
+    assert len(calls) == 1 and state.fallbacks == []
 
 
-def test_matmul_nd_rerun_row(tmp_path, monkeypatch):
+def test_matmul_nd_fallback_rows(tmp_path, monkeypatch):
     import json
     import re
     import time
@@ -386,21 +421,30 @@ def test_matmul_nd_rerun_row(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     bad = Step("matmul:minimal", "matmul minimal", "matmul", None, True, None)
     bad.state.result = Result(Status.FAIL, "assert False", ["device 17: 2 non-deterministic outputs"])
-    rerun = Result(Status.FAIL, "assert False", ["device 3: 1 non-deterministic outputs"])
-    bad.state.rerun = State(rerun, "log_02", time.time() - 250, time.time(), attempt=2, env={"TT_MM_THROTTLE_PERF": "5"})
+    first = Result(Status.FAIL, "assert False", ["device 3: 1 non-deterministic outputs"])
+    second = Result(Status.FAIL, "assert False", ["device 5: 4 non-deterministic outputs"])
+    now = time.time()
+    bad.state.fallbacks = [
+        State(first, "log_02", now - 250, now, attempt=2, env={"TT_MM_THROTTLE_PERF": "5"}),
+        State(second, "log_03", now - 70, now, attempt=3, opts=["--grid-size", "11x10"]),
+    ]
     screen = Screen([bad], ["hdr"], tmp_path / "status.json", {})
     lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines()]
     m = lines.index("MATMUL ND")
-    step, dev, again, again_dev = lines[m + 1 : m + 5]
+    step, dev, fb1, fb1_dev, fb2, fb2_dev = lines[m + 1 : m + 7]
     assert step.startswith("   minimal ") and dev.startswith("     device 17 ")
-    assert again.startswith("     rerun ") and again_dev.startswith("       device 3 ")
-    assert step.index("FAIL") == dev.index("FAIL") == again.index("FAIL") == again_dev.index("FAIL")
-    assert again.endswith("4m10s    TT_MM_THROTTLE_PERF=5  assert False")
+    assert fb1.startswith("     fallback 1 ") and fb1_dev.startswith("       device 3 ")
+    assert fb2.startswith("     fallback 2 ") and fb2_dev.startswith("       device 5 ")
+    assert step.index("FAIL") == dev.index("FAIL") == fb1.index("FAIL") == fb2_dev.index("FAIL")
+    assert fb1.endswith("4m10s    TT_MM_THROTTLE_PERF=5  assert False")
+    assert fb2.endswith("1m10s    --grid-size 11x10  assert False")
     screen.write_status()
     row = json.loads((tmp_path / "status.json").read_text())["steps"][0]
-    assert row["status"] == "FAIL" and row["rerun"]["status"] == "FAIL"
-    assert row["rerun"]["env"] == {"TT_MM_THROTTLE_PERF": "5"} and row["rerun"]["log"] == "log_02"
-    assert row["rerun"]["details"] == ["device 3: 1 non-deterministic outputs"]
+    assert row["status"] == "FAIL" and [f["status"] for f in row["fallbacks"]] == ["FAIL", "FAIL"]
+    assert row["fallbacks"][0]["env"] == {"TT_MM_THROTTLE_PERF": "5"} and row["fallbacks"][0]["opts"] == []
+    assert row["fallbacks"][1]["env"] == {} and row["fallbacks"][1]["opts"] == ["--grid-size", "11x10"]
+    assert row["fallbacks"][0]["log"] == "log_02" and row["fallbacks"][1]["log"] == "log_03"
+    assert row["fallbacks"][1]["details"] == ["device 5: 4 non-deterministic outputs"]
 
 
 def test_fabric_results():

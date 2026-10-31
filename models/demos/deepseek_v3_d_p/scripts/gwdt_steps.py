@@ -60,7 +60,8 @@ class State:
     now: str = ""
     attempt: int = 1
     env: dict[str, str] = field(default_factory=dict)
-    rerun: "State | None" = None
+    opts: list[str] = field(default_factory=list)
+    fallbacks: list["State"] = field(default_factory=list)
 
 
 @dataclass
@@ -181,7 +182,7 @@ SMI_CMD = "tt-smi -s --snapshot_no_tty"
 
 
 def attempt_path(path: Path, attempt: int) -> Path:
-    """A rerun's files sit next to the first run's: reset.log, reset_02.log."""
+    """A fallback's files sit next to the first run's: reset.log, reset_02.log."""
     return path if attempt == 1 else path.with_stem(f"{path.stem}_{attempt:02d}")
 
 
@@ -215,7 +216,7 @@ def pytest_step(
             return failed
         log, csv = d / f"log_{n:02d}", d / f"crash_triage_{n:02d}.csv"
         state.log = str(log)
-        cmd = "pytest -vs -rA " + " ".join(f"'{a}'" for a in ids + opts)
+        cmd = "pytest -vs -rA " + " ".join(f"'{a}'" for a in ids + opts + state.opts)
 
         def tick():
             if log.is_file():
@@ -538,23 +539,29 @@ def matmul_steps() -> list[Step]:
     ]
 
 
-THROTTLE_ENV = {"TT_MM_THROTTLE_PERF": "5"}
+THROTTLE = ({"TT_MM_THROTTLE_PERF": "5"}, [])
+# Unthrottled, so a pass on 110 cores points at the co-active core count.
+CORE_CAP = ({}, ["--grid-size", SWEEP_GRID])
 
 
-def rerun_throttled(step: Step) -> Step:
-    """A failed or hung ND run reruns once, after its own reset, with matmul compute throttled to 33%. The row keeps the
-    first result; the rerun is a sub-row."""
+def with_fallbacks(step: Step, fallbacks: list[tuple[dict[str, str], list[str]]]) -> Step:
+    """A failed or hung ND run tries each fallback in order, each after its own reset, until one passes. THROTTLE
+    throttles matmul compute to 33%. The row keeps the first result; each fallback is a sub-row."""
 
     def run(ctx: Ctx, state: State) -> Result:
         r = step.run(ctx, state)
         if ctx.mode_co or r.status not in (Status.FAIL, Status.HANG):
             return r
-        rerun = state.rerun = State(Result(Status.RUN), start=time.time(), attempt=2, env=THROTTLE_ENV)
-        try:
-            rerun.result = step.run(ctx, rerun)
-        except Exception as e:
-            rerun.result = Result(Status.FAIL, f"{type(e).__name__}: {e}")
-        rerun.end = time.time()
+        for n, (env, opts) in enumerate(fallbacks, 2):
+            f = State(Result(Status.RUN), start=time.time(), attempt=n, env=env, opts=opts)
+            state.fallbacks.append(f)
+            try:
+                f.result = step.run(ctx, f)
+            except Exception as e:
+                f.result = Result(Status.FAIL, f"{type(e).__name__}: {e}")
+            f.end = time.time()
+            if f.result.status == Status.PASS:
+                break
         return r
 
     return Step(step.key, step.title, step.group, step.model, step.blocking, run, step.collect)
@@ -623,7 +630,9 @@ def build_steps(models: list[str]) -> list[Step]:
         mla_step("mla-smoke", 50),
         mla_step("mla-soak", 2500),
     ]
-    matmul = [rerun_throttled(s) for s in matmul_steps()]
+    matmul = [
+        with_fallbacks(s, [THROTTLE, CORE_CAP] if s.key == "matmul:minimal" else [THROTTLE]) for s in matmul_steps()
+    ]
     return [paths_step(models), collect_step(hardware + matmul + model_steps)] + hardware + matmul + model_steps
 
 

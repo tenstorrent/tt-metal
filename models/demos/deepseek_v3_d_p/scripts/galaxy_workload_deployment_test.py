@@ -79,11 +79,11 @@ class Screen:
         for s in matmul:
             out.append(self.model_row(3, s.key.split(":")[1], s.state.result, s.state.start, s.state.end))
             out += [self.model_row(5, label, r) for label, r in self.sub_rows(s)]
-            if rerun := s.state.rerun:
-                env = " ".join(f"{k}={v}" for k, v in rerun.env.items())
-                r = Result(rerun.result.status, f"{env}  {rerun.result.reason}".rstrip())
-                out.append(self.model_row(5, "rerun", r, rerun.start, rerun.end))
-                out += [self.model_row(7, label, r) for label, r in device_rows(rerun.result)]
+            for i, f in enumerate(s.state.fallbacks, 1):
+                change = " ".join([*(f"{k}={v}" for k, v in f.env.items()), *f.opts])
+                r = Result(f.result.status, f"{change}  {f.result.reason}".rstrip())
+                out.append(self.model_row(5, f"fallback {i}", r, f.start, f.end))
+                out += [self.model_row(7, label, r) for label, r in device_rows(f.result)]
         models = list(dict.fromkeys(s.model for s in self.steps if s.model))
         if models:
             out += ["", "MODELS"]
@@ -162,16 +162,19 @@ class Screen:
                     "log": s.state.log,
                     "start": s.state.start,
                     "end": s.state.end,
-                    "rerun": s.state.rerun
-                    and {
-                        "env": s.state.rerun.env,
-                        "status": s.state.rerun.result.status.name,
-                        "reason": s.state.rerun.result.reason,
-                        "details": s.state.rerun.result.details,
-                        "log": s.state.rerun.log,
-                        "start": s.state.rerun.start,
-                        "end": s.state.rerun.end,
-                    },
+                    "fallbacks": [
+                        {
+                            "env": f.env,
+                            "opts": f.opts,
+                            "status": f.result.status.name,
+                            "reason": f.result.reason,
+                            "details": f.result.details,
+                            "log": f.log,
+                            "start": f.start,
+                            "end": f.end,
+                        }
+                        for f in s.state.fallbacks
+                    ],
                 }
                 for s in self.steps
             ],
