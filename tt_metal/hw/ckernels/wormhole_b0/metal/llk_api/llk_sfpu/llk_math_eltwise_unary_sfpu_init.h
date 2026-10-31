@@ -88,15 +88,24 @@ inline void round_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void trunc_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void isfinite_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// Defined with the kernel in tt-llk's sfpu/ckernel_sfpu_isinf_isnan.h: programs the ADDR_MOD_6 the kernel's
+// predicated store advances Dest through (nothing in a kernel built with MM_THROTTLE).
+void _init_sfpu_isinf_isnan_();
 
-inline void isinf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void isinf_isnan_init() {
+    _init_sfpu_isinf_isnan_();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
-inline void isnan_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void isfinite_init() { isinf_isnan_init(); }
 
-inline void isneginf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void isinf_init() { isinf_isnan_init(); }
 
-inline void isposinf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void isnan_init() { isinf_isnan_init(); }
+
+inline void isneginf_init() { isinf_isnan_init(); }
+
+inline void isposinf_init() { isinf_isnan_init(); }
 
 inline void negative_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
