@@ -697,6 +697,19 @@ public:
             default: return "";
         }
     }
+    // Must match the cores the watcher server delays.
+    bool get_watcher_debug_delay_targets_eth() const {
+        for (auto feature :
+             {RunTimeDebugFeatureReadDebugDelay,
+              RunTimeDebugFeatureWriteDebugDelay,
+              RunTimeDebugFeatureAtomicDebugDelay}) {
+            const auto& cores = get_feature_cores(feature);
+            if (auto it = cores.find(CoreType::ETH); it != cores.end() && !it->second.empty()) {
+                return true;
+            }
+        }
+        return false;
+    }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
             "{}_{}_{}_{}_{}_{}_{}_{}",

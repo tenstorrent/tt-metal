@@ -152,8 +152,9 @@ protected:
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-        bool is_n300_or_t3k_cluster =
-            cluster_type == tt::tt_metal::ClusterType::T3K or cluster_type == tt::tt_metal::ClusterType::N300;
+        bool is_n300_or_t3k_cluster = cluster_type == tt::tt_metal::ClusterType::T3K or
+                                      cluster_type == tt::tt_metal::ClusterType::N300 or
+                                      cluster_type == tt::tt_metal::ClusterType::N300_2x2;
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
@@ -222,8 +223,9 @@ protected:
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-        bool is_n300_or_t3k_cluster =
-            cluster_type == tt::tt_metal::ClusterType::T3K or cluster_type == tt::tt_metal::ClusterType::N300;
+        bool is_n300_or_t3k_cluster = cluster_type == tt::tt_metal::ClusterType::T3K or
+                                      cluster_type == tt::tt_metal::ClusterType::N300 or
+                                      cluster_type == tt::tt_metal::ClusterType::N300_2x2;
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 

@@ -202,8 +202,10 @@ public:
     tt::llrt::TargetSelection saved_target_selection[tt::llrt::RunTimeDebugFeatureCount];
 
     std::map<CoreType, std::vector<CoreCoord>> delayed_cores;
+    uint32_t saved_watcher_debug_delay_ = 0;
 
     void SetUp() override {
+        saved_watcher_debug_delay_ = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_debug_delay();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_debug_delay(5000000);
         delayed_cores[CoreType::WORKER] = {{0, 0}, {1, 1}};
 
@@ -230,6 +232,7 @@ public:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_debug_delay(saved_watcher_debug_delay_);
     }
 };
 

@@ -456,6 +456,9 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_watcher_debug_delay()) {
         this->defines_ += "-DWATCHER_DEBUG_DELAY=" + to_string(rtoptions.get_watcher_debug_delay()) + " ";
+        if (rtoptions.get_watcher_debug_delay_targets_eth()) {
+            this->defines_ += "-DWATCHER_DEBUG_DELAY_ETH ";
+        }
     }
 
     if (rtoptions.get_hw_cache_invalidation_enabled()) {
