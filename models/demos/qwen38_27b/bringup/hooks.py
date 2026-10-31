@@ -140,3 +140,10 @@ def device_model(mesh, spec, layers, lm_head=True):
     from models.demos.qwen38_27b.tt.model import TtQwen38Model
 
     return TtQwen38Model(mesh, spec, layers, lm_head=lm_head)
+
+
+def contract_state_pcc(spec, runtime, kv, slot, length, golden) -> dict:
+    """K.1: the Gated DeltaNet state (not in the KV table) of the prefill runtime vs the golden snapshot at length."""
+    from models.demos.qwen38_27b.tt.runners.adapter import contract_state_pcc as pcc
+
+    return pcc(spec, runtime, kv, slot, length, golden)

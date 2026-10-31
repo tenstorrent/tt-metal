@@ -605,6 +605,10 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
+    # an adapter that knows its own KV layout reads it back itself (PrefillModelAdapter's optional hook)
+    read_back = getattr(ADAPTER, "read_slot_kv_and_check_pcc", None)
+    if read_back is not None:
+        return read_back(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gemma4_d_p":
         from models.demos.gemma4_d_p.tt.runners.kv_validation import read_slot_kv_and_check_pcc
 

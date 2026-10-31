@@ -70,13 +70,18 @@ class GdnSlot:
 class TtModelState:
     """The served state of every layer of the model, for num_slots users (module docstring)."""
 
-    def __init__(self, model: "TtQwen38Model", max_seq: int):
+    def __init__(self, model: "TtQwen38Model", max_seq: int, num_slots: int | None = None, kv: TtKVCache | None = None):
+        """kv: the engine-owned cache to run on (the prefill adapter's allocate_kv_cache), else one is allocated."""
         self.model, self.max_seq = model, max_seq
-        self.num_slots = settings.get("NUM_SLOTS")
+        self.num_slots = settings.get("NUM_SLOTS") if num_slots is None else num_slots
         cfg = model.cfg
         self.attn_layers = [i for i in model.layers if model.is_attn(i)]
-        self.kv = None
-        if self.attn_layers:
+        self.kv = kv
+        if kv is not None:
+            want = (model.max_seq, model.chunk, self.num_slots, len(self.attn_layers))
+            have = (kv.max_seq, kv.chunk, kv.num_slots, kv.num_layers)
+            assert have == want, f"KV cache (max_seq, chunk, slots, attn layers) {have} != the model's {want}"
+        elif self.attn_layers:
             # the served cache (7040 rows per chip) whatever the request length: the ring SDPA's cache read
             # (kv_actual_isl) needs more cache rows per chip than one chunk's 640 (Q.seq < K.seq)
             self.kv = TtKVCache(
@@ -250,9 +255,9 @@ class TtQwen38Model:
     def is_attn(self, layer: int) -> bool:
         return self.cfg.layer_types[layer] == "full_attention"
 
-    def new_state(self, max_seq: int) -> TtModelState:
+    def new_state(self, max_seq: int, num_slots: int | None = None, kv: TtKVCache | None = None) -> TtModelState:
         assert max_seq <= self.max_seq, (max_seq, self.max_seq)
-        return TtModelState(self, max_seq)
+        return TtModelState(self, max_seq, num_slots=num_slots, kv=kv)
 
     # ---- chunk boundary (host I/O allowed)
     def _order(self, start: int) -> torch.Tensor:

@@ -31,6 +31,7 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -181,6 +182,15 @@ class PrefillModelAdapter(ABC):
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    def hf_model_path(self) -> str:
+        """PREFILL_HF_MODEL, else ``hf_model_default``: the checkpoint (dir or repo id) this adapter loads. Read here
+        so a model package whose own code may not read the environment can still honour the override."""
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
+
+    # Optional read-back hook (not abstract): an adapter whose KV layout the producer's built-in readers do not know
+    # defines ``read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir) -> {cache: min_pcc}``;
+    # prefill_producer._read_slot_kv_and_check_pcc calls it before any of its own readers.
 
     @property
     def default_sparse_kv_cache_format(self) -> Optional[object]:
@@ -336,6 +346,8 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
+    # Qwen3.8-27B: Gated DeltaNet + gated GQA hybrid (3:1); KV table over the attention layers only.
+    "qwen38_27b": "models.demos.qwen38_27b.tt.runners.adapter:Qwen38PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

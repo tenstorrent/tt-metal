@@ -157,3 +157,25 @@
   and still drives the GDN snapshot points. `to_torch` reads only `[0, length)`, so the graded state is unchanged.
 - Results: PCC per layer >= 0.99998, rel <= 0.0067, bias <= 2e-4, state PCC 0.99969, 55 ops per layer.
 - Re-run: `bfw job check --task L.s5120 --gate-only`.
+
+## K.1: prefill-runner adapter, served KV cache and its table, 2026-10-31
+
+- `tt/runners/adapter.py` `Qwen38PrefillAdapter`, registered as `qwen38_27b` in `ADAPTER_PATHS`
+  (`models/demos/common/prefill/adapter.py`). `allocate_kv_cache` returns `Qwen38KvCaches`: one `TtKVCache`
+  (bfp8 ND-sharded `[1, 1, 32, 256]` ROUND_ROBIN_1D, batch `slot * n_attn + attn_layer`) over the served attention
+  layers, always 56320 long (the ring SDPA needs more cache rows than Q rows per chip). The weights load from the
+  checkpoint (`weight_cache_path` None). `FABRIC_PAYLOAD_SIZE` 4352 (the 1D default).
+- `tt/runners/runtime.py` `Qwen38PrefillRuntime`: `compile(kv)` binds the engine's cache into a `TtModelState`
+  (`new_state(max_seq, num_slots=, kv=)`). The GDN live state and snapshots are the runtime's own. `prefill_chunk`
+  goes `embed_device(engine ids)` -> `layer(i, ..., end=actual_end, slot=)`. After each layer it records an event,
+  synchronizes on it, then calls `sink(global layer, request_id)`. Eager only: no trace, no D2H acks.
+- `tt/runners/kv_table.py`: 8 configs `k_h0..v_h3`, 8704 B records, one-chip device groups `(row (p/640)%8,
+  column h)`. Shard j = batch * 220 + local_row / 32 sits in bank j % banks at `buffer_address + (j // banks) * 8704`.
+  GDN layers stay unset. `kv_migration_base_address` = entry (0, 0, 0, 0): 0 here, because served layer 0 is GDN.
+- Generic hooks in `common/prefill`: `PrefillModelAdapter.hf_model_path()` (PREFILL_HF_MODEL, which the model
+  package may not read itself) and the producer's `_read_slot_kv_and_check_pcc`, which calls the adapter's
+  `read_slot_kv_and_check_pcc` first (no name branch). `bringup/hooks.py contract_state_pcc` forwards to the adapter.
+- Result: framework contract PASS (layout_failures 0, acks_early 0, producer KV K 0.99991 / V 0.99987, GDN state conv
+  0.99991 / recurrent 0.99970). Runner test fed by tt-d-gen's engine @ 516a9bb PASS (0 failures, KV PCC min 0.99979
+  over a2 [0, 56320) with the follow-up from 9984 and the pull-back to 51200, 16088 records read).
+- Re-run: `bfw job check --task K.1 --gate-only`.
