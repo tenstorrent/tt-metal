@@ -27,15 +27,13 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
+#include "ttnn-nanobind/opaque_types.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
-
-NB_MAKE_OPAQUE(std::vector<tt::tt_metal::UnpackToDestMode>);
-NB_MAKE_OPAQUE(std::vector<uint32_t>);
 
 namespace ttnn::program_descriptors {
 
