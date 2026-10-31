@@ -14,6 +14,8 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_kv_pad_derivation.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/sliding_ring_sdpa_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/dataflow/sliding_ring_sdpa_lanes.hpp"
+#include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/dataflow/sliding_ring_sdpa_lane_rows.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
@@ -322,38 +324,68 @@ void kernel_main() {
     static_assert(!has_kv_valid_end || !has_logical_length_tensor);
     [[maybe_unused]] constexpr uint32_t kv_valid_end_common_arg = logical_length_common_arg_base;
 
+    // Lanes: num_lanes requests' Q rows stacked along Q's row dim; lane b reads cache slot slot_id[b] with prefix
+    // kv_actual_isl[b]. Each unit loads its lane's slot, logical_nt and Q mapping.
+    constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
+    static_assert(
+        num_lanes == 1 || (slot_from_metadata && kv_pad_from_metadata && has_sliding_window && !ksplit_enabled),
+        "Lanes need the metadata path, a sliding window and no K split");
+    // kv_valid_end is a single value, and the host rejects it with a sliding window.
+    static_assert(num_lanes == 1 || !has_kv_valid_end, "Lanes do not support kv_valid_end");
+    [[maybe_unused]] uint32_t lane_batch_idx[num_lanes] = {};
+    [[maybe_unused]] uint32_t lane_logical_nt[num_lanes] = {};
+    [[maybe_unused]] ring_joint::ChunkedQMapping lane_qmap[num_lanes] = {};
+
     if constexpr (slot_from_metadata || kv_pad_from_metadata || has_logical_length_tensor) {
         Noc meta_noc;
         CircularBuffer cb_q_scratch(cb_q_in);
         const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
+        // Metadata tensors hold one element per lane (one lane: the single-request scalar). Every lane is derived
+        // the same way; lane 0 feeds the single-request variables, which drive the call's ring-iteration masks.
         if constexpr (slot_from_metadata) {
-            const uint32_t slot_id =
-                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1);
-            kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
-                slot_id,
-                get_common_arg_val<uint32_t>(1),
-                get_common_arg_val<uint32_t>(2),
-                get_common_arg_val<uint32_t>(3));
+            std::array<uint32_t, num_lanes> slot_ids;
+            gemma4_sliding::read_metadata_vector_u32(
+                meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1, slot_ids);
+            for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+                lane_batch_idx[lane] = trace_metadata::bounded_cache_batch_idx(
+                    slot_ids[lane],
+                    get_common_arg_val<uint32_t>(1),
+                    get_common_arg_val<uint32_t>(2),
+                    get_common_arg_val<uint32_t>(3));
+            }
+            kv_cache_batch_idx = lane_batch_idx[0];
         }
         if constexpr (kv_pad_from_metadata) {
-            uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
-            kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
-                kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
-            const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
-            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            std::array<uint32_t, num_lanes> kv_actual_isls;
+            gemma4_sliding::read_metadata_vector_u32(
+                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1, kv_actual_isls);
+            [[maybe_unused]] uint32_t kv_valid_end = 0;
             if constexpr (has_kv_valid_end) {
-                const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
+                kv_valid_end = trace_metadata::read_metadata_scalar_u32(
                     meta_noc, kv_valid_end_args, get_common_arg_val<uint32_t>(kv_valid_end_common_arg), meta_l1);
-                logical_nt =
-                    trace_metadata::logical_tile_rows_clamped_to_valid_end(logical_nt, kv_actual_isl, kv_valid_end);
             }
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
-            qmap = ring_joint::build_chunked_q_mapping(
-                kv_actual_tile_count, logical_nt, q_local_padded_Nt, q_ring_size, tensor_rank / kv_stripe_split);
+            for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+                const uint32_t kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
+                    kv_actual_isls[lane], q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
+                const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
+                lane_logical_nt[lane] = trace_metadata::logical_tile_rows_clamped_to_cache(
+                    kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+                if constexpr (has_kv_valid_end) {
+                    lane_logical_nt[lane] = trace_metadata::logical_tile_rows_clamped_to_valid_end(
+                        lane_logical_nt[lane], kv_actual_isl, kv_valid_end);
+                }
+                lane_qmap[lane] = ring_joint::build_chunked_q_mapping(
+                    kv_actual_tile_count,
+                    lane_logical_nt[lane],
+                    q_local_padded_Nt,
+                    q_ring_size,
+                    tensor_rank / kv_stripe_split);
+            }
+            logical_nt = lane_logical_nt[0];
+            qmap = lane_qmap[0];
             // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
                 .transport_rank = fused_op_receiver.seq.ring_index,
@@ -392,6 +424,16 @@ void kernel_main() {
                 d[ring_joint::kDerivedQValidTileCount] = qmap.q_valid_tile_count;
             }
             d[ring_joint::kDerivedActiveRingIterMask] = active_ring_iter_mask;
+            if constexpr (num_lanes > 1) {
+                for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+                    const uint32_t base = ring_joint::kDerivedLaneBase + lane * ring_joint::kDerivedLaneStride;
+                    d[base + ring_joint::kDerivedLogicalNt] = lane_logical_nt[lane];
+                    d[base + ring_joint::kDerivedQPreWrapStartTile] = lane_qmap[lane].q_pre_wrap_start_tile;
+                    d[base + ring_joint::kDerivedQPreWrapTileCount] = lane_qmap[lane].q_pre_wrap_tile_count;
+                    d[base + ring_joint::kDerivedQPostWrapStartTile] = lane_qmap[lane].q_post_wrap_start_tile;
+                    d[base + ring_joint::kDerivedQValidTileCount] = lane_qmap[lane].q_valid_tile_count;
+                }
+            }
             cb_derived.push_back(1);
         }
     }
@@ -418,10 +460,18 @@ void kernel_main() {
     const auto local_k_reader = TensorAccessor(k_args, k_addr);
     const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
 
-    const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
-    // The halo exchange wrote the active slot to gathered slot 0, so address it as batch-1.
-    const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
-    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
+    if constexpr (num_lanes > 1) {
+        for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+            kv_batch_dim = std::max(kv_batch_dim, lane_batch_idx[lane] + 1);
+        }
+    }
+    // The fused all-gather wrote the active slot to gathered slot 0 (lanes: lane b's to slot b). That is batch B
+    // either way: an indexed cache forces Q batch 1, and lanes set B = num_lanes.
+    const uint32_t gathered_kv_batch_dim = B;
+    // Lanes: Q is [1, NH, num_lanes * q_local_padded_Nt rows, DH], lane b's rows at b * q_local_padded_Nt.
+    const auto input_q_tile_logical = num_lanes > 1 ? TensorTileShape(1, NH, num_lanes * q_local_padded_Nt, DHt)
+                                                    : TensorTileShape(B, NH, q_local_padded_Nt, DHt);
     // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
@@ -502,11 +552,22 @@ void kernel_main() {
             const uint32_t nq = decoded_q.nq;
             const uint32_t q_chunk = decoded_q.q_chunk;
             const uint32_t nk = nq / q_heads_per_k;
+            if constexpr (num_lanes > 1) {
+                kv_cache_batch_idx = lane_batch_idx[nb];
+                logical_nt = lane_logical_nt[nb];
+                qmap = lane_qmap[nb];
+            }
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
 
             Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
             uint32_t q_end_seq_tile = q_local_padded_Nt;
+            if constexpr (num_lanes > 1) {
+                const auto lane_rows =
+                    gemma4_sliding::lane_q_chunk_rows(nb, nq, q_chunk, Sq_chunk_t, q_local_padded_Nt, DHt);
+                q_slice = lane_rows.slice;
+                q_end_seq_tile = lane_rows.end_seq_tile;
+            }
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first ring iteration.
@@ -548,9 +609,9 @@ void kernel_main() {
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
                 uint32_t end_seq_tile;
-                // Local KV reads the indexed cache slot; gathered KV is at slot 0 of the scratch buffer.
+                // Local KV reads the indexed cache slot; gathered KV is at slot 0 of the scratch buffer (lanes: nb).
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
-                const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
+                const uint32_t gathered_kv_batch = (indexed_kv_cache && num_lanes == 1) ? 0 : nb;
                 const bool source_is_local = source_ring_id == ring_index;
                 if (source_is_local) {
                     const uint32_t local_k_start_tile = source_k_chunk * Sk_chunk_t;
