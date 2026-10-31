@@ -11,7 +11,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights, output_gate_columns, split_output_gate
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -201,3 +201,50 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         ("convolution state", golden_convolution, actual_convolution),
     ):
         assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999, nrmse_threshold=0.03)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_size",
+    [pytest.param((1, 1), 1, id="tp1"), pytest.param((1, 4), 4, id="tp4")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("projection_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
+@pytest.mark.parametrize("kept_tiles", [0, 1, 3, 4], ids=lambda tiles: f"keep{tiles}")
+def test_output_gate_split_is_bit_exact(
+    mesh_device, tensor_parallel_size: int, projection_dtype, kept_tiles: int
+) -> None:
+    """With the SP relay the layer loads the input projection without the output gate's columns past each TP rank's
+    first ``kept`` and the output gate's projection from those columns, cut on device from the stored fused projection
+    (for bfloat8_b through a bfloat16 concat and a cast back). Both must hold exactly the fused projection's tiles,
+    block exponents included, rank by rank."""
+    config = KDAConfig(
+        hidden_size=128,
+        num_heads=16,
+        head_k_dim=32,
+        head_v_dim=32,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+    )
+    state_dict = random_weights(config)
+    kept = kept_tiles * ttnn.TILE_SIZE
+    load = lambda split: load_kda_weights(
+        mesh_device, config, state_dict, projection_dtype=projection_dtype, output_gate_split=split
+    )
+    fused_ranks = _host_shards(load(None).input_projection)
+    split = load(kept)
+    assert split.input_projection.dtype == projection_dtype and split.output_gate_projection.dtype == projection_dtype
+
+    start, end = output_gate_columns(config, tensor_parallel_size)
+    bits = lambda tensor: tensor.contiguous().view(torch.int32)
+    for rank, (fused_rank, kept_rank, gate_rank) in enumerate(
+        zip(fused_ranks, _host_shards(split.input_projection), _host_shards(split.output_gate_projection), strict=True)
+    ):
+        expected_kept = torch.cat([fused_rank[..., : start + kept], fused_rank[..., end:]], dim=-1)
+        assert torch.equal(bits(kept_rank), bits(expected_kept)), f"input projection rank {rank}"
+        assert torch.equal(bits(gate_rank), bits(fused_rank[..., start + kept : end])), f"output gate rank {rank}"
+
+
+def test_output_gate_split_rejects_partial_tiles(expect_error) -> None:
+    config = KDAConfig(hidden_size=64, num_heads=8, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
+    with expect_error(ValueError, "output_gate_split must be tile-aligned"):
+        split_output_gate(None, config, 2, 16)

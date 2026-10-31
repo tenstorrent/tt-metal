@@ -17,6 +17,8 @@ barrier separates consecutive calls.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import ttnn
 
 
@@ -32,6 +34,24 @@ def persistent_semaphores(mesh_device, count: int) -> list:
     # The zeroed counters must land before any device's program can increment a peer's.
     ttnn.synchronize_device(mesh_device)
     return semaphores
+
+
+@dataclass(frozen=True)
+class RelayOutputGate:
+    """input @ weight run in the relay's dispatch on worker cores the relay leaves idle (ttnn.linear's 2D multicast
+    matmul with program_config, on its cores):
+    the output's first ``copied_columns`` tile columns are copied from ``copy_source`` (from tile column
+    ``copy_source_column``) by ``copy_cores``, the projection's columns follow."""
+
+    input: ttnn.Tensor
+    weight: ttnn.Tensor
+    program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+    compute_config: ttnn.DeviceComputeKernelConfig
+    memory_config: ttnn.MemoryConfig
+    copy_source: ttnn.Tensor | None = None
+    copy_source_column: int = 0
+    copied_columns: int = 0
+    copy_cores: list = field(default_factory=list)
 
 
 class RelayAffinePrefix:
@@ -70,7 +90,8 @@ class RelayAffinePrefix:
         self.num_links = num_links
         self.local_rows = local_rows
         grid = mesh_device.compute_with_storage_grid_size()
-        # One core per head, then one sender per link: the given cores, else the grid in row-major order.
+        # One core per head, then one sender per link: the given cores (those another program merged into the relay
+        # leaves idle), else the grid in row-major order.
         if cores is None:
             cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         cores = [c if isinstance(c, ttnn.CoreCoord) else ttnn.CoreCoord(*c) for c in cores]
@@ -107,9 +128,22 @@ class RelayAffinePrefix:
                 for _ in range(3)
             )
 
-    def __call__(self, packed, initial_state, actual_start):
-        """Return this rank's entry states and the final state, both [BH, K, K] FP32. Frees the landing buffers once
-        the relay has run."""
+    def __call__(self, packed, initial_state, actual_start, output_gate: RelayOutputGate | None = None):
+        """Return this rank's entry states and the final state, both [BH, K, K] FP32, and the output gate's output
+        (None without one). Frees the landing buffers once the relay has run."""
+        gate = {}
+        if output_gate is not None:
+            gate = dict(
+                output_gate_input=output_gate.input,
+                output_gate_weight=output_gate.weight,
+                output_gate_program_config=output_gate.program_config,
+                output_gate_compute_kernel_config=output_gate.compute_config,
+                output_gate_memory_config=output_gate.memory_config,
+                output_gate_copy_source=output_gate.copy_source,
+                output_gate_copy_source_column=output_gate.copy_source_column,
+                output_gate_copied_columns=output_gate.copied_columns,
+                output_gate_copy_cores=list(output_gate.copy_cores),
+            )
         # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
         self.reserve()
         result = ttnn.experimental.kda.relay_affine_prefix(
@@ -124,6 +158,7 @@ class RelayAffinePrefix:
             sequence_parallel_axis=self.axis,
             entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
+            **gate,
         )
         # Every write into them is consumed within the call: the predecessor's entry columns by this rank's heads, and
         # the last rank's final state by the first rank's writer.

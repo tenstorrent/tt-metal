@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -40,7 +41,9 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         {{&in.rank_final, "rank_final"},
          {&in.prefix_final, "prefix_final"},
          {&in.actual_start, "actual_start"},
-         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+         {in.projection_input ? &*in.projection_input : nullptr, "projection_input"},
+         {in.projection_weight ? &*in.projection_weight : nullptr, "projection_weight"}},
         operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     const auto& tail = in.rank_final.logical_shape();
@@ -59,21 +62,40 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         operation_name);
     TT_FATAL(
         !attrs.cores || attrs.cores->size() >= attrs.num_links, "{}: needs a core per fabric link", operation_name);
+    if (attrs.projection) {
+        TT_FATAL(
+            attrs.cores && in.projection_input && in.projection_weight,
+            "{}: a projection needs its input, weight and the carry's cores",
+            operation_name);
+        kda_factory_detail::check_projection(
+            *in.projection_input, *in.projection_weight, attrs.projection->program_config, operation_name);
+    }
 }
 
 SelectFinalCarryOperation::spec_return_value_t SelectFinalCarryOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    return {tt::tt_metal::TensorSpec(
-        in.prefix_final.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::FLOAT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            attrs.output_mem_config))};
+    const auto spec =
+        [](const ttnn::Shape& shape, tt::tt_metal::DataType dtype, const tt::tt_metal::MemoryConfig& memory) {
+            return tt::tt_metal::TensorSpec(
+                shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
+        };
+    spec_return_value_t specs = {
+        spec(in.prefix_final.logical_shape(), tt::tt_metal::DataType::FLOAT32, attrs.output_mem_config)};
+    if (attrs.projection) {
+        auto shape = in.projection_input->logical_shape();
+        shape[-1] = in.projection_weight->logical_shape()[-1];
+        specs.push_back(spec(shape, tt::tt_metal::DataType::BFLOAT16, attrs.projection->output_mem_config));
+    }
+    return specs;
 }
 
 SelectFinalCarryOperation::tensor_return_value_t SelectFinalCarryOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    return {create_device_tensor(compute_output_specs(attrs, in)[0], in.prefix_final.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(attrs, in)) {
+        outputs.push_back(create_device_tensor(spec, in.prefix_final.device()));
+    }
+    return outputs;
 }
 
 std::vector<Tensor> select_final_carry(
@@ -88,7 +110,10 @@ std::vector<Tensor> select_final_carry(
     tt::tt_fabric::Topology topology,
     bool prefix_on_last_rank,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores,
-    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses) {
+    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses,
+    const std::optional<FinalCarryProjectionParams>& projection,
+    const std::optional<Tensor>& projection_input,
+    const std::optional<Tensor>& projection_weight) {
     return ttnn::device_operation::launch<SelectFinalCarryOperation>(
         SelectFinalCarryParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -98,12 +123,15 @@ std::vector<Tensor> select_final_carry(
             .output_mem_config = memory_config,
             .prefix_on_last_rank = prefix_on_last_rank,
             .cores = cores,
-            .semaphore_addresses = semaphore_addresses},
+            .semaphore_addresses = semaphore_addresses,
+            .projection = projection},
         SelectFinalCarryInputs{
             .rank_final = rank_final,
             .prefix_final = prefix_final,
             .actual_start = actual_start,
-            .actual_end = actual_end});
+            .actual_end = actual_end,
+            .projection_input = projection_input,
+            .projection_weight = projection_weight});
 }
 
 }  // namespace ttnn::experimental::prim

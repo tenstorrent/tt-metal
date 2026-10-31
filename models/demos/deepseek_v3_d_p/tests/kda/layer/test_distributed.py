@@ -214,10 +214,12 @@ def test_sp_segmented_prefill_matches_one_shot(
     with ttnn.manage_config("throw_exception_on_fallback", True):
         for split in splits:
             stop = start + split
+            # A chunk of another length may take the SP relay where the one-shot layer does not, and so split the
+            # output gate's weights differently: each chunk layer prepares its own.
             chunk_layer = ttKDA(
                 mesh_device,
                 config,
-                weights=layer.weights,
+                weights,
                 tt_ccl=layer.tt_ccl,
                 sp_axis=sp_axis,
                 tp_axis=tensor_parallel_axis,
