@@ -191,6 +191,10 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
                 (deepseek_v41_flash_d_p P.16; not in engram mode): the caller's buffer, exactly the output's spec.
             max_grid (ttnn.CoreCoord, optional): default None = the device's whole compute grid
                 (deepseek_v41_flash_d_p FIX.15): the op runs on the rectangle (0, 0) .. (max_grid - 1) of the grid.
+            engram_gate_eps (float, optional): engram mode only, default None = off (deepseek_v41_flash_d_p P.24):
+                the streams' C columns are the whole hidden (no TP split), and columns 3n .. 4n-1 of the row also
+                hold the engram gates sigmoid(copysign(sqrt(max(|d_i|, 1e-6)), d_i)), d_i = dot_i
+                rsqrt(sum h_i^2 / C + eps) rsqrt(sum k_i^2 / C + eps) / sqrt(C), fp32 SFPU in the op chain's steps.
 
         Returns:
             ttnn.Tensor: mix with column n (n + 2) = sum over the row of streams^2 (exact fp32 on the SFPU). Engram
@@ -205,7 +209,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("engram_keys") = nb::none(),
         nb::arg("engram_weight") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("max_grid") = nb::none());
+        nb::arg("max_grid") = nb::none(),
+        nb::arg("engram_gate_eps") = nb::none());
 
     mod.def(
         "_mhc_pre_ttnn_program_descriptor",

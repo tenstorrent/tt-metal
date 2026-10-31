@@ -862,6 +862,18 @@ TABLE = {
         "indexer's typecast goes). One rounding (fp32 -> bfp8) instead of two (fp32 -> bf16 -> bfp8, DS41-137); "
         "never below the reference's fp8 input. off = the norms write bf16 and the readers cast / scale (before P.21)",
     ),
+    "TINY_KERNELS": Setting(
+        "on",
+        ("on", "off"),
+        "P.24 (galaxy 8x4, owner pick 2026-10-31, opportunity #10): on = two tiny op chains as one fork program each: "
+        "the compressor's ratio-2 pair pooling (reshape, 4 slices, maximum, 2 subtract, 2 exp, add, 2 divide, "
+        "2 multiply, add on [S/SP, 2 x 512] fp32 a layer) is ttnn.bringup.pair_pool (new fork pair_pool_ttnn, prepared, "
+        "load-time output); the engram gates (3 slices, 2 x (multiply, add, rsqrt), 3 multiply, abs, maximum, sqrt, "
+        "neg, ltz, where, sigmoid on [rows, 4]) are an epilogue of the engram pass (mhc_pre_xing_pack option "
+        "engram_gate_eps: the gates in columns 12..15 of its row, read by mhc_post through post_col; OWN_ROWS=on, where "
+        "the row's sums are whole). The same fp32 steps with the stock ops' SFPU bodies, each step one fp32 rounding. "
+        "off = the op chains (the path before P.24)",
+    ),
     "MAX_WORKER_CORES": Setting(
         110,
         None,
