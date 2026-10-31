@@ -82,17 +82,25 @@ void apply_weight(uint32_t Vt, DFB& tmp) {
     tmp.push_back(Vt);
 }
 
-template <typename DFB>
+template <bool silu, typename DFB>
 void activate_gate(uint32_t Vt, DFB& norm) {
     norm.reserve_back(Vt);
     pack_reconfig_data_format(dfb::norm);
     reconfig_data_format_srca(dfb::gate);
     copy_init(dfb::gate);
-    sigmoid_tile_init();
+    if constexpr (silu) {
+        silu_tile_init();
+    } else {
+        sigmoid_tile_init();
+    }
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
+        if constexpr (silu) {
+            silu_tile(0);
+        } else {
+            sigmoid_tile(0);
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::norm, i);
@@ -118,7 +126,7 @@ void multiply_output(uint32_t Vt, DFB& out) {
     out.push_back(Vt);
 }
 
-template <uint32_t Vt>
+template <uint32_t Vt, uint32_t silu_gate>
 TT_KERNEL void compute(uint32_t wi_count) {
     compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
     DataflowBuffer x(dfb::x);
@@ -152,7 +160,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         apply_weight(Vt, tmp);
         tmp.wait_front(Vt);
         norm.pop_front(Vt);
-        activate_gate(Vt, norm);
+        activate_gate<(silu_gate != 0)>(Vt, norm);
         norm.wait_front(Vt);
         gate.pop_front(Vt);
         multiply_output(Vt, out);

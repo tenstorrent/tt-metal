@@ -34,7 +34,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
-    uint32_t input_column_offset = 0);
+    uint32_t input_column_offset = 0,
+    uint32_t segment_length = 0);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_with_carry(
     const ttnn::Tensor& input,
@@ -54,6 +55,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
-    uint32_t input_column_offset = 0);
+    uint32_t input_column_offset = 0,
+    uint32_t segment_length = 0);
 
 }  // namespace ttnn::experimental::kda
