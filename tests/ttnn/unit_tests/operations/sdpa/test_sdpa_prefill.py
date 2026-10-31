@@ -820,6 +820,48 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
 
 
+def _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype):
+    b, nh, nkv, s, d = 1, 8, 1, 256, 64
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=64,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    Q, K, V = fa_rand(b, nh, s, d), fa_rand(b, nkv, s, d), fa_rand(b, nkv, s, d)
+    S = (torch.rand(1, nh) * 4.0).reshape(1, nh, 1, 1)
+    to_dev = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_out = ttnn.transformer.scaled_dot_product_attention(
+        to_dev(Q, ttnn.bfloat16),
+        to_dev(K, ttnn.bfloat16),
+        to_dev(V, ttnn.bfloat16),
+        is_causal=True,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        attention_sink=to_dev(S, sink_dtype),
+    )
+    gt = reference_sdpa_with_attention_sinks(Q, K.repeat(1, nh, 1, 1), V.repeat(1, nh, 1, 1), S, is_causal=True)
+    return ttnn.to_torch(tt_out)[:, :, :s, :], gt
+
+
+def test_sdpa_attention_sink_bf16_with_fp32_dest_acc(device, reset_seeds):
+    tt_out, gt = _run_sdpa_with_sink_fp32_dest_acc(device, ttnn.bfloat16)
+    passing, pcc = comp_pcc(gt, tt_out, 0.994)
+    assert passing, pcc
+
+
+@pytest.mark.parametrize("sink_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+def test_sdpa_attention_sink_rejects_block_float_with_fp32_dest_acc(device, sink_dtype, expect_error):
+    with expect_error(RuntimeError, "Attention sink must be BF16 when fp32_dest_acc_en=true"):
+        _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype)
+
+
 # The nightly prefill file sweeps the masked fraction and chunk sizes at S 2048 and 4096.
 @pytest.mark.parametrize(
     "s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked",
