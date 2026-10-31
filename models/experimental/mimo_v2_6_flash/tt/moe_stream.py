@@ -868,15 +868,21 @@ class ReduceExpand:
     TRISC sums them, its NOC 1 RISC writes the expanded rows."""
 
     # A row of cores clear of the bank cores and the bank rows the producers (DownStream, the o projection's
-    # BankStreamMatmul) run on, so a producer and this reduce can share one launch (FabricRowGather).
+    # BankStreamMatmul) run on, so a producer and this reduce can share one launch (FabricRowGather). 16 user rows
+    # also take row 8 (clear of them too, and of the prefill SDPA's 8 x 8 grid): 4 tiles per core as with 8 rows, so
+    # the fabric gather buffer stays 128 KB per core and the persistent L1 above the prefill programs' CBs as it was.
     CORE_ROW = 5
+    CORE_ROW_16 = 8
 
     def __init__(self, plan, hidden, chips, compute_config, rows=4):
         """``rows``: the user rows of the compact tiles, 4, 8 or 16."""
         device = plan.mesh_device
         assert rows in (4, 8, 16), rows
         self.rows = rows
-        self.cores = [ttnn.CoreCoord(x, self.CORE_ROW) for x in range(device.dram_grid_size().x)]
+        core_rows = (self.CORE_ROW,) if rows <= 8 else (self.CORE_ROW, self.CORE_ROW_16)
+        assert core_rows[-1] < device.compute_with_storage_grid_size().y
+        banks = device.dram_grid_size().x
+        self.cores = [ttnn.CoreCoord(x, y) for y in core_rows for x in range(banks)]
         self.hidden = hidden
         self.chips = chips
         nt = hidden // TILE
@@ -888,7 +894,9 @@ class ReduceExpand:
         self.tiles_per_core = self.compact_tiles // len(self.cores)
         # The fused norm's gather tiles: every core's user rows of its partial, 32 / rows cores per tile.
         self.gather_tiles = -(-len(self.cores) * rows // TILE)
-        self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(self.cores[0], self.cores[-1])])
+        self.core_ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, y), ttnn.CoreCoord(banks - 1, y)) for y in core_rows]
+        )
         self.compute_config = compute_config
         full = ttnn.Tile([TILE, TILE])
         page = full.get_tile_size(ttnn.bfloat16)
