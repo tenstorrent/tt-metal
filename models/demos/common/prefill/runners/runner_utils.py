@@ -35,9 +35,10 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
+    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0, sp_axis: int = 0
 ) -> ttnn.MeshDevice:
-    sp = mesh_shape[0]
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    sp = mesh_shape[sp_axis]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
     fabric_mode_map = {
         "1d": ttnn.FabricConfig.FABRIC_1D,
@@ -52,9 +53,12 @@ def open_mesh_device(
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
-        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
-        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
-    logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
+        # A torus mode needs a descriptor declaring RING on each wrapped axis; a LINE one hangs at bring-up.
+        # SP on axis 1 is the 4x4 tray-half stage, whose descriptor is [LINE, RING]: wrap X only.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if sp_axis == 0 else ttnn.FabricConfig.FABRIC_2D_TORUS_X
+    logger.info(
+        f"Fabric config: {fabric_config} (sp={sp} on axis {sp_axis}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})"
+    )
 
     fabric_router_config = _create_fabric_router_config(
         max_payload_size=max_payload_size,
@@ -107,19 +111,36 @@ def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
     return rows
 
 
-def make_token_spec(mesh_shape: tuple, row_len: int) -> ttnn.TensorSpec:
+def stage_mesh_shape(sp_factor: int, tp_factor: int, sp_axis: int = 0) -> tuple:
+    """The (axis 0, axis 1) mesh shape for SP on ``sp_axis`` and TP on the other axis."""
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    shape = [tp_factor, tp_factor]
+    shape[sp_axis] = sp_factor
+    return tuple(shape)
+
+
+def axis_mapper_config(sp_placement, tp_placement, sp_axis: int = 0) -> ttnn.MeshMapperConfig:
+    """A mapper config with ``sp_placement`` on mesh axis ``sp_axis`` and ``tp_placement`` on the other."""
+    placements = [tp_placement, tp_placement]
+    placements[sp_axis] = sp_placement
+    return ttnn.MeshMapperConfig(placements=placements)
+
+
+def make_token_spec(mesh_shape: tuple, row_len: int, sp_axis: int = 0) -> ttnn.TensorSpec:
+    # Dim 0 is one row per SP chip, whichever mesh axis SP is on.
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([mesh_shape[0], 1, row_len]),
+        shape=ttnn.Shape([mesh_shape[sp_axis], 1, row_len]),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )
 
 
-def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0) -> ttnn.TensorSpec:
+def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0) -> ttnn.TensorSpec:
+    sp_factor = mesh_shape[sp_axis]
     if mtp_levels:
-        return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, mesh_shape[0], mtp_levels))
-    return make_token_spec(mesh_shape, h2d_row_len(chunk_size, mesh_shape[0]))
+        return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, sp_factor, mtp_levels), sp_axis)
+    return make_token_spec(mesh_shape, h2d_row_len(chunk_size, sp_factor), sp_axis)
 
 
 def build_h2d_service(
@@ -147,7 +168,7 @@ def build_h2d_service(
         metadata_size_bytes=metadata_size_bytes,
     )
     logger.info(
-        f"[h2d] H2DStreamService built: global_shape=({mesh_device.shape[0]},1,{row_len}) "
+        f"[h2d] H2DStreamService built: global_shape=({int(global_spec.shape[0])},1,{row_len}) "
         f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
     )
     return service

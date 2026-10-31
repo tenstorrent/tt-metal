@@ -1047,7 +1047,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            rank_mapping_compile_time_arg(rank_mapping),        // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols
@@ -1105,7 +1105,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            rank_mapping_compile_time_arg(rank_mapping),        // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols

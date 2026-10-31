@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     random_weights,
@@ -23,15 +24,26 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
-]
+pytestmark = run_for_blackhole()
+
+_ON_4X4_STAGE = pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4")
+# LoudBox with TP on either axis, and one 4x4 prefill stage (a Galaxy tray half) with its deployed layout:
+# TP=4 on the axis-0 line, SP=4 on the axis-1 ring.
+_ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
+    "mesh_device,device_params,tensor_parallel_axis",
+    [
+        pytest.param((2, 4), fabric_1d_plain_device_params(), 0, id="2x4-tp0"),
+        pytest.param((2, 4), fabric_1d_plain_device_params(), 1, id="2x4-tp1"),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            0,
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-x-tp0",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 
 
 def _to_sp_input(
@@ -51,7 +63,7 @@ def _to_sp_input(
     )
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 def test_sp_explicit_grouping_matches_reference(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
@@ -146,11 +158,21 @@ def test_sp_explicit_grouping_matches_reference(
 
 
 @pytest.mark.parametrize(
-    "tensor_parallel_axis,summary_group_chunks,splits",
+    "mesh_device,device_params,tensor_parallel_axis,summary_group_chunks,splits",
     [
-        pytest.param(1, 8, (2048, 3072), id="tp-axis-1-uneven-split"),
-        pytest.param(0, 10, (2560, 2560), id="tp-axis-0-even-split"),
+        pytest.param((2, 4), fabric_1d_plain_device_params(), 1, 8, (2048, 3072), id="2x4-tp1-uneven-split"),
+        pytest.param((2, 4), fabric_1d_plain_device_params(), 0, 10, (2560, 2560), id="2x4-tp0-even-split"),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            0,
+            10,
+            (2560, 2560),
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-x-tp0-even-split",
+        ),
     ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_sp_segmented_prefill_matches_one_shot(
     mesh_device: ttnn.MeshDevice,
@@ -276,7 +298,7 @@ def test_sp_segmented_prefill_matches_one_shot(
     )
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 def test_sp_minimal_group_matches_reference_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,

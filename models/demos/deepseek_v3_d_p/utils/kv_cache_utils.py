@@ -308,6 +308,7 @@ def create_kv_chunk_address_table_block_cyclic(
     stage_layout=None,
     layer_rows=None,
     tp_axis=None,
+    chunk_size_global=PREFILL_CHUNK_TOKENS,
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
@@ -336,6 +337,7 @@ def create_kv_chunk_address_table_block_cyclic(
             indexing by layer needs no change. None (every layer owns a slab) means row == layer, which
             is what DeepSeek / Kimi-K2 / GLM want.
         tp_axis: None for a TP-replicated cache, the TP axis for a deduped one (see is_tp_deduped_kv_cache).
+        chunk_size_global: the cache's block-cyclic period, the prefill chunk size it was written with.
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -383,7 +385,19 @@ def create_kv_chunk_address_table_block_cyclic(
         stage_layout=stage_layout,
         layer_rows=layer_rows,
         tp_axis=tp_axis,
+        chunk_size_global=chunk_size_global,
     )
+
+
+def _sp_row_coords(mesh_shape, sp_axis, sp_row):
+    """Mesh coordinates of the chips at SP position ``sp_row``, in TP order, for SP on ``sp_axis``."""
+    coords = []
+    for tp_idx in range(mesh_shape[1 - sp_axis]):
+        coord = [0, 0]
+        coord[sp_axis] = sp_row
+        coord[1 - sp_axis] = tp_idx
+        coords.append(tuple(coord))
+    return coords
 
 
 def populate_kv_chunk_address_table_block_cyclic(
@@ -401,6 +415,7 @@ def populate_kv_chunk_address_table_block_cyclic(
     layer_rows=None,
     tp_axis=None,
     alias_rows=None,
+    chunk_size_global=PREFILL_CHUNK_TOKENS,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -420,9 +435,13 @@ def populate_kv_chunk_address_table_block_cyclic(
             A compacted cache passes its dense -> global layer map here; DRAM addresses do not move.
         tp_axis: None (default) = TP-REPLICATED, one device group per row. When set (KV dedup), each
             (row, col) device holds a distinct sub-slice, so the table uses per-device singleton groups:
-            linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
+            linear chip row*tp + col owns tokens [seq_chunk*C + row*(C/sp) + col*(C/sp/tp), +C/sp/tp)
+            for C = chunk_size_global.
         alias_rows: {alias table row: source table row}; each alias gets every location its source does.
             Decode MTP levels that share one KV cache read level 1's rows this way. None = no aliases.
+        chunk_size_global: the block-cyclic period, i.e. the prefill chunk size the cache was written
+            with (update_padded_kv_cache places each chunk's C/sp tokens on every SP row). 5120 by
+            default; a 4x4 stage runs 2560.
         (remaining args as in create_kv_chunk_address_table_block_cyclic)
 
     Returns:
@@ -448,23 +467,22 @@ def populate_kv_chunk_address_table_block_cyclic(
         # Per-stage device groups + host tags are built inside the stage loop below (one group per
         # (stage, SP row, TP col)); no rank-local single-stage device-group pass here — the multi-stage merge
         # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
-        rows = mesh_shape[0]
+        rows = mesh_shape[sp_axis]
 
-        tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
-        num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS  # number of 5k chunks in the seq len
+        tokens_per_chunk_local = chunk_size_global // mesh_shape[sp_axis]  # 640 for 5k chunks on sp=8
+        num_chunks_per_seq_len = seq_len // chunk_size_global  # number of chunks in the seq len
 
-        assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
+        assert seq_len % chunk_size_global == 0, f"seq_len {seq_len} must be a multiple of {chunk_size_global}"
 
         assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-            f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+            f"{chunk_size_global} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
             f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
         )
 
         if tp_axis is not None:
-            assert sp_axis == 0 and tp_axis == 1, (
-                f"TP-sharded KV chunk table requires the production (sp_axis=0, tp_axis=1) layout, "
-                f"got sp_axis={sp_axis}, tp_axis={tp_axis}"
-            )
+            assert (
+                tp_axis == 1 - sp_axis
+            ), f"TP-sharded KV chunk table needs distinct axes, got sp_axis={sp_axis}, tp_axis={tp_axis}"
         tp_factor = mesh_shape[tp_axis] if tp_axis is not None else 1
         tokens_per_device = tokens_per_chunk_local // tp_factor
         assert (
@@ -486,7 +504,9 @@ def populate_kv_chunk_address_table_block_cyclic(
             count = stage["count"]
             stage_fnids = stage["fnids"]
             for row in range(rows):
-                row_groups = [[fid] for fid in stage_fnids[row]] if tp_axis is not None else [stage_fnids[row]]
+                # fnids are indexed by raw mesh coordinate; SP row `row` is a mesh column at sp_axis=1.
+                sp_row_fnids = [stage_fnids[r][c] for r, c in _sp_row_coords(mesh_shape, sp_axis, row)]
+                row_groups = [[fid] for fid in sp_row_fnids] if tp_axis is not None else [sp_row_fnids]
                 for col, fnids_dev in enumerate(row_groups):
                     group_idx = lookup_table.add_device_group(fnids_dev)
                     for fid in fnids_dev:
@@ -500,7 +520,7 @@ def populate_kv_chunk_address_table_block_cyclic(
                             aliases = aliases_of.get(table_row, ())
                             for seq_chunk in range(num_chunks_per_seq_len):
                                 chunk_token_start = (
-                                    seq_chunk * PREFILL_CHUNK_TOKENS
+                                    seq_chunk * chunk_size_global
                                     + row * tokens_per_chunk_local
                                     + col * tokens_per_device
                                 )
@@ -530,7 +550,7 @@ def populate_kv_chunk_address_table_block_cyclic(
 
     rank = ttnn.distributed_context_get_rank()
     size = ttnn.distributed_context_get_size()
-    total_rows = mesh_shape[0]
+    total_rows = mesh_shape[sp_axis]
     rank_row_start = int(rank) * total_rows // int(size)
     rank_row_end = rank_row_start + total_rows // int(size)
 
@@ -542,16 +562,16 @@ def populate_kv_chunk_address_table_block_cyclic(
     # stage's own `count`.
     num_layers = len(layer_rows) if layer_rows is not None else config.num_layers - len(alias_rows or ())
 
-    assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
-    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS
+    assert seq_len % chunk_size_global == 0, f"seq_len {seq_len} must be a multiple of {chunk_size_global}"
+    num_chunks_per_seq_len = seq_len // chunk_size_global
 
     assert (
         tt_kvpe_cache.shape[0] == num_users * num_layers
     ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
 
-    tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
+    tokens_per_chunk_local = chunk_size_global // mesh_shape[sp_axis]  # 640 for 5k chunks on sp=8
     assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-        f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+        f"{chunk_size_global} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
     )
 
@@ -560,10 +580,9 @@ def populate_kv_chunk_address_table_block_cyclic(
     num_dram_banks = get_num_dram_banks(mesh_device)
 
     if tp_axis is not None:
-        assert sp_axis == 0 and tp_axis == 1, (
-            f"TP-sharded KV chunk table requires the production (sp_axis=0, tp_axis=1) layout, "
-            f"got sp_axis={sp_axis}, tp_axis={tp_axis}"
-        )
+        assert (
+            tp_axis == 1 - sp_axis
+        ), f"TP-sharded KV chunk table needs distinct axes, got sp_axis={sp_axis}, tp_axis={tp_axis}"
     tp_factor = mesh_shape[tp_axis] if tp_axis is not None else 1
     tokens_per_device = tokens_per_chunk_local // tp_factor  # 160 for 5k chunks on tp=4
     assert (
@@ -580,9 +599,15 @@ def populate_kv_chunk_address_table_block_cyclic(
     for row in range(rank_row_start, rank_row_end):
         for col in range(tp_factor):
             if tp_axis is None:
-                fids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, c)) for c in range(mesh_shape[1])]
+                fids = [
+                    mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+                    for coord in _sp_row_coords(mesh_shape, sp_axis, row)
+                ]
             else:
-                fids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col))]
+                # TP rank `col` of SP row `row`, whichever mesh axis SP is on (as the stage_layout path above).
+                fids = [
+                    mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*_sp_row_coords(mesh_shape, sp_axis, row)[col]))
+                ]
             all_fabric_node_ids.extend(fids)
             device_group_idx[(row, col)] = lookup_table.add_device_group(fids)
 
@@ -606,7 +631,7 @@ def populate_kv_chunk_address_table_block_cyclic(
                     aliases = aliases_of.get(table_row, ())
                     for seq_chunk in range(num_chunks_per_seq_len):
                         chunk_token_start = (
-                            seq_chunk * PREFILL_CHUNK_TOKENS
+                            seq_chunk * chunk_size_global
                             + global_row * tokens_per_chunk_local
                             + col * tokens_per_device
                         )
@@ -1141,6 +1166,9 @@ def init_kvpe_cache(
         # declared distribution rank and rejects an axis gather on a rank-1 topology, which is what broke
         # the indexer's TP leg. Declaring the real distribution also leaves placements[sp_axis] sharded
         # after that gather replicates placements[tp_axis], which is exactly the post-gather layout.
+        # With SP on mesh axis 1 the stripes really run down the columns (chip (t, s) holds stripe
+        # s*tp + t); ring_mla takes that order from Q's sequence placement, and the readers in
+        # prefill_kv_validation / test_utils reorder by sp_axis, so nothing reads this declaration's order.
         kvpe_cache.update_tensor_topology(row_major_seq_topology)
         return kvpe_cache
 

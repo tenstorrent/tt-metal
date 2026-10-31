@@ -1,0 +1,48 @@
+# 8-stage SC4 pipeline prefill at stage shape [4,4] with SP on mesh axis 1: two ranks per galaxy,
+# rank 2k on host k's top tray half (rows 0-3) and rank 2k+1 on its bottom half (rows 4-7), chained
+# top(H) -> bottom(H) -> top(H+1) along the hosts' cabling ring h0 -> h1 -> h2 -> h3.
+#
+# CI (run_multirank_pcc.sh sc4_4x4) binds by tt-run discovery against the descriptor below and reads
+# only global_env from here. The rank_bindings are the template for an explicit binding, for a manual
+# run: it has no host field, so placement comes from mpirun, two slots per host in ring order
+# (`--host h0:2,h1:2,h2:2,h3:2 --map-by slot`), which assemble_pipeline_binding.py prints. Under a
+# Slurm allocation use a rankfile instead (rank 2k and 2k+1 on host k): --map-by slot there alternates
+# ranks across the nodes. TT_VISIBLE_DEVICES is per galaxy and a wrong map does not error, so fill this
+# from each host's own probe:
+#   on every host:   python models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --layout 4x4 --out <host>.yaml
+#   then, anywhere:  python models/demos/deepseek_v3_d_p/utils/assemble_pipeline_binding.py assemble \
+#                      --probe h0.yaml --probe h1.yaml --probe h2.yaml --probe h3.yaml --out <yaml>
+# The `predict` subcommand fills it from the cabling descriptors instead, for a mock run or to check
+# the probes against.
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 4, mesh_id: 4, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 5, mesh_id: 5, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 6, mesh_id: 6, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 7, mesh_id: 7, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_sp1_mgd.textproto
+
+global_env:
+  # SP's ring is the X axis, matched by the descriptor's dim_types [LINE, RING].
+  PREFILL_FABRIC_MODE: "2d_torus_x"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_SP_AXIS: "1"
+  # Dense TP dedup of the MLA KV cache (ring_mla split-KV, SP-major stripes down the mesh columns):
+  # each chip holds 1/16 of a stage's KV, as an 8x4 stage's chip holds 1/32. Pinned, since tt-run's
+  # global_env wins over a manifest. 16 stripes put the window on multiples of 16 x 256 = 4096 rows
+  # (bank alignment) and of the 2560 chunk: multiples of 20480.
+  PREFILL_TP_SHARD_KV: "1"
+  # Half the 8x4 stages' 5120-token chunk: at SP=4 that keeps each chip at 640 tokens, the 8x4 per-chip
+  # workload its MLA SDPA and KDA configs are tuned for, and keeps per-stage chunk latency near 8x4's.
+  PREFILL_CHUNK_SIZE: "2560"
+  PREFILL_MAX_SEQ_LEN: "61440"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  # PREFILL_PP_D2D_FIFO_BYTES stays at the runner's 256 B default, as in the 2-rank 4x4 binding: with
+  # 5120-token chunks ring_mla's static CBs reached to within ~1.5 KB of the top of L1.
+  LOGURU_LEVEL: "INFO"

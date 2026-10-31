@@ -125,7 +125,18 @@ struct RingAttentionRankMapping {
     ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
+    // Full mesh only: number tensor ranks down the mesh columns (col * rows + row) instead of along the
+    // rows. Split-KV ring MLA with its sequence (SP) on mesh axis 1 lays the KV stripes out that way.
+    bool column_major_ranks = false;
 };
+
+// The kernels' full-mesh rank-mapping compile-time arg (ring_attention_rank_mapping.hpp).
+inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& mapping) {
+    if (!mapping.full_mesh) {
+        return 0u;
+    }
+    return mapping.column_major_ranks ? 2u : 1u;
+}
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {

@@ -30,6 +30,8 @@ struct MeshRingPlan {
     uint32_t mesh_cols = 0;
     uint32_t ring_size = 0;
     std::optional<uint64_t> route_plan_hash;
+    // Full mesh only: MeshRingPosition::tensor_rank runs down the mesh columns instead of along the rows.
+    bool column_major_ranks = false;
 };
 
 // What the edge proof concluded about the geometry in `plan`: Ring where the walk closed, Linear

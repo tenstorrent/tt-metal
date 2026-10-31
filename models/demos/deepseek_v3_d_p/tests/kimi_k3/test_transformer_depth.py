@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import att
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fold_query
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
@@ -59,7 +60,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
-SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
 
 # Per-layer, against the model itself. The package's chunked per-layer bar is 0.88 at depth 61-78;
@@ -107,10 +107,26 @@ PLACEMENTS = [
         # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
         # clears AttnRes with margin while leaving MLA its working space.
         {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        0,
+        1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
-    )
+    ),
+    # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+    # L12 here is exactly one stage of the 8-stage layout. Needs the Galaxy narrowed to one tray half
+    # (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by tests/run_4x4_stage_tests.sh); unnarrowed, the
+    # system mesh is 8x4 and requires_mesh_topology skips it.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        1,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="4x4-sp1",
+    ),
 ]
+# The full-Galaxy row alone, for the tests that reuse this file's helpers on 8x4 only.
+PLACEMENTS_8X4 = [p for p in PLACEMENTS if p.id == "fabric2d-8x4"]
 
 
 def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path | None = None) -> dict:
@@ -129,9 +145,9 @@ def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path 
     return {"embed_weight": model["embed_weight"].float(), "norm_weight": model["norm_weight"], "layers": layers}
 
 
-def _compose(mesh_device, tensor):
+def _compose(mesh_device, tensor, sp_axis, tp_axis):
     dims = [0, 0]
-    dims[SP_AXIS], dims[TP_AXIS] = 2, 3
+    dims[sp_axis], dims[tp_axis] = 2, 3
     return ttnn.to_torch(
         tensor,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
@@ -143,9 +159,11 @@ def _compose(mesh_device, tensor):
 # work have no headroom left, so give the ladder its own budget rather than let L12 and L24 die
 # on a timeout that has nothing to do with what they measure.
 @pytest.mark.timeout(4800)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
+def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axis, num_layers):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
@@ -157,14 +175,15 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     # `$TT_KIMI_K3_PREFILL_TTNN_CACHE` turns the checkpoint read into a one-time cost per depth.
     # Every component already writes its tensorbins when handed a `weight_cache_path`; the markers
     # below record which layers finished, so a later run skips the 59 GB per MoE layer entirely.
-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), tp_axis)
     state_dict = _model_state_dict(checkpoint, num_layers, root, cache)
 
     attn_res = TtAttnRes(
         mesh_device,
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         # Same pools the KDA layers cycle. AttnRes's private fallback set is only safe while nothing
         # else has a collective in flight on this axis, which is not true inside a K3 layer stack.
         tt_ccl=get_tt_ccl(mesh_device),
@@ -173,7 +192,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
             load_attn_res_state_dict(checkpoint, num_layers, root),
             None,
             num_layers=num_layers,
-            tensor_parallel_axis=TP_AXIS,
+            tensor_parallel_axis=tp_axis,
             prefix=root,
         ),
     )
@@ -198,13 +217,13 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         num_layers=num_layers,
         seq_len=SEQ_LEN,
         residual_factory=residual_factory,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
 
-    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+    slabs = attach_kda_states(mesh_device, model, sp_axis=sp_axis, tp_axis=tp_axis)
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
     kvpe = None
@@ -214,7 +233,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
             hf_config=config,
             max_seq_len=SEQ_LEN,
             mesh_shape=tuple(mesh_device.shape),
-            sp_axis=SP_AXIS,
+            sp_axis=sp_axis,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
         )
@@ -226,17 +245,17 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     tokens_tt = prepare_prefill_input_tensor(
         trace.token_ids(SEQ_LEN)[0].tolist(),
         mesh_device,
-        tuple(mesh_device.shape)[SP_AXIS],
+        tuple(mesh_device.shape)[sp_axis],
         False,
         tuple(mesh_device.shape),
-        SP_AXIS,
+        sp_axis,
     )
 
     per_layer = {}
     inner = {}
 
     def tap(local_idx, hidden):
-        per_layer[local_idx] = _compose(mesh_device, hidden)
+        per_layer[local_idx] = _compose(mesh_device, hidden, sp_axis, tp_axis)
 
     # Wrap each layer's two norms so their outputs are recorded without adding debug plumbing to the
     # block. The FFN norm's output is the model's own `moe_input_layer_i`, and the attention norm's
@@ -245,7 +264,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     def _record(layer, name, fn):
         def wrapped(x):
             out = fn(x)
-            inner[(layer, name)] = _compose(mesh_device, out)
+            inner[(layer, name)] = _compose(mesh_device, out, sp_axis, tp_axis)
             return out
 
         return wrapped
@@ -264,7 +283,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 
         def _attn(normed, ctx, _idx=local_idx, _fn=inner_fn):
             out = _fn(normed, ctx)
-            inner[(_idx, "attn_out")] = _compose(mesh_device, out)
+            inner[(_idx, "attn_out")] = _compose(mesh_device, out, sp_axis, tp_axis)
             return out
 
         attention.forward = _attn
@@ -342,8 +361,8 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         # The device cache is indexed by rank-local MLA SLOT; the golden by MODEL layer. The
         # schedule is the only thing that knows the mapping, which is exactly why the block never
         # calls `KimiK3Config.mla_kv_slot`.
-        cache = gather_cache_tp0(kvpe.storage, mesh_device)
-        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
+        cache = gather_cache_tp0(kvpe.storage, mesh_device, sp_axis)
+        positions = blockcyclic_positions(tuple(mesh_device.shape)[sp_axis], SEQ_LEN, SEQ_LEN)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
             device_rows = unrotate_cache_layer(cache[slot], positions, SEQ_LEN)
             golden_rows = trace.kv_cache(model_layer, 0, SEQ_LEN)

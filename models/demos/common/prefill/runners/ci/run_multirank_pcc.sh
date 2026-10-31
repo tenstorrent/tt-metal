@@ -18,8 +18,10 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
+# sc4_4x4 is Kimi-K3 as 8 stages of 4x4 (two per galaxy) instead of 4 of 8x4.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -57,6 +59,8 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
+# Non-zero for a 4x4 layout: the galaxy count, two 4x4 stages (tray halves) on each.
+PP_4X4_HOSTS=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
@@ -144,6 +148,21 @@ case "${MODEL}" in
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
+    if [ "${CONFIG}" = sc4_4x4 ]; then
+      # Two ranks per galaxy, bound by tt-run discovery against the 8-mesh 4x4 descriptor.
+      PP_RANKS=8
+      PP_4X4_HOSTS=4
+      # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+      # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
+      K3_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}"
+      PP_CACHE_DIR="${K3_CACHE}/kimi_k3_bh_16dev/4x4_sp1"
+      RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}';"
+      # The producer does not see the binding's global_env; its row count is the SP factor.
+      PRODUCER_ENV+=" export PREFILL_SP=4; export PREFILL_TP=4;"
+      # Half the 8x4 chunk, as the 4x4 bindings set it: 640 tokens per chip at SP=4. Runner and
+      # producer both take CHUNK_SIZE, and the stage settings below must agree with it.
+      CHUNK_SIZE=2560
+    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -181,6 +200,13 @@ if [ -n "${VARIANT}" ]; then
   EXPECTED_TPS=""
 fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
+# TEMPORARY (K2.7 SC4 D2D hang, PR #61481): forward the hang probe and lease-order switches to the
+# ranks. The probe writes under TRIAGE_OUTPUT_DIR, which the leg uploads.
+if [ -n "${PREFILL_HANG_PROBE_SECS:-}" ]; then
+  RUNNER_ENV+=" export PREFILL_HANG_PROBE_SECS=${PREFILL_HANG_PROBE_SECS}; \
+      export PREFILL_HANG_PROBE_DIR='${TRIAGE_OUTPUT_DIR:-${EVIDENCE_DIR}}/hang_probe';"
+fi
+[ -z "${PREFILL_LEASE_ORDER:-}" ] || RUNNER_ENV+=" export PREFILL_LEASE_ORDER=${PREFILL_LEASE_ORDER};"
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
@@ -201,6 +227,11 @@ if [ "${CONFIG}" = sc1 ]; then
   # Exported to BOTH runner and producer, and only when the model asked for it: the manifest's depth
   # is applied with setdefault, so an explicit export is what shrinks it.
   [ -n "${SC1_NUM_LAYERS}" ] && NUM_LAYERS_ENV="export PREFILL_NUM_LAYERS=${SC1_NUM_LAYERS};"
+fi
+if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
+  # The 4x4 binding's global_env carries a PREFILL_MAX_SEQ_LEN for hand runs, and tt-run's env beats
+  # the manifest's; pin the runner to the window the producer is about to send.
+  RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN};"
 fi
 if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
@@ -225,7 +256,7 @@ SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # one config yields the same chunk twice, and the summary drops chunks past a short window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
   "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
-  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd, -)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
@@ -327,7 +358,41 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "${PP_RANKS}" -ne 0 ]; then
+if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
+  # tt-run discovery binds two 4x4 meshes per host: it solves the 8-mesh descriptor against the
+  # live cabling, so it picks the host ring order (the hostfile's order does not matter) and gives
+  # each rank its tray half's chips. Mock-checked on pod2 and pod6 against
+  # assemble_pipeline_binding.py predict: same halves per host, even meshes on the top half.
+  IFS=, read -r -a HOST_LIST <<< "${RESOLVED_HOSTS}"
+  [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
+    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
+  }
+  MGD="${MGD_DIR}/sc4_4x4_sp1_mgd.textproto"
+  [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
+  "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "$(printf '%s:1,' "${HOST_LIST[@]}" | sed 's/,$//')" --map-by slot \
+    --bind-to none --allow-run-as-root \
+    bash -lc "[ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }"
+  # The 4x4 stage settings an explicit binding would carry in its global_env. The window is left to
+  # RUNNER_OVERRIDES (the producer's), and the log level to the launch line.
+  TEMPLATE_4X4="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_sc4_8rank_4x4_sp1.yaml"
+  STAGE_ENV=$(awk '/^global_env:/ {g=1; next} g && /^[^ #]/ {g=0} g && /^  [A-Z_]+: / {
+      k=$1; sub(/:$/,"",k); v=$2; gsub(/"/,"",v)
+      if (k != "PREFILL_MAX_SEQ_LEN" && k != "LOGURU_LEVEL") printf "export %s=%s; ", k, v }' "${TEMPLATE_4X4}")
+  case "${STAGE_ENV}" in
+    *PREFILL_SP_AXIS=1*) ;;
+    *) echo "no 4x4 stage settings (PREFILL_SP_AXIS) in ${TEMPLATE_4X4}'s global_env" >&2; exit 2 ;;
+  esac
+  case "${STAGE_ENV}" in
+    *"PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"*) ;;
+    *) echo "${TEMPLATE_4X4}'s PREFILL_CHUNK_SIZE does not match the launcher's ${CHUNK_SIZE}" >&2; exit 2 ;;
+  esac
+  RUNNER_ENV+=" ${STAGE_ENV}"
+  TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
+  RUNNER_PLACEMENT=""
+  # Each producer rank reads its own stage's map (device_map_r<rank>.json); none can reach the others.
+  RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+elif [ "${PP_RANKS}" -ne 0 ]; then
   # The CI controller has no chips: probe the allocated worker, and never reuse the template's
   # device IDs, since column enumeration is host-specific.
   [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
@@ -405,16 +470,28 @@ done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
-if [ "${PP_RANKS}" -eq 0 ]; then
+if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
   [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-  HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
+  RANK_HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{print $2}')
+  # One --host entry per host with its rank count, in first-rank order.
+  HOSTS=$(printf '%s\n' "${RANK_HOSTS}" | awk 'NF && !($1 in n) {order[++k]=$1} NF {n[$1]++} END {for (i=1;i<=k;i++) printf "%s%s:%d", (i>1?",":""), order[i], n[order[i]]}')
   [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
   echo "producer host order from tt-run discovery: ${HOSTS}"
-  EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
+  EXPECTED_RANKS=$(printf '%s\n' "${RANK_HOSTS}" | grep -c .)
+  if [ "${PP_RANKS}" -ne 0 ] && [ "${EXPECTED_RANKS}" -ne "${PP_RANKS}" ]; then
+    echo "tt-run discovery bound ${EXPECTED_RANKS} ranks; ${MODEL}/${CONFIG} needs ${PP_RANKS}"; exit 1
+  fi
+  # The binding tt-run solved, kept with the run's evidence.
+  BINDING="${RANKFILE%/*}/rank_bindings.yaml"
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+# Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
+# when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
+if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
+  echo "tt-run discovery interleaved hosts across ranks: ${RANK_HOSTS//$'\n'/ }"; exit 1
+fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"

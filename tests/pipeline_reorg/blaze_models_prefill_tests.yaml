@@ -1951,6 +1951,142 @@
   sp_config: sc4
 
 
+# TEMPORARY (PR #61481): the K2.7 SC4 D2D hang from blaze run 41143279419 under a stall probe, with the
+# 716b4c32ce6 lease order (new) and with the next receive fenced on the activation sender (fenced).
+# Select with test-type k27_sc4_hang_probe ("all" also runs them). Remove with the probe in prefill_runner.py.
+- name: "(Kimi-K2.7-1T) SC4 D2D hang probe, lease new #1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_HANG_PROBE_SECS=300 PREFILL_LEASE_ORDER=new
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
+  test_type: k27_sc4_hang_probe
+  test_tags: [k27_sc4_hang_probe]
+  test_group: disagg_prefill_hang_probe
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+- name: "(Kimi-K2.7-1T) SC4 D2D hang probe, lease new #2"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_HANG_PROBE_SECS=300 PREFILL_LEASE_ORDER=new
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
+  test_type: k27_sc4_hang_probe
+  test_tags: [k27_sc4_hang_probe]
+  test_group: disagg_prefill_hang_probe
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+- name: "(Kimi-K2.7-1T) SC4 D2D hang probe, lease new #3"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_HANG_PROBE_SECS=300 PREFILL_LEASE_ORDER=new
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
+  test_type: k27_sc4_hang_probe
+  test_tags: [k27_sc4_hang_probe]
+  test_group: disagg_prefill_hang_probe
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+- name: "(Kimi-K2.7-1T) SC4 D2D hang probe, lease fenced #1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_HANG_PROBE_SECS=300 PREFILL_LEASE_ORDER=fenced
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
+  test_type: k27_sc4_hang_probe
+  test_tags: [k27_sc4_hang_probe]
+  test_group: disagg_prefill_hang_probe
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+- name: "(Kimi-K2.7-1T) SC4 D2D hang probe, lease fenced #2"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_HANG_PROBE_SECS=300 PREFILL_LEASE_ORDER=fenced
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
+  test_type: k27_sc4_hang_probe
+  test_tags: [k27_sc4_hang_probe]
+  test_group: disagg_prefill_hang_probe
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+- name: "(Kimi-K2.7-1T) SC4 D2D hang probe, lease fenced #3"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_HANG_PROBE_SECS=300 PREFILL_LEASE_ORDER=fenced
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
+  test_type: k27_sc4_hang_probe
+  test_tags: [k27_sc4_hang_probe]
+  test_group: disagg_prefill_hang_probe
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 # 4-galaxy (SC4) disaggregated prefill for GLM-5.3: the same launcher script as the Kimi-K2.7 entry above
 # under a different model key, but GLM-5.3 owns TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
@@ -2212,12 +2348,47 @@
       # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
       # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
       # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
-      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4
-      # is a SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 60 (DFlash) + 200.
-      timeout: 200
+      # matching the 2x pass #56135 applied to the rest of this pipeline. Since then the whole job has
+      # taken 24-27 min (runs 40798487584 and 40813119749, 2026-10-29), so 110 keeps 4x of that and frees
+      # 90 for the 4x4 leg below. shield/demo bh_sc4 is a SUM over the team's legs on that SKU, not a
+      # per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 60 (DFlash) + 20 (DSpark) + 110 + 90 (4x4).
+      timeout: 110
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# The same 93 layers as 8 stages of [4,4], SP on mesh axis 1: two ranks per galaxy, one per tray half,
+# 12 layers each (9 on the last), chained along the hosts' cabled ring. run_multirank_pcc.sh checks the
+# 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run discovery binds the ranks: it
+# finds the ring order from the cabling, so the hosts can come in any order. A 4x4 stage keeps the
+# SP-only MLA KV cache (ring_mla's TP dedup needs SP on axis 0), so each MLA layer holds 4x the 8x4
+# stage's KV per chip on half the layers: 16 slots instead of 83 at the same 1M window. Chunks are
+# 2560 tokens, half the 8x4 leg's, so each chip still prefills 640 per chunk. Eager, like the 8x4 leg.
+- name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_NUM_USERS=16
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4_4x4
+  test_type: k3_prefill_runner_93l_4x4
+  test_tags: [kimi_k3, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Not yet measured in CI. The 8x4 leg above takes 24-27 min with the same 1.5 TB of weights; eight
+      # ranks stream the same total.
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U084DDYSWCW # Adrian Morrison
   team: shield
   budget_type: demo
   sp_config: sc4

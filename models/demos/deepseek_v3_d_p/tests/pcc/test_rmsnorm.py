@@ -44,18 +44,43 @@ def _ci_unsupported_param_combos(**params):
     ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, tp_axis",
     [
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
+        ),
+        # LoudBox 8-chip ring, TP on either mesh axis. tp0 is the layout once SP moves to axis 1
+        # for the 4x4 stages.
+        pytest.param(
+            (1, 8),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 8), topology="ring"),
+            id="torus-x-1x8",
+        ),
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(),
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1-tp0",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): TP=4 on the axis-0 line, which keeps no ring.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, epsilon, num_links):
+def test_rmsnorm_distributed(mesh_device, device_params, tp_axis, isl_per_chip, emb_dim, epsilon, num_links):
     """
     Test distributed RMSNorm against PyTorch reference.
 
@@ -66,13 +91,13 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     Configuration:
     - Input shape: (1, 1, isl_per_chip, 7168) - 4D format
     - Per device: (1, 1, isl_per_chip, 1792) - 7168 / 4 = 1792
-    - Stats gathered along cluster_axis=1 (mesh columns)
+    - Stats gathered along cluster_axis=tp_axis
     """
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
-    per_device_width = emb_dim // mesh_shape[1]
+    per_device_width = emb_dim // mesh_shape[tp_axis]
 
     # 4D shapes for distributed RMSNorm
     inp_shape_full = (1, 1, isl_per_chip, emb_dim)
@@ -81,7 +106,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     logger.debug(f"Full input: {inp_shape_full}, per-device: {inp_shape_per_device}")
 
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    topology = per_axis_topology(device_params["fabric_config"])[tp_axis]
     logger.debug(f"Using topology: {topology}")
 
     signpost(f"RMSNorm PCC test - {mesh_shape=} {isl_per_chip=} {emb_dim=} {num_links=} {topology=}")
@@ -111,15 +136,17 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
         emb_dim=emb_dim,
         epsilon=epsilon,
         torch_weight=rmsnorm.weight,
-        cluster_axis=1,
+        cluster_axis=tp_axis,
         num_links=num_links,
         topology=topology,
     )
 
-    # Shard input across devices along width dimension (dim=3)
+    # Shard input across devices along width dimension (dim=3) over the TP axis
     tt_input_sharded = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, 3)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=mesh_shape, dims=(None, 3) if tp_axis == 1 else (3, None)
+        ),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
@@ -133,7 +160,9 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     # Convert distributed output to torch (concat shards along dim 3)
     tt_distributed_torch = ttnn.to_torch(
         tt_output_distributed,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(0, 3)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, mesh_shape=mesh_shape, dims=(0, 3) if tp_axis == 1 else (3, 0)
+        ),
     )
     logger.debug(f"Distributed output (concatenated) shape: {tt_distributed_torch.shape}")
 
@@ -143,7 +172,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug("Comparing distributed RMSNorm vs PyTorch reference")
     # The 2x4 Fabric2D profile replicates the TP-sharded tensor across the two SP rows. The composer
     # concatenates those replicas on dim 0, so validate every replica against the same reference.
-    torch_reference = torch_reference.expand(mesh_shape[0], -1, -1, -1)
+    torch_reference = torch_reference.expand(mesh_shape[1 - tp_axis], -1, -1, -1)
     pcc_passed, pcc_message = assert_with_pcc(
         torch_reference.to(torch.float32),
         tt_distributed_torch.to(torch.float32),

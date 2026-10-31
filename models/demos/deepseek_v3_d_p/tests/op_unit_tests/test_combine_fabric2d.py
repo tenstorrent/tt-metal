@@ -24,8 +24,9 @@ to fit every routed token.
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
 seq_len_per_chip is 640. `test_combine_fabric2d_partial_last_tile` varies it on purpose.
 
-H is the dispatch group size (mesh rows), G the number of groups (mesh columns). Routing tensors are
-indexed (G, H, ...), device tensors (H, G, ...) to match the mesh.
+H is the dispatch group size (the mesh extent along the SP axis), G the number of groups (the extent
+along the other axis). Routing tensors are indexed (G, H, ...), device tensors (H, G, ...); `sp_axis`
+says which mesh axis H runs along (1 for the 4x4-stage layout).
 """
 
 import functools
@@ -38,6 +39,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # One 5120-token chunk spread over the 8-chip dispatch group.
 CHUNK = 5 * 1024
@@ -52,16 +54,30 @@ SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 FWD_REDUCTION = 16
 
 # The production Galaxy row and its 8x1 TorusY LoudBox proxy. The proxy is one dispatch group on a
-# single-axis ring, so it covers neither cross-group routing nor the 2D torus.
+# single-axis ring, so it covers neither cross-group routing nor the 2D torus. The 4x4 row is one
+# 4x4 prefill stage, whose SP ring is mesh axis 1.
 _MESH_IDS = (
     "fabric2d-torus-xy-8x4-2link",
+    "fabric2d-torus-x-4x4-2link",
     "fabric2d-torus-y-8x1-2link",
+    "fabric2d-torus-x-1x8-2link",
 )
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
 assert len(_MESH_CONFIGS) == len(_MESH_IDS), "combine_fabric2d mesh configs missing from ALL_MESH_CONFIGS"
 
 # The production 8x4 mesh on its own, for the tests about how the op is called, not the ring geometry.
 _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
+
+
+def _ring_sp_axis(mesh_device, device_params) -> int:
+    """The SP axis a mesh config runs combine on: axis 0 when it has extent and wraps, else axis 1.
+
+    For the tests that cover one layout per mesh rather than both SP axes: the 8x4 and 8x1 rows ring on
+    axis 0, the 4x4 tray half and the 1x8 row on axis 1.
+    """
+    if mesh_device.shape[0] > 1 and per_axis_topology(device_params["fabric_config"])[0] == ttnn.Topology.Ring:
+        return 0
+    return 1
 
 
 def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, num_dispatch_groups: int):
@@ -235,8 +251,15 @@ class _Fixture:
         routing=None,
         capacity=None,
         payload_shift=0,
+        sp_axis=0,
     ):
         self.mesh_device = mesh_device
+        self.sp_axis = sp_axis
+        # (H, G, ...) device tensors: H along the SP axis, G along the other one.
+        hg_dims = (0, 1) if sp_axis == 0 else (1, 0)
+        # Per-group tensors (G, ...), replicated along the SP axis.
+        self._group_dims = (None, 0) if sp_axis == 0 else (0, None)
+        self._hg_dims = hg_dims
         self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
         self.num_routed_experts, self.topk = num_routed_experts, topk
         self.experts_per_chip = num_routed_experts // G // H
@@ -262,19 +285,20 @@ class _Fixture:
         # A metadata row is (origin chip's linear mesh index, token, top-k slot), as dispatch writes it.
         meta = torch.full((H, G, capacity, 3), -1, dtype=torch.int32)
         g_idx, s_idx, t_idx, k_idx = self.kept.nonzero(as_tuple=True)
-        meta[r.holder_pos[self.kept], g_idx, r.page[self.kept]] = torch.stack(
-            [s_idx * G + g_idx, t_idx, k_idx], dim=-1
-        ).to(torch.int32)
+        origin_linear = s_idx * G + g_idx if sp_axis == 0 else g_idx * H + s_idx
+        meta[r.holder_pos[self.kept], g_idx, r.page[self.kept]] = torch.stack([origin_linear, t_idx, k_idx], dim=-1).to(
+            torch.int32
+        )
 
         self._tt_payload = {}
         self._delivered = {ttnn.bfloat16: self.payload}
-        self.tt_meta = self._shard(meta, (0, 1), ttnn.int32)
+        self.tt_meta = self._shard(meta, hg_dims, ttnn.int32)
         # expert_offsets holds every origin chip's row, replicated along the dispatch axis: a forwarding
         # chip needs them to size what it forwards. Counts and region offsets are the same on every
         # chip of a group, so each device takes one row.
-        self.tt_offs = self._shard(r.offs, (None, 0), ttnn.int32)
-        self.tt_counts = self._shard(r.counts[:, 0:1, :], (None, 0), ttnn.int32)
-        self.tt_region = self._shard(r.region[:, 0:1, :], (None, 0), ttnn.int32)
+        self.tt_offs = self._shard(r.offs, self._group_dims, ttnn.int32)
+        self.tt_counts = self._shard(r.counts[:, 0:1, :], self._group_dims, ttnn.int32)
+        self.tt_region = self._shard(r.region[:, 0:1, :], self._group_dims, ttnn.int32)
 
     def _shard(self, t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(
@@ -289,7 +313,7 @@ class _Fixture:
     def tt_payload(self, layout, dtype=ttnn.bfloat16):
         """The payload on device in `layout` and `dtype`, uploaded once. A TILE upload runs a tilize program."""
         if (layout, dtype) not in self._tt_payload:
-            tt_payload = self._shard(self.payload, (0, 1), dtype, layout=layout)
+            tt_payload = self._shard(self.payload, self._hg_dims, dtype, layout=layout)
             if dtype == ttnn.bfloat8_b and dtype not in self._delivered:
                 self._delivered[dtype] = self._read_back_rounded(tt_payload)
             self._tt_payload[layout, dtype] = tt_payload
@@ -304,7 +328,7 @@ class _Fixture:
         rounded = ttnn.to_torch(
             tt_payload,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(0, 1)
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=self._hg_dims
             ),
             dtype=torch.bfloat16,
         )
@@ -356,12 +380,12 @@ class _Fixture:
         """
         r = self.routing
         payload = self.delivered_payload(dtype)
-        got_all = ttnn.get_device_tensors(output)  # row-major over the (H, G) mesh
+        got_all = ttnn.get_device_tensors(output)  # row-major over the mesh
         assert len(got_all) == self.H * self.G, f"{label}: {len(got_all)} device tensors for {self.H * self.G} chips"
         checked = 0
         bad = 0
         for dev in range(self.H * self.G):
-            s, g = dev // self.G, dev % self.G
+            s, g = (dev // self.G, dev % self.G) if self.sp_axis == 0 else (dev % self.H, dev // self.H)
             mask = self.kept[g, s]
             if not mask.any():
                 continue
@@ -403,16 +427,25 @@ class _Fixture:
         pytest.param(ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 2, id="tile_bfp8"),
     ],
 )
+# sp1 runs the ring along mesh axis 1, as in the 4x4 stages.
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 @pytest.mark.timeout(900)
-def test_combine_fabric2d(mesh_device, device_params, num_links, routing, input_layout, input_dtype, payload_shift):
-    cfg = extract_mesh_config(mesh_device)
-    assert cfg.sp_axis == 0, "this op runs on the dispatch axis, which extract_mesh_config puts at 0"
+def test_combine_fabric2d(
+    mesh_device, device_params, num_links, routing, input_layout, input_dtype, payload_shift, sp_axis
+):
+    if mesh_device.shape[sp_axis] == 1:
+        pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
+    # The op relays tokens around a ring on the SP axis, and TtMoe only picks it when that axis
+    # wraps. On a 4x4 tray half only axis 1 does, so sp0 there is a layout the model never runs.
+    if per_axis_topology(device_params["fabric_config"])[sp_axis] != ttnn.Topology.Ring:
+        pytest.skip(f"sp_axis={sp_axis} is not a ring under {device_params['fabric_config']}")
+    cfg = extract_mesh_config(mesh_device, sp_axis)
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     if routing == "production" and G == 1:
         pytest.skip("production routing sends most picks to other dispatch groups; this mesh has only one")
-    fx = _Fixture(mesh_device, H, G, seed=7, routing=routing, payload_shift=payload_shift)
+    fx = _Fixture(mesh_device, H, G, seed=7, routing=routing, payload_shift=payload_shift, sp_axis=sp_axis)
     logger.info(
-        f"combine_fabric2d: mesh={tuple(mesh_device.shape)} H={H} G={G} experts_per_chip={fx.experts_per_chip} "
+        f"combine_fabric2d: mesh={tuple(mesh_device.shape)} sp_axis={sp_axis} H={H} G={G} experts_per_chip={fx.experts_per_chip} "
         f"seq={fx.seq_len_per_chip} topk={fx.topk} capacity={fx.capacity}"
     )
 
@@ -446,7 +479,7 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
     - Handshake counters: they outlive the launch and only the kernels zero them. A stale one makes the
       next launch read or overwrite slots early; a new draw per launch turns that into wrong slots.
     """
-    cfg = extract_mesh_config(mesh_device)
+    cfg = extract_mesh_config(mesh_device, _ring_sp_axis(mesh_device, device_params))
     plan = [
         ("row-major", ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         ("tile", ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -457,7 +490,14 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
     ]
     added = []
     for seed, (label, layout, dtype) in enumerate(plan):
-        fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=emb_dim, seed=20 + seed)
+        fx = _Fixture(
+            mesh_device,
+            cfg.dispatch_group_size,
+            cfg.num_dispatch_groups,
+            emb_dim=emb_dim,
+            seed=20 + seed,
+            sp_axis=cfg.sp_axis,
+        )
         fx.tt_payload(layout, dtype)  # uploaded first, so its tilize program is not counted below
         before = mesh_device.num_program_cache_entries()
         output = fx.run(cfg.sp_axis, num_links, layout=layout, dtype=dtype)
@@ -588,8 +628,8 @@ def test_combine_fabric2d_unsupported_dtype(
     Tokens are sized as BFLOAT16 whatever the input, so a float32 TILE buffer would otherwise pass every
     size check and be moved as the wrong bytes.
     """
-    cfg = extract_mesh_config(mesh_device)
-    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
+    cfg = extract_mesh_config(mesh_device, _ring_sp_axis(mesh_device, device_params))
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, sp_axis=cfg.sp_axis)
     fx.tt_payload(input_layout, input_dtype)
     with expect_error(RuntimeError, "dispatched_buffer must be BFLOAT16"):
         fx.run(cfg.sp_axis, num_links, layout=input_layout, dtype=input_dtype)
@@ -764,11 +804,14 @@ def test_combine_fabric2d_overlapped_skew(mesh_device, device_params, num_links)
     Four payloads in rotation over one routing. A stale page then carries the right destination and fails as
     wrong bytes, rather than as a misrouted token that could hang the ring.
     """
-    cfg = extract_mesh_config(mesh_device)
+    cfg = extract_mesh_config(mesh_device, _ring_sp_axis(mesh_device, device_params))
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     launches = 8
     indices = _starved_relay_indices(G, H, SEQ_LEN_PER_CHIP, topk=8, num_routed_experts=256)
-    draws = [_Fixture(mesh_device, H, G, routing=indices, capacity="exact", seed=40 + i) for i in range(4)]
+    draws = [
+        _Fixture(mesh_device, H, G, routing=indices, capacity="exact", seed=40 + i, sp_axis=cfg.sp_axis)
+        for i in range(4)
+    ]
     # Uploaded first, so no upload sits between the queued launches.
     for fx in draws:
         fx.tt_payload(ttnn.ROW_MAJOR_LAYOUT)

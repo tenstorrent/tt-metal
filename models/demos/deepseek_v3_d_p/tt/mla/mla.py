@@ -745,25 +745,24 @@ class ttMLA:
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             )  # [slots, n1, n0 * rows_per_chip, width]
             rows = sharded.shape[2] // n0
-            # Row-major chip order (axis 0 outer), matching the coordinate order init_kvpe_cache declares.
-            host = torch.cat(
-                [sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0 in range(n0) for a1 in range(n1)],
-                dim=2,
-            )
+            # SP-major stripe order, as ring_mla writes it: row-major over the mesh (axis 0 outer) with SP on
+            # axis 0, column-major (axis 1 outer) with SP on axis 1.
+            if sp_axis == 0:
+                coords = [(a0, a1) for a0 in range(n0) for a1 in range(n1)]
+            else:
+                coords = [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
+            host = torch.cat([sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0, a1 in coords], dim=2)
         else:
+            # SP shards concatenate on the sequence dim; the TP replicas stack on dim 1 and one is kept.
+            shard_dims = [None, None]
+            shard_dims[sp_axis] = 2
+            shard_dims[1 - sp_axis] = 1
             host = ttnn.to_torch(
                 storage,
-                mesh_composer=ttnn.create_mesh_composer(
-                    mesh_device,
-                    config=ttnn.MeshComposerConfig(
-                        dims=(2, -1),
-                        mesh_shape_override=ttnn.MeshShape(
-                            mesh_device.shape[sp_axis],  # concat SP shards
-                            1,  # collapse TP replicas
-                        ),
-                    ),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=tuple(shard_dims), mesh_shape=mesh_device.shape
                 ),
-            )
+            )[:, :1]
         return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
@@ -2213,9 +2212,11 @@ class ttMLA:
             ), "dense tp_shard_kv is the chunked ring_mla split-KV path; single-shot prefill has no striped write"
         # Checked here, not on the first chunk after a long weight load.
         if self.tp_shard_kv and not self._has_indexer:
-            assert self.sp_axis == 0 and self.tp_axis == 1, (
-                f"dense tp_shard_kv needs SP on mesh axis 0 and TP on axis 1 (split-KV ring_mla), got "
-                f"sp_axis={self.sp_axis} tp_axis={self.tp_axis}"
+            # Either axis works: ring_mla numbers its KV stripes SP-major, row-major over the mesh with SP
+            # on axis 0 and column-major with SP on axis 1, from Q's declared sequence placement.
+            assert self.tp_axis == 1 - self.sp_axis, (
+                f"dense tp_shard_kv needs SP and TP on distinct mesh axes, got sp_axis={self.sp_axis} "
+                f"tp_axis={self.tp_axis}"
             )
             chunk_local = self.active_seq_len // self.sp_factor
             assert self.active_seq_len % self.sp_factor == 0 and chunk_local % (self.tp_factor * ttnn.TILE_SIZE) == 0, (

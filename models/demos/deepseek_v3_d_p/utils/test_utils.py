@@ -38,32 +38,37 @@ def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
     return torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(-1, d)
 
 
-def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
-    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2, TP-replicated) to host float32, keeping
-    TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+def gather_cache_tp0(tt_cache, mesh_device, sp_axis: int = 0) -> torch.Tensor:
+    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2 over ``sp_axis``, TP-replicated) to host
+    float32, keeping TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+    dims = (2, 1) if sp_axis == 0 else (1, 2)
     cache_full = ttnn.to_torch(
         tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=mesh_device.shape),
     ).to(torch.float32)[
         :, :1
     ]  # [num_slots, 1, seq_len_cache, head_dim]
     return cache_full[:, 0]
 
 
-def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
+def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False, sp_axis: int = 0):
     """Gather a KV/indexer cache to host float32 in shard-major (block-cyclic) order, returning
     ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)`` for the caller to un-rotate.
     An ``MlaKvCache`` is decoded to logical [latent || RoPE] rows (incl. packed scaled FP8).
 
+    The sequence is sharded along mesh axis ``sp_axis`` and TP runs along the other one.
     TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
     tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
 
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    dims = [None, None]
+    dims[sp_axis], dims[tp_axis] = 2, 1  # sequence along SP, TP replicas or slices on dim 1
     is_mla_cache = isinstance(tt_cache, MlaKvCache)
     cache_sr = ttnn.to_torch(
         tt_cache.storage if is_mla_cache else tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_device.shape),
     )  # [num_slots, tp, seq_dim, head_dim]
     if is_mla_cache:
         cache_sr = tt_cache.unpack_host(cache_sr)
@@ -137,14 +142,18 @@ def print_l1_small_buffers(device, name):
 def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
     """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
 
+    The TP extent is read along config.ccl_config["TP_AXIS"] (mesh axis 1 by default). Only a TP
+    extent below 4 scales the dim down; a wider one (TP=8, the 8x4 Galaxy with SP on axis 1) keeps
+    the model's real dim and splits it finer.
+
     `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
     a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
     it is the default, and it is a no-op for every model whose per-device width already is (only
     GPT-OSS is not: 2880 -> 720/device, 22.5 tiles). Pass False when the input is DRAM-interleaved,
     where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
     """
-    _, n_tp_devices = mesh_device.shape
-    if n_tp_devices != 4:
+    n_tp_devices = mesh_device.shape[config.ccl_config.get("TP_AXIS", 1)]
+    if n_tp_devices < 4:
         config.dim = config.dim // (4 // n_tp_devices)
     if tile_align_width:
         tile_multiple = 32 * n_tp_devices
@@ -154,7 +163,8 @@ def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True
 def get_input_mem_config(config, mesh_shape):
     shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
     shard_height = ((shard_height + 31) // 32) * 32
-    shard_width = (config.dim + mesh_shape[1] - 1) // mesh_shape[1]
+    n_tp_devices = mesh_shape[config.ccl_config.get("TP_AXIS", 1)]
+    shard_width = (config.dim + n_tp_devices - 1) // n_tp_devices
     return ttnn.create_sharded_memory_config(
         shape=(shard_height, shard_width),
         core_grid=config.core_grid,

@@ -8,6 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig, KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
@@ -33,10 +34,27 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = run_for_blackhole()
 
 
+_FABRIC_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+
+
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
+    "mesh_device,device_params,sp_axis,tp_axis",
+    [
+        pytest.param((1, 8), _FABRIC_1D, 0, 1, id="1x8-sp0"),
+        pytest.param((2, 4), _FABRIC_1D, 0, 1, id="2x4-sp0"),
+        pytest.param((2, 4), _FABRIC_1D, 1, 0, id="2x4-sp1"),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="4x4-sp1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis, tp_axis, device_params):
     sp = tuple(mesh_device.shape)[sp_axis]
     local_rows = 256

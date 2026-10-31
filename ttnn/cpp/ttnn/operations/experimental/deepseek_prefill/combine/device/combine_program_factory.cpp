@@ -157,7 +157,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const bool local_only = num_links == 0;
     TT_FATAL(
         !local_only || ((mesh_device->shape().mesh_size() == 1 ||
-                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                         (operation_attributes.axis.has_value() && *operation_attributes.axis <= 1 &&
+                          mesh_device->shape()[*operation_attributes.axis] == 1)) &&
                         operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
         "Zero-link prefill combine requires a singleton communication domain, dispatch_group_size=1, and Linear "
         "topology");
@@ -823,10 +824,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // Preserve the existing networked partition calculation.
     uint32_t mesh_row_coord = linearized_mesh_coord / mesh_cols;
     uint32_t mesh_col_coord = linearized_mesh_coord % mesh_cols;
-    uint32_t experts_per_dispatch_group = operation_attributes.experts_per_chip * mesh_rows;
-    uint32_t counter_offset = local_only ? 0
-                                         : mesh_col_coord * experts_per_dispatch_group +
-                                               mesh_row_coord * operation_attributes.experts_per_chip;
+    const bool sp_on_axis_1 = operation_attributes.axis.value_or(0) == 1;
+    uint32_t sp_coord = sp_on_axis_1 ? mesh_col_coord : mesh_row_coord;
+    uint32_t group_coord = sp_on_axis_1 ? mesh_row_coord : mesh_col_coord;
+    uint32_t experts_per_dispatch_group =
+        operation_attributes.experts_per_chip * (sp_on_axis_1 ? mesh_cols : mesh_rows);
+    uint32_t counter_offset =
+        local_only ? 0 : group_coord * experts_per_dispatch_group + sp_coord * operation_attributes.experts_per_chip;
 
     // reader_untilize runs on untilizer cores for BOTH layouts: TILE reads tiles into c_0 (for the
     // compute kernel), ROW_MAJOR reads rows straight into c_2 (no compute).  The compute kernel
