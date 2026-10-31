@@ -260,6 +260,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_common.hpp
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
+    impl/dispatch/kernels/cq_trids.hpp
     impl/dispatch/kernels/cq_helpers.hpp
     impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
