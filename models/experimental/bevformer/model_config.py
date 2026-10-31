@@ -157,10 +157,11 @@ INVERSE_SIGMOID_EPS = 1e-5
 
 # --- Box code and coder -------------------------------------------------------------------------
 
-# The box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs. In the box codes, the
-# reg branches' raw output, cx, cy and cz are logit offsets, which the decoder adds to its reference
-# points' logits; in the box predictions, the head's output, they are the refined centers in metres.
-# The other channels are the same in both.
+# The reference's box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs, which the
+# CODE_* slices index. In the box codes, the reg branches' raw output, cx, cy and cz are logit
+# offsets, which the decoder adds to its reference points' logits; in the box predictions, the
+# head's output, they are the refined centers in metres. The other channels are the same in both.
+# The TTNN head's device tensors hold the channels in CENTERS_FIRST order instead (see CODE_ORDER).
 CODE_SIZE = 10
 CODE_XY = slice(0, 2)
 CODE_WL = slice(2, 4)

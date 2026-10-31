@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blocks shared across the port: the LayerNorm helper, the encoder's and decoder's FFN, and the conv
-the ResNet101-DCN backbone and the FPN share.
+"""Blocks shared across the port: the LayerNorm helper, the linear into L1 with its program
+config, the decoder's FFN, layer stacking and device constants, and the conv the ResNet101-DCN backbone and the FPN
+share.
 
 conv2d lays the conv's weights out once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
@@ -48,14 +49,29 @@ def layer_norm(x, params, residual=None, memory_config=None):
     )
 
 
+def device_constant(values, shape, dtype, device):
+    """``values``, a flat list, as a ``shape`` TILE tensor on ``device``, uploaded once so a trace
+    may capture the ops that read it."""
+    return ttnn.to_device(ttnn.Tensor(values, shape, dtype, ttnn.TILE_LAYOUT), device)
+
+
+def stack_layers(tensors):
+    """``tensors`` stacked along a new leading axis in L1, where ttnn.stack lands in DRAM. A
+    single tensor gains the axis as a view."""
+    leading = [ttnn.unsqueeze(t, 0) for t in tensors]
+    return leading[0] if len(leading) == 1 else ttnn.concat(leading, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
 def linear_program_config(device, rows, in_features, out_features, activation=None):
     """A matmul over ``rows`` rows on the whole grid, the bias and ``activation`` inside it:
     ttnn.linear without a program config adds the bias in a separate op when the output goes to
     L1, and applies ``activation`` in a separate op always.
 
-    An output of 4 tiles' width or more splits both ways, its columns over up to 8 grid columns
-    and its rows over the grid's rows: a few hundred rows split by rows alone leave most cores
-    idle. A narrower one splits its rows alone, in blocks of up to 4 tile rows."""
+    An output of 4 tiles' width or more splits both ways, its columns over up to 8 grid columns,
+    which divide the decoder's widths of 8 and 16 tiles, and its rows over the grid's rows: a few
+    hundred rows split by rows alone leave most cores idle. A narrower one has too few columns for
+    that to pay off and splits its rows alone, in blocks of up to 4 tile rows. The inner
+    dimension goes in blocks of up to 8 tiles, which bounds the input's circular buffer in L1."""
     grid = device.compute_with_storage_grid_size()
     return _linear_program_config((grid.x, grid.y), rows, in_features, out_features, activation)
 

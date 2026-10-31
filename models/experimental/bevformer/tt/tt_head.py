@@ -25,7 +25,7 @@ from models.experimental.bevformer.model_config import (
     GRID_DTYPE,
     SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_common import l1_linear, layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import device_constant, l1_linear, layer_norm, signpost, stack_layers
 from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
@@ -49,13 +49,10 @@ class TTBEVFormerHead:
         self.params = params
         self.all_layers = all_layers
         # The box predictions' center channels, which the refined centers fill.
-        self._center_mask = ttnn.to_device(
-            ttnn.Tensor(
-                [float(c in range(CENTERS_FIRST_CENTERS.stop)) for c in range(CODE_SIZE)],
-                [1, 1, 1, CODE_SIZE],
-                GRID_DTYPE,
-                ttnn.TILE_LAYOUT,
-            ),
+        self._center_mask = device_constant(
+            [float(c in range(CENTERS_FIRST_CENTERS.start, CENTERS_FIRST_CENTERS.stop)) for c in range(CODE_SIZE)],
+            [1, 1, 1, CODE_SIZE],
+            GRID_DTYPE,
             device,
         )
         self.decoder = TTDetectionTransformerDecoder(
@@ -92,13 +89,13 @@ class TTBEVFormerHead:
         # The decoder returns the last layer alone without all_layers.
         cls_branches = p.cls_branches if self.all_layers else p.cls_branches[-1:]
         signpost(header="Head ClsBranches Start")
-        all_cls_scores = ttnn.stack([self._cls_branch(hs[i], branch) for i, branch in enumerate(cls_branches)], dim=0)
+        all_cls_scores = stack_layers([self._cls_branch(hs[i], branch) for i, branch in enumerate(cls_branches)])
         signpost(header="Head ClsBranches End")
         signpost(header="Head BoxPreds Start")
 
         centers = ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min)
         centers = ttnn.pad(centers, [(0, 0)] * 3 + [(0, CODE_SIZE - centers.shape[-1])], 0.0)
-        all_bbox_preds = ttnn.where(self._center_mask, centers, box_codes)
+        all_bbox_preds = ttnn.where(self._center_mask, centers, box_codes, memory_config=ttnn.L1_MEMORY_CONFIG)
         signpost(header="Head BoxPreds End")
         signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds

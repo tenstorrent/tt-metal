@@ -25,7 +25,7 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, GRID_DTYPE, INVERSE_SIGMOID_EPS
-from models.experimental.bevformer.tt.tt_common import TTFFN, l1_linear, layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import TTFFN, l1_linear, layer_norm, signpost, stack_layers
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
@@ -45,7 +45,8 @@ class TTMultiheadAttention:
         self.num_heads = params.num_heads
         grid = device.compute_with_storage_grid_size()
         # SDPA's default 32-row chunks leave each core a sliver of the queries and keys, so the
-        # per-chunk overhead dominates.
+        # per-chunk overhead dominates; 128 x 256 is the fastest pair on Blackhole for the
+        # decoder's query count.
         self.sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y), q_chunk_size=128, k_chunk_size=256, exp_approx_mode=False
         )
@@ -116,11 +117,11 @@ class TTDetrTransformerDecoderLayer:
 class TTDetectionTransformerDecoder:
     """Decoder over a ``bev_shape`` ``(bev_h, bev_w)`` BEV map."""
 
-    def __init__(self, params, device, bev_shape, batch_first=False, all_layers=True):
+    def __init__(self, params, device, bev_shape, batch_first=False, all_layers=False):
         """``params`` comes from ``create_decoder_parameters``; ``batch_first`` selects the
         layout of ``query``, ``query_pos``, ``value`` and the stacked outputs (see ``__call__``);
-        ``all_layers`` keeps every layer's outputs, without it only the last layer's, while every
-        layer still runs, as each refines the previous one's points."""
+        ``all_layers`` keeps every layer's outputs, without it, the default, only the last
+        layer's; every layer runs either way, as each refines the previous one's points."""
         self.batch_first = batch_first
         self.all_layers = all_layers
         self.layers = [TTDetrTransformerDecoderLayer(p, device, bev_shape) for p in params.layers]
@@ -180,10 +181,10 @@ class TTDetectionTransformerDecoder:
                 intermediate_reference_points.append(reference_points)
                 box_codes.append(box_code)
 
-        outputs = ttnn.stack(intermediate, dim=0)
+        outputs = stack_layers(intermediate)
         if not self.batch_first:
             outputs = ttnn.permute(outputs, (0, 2, 1, 3))
-        reference_points_out = ttnn.stack(intermediate_reference_points, dim=0)
-        box_codes_out = ttnn.stack(box_codes, dim=0)
+        reference_points_out = stack_layers(intermediate_reference_points)
+        box_codes_out = stack_layers(box_codes)
         signpost(header="TTNN Decoder Forward End")
         return outputs, reference_points_out, box_codes_out
