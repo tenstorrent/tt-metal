@@ -22,6 +22,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -1071,6 +1072,12 @@ static std::vector<Tensor> pool2d(
         block_float_tile_safe;
 
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
+        TT_FATAL(
+            dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B,
+            "Currently only BFLOAT16, BFLOAT8_B, and BFLOAT4_B output data formats are supported");
+        TT_FATAL(
+            !((dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B) && output_layout == Layout::ROW_MAJOR),
+            "BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout");
         // Reduction needs interleaved input/output. The output is a tiny (1×1 spatial) tensor;
         // a shard spec sized for the full input cannot fit it, so we fall back to interleaved
         // with the same buffer type (DRAM/L1) when either the caller asked for a sharded
@@ -1180,6 +1187,9 @@ static std::vector<Tensor> pool2d(
 
         if (output.layout() != output_layout) {
             output = ttnn::to_layout(output, output_layout, std::nullopt, reduce_mem);
+        }
+        if (output.dtype() != dtype) {
+            output = ttnn::typecast(output, dtype, reduce_mem);
         }
         // Honor caller's requested output memory config when feasible. We skip re-sharding
         // because a shard spec sized for the input H×W can't fit the 1×1 output.
