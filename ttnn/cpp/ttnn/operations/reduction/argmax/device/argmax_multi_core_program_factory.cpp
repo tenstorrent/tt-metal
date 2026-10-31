@@ -247,6 +247,40 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         }
     }
 
+    const uint32_t dfb_alignment = device.allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const auto dfb_alloc_size = [dfb_alignment](uint64_t n) {
+        return tt::align(n, static_cast<uint64_t>(dfb_alignment));
+    };
+    const auto lowest_occupied_l1 = device.lowest_occupied_compute_l1_address();
+    const uint64_t dfb_region_end =
+        lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device.l1_size_per_core();
+    const uint64_t dfb_region_base = device.allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint64_t l1_available = dfb_region_end > dfb_region_base ? dfb_region_end - dfb_region_base : 0;
+
+    // Every core keeps an index and a value for each output row until the merge, so with many rows use
+    // fewer cores until the buffers fit.
+    if (not sub_core_grids.has_value()) {
+        const auto grid = device.compute_with_storage_grid_size();
+        const uint32_t red_dim_blocks = tt::div_up(red_dim_units, min_red_dim_units_per_core);
+        const auto l1_needed = [&](uint32_t num_cores) {
+            const uint32_t src_units = tt::div_up(red_dim_blocks, num_cores) * min_red_dim_units_per_core;
+            const uint32_t row_bytes = round_up_to_mul32(output_last_dim * output_unit_size);
+            return dfb_alloc_size(round_up_to_mul32(src_units * input_unit_size)) + dfb_alloc_size(row_bytes) +
+                   dfb_alloc_size(uint64_t{row_bytes} * num_cores) +
+                   dfb_alloc_size(uint64_t{round_up_to_mul32(output_last_dim * input_unit_size)} * num_cores);
+        };
+        const uint32_t planned_cores = effective_core_grids.has_value()
+                                           ? effective_core_grids->num_cores()
+                                           : std::min<uint32_t>(red_dim_blocks, grid.x * grid.y);
+        uint32_t num_cores = planned_cores;
+        while (num_cores > 1 && l1_needed(num_cores) > l1_available) {
+            num_cores /= 2;
+        }
+        if (num_cores < planned_cores) {
+            effective_core_grids = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+        }
+    }
+
     // Distribute work to cores
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
         distribute_work_to_cores(device, red_dim_units, min_red_dim_units_per_core, effective_core_grids);
@@ -279,20 +313,11 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
 
     // Only src is duplicated. Charge it against the region the DFBs actually get, with each one
     // rounded to the DRAM alignment.
-    const uint32_t dfb_alignment = device.allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
-    const auto dfb_alloc_size = [dfb_alignment](uint64_t n) {
-        return tt::align(n, static_cast<uint64_t>(dfb_alignment));
-    };
     const uint64_t shared_dfb_bytes =
         dfb_alloc_size(dst_page_size) + dfb_alloc_size(out_idxs_page_size) + dfb_alloc_size(out_vals_page_size);
     // A core belongs to one src group, so charge the larger.
     const uint64_t dual_src_dfb_bytes =
         std::max(dfb_alloc_size(2ull * src_dfb_entry_size0), dfb_alloc_size(2ull * src_dfb_entry_size1));
-    const auto lowest_occupied_l1 = device.lowest_occupied_compute_l1_address();
-    const uint64_t dfb_region_end =
-        lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device.l1_size_per_core();
-    const uint64_t dfb_region_base = device.allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint64_t l1_available = dfb_region_end > dfb_region_base ? dfb_region_end - dfb_region_base : 0;
 
     // Split the inner (j) loop across both DM processors; reduce_all is excluded, it needs a merge not a partition.
     const bool l1_fits_secondary_dm = (dual_src_dfb_bytes + shared_dfb_bytes) <= l1_available;

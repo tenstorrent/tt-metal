@@ -69,6 +69,9 @@ def _argmax_row_major_wide_reduce_last_dim():
         _case([50, 100, 200], RM, -1, True, torch.int32),
         _case([25, 50, 100], RM, -1, False, torch.uint8),
         _case([2, 3, 48, 96], RM, -1, True, torch.bfloat16),
+        # Many rows: each core keeps a partial per row, so fewer cores are used to fit L1.
+        _case([32768, 128], RM, -1, False, torch.bfloat16),
+        _case([65536, 64], RM, -1, False, torch.bfloat16),
         _case([1, 8, 20, 18], TL, -1, True, torch.bfloat16),
     ]
 
