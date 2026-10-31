@@ -212,6 +212,7 @@ class DistributedRMSNorm(Module):
         per_head_norm=False,
         dynamic_weight_includes_static=False,
         dynamic_tile_row_map=None,
+        preserve_rope_rounding=False,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -252,6 +253,8 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
+        if preserve_rope_rounding:
+            extra["preserve_rope_rounding"] = True
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).

@@ -49,7 +49,9 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     // Row-major uint32 [1, 1, 1, >= tile rows], one page: per-token weight/bias tile row r is read from row map[r];
     // entries must index existing tile rows of the affine tensors (the producer checks them, the op does not).
-    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt);
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt,
+    // Preserve the standalone BF16 norm/RoPE pack boundaries on the supported LTX path.
+    bool preserve_rope_rounding = false);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.
