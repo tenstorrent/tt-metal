@@ -66,6 +66,7 @@ inline void hyb_chunk_done(uint32_t chunk, uint32_t chunk_rows) {
     noc_inline_dw_write(get_noc_addr(noc_x, noc_y, area + HYB_MAX_STEPS * HYB_MAX_CHUNKS * 4 + slot), chunk_rows);
     noc_async_write_barrier();
     noc_semaphore_inc(get_noc_addr(noc_x, noc_y, area + slot), 1);
+    noc_async_atomic_barrier();
 }
 
 inline void hyb_expert_done() {
