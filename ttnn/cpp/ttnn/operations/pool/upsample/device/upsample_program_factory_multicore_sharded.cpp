@@ -395,7 +395,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
         output_nsticks_per_core);
 
     metal2::KernelSpec::CompileTimeArgs common_cta{
-        {"stick_nbytes", input_stick_nbytes},
+        {"stick_nbytes", aligned_input_stick_nbytes},
         {"in_nsticks_per_core", input_nsticks_per_core},
         {"scale_h", scale_factor_h},
         {"scale_w", scale_factor_w},
