@@ -20,6 +20,7 @@ empty state_dict when the cache is complete. Requires an 8x4 Blackhole mesh and:
     TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/goldened
 """
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -1217,8 +1218,23 @@ def _sliding_window_topk(chunk_idx, sp, topk):
     return torch.where(idx >= 0, idx, 0xFFFFFFFF).to(torch.int32).reshape(sp, 1, CHUNK // sp, topk)
 
 
-def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, num_iterations, num_links, topology):
-    """Determinism-only chunked block: random weights and input, no golden, no TTNN cache, no PCC."""
+def _trace_embedded_hidden(variant, model_path, total_len, vocab_size):
+    """Real embedding rows of the golden trace's first total_len tokens."""
+    with open(_resolve_trace_dir(variant) / "metadata.json") as f:
+        ids = torch.tensor(json.load(f)["token_ids"][:total_len], dtype=torch.int64) % vocab_size
+    assert ids.numel() == total_len, f"trace has {ids.numel()} tokens < {total_len}"
+    key = "model.embed_tokens.weight"
+    with open(model_path / "model.safetensors.index.json") as f:
+        shard = json.load(f)["weight_map"][key]
+    with safe_open(str(model_path / shard), framework="pt") as f:
+        return f.get_tensor(key)[ids].to(torch.bfloat16)
+
+
+def run_chunked_block_random(
+    variant, config, mesh_device, model_path, layer_idx, n_chunks, num_iterations, num_links, topology
+):
+    """Determinism-only chunked block: random weights, real embedded trace tokens as input, no golden
+    compare, no TTNN cache. PCC is reported only for tensors that are not bit-identical."""
     assert num_iterations >= 2, "iter 0 is the baseline"
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
@@ -1298,7 +1314,7 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
     shard_dims = [None, None]
     shard_dims[sp_axis] = -2
     shard_dims[tp_axis] = -1
-    hidden = torch.randn(total_len, config.hidden_size, generator=torch.Generator().manual_seed(7)).to(torch.bfloat16)
+    hidden = _trace_embedded_hidden(variant, model_path, total_len, config.vocab_size)
     out = torch.zeros(total_len, config.hidden_size, dtype=torch.float32)
     mesh_device.enable_program_cache()
 
@@ -1342,7 +1358,11 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
             continue
         for name, base in baseline.items():
             if not torch.equal(base, snapshot[name]):
-                failures.append(f"iter {it} {name}: {int((base != snapshot[name]).sum())} elements differ")
+                _, pcc = comp_pcc(base.float(), snapshot[name].float())
+                failures.append(
+                    f"iter {it} {name}: {int((base != snapshot[name]).sum()) / 1e6:.2f}M/{base.numel() / 1e6:.2f}M"
+                    f" differ, PCC {pcc:.5f}"
+                )
 
     if failures:
         pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(failures))
@@ -1371,12 +1391,13 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(3600)
 def test_kimi_prefill_block_chunked_random(
-    variant, config_only, mesh_device, device_params, layer_idx, n_chunks, num_iterations, num_links
+    variant, config_only, mesh_device, device_params, model_path, layer_idx, n_chunks, num_iterations, num_links
 ):
     run_chunked_block_random(
         variant,
         config_only,
         mesh_device,
+        model_path,
         layer_idx,
         n_chunks,
         num_iterations,
@@ -1405,12 +1426,13 @@ def test_kimi_prefill_block_chunked_random(
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA (indexer) is Blackhole-only")
 @pytest.mark.timeout(3600)
 def test_glm_prefill_block_chunked_random(
-    variant, config_only, mesh_device, device_params, layer_idx, n_chunks, num_iterations, num_links
+    variant, config_only, mesh_device, device_params, model_path, layer_idx, n_chunks, num_iterations, num_links
 ):
     run_chunked_block_random(
         variant,
         config_only,
         mesh_device,
+        model_path,
         layer_idx,
         n_chunks,
         num_iterations,
