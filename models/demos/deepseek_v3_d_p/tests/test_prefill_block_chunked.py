@@ -263,8 +263,14 @@ def run_chunked_block(
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
-    trace_dir = _resolve_trace_dir(variant)
-    if not trace_dir.exists():
+    try:
+        trace_dir = _resolve_trace_dir(variant)
+    except FileNotFoundError:
+        # Determinism needs no golden: pass 0 on random input is the baseline.
+        if not determinism_check:
+            raise
+        trace_dir = None
+    if trace_dir is not None and not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
     layout = variant.prefill_trace_layout
 
@@ -291,30 +297,36 @@ def run_chunked_block(
         f"n_chunks={n_chunks} total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK}"
     )
 
-    # --- Golden trace: layer L input is layer L-1 decoder output; references for layer L. ---
-    profiler.start("trace_loading")
-    input_hidden = _load_trace_tensor(
-        trace_dir, layout, "hidden_states", layer_idx - 1, f"decoder_output_layer_{layer_idx - 1}", total_len
-    )
-    ref_out = _load_trace_tensor(
-        trace_dir, layout, "hidden_states", layer_idx, f"decoder_output_layer_{layer_idx}", total_len
-    )
-    ref_post_attn_norm = _load_optional(
-        trace_dir, layout, "hidden_states", layer_idx, f"post_attn_norm_layer_{layer_idx}", total_len
-    )
-    ref_post_mla_residual = _load_optional(
-        trace_dir, layout, "hidden_states", layer_idx, f"post_mla_residual_layer_{layer_idx}", total_len
-    )
-    g_compressed = _load_optional(
-        trace_dir, layout, "kv_cache", layer_idx, f"compressed_kv_layer_{layer_idx}", total_len
-    )
-    g_nope = _load_optional(trace_dir, layout, "kv_cache", layer_idx, f"kv_latent_normed_layer_{layer_idx}", total_len)
-    g_rope = _load_optional(trace_dir, layout, "kv_cache", layer_idx, f"kv_kpe_roped_layer_{layer_idx}", total_len)
-    g_post = _load_trace_tensor(
-        trace_dir, layout, "kv_cache", layer_idx, f"kv_post_transform_layer_{layer_idx}", total_len
-    )
-    profiler.end("trace_loading")
-    logger.info(f"loaded trace: input {tuple(input_hidden.shape)}, ref_out {tuple(ref_out.shape)}")
+    if trace_dir is None:
+        logger.warning("no golden trace: random input, determinism only, no PCC")
+        input_hidden = torch.randn(total_len, emb_dim, generator=torch.Generator().manual_seed(7)).to(torch.bfloat16)
+    else:
+        # --- Golden trace: layer L input is layer L-1 decoder output; references for layer L. ---
+        profiler.start("trace_loading")
+        input_hidden = _load_trace_tensor(
+            trace_dir, layout, "hidden_states", layer_idx - 1, f"decoder_output_layer_{layer_idx - 1}", total_len
+        )
+        ref_out = _load_trace_tensor(
+            trace_dir, layout, "hidden_states", layer_idx, f"decoder_output_layer_{layer_idx}", total_len
+        )
+        ref_post_attn_norm = _load_optional(
+            trace_dir, layout, "hidden_states", layer_idx, f"post_attn_norm_layer_{layer_idx}", total_len
+        )
+        ref_post_mla_residual = _load_optional(
+            trace_dir, layout, "hidden_states", layer_idx, f"post_mla_residual_layer_{layer_idx}", total_len
+        )
+        g_compressed = _load_optional(
+            trace_dir, layout, "kv_cache", layer_idx, f"compressed_kv_layer_{layer_idx}", total_len
+        )
+        g_nope = _load_optional(
+            trace_dir, layout, "kv_cache", layer_idx, f"kv_latent_normed_layer_{layer_idx}", total_len
+        )
+        g_rope = _load_optional(trace_dir, layout, "kv_cache", layer_idx, f"kv_kpe_roped_layer_{layer_idx}", total_len)
+        g_post = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"kv_post_transform_layer_{layer_idx}", total_len
+        )
+        profiler.end("trace_loading")
+        logger.info(f"loaded trace: input {tuple(input_hidden.shape)}, ref_out {tuple(ref_out.shape)}")
 
     # --- Weights from the prebuilt TTNN cache (empty state_dict when complete). ---
     effective_cache_path = weight_cache_path / f"{sp}x{tp}"
@@ -483,6 +495,9 @@ def run_chunked_block(
 
     if repeat_failures:
         pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(repeat_failures))
+    if trace_dir is None:
+        logger.success(f"Chunked prefill block determinism passed without golden ({passes} passes)")
+        return
 
     # --- PCC comparisons over [:total_len] ---
     profiler.start("pcc_validation")
