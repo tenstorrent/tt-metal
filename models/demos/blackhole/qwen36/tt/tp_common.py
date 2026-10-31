@@ -269,9 +269,13 @@ def prefill_intrace_snap_enabled():
       snapshot into its prefix-cache slot (GdnPrefixStateCache.save with a snapshot source); a point at a replay end
       is saved from the bound state as before.
 
-    Prefill outputs, KV and drafter K/V do not change (the same rows run through the same per-row ops; a snapshot is a
-    copy of the scan state). A planner difference: the state at a former split point no longer passes through a masked
-    short-trace tail (whose trailing masked GDN chunks hand on a state re-packed by one more identity scan step), so
+    Prefill outputs (logits, feed rows, GDN state) and the base KV do not change (the same rows run through the same
+    per-row ops; a snapshot is a copy of the scan state). The drafter K/V can change in its low bits for the rows a
+    split plan warmed in 2048-row chunk / short-trace drafter passes and one segment warms in a big-chunk pass (r67
+    stack, 2026-10-31: drafter K/V differed at 5 of 7 prompt lengths, acceptance moved at 1 of 7, 41021 tokens
+    2.824 -> 2.706 committed/iter; the 64 greedy tokens were identical everywhere). A planner difference: the state at
+    a former split point no longer passes through a masked short-trace tail (whose trailing masked GDN chunks hand on a
+    state re-packed by one more identity scan step), so
     such a saved snapshot differs in its low bits; the downstream prefill outputs were bit-identical in every device
     test (see the module docstring of prefill_plan.py). Needs the KDA conv (QWEN_GDN_CONV=kda) and the fused chunk op;
     TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up)."""
