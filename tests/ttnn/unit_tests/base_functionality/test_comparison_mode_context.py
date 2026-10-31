@@ -721,9 +721,15 @@ def test_binary_backward_with_keyword_scalar_in_comparison_mode(device, operatio
         # gives.
         pytest.param(ttnn.erfinv_bw, _linspace_tile(-0.9, 0.9), {}, id="erfinv_bw"),
         # A negative eps disables clamping: torch and the device both give NaN outside [0, 1] and 1 / (x * (1 - x))
-        # inside it.
+        # inside it, including on [eps, 0) and (1, 1 - eps].
         pytest.param(
             ttnn.logiteps_bw, _repeated_tile([-2.0, 0.25, 0.75, 2.0]), {"eps": -0.001}, id="logiteps_bw_negative_eps"
+        ),
+        pytest.param(
+            ttnn.logiteps_bw,
+            _repeated_tile([-0.25, 0.25, 0.75, 1.25]),
+            {"eps": -0.5},
+            id="logiteps_bw_negative_eps_in_band",
         ),
         # The device writes zero for NaN inputs; torch autograd must produce the same gradient at those positions.
         pytest.param(ttnn.relu6_bw, _repeated_tile([float("nan"), -1.0, 3.0, 7.0]), {}, id="relu6_bw_nan_input"),
