@@ -12,6 +12,7 @@
 
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -97,6 +98,18 @@ void test_dram_prefetcher_validator(
 // call against freshly delivered data -- so there is nothing for program caching to hit, and the
 // direct path keeps the test op's wiring visible next to what it validates.
 void test_tensor_prefetcher_pipe_validator(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
+    bool streaming = false,
+    const std::vector<uint32_t>& rotation = {});
+
+// The workload test_tensor_prefetcher_pipe_validator enqueues, for a caller that enqueues it some other way,
+// such as recording it into a CommandList.
+tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,

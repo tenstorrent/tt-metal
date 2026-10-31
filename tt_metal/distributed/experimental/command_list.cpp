@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -26,6 +27,7 @@
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/buffers/tensor_prefetcher_manager.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/metal_env_impl.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -344,6 +346,10 @@ public:
     ~CommandListBuilderImpl();
 
     void add(MeshWorkload& workload, const CmdListParameters& parameters);
+    void add_tensor_prefetcher_request(
+        const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+        ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+        const std::vector<TensorPrefetcherInput>& input_tensors);
     CommandList build(MeshCommandQueue& cq) const;
     MeshDevice& device() const;
     void clear();
@@ -386,6 +392,7 @@ private:
     // Become CommandListParameterRegistry::tensor_regions and tensor_region_slots at build().
     std::vector<BoundTensorFootprint> tensor_regions;
     std::unordered_map<CmdListTensorArgName, std::vector<size_t>> tensor_region_slots;
+    distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests;
     bool valid = true;
     bool lock_held = false;
 };
@@ -400,6 +407,7 @@ public:
         std::shared_ptr<MeshBuffer> command_buffer,
         std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers,
         detail::CommandListParameterRegistry registry,
+        distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests,
         uint8_t cq_id,
         SubDeviceManagerId sub_device_manager_id);
     ~Impl();
@@ -422,6 +430,8 @@ private:
     // Pins kernel-binary MeshBuffers referenced by the serialized commands.
     std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers;
     detail::CommandListParameterRegistry registry;
+    // Re-queued on the Tensor prefetcher before each replay's commands.
+    distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests;
     uint8_t bound_cq_id = 0;
     SubDeviceManagerId sub_device_manager_id;
     bool valid = true;
@@ -433,6 +443,7 @@ CommandList::Impl::Impl(
     std::shared_ptr<MeshBuffer> command_buffer,
     std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers,
     detail::CommandListParameterRegistry registry,
+    distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests,
     uint8_t cq_id,
     SubDeviceManagerId sub_device_manager_id) :
     mesh_device(&mesh_device),
@@ -440,6 +451,7 @@ CommandList::Impl::Impl(
     command_buffer(std::move(command_buffer)),
     retained_binary_buffers(std::move(retained_binary_buffers)),
     registry(std::move(registry)),
+    tensor_prefetcher_requests(std::move(tensor_prefetcher_requests)),
     bound_cq_id(cq_id),
     sub_device_manager_id(sub_device_manager_id) {
     mesh_device.impl().register_command_list();
@@ -470,6 +482,7 @@ void CommandList::Impl::release_resources() noexcept {
     descriptor = {};
     retained_binary_buffers.clear();
     registry = {};
+    tensor_prefetcher_requests = {};
     valid = false;
     mesh_device->impl().unregister_command_list();
 }
@@ -524,13 +537,23 @@ void CommandList::Impl::replay(bool blocking, bool check_dram_overlap) const {
     if (check_dram_overlap) {
         verify_no_dram_overlap();
     }
+    // Queued ahead of the commands, as trace replay does, so the prefetcher can start filling the pipes while the
+    // consumers are dispatched. Queued under the same API lock as the commands, after the list is accepted, so a
+    // rejected list sends nothing and concurrent replays reach the pipes in the order their consumers run.
+    std::function<void()> queue_prefetcher_requests;
+    if (!tensor_prefetcher_requests.requests.empty()) {
+        queue_prefetcher_requests = [this] {
+            mesh_device->impl().tensor_prefetcher(mesh_device).replay_captured_nolock(tensor_prefetcher_requests);
+        };
+    }
     as_fd_queue(mesh_device->mesh_command_queue(bound_cq_id))
         .enqueue_command_list(
             descriptor.worker_descriptors(),
             descriptor.sub_device_ids(),
             *command_buffer,
             sub_device_manager_id,
-            blocking);
+            blocking,
+            queue_prefetcher_requests);
 }
 
 void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking) {
@@ -1068,6 +1091,16 @@ void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters
     }
 }
 
+void CommandListBuilderImpl::add_tensor_prefetcher_request(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors) {
+    TT_FATAL(valid, "CommandListBuilder has been deallocated");
+    mesh_device.impl()
+        .tensor_prefetcher(&mesh_device)
+        .capture(tensor_prefetcher_requests, prefetcher_pipes, device_subset, input_tensors);
+}
+
 CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
     TT_FATAL(valid, "CommandListBuilder has been deallocated");
     TT_FATAL(cq.device() == &mesh_device, "Command queue belongs to a different MeshDevice");
@@ -1087,6 +1120,7 @@ CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
         std::move(command_buffer),
         retained_binary_buffers,
         std::move(assembly.registry),
+        tensor_prefetcher_requests,
         static_cast<uint8_t>(cq.id()),
         sub_device_manager_id));
 }
@@ -1103,6 +1137,7 @@ void CommandListBuilderImpl::clear() {
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
+    tensor_prefetcher_requests = {};
 }
 
 void CommandListBuilderImpl::deallocate() {
@@ -1111,6 +1146,7 @@ void CommandListBuilderImpl::deallocate() {
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
+    tensor_prefetcher_requests = {};
     valid = false;
     if (lock_held) {
         mesh_device.impl().release_command_list_builder();
@@ -1129,6 +1165,14 @@ CommandListBuilder::~CommandListBuilder() = default;
 void CommandListBuilder::add(MeshWorkload& workload, const CmdListParameters& parameters) {
     TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
     impl_->add(workload, parameters);
+}
+
+void CommandListBuilder::add_tensor_prefetcher_request(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors) {
+    TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
+    impl_->add_tensor_prefetcher_request(prefetcher_pipes, device_subset, input_tensors);
 }
 
 CommandList CommandListBuilder::build(MeshCommandQueue& cq) const {
