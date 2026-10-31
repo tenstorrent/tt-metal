@@ -467,6 +467,7 @@ private:
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
     bool has_tile_counter_registers_{};
+    uint32_t num_dataflow_buffers_{};
     bool supports_implicit_dfb_sync_{};
     uint32_t num_tile_counters_{};
 
@@ -610,8 +611,8 @@ public:
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
 
-    // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_num_dataflow_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS; }
+    // Max dataflow buffers (circular buffers on Gen1) per core: the number of device slots a core's DFBs can occupy.
+    uint32_t get_num_dataflow_buffers() const { return num_dataflow_buffers_; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 

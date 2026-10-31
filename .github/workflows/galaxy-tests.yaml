@@ -36,6 +36,10 @@ on:
           - all
           - galaxy-fabric-unit
           - galaxy-fabric-2d-torus-nightly
+          - galaxy-fabric-2x2-torus-z
+          - galaxy-fabric-2x2-torus-nonz
+          - galaxy-fabric-per-mesh-torus-yx
+          - galaxy-fabric-per-mesh-wh-combo
           - galaxy-fabric-multi-mesh-4x4-2x4s
           - galaxy-fabric-multi-mesh-2x8-2x4s
           - bh-galaxy-fabric-torus-stability
@@ -124,7 +128,7 @@ jobs:
     outputs:
       enabled-skus: ${{ steps.skus.outputs.enabled-skus }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions/resolve-galaxy-skus
