@@ -168,6 +168,17 @@ int main()
                 cfg_regs[TRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0b111;
                 const std::uint32_t sr   = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
                 const std::uint32_t bits = mask << 12;
+                // TRISCs idle in their icache loop between kernels (not in reset): assert reset first, so the
+                // poked TRISCs really restart at poke_loop when released.
+                ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, sr | TRISC_SOFT_RESET_MASK);
+                do
+                {
+                    asm volatile("nop");
+                } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != (sr | TRISC_SOFT_RESET_MASK));
+                for (std::uint32_t i = 0; i < 100; ++i)
+                {
+                    asm volatile("nop");
+                }
                 ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, (sr | TRISC_SOFT_RESET_MASK) & ~bits);
                 for (std::uint32_t i = 0; i < 2000; ++i)
                 {
