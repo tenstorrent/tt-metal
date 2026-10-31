@@ -31,18 +31,28 @@ inline void _calculate_where_(
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
 
-    lltt::record(0, 6);
-    TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
-    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
-    TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
-    TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_6, offset3);
+    // Three SFPLOADs, SFPSETCC, SFPENCC, SFPSTORE.
+    constexpr std::uint32_t replay_len = 6;
+
+    // Same bracketed record as the SFPLOADMACRO paths below: load_replay_buf disables instruction
+    // gathering around the record window when the kernel is built with gathering on.
+    load_replay_buf(
+        0 /*start*/,
+        replay_len,
+        [offset0, offset1, offset2, offset3]
+        {
+            TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
+            TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
+            TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
+            TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_6, offset3);
+        });
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        lltt::replay(0, 6);
+        lltt::replay(0 /*start*/, replay_len);
     }
 #else
     if (dst_index_out == dst_index_in0)
