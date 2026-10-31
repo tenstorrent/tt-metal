@@ -8,6 +8,14 @@
 
 #include "internal/debug/sanitize.h"
 
+// The nodes a multicast destination's address is reserved on, which its traits report through multicast_node_set:
+// num_nodes packed coordinates (x in bits 8-15, y in bits 0-7). Defined without Watcher too, so the traits needn't
+// depend on it.
+struct DebugMulticastNodeSet {
+    const uint16_t* packed_xy_coords;
+    uint32_t num_nodes;
+};
+
 #if defined(DEBUG_SANITIZE_NOC_ENABLED)
 
 struct DebugNodeCoord {
@@ -100,10 +108,9 @@ inline void debug_sanitize_multicast_rect_covered(
     }
 }
 
-// Multicast into a sharded tensor: every worker node of the rectangle must be one of the tensor's nodes, given as
-// num_nodes packed bank coordinates (x in bits 8-15, y in bits 0-7).
+// Every worker node of the rectangle must be one of the destination's nodes.
 //
-// Takes the nodes as a pointer and count, not a template over the accessor, so Watcher builds carry one copy.
+// Takes the nodes as a pointer and count, not a template over the destination, so Watcher builds carry one copy.
 void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -111,22 +118,21 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     uint32_t len,
     DebugNodeCoord start,
     DebugNodeCoord end,
-    const uint16_t* packed_xy_coords,
-    uint32_t num_nodes,
+    DebugMulticastNodeSet nodes,
     bool includes_sender) {
     const DebugMulticastRect rect{noc_id, start, end};
     if (!rect.is_malformed && !debug_is_worker(noc_id, rect.min)) {
         return;  // left to the generic multicast check
     }
     const DebugNodeCoord sender = debug_sender_coord(noc_id);
-    // Assumes the tensor's nodes are distinct, or a duplicate inside the rectangle can hide a missing one. A
+    // Assumes the nodes are distinct, or a duplicate inside the rectangle can hide a missing one. A tensor's
     // BufferDistributionSpec built from a CoreRangeSet satisfies this; one built from a core list is not checked.
     uint32_t num_inside = 0;
     bool is_sender_node = false;
-    for (uint32_t i = 0; i < num_nodes; ++i) {
+    for (uint32_t i = 0; i < nodes.num_nodes; ++i) {
         const DebugNodeCoord node{
-            static_cast<uint32_t>((packed_xy_coords[i] >> 8) & 0xFF),
-            static_cast<uint32_t>(packed_xy_coords[i] & 0xFF),
+            static_cast<uint32_t>((nodes.packed_xy_coords[i] >> 8) & 0xFF),
+            static_cast<uint32_t>(nodes.packed_xy_coords[i] & 0xFF),
         };
         num_inside += debug_rect_contains(rect, node);
         is_sender_node |= node == sender;
@@ -134,22 +140,21 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     debug_sanitize_multicast_rect_covered(
         noc_id, noc_addr, l1_addr, len, rect, num_inside, sender, is_sender_node, includes_sender);
 }
-#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                                      \
-    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender) \
-    debug_sanitize_noc_multicast_rect_in_node_set(                                          \
-        noc_id,                                                                             \
-        noc_a,                                                                              \
-        worker_a,                                                                           \
-        l,                                                                                  \
-        DebugNodeCoord{x_start, y_start},                                                   \
-        DebugNodeCoord{x_end, y_end},                                                       \
-        coords,                                                                             \
-        n,                                                                                  \
+#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                                  \
+    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, nodes, includes_sender) \
+    debug_sanitize_noc_multicast_rect_in_node_set(                                      \
+        noc_id,                                                                         \
+        noc_a,                                                                          \
+        worker_a,                                                                       \
+        l,                                                                              \
+        DebugNodeCoord{x_start, y_start},                                               \
+        DebugNodeCoord{x_end, y_end},                                                   \
+        nodes,                                                                          \
         includes_sender)
 
 #else  // !DEBUG_SANITIZE_NOC_ENABLED
 
 #define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET( \
-    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender)
+    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, nodes, includes_sender)
 
 #endif  // DEBUG_SANITIZE_NOC_ENABLED
