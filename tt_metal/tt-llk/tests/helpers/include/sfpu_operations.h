@@ -585,6 +585,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::gelu)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE, is_fp32_dest_acc_en>);
+        ckernel::sfpu::gelu_bf16_tile_init<!is_fp32_dest_acc_en && !APPROX_MODE && ITERATIONS == 32>();
     }
     else if constexpr (OPERATION == SfpuType::gelu_appx)
     {

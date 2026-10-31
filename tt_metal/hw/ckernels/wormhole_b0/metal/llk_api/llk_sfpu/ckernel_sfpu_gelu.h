@@ -291,8 +291,28 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
+bool bf16_dest_gelu();
+template <int ITERATIONS>
+void calculate_gelu_bf16();
+void init_gelu_bf16();
+// Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
+inline constexpr bool gelu_bf16_whole_tile = true;
+// Sets up the generated BF16 gelu kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void gelu_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_gelu_bf16();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_gelu()) {
+            calculate_gelu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {
@@ -612,3 +632,5 @@ inline void gelu_derivative_polynomial_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_gelu_bf16.h"
