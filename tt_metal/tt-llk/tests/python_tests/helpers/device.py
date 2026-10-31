@@ -269,6 +269,8 @@ _HOST_SIGNAL_SCRATCH_INDEX = {
 
 def host_signal_address(slot: int) -> int | None:
     """Address of host signal slot, or None when this target signals through L1 only."""
+    if os.environ.get("RC_HOST_L1POLL"):  # RC experiment: poll L1 over the NoC, as on Versim
+        return None
     index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
     target = TestTargetConfig._instance
     if index is None or (target is not None and target.run_simulator):

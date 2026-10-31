@@ -1392,6 +1392,9 @@ class TestConfig:
         if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
 
+        if os.environ.get("RC_BRISC_POLL_1US"):  # RC experiment: BRISC polls every 1 us, as on Versim
+            OPTIONS_COMPILE += "-DRC_BRISC_POLL_1US "
+
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
         if self.coverage_build == CoverageBuild.Yes:

@@ -210,7 +210,7 @@ int main()
                 break;
         }
 
-#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
+#if defined(TT_METAL_TTSIM) || defined(RC_BRISC_POLL_1US) // RC experiment: Versim-like 1 us poll; ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
         constexpr std::uint32_t poll_period_us = 1;
 #else
         constexpr std::uint32_t poll_period_us = 100;
