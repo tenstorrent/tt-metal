@@ -6,7 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -20,7 +20,7 @@ struct LlamaAllGatherMatmulAsyncSharedVariables {
     // The intermediate CB is globally allocated over the intermediate tensor's buffer, so its address
     // has to be re-pointed on every cache hit; keep the handle to do that.
     tt::tt_metal::CBHandle cb_inter{};
-    ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_shared_variables;
+    ttnn::operations::llama_matmul::agmm_fusion_override_variables_t matmul_shared_variables;
 };
 
 struct LlamaAllGatherMatmulAsyncProgramFactory {
