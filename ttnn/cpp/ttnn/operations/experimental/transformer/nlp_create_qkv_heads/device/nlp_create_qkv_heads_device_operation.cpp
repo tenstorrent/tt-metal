@@ -58,6 +58,12 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_tile_shape()[1];
+    TT_FATAL(
+        operation_attributes.head_dim % tile_width == 0,
+        "head_dim ({}) must be a multiple of the tile width ({}); pad each head to a tile multiple",
+        operation_attributes.head_dim,
+        tile_width);
 
     CMAKE_UNIQUE_NAMESPACE::validate_q_head_split(operation_attributes, tensor_args);
     if (operation_attributes.kv_tied) {
