@@ -154,14 +154,15 @@ jobs:
         id: skip-list
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os, yaml
+          import os, shlex, yaml
           skips = yaml.safe_load(open(os.environ["TTSIM_SKIP_LIST_YAML"])) or {}
           for arch in ("wormhole_b0", "blackhole", "quasar"):
               ids = skips.get(arch) or []
               bad = [p for p in ids if not isinstance(p, str)]
               if bad:
                   raise SystemExit(f"{arch} skip-list entries are not strings (quote ids that end in ':'): {bad}")
-              args = " ".join("--deselect=" + p for p in ids)
+              # Quote each arg: ids can contain spaces and pytest shlex-splits PYTEST_ADDOPTS.
+              args = " ".join(shlex.quote("--deselect=" + p) for p in ids)
               print(f"skip-args-{arch}={args}")
           PY
 

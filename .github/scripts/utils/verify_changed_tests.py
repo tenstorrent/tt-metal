@@ -79,6 +79,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -490,11 +491,15 @@ def ttsim_skip_arch(sku):
 
 
 def deselect_args(sku, skips):
-    """The pytest --deselect args a sim leg should carry, as one shell-ready string."""
+    """The pytest --deselect args a sim leg should carry, as one shell-ready string.
+
+    Each arg is shlex-quoted: node ids can contain spaces (e.g. `grid_size=(8, 4)`), and
+    pytest shlex-splits PYTEST_ADDOPTS.
+    """
     arch = ttsim_skip_arch(str(sku))
     if arch is None:
         return ""
-    return " ".join("--deselect=" + test_id for test_id in skips.get(arch) or [])
+    return " ".join(shlex.quote("--deselect=" + test_id) for test_id in skips.get(arch) or [])
 
 
 # ---------------------------------------------------------------------------

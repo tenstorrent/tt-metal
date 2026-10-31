@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import re
+import shlex
 import textwrap
 from pathlib import Path
 
@@ -1371,6 +1372,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/test_b.py::test_wh_two[param_x]
 blackhole:
   - tests/ttnn/unit_tests/test_c.py::test_bh_only
+  - tests/ttnn/unit_tests/test_c.py::test_bh_spaced[grid_size=(8, 4)]
 quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_d.py::test_llk_only
   - models/experimental/ops/quasar/tests/test_e.py::test_qsr_only[param_y]
@@ -1438,7 +1440,12 @@ def test_sim_legs_carry_their_archs_deselect_args(repo: Repo):
     assert "test_c.py" not in wh
 
     bh = by_sku["sim_bh_p150"]["gate_pytest_deselect"]
-    assert bh == "--deselect=tests/ttnn/unit_tests/test_c.py::test_bh_only"
+    assert bh == (
+        "--deselect=tests/ttnn/unit_tests/test_c.py::test_bh_only "
+        "'--deselect=tests/ttnn/unit_tests/test_c.py::test_bh_spaced[grid_size=(8, 4)]'"
+    )
+    # pytest shlex-splits PYTEST_ADDOPTS; the spaced id must survive as one arg.
+    assert shlex.split(bh)[1] == "--deselect=tests/ttnn/unit_tests/test_c.py::test_bh_spaced[grid_size=(8, 4)]"
 
     # Hardware legs get no deselects at all.
     assert "gate_pytest_deselect" not in by_sku["wh_n150_civ2"]
@@ -1459,7 +1466,7 @@ def test_sim_quasar_legs_carry_the_quasar_deselects(repo: Repo):
     assert code == 0, stderr
     assert payload["legs"][0]["gate_pytest_deselect"] == (
         "--deselect=tt_metal/tt-llk/tests/python_tests/quasar/test_d.py::test_llk_only "
-        "--deselect=models/experimental/ops/quasar/tests/test_e.py::test_qsr_only[param_y]"
+        "'--deselect=models/experimental/ops/quasar/tests/test_e.py::test_qsr_only[param_y]'"
     )
 
 

@@ -48,6 +48,26 @@ blackhole:
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
 
+  # ttsim: tensix_unpacr_nop bank_clr_ctrl=1 is unsupported (some tiny-tile matmul configs); crashes the xdist worker
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile[silicon_arch_name=blackhole-mesh_device=(1, 1)-m=4-k=32-n=32-tile_h=4-tile_w=32-transpose_tile=False]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile[silicon_arch_name=blackhole-mesh_device=(1, 1)-m=2-k=32-n=32-tile_h=2-tile_w=32-transpose_tile=False]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile[silicon_arch_name=blackhole-mesh_device=(1, 1)-m=4-k=32-n=32-tile_h=4-tile_w=32-transpose_tile=False]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=1-grid_size=(8, 4)-has_bias=False-n=1024-k=1024-m=128]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=2-grid_size=(8, 4)-has_bias=False-n=1024-k=1024-m=128]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=4-grid_size=(8, 4)-has_bias=False-n=1024-k=1024-m=128]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=32-tile_h=4-grid_size=(8, 4)-has_bias=False-n=1024-k=1024-m=128]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=32-tile_h=1-grid_size=(8, 4)-has_bias=False-n=1024-k=1024-m=128]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_1d_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=32-tile_h=8-grid_size=(8, 4)-has_bias=False-n=1024-k=1024-m=128]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=1-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=2-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_tiny_tile[transpose_tile=False-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=4-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=32-tile_h=1-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=32-tile_h=2-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_tiny_tile[transpose_tile=True-in1_dtype=DataType.BFLOAT16-out_sharded=True-in0_sharded=True-tile_w=32-tile_h=4-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_optional_output_argument_with_tiny_tiles[tile_w=16-tile_h=1-n_out=512-k=64-m=1024-c=1-n=1]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_optional_output_argument_with_tiny_tiles[tile_w=16-tile_h=2-n_out=512-k=64-m=1024-c=1-n=1]
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_optional_output_argument_with_tiny_tiles[tile_w=16-tile_h=4-n_out=512-k=64-m=1024-c=1-n=1]
+
 quasar:
   # ttsim: rv32_v_alu baby-RISC V extension is out of scope.
   - tt_metal/tt-llk/tests/python_tests/quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar
@@ -76,3 +96,6 @@ quasar:
   - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw40-ttnn_mesh_device0]  # #62417
   - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_nhwc_to_nchw-ttnn_mesh_device0]  # #62417
   - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_transpose-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_nlp_create_qkv_heads_decode.py::test_nlp_create_qkv_heads_decode[00_1x6144_bf16_int-l1-ttnn_mesh_device0]  # ttsim: mop_ingest inner_loop_len=192 unimplemented (pack untilize BLOCK_CT_DIM on 3x2 grid)
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[dist2bbox-1280-ttnn_mesh_device0]  # ttsim: mop_ingest inner_loop_len=524 unimplemented (tilize)
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_concat.py::test_concat[00_32x8192_bf8_host-ttnn_mesh_device0]  # ttsim: mop_ingest inner_loop_len=256 unimplemented
