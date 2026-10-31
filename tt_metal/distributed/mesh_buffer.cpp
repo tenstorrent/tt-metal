@@ -259,7 +259,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         TT_FATAL(!address.has_value(), "Per-core allocation does not support explicit address");
         mesh_buffer = std::shared_ptr<MeshBuffer>(
             new MeshBuffer(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
-        mesh_buffer->unique_id_ = BufferImpl::next_unique_id.fetch_add(1);
+        mesh_buffer->unique_id_ = BufferImpl::allocate_unique_id();
         // Per-core: each device allocates independently. The mesh-level lockstep allocator queries
         // device per-bank ranges at allocation time, so no explicit mirroring is needed.
         for (auto& [coord, device_buffer] : mesh_buffer->buffers_) {
@@ -438,13 +438,12 @@ void MeshBuffer::deallocate() {
         {
             std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
             state_.swap(old_state);
+            unique_id_.reset();
         }
     };
 
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
-        unique_id_.reset();
-
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
@@ -484,7 +483,6 @@ void MeshBuffer::deallocate() {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
     }
-    unique_id_.reset();
     set_deallocated_state();
 }
 

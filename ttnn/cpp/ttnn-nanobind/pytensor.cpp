@@ -1634,7 +1634,7 @@ void pytensor_module(nb::module_& mod) {
         )doc")
         .def(
             "buffer_unique_id",
-            [](const Tensor& self) -> std::optional<size_t> {
+            [](const Tensor& self) -> std::optional<std::uint64_t> {
                 if (!is_device_tensor(self) || !self.is_allocated() ||
                     !self.device_storage().is_root_allocated()) {
                     return std::nullopt;
@@ -1642,10 +1642,11 @@ void pytensor_module(nb::module_& mod) {
                 return self.device_storage().get_root_mesh_buffer().unique_id();
             },
             R"doc(
-            Get the unique ID of this tensor's root backing device buffer, or
+            Get the ID of the device allocation holding this tensor's memory, or
             None if the tensor is not on device / not allocated. Views return
-            the ID of the buffer that owns their device memory. This ID matches
-            the IDs reported by the unsafe-allocation tracker.
+            the ID of the allocation that owns their device memory. For lockstep
+            allocated tensors, this ID matches the IDs reported by the
+            unsafe-allocation tracker.
         )doc")
         .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(

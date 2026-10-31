@@ -34,7 +34,8 @@ public:
         const BufferShardingArgs& sharding_args,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
-        bool owns_data);
+        bool owns_data,
+        std::optional<size_t> unique_id = std::nullopt);
 
     static std::shared_ptr<Buffer> create(
         IDevice* device,
@@ -119,6 +120,8 @@ public:
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
+    // Draws a new ID for a Buffer or for the allocation of a MeshBuffer.
+    static size_t allocate_unique_id() { return next_unique_id.fetch_add(1); }
 
 private:
     static std::shared_ptr<Buffer> create_owning(

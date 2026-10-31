@@ -26,6 +26,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -955,6 +956,8 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 node_id GraphProcessor::add_tensor(const Tensor& t) {
     // Set only if the tensor's MeshBuffer owns its allocation.
     const tt::tt_metal::distributed::MeshBuffer* buffer = nullptr;
+    // A lockstep allocation has one address on the whole MeshDevice. A per-node one is placed by each device.
+    bool lockstep = false;
     nlohmann::json device_tensors_json = nlohmann::json::array();
     if (is_device_tensor(t) && t.is_allocated()) {
         const auto& mesh_buffer = t.mesh_buffer();
@@ -963,6 +966,8 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         // To deduplicate an entry for this buffer, use the allocation's ID.
         if (mesh_buffer.unique_id().has_value()) {
             buffer = &mesh_buffer;
+            lockstep = !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+                mesh_buffer.device_local_config().sharding_args);
         }
 
         // For multi-device tensors, capture per-device addresses and mesh device IDs.
@@ -980,7 +985,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             if (device_buffer != nullptr) {
                 device_tensors_json.push_back(
                     {{"device_id", device_buffer->device()->id()},
-                     {kMeshDeviceId, buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
+                     {kMeshDeviceId, lockstep ? buffer->device()->id() : device_buffer->device()->id()},
                      {"address", device_buffer->address()}});
             }
         }
@@ -1012,7 +1017,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     // Add buffer-related info (primary device for single-device tensors)
-    if (buffer != nullptr) {
+    if (lockstep) {
         params[kDeviceId] = std::to_string(buffer->device()->id());
         params[kAddress] = std::to_string(buffer->address());
     }
@@ -1051,6 +1056,12 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
 
 node_id GraphProcessor::add_buffer(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer) {
     const auto& config = mesh_buffer.device_local_config();
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config.sharding_args)) {
+        // Match the node track_allocate records from the first device's Buffer, which shares the MeshBuffer's ID.
+        const auto* mesh_device = mesh_buffer.device();
+        return add_buffer(
+            mesh_buffer.get_device_buffer(mesh_device->get_view().get_local_mesh_coord_range().start_coord()));
+    }
     return add_buffer(
         mesh_buffer.unique_id().value(),
         mesh_buffer.device_local_size(),

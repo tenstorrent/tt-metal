@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
+import pytest
 import torch
 import ttnn
 from conftest import requires_hybrid_allocator
@@ -48,3 +51,45 @@ def test_graph_capture_links_per_core_tensor_to_its_allocation(device):
         if node["counter"] in allocated_buffers and device_tensors.intersection(node["connections"])
     ]
     assert linked, "the tensor is not linked to the buffer node of its allocation"
+
+
+@requires_hybrid_allocator
+def test_graph_capture_reports_each_device_of_per_core_tensor(mesh_device):
+    """Each device places a per-core allocation itself, so graph capture must report every device's tensor under its
+    own device ID, and give the tensor no single address."""
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("Requires at least 2 devices")
+    core = ttnn.CoreCoord(0, 0)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), [1, 64], ttnn.ShardOrientation.ROW_MAJOR
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    mem_config.experimental_set_per_core_allocation(True)
+    data = torch.zeros(1, 64, dtype=torch.uint8)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    tensor = ttnn.from_torch(
+        data,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ttnn.from_device(tensor)
+    graph = ttnn.graph.end_graph_capture()
+
+    tensor_nodes = [
+        node
+        for node in graph
+        if node["node_type"] == "tensor"
+        and node["params"].get("storage_type") == "DEVICE"
+        and "device_tensors" in node["params"]
+    ]
+    assert tensor_nodes, "the tensor was not captured"
+    for node in tensor_nodes:
+        device_tensors = json.loads(node["params"]["device_tensors"])
+        assert len(device_tensors) == mesh_device.get_num_devices()
+        assert len({dt["mesh_device_id"] for dt in device_tensors}) == len(device_tensors)
+        assert all(dt["mesh_device_id"] == dt["device_id"] for dt in device_tensors)
+        assert "address" not in node["params"]
