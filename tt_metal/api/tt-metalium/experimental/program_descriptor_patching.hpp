@@ -83,6 +83,9 @@ struct ResolvedCbBinding {
 struct ResolvedBindings {
     std::vector<ResolvedRtArgBinding> rt_args;
     std::vector<ResolvedCbBinding> cbs;
+    // True when resolve_bindings bailed on an ambiguous Buffer* alias: rt_args/cbs are then empty even
+    // though the descriptor may declare bindings, so a cache hit cannot re-point any address.
+    bool bailed_on_alias = false;
     bool empty() const noexcept { return rt_args.empty() && cbs.empty(); }
 };
 

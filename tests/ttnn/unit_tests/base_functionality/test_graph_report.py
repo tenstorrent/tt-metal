@@ -3786,6 +3786,25 @@ class TestGraphCaptureToFile:
         assert "version" in report
         assert report["graph"] == captured_graph
 
+    def test_capture_ends_when_report_file_cannot_be_written(self, device, tmp_report_dir, expect_error):
+        blocker = tmp_report_dir / "not_a_directory"
+        blocker.write_text("")
+        report_path = blocker / "report.json"
+
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            _ = ttnn.relu(tt_input)
+            with expect_error(RuntimeError, "cannot create directories"):
+                ttnn.graph.end_graph_capture_to_file(report_path)
+            assert not ttnn.graph.is_graph_capture_active()
+        finally:
+            if ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+
     @skip_for_slow_dispatch()
     def test_default_manager_execution_metadata_round_trip(self, device, tmp_report_dir):
         report_path = tmp_report_dir / "default_manager_report.json"

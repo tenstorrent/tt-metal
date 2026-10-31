@@ -6,6 +6,7 @@ import dataclasses
 
 import pathlib
 import sys
+import threading
 import types
 
 from contextlib import contextmanager
@@ -792,7 +793,25 @@ def set_output_tensor_id_decorator(function):
     return call_wrapper
 
 
-OPERATION_CALL_STACK = []
+class _OperationCallStack(threading.local):
+    def __init__(self):
+        self.frames = []
+        self.operation_id = None
+
+
+# Per thread: an operation running on another thread must not make this thread's operation look nested.
+_operation_call_stack = _OperationCallStack()
+
+
+def get_current_operation_id():
+    """ID of the top-level operation running on the calling thread."""
+    return _operation_call_stack.operation_id
+
+
+def __getattr__(name):
+    if name == "OPERATION_CALL_STACK":
+        return _operation_call_stack.frames
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _complex_tensor_to_torch(complex_tensor, convert_component):
@@ -1539,7 +1558,7 @@ class Operation:
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
                 operation_id = ttnn._ttnn.get_python_operation_id()
-                is_top_level_operation = len(OPERATION_CALL_STACK) == 1
+                is_top_level_operation = len(_operation_call_stack.frames) == 1
 
                 decorated_function = function
 
@@ -1690,13 +1709,14 @@ class Operation:
         recording = ttnn.graph.is_python_io_recording_enabled()
         if recording:
             ttnn.graph.track_function_start(self.python_fully_qualified_name)
+        call_stack = _operation_call_stack.frames
         try:
-            if not OPERATION_CALL_STACK:
-                ttnn._ttnn.fetch_and_increment_python_operation_id()
-            OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
+            if not call_stack:
+                _operation_call_stack.operation_id = ttnn._ttnn.fetch_and_increment_python_operation_id() + 1
+            call_stack.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
-            OPERATION_CALL_STACK.pop()
+            call_stack.pop()
             if recording:
                 ttnn.graph.track_function_end()
         return output

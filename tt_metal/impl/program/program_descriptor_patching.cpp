@@ -103,7 +103,7 @@ ResolvedBindings resolve_bindings(
             // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
             auto& seen = is_input ? input_buffers : output_buffers;
             if (!seen.insert(buf).second) {
-                return ResolvedBindings{};
+                return ResolvedBindings{.bailed_on_alias = true};
             }
         }
     }
