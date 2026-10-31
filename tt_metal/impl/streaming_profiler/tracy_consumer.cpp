@@ -55,13 +55,14 @@ void TracyConsumer::operator()(const Batch& batch) {
     using experimental::streaming_profiler::TimestampedData;
     using experimental::streaming_profiler::Zone;
     for (const Zone& zone : batch.records<Zone>()) {
-        push_zone(zone.core(), zone.site().name, zone.start_host_cycles(), zone.end_host_cycles());
+        push_zone(zone.core(), zone.observability_event().name, zone.start_host_cycles(), zone.end_host_cycles());
     }
     for (const TimestampedData& data : batch.records<TimestampedData>()) {
-        push_marker(data.core(), data.site().name, data.host_cycles(), data.runtime_id(), data.payload());
+        push_marker(
+            data.core(), data.observability_event().name, data.host_cycles(), data.runtime_id(), data.payload());
     }
     for (const Event& event : batch.records<Event>()) {
-        push_marker(event.core(), event.site().name, event.host_cycles(), event.runtime_id(), {});
+        push_marker(event.core(), event.observability_event().name, event.host_cycles(), event.runtime_id(), {});
     }
 }
 

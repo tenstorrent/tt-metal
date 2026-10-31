@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "hostdev/profiler_zone_id.h"
+#include "hostdev/observability_event_id.h"
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -66,10 +66,10 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Hands out the tu_id half of a structural zone id (hostdev/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
-// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
+// Hands out the tu_id half of a structural event id (hostdev/observability_event_id.h) as -DTT_PROFILER_TU_ID.
+// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_observability_event_meta),
 // hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
-// number its zones differently. Compile-time args are left out to keep the registry bounded; two
+// number its events differently. Compile-time args are left out to keep the registry bounded; two
 // define-variants of one source then share a tu_id, which the host reports as a collision rather than
 // mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
 // sharing a cache root, the mutex covers the JIT's own thread pool.
@@ -80,11 +80,11 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
     struct RegistryLock {
         int fd;
         explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
-            TT_FATAL(fd >= 0, "Failed to open profiler zone tu-id registry '{}': {}", path, std::strerror(errno));
+            TT_FATAL(fd >= 0, "Failed to open observability event tu-id registry '{}': {}", path, std::strerror(errno));
             if (::flock(fd, LOCK_EX) != 0) {
                 int err = errno;
                 ::close(fd);
-                TT_THROW("Failed to lock profiler zone tu-id registry '{}': {}", path, std::strerror(err));
+                TT_THROW("Failed to lock observability event tu-id registry '{}': {}", path, std::strerror(err));
             }
         }
         ~RegistryLock() {
@@ -93,7 +93,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
         }
     } registry_lock(registry_path);
 
-    std::vector<bool> taken(TT_ZONE_TU_COUNT, false);
+    std::vector<bool> taken(TT_OBSERVABILITY_EVENT_TU_COUNT, false);
     {
         std::ifstream in(registry_path);
         std::string line;
@@ -108,7 +108,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
             } catch (const std::exception&) {
                 continue;
             }
-            if (entry_id >= TT_ZONE_TU_COUNT) {
+            if (entry_id >= TT_OBSERVABILITY_EVENT_TU_COUNT) {
                 continue;  // assigned when the tu split was wider
             }
             if (line.compare(0, tab, source_id) == 0) {
@@ -118,22 +118,22 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
         }
     }
 
-    taken[TT_ZONE_RESERVED_TU] = true;
+    taken[TT_OBSERVABILITY_EVENT_RESERVED_TU] = true;
     uint32_t id = 0;
-    while (id < TT_ZONE_TU_COUNT && taken[id]) {
+    while (id < TT_OBSERVABILITY_EVENT_TU_COUNT && taken[id]) {
         ++id;
     }
     TT_FATAL(
-        id < TT_ZONE_TU_COUNT,
-        "Profiler zone tu-id space ({} ids) is exhausted. Delete '{}' to compact it; ids are re-derived from "
+        id < TT_OBSERVABILITY_EVENT_TU_COUNT,
+        "Observability event tu-id space ({} ids) is exhausted. Delete '{}' to compact it; ids are re-derived from "
         "each build's ELFs, so nothing is lost by resetting it.",
-        TT_ZONE_TU_COUNT,
+        TT_OBSERVABILITY_EVENT_TU_COUNT,
         registry_path);
 
     std::ofstream out(registry_path, std::ios::app);
     out << source_id << '\t' << id << '\n';
     out.flush();
-    TT_FATAL(out.good(), "Failed to persist profiler zone tu-id registry entry to '{}'", registry_path);
+    TT_FATAL(out.good(), "Failed to persist observability event tu-id registry entry to '{}'", registry_path);
     return id;
 }
 
@@ -374,7 +374,7 @@ void JitBuildEnv::init(
     if (rtoptions.get_streaming_profiler_enabled()) {
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
-        // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
+        // DeviceZoneScopedN / DeviceTimestampedData event compiled; PROFILE_STREAMING makes
         // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
         // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
@@ -832,11 +832,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // Add the machine-local PCH here so exported recipes remain portable.
     // Exclude build-map dump flags from the PCH profile.
     const std::string pch = tt::jit_build::ensure_pch(
-        env_.gpp_,
-        recipe.compiler_opt_level,
-        recipe.cflags,
-        recipe.pch_umbrella,
-        fs::path(env_.out_root_) / "pch");
+        env_.gpp_, recipe.compiler_opt_level, recipe.cflags, recipe.pch_umbrella, fs::path(env_.out_root_) / "pch");
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
@@ -847,7 +843,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -Winvalid-pch -Wno-error=invalid-pch";
     }
 
-    // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
+    // Per-TU half of the structural device event id (STREAMING profiler only; the DRAM profiler's 16-bit
     // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
     // the SOURCE, not of the build recipe, so folding it into the cache key would split the cache for no
     // reason. It is stable for a given source identity, so a cached object never disagrees with a freshly
@@ -857,10 +853,10 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
         // would mint a fresh tu_id per config for the same source).
         const std::string source_id = (settings != nullptr)
-                                          ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
+                                          ? settings->get_observability_event_src_id() + '\x1f' + this->target_name_
                                           : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
         const uint32_t tu_id =
-            get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".profiler_zone_tu_ids", source_id);
+            get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".observability_event_tu_ids", source_id);
         defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
     }
 

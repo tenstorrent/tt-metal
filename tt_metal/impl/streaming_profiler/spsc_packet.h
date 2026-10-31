@@ -4,8 +4,8 @@
 //
 // The relay's compact profiler packet wire format. Each (core, risc) lane is kept separate end to end, so
 // identity is structural and packets carry no core/risc or framing bits. A packet is two 32-bit words:
-// word0 = [31:27] type(5) | [26:0] low27, word1 = payload32. Markers carry the 27-bit structural zone id
-// (tu_id(13) << 14 | local(14), hostdev/profiler_zone_id.h) and timer_low; timer_hi rides the rare STICKY_TIMER.
+// word0 = [31:27] type(5) | [26:0] low27, word1 = payload32. Markers carry the 27-bit structural event id
+// (tu_id(13) << 14 | local(14), hostdev/observability_event_id.h) and timer_low; timer_hi rides the rare STICKY_TIMER.
 // Plain C, read by the host decoder; the producer keeps its own copy of the packer (ppfmt in
 // kernel_profiler_streaming.hpp).
 
@@ -61,7 +61,7 @@
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
-#define PP_LOW27_MASK 0x7FFFFFFu /* [26:0]: timer_hi (sticky) or the full 27-bit zone id (marker) */
+#define PP_LOW27_MASK 0x7FFFFFFu /* [26:0]: timer_hi (sticky) or the full 27-bit event id (marker) */
 
 static inline uint32_t pp_type(uint32_t w0) { return (w0 >> PP_TYPE_SHIFT) & PP_TYPE_MASK; }
 static inline uint32_t pp_low27(uint32_t w0) { return w0 & PP_LOW27_MASK; }

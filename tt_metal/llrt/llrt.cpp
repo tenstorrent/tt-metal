@@ -30,7 +30,7 @@
 #include "llrt.hpp"
 #include "binary_metadata.hpp"
 #include "tt_elffile.hpp"
-#include "zone_meta.hpp"
+#include "observability_event_meta.hpp"
 #include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -84,11 +84,11 @@ const CachedBinary& get_cached_binary(
         elf.ReadImage(path);
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
         // Every device-executed image, kernel or firmware, passes through here before it can run, so
-        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
-        // Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
-        // carry .tt_zone_meta, and ingest_elf returns immediately for the rest. Must run before from_elf, which may
-        // XIP-transform the ELF in place.
-        ZoneMetaRegistry::instance().ingest_elf(elf, path);
+        // harvesting .tt_observability_event_meta registers an event's name strictly before that event can reach the
+        // host. Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
+        // carry .tt_observability_event_meta, and ingest_elf returns immediately for the rest. Must run before
+        // from_elf, which may XIP-transform the ELF in place.
+        ObservabilityEventMetaRegistry::instance().ingest_elf(elf, path);
         ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
         if (update_callback) {
             update_callback(image);
@@ -428,9 +428,7 @@ std::optional<std::string> get_watcher_error_message_in_test_mode(
         auto& watcher = *context.watcher_server();
         if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
             return fmt::format(
-                "Device {}: Aborting wait due to watcher error: {}",
-                device_id,
-                watcher.exception_message());
+                "Device {}: Aborting wait due to watcher error: {}", device_id, watcher.exception_message());
         }
     }
     return std::nullopt;

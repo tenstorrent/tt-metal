@@ -178,10 +178,10 @@ struct TensorBindingHandle {
 //  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
 //    tensors the base address is strictly a user enqueue-time argument.
 struct ScratchpadBindingHandle {
-    std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
-    uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
-    uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
-    uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    std::string accessor_name;                // user-facing identifier (kernel symbol in `scratch::`)
+    uint32_t size_bytes = 0;                  // per-node size; emitted as the accessor's compile-time size
+    uint32_t addr_crta_word = 0;              // word index of the base-address slot within the kernel's CRTA buffer
+    uint32_t allocated_address = 0;           // L1 base address; filled by allocate_scratchpads (0 until allocated)
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
     // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
@@ -310,7 +310,9 @@ public:
     uint64_t compute_hash() const;
 
     const std::string& get_full_kernel_name() const override;
-    std::string get_profiler_zone_src_id() const override { return this->kernel_src_.profiler_zone_src_id(); }
+    std::string get_observability_event_src_id() const override {
+        return this->kernel_src_.observability_event_src_id();
+    }
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
@@ -697,9 +699,7 @@ public:
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() == ARCH::QUASAR,
             "DispatchEngineKernel is only supported on Quasar");
-        TT_FATAL(
-            config.num_threads_per_cluster == 1,
-            "DispatchEngineKernel requires num_threads_per_cluster=1");
+        TT_FATAL(config.num_threads_per_cluster == 1, "DispatchEngineKernel requires num_threads_per_cluster=1");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
@@ -714,7 +714,8 @@ public:
 
     Config config() const override { return this->config_; }
 
-    void process_defines(std::function<void(const std::string& define, const std::string& value)> callback) const override;
+    void process_defines(
+        std::function<void(const std::string& define, const std::string& value)> callback) const override;
 
     std::string_view get_compiler_opt_level() const override;
 

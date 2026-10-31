@@ -35,7 +35,7 @@ class Receiver;
 class SteadyClock;
 
 void set_thread_name(const std::string& name);
-void init_site_registry();
+void init_observability_event_registry();
 
 // How a polling thread waits for work: `spins` empty polls, then sleeps growing to `cap_us`.
 inline constexpr uint32_t kEmptyPollsBeforeSleep = 1000;

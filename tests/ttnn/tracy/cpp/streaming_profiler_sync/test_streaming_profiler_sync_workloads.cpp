@@ -162,7 +162,7 @@ int run() {
         [&](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
             dropped_bytes += batch.dropped_bytes();
             for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                if (zone.site().name == "HOST_RX") {
+                if (zone.observability_event().name == "HOST_RX") {
                     starts[zone.core().chip_id].push_back(zone.start_time());
                 }
             }
@@ -790,7 +790,7 @@ public:
             [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
                 dropped_bytes_ += batch.dropped_bytes();
                 for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
-                    const std::string_view name = zone.site().name;
+                    const std::string_view name = zone.observability_event().name;
                     const streaming_profiler::Core core = zone.core();
                     if (name == "MC_RX") {
                         arrivals_[zone.runtime_id()].push_back(multicast::Arrival{

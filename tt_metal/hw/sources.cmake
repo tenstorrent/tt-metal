@@ -241,7 +241,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/profiler_common.h
-    inc/hostdev/profiler_zone_id.h
+    inc/hostdev/observability_event_id.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h

@@ -254,7 +254,7 @@ registry, which lives as long as the process:
 
 ```cpp
 class Record {  // what every kind carries
-    const MarkerSite& site() const;   // name and source location
+    const ObservabilityEventInfo& observability_event() const;   // name and source location
     Core core() const;          // chip, logical and physical (NoC 0) coordinates, processor
     uint32_t runtime_id() const;  // host runtime ID of the program on the core, 0 = none yet
 };
@@ -291,7 +291,7 @@ reference.
 ```cpp
 void MyConsumer::operator()(const Batch<Zone>& batch) {
     for (const Zone& zone : batch.records<Zone>()) {
-        // zone.site().name, zone.core() (chip, coordinate, processor), zone.runtime_id(); device cycles in
+        // zone.observability_event().name, zone.core() (chip, coordinate, processor), zone.runtime_id(); device cycles in
         // zone.start_device_cycles() / zone.end_device_cycles(), host time via zone.start_time() / zone.duration()
     }
 }
@@ -435,7 +435,7 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   `capture_context.hpp` (a capture's devices, their cores and clock offsets, and its links), `decode.{hpp,cpp}` (the
   frame decoder), `ops_csv`, `zone_csv`, `tracy_consumer.{hpp,cpp}` (the Tracy sink: one context per core, every record
   already on the host timeline and placed against one process-wide anchor).
-- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 27-bit
+- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Event ids are 27-bit
   structural ids resolved to names per ELF on the host; every RISC emits its own `STICKY_PROG` at launch so
   `rec.prog` is exact on every lane (§N+60).
 
@@ -1128,7 +1128,7 @@ see [§4.1](#41-zones-and-point-markers-in-the-tracy-gui).
 Every zone ships whole, in one packet, emitted at scope **close** — the RAII scope object carries the
 start timestamp (`start_hi`/`start_lo`, 8 B of member state), so the open touches nothing but the wall
 clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id is the full 27-bit
-structural zone id (`tu_id(13) << 14 | local(14)`, the split in `hostdev/profiler_zone_id.h`),
+structural event id (`tu_id(13) << 14 | local(14)`, the split in `hostdev/observability_event_id.h`),
 ELF-name-resolved on the host.
 
 | type | name | words | payload after word0 | expresses |
