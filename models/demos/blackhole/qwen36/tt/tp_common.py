@@ -187,20 +187,23 @@ def prefill_strided_rs_cfg():
     (K block 4 = today's in0_block_w), and the strided RS workers on the two grid rows above it consume the matmul's
     output blocks as they finish, through a 2-block L1 window (no DRAM round-trip of the partial).
 
-    Not bit-identical: the strided RS adds the 8 per-device partials in a different order (each hop rounds to bf16), so
-    about 55% of the reduced outputs move by 1-2 bf16 ulps (PCC 0.99986 on random data at 2048 rows). Opt-in only after
-    an accuracy sign-off.
+    Not bit-identical: about 55% of the outputs move by 1-2 bf16 ulps. Against an fp32 host reference of the full
+    reduction (op test, random data, HiFi2 as the model) the relative RMS error is 0.00499 against today's 0.00447
+    (+12%), with HiFi4 0.00505 against 0.00377: the strided path adds an error of its own that does not depend on the
+    matmul fidelity. Opt-in only after an accuracy sign-off.
 
-    Device time per op on the 8-chip ring (traced op test, min of 5): MLP-down 8192 rows 2.90 -> 1.59 ms, 2048 rows 0.67
-    -> 0.47; attention-wo 8192 rows 1.81 -> 1.47, 2048 rows 0.40 -> 0.45. In the model's 8K chunk trace only the
+    Device time per op on the 8-chip ring (traced op test, min of 5): MLP-down 8192 rows 2.90 -> 1.59 ms, 2048 rows
+    0.67 -> 0.47; attention-wo 8192 rows 1.81 -> 1.47, 2048 rows 0.40 -> 0.45. In the model's 8K chunk trace only the
     MLP-down arm pays (8K chunk -14..-31 ms, single 16K call -58 ms); the attention-wo arm measured neutral to slower
     (8K chunk -5..+13 ms), so it is off by default.
 
-    Knobs (read once): QWEN36_PREFILL_STRIDED_RS_DOWN_MIN (default 2048), QWEN36_PREFILL_STRIDED_RS_WO_MIN (default
-    1 << 30 = attention-wo off; 8192 turns it on for the 8K chunk; a huge value turns an op off), QWEN36_PREFILL_STRIDED_RS_WIN (L1 window blocks, default 2; 0 = DRAM matmul
-    output), QWEN36_PREFILL_STRIDED_RS_WORKERS (RS workers per link, default 5), QWEN36_PREFILL_STRIDED_RS_LINKS
-    (default 2), QWEN36_PREFILL_STRIDED_RS_KB (matmul K block in tiles, default 4), QWEN36_PREFILL_STRIDED_RS_SMALL_M
-    ("1": also take 256- and 512-row calls, M block 1 / 2 tiles; accuracy-stress only, not a speed setting)."""
+    Knobs (read once):
+    * QWEN36_PREFILL_STRIDED_RS_DOWN_MIN: MLP-down row floor, default 2048.
+    * QWEN36_PREFILL_STRIDED_RS_WO_MIN: attention-wo row floor, default 1 << 30 (off); 8192 takes the 8K chunk.
+    * QWEN36_PREFILL_STRIDED_RS_WIN: L1 window blocks, default 2; 0 = DRAM matmul output.
+    * QWEN36_PREFILL_STRIDED_RS_WORKERS / _LINKS: RS workers per link (default 5) and links (default 2).
+    * QWEN36_PREFILL_STRIDED_RS_KB: matmul K block in tiles, default 4.
+    * QWEN36_PREFILL_STRIDED_RS_SMALL_M: "1" also takes 512-row (and 256-row) calls; accuracy stress only."""
     global _STRIDED_RS
     if _STRIDED_RS is None:
         env = os.environ.get
