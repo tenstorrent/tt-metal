@@ -163,6 +163,13 @@ def _split() -> int:
     return 0 if os.environ.get(SPLIT_ENV, "1") == "0" else 1
 
 
+def _slice() -> int:
+    """QWEN38_RR_SLICE (default "1"): every packet carries only the half slices of the receivers in its range
+    (kernels/rr_slice.h); the kernels fall back to the full row when the packet or the slot is too small."""
+
+    return 1 if os.environ.get("QWEN38_RR_SLICE", "1") == "1" else 0
+
+
 def _reduce_core_xy(mesh):
     w = mesh.worker_core_from_logical_core(gr_fold.TRANSPORT["partials"][0])
     return (w.x, w.y)
@@ -209,7 +216,7 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
             state["data1"],
             payload,
             state["slot"],
-            *((SEM_LINK, total, _split()) if links > 1 else ()),
+            *((SEM_LINK, total, _split() | _slice() << 1) if links > 1 else ()),
         ),
     )
     dtype = partial.dtype
@@ -589,7 +596,7 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
             CB_NEW,
             int(is_fp32),
             SEM_HELP,
-            *((SEM_LINK_W, total + bf, _split()) if links > 1 else ()),
+            *((SEM_LINK_W, total + bf, _split() | _slice() << 1) if links > 1 else ()),
             *fp.accessor_args(residual),
             *fp.accessor_args(injection),
             *fp.accessor_args(new_residual),

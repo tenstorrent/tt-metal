@@ -33,6 +33,7 @@
 
 #include "../../gr_fold/kernels/transport_phase.h"
 #include "../../kernels/zones.h"
+#include "rr_slice.h"
 
 constexpr uint32_t CB_IN = get_compile_time_arg_val(0);
 constexpr uint32_t TILES = get_compile_time_arg_val(1);
@@ -77,14 +78,26 @@ constexpr uint32_t SCRATCH_OFF =
 constexpr uint32_t RX_OFF = 4 + 2 * HELPERS;  // the reduce core's NoC (x, y) in the runtime args after the phase block
 // SPLIT 0: packet p goes over link p % LINKS; SPLIT 1: link i carries the i-th equal share of the packed bytes (cut at
 // a chunk)
-constexpr uint32_t SPLIT = get_compile_time_arg_val(35);
+constexpr uint32_t SPLIT_ARG = get_compile_time_arg_val(35);  // bit 0 SPLIT, bit 1 QWEN38_RR_SLICE
+constexpr uint32_t SPLIT = SPLIT_ARG & 1;
+// slice send (rr_slice.h): the packets carry only the receivers' half slices; needs two links, the half row cut, and
+// the longest range to fit one packet and the two link regions to fit the slot
+constexpr uint32_t HALF_BYTES = OUT_TILES * PITCH;
+#if defined(QWEN38_RING_ROUTE)
+constexpr uint32_t MAX_RANGE = RING / 2;
+#else
+constexpr uint32_t MAX_RANGE = RING - 1;
+#endif
+constexpr bool RS = ((SPLIT_ARG >> 1) & 1) && LINKS == 2 && SPLIT == 1 && MAX_RANGE * HALF_BYTES <= PAYLOAD &&
+                    2 * (RING - 1) * HALF_BYTES <= SLOT_BYTES && (RING - 1 + 2) * HALF_BYTES <= TOTAL_BYTES;
 constexpr uint32_t SHARE = (TOTAL_BYTES / PITCH / LINKS) * PITCH;
 constexpr uint32_t SHARE_BEGIN = LINK * SHARE;
 constexpr uint32_t SHARE_END = LINK + 1 == LINKS ? TOTAL_BYTES : SHARE_BEGIN + SHARE;
 // the packets of the whole call (each peer sends them over its links; the data semaphore counts them all)
 constexpr uint32_t PACKETS_ALL =
-    SPLIT == 0 ? PACKETS
-               : (SHARE + PAYLOAD - 1) / PAYLOAD + (TOTAL_BYTES - SHARE * (LINKS - 1) + PAYLOAD - 1) / PAYLOAD;
+    RS           ? LINKS
+    : SPLIT == 0 ? PACKETS
+                 : (SHARE + PAYLOAD - 1) / PAYLOAD + (TOTAL_BYTES - SHARE * (LINKS - 1) + PAYLOAD - 1) / PAYLOAD;
 constexpr uint32_t CHUNKS_PER_PACKET = PAYLOAD / PITCH;
 static_assert(PAYLOAD % PITCH == 0, "a packet holds whole chunks");
 
@@ -152,14 +165,55 @@ void kernel_main() {
 #endif
             // only the chunks of this link's packets (LINK 0: plus the own slice the feed reads); the two RISCs take
             // alternate tiles
-            for (uint32_t t = first; t < TILES; t += 2) {
-                for (uint32_t k = 0; k < 2; ++k) {
-                    const uint32_t c = 2 * t + k;
-                    const bool mine = SPLIT == 0 ? (c / CHUNKS_PER_PACKET) % LINKS == LINK
-                                                 : (c * PITCH >= SHARE_BEGIN && c * PITCH < SHARE_END);
-                    const bool own = LINK == 0 && c >= rank * OUT_TILES * 2 && c < (rank + 1) * OUT_TILES * 2;
-                    if (mine || own) {
-                        noc_async_read(local.get_noc_addr(t, k * face_bytes), stage + c * PITCH, chunk_len);
+            if constexpr (RS) {
+                // this RISC's receivers' half slices of this link, packed in hop order; link 0 also stages the own
+                // slice (split between the RISCs so that both read about the same number of chunks)
+                const uint32_t fr = rr_fwd_range<RING>(rank);
+                const uint32_t br = RING - 1 - fr;
+                const uint32_t chunks_per_slice = 2 * OUT_TILES;
+                auto read_chunk = [&](uint32_t c, uint32_t dst) {
+                    noc_async_read(local.get_noc_addr(c >> 1, (c & 1) * face_bytes), dst, chunk_len);
+                };
+#if defined(COMPILE_FOR_BRISC)
+                for (uint32_t h = 1; h <= fr; ++h) {
+                    const uint32_t q = (rank + h) % RING;
+                    for (uint32_t j = 0; j < OUT_TILES; ++j) {
+                        read_chunk(
+                            q * chunks_per_slice + LINK * OUT_TILES + j, stage + (h - 1) * HALF_BYTES + j * PITCH);
+                    }
+                }
+#else
+                for (uint32_t h = 1; h <= br; ++h) {
+                    const uint32_t q = (rank + RING - h) % RING;
+                    for (uint32_t j = 0; j < OUT_TILES; ++j) {
+                        read_chunk(
+                            q * chunks_per_slice + LINK * OUT_TILES + j, stage + (fr + h - 1) * HALF_BYTES + j * PITCH);
+                    }
+                }
+#endif
+                if constexpr (LINK == 0) {
+                    const int32_t diff = (int32_t)(br * OUT_TILES + chunks_per_slice) - (int32_t)(fr * OUT_TILES);
+                    int32_t ob = diff / 2;
+                    ob = ob < 0 ? 0 : (ob > (int32_t)chunks_per_slice ? (int32_t)chunks_per_slice : ob);
+#if defined(COMPILE_FOR_BRISC)
+                    const uint32_t lo = 0, hi = ob;
+#else
+                    const uint32_t lo = ob, hi = chunks_per_slice;
+#endif
+                    for (uint32_t i = lo; i < hi; ++i) {
+                        read_chunk(rank * chunks_per_slice + i, stage + (RING - 1) * HALF_BYTES + i * PITCH);
+                    }
+                }
+            } else {
+                for (uint32_t t = first; t < TILES; t += 2) {
+                    for (uint32_t k = 0; k < 2; ++k) {
+                        const uint32_t c = 2 * t + k;
+                        const bool mine = SPLIT == 0 ? (c / CHUNKS_PER_PACKET) % LINKS == LINK
+                                                     : (c * PITCH >= SHARE_BEGIN && c * PITCH < SHARE_END);
+                        const bool own = LINK == 0 && c >= rank * OUT_TILES * 2 && c < (rank + 1) * OUT_TILES * 2;
+                        if (mine || own) {
+                            noc_async_read(local.get_noc_addr(t, k * face_bytes), stage + c * PITCH, chunk_len);
+                        }
                     }
                 }
             }
@@ -175,7 +229,29 @@ void kernel_main() {
             go.set(0);
 #endif
         }
-        if (line.has_peers) {
+        if constexpr (RS) {
+            if (line.has_peers) {
+#if defined(COMPILE_FOR_BRISC)
+                const uint32_t block0 = 0;
+#else
+                const uint32_t block0 = rr_fwd_range<RING>(rank);
+#endif
+                noc_async_writes_flushed();
+                fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    &line.connection,
+                    line.header,
+                    stage + block0 * HALF_BYTES,
+                    line.range * HALF_BYTES,
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                        safe_get_noc_addr(
+                            tx, ty, land + rank * SLOT_BYTES + LINK * (RING - 1) * HALF_BYTES + block0 * HALF_BYTES, 0),
+                        data_noc,
+                        1,
+                        true},
+                    1,
+                    line.range);
+            }
+        } else if (line.has_peers) {
             const uint32_t n_mine = SPLIT == 0 ? PACKETS : (SHARE_END - SHARE_BEGIN + PAYLOAD - 1) / PAYLOAD;
             for (uint32_t q = 0; q < n_mine; ++q) {
                 const uint32_t p = SPLIT == 0 ? LINK + q * LINKS : q;
@@ -215,10 +291,28 @@ void kernel_main() {
                 const uint32_t slice_bytes = OUT_TILES * 2 * PITCH;
                 auto fill = [&](uint32_t dst, uint32_t logical) {
                     const uint32_t phys = MIRROR ? RING - 1 - logical : logical;
-                    noc_async_write(
-                        (phys == rank ? stage : land + phys * SLOT_BYTES) + slice,
-                        safe_get_noc_addr(my_x[noc_index], my_y[noc_index], dst, noc_index),
-                        slice_bytes);
+                    if constexpr (RS) {
+                        const uint64_t dst_noc = safe_get_noc_addr(my_x[noc_index], my_y[noc_index], dst, noc_index);
+                        if (phys == rank) {
+                            noc_async_write(stage + (RING - 1) * HALF_BYTES, dst_noc, 2 * HALF_BYTES);
+                        } else {  // one half slice per link, at its hop position of the sender's forward / backward
+                                  // packet
+                            const uint32_t fs = rr_fwd_range<RING>(phys);
+                            const uint32_t df = (rank + RING - phys) % RING;
+                            const uint32_t block = df <= fs ? df - 1 : fs + (phys + RING - rank) % RING - 1;
+                            for (uint32_t l = 0; l < 2; ++l) {
+                                noc_async_write(
+                                    land + phys * SLOT_BYTES + (l * (RING - 1) + block) * HALF_BYTES,
+                                    dst_noc + l * HALF_BYTES,
+                                    HALF_BYTES);
+                            }
+                        }
+                    } else {
+                        noc_async_write(
+                            (phys == rank ? stage : land + phys * SLOT_BYTES) + slice,
+                            safe_get_noc_addr(my_x[noc_index], my_y[noc_index], dst, noc_index),
+                            slice_bytes);
+                    }
                 };
                 cfs.reserve_back(1);
                 fill(cfs.get_write_ptr(), 0);  // L >= 1: p_0 (the F chain's seed); L == 0: p_0 is the device's own term
