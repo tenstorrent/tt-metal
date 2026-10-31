@@ -11,11 +11,12 @@
 // exchange's senders, paths and planner instances, the persistent words each piece needs). build_head_workload makes
 // the per-chip programs from a model, the persistent words' addresses and the tensors. Differences from the
 // reference, none in what the kernels compute or in their NoC / fabric traffic:
-//  * no per-call arena tensor: the arena is a program CB, the first CB on every core it spans, so it sits at the L1
-//    CB base on every core and chip; the CBs over its regions are bound to a view of that range (a non-owning L1
-//    buffer at the base), and every arena address a kernel takes is base + the region's offset (a constant);
+//  * the arena is an L1 tensor given to the op (by default one the block's resources keep), not one allocated each
+//    call: the same address on every core and chip, so the CBs over its regions bind to it at their offsets;
 //  * the persistent words (mailboxes, flags, counters, the reference's global semaphores) are word tensors of the
 //    block's resources;
+//  * every address argument is recorded with its source and offset (HeadPatches): a cache hit rewrites only the
+//    arguments of sources whose address moved;
 //  * addresses the reference baked into defines are common runtime args (kernels/head_kernel_contract.hpp);
 //  * the fabric connections are main's (append_fabric_connection_rt_args); the routing planner's torus tie split is
 //    the config's tie rule (main's fabric: NorthEast).
@@ -85,22 +86,57 @@ struct HeadWordsSpec {
 // The persistent words' base addresses (the same on every chip), by HeadWordsSpec name.
 using HeadWordAddresses = std::map<std::string, uint32_t>;
 
-// The DRAM tensors the programs address (their buffers; bound on cache hits).
+// The buffers the programs address. Every address argument is one of these plus an offset.
+enum HeadSrc : uint16_t {
+    SRC_X = 0,   // [rows, H / TP] this chip's shard
+    SRC_X_FULL,  // the DRAM fallback's gathered x [rows, H]
+    SRC_W,       // the shared expert's weights in the engine's layout
+    SRC_Y,       // the shared expert's reduced output
+    SRC_ROWS,    // the owners' joint routing rows
+    SRC_XBUF,    // the dispatch buffer
+    SRC_ROUTE,   // the owned tokens' route words
+    SRC_LATENT,  // the owners' latent rows
+    SRC_RW,      // W_r^T [E, H / TP]
+    SRC_RB,      // the router bias tiles
+    SRC_RIX,     // the expert index tiles
+    SRC_SLOTS,   // the routing exchange's DRAM slots
+    SRC_FSLOTS,  // its forwarding slots
+    SRC_COUNTS,  // the combine plan: counts, regions, token_index, table, plan
+    SRC_REGIONS,
+    SRC_TOKEN_INDEX,
+    SRC_TABLE,
+    SRC_PLAN,
+    SRC_ARENA,  // the arena (L1)
+    SRC_WORD0,  // the persistent words, in head_words order
+};
+
+inline constexpr size_t kHeadMaxSrc = 40;  // SRC_WORD0 + the persistent words, at most
+
 struct HeadBuffers {
-    tt::tt_metal::Buffer* x = nullptr;                 // [rows, H / TP] this chip's shard
-    tt::tt_metal::Buffer* x_full = nullptr;            // the DRAM fallback's gathered x [rows, H]
-    tt::tt_metal::Buffer* w = nullptr;                 // the shared expert's weights in the engine's layout
-    tt::tt_metal::Buffer* y = nullptr;                 // the shared expert's reduced output
-    tt::tt_metal::Buffer* rows = nullptr;              // the owners' joint routing rows
-    tt::tt_metal::Buffer* xbuf = nullptr;              // the dispatch buffer
-    tt::tt_metal::Buffer* route = nullptr;             // the owned tokens' route words
-    tt::tt_metal::Buffer* latent = nullptr;            // the owners' latent rows
-    tt::tt_metal::Buffer* rw = nullptr;                // W_r^T [E, H / TP]
-    tt::tt_metal::Buffer* rb = nullptr;                // the router bias tiles
-    tt::tt_metal::Buffer* rix = nullptr;               // the expert index tiles
-    tt::tt_metal::Buffer* slots = nullptr;             // the routing exchange's DRAM slots
-    tt::tt_metal::Buffer* fslots = nullptr;            // its forwarding slots
-    std::array<tt::tt_metal::Buffer*, 5> plan_outs{};  // counts, regions, token_index, table, plan
+    // per HeadSrc (SRC_WORD0 + i: head_words' i-th): the buffer (nullptr for the words, an absent tensor) and its
+    // address (0 when absent). Fixed arrays: a cache hit builds one a chip.
+    std::array<tt::tt_metal::Buffer*, kHeadMaxSrc> buffers{};
+    std::array<uint32_t, kHeadMaxSrc> addresses{};
+    tt::tt_metal::Buffer* operator[](HeadSrc s) const { return buffers[s]; }
+};
+
+// Where every address argument of one chip's program sits: a cache hit compares each source's address with the one
+// the program holds and rewrites that source's arguments only when it moved.
+struct HeadPatches {
+    struct Arg {
+        uint32_t kernel;
+        bool common;
+        CoreCoord core;
+        uint32_t index;
+        uint16_t src;
+        uint32_t offset;
+    };
+    struct Cb {
+        uint32_t index;  // in the program's CBs (descriptor order)
+        uint32_t offset;
+    };
+    std::vector<Arg> args;  // grouped by source
+    std::vector<Cb> arena_cbs;
 };
 
 class HeadModel;
@@ -123,7 +159,6 @@ struct HeadTensorShapes {
     std::array<std::pair<uint32_t, uint32_t>, 5> plan_outs;  // uint32 ROW_MAJOR
     uint32_t w_tiles_per_region, w_regions;                  // the engine weights: regions of tiles (bank-sharded)
     uint32_t arena_bytes;
-    uint32_t arena_base;  // the L1 CB base (the arena CB's address)
 };
 HeadTensorShapes head_tensor_shapes(const HeadModel& model);
 
@@ -141,13 +176,19 @@ HeadDeviceWeights prepare_head_weights(
     const std::vector<float>& router_w,
     const std::vector<float>& router_b);
 
-// The per-chip programs (one per mesh coordinate of `coords`). fabric_starts (tests): "r,c,kernel file,x,y" -> the
-// index the core's fabric connection args start at.
+// The cores the arena spans (the matmul cores, the router cores, the ports, the watcher) and its bytes a core.
+CoreRangeSet head_arena_cores(const HeadModel& model);
+
+// The per-chip programs (one per mesh coordinate of `coords`). patches: per coordinate (r C + c) where the address
+// arguments sit. fabric_starts (tests): "r,c,kernel file,x,y" -> the index the core's fabric connection args start at.
 tt::tt_metal::WorkloadDescriptor build_head_workload(
     const HeadModel& model,
-    const HeadWordAddresses& words,
     const HeadBuffers& buffers,
     const std::vector<ttnn::MeshCoordinate>& coords,
+    std::vector<HeadPatches>* patches = nullptr,
     std::map<std::string, uint32_t>* fabric_starts = nullptr);
+
+// Rewrites the address arguments (and the arena CBs) of one chip's cached program whose sources moved.
+void patch_head_program(tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

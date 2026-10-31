@@ -21,6 +21,7 @@
 #include "ttnn/tensor/types.hpp"
 
 #include "device/head_plan.hpp"
+#include "device/fused_head_device_operation_types.hpp"
 #include "device/head_program.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -98,8 +99,10 @@ FusedHeadWeights prepare_fused_head_weights(
 struct FusedHeadSetup {
     std::shared_ptr<const HeadModel> model;
     HeadProgramConfig config;
-    HeadWordAddresses words;
-    uint64_t serial = 0;
+    std::vector<uint32_t> words;  // the persistent words' addresses, head_words' order
+    FusedHeadInputs inputs;       // the persistent tensors (a call sets x and the weights)
+    std::shared_ptr<HeadPatchStore> patches;
+    mutable std::optional<Tensor> arena;  // the default arena (made on first use)
 };
 const FusedHeadSetup& setup_fused_head(
     MoEBlockResources& resources,
@@ -108,7 +111,9 @@ const FusedHeadSetup& setup_fused_head(
     std::optional<int64_t> l1_free = std::nullopt);
 
 // ttnn.experimental.moe_block.fused_head: x [1, 1, rows, H / TP] a chip (bf16 TILE, DRAM) -> the head's outputs.
-// x_full: the DRAM fallback's gathered x [1, 1, rows, H] (its layout only).
+// x_full: the DRAM fallback's gathered x [1, 1, rows, H] (its layout only). arena: an L1 tensor over the head's arena
+// cores (head_arena_cores, a shard of at least arena_bytes each) the head runs in - e.g. one the block shares between
+// its ops; default one the resources keep.
 FusedHeadOutputs fused_head(
     const Tensor& x,
     const FusedHeadWeights& weights,
@@ -116,13 +121,12 @@ FusedHeadOutputs fused_head(
     const MoEDtypes& dtypes,
     uint32_t accumulators,
     const std::optional<Tensor>& x_full = std::nullopt,
-    std::optional<int64_t> l1_free = std::nullopt);
+    std::optional<int64_t> l1_free = std::nullopt,
+    const std::optional<Tensor>& arena = std::nullopt);
 
 // The per-chip program descriptors fused_head would launch (no launch): tests compare them with the reference's.
-// buffers keep the arena's view alive while the descriptors are read.
 struct FusedHeadPrograms {
     std::vector<std::pair<ttnn::MeshCoordinate, tt::tt_metal::ProgramDescriptor>> programs;
-    std::vector<tt::tt_metal::WorkloadBuffer> buffers;
     // every buffer the programs address: name -> (address, bytes) - the arena, the persistent words, the tensors
     std::map<std::string, std::pair<uint32_t, uint32_t>> addresses;
     // "r,c,kernel file,x,y" -> where the core's fabric connection args start (main's; the reference's differ)
@@ -135,6 +139,7 @@ FusedHeadPrograms fused_head_programs(
     const MoEDtypes& dtypes,
     uint32_t accumulators,
     const std::optional<Tensor>& x_full = std::nullopt,
-    std::optional<int64_t> l1_free = std::nullopt);
+    std::optional<int64_t> l1_free = std::nullopt,
+    const std::optional<Tensor>& arena = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

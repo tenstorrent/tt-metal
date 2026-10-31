@@ -235,14 +235,16 @@ void bind_fused_head(nb::module_& mod) {
             dtypes: MoEDtypes (the shared expert's weights / fidelity).
             accumulators: the combine's accumulator count (the routing planner's instances at most).
             x_full: the DRAM fallback's gathered x [1, 1, rows, H] (only when the plan took the fallback).
-            l1_free: the free L1 a core the head may take (default the planner's host figure).
+            l1_free: the free L1 a core the head may take (default: measured at the block's first head).
+            arena: an L1 tensor over the head's arena cores the head runs in (default one the resources keep, which
+                holds that L1 for good: a block shares one arena between its ops).
 
         Returns:
             FusedHeadOutputs: se, rows, xbuf, route, latent, and the combine plan (counts, regions, token_index, table,
             plan) - the resources' tensors, rewritten each call.
 
         The plan, the host model and the persistent words are made on the first call and kept in the resources; a
-        repeated call patches only the tensors' addresses.
+        repeated call rewrites only the arguments of the tensors whose address moved.
         )doc",
         &fused_head,
         nb::arg("x"),
@@ -252,7 +254,8 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("dtypes"),
         nb::arg("accumulators"),
         nb::arg("x_full") = nb::none(),
-        nb::arg("l1_free") = nb::none());
+        nb::arg("l1_free") = nb::none(),
+        nb::arg("arena") = nb::none());
 
     nb::class_<FusedHeadPrograms>(mod, "FusedHeadPrograms", "fused_head_programs' answer (tests).")
         .def_prop_ro(
@@ -277,6 +280,7 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("accumulators"),
         nb::arg("x_full") = nb::none(),
         nb::arg("l1_free") = nb::none(),
+        nb::arg("arena") = nb::none(),
         R"doc(
         The per-chip program descriptors fused_head would launch, without launching (tests: compared with the
         reference's on a mock mesh).)doc");

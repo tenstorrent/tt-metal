@@ -15,19 +15,25 @@
 
 namespace ttnn::operations::experimental::moe_block::fused_head {
 
-// One program a chip (head_program.hpp). Every DRAM address a kernel takes is a tensor's base (bound with
-// emplace_runtime_args(Buffer*)): a cache hit patches only those. The arena is a program CB and the persistent words
-// belong to the resources, both at the same addresses for the cached program's life.
+// One program a chip (head_program.hpp). Every address argument is recorded with its source and offset; a cache hit
+// (override_runtime_arguments) compares each source's address with the one the program holds and rewrites only the
+// arguments - and, for the arena, the CBs - of a source that moved: no descriptor is rebuilt.
 struct FusedHeadFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const FusedHeadParams& attrs,
         const FusedHeadInputs& tensor_args,
         Tensor& output,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const FusedHeadParams& attrs,
+        const FusedHeadInputs& tensor_args,
+        Tensor& output,
+        const std::optional<ttnn::MeshCoordinate>& coord);
 };
 
-// The HeadBuffers of a call's tensors.
-HeadBuffers head_buffers(const FusedHeadInputs& args);
+// The HeadBuffers of a call: its tensors, the arena and the persistent words.
+HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& args);
 
 struct FusedHeadDeviceOperation {
     using operation_attributes_t = FusedHeadParams;
@@ -36,7 +42,7 @@ struct FusedHeadDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FusedHeadFactory>;
 
-    // the config, plan_key, resources serial and the input specs: never an address.
+    // the config, plan_key and the input specs: never an address.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

@@ -4,6 +4,7 @@
 
 #include "fused_head_device_operation.hpp"
 
+#include <tt-metalium/program.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operation.hpp"
@@ -36,7 +37,6 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
     const auto& c = attrs.config;
     return tt::tt_metal::operation::hash_operation<FusedHeadDeviceOperation>(
         attrs.plan_key,
-        attrs.resources_serial,
         c.lay.GY,
         c.lay.MT,
         c.lay.NCH,
@@ -118,22 +118,37 @@ FusedHeadDeviceOperation::tensor_return_value_t FusedHeadDeviceOperation::create
     return args.y;
 }
 
-HeadBuffers head_buffers(const FusedHeadInputs& a) {
+HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a) {
     HeadBuffers b;
-    b.x = a.x.buffer();
-    b.x_full = a.x_full ? a.x_full->buffer() : nullptr;
-    b.w = a.w.buffer();
-    b.y = a.y.buffer();
-    b.rows = a.rows.buffer();
-    b.xbuf = a.xbuf.buffer();
-    b.route = a.route.buffer();
-    b.latent = a.latent ? a.latent->buffer() : nullptr;
-    b.rw = a.w_router.buffer();
-    b.rb = a.router_bias.buffer();
-    b.rix = a.router_index.buffer();
-    b.slots = a.slots.buffer();
-    b.fslots = a.fslots.buffer();
-    b.plan_outs = {a.counts.buffer(), a.regions.buffer(), a.token_index.buffer(), a.table.buffer(), a.plan.buffer()};
+    TT_FATAL(SRC_WORD0 + attrs.words.size() <= kHeadMaxSrc, "fused_head: {} persistent words", attrs.words.size());
+    auto set = [&](HeadSrc s, const Tensor* t) {
+        if (t != nullptr) {
+            b.buffers[s] = t->buffer();
+            b.addresses[s] = static_cast<uint32_t>(t->buffer()->address());
+        }
+    };
+    set(SRC_X, &a.x);
+    set(SRC_X_FULL, a.x_full ? &*a.x_full : nullptr);
+    set(SRC_W, &a.w);
+    set(SRC_Y, &a.y);
+    set(SRC_ROWS, &a.rows);
+    set(SRC_XBUF, &a.xbuf);
+    set(SRC_ROUTE, &a.route);
+    set(SRC_LATENT, a.latent ? &*a.latent : nullptr);
+    set(SRC_RW, &a.w_router);
+    set(SRC_RB, &a.router_bias);
+    set(SRC_RIX, &a.router_index);
+    set(SRC_SLOTS, &a.slots);
+    set(SRC_FSLOTS, &a.fslots);
+    set(SRC_COUNTS, &a.counts);
+    set(SRC_REGIONS, &a.regions);
+    set(SRC_TOKEN_INDEX, &a.token_index);
+    set(SRC_TABLE, &a.table);
+    set(SRC_PLAN, &a.plan);
+    set(SRC_ARENA, &attrs.arena);
+    for (size_t i = 0; i < attrs.words.size(); ++i) {
+        b.addresses[SRC_WORD0 + i] = attrs.words[i];
+    }
     return b;
 }
 
@@ -142,7 +157,37 @@ tt::tt_metal::WorkloadDescriptor FusedHeadFactory::create_workload_descriptor(
     const FusedHeadInputs& args,
     Tensor& /*output*/,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    return build_head_workload(*attrs.model, attrs.words, head_buffers(args), coords_of(tensor_coords));
+    std::vector<HeadPatches> patches;
+    auto w = build_head_workload(*attrs.model, head_buffers(attrs, args), coords_of(tensor_coords), &patches);
+    std::lock_guard lock(attrs.patches->mutex);
+    if (attrs.patches->chips.empty()) {
+        attrs.patches->chips = std::move(patches);
+    }
+    return w;
+}
+
+void FusedHeadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const FusedHeadParams& attrs,
+    const FusedHeadInputs& args,
+    Tensor& /*output*/,
+    const std::optional<ttnn::MeshCoordinate>& coord) {
+    TT_FATAL(coord.has_value(), "fused_head: one program a chip");
+    const HeadBuffers b = head_buffers(attrs, args);
+    auto& store = *attrs.patches;
+    {
+        // (programs another resources object built: where their address args sit, once - every chip's)
+        std::lock_guard lock(store.mutex);
+        if (store.chips.empty()) {
+            const auto& m = *attrs.model;
+            std::vector<ttnn::MeshCoordinate> all;
+            for (uint32_t i = 0; i < attrs.config.shape.N(); ++i) {
+                all.emplace_back(i / attrs.config.shape.G, i % attrs.config.shape.G);
+            }
+            build_head_workload(m, b, all, &store.chips);
+        }
+    }
+    patch_head_program(program, store.chips[(*coord)[0] * attrs.config.shape.G + (*coord)[1]], b);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

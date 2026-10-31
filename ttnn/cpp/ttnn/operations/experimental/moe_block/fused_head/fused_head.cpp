@@ -5,7 +5,6 @@
 #include "fused_head.hpp"
 
 #include <algorithm>
-#include <atomic>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -129,23 +128,13 @@ std::vector<ttnn::MeshCoordinate> all_coords(const tt::tt_metal::distributed::Me
     return out;
 }
 
-FusedHeadInputs inputs_of(
-    const Tensor& x,
-    const FusedHeadWeights& w,
-    MoEBlockResources& res,
-    const HeadModel& model,
-    const std::optional<Tensor>& x_full) {
+// The head's persistent tensors (its outputs and the routing exchange's), in an inputs template.
+FusedHeadInputs persistent_inputs(MoEBlockResources& res, const HeadModel& model) {
     const auto s = head_tensor_shapes(model);
     auto t = [&](const std::string& name, const TensorSpec& spec) {
         return res.persistent_tensor("fused_head/" + name, spec);
     };
     FusedHeadInputs in{
-        .x = x,
-        .x_full = x_full,
-        .w = w.w,
-        .w_router = w.w_router,
-        .router_bias = w.router_bias,
-        .router_index = w.router_index,
         .y = t("y", dram_spec(s.y_rows, s.y_cols, DataType::BFLOAT16, Layout::TILE)),
         .rows = t("rows", dram_spec(s.rows_rows, s.rows_cols, DataType::UINT16, Layout::ROW_MAJOR)),
         .xbuf = t("xbuf", dram_spec(s.xbuf_rows, s.xbuf_cols, DataType::BFLOAT16, Layout::ROW_MAJOR)),
@@ -167,6 +156,39 @@ FusedHeadInputs inputs_of(
         in.latent = t("latent", dram_spec(s.latent_rows, s.latent_cols, DataType::BFLOAT16, Layout::TILE));
     }
     return in;
+}
+
+// A call's inputs: the template's persistent tensors with this call's x and weights.
+FusedHeadInputs call_inputs(
+    const FusedHeadSetup& setup, const Tensor& x, const FusedHeadWeights& w, const std::optional<Tensor>& x_full) {
+    FusedHeadInputs in = setup.inputs;
+    in.x = x;
+    in.x_full = x_full;
+    in.w = w.w;
+    in.w_router = w.w_router;
+    in.router_bias = w.router_bias;
+    in.router_index = w.router_index;
+    return in;
+}
+
+// The arena when the caller gives none: an L1 tensor the resources keep (the arena cores, a shard of arena_bytes
+// each) - it holds the L1 for good; a block whose other ops need that L1 passes one arena it shares between them.
+Tensor default_arena(MoEBlockResources& res, const FusedHeadSetup& setup) {
+    const auto& arena = setup.arena;
+    if (arena.has_value()) {
+        return *arena;
+    }
+    const auto cores = head_arena_cores(*setup.model);
+    const uint32_t words = head_tensor_shapes(*setup.model).arena_bytes / 4;
+    const MemoryConfig mc{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(cores, {1, words}, tt::tt_metal::ShardOrientation::ROW_MAJOR)};
+    const TensorSpec spec(
+        ttnn::Shape({cores.num_cores(), words}),
+        tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), mc));
+    setup.arena = res.persistent_tensor("fused_head/arena", spec);
+    return *setup.arena;
 }
 
 std::vector<float> to_floats(const Tensor& t) {
@@ -232,10 +254,10 @@ const FusedHeadSetup& setup_fused_head(
         setup.model = make_head_model(mesh, pc, resources.port_luts());
         for (const auto& spec : head_words(*setup.model)) {
             const auto& t = resources.persistent_words("fused_head/" + key + "/" + spec.name, spec.cores, spec.words);
-            setup.words[spec.name] = static_cast<uint32_t>(t.buffer()->address());
+            setup.words.push_back(static_cast<uint32_t>(t.buffer()->address()));
         }
-        static std::atomic<uint64_t> serials{0};
-        setup.serial = ++serials;
+        setup.inputs = persistent_inputs(resources, *setup.model);
+        setup.patches = std::make_shared<HeadPatchStore>();
         return setup;
     });
 }
@@ -271,16 +293,18 @@ FusedHeadOutputs fused_head(
     const MoEDtypes& dtypes,
     uint32_t accumulators,
     const std::optional<Tensor>& x_full,
-    std::optional<int64_t> l1_free) {
+    std::optional<int64_t> l1_free,
+    const std::optional<Tensor>& arena) {
     using namespace fused_head_entry_detail;
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
     FusedHeadParams params{
         .config = setup.config,
         .plan_key = resources.plan_key(),
-        .resources_serial = setup.serial,
         .model = setup.model,
-        .words = setup.words};
-    auto in = inputs_of(x, weights, resources, *setup.model, x_full);
+        .words = setup.words,
+        .arena = arena ? *arena : default_arena(resources, setup),
+        .patches = setup.patches};
+    auto in = call_inputs(setup, x, weights, x_full);
     FusedHeadOutputs out{
         .se = in.y,
         .rows = in.rows,
@@ -303,21 +327,29 @@ FusedHeadPrograms fused_head_programs(
     const MoEDtypes& dtypes,
     uint32_t accumulators,
     const std::optional<Tensor>& x_full,
-    std::optional<int64_t> l1_free) {
+    std::optional<int64_t> l1_free,
+    const std::optional<Tensor>& arena) {
     using namespace fused_head_entry_detail;
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
-    const auto in = inputs_of(x, weights, resources, *setup.model, x_full);
+    const auto in = call_inputs(setup, x, weights, x_full);
+    const FusedHeadParams params{
+        .config = setup.config,
+        .plan_key = resources.plan_key(),
+        .model = setup.model,
+        .words = setup.words,
+        .arena = arena ? *arena : default_arena(resources, setup),
+        .patches = setup.patches};
     FusedHeadPrograms out;
     auto w = build_head_workload(
-        *setup.model, setup.words, head_buffers(in), all_coords(resources.mesh_device()), &out.fabric_starts);
+        *setup.model, head_buffers(params, in), all_coords(resources.mesh_device()), nullptr, &out.fabric_starts);
     for (auto& [range, desc] : w.programs) {
         out.programs.emplace_back(range.start_coord(), std::move(desc));
     }
-    out.buffers = std::move(w.buffers);
     const auto shapes = head_tensor_shapes(*setup.model);
-    out.addresses["arena"] = {shapes.arena_base, shapes.arena_bytes};
-    for (const auto& spec : head_words(*setup.model)) {
-        out.addresses[spec.name] = {setup.words.at(spec.name), 4 * spec.words};
+    out.addresses["arena"] = {static_cast<uint32_t>(params.arena.buffer()->address()), shapes.arena_bytes};
+    const auto specs = head_words(*setup.model);
+    for (size_t i = 0; i < specs.size(); ++i) {
+        out.addresses[specs[i].name] = {setup.words[i], 4 * specs[i].words};
     }
     const std::vector<std::pair<std::string, const Tensor*>> ts = {
         {"x", &in.x},

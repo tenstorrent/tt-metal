@@ -26,12 +26,15 @@ plan - the resources' tensors). `prepare_fused_head_weights` lays out the shared
 creates the persistent words in the resources (`fused_head/...`); later calls only launch.
 
 Differences from the reference, none in what the kernels compute or in their NoC / fabric traffic:
-- the arena is a program CB, the first CB on every core it spans, so it lands at the L1 CB base on every core and
-  chip; the CBs over its regions bind to a non-owning view of that range, and every arena address a kernel takes is
-  the base plus the region's offset (a constant). No per-call arena tensor, no holes or settling;
+- the arena is an L1 tensor given to the op (`arena=`; by default one the resources keep, which holds that L1 for
+  good - a block passes one arena it shares between its ops), not one allocated each call: the CBs over its regions
+  bind to it at their offsets, and the kernels take its base plus the region's offset. No holes or settling;
 - the persistent words (mailboxes, flags, counters, the reference's global semaphores) are word tensors of the
-  resources; several arguments point inside them, so the program hash carries the resources' serial (one cached
-  program per resources object) instead of their addresses. DRAM tensors are bound as bases (address-only hits);
+  resources;
+- every address argument is recorded with its source (a tensor, the arena, a word tensor) and offset. A cache hit
+  (override_runtime_arguments) reads one argument a source, and only for a source whose address moved rewrites its
+  arguments (and, for the arena, its CBs): no descriptor is rebuilt, nothing is rewritten when nothing moved. The
+  program hash holds no address;
 - the addresses the reference baked into defines (SE_EW, RT_ENG, RT_MSYNC, RT_PWORD, RT_PART) are common runtime args;
 - fabric connections are main's (`append_fabric_connection_rt_args`); the kernel_lib multicast families use main's
   `Mcast::attach`; their semaphore ids differ from the reference's;

@@ -11,8 +11,7 @@ blackhole_galaxy.yaml MOE_BLOCK_REFS=/data/mstaletovic/jobs/port/refs pytest <th
 (skipped without either). Per chip and kernel: the kernel file vs the reference source it came from, core ranges,
 compile-time args, the runtime args of every core and the common args (addresses as the buffer and offset they point
 at: the reference's dump marks which arguments are addresses), the defines the host sets; the CBs (index, size, page,
-cores, arena offset). Expected differences, checked as such: the arena is a program CB (an extra CB, first); the
-addresses the reference baked into defines are common runtime args (one more common arg on the engine and router
+cores, arena offset). Expected differences, checked as such: the addresses the reference baked into defines are common runtime args (one more common arg on the engine and router
 kernels); the fabric connections' arguments are main's (compared up to their start); the kernel_lib multicast and
 fabric semaphores take other ids; the routing planner's tie split is the config's rule (NorthEast: YT 0)."""
 
@@ -245,10 +244,9 @@ def test_head_program_parity(mesh, case):
                     errors.append(f"{where}: define {n} = {v}, the reference {ref_defs[n]}")
             if len(errors) > 40:
                 break
-        # CBs: mine without the arena CB (the first)
         mine_cbs = sorted(
             (fd.buffer_index, cb.total_size, fd.page_size, tuple(_crs_cores(cb.core_ranges)), cb.address_offset)
-            for cb in list(desc.cbs)[1:]
+            for cb in desc.cbs
             for fd in cb.format_descriptors
         )
         ref_cbs = sorted(
