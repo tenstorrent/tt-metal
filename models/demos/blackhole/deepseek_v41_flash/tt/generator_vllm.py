@@ -1170,6 +1170,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         of its prompt is meaningless (the plugin discards it). Positions [start, end) are computed in windows of one chunk (a model-wide constant).
         """
         N = len(ends)
+        _pf = os.environ.get(
+            "DSV41_PIECE_LAG_FILE"
+        )  # live switch (A/B in one boot): the file holds 0 or 1; absent file = the env default
+        if _pf and os.path.exists(_pf):
+            try:
+                self.piece_lag = open(_pf).read().strip() == "1"
+            except OSError:
+                pass
         starts = (
             [int(x) for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)]
             if start_pos is not None
