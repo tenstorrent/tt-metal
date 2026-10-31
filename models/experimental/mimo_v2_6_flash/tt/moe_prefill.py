@@ -100,15 +100,12 @@ class GroupedExperts:
         # Two groups of x rows and of y rows with BFP4 weights. BFP8 weight slices take 400 KB more: one of each keeps
         # the static CBs below their end on dev (1.47 MB; the chunked prefill tests hold L1 buffers from 1.50 MB).
         slots = 2 if self.w_dtype == ttnn.bfloat4_b else 1
-        # 16 decode users hold ~128 KB more persistent L1 (the fabric row gather of 16-row reductions): one group of x
-        # rows keeps these CBs below it.
-        x_slots = 1 if (self.moe.decode_users or 0) > 8 else slots
         return [
             cb(self.CB_PLAN, ttnn.float32, 1),
             cb(self.CB_WGU, self.w_dtype, 2 * self.gu_tiles),
             cb(self.CB_WD, self.w_dtype, 2 * self.wd_tiles),
             cb(self.CB_X, bf, self.kt),
-            cb(self.CB_XRM, bf, x_slots * self.quarter_tiles),
+            cb(self.CB_XRM, bf, slots * self.quarter_tiles),
             cb(self.CB_XQ, bf, self.quarter_tiles),
             cb(self.CB_RW, bf, 2),
             cb(self.CB_H_OWN, bf, 4),
