@@ -1124,6 +1124,44 @@
   },
   "waiting": null
  },
+ "FIX.15": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "63ea7faeea744e81917a2bb0691de959cd219bf4",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "7b8145d6-f235-4dea-aae8-6ee68d07c435"
+  },
+  "attempt": 1,
+  "history": [
+   {
+    "status": "ABORTED",
+    "t": "2026-10-31T00:58:47",
+    "why": "overseer: P.20's rejected changes were still in the tree; the reject is applied first, then FIX.15 restarts on a clean tree"
+   },
+   {
+    "attempt": 1,
+    "from": "RUNNING",
+    "role": "overseer",
+    "status": "RESUMED",
+    "t": "2026-10-31T01:00:59"
+   }
+  ],
+  "role": "overseer",
+  "status": "TODO",
+  "waiting": null
+ },
  "FIX.2": {
   "agent": {
    "defs": {
@@ -6967,6 +7005,39 @@
   "started": "2026-10-28T12:49:39",
   "status": "PASS",
   "units": null,
+  "waiting": null
+ },
+ "P.20": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "63ea7faeea744e81917a2bb0691de959cd219bf4",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "99490350-f4a9-47f7-ac84-51a379adfec2"
+  },
+  "attempt": 1,
+  "history": [
+   {
+    "status": "REJECTED",
+    "t": "2026-10-31T01:01:00"
+   }
+  ],
+  "reason": [
+   "rejected by the owner on the A/B report /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/P.20/table.md; reverted 2 files (old path)"
+  ],
+  "role": "perf",
+  "status": "REJECTED",
   "waiting": null
  },
  "P.3": {
