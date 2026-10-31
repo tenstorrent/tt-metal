@@ -872,6 +872,9 @@ Tensor fmod(
 
 Tensor floor_div(
     const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
+    if (input_a.dtype() == DataType::INT32) {
+        return ttnn::div(input_a, value, false, "floor", std::nullopt, output_mem_config);
+    }
     float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
     if (value_f == 0) {
         float t_inf = std::numeric_limits<float>::infinity();

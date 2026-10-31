@@ -2165,6 +2165,15 @@ def test_bitwise_or_subcore_grid_tensor_scalar(device, shape, sub_core_grid, sca
     assert torch.equal(result, golden)
 
 
+@pytest.mark.parametrize("scalar", [1, 2, 3, 7, -2, 1000])
+def test_floor_div_int32_tensor_scalar(device, scalar):
+    torch.manual_seed(0)
+    x = torch.randint(-100000, 100000, (1, 1, 32, 32), dtype=torch.int32)
+    input_tensor = ttnn.from_torch(x, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.floor_div(input_tensor, scalar)).to(torch.int64)
+    assert torch.equal(output, torch.div(x, scalar, rounding_mode="floor").to(torch.int64))
+
+
 # ── sub_core_grid tests for bitwise_xor ─────────────────────────────────────
 
 
