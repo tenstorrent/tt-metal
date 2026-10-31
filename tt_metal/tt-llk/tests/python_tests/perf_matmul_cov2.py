@@ -828,7 +828,7 @@ def test_perf_matmul_cov2(perf_report, case):
                 dest_acc=dest_acc,
                 unfuse_one_tile=True,
             ),
-            MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim)),
+            MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle)),
             MATMUL_L1_ACC(l1_acc),
         ],
         runtimes=[
