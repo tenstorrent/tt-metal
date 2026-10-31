@@ -61,12 +61,10 @@ constexpr TopkSegmentBounds half_bounds(TopkMetadataBounds row, uint32_t chunk_e
         row, chunk_elements, second_half ? mid : 0, second_half ? row.num_chunks : mid);
 }
 
-// Whether a row assigned to a core pair is actually halved: only a row of two or more chunks is, the test the
-// host applies when it knows the length (derive_core_row_assignments). Under a metadata length the host plans
-// the pair from the physical width, so the kernels re-apply this test to the real length. Otherwise a one-chunk
-// row is still halved -- one half all -inf -- and the unfused merge that joins the halves orders tied values
-// differently from the single fused reduction an eager call runs, so traced and eager indices disagree.
-constexpr bool row_halved(TopkMetadataBounds row) { return row.num_chunks >= 2; }
+// The program-namespace test, taking the row's real bounds.
+constexpr bool row_halved(TopkMetadataBounds row) {
+    return ttnn::operations::experimental::topk_large_indices::program::row_halved(row.num_chunks);
+}
 
 // A core's whole rows are always the whole row, never a chunk range.
 constexpr TopkSegmentBounds whole_row_bounds(TopkMetadataBounds row) {

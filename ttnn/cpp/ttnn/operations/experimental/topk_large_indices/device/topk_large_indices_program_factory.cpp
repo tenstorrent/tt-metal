@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_large_indices_program_factory.hpp"
-#include "kernels/topk_large_indices_metadata.hpp"
 #include "kernels/topk_large_indices_runtime_args.hpp"
 
 #include <tt-metalium/base_types.hpp>
@@ -204,8 +203,8 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
     // does not describe a contiguous row range -- producing it anyway would drop rows. The geometry test is
     // row_split_possible's, threaded through rather than re-derived, so the two cannot disagree. The chunk test
     // is row_halved's, which the kernels re-apply to a metadata length the host cannot see.
-    const bool pair_split = row_split && row_split_possible(num_rows, static_cast<uint32_t>(num_cores)) &&
-                            row_halved({.num_chunks = num_chunks, .tail_elements = 0});
+    const bool pair_split =
+        row_split && row_split_possible(num_rows, static_cast<uint32_t>(num_cores)) && row_halved(num_chunks);
 
     if (pair_split) {
         const uint64_t num_units = 2ull * split_rows;
