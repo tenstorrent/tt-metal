@@ -177,6 +177,11 @@ user, 870 agg), 117 -> ~75 ms at 256 users (13 per user, 3400 agg).
 
 ## 4. Workstream C: the prefill chunk
 
+Follow-up (2026-10-31, after the capstone and the release): SP compute with the owner-row cache through a
+selected-row push (`row_ownership.md` s.2.5.1): every arrival at the full-mesh rate (~520-535 s per lone 1 M prompt
+against 505 s today) with 32 resident, no thin waves; needs the compact-row push localized from tt-metal #62997 and
+owner-only fill / pool / carry writes. Decode unchanged.
+
 A 16K chunk takes 7.1-7.4 s on the sequence-parallel path (2.2K tok/s per prompt, 2023-2530 tok/s on the regions
 expert path), 58-94 s at 1 M positions on the 2026-10-21 run (the growing term is the whole-prefix copy and the
 multi-row scorer, `doc/mesh/prefill_1m_cost.md`). The per-op profile (`doc/mesh/prefill_profile.md`) puts the chunk at

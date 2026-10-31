@@ -144,6 +144,26 @@ with no scratch slot and 32 x 1 M capacity. It serves one prompt at a time, so f
 on mean TTFT. Recommendation: not now; a follow-up for lone arrivals at full occupancy once waves exist (it reuses
 the same row-sharded slot machinery plus one row gather per DSA layer).
 
+#### 2.5.1 (e') SP compute with the owner-row cache through a selected-row push (the lone-prompt follow-up, 2026-10-31)
+
+The variant above gathers the queries to the owner; the cheaper variant pushes the rows: every row keeps the
+replicated pooled indexer keys (64 MiB per 1 M user, `TtIndexCache`), scores ITS slab's queries and selects its
+top-k as today, then the owner row pushes the UNION of the selected latent rows of the chunk (0.6-5 % of the prefix
+per chunk after dedup, the measurement of tt-metal #62997, i.e. 6-50 MiB per DSA layer at 1 M) to the other rows
+through the row-axis links, and every row attends locally over its slab's queries (the paged op's gather half,
+`custom_ops/paged_sparse_sdpa`, reading from a compact per-chunk region instead of the slot's pages). The fill
+(2 MiB of new latent rows per row per layer), the pooled-key write and the KDA carry go to the owner row only; the
+non-owner rows hold no copy of the prompt, so the 32 x 1 M cell stays. Cost: tens of ms per DSA layer of link
+traffic plus the dedup kernel, an estimated 3-6 % on the 16 K chunk (~520-535 s per lone 1 M prompt against 505 s
+today), with SP's full-mesh rate for every arrival, late or lone, and no thin wave ever (the wave path's weak case:
+a resident wave user appending alone runs 3-8x slower than SP). Decode is unchanged (it already runs per owner
+row); it gains only indirectly: a lone arrival's prefill stalls the decoders for 1/8 of the steps a thin wave costs,
+and the 7 replicas an SP user keeps today return as DRAM headroom. Needs: the compact-row push (localize #62997's
+mechanism into `custom_ops`), the per-chunk compact region in the paged op's reader, owner-only fill / pool / carry
+writes (the row-sharded slot machinery of section 1 #3 and #7), one row gather of the selection per DSA layer.
+Sequenced after the capstone (32 resident x 1 M) and the release; measured on the lone 1 M needle (TTFT vs 505 s)
+and the "8, then 1 late" shape.
+
 ### 2.6 (d) Mixing prefill rows with decode rows
 
 Every op is dispatched to the whole mesh (one command stream per mesh; a captured trace replays on every chip), so a
