@@ -37,6 +37,7 @@ from models.experimental.bevformer.model_config import (
     POST_CENTER_RANGE,
     SCORE_DTYPE,
 )
+from models.experimental.bevformer.tt.tt_common import device_constant
 
 # _gather_rows' padded row width, a whole tile.
 _GATHER_WIDTH = ttnn.TILE_SIZE
@@ -71,22 +72,27 @@ def _gather_rows(table, rows, columns=None, compute_kernel_config=None):
         rest = padded if bs == 1 else padded[b : b + 1]
         sample_rows = rows if bs == 1 else rows[b : b + 1]
         out = None
-        for _ in range(3):
+        for i in range(3):
             part = ttnn.typecast(rest, ttnn.bfloat16)
-            rest = ttnn.subtract(rest, ttnn.typecast(part, ttnn.float32))
+            if i < 2:
+                rest = ttnn.subtract(rest, ttnn.typecast(part, ttnn.float32))
             gathered = ttnn.embedding(sample_rows, ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT))
             gathered = ttnn.to_layout(gathered, ttnn.TILE_LAYOUT)
             if columns is None:
                 gathered = ttnn.typecast(gathered, ttnn.float32)
             else:
                 gathered = ttnn.matmul(
-                    gathered, columns, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config
+                    gathered,
+                    columns,
+                    dtype=ttnn.float32,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=compute_kernel_config,
                 )
             out = gathered if out is None else ttnn.add(out, gathered)
         if columns is None:
             out = out[..., :width]
         samples.append(ttnn.reshape(out, (1, k, out.shape[-1])))
-    out = samples[0] if bs == 1 else ttnn.concat(samples, dim=0)
+    out = samples[0] if bs == 1 else ttnn.concat(samples, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
     return out
 
 
@@ -120,9 +126,7 @@ class TTNMSFreeCoder:
                 self._fallback.append(threshold)
         self._fallback.append(0.0)
         # Uploaded here, so a trace may capture the coder's first call.
-        self._fallback_tensor = ttnn.to_device(
-            ttnn.Tensor(self._fallback, [1, len(self._fallback)], ttnn.float32, ttnn.TILE_LAYOUT), device
-        )
+        self._fallback_tensor = device_constant(self._fallback, [1, len(self._fallback)], ttnn.float32, device)
         self.max_num = max_num
         self.num_classes = num_classes
         # The search's counts reach num_query * num_classes, which bfloat16 accumulation would
@@ -130,49 +134,39 @@ class TTNMSFreeCoder:
         self._count_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
         )
-        # The decoded box's channels from the CENTERS_FIRST box code, moved by _gather_rows: (cx,
-        # cy, cz, w, l, h, sin, vx, vy) in the first tile, w, l and h before their exp and sin
-        # before the yaw's atan2, and cos in the second tile under the sin, so the decoding works
-        # on whole tiles.
+        # The 0/1 matrix _gather_rows moves the CENTERS_FIRST box code's channels with, row the
+        # code channel, column its place: (cx, cy, cz, w, l, h, sin, vx, vy) in the first tile, w,
+        # l and h before their exp and sin before the yaw's atan2, and cos in the second tile at
+        # the sin's column, so atan2 pairs them element by element over whole tiles.
         codes = [*range(CODE_SIZE)]
         decoded = codes[CODE_XY] + codes[CODE_Z] + codes[CODE_WL] + codes[CODE_H] + codes[CODE_SIN]
         decoded += codes[CODE_VELOCITY]
         tile = ttnn.TILE_SIZE
-        columns = [0.0] * (_GATHER_WIDTH * 2 * tile)
-        for box_channel, code_channel in enumerate(decoded):
-            columns[CENTERS_FIRST.index(code_channel) * 2 * tile + box_channel] = 1.0
-        columns[CENTERS_FIRST.index(codes[CODE_COS][0]) * 2 * tile + tile + BOX_YAW.start] = 1.0
-        self._decode_columns = ttnn.to_device(
-            ttnn.Tensor(columns, [_GATHER_WIDTH, 2 * tile], ttnn.bfloat16, ttnn.TILE_LAYOUT), device
-        )
+        width = 2 * tile
+        columns = [0.0] * (_GATHER_WIDTH * width)
+        for column, code_channel in enumerate(decoded):
+            columns[CENTERS_FIRST.index(code_channel) * width + column] = 1.0
+        columns[CENTERS_FIRST.index(codes[CODE_COS][0]) * width + tile + BOX_YAW.start] = 1.0
+        self._decode_columns = device_constant(columns, [_GATHER_WIDTH, width], ttnn.bfloat16, device)
         self._size_mask, self._yaw_mask = (
-            ttnn.to_device(
-                ttnn.Tensor(
-                    [float(c in range(channels.start, channels.stop)) for c in range(tile)],
-                    [1, 1, tile],
-                    ttnn.float32,
-                    ttnn.TILE_LAYOUT,
-                ),
+            device_constant(
+                [float(c in range(channels.start, channels.stop)) for c in range(tile)],
+                [1, 1, tile],
+                ttnn.float32,
                 device,
             )
             for channels in (BOX_SIZE, BOX_YAW)
         )
         # 1 .. _SEARCH_STEPS down dim 1: the search's thresholds, in steps of its bracket.
-        self._search_steps = ttnn.to_device(
-            ttnn.Tensor(
-                [float(i) for i in range(1, _SEARCH_STEPS + 1)], [1, _SEARCH_STEPS, 1, 1], SCORE_DTYPE, ttnn.TILE_LAYOUT
-            ),
-            device,
+        self._search_steps = device_constant(
+            [float(i) for i in range(1, _SEARCH_STEPS + 1)], [1, _SEARCH_STEPS, 1, 1], SCORE_DTYPE, device
         )
         # _sort_descending's tie order: an element ranks after the equal ones before it.
         padded_k = -(-max_num // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        self._earlier = ttnn.to_device(
-            ttnn.Tensor(
-                [float(j < i) for i in range(padded_k) for j in range(padded_k)],
-                [1, 1, padded_k, padded_k],
-                ttnn.float32,
-                ttnn.TILE_LAYOUT,
-            ),
+        self._earlier = device_constant(
+            [float(j < i) for i in range(padded_k) for j in range(padded_k)],
+            [1, 1, padded_k, padded_k],
+            ttnn.float32,
             device,
         )
 
@@ -180,9 +174,10 @@ class TTNMSFreeCoder:
         """The exact k-th largest of ``logits`` ``(bs, 1, 1, n)``, ``(bs, 1, 1, 1)`` float32. A
         bfloat16 top-k gives it rounded, the pivot, as rounding is monotonic. The k-th logit then
         lies in ``[low, low + 2 * half_width)`` around the pivot, and each round splits that bracket
-        into ``_SEARCH_STEPS`` steps and keeps the step holding it: of the thresholds
-        ``low + i * step``, i = 1 .. ``_SEARCH_STEPS``, those with at least k logits at or above them come first, and ``low`` moves up by their
-        number of steps. The last threshold is the bracket's top, which never has k logits."""
+        into ``_SEARCH_STEPS`` steps and keeps the step holding it. Of the thresholds
+        ``low + i * step``, i = 1 .. ``_SEARCH_STEPS``, those with at least k logits at or above
+        them come first, as the counts fall while i rises, and ``low`` moves up by their number of
+        steps. The last threshold is the bracket's top, which never has k logits."""
         k = self.max_num
         bs = logits.shape[0]
         pivot, _ = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), k=k, dim=-1)
@@ -191,8 +186,8 @@ class TTNMSFreeCoder:
         half_width = ttnn.add(ttnn.multiply(ttnn.abs(pivot), 2.0**-6), 1e-30)
         low = ttnn.subtract(pivot, half_width)
         # The logits as whole tiles, (n / 32, 32), padded with -inf, which no threshold counts, and
-        # the thresholds down dim 1: a round's count reduces 32 such tile blocks, which spreads
-        # over the cores where one row of n logits per threshold runs on one.
+        # the thresholds down dim 1: a round's count reduces one such tile block per threshold,
+        # and the blocks spread over the cores.
         n = logits.shape[-1]
         tile_area = ttnn.TILE_SIZE * ttnn.TILE_SIZE
         padded_n = -(-n // tile_area) * tile_area
@@ -283,8 +278,9 @@ class TTNMSFreeCoder:
         from its sine and cosine."""
         tile = ttnn.TILE_SIZE
         codes, cos = gathered[..., :tile], gathered[..., tile:]
-        boxes = ttnn.where(self._size_mask, ttnn.exp(codes), codes)
-        boxes = ttnn.where(self._yaw_mask, ttnn.atan2(codes, cos), boxes)
+        # The masks live in DRAM, and a where's output follows its condition's memory by default.
+        boxes = ttnn.where(self._size_mask, ttnn.exp(codes), codes, memory_config=ttnn.L1_MEMORY_CONFIG)
+        boxes = ttnn.where(self._yaw_mask, ttnn.atan2(codes, cos), boxes, memory_config=ttnn.L1_MEMORY_CONFIG)
         return boxes[..., : BOX_VELOCITY.stop]
 
     def valid(self, scores, boxes):
