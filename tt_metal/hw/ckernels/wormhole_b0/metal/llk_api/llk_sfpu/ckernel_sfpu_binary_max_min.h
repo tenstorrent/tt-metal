@@ -46,7 +46,10 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     constexpr int b = p_sfpu::LREG2;
     constexpr int c = p_sfpu::LREG3;
 
-#pragma GCC unroll 8
+    // Fully unrolled: with a partial unroll the per-row instruction words (they depend on
+    // i & 1) are rebuilt with RISC ALU ops in the remaining loop, which makes a 32-row
+    // (whole-tile) call issue-bound at ~2 RISC slots per SFPU instruction.
+#pragma GCC unroll 32
     for (int i = 0; i < ITERATIONS; ++i) {
         int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
         TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset0 | (a >> 2));
