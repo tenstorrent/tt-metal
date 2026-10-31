@@ -301,7 +301,11 @@ Tensor full_like_impl(
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
              dtype_value == DataType::FLOAT32) &&
             tensor.storage_type() == StorageType::DEVICE && dtype_value == tensor.dtype()) {
-            return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+            if constexpr (std::is_same_v<T, std::int64_t>) {
+                return ttnn::fill(tensor, static_cast<float>(fill_value), memory_config, optional_output_tensor);
+            } else {
+                return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+            }
         }
         return full_impl(
             tensor.logical_shape(),
@@ -343,7 +347,8 @@ Tensor ones(
 }
 
 template <typename FillValueType>
-    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, std::int64_t> or
+             std::is_same_v<FillValueType, float>
 Tensor full(
     const ttnn::Shape& shape,
     const FillValueType fill_value,
@@ -407,7 +412,8 @@ Tensor from_buffer(
 }
 
 template <typename FillValueType>
-    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, std::int64_t> or
+             std::is_same_v<FillValueType, float>
 Tensor full_like(
     const Tensor& tensor,
     const FillValueType fill_value,
@@ -513,6 +519,14 @@ template Tensor full_impl<int>(
     MeshDevice* device,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor);
+template Tensor full_impl<std::int64_t>(
+    const ttnn::Shape& shape,
+    const std::int64_t fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    MeshDevice* device,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor);
 
 template Tensor full_like_impl<float>(
     const Tensor& tensor,
@@ -530,10 +544,26 @@ template Tensor full_like_impl<int>(
     std::optional<std::reference_wrapper<MeshDevice>> device_arg,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor);
+template Tensor full_like_impl<std::int64_t>(
+    const Tensor& tensor,
+    const std::int64_t fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    std::optional<std::reference_wrapper<MeshDevice>> device_arg,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor);
 
 template Tensor full<int>(
     const ttnn::Shape& shape,
     const int fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
+template Tensor full<std::int64_t>(
+    const ttnn::Shape& shape,
+    const std::int64_t fill_value,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
@@ -551,6 +581,14 @@ template Tensor full<float>(
 template Tensor full_like<int>(
     const Tensor& tensor,
     const int fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
+template Tensor full_like<std::int64_t>(
+    const Tensor& tensor,
+    const std::int64_t fill_value,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
