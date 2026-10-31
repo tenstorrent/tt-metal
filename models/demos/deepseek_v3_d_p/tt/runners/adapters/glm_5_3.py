@@ -53,6 +53,10 @@ class GLM53Adapter(MLAPrefillAdapter):
     supports_mtp = True
     # The deployed mode: on SC4 it cuts TTFT by about 3% against VC1 with one fabric route per chip.
     d2d_relay_default = True
+    # Sparse (DSA) MLA always TP-dedups its KVPE and index caches (allocate_kv_cache), so
+    # PREFILL_TP_SHARD_KV=1, which the 4x4 bindings pin, states what it does anyway. 0 cannot roll it back.
+    supports_tp_shard_kv = True
+    tp_shard_kv_default = True
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
