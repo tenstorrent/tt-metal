@@ -51,6 +51,10 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+
+            With a scalar ``true_value`` or ``false_value``, a BFLOAT16 predicate can be paired with a FLOAT32
+            tensor, or a FLOAT32 predicate with a BFLOAT16 tensor, when both are in TILE layout and have the
+            same last two dimensions. By default the output takes the tensor's dtype.
         )doc",
         "where",
         "ttnn.where",
