@@ -373,6 +373,111 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+/// @tparam D Row of this call, 0 .. ITERATIONS-1.
+template <int D>
+inline void log_bf16_row() {
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2 * D);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x7fc0);
+        TTI_SFPDIVP2(0xfff, p_sfpu::LREG1, p_sfpu::LREG2, 1);
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG1, 4);
+        TTI_SFPSETMAN(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
+        TTI_SFPABS(0, p_sfpu::LREG3, p_sfpu::LREG5, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG3, 6);
+        TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LCONST_neg1, p_sfpu::LREG3, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG3, p_sfpu::LREG13, p_sfpu::LREG5, 0);
+        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG5, 0);
+        TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG3, 1);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    TTI_SFPIADD(0xf01, p_sfpu::LREG3, p_sfpu::LREG3, 9);
+    TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    TTI_SFPENCC(0x003, 0, 0, 10);
+    TTI_SFP_STOCH_RND(
+        sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LCONST_0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2 * D);
+}
+
+/// @tparam D Row of this call, 0 .. ITERATIONS-1.
+template <int D>
+inline void log_fp32_row() {
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2 * D);
+    if constexpr (D == 0) {
+        TTI_REPLAY(0, 16, 1, 1);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x3f40);
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+        TTI_SFPSETMAN(0, p_sfpu::LREG1, p_sfpu::LREG2, 1);
+        TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG2, 6);
+        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LCONST_neg1, p_sfpu::LREG2, 0);
+        TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATA, 0xaa4b);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG4, 0);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0xb031);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0x309d);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0xb154);
+    } else {
+        TTI_REPLAY(0, 16, 0, 0);
+    }
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0x3266);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x7fc0);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 0);
+    TTI_SFPDIVP2(0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG4, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG4, 0);
+    TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPIADD(0xf01, p_sfpu::LREG2, p_sfpu::LREG2, 9);
+    TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
+    TTI_SFPENCC(0x003, 0, 0, 10);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2 * D);
+}
+
+/// @tparam D First row; N = ITERATIONS.
+template <int D, int N>
+inline void log_bf16_rows() {
+    if constexpr (D < N) {
+        log_bf16_row<D>();
+        log_bf16_rows<D + 1, N>();
+    }
+}
+
+/// @tparam D First row; N = ITERATIONS.
+template <int D, int N>
+inline void log_fp32_rows() {
+    if constexpr (D < N) {
+        log_fp32_row<D>();
+        log_fp32_rows<D + 1, N>();
+    }
+}
+
+/// @tparam N ITERATIONS / 4.
+template <int N>
+inline void log_advance_dst() {
+    if constexpr (N > 0) {
+        TTI_INCRWC(0, 8, 0, 0);
+        log_advance_dst<N - 1>();
+    }
+}
+
 /**
  * @tparam APPROXIMATION_MODE Ignored
  * @tparam FAST_APPROX Ignored (see calculate_log_body)
@@ -392,6 +497,19 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
+    if constexpr (!HAS_BASE_SCALING && ITERATIONS % 4 == 0) {
+        if constexpr (is_fp32_dest_acc_en) {
+            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATA, 0x2ee1);
+            TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0xbf00);
+            log_fp32_rows<0, ITERATIONS>();
+        } else {
+            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0xbe80);
+            TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0xc0c0);
+            log_bf16_rows<0, ITERATIONS>();
+        }
+        log_advance_dst<ITERATIONS / 4>();
+        return;
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
