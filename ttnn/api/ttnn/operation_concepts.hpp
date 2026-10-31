@@ -181,6 +181,16 @@ concept HasDynamicAxes = requires(
     } -> std::convertible_to<std::vector<dynamic_length::DynamicAxis>>;
 };
 
+// Opt-in, instead of a custom compute_program_hash: the framework derives the program hash and the exact cache
+// key from the attributes and tensor arguments, leaving out what the declared DynamicKey says the program does not
+// depend on.
+template <typename device_operation_t>
+concept HasDynamicKey = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    { device_operation_t::dynamic_key(attrs, tensor_args) } -> std::convertible_to<dynamic_length::DynamicKey>;
+};
+
 // Detect if operation provides custom cache-hit validation.
 // If not provided, the framework defaults to calling validate_on_program_cache_miss.
 template <typename device_operation_t>

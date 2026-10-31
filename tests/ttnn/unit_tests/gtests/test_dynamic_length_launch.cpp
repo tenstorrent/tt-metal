@@ -89,8 +89,36 @@ struct LengthOp {
         return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
     }
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t& tensor_args) {
-        return ttsl::hash::hash_objects_with_default_seed(tensor_args.input.tensor_spec());
+    static dynamic_length::DynamicKey dynamic_key(const operation_attributes_t& attrs, const tensor_args_t&) {
+        dynamic_length::DynamicKey key;
+        key.value(attrs.length);
+        return key;
+    }
+};
+
+// LengthOp's program keyed without the input's rows, so every height shares it.
+struct RowsOp {
+    using operation_attributes_t = LengthOp::operation_attributes_t;
+    using tensor_args_t = LengthOp::tensor_args_t;
+    using spec_return_value_t = LengthOp::spec_return_value_t;
+    using tensor_return_value_t = LengthOp::tensor_return_value_t;
+    using program_factory_t = LengthOp::program_factory_t;
+
+    static dynamic_length::DynamicKey dynamic_key(const operation_attributes_t&, const tensor_args_t& tensor_args) {
+        dynamic_length::DynamicKey key;
+        key.dim(tensor_args.input, -2);
+        return key;
+    }
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& tensor_args) {
+        return tensor_args.input.tensor_spec();
+    }
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
     }
 };
 
@@ -101,15 +129,18 @@ struct NoAxesOp {
 
 static_assert(HasDynamicAxes<LengthOp>);
 static_assert(!HasDynamicAxes<NoAxesOp>);
+static_assert(HasDynamicKey<RowsOp>);
+static_assert(HasDynamicKey<LengthOp>);
+static_assert(!HasDynamicKey<NoAxesOp>);
 
 class DynamicLengthLaunchTest : public TTNNFixtureWithDevice {
 protected:
     static constexpr std::size_t kCapacity = 64;
 
-    Tensor make_input() const {
+    Tensor make_input(uint32_t rows = kCapacity, uint32_t cols = 32) const {
         return create_device_tensor(
             tt::tt_metal::TensorSpec(
-                ttnn::Shape{1, 1, kCapacity, 32},
+                ttnn::Shape{1, 1, rows, cols},
                 tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{})),
             device_);
     }
@@ -189,6 +220,27 @@ TEST_F(DynamicLengthLaunchTest, TraceCaptureRequiresScalarAtCapacity) {
     } release{device_, trace_id};
     EXPECT_THROW(launch<LengthOp>({.length = 16}, {.input = input}), std::exception);
     EXPECT_NO_THROW(launch<LengthOp>({.length = kCapacity}, {.input = input}));
+}
+
+TEST_F(DynamicLengthLaunchTest, DeclaredRowsShareOneProgram) {
+    launch<RowsOp>({}, {.input = make_input(32)});
+    launch<RowsOp>({}, {.input = make_input(96)});
+    EXPECT_EQ(device_->get_program_cache().num_entries(), 1);
+    launch<RowsOp>({}, {.input = make_input(32, 64)});
+    EXPECT_EQ(device_->get_program_cache().num_entries(), 2);
+}
+
+TEST_F(DynamicLengthLaunchTest, RejectsDynamicDimOnShardedTensor) {
+    const MemoryConfig height_sharded{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(CoreRangeSet(CoreRange({0, 0}, {0, 0})), {64, 32}, ShardOrientation::ROW_MAJOR)};
+    const auto input = create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape{1, 1, 64, 32},
+            tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), height_sharded)),
+        device_);
+    EXPECT_THROW(launch<RowsOp>({}, {.input = input}), std::exception);
 }
 
 }  // namespace

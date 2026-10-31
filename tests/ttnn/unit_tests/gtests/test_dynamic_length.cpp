@@ -5,7 +5,18 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <exception>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/dynamic_length.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -59,6 +70,201 @@ TEST(DynamicLength, RejectsWrongDtypeLengthTensor) {
     const auto length = ttnn::zeros(ttnn::Shape({1}), DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT);
     const std::array axes{DynamicAxis{.name = "n", .capacity = 128, .value = 128, .tensor = &length}};
     EXPECT_THROW(validate_axes(axes, "op"), std::exception);
+}
+
+struct KeyAttributes {
+    uint32_t mode = 0;
+    uint32_t length = 0;
+};
+
+struct KeyTensorArgs {
+    Tensor input;
+    Tensor weight;
+    std::optional<Tensor> output;
+};
+
+Tensor make_tensor(uint32_t rows, uint32_t cols) {
+    return ttnn::zeros(ttnn::Shape({1, 1, rows, cols}), DataType::BFLOAT16, ttnn::TILE_LAYOUT);
+}
+
+// The rows of input and output are dynamic; the weight's are not.
+std::string rows_free_key(const KeyTensorArgs& args, KeyAttributes attributes = {}) {
+    DynamicKey dynamic_key;
+    dynamic_key.dim(args.input, -2).dim(args.output, 2);
+    return program_key(attributes, args, dynamic_key, "op");
+}
+
+TEST(DynamicKey, IgnoresDeclaredExtents) {
+    const KeyTensorArgs short_args{make_tensor(32, 64), make_tensor(64, 32), make_tensor(32, 32)};
+    const KeyTensorArgs long_args{make_tensor(96, 64), make_tensor(64, 32), make_tensor(128, 32)};
+    EXPECT_EQ(rows_free_key(short_args), rows_free_key(long_args));
+}
+
+TEST(DynamicKey, KeepsEverythingElse) {
+    const KeyTensorArgs args{make_tensor(32, 64), make_tensor(64, 32), make_tensor(32, 32)};
+    const auto key = rows_free_key(args);
+    EXPECT_NE(key, rows_free_key({make_tensor(32, 96), args.weight, args.output}));
+    EXPECT_NE(key, rows_free_key({args.input, make_tensor(96, 32), args.output}));
+    EXPECT_NE(key, rows_free_key({args.input, args.weight, std::nullopt}));
+    EXPECT_NE(key, rows_free_key(args, {.mode = 1}));
+    EXPECT_NE(key, rows_free_key(args, {.length = 1}));
+    const auto row_major_input = ttnn::zeros(ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT);
+    EXPECT_NE(key, rows_free_key({row_major_input, args.weight, args.output}));
+}
+
+std::string length_free_key(const KeyAttributes& attributes, const KeyTensorArgs& args) {
+    DynamicKey dynamic_key;
+    dynamic_key.value(attributes.length);
+    return program_key(attributes, args, dynamic_key, "op");
+}
+
+TEST(DynamicKey, IgnoresDeclaredValues) {
+    const KeyTensorArgs args{make_tensor(32, 64), make_tensor(64, 32), std::nullopt};
+    const auto key = length_free_key({.length = 16}, args);
+    EXPECT_EQ(key, length_free_key({.length = 64}, args));
+    EXPECT_NE(key, length_free_key({.mode = 1, .length = 16}, args));
+}
+
+TEST(DynamicKey, KeysDerivedValues) {
+    const KeyTensorArgs short_args{make_tensor(32, 64), make_tensor(64, 32), std::nullopt};
+    const KeyTensorArgs long_args{make_tensor(96, 64), make_tensor(64, 32), std::nullopt};
+    const auto key = [](const KeyTensorArgs& args, uint32_t block_rows) {
+        DynamicKey dynamic_key;
+        dynamic_key.dim(args.input, -2).depends_on(block_rows);
+        return program_key(KeyAttributes{}, args, dynamic_key, "op");
+    };
+    EXPECT_EQ(key(short_args, 1), key(long_args, 1));
+    EXPECT_NE(key(short_args, 1), key(long_args, 3));
+}
+
+struct MapTensorArgs {
+    std::map<int, Tensor> by_id;
+    std::unordered_map<int, Tensor> by_slot;
+};
+
+TEST(DynamicKey, ReachesTensorsInMaps) {
+    const auto key = [](uint32_t rows) {
+        const MapTensorArgs args{{{0, make_tensor(rows, 64)}}, {{0, make_tensor(rows, 32)}}};
+        DynamicKey dynamic_key;
+        dynamic_key.dim(args.by_id.at(0), -2).dim(args.by_slot.at(0), -2);
+        return program_key(KeyAttributes{}, args, dynamic_key, "op");
+    };
+    EXPECT_EQ(key(32), key(96));
+}
+
+TEST(DynamicKey, RejectsDimOutsideTensorArgs) {
+    const KeyTensorArgs args{make_tensor(32, 64), make_tensor(64, 32), std::nullopt};
+    const auto unrelated = make_tensor(32, 64);
+    DynamicKey dynamic_key;
+    dynamic_key.dim(unrelated, -2);
+    EXPECT_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"), std::exception);
+}
+
+TEST(DynamicKey, RejectsRowMajorLastDim) {
+    const auto row_major = ttnn::zeros(ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT);
+    const KeyTensorArgs args{row_major, make_tensor(64, 32), std::nullopt};
+    DynamicKey dynamic_key;
+    dynamic_key.dim(args.input, -1);
+    EXPECT_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"), std::exception);
+    dynamic_key = {};
+    dynamic_key.dim(args.input, -2);
+    EXPECT_NO_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"));
+}
+
+TEST(DynamicKey, RejectsDimOutOfRange) {
+    const KeyTensorArgs args{make_tensor(32, 64), make_tensor(64, 32), std::nullopt};
+    DynamicKey dynamic_key;
+    dynamic_key.dim(args.input, 4);
+    EXPECT_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"), std::exception);
+}
+
+TEST(DynamicKey, RejectsValueOutsideAttributes) {
+    const KeyAttributes attributes;
+    const KeyAttributes copy = attributes;
+    const KeyTensorArgs args{make_tensor(32, 64), make_tensor(64, 32), std::nullopt};
+    DynamicKey dynamic_key;
+    dynamic_key.value(copy.length);
+    EXPECT_THROW(program_key(attributes, args, dynamic_key, "op"), std::exception);
+}
+
+enum class Mode : uint8_t { A, B };
+
+struct HashedLeaf {
+    uint32_t value = 0;
+    ttsl::hash::hash_t to_hash() const { return value; }
+};
+
+struct Inner {
+    uint32_t first = 0;
+    std::optional<std::string> name;
+};
+
+struct WithAttributes {
+    uint32_t a = 0;
+    float b = 0;
+    static constexpr auto attribute_names = std::forward_as_tuple("a", "b");
+    auto attribute_values() const { return std::forward_as_tuple(a, b); }
+};
+
+struct EveryBranch {
+    int32_t integer = -3;
+    double real = 0.5;
+    Mode mode = Mode::B;
+    std::string text = "text";
+    std::optional<uint32_t> present = 7;
+    std::optional<uint32_t> absent;
+    std::variant<uint32_t, std::string> variant = std::string{"alt"};
+    std::vector<uint32_t> list = {1, 2, 3};
+    std::vector<bool> flags = {true, false};
+    std::set<int> set = {4, 5};
+    std::map<int, std::string> map = {{1, "one"}};
+    std::unordered_map<int, uint32_t> unordered = {{2, 20}, {1, 10}, {3, 30}};
+    std::pair<uint32_t, Mode> pair = {9, Mode::A};
+    std::tuple<uint32_t, std::string> tuple = {8, "t"};
+    std::array<uint32_t, 2> array = {11, 12};
+    Inner inner = {.first = 6, .name = "inner"};
+    WithAttributes attributes = {.a = 1, .b = 2};
+    HashedLeaf hashed = {.value = 42};
+};
+
+struct NoTensors {
+    std::vector<uint32_t> sizes = {32, 64};
+};
+
+// With nothing declared and no tensors, the key is canonical_key's, followed by the empty derived suffix.
+TEST(DynamicKey, MatchesCanonicalKeyWithNothingDeclared) {
+    const EveryBranch attributes;
+    const NoTensors args;
+    EXPECT_EQ(
+        program_key(attributes, args, DynamicKey{}, "op"),
+        ttsl::hash::canonical_key(attributes, args) + ttsl::hash::canonical_key(std::uint64_t{0}));
+}
+
+struct Outer {
+    Inner inner;
+    uint32_t last = 0;
+};
+
+// value() matches by address and type, so a first member does not stand for the aggregates that start with it.
+TEST(DynamicKey, FirstMemberDoesNotAliasItsAggregate) {
+    const NoTensors args;
+    const auto first_free_key = [&](const Outer& attributes) {
+        DynamicKey dynamic_key;
+        dynamic_key.value(attributes.inner.first);
+        return program_key(attributes, args, dynamic_key, "op");
+    };
+    const Outer attributes{.inner = {.first = 1, .name = "a"}, .last = 2};
+    EXPECT_EQ(first_free_key(attributes), first_free_key({.inner = {.first = 5, .name = "a"}, .last = 2}));
+    EXPECT_NE(first_free_key(attributes), first_free_key({.inner = {.first = 1, .name = "b"}, .last = 2}));
+    EXPECT_NE(first_free_key(attributes), first_free_key({.inner = {.first = 1, .name = "a"}, .last = 3}));
+
+    const auto inner_free_key = [&](const Outer& attributes) {
+        DynamicKey dynamic_key;
+        dynamic_key.value(attributes.inner);
+        return program_key(attributes, args, dynamic_key, "op");
+    };
+    EXPECT_EQ(inner_free_key(attributes), inner_free_key({.inner = {.first = 5, .name = "b"}, .last = 2}));
+    EXPECT_NE(inner_free_key(attributes), inner_free_key({.inner = {.first = 1, .name = "a"}, .last = 3}));
 }
 
 }  // namespace ttnn::dynamic_length::test

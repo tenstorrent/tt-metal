@@ -270,6 +270,50 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+namespace {
+// The multi-core factory with interleaved input and output derives its per-core rows on device when
+// asked to; only that configuration hashes without the row count.
+bool row_free_configuration(
+    const UntilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const UntilizeDeviceOperation::tensor_args_t& tensor_args) {
+    if (!operation_attributes.runtime_rows || tensor_args.input.is_sharded() ||
+        operation_attributes.output_mem_config.is_sharded()) {
+        return false;
+    }
+    return std::holds_alternative<UntilizeMultiCoreProgramFactory>(
+        UntilizeDeviceOperation::select_program_factory(operation_attributes, tensor_args));
+}
+}  // namespace
+
+void UntilizeDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return;
+    }
+    // Only the row-dependent invariants: the row count is not in the hash.
+    using namespace tt::constants;
+    const auto& input_tensor_a = tensor_args.input;
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
+    TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+    TT_FATAL(input_tensor_a.is_allocated(), "Input tensor must be allocated");
+}
+
+ttnn::dynamic_length::DynamicKey UntilizeDeviceOperation::dynamic_key(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    ttnn::dynamic_length::DynamicKey key;
+    if (row_free_configuration(operation_attributes, tensor_args)) {
+        // Both are computed from the height and only steer factory selection, which row_free_configuration
+        // has already pinned to the multi-core factory; that factory reads neither.
+        key.dim(tensor_args.input, -2)
+            .value(operation_attributes.enough_space_height)
+            .value(operation_attributes.pf_type);
+    }
+    return key;
+}
+
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -422,7 +466,8 @@ Tensor untilize(
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_height,
-    uint32_t pf_type) {
+    uint32_t pf_type,
+    bool runtime_rows) {
     return ttnn::device_operation::launch<UntilizeDeviceOperation>(
         UntilizeOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
@@ -430,7 +475,8 @@ Tensor untilize(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
             .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
+            .pf_type = pf_type,
+            .runtime_rows = runtime_rows},
         UntilizeTensorArgs{.input = input});
 }
 
