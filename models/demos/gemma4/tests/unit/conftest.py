@@ -50,11 +50,15 @@ from models.demos.gemma4.tt.generator import (  # noqa: E402  - pure helpers the
     items_within_prefill_window,
     merge_soft_tokens,
 )
+from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV  # noqa: E402
 
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
+    # Read at import by the class bodies (the base's resident-decode declaration and the MTP contract's
+    # deferred-verify declaration); cleared so the shell cannot leak into the capability tests.
+    "GEMMA4_SUPPORTS_ASYNC_DECODE",
+    "GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE",
     "GEMMA4_DFLASH_MAX_SPEC_ISL",
-    "GEMMA4_DFLASH_SERVE_BLOCK",
     "GEMMA4_DFLASH_WIDTH_SET",
     "GEMMA4_DFLASH_PACKED",
     "GEMMA4_DFLASH_WARMUP_DECODE",
@@ -262,6 +266,7 @@ def _stub_runtime(patch):
         class VerifyOutput:
             spec_mode: str
             argmax_ids: object = None
+            logits: object = None
             hidden: object = None
 
         @dataclass
@@ -274,11 +279,12 @@ def _stub_runtime(patch):
             drafter_state: str
             drafter_target_cache_requires: tuple
             supports_narrow_decode: bool = False
+            k_by_rows: tuple = ()
 
         @dataclass
         class SpecReject:
             reason: str
-            supported_k: tuple
+            supported_k: tuple = ()
 
         patch.setitem(sys.modules, "vllm_tt_plugin", _module("vllm_tt_plugin", __path__=[]))
         patch.setitem(
@@ -329,24 +335,56 @@ def drafter_module():
         yield _fresh_import(patch, "models.demos.gemma4.tt.dflash_drafter")
 
 
-def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
-    """A contract-rail model over recording stubs, after a solo-capable warmup."""
-    cls = adapter.Gemma4DFlashContractForCausalLM
+def _base_stub(name):
+    """The base-class entry point ``name`` routed to the instance's own ``_harness_<name>`` stub."""
+
+    def call(self, *args, **kwargs):
+        stub = self.__dict__.get("_harness_" + name)
+        assert stub is not None, f"{type(self).__name__} has no harness stub for {name}"
+        return stub(self, *args, **kwargs)
+
+    call.__name__ = name
+    return call
+
+
+def install_base_stubs(adapter, monkeypatch):
+    """Route the base ``Gemma4ForCausalLM`` serving entry points to per-instance recorders.
+
+    The contract classes reach the plain prefill / decode / read / warmup through the base class, so the
+    stubs live on it; dispatching on the instance lets a dFlash model and an MTP model built in the same
+    test keep their own recorders (each harness sets ``model._harness_<name>``).
+    """
+    base = adapter.Gemma4ForCausalLM
+    for name in ("prefill_forward", "decode_forward", "read_decode_output", "warmup_model_decode"):
+        monkeypatch.setattr(base, name, _base_stub(name), raising=False)
+
+
+def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None, env=None):
+    """A contract-rail model over recording stubs, after a solo-capable warmup.
+
+    ``cls`` selects the dFlash contract class to build (the text class by default, or its
+    composed vision class); ``env`` holds the policy knobs the model reads at construction.
+    """
+    cls = cls or adapter.Gemma4DFlashContractForCausalLM
     model = cls.__new__(cls)
     model.events = []
+    model.prefill_kwargs = []
+    model.is_multimodal = False
+    model.image_token_id = None
+    model.video_token_id = None
     model.model = [Target(model.events, ring=ring)]
     attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=1024, max_batch_size=32)]
+    model.tt_supported_decode_batch_sizes = (32,)  # the warmed decode buckets
+    model.tt_supported_decode_batch_sizes = (32,)  # the warmed decode buckets
     model.kv_cache = [[("k", "v"), ("k", "v")]]
     model._spec_decoder = Decoder(model.events, widths=widths)
     model._spec_width_set = True
     model._spec_width_ladder = list(widths)
     model._spec_horizon = 256
     model._spec_active = False
-    model._spec_active_owner = None
     model._spec_owner_slot = None
     model._spec_pending = None
-    model._spec_pending_owner = None
     model._spec_first_step = True
     model._spec_decoder_bucket = None
     model._bounded_sliding_kv_cache = ring is not None
@@ -354,6 +392,10 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model.results = []
     model.reloads = []
     model.decode_commands = []
+    for name in SPEC_POLICY_ENV:  # the policy knobs are read at init: the shell's values are cleared, ``env`` wins
+        monkeypatch.delenv(name, raising=False)
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
     model._dflash_init_state()
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
     model._effective_paged_block_size = lambda kv_cache: 64
@@ -364,7 +406,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     def bootstrap(anchor, start, page_table, kv_cache, page_tables_per_layer=None):
         taps, n = model._spec_pending
         model._spec_pending = None
-        model._spec_pending_owner = None
         dec = model._spec_decoder
         row = page_table[:1]
         dec.refresh_page_tables(row)
@@ -377,7 +418,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
 
     def release_decoder(drop_page_tables=True, teardown=False):
         model._spec_active = False
-        model._spec_active_owner = None
         model.events.append(("release_decoder", bool(teardown)))
 
     monkeypatch.setattr(model, "_spec_bootstrap", bootstrap)
@@ -386,6 +426,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     def prefill(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs["tokens"]
         model.events.append(("prefill", int(tokens.shape[0]), kwargs.get("prompt_lens"), kwargs.get("enable_trace")))
+        model.prefill_kwargs.append(sorted(kwargs))
         model.last_prefill_tables = (kwargs.get("page_table"), page_tables_per_layer)
         target = model.model[0]
         if target.tap_layers is not None:
@@ -439,10 +480,10 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
         model.events.append(("read", bool(async_read)))
         return [tt_out]
 
-    base = adapter.Gemma4ForCausalLM
-    monkeypatch.setattr(base, "prefill_forward", prefill)
-    monkeypatch.setattr(base, "decode_forward", decode)
-    monkeypatch.setattr(base, "read_decode_output", read, raising=False)
+    install_base_stubs(adapter, monkeypatch)
+    model._harness_prefill_forward = prefill
+    model._harness_decode_forward = decode
+    model._harness_read_decode_output = read
     model.tap_counter = [0]
 
     def harness_taps(rows, group):

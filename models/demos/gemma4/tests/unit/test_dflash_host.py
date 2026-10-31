@@ -12,7 +12,9 @@ computes on the device is not something a host test can attest.
 
 import ast
 import dataclasses
+import inspect
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +22,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.gemma4.tests.unit import mtp_contract_harness as mh
 from models.demos.gemma4.tests.unit.conftest import build_model, import_adapter
 from models.demos.gemma4.tests.unit.dflash_contract_harness import (
     DeviceResult,
@@ -34,11 +37,27 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (
     make_expect_error,
 )
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state
+from models.demos.gemma4.tt.spec_policy import CostLine
 
 
 @pytest.fixture
 def expect_error_base():
     return make_expect_error()
+
+
+@pytest.fixture
+def mtp(adapter, monkeypatch):
+    """The MTP (assistant drafter) contract rail over its recording stubs, warm: the rail's twin of ``model``."""
+    return mh.build_mtp_model(adapter, monkeypatch)
+
+
+@pytest.fixture
+def assistant_dir(tmp_path):
+    """An assistant checkpoint dir (only ``config.json`` is read), beside the dFlash ``drafter_snapshot``."""
+    path = tmp_path / "assistant"
+    path.mkdir()
+    (path / "config.json").write_text(json.dumps({"backbone_hidden_size": 5376, "hidden_size": 1024}))
+    return str(path)
 
 
 def _names(model, kind):
@@ -70,12 +89,44 @@ def test_declares_the_contract_rail(adapter):
     assert caps["supports_async_decode"] is False
     assert caps["supports_async_spec_decode"] is False
 
-
-def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
-    for cls in (adapter.Gemma4DFlashForCausalLM, adapter.Gemma4MTPForCausalLM):
-        assert cls.model_capabilities["output_tokens_per_step"] > 1
-        assert "max_device_top_k" not in cls.model_capabilities
-        assert "supports_device_penalties" not in cls.model_capabilities
+    # -- the MTP rail: declares the contract rail
+    caps = adapter.Gemma4MTPContractForCausalLM.model_capabilities
+    assert caps["output_tokens_per_step"] == 1
+    assert caps["supports_spec_decode"] is True
+    assert "tt_adaptive_block_output" not in caps and "tt_block_kv_extent_tokens" not in caps
+    assert caps["spec_requirements"] == ("device_propose",)
+    assert caps["spec_hidden_handoff"] == ("on_device",)
+    assert caps["supports_sample_on_device"] is True
+    assert caps["max_device_top_k"] == 32
+    assert caps["supports_device_penalties"] is False
+    # The resident decode is the base's env-driven value; the deferred verify is this class's own (below).
+    assert caps["supports_async_decode"] is adapter.Gemma4ForCausalLM.model_capabilities["supports_async_decode"]
+    assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
+    # Prefix caching is the base's env-driven value: sessions key on slot + generation, not block ids.
+    assert caps["supports_prefix_caching"] == adapter.Gemma4ForCausalLM.model_capabilities["supports_prefix_caching"]
+    assert adapter.Gemma4MTPContractForCausalLM._SPEC_N == adapter.Gemma4MTPContractForCausalLM._SPEC_DRAFT_LEN + 1
+    # -- the MTP rail: the deferred-verify declaration is inherited by the composed classes and not by dflash
+    for name in (
+        "Gemma4MTPContractVisionForConditionalGeneration",
+        "Gemma4MTPContractUnifiedVisionForConditionalGeneration",
+    ):
+        caps = getattr(adapter, name).model_capabilities
+        assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
+    dflash = adapter.Gemma4DFlashContractForCausalLM.model_capabilities
+    assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
+    # -- the MTP rail: the async declarations follow their environment gates
+    for env, async_decode, async_spec in [
+        ({"GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "0"}, True, False),
+        ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "0"}, False, True),
+        ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "false", "GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "no"}, False, False),
+    ]:
+        with pytest.MonkeyPatch.context() as patch:
+            module = import_adapter(patch, env)
+            caps = module.Gemma4MTPContractForCausalLM.model_capabilities
+            assert caps["supports_async_decode"] is async_decode and caps["supports_async_spec_decode"] is async_spec
+            assert module.Gemma4MTPContractVisionForConditionalGeneration.model_capabilities is caps
+            dflash = module.Gemma4DFlashContractForCausalLM.model_capabilities
+            assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
 
 
 def _plugin_sampling_router():
@@ -161,17 +212,70 @@ def test_dflash_cannot_enable_resident_decode_with_an_environment_override(value
         assert caps["supports_async_spec_decode"] is False
 
 
-def test_verify_count_pins_the_inherited_width_arithmetic(adapter):
+def test_verify_count_pins_the_inherited_width_arithmetic(adapter, expect_error):
     cls = adapter.Gemma4DFlashContractForCausalLM
     assert cls._SPEC_CONTRACT_K == 5
     assert cls._SPEC_V == 5 and cls._SPEC_N == 6
 
+    # -- the MTP rail: k by rows table parses clamps and checks the tile
+    assert adapter.spec_k_by_rows_table("5:5,8:3,16:1", 5) == ((5, 5), (8, 3), (16, 1))
+    assert adapter.spec_k_by_rows_table(" 5:5 , 8:3 ", 3) == ((5, 3), (8, 3))
+    with expect_error(ValueError, "strictly ascend"):
+        adapter.spec_k_by_rows_table("8:3,5:5", 5)
+    with expect_error(ValueError, "above the device argmax tile"):
+        adapter.spec_k_by_rows_table("8:5", 5)
+    with expect_error(ValueError, "not max_rows:k"):
+        adapter.spec_k_by_rows_table("8", 5)
+    with expect_error(ValueError, "is empty"):
+        adapter.spec_k_by_rows_table(" , ", 5)
+    # -- the MTP rail: plan k by rows appends the tail only when the table stops short
+    table = ((5, 5), (8, 3), (16, 1))
+    assert adapter.spec_plan_k_by_rows(table, 16) == table
+    assert adapter.spec_plan_k_by_rows(table, 8) == table
+    assert adapter.spec_plan_k_by_rows(table, 32) == table + ((32, 1),)
+    # -- the MTP rail: capture shapes add the solo record and clamp to the row cap
+    table = ((5, 5), (8, 3), (16, 1))
+    assert adapter.spec_capture_shapes(table, 5, 16) == mh.DEFAULT_SHAPES
+    assert adapter.spec_capture_shapes(table, 5, 6) == ((1, 5), (5, 5), (6, 3))
+    assert adapter.spec_capture_shapes(table, 5, 1) == ((1, 5),)
+    assert adapter.spec_capture_shapes(((4, 3),), 3, 16) == ((1, 3), (4, 3))
+    # -- the MTP rail: extra records join the table's as a band's second draft length, never its default
+    assert adapter.spec_extra_shapes("5:3, 1:2", 5) == ((5, 3), (1, 2)) and adapter.spec_extra_shapes("", 5) == ()
+    assert adapter.spec_capture_shapes(table, 5, 16, extra=((5, 3), (1, 2))) == (
+        (1, 2),
+        (1, 5),
+        (5, 3),
+        (5, 5),
+        (8, 3),
+        (16, 1),
+    )
+    assert adapter.spec_capture_shapes(table, 5, 4, extra=((5, 3), (4, 5))) == ((1, 5), (4, 3), (4, 5))
+    with expect_error(ValueError, "drafts above"):
+        adapter.spec_extra_shapes("5:6", 5)
+    with expect_error(ValueError, "above the device argmax tile"):
+        adapter.spec_extra_shapes("8:5", 5)
+    with expect_error(ValueError, "is not rows:k"):
+        adapter.spec_extra_shapes("x", 5)
 
-def test_contract_rail_shares_the_base_and_not_the_block_rail(adapter):
+
+def test_contract_rail_shares_the_dflash_base_and_the_contract_base(adapter, monkeypatch):
     cls = adapter.Gemma4DFlashContractForCausalLM
     assert issubclass(cls, adapter.Gemma4DFlashBase)
-    assert not issubclass(cls, adapter.Gemma4DFlashForCausalLM)
-    assert not hasattr(cls, "_SPEC_BLOCK")
+    assert issubclass(cls, adapter.Gemma4SpecContractBase)
+    assert cls.model_capabilities["output_tokens_per_step"] == 1
+
+    # -- the MTP rail: the serving classes are the baseline and the two contract rails
+    # The block-output rails are gone: every speculating class serves the plugin contract.
+    classes = sorted(name for name in dir(adapter) if name.startswith("Gemma4") and name.endswith("ForCausalLM"))
+    assert classes == ["Gemma4DFlashContractForCausalLM", "Gemma4ForCausalLM", "Gemma4MTPContractForCausalLM"]
+    for name in classes[::2]:
+        cls = getattr(adapter, name)
+        assert issubclass(cls, adapter.Gemma4SpecContractBase)
+        assert cls.model_capabilities["output_tokens_per_step"] == 1
+    assert issubclass(adapter.Gemma4DFlashContractForCausalLM, adapter.Gemma4DFlashBase)
+
+    # -- the acceptance-adaptive policy: the composed vision rail shares it
+    _dflash_the_composed_vision_rail_shares_the_policy(adapter, monkeypatch)
 
 
 @pytest.fixture
@@ -189,7 +293,7 @@ def drafter_snapshot(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafter_snapshot):
+def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafter_snapshot, monkeypatch, assistant_dir):
     from vllm_tt_plugin.spec_decode import SpecPlan
 
     plan = adapter.Gemma4DFlashContractForCausalLM.spec_plan(None, 32, 5)
@@ -197,6 +301,26 @@ def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafte
     assert plan.effective_k == 5
     assert plan.supports_narrow_decode is True
     assert plan.accept_modes == ("argmax_ids",)
+
+    # -- the MTP rail: spec plan is positional and declares the assistant drafter
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_dir)
+    monkeypatch.delenv("GEMMA4_SPEC_K_BY_ROWS", raising=False)
+    plan = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 32, 5)
+    assert plan.effective_k == 5 and plan.lanes_per_request == 1
+    assert plan.accept_modes == ("argmax_ids", "logits")
+    assert plan.drafter_state == "shared_with_target"
+    assert plan.drafter_target_cache_requires == ("named_layer_caches", "absolute_positions")
+    assert plan.supports_narrow_decode is True
+    assert plan.k_by_rows == ((5, 5), (32, 1))  # the default table plus the plan's admission tail
+    assert plan.extra_bytes_per_seq == 5376 * 2 + 16 and plan.extra_bytes_per_token == 0
+    # -- the MTP rail: spec plan reads the table and clamps to the requested k
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_dir)
+    monkeypatch.setenv("GEMMA4_SPEC_K_BY_ROWS", "4:7,8:3")
+    plan = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 3)
+    assert plan.effective_k == 3
+    assert plan.k_by_rows == ((4, 3), (8, 3))
+    plan = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 4, 9)
+    assert plan.effective_k == 5 and plan.k_by_rows == ((4, 5), (8, 3))
 
 
 @pytest.mark.parametrize(
@@ -219,7 +343,9 @@ def test_spec_plan_rejects_configurations_that_capture_during_serving(
     assert needle in out.reason
 
 
-def test_spec_plan_rejects_a_verify_count_outside_the_drafter_block(adapter, drafter_snapshot, monkeypatch):
+def test_spec_plan_rejects_a_verify_count_outside_the_drafter_block(
+    adapter, drafter_snapshot, monkeypatch, expect_error, assistant_dir, tmp_path
+):
     from vllm_tt_plugin.spec_decode import SpecReject
 
     monkeypatch.setenv("GEMMA4_DFLASH_BLOCK", "4")  # block_size 4 admits verify counts 1..3
@@ -227,11 +353,58 @@ def test_spec_plan_rejects_a_verify_count_outside_the_drafter_block(adapter, dra
     assert isinstance(out, SpecReject)
     assert "outside [1, 3]" in out.reason
 
+    # -- the MTP rail: the assistant follows the target checkpoint name
+    for target, repo in [
+        ("google/gemma-4-31B-it", "google/gemma-4-31B-it-assistant"),
+        ("google/gemma-4-12B-it", "google/gemma-4-12B-it-assistant"),
+        ("google/gemma-4-26B-A4B-it", "google/gemma-4-26B-A4B-it-assistant"),
+        ("/data/weights/gemma-4-26b-a4b-it/", "google/gemma-4-26B-A4B-it-assistant"),
+        ("/data/weights/GEMMA-4-12B-IT", "google/gemma-4-12B-it-assistant"),
+    ]:
+        calls = []
+        monkeypatch.setattr(
+            adapter, "_hf_resolve_repo", lambda repo_id, cache_dir: calls.append((repo_id, cache_dir)) or "/snap"
+        )
+        assert adapter.assistant_repo_for(target) == repo, target
+        assert adapter._assistant_default_snapshot(target) == "/snap"
+        assert calls == [(repo, "models--" + repo.replace("/", "--"))], target
+    # -- the MTP rail: an unknown target checkpoint raises instead of defaulting to 31b
+    monkeypatch.setattr(adapter, "_hf_resolve_repo", lambda repo_id, cache_dir: "/snap")
+    with expect_error(ValueError, "gemma-4-9B-it"):
+        adapter.assistant_repo_for("google/gemma-4-9B-it")
+    with expect_error(ValueError, "no assistant checkpoint is known"):
+        adapter._assistant_default_snapshot("/weights/mystery-model")
+    with expect_error(ValueError, "more than one checkpoint"):
+        adapter.assistant_repo_for("/data/31b-box/gemma-4-12B-it")
+    # -- the MTP rail: spec plan rejects a target without a known assistant
+    monkeypatch.delenv("GEMMA4_ASSISTANT_MODEL", raising=False)
+    monkeypatch.setenv("HF_MODEL", "google/gemma-4-9B-it")
+    outcome = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 5)
+    assert type(outcome).__name__ == "SpecReject" and "gemma-4-9B-it" in outcome.reason
+    monkeypatch.delenv("HF_MODEL", raising=False)
+    # -- the MTP rail: spec plan rejects without an assistant snapshot
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", str(tmp_path / "missing"))
+    outcome = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 5)
+    assert type(outcome).__name__ == "SpecReject"
+    assert "GEMMA4_ASSISTANT_MODEL" in outcome.reason and outcome.supported_k == ()
+    # -- the MTP rail: spec plan rejects an unreadable assistant config
+    (tmp_path / "unreadable").mkdir()
+    (tmp_path / "unreadable" / "config.json").write_text(json.dumps({"hidden_size": 1024}))
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", str(tmp_path / "unreadable"))
+    outcome = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 5)
+    assert type(outcome).__name__ == "SpecReject" and "backbone_hidden_size" in outcome.reason
+    # -- the MTP rail: spec plan rejects a table the argmax tile cannot hold
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_dir)
+    monkeypatch.setenv("GEMMA4_SPEC_K_BY_ROWS", "8:5")
+    outcome = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 5)
+    assert type(outcome).__name__ == "SpecReject" and "argmax tile" in outcome.reason
+    assert outcome.supported_k == (5,)
+
 
 # -- 3.1 the first solo ordinary step -------------------------------------------
 
 
-def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(model):
+def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(model, mtp, adapter, monkeypatch):
     _prefill(model, prompt_len=2, key=10)
     assert model._spec_pending is not None
     assert model._spec_pending[1] == 2
@@ -245,6 +418,29 @@ def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(
     assert model._dflash_owner_tables[0].tolist() == _table([10]).tolist()
     assert model._spec_owner_slot == 0
 
+    # -- the MTP rail: solo request proposes after a plain first step and answers the verify
+    proposal = mh._start_solo(mtp)
+    # The first step was the plain decode; the proposal reseeded the row and replayed the solo record.
+    assert _names(mtp, "decode") == [("decode", [3], [2])]
+    assert _names(mtp, "reseed") == [("reseed", (1, 5), [0], [150], [3])]
+    step = mh._steps(mtp)[0]
+    assert step[1:7] == ((1, 5), [0], [150], [3], [None], 1024)
+    assert step[7] == [[10, 11, 0, 0]]
+    assert proposal.draft_token_ids.tolist() == [[101, 102, 103, 104, 105]]
+    out = mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    assert out.spec_mode == "argmax_ids" and out.hidden is None
+    assert out.argmax_ids.tolist() == [[150, 151, 152, 153, 154, 155]]
+    assert out.argmax_ids.dtype == torch.int32
+    assert len(_names(mtp, "decode")) == 1, "the verify was answered from the retained posterior"
+
+    # -- the acceptance-adaptive policy: the first request speculates from the optimistic prior and the
+    # accepted counts feed the row's EWMA and the batch prior (both rails)
+    _dflash_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(adapter, monkeypatch)
+    _mtp_the_first_proposal_speculates_from_the_optimistic_prior_and_high_acceptance_keeps_k5(adapter, monkeypatch)
+    _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_drafts(adapter, monkeypatch)
+    _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_counts_at_once(adapter, monkeypatch)
+    _mtp_a_draftless_verify_and_an_ordinary_step_observe_nothing(adapter, monkeypatch)
+
 
 def test_padded_solo_ordinary_step_answers_at_the_live_row(model):
     _prefill(model, prompt_len=2, key=10)
@@ -252,7 +448,9 @@ def test_padded_solo_ordinary_step_answers_at_the_live_row(model):
     assert out.tolist() == [150, 0, 0, 0]
 
 
-def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(model):
+def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(
+    model, mtp, adapter, monkeypatch, expect_error
+):
     _prefill(model, prompt_len=2, key=10)
     taps = list(model._spec_pending[0])
     out = _ordinary(model, [3], [2], [10], result="device", sampling=False)
@@ -261,8 +459,36 @@ def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(mod
     assert all(tap.releases == 1 for tap in taps)
     assert _names(model, "bootstrap") == []
 
+    # -- the MTP rail: a plain ordinary step drops the retained proposal and the next proposal reseeds
+    mh._start_solo(mtp)
+    out = mh._ordinary(mtp, [150], [3], [10], result="device", sampling=False)
+    assert out == "device", "host sampling reads logits, so the plain decode answers"
+    proposal = mh._propose(mtp, [[160, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [4])
+    # -- the MTP rail: read_decode_output passes a host tensor through and routes device output to the base reader
+    # The runner's async read (``submit_decode`` with ``async_read=True``): a verify's host tensor comes back
+    # as ``(tensor, [])``, the plain decode's device output goes to the base reader with the async flag.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    ids = torch.tensor([[150, 151]], dtype=torch.int32)
+    host, events = mtp.read_decode_output(ids, async_read=True)
+    assert host is ids and events == []
+    assert mtp.read_decode_output(ids) is ids
+    mh._prefill(mtp)
+    out = mh._ordinary(mtp, [3], [2], [10], result="device")
+    assert mtp.read_decode_output(out, async_read=True) == ["device"]
+    assert _names(mtp, "read")[-1] == ("read", True)
 
-def test_two_live_rows_on_the_first_step_run_the_plain_decode_and_release(model):
+    # -- the acceptance-adaptive policy: without a cost table or switched off the rails run as before, and a
+    # bad knob is refused at construction (both rails)
+    _dflash_without_a_cost_table_every_solo_greedy_request_speculates_and_a_warning_says_so_once(adapter, monkeypatch)
+    _mtp_without_a_cost_table_the_rows_based_record_serves_and_a_warning_says_so_once(adapter, monkeypatch)
+    _dflash_adaptive_off_keeps_the_rail_as_before_whatever_the_table_says(adapter, monkeypatch)
+    _mtp_adaptive_off_keeps_the_rows_based_record_whatever_the_table_says(adapter, monkeypatch)
+    _mtp_a_bad_policy_knob_is_refused_when_the_adapter_is_built(adapter, monkeypatch, expect_error=expect_error)
+
+
+def test_two_live_rows_on_the_first_step_run_the_plain_decode_and_release(model, mtp):
     _prefill(model, prompt_len=2, key=10)
     out = _ordinary(model, [3, 4], [2, 5], [10, 20], result="device")
     assert out == "device"
@@ -272,8 +498,22 @@ def test_two_live_rows_on_the_first_step_run_the_plain_decode_and_release(model)
     assert out == "device"
     assert _names(model, "bootstrap") == []
 
+    # -- the MTP rail: rows no record can hold leave before the record is chosen
+    # 20 live rows, 19 of them at the end of max_seq_len: the one proposing row takes the solo record.
+    mtp.model_args[0].max_seq_len = 1024
+    mh._prefill(mtp, rows=20)
+    keys = [10 + 2 * r for r in range(20)]
+    positions = [1023] * 20
+    positions[5] = 2
+    mh._ordinary(mtp, [3] * 20, positions, keys, result=_tensor([30] * 20))
+    committed, posits = mh._committed(20, range(20), [30] * 20, [p + 1 for p in positions])
+    proposal = mh._propose(mtp, committed, posits)
+    assert proposal.num_valid.tolist() == [0] * 5 + [5] + [0] * 14
+    step = mh._steps(mtp)[-1]
+    assert step[1] == (1, 5) and step[2] == [5] and step[7] == [[20, 21, 0, 0]]
 
-def test_a_request_prefilled_with_another_never_proposes(model):
+
+def test_a_request_prefilled_with_another_never_proposes(model, mtp):
     _prefill(model, prompt_len=2, key=10, rows=2)
     assert model._spec_pending is None
     assert model.model[0].tap_layers is None
@@ -282,26 +522,55 @@ def test_a_request_prefilled_with_another_never_proposes(model):
     assert proposal.num_valid.tolist() == [0]
     assert model._spec_decoder.replays == 0
 
+    # -- the MTP rail: three proposing rows in a wide batch pad the record with zero tables
+    live = [4, 9, 17]
+    for slot, key in zip(live, (10, 20, 30)):
+        mh._prefill(mtp, slot=slot, key=key)
+    mh._wire(mtp, live, [3, 4, 5], [2, 2, 2], [10, 20, 30], 32, _tensor([0] * 32))
+    committed, posits = mh._committed(32, live, [30, 31, 32], [3, 3, 3])
+    proposal = mh._propose(mtp, committed, posits)
+    assert [int(v) for v in proposal.num_valid[live]] == [5, 5, 5] and int(proposal.num_valid.sum()) == 15
+    step = mh._steps(mtp)[-1]
+    assert step[1] == (5, 5) and step[2] == live
+    assert step[7] == [[10, 11, 0, 0], [20, 21, 0, 0], [30, 31, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
 
-def test_a_request_at_a_row_other_than_zero_is_not_bootstrapped(model):
+
+def test_a_request_at_a_row_other_than_zero_is_not_bootstrapped(model, mtp):
     _prefill(model, prompt_len=2, key=10, slot=1)
     out = _ordinary(model, [0, 3], [-1, 2], [0, 10], result="device")
     assert out == "device"
     assert model._spec_pending is None and _names(model, "bootstrap") == []
 
+    # -- the MTP rail: one proposing row in a wide batch takes the solo record without padding
+    mh._prefill(mtp, slot=7, key=10)
+    mh._wire(mtp, [7], [3], [2], [10], 20, _tensor([0] * 7 + [30] + [0] * 12))
+    committed, posits = mh._committed(20, [7], [30], [3])
+    proposal = mh._propose(mtp, committed, posits)
+    assert proposal.num_valid.tolist() == [0] * 7 + [5] + [0] * 12
+    step = mh._steps(mtp)[-1]
+    assert step[1] == (1, 5) and step[2] == [7] and step[7] == [[10, 11, 0, 0]]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [7], [30], [3])
+    assert mtp._mtp_decoder.reseed_tables[-1] == [[10, 11, 0, 0]]
 
-def test_bootstrap_refuses_a_position_no_captured_width_covers(model):
+
+def test_bootstrap_refuses_a_position_no_captured_width_covers(model, adapter, monkeypatch):
     _prefill(model, prompt_len=2, key=10)
     model._spec_decoder._pv_widths[1024]["trace"] = None  # prepared, never captured
     out = _ordinary(model, [3], [2], [10], result="device")
     assert out == "device"
     assert model._spec_pending is None and _names(model, "bootstrap") == []
 
+    # -- the MTP rail: proposing without captured records declines
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False)
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    assert mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5]).num_valid.tolist() == [0]
+
 
 # -- 3.2 propose: commit, refresh, declines --------------------------------------
 
 
-def test_propose_commits_the_runners_count_and_anchor_before_the_replay(model):
+def test_propose_commits_the_runners_count_and_anchor_before_the_replay(model, mtp, adapter, monkeypatch):
     _start_solo(model)
     commits = _names(model, "commit")
     replays = _names(model, "replay")
@@ -313,8 +582,25 @@ def test_propose_commits_the_runners_count_and_anchor_before_the_replay(model):
     assert retained.posterior == [250, 251, 252, 253, 254, 255]
     assert retained.consumed is False
 
+    # -- the MTP rail: next proposal seeds from the verified column without a reseed
+    mh._start_solo(mtp)
+    mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    # The runner accepted 2 drafts and committed the correction: 3 tokens, anchor at column 2.
+    proposal = mh._propose(mtp, [[150, 151, 999, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    assert proposal.num_valid.tolist() == [5] and proposal.draft_token_ids.tolist() == [[201, 202, 203, 204, 205]]
+    assert len(_names(mtp, "reseed")) == 1
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [0], [999], [6], [2])
 
-def test_propose_refreshes_the_verify_page_tables_when_the_block_table_changes(model):
+    # -- the acceptance-adaptive policy: the record a proposal replays, the reseed as the entry cost, the
+    # prior-gated bootstrap and the measured table (both rails)
+    _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(adapter, monkeypatch)
+    _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(adapter, monkeypatch)
+    _mtp_a_row_continuing_in_the_last_replay_pays_no_reseed(adapter, monkeypatch)
+    _dflash_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_would_not_pay(adapter, monkeypatch)
+    _dflash_the_cost_table_is_consumed_as_measured(adapter, monkeypatch)
+
+
+def test_propose_refreshes_the_verify_page_tables_when_the_block_table_changes(model, mtp):
     _start_solo(model)
     assert len(_names(model, "refresh")) == 1  # the bootstrap's own refresh
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
@@ -326,12 +612,65 @@ def test_propose_refreshes_the_verify_page_tables_when_the_block_table_changes(m
     assert model.events.index(refreshes[-1]) < model.events.index(_names(model, "replay")[-1])
     assert _names(model, "commit")[-1] == ("commit", 3, 251)
 
+    # -- the MTP rail: page tables are installed from the step and refreshed only on change
+    mh._start_solo(mtp)
+    assert _names(mtp, "refresh") == [("refresh", [[[10, 11, 0, 0]], [[10, 11, 0, 0]]])]
+    mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    # the change check reads no table whose storage and version the last install already saw, and compares a
+    # new object of the same content once per distinct object (both layers share the step's one table): an
+    # unchanged step costs a key check per layer, not a compare per layer
+    equal_calls = []
+    real_equal = torch.equal
 
-def test_propose_without_a_table_change_does_not_refresh(model):
+    def counted_equal(a, b):
+        equal_calls.append((tuple(a.shape), tuple(b.shape)))
+        return real_equal(a, b)
+
+    torch.equal = counted_equal
+    try:
+        mh._propose(mtp, [[150, 151, 152, 153, 154, 155]], [mh._positions(4, 6)], counts=[6])
+        assert len(equal_calls) <= 1, equal_calls  # the harness hands a new tensor object each step
+        _full, layers = mtp._mtp_step_page_tables()
+        assert not mtp._mtp_tables_changed(layers) and len(equal_calls) <= 1, "the same objects again: a key check"
+        layers[0][0, 2] = 12  # a block appended in place: the version moves, the content is read and differs
+        assert mtp._mtp_tables_changed(layers) and len(equal_calls) == 2
+        layers[0][0, 2] = 0
+    finally:
+        torch.equal = real_equal
+    assert len(_names(mtp, "refresh")) == 1, "an unchanged table is not re-installed"
+    assert len({id(t) for t in mtp._mtp_installed_tables}) == 1 and len(mtp._mtp_installed_tables) == 2
+    assert mtp._mtp_installed_keys[0] == mtp._mtp_installed_keys[1] and mtp._mtp_installed_keys[0][2] == (1, 4)
+    # The block table grew by one block: the full per-layer tables are re-installed and the
+    # record's flat row follows.
+    mh._verify(
+        mtp,
+        [mh._block(155, [201, 202, 203, 204, 205])],
+        [mh._positions(9, 6)],
+        [5],
+        [10],
+        page_table=_tensor([[10, 11, 12, 0]]),
+    )
+    mh._propose(mtp, [[250, 251, 252, 253, 254, 255]], [mh._positions(10, 6)], counts=[6])
+    assert _names(mtp, "refresh")[-1] == ("refresh", [[[10, 11, 12, 0]], [[10, 11, 12, 0]]])
+    assert mh._steps(mtp)[-1][7] == [[10, 11, 12, 0]]
+
+
+def test_propose_without_a_table_change_does_not_refresh(model, mtp):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
     assert len(_names(model, "refresh")) == 1
+
+    # -- the MTP rail: the flat record table selects the drafting rows from the wire table
+    mh._prefill(mtp, rows=3)
+    mh._ordinary(mtp, [3, 4, 5], [2, 1019, 2], [10, 12, 14], result=_tensor([30, 31, 32]))
+    proposal = mh._propose(
+        mtp, [[30] + [-1] * 5, [31] + [-1] * 5, [32] + [-1] * 5], [[3] + [-1] * 5, [1020] + [-1] * 5, [3] + [-1] * 5]
+    )
+    assert proposal.num_valid.tolist() == [5, 0, 5]
+    step = mh._steps(mtp)[-1]
+    assert step[2] == [0, 2] and step[7][:2] == [[10, 11, 0, 0], [14, 15, 0, 0]]
+    assert _names(mtp, "refresh")[-1][1][0] == [[10, 11, 0, 0], [12, 13, 0, 0], [14, 15, 0, 0]]
 
 
 def test_propose_installs_per_layer_tables_under_bounded_sliding(adapter, monkeypatch):
@@ -343,8 +682,15 @@ def test_propose_installs_per_layer_tables_under_bounded_sliding(adapter, monkey
     installed = model.model[0]._active_page_tables_per_layer
     assert [t.tolist() for t in installed] == [[[10, 11, 12, 0]], [[10, 11, 12, 0]]]
 
+    # -- the MTP rail: bounded targets leave the target stash alone
+    # The decoder receives its per-layer tables explicitly; the plain decode installs the stash per call.
+    mtp = mh.build_mtp_model(adapter, monkeypatch, ring=2048, max_seq_len=4096)
+    mh._start_solo(mtp)
+    assert not hasattr(mtp.model[0], "_active_page_tables_per_layer")
+    assert len(_names(mtp, "refresh")) == 1
 
-def test_propose_declines_past_the_widest_captured_width(model):
+
+def test_propose_declines_past_the_widest_captured_width(model, mtp):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     last_covered = 1024 - 6 - 64
@@ -354,14 +700,29 @@ def test_propose_declines_past_the_widest_captured_width(model):
     assert not model._spec_active
     assert model.events[-1] == ("release_decoder", False)
 
+    # -- the MTP rail: a row past the captured widths is left out while the others draft
+    mh._prefill(mtp, rows=2)
+    mh._ordinary(mtp, [3, 4], [2, 1019], [10, 12], result=_tensor([30, 31]))
+    proposal = mh._propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5, [1020] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5, 0]
+    assert mh._steps(mtp)[-1][1:4] == ((1, 5), [0], [30])
 
-def test_propose_declines_when_the_verify_rows_exceed_max_seq_len(model):
+
+def test_propose_declines_when_the_verify_rows_exceed_max_seq_len(model, mtp):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     model.model_args[0].max_seq_len = 11  # rows 6..11 need 12 positions
     proposal = _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
     assert proposal.num_valid.tolist() == [0]
     assert not model._spec_active
+
+    # -- the MTP rail: a row past max seq len declines
+    mtp.model_args[0].max_seq_len = 10
+    mh.install_decoder(mtp)
+    mh._start_solo(mtp)  # rows 3..8 fit; after six committed tokens rows 9..14 do not
+    mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    proposal = mh._propose(mtp, [[150, 151, 152, 153, 154, 155]], [mh._positions(4, 6)], counts=[6])
+    assert proposal.num_valid.tolist() == [0]
 
 
 def test_propose_declines_before_wrapping_an_exact_window_ring(adapter, monkeypatch):
@@ -376,6 +737,14 @@ def test_propose_declines_before_wrapping_an_exact_window_ring(adapter, monkeypa
     assert proposal.num_valid.tolist() == [0]  # rows 1019..1024 wrap
     assert not model._spec_active
 
+    # -- the MTP rail: an exact window ring declines before the verify would wrap
+    mtp = mh.build_mtp_model(adapter, monkeypatch, ring=1024, max_seq_len=4096)
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [1018], [10], result=_tensor([150]))
+    assert mh._propose(mtp, [[150] + [-1] * 5], [[1019] + [-1] * 5]).num_valid.tolist() == [0]
+    mh._ordinary(mtp, [150], [1019], [10], result=_tensor([151]))
+    assert mh._propose(mtp, [[151] + [-1] * 5], [[1020] + [-1] * 5]).num_valid.tolist() == [0]
+
 
 def test_a_ring_with_headroom_does_not_decline(adapter, monkeypatch):
     model = build_model(adapter, monkeypatch, ring=2048, widths=(4096,))
@@ -387,7 +756,7 @@ def test_a_ring_with_headroom_does_not_decline(adapter, monkeypatch):
     assert proposal.num_valid.tolist() == [5]
 
 
-def test_after_a_decline_the_next_ordinary_step_is_plain(model):
+def test_after_a_decline_the_next_ordinary_step_is_plain(model, mtp, adapter, monkeypatch):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     model.model_args[0].max_seq_len = 11
@@ -396,6 +765,101 @@ def test_after_a_decline_the_next_ordinary_step_is_plain(model):
     assert out == "device"
     proposal = _propose(model, [[9, -1, -1, -1, -1, -1]], [[7, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [0]
+
+    # -- the MTP rail: above the row cap every row declines once logged then resumes when the batch shrinks
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    rows = 17
+    mh._prefill(mtp, rows=rows)
+    keys = [10 + 2 * r for r in range(rows)]
+    # the all-declined step's per-row python budget: the blocks are read to the host once per step and the
+    # ordinary step walks no session, so no row is read tensor by tensor and no row's sampling is inspected
+    # (a replay's readback is the only reader of that); the c128 Galaxy point paid ~2 ms a step in both.
+    # Above the cap the proposal itself walks nothing either (``_mtp_fast_decline``): no session is looked up
+    # or opened, no row's position is listed, and the step's live rows are never resolved by the plain decode
+    # (the 26B QB2 random c16 paid ~0.5 ms a step over the plain entry, 2026-10-30).
+    budget = {"row_reads": 0, "sampling_checks": 0, "session_walks": 0, "row_lists": 0}
+    base = adapter.Gemma4SpecContractBase
+    orig_row, orig_can = base._spec_row, base._spec_row_can_use_argmax
+    orig_session_at, orig_live = mtp._mtp_session_at, base._spec_live_rows
+
+    def counted_row(values, rows_, row):
+        budget["row_reads"] += 1
+        return orig_row(values, rows_, row)
+
+    def counted_can(cls, sampling_params, row, grammar_bitmask=None):
+        budget["sampling_checks"] += 1
+        return orig_can.__func__(cls, sampling_params, row, grammar_bitmask)
+
+    def counted_session_at(slot):
+        budget["session_walks"] += 1
+        return orig_session_at(slot)
+
+    def counted_live(positions, rows_):
+        budget["row_lists"] += 1
+        return orig_live(positions, rows_)
+
+    monkeypatch.setattr(base, "_spec_row", staticmethod(counted_row))
+    monkeypatch.setattr(base, "_spec_row_can_use_argmax", classmethod(counted_can))
+    monkeypatch.setattr(mtp, "_mtp_session_at", counted_session_at)
+    monkeypatch.setattr(base, "_spec_live_rows", staticmethod(counted_live))
+    mh._ordinary(mtp, [3] * rows, [2] * rows, keys, result=_tensor([30] * rows))
+    for _ in range(2):
+        proposal = mh._propose(mtp, [[30] + [-1] * 5] * rows, [[3] + [-1] * 5] * rows)
+        assert proposal.num_valid.tolist() == [0] * rows and proposal.draft_token_ids.eq(0).all()
+    assert mh._steps(mtp) == []
+    assert [m for m in messages if "proposing nothing" in m] == [
+        "Gemma4MTP speculative contract: proposing nothing (17 proposing rows exceed the largest record (16, 1) "
+        "(GEMMA4_SPEC_MAX_ROWS=16))"
+    ]
+    out = mh._ordinary(mtp, [30] * rows, [3] * rows, keys, result="device")
+    assert out == "device", "the ordinary step after a decline is the plain decode"
+    assert budget == {"row_reads": 0, "sampling_checks": 0, "session_walks": 0, "row_lists": 0}, budget
+    assert mtp._mtp_sessions == {} and mtp._mtp_plain_epoch == 2, "no session above the cap; two plain steps counted"
+    assert mtp._mtp_slot_epoch == {slot: 0 for slot in range(rows)}, "each slot remembers the count at its prefill"
+    calib = mtp._spec_policy.calibration
+    assert calib.total[0] == 1 and calib.modes[("plain", 32)].steps == 1, "the closed interval is the plain step"
+    assert mtp._mtp_row_needs_logits.get(0) is False and budget["sampling_checks"] == 1, "evaluated on first use"
+    assert budget["row_lists"] == 1, "the step's rows are listed on that first use"
+    assert mtp._mtp_row_needs_logits.get(0) is False and budget["sampling_checks"] == 1, "and cached"
+    assert not mtp._mtp_row_needs_logits.any() and budget["sampling_checks"] == rows, "a greedy batch walks all"
+    assert mtp._mtp_row_needs_logits.get(99, "off") == "off" and mtp._mtp_row_needs_logits.values() == [False] * rows
+    monkeypatch.setattr(base, "_spec_row", staticmethod(orig_row))
+    monkeypatch.setattr(base, "_spec_row_can_use_argmax", orig_can)
+    monkeypatch.setattr(mtp, "_mtp_session_at", orig_session_at)
+    monkeypatch.setattr(base, "_spec_live_rows", staticmethod(orig_live))
+    # Fewer rows: the next proposal reseeds the survivors and drafts again; their sessions open with the two
+    # plain steps they had above the cap, and this proposal is their third.
+    live = 4
+    proposal = mh._propose(mtp, [[31] + [-1] * 5] * live, [[4] + [-1] * 5] * live)
+    assert proposal.num_valid.tolist() == [5] * live
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [0, 1, 2, 3], [31] * 4, [4] * 4)
+    assert sorted(mtp._mtp_sessions) == [0, 1, 2, 3] and all(s not in mtp._mtp_slot_epoch for s in range(4))
+    assert [(s.steps, s.committed, s.epoch) for s in mtp._mtp_sessions.values()] == [(3, 3, 2)] * 4
+    mtp.release_request(1)
+    assert [m for m in messages if "contract summary" in m] == [
+        "Gemma4MTP contract summary: slot 1 (release) 3 steps, 3 tokens, 1.00 tokens/step, no verified drafts"
+    ]
+    # The survivors' unconsumed proposals and the released slot listed live (the runner's trailing proposal) both
+    # need the walk: the proposals are dropped as overtaken, the trailing row leaves the proposing set, and the
+    # three survivors reseed.
+    proposal = mh._propose(mtp, [[32] + [-1] * 5] * live, [[5] + [-1] * 5] * live)
+    assert proposal.num_valid.tolist() == [5, 0, 5, 5] and _names(mtp, "reseed")[-1][2] == [0, 2, 3]
+    # -- the MTP rail: seventeen proposing rows decline above the largest record
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._prefill(mtp, rows=17)
+    keys = [10 + 2 * r for r in range(17)]
+    mh._ordinary(mtp, [3] * 17, [2] * 17, keys, result=_tensor([30] * 17))
+    committed, posits = mh._committed(17, range(17), [30] * 17, [3] * 17)
+    assert mh._propose(mtp, committed, posits).num_valid.tolist() == [0] * 17 and mh._steps(mtp) == []
+
+    # -- the acceptance-adaptive policy: falling acceptance leaves for the plain step, the amortized retry,
+    # the rate-limited switch log (both rails)
+    _dflash_rejections_end_the_session_and_the_request_runs_plain(adapter, monkeypatch)
+    _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_proposal_is_the_retry(adapter, monkeypatch)
+    _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_plain_steps(adapter, monkeypatch)
+    _mtp_record_switches_are_rate_limited_to_one_line_per_interval(adapter, monkeypatch)
+    _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain(adapter, monkeypatch)
 
 
 def test_propose_declines_when_the_runners_anchor_position_disagrees_with_the_decoder(model):
@@ -406,7 +870,7 @@ def test_propose_declines_when_the_runners_anchor_position_disagrees_with_the_de
     assert not model._spec_active
 
 
-def test_propose_shape_follows_the_block_rows_and_declines_padding_rows(model):
+def test_propose_shape_follows_the_block_rows_and_declines_padding_rows(model, mtp, adapter, monkeypatch):
     _prefill(model, prompt_len=2, key=10)
     _ordinary(model, [3, 0, 0, 0], [2, -1, -1, -1], [10, 0, 0, 0])
     committed = torch.zeros((4, 6), dtype=torch.int32)
@@ -420,8 +884,46 @@ def test_propose_shape_follows_the_block_rows_and_declines_padding_rows(model):
     assert out.num_valid.tolist() == [5, 0, 0, 0]
     assert out.draft_scores is None
 
+    # -- the MTP rail: padded wire rows are ignored and keep the placeholder
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3, 0], [2, -1], [10, 0], result=_tensor([150, 0]))
+    proposal = mh._propose(mtp, [[150] + [-1] * 5, [-1] * 6], [[3] + [-1] * 5, [-1] * 6])
+    assert proposal.num_valid.tolist() == [5, 0]
+    out = mh._verify(
+        mtp,
+        [mh._block(150, [101, 102, 103, 104, 105]), [0] + [-1] * 5],
+        [mh._positions(3, 6), [-1] * 6],
+        [5, 0],
+        [10, 0],
+    )
+    assert out.argmax_ids[0].tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.argmax_ids[1].tolist() == [-1] * 6
+    # -- the MTP rail: the record is the smallest covering the live rows
+    for live, shape, offer in [(2, (5, 5), 5), (6, (8, 3), 3), (9, (16, 1), 1), (16, (16, 1), 1)]:
+        mtp = mh.build_mtp_model(adapter, monkeypatch)
+        mh._prefill(mtp, rows=live)
+        keys = [10 + 2 * r for r in range(live)]
+        mh._ordinary(mtp, [3] * live, [2] * live, keys, result=_tensor([30] * live))
+        proposal = mh._propose(mtp, [[30] + [-1] * 5] * live, [[3] + [-1] * 5] * live)
+        assert proposal.num_valid.tolist() == [offer] * live, live
+        step = mh._steps(mtp)[0]
+        assert step[1] == shape and len(step[7]) == shape[0], live
+        assert all(row == [0, 0, 0, 0] for row in step[7][live:]), "padding rows address the null block"
+        assert proposal.draft_token_ids[:, offer:].eq(0).all()
+    # -- the MTP rail: a shorter record offers fewer drafts and the verify truncates to them
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._prefill(mtp, rows=6)
+    keys = [10 + 2 * r for r in range(6)]
+    mh._ordinary(mtp, [3] * 6, [2] * 6, keys, result=_tensor([30] * 6))
+    proposal = mh._propose(mtp, [[30] + [-1] * 5] * 6, [[3] + [-1] * 5] * 6)
+    drafts = proposal.draft_token_ids.tolist()
+    assert drafts[0] == [101, 102, 103, 0, 0]
+    blocks = [mh._block(30, drafts[r][:3]) for r in range(6)]
+    out = mh._verify(mtp, blocks, [mh._positions(3, 4)] * 6, [3] * 6, keys)
+    assert out.argmax_ids[0].tolist() == [150, 151, 152, 153, -1, -1]
 
-def test_a_batched_proposal_declines_every_row_and_ends_the_session(model):
+
+def test_a_batched_proposal_declines_every_row_and_ends_the_session(model, mtp):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     committed = torch.zeros((2, 6), dtype=torch.int32)
@@ -431,11 +933,223 @@ def test_a_batched_proposal_declines_every_row_and_ends_the_session(model):
     assert not model._spec_active
     assert model._spec_decoder.replays == 2
 
+    # -- the MTP rail: five rows share one replay and verify with per row counts
+    mh._prefill(mtp, rows=5)
+    out = mh._ordinary(mtp, [3, 4, 5, 6, 7], [2] * 5, [10, 12, 14, 16, 18], result=_tensor([30, 31, 32, 33, 34]))
+    assert out.tolist() == [30, 31, 32, 33, 34]
+    committed = [[30 + r] + [-1] * 5 for r in range(5)]
+    proposal = mh._propose(mtp, committed, [[3] + [-1] * 5] * 5)
+    assert proposal.num_valid.tolist() == [5] * 5
+    step = mh._steps(mtp)[0]
+    assert step[1:4] == ((5, 5), [0, 1, 2, 3, 4], [30, 31, 32, 33, 34])
+    assert step[7] == [[10, 11, 0, 0], [12, 13, 0, 0], [14, 15, 0, 0], [16, 17, 0, 0], [18, 19, 0, 0]]
+    drafts = proposal.draft_token_ids.tolist()
+    valid = [5, 3, 0, 5, 1]
+    blocks = [mh._block(30 + r, drafts[r][: valid[r]]) for r in range(5)]
+    positions = [mh._positions(3, 1 + valid[r]) for r in range(5)]
+    out = mh._verify(mtp, blocks, positions, valid, [10, 12, 14, 16, 18])
+    expected = [[150 + 10 * r + j for j in range(6)] for r in range(5)]
+    assert out.argmax_ids.tolist() == expected
+    assert len(_names(mtp, "decode")) == 1, "every row answered from the shared replay"
+    # Each row commits a different count; the next replay seeds every row from its own verified column.
+    counts = [6, 2, 1, 4, 2]
+    committed = [[expected[r][j] if j < counts[r] else -1 for j in range(6)] for r in range(5)]
+    positions = [mh._positions(4, counts[r]) for r in range(5)]
+    proposal = mh._propose(mtp, committed, positions, counts=counts)
+    assert proposal.num_valid.tolist() == [5] * 5
+    step = mh._steps(mtp)[-1]
+    assert step[3] == [expected[r][counts[r] - 1] for r in range(5)]
+    assert step[4] == [3 + counts[r] for r in range(5)]
+    assert step[5] == [c - 1 for c in counts]
+    assert len(_names(mtp, "reseed")) == 1
+
+
+# -- 3.2b the MTP rail on the lane engine (GEMMA4_GALAXY_LANES): records per lane over the slot batch ------------
+#
+# The runner's lane step is the slot batch ``lanes x lane_slots`` widened to ``[B, 1+K]``: a scheduled request's row
+# is its slot and every other slot a padding row between the live ones (plugin docs/SPEC_DECODE_CONTRACT.md s.4,
+# tests/spec/test_spec_lane.py). The model's records run per mesh column, so a record's rows are PER LANE.
+
+LANES, LANE_SLOTS = 4, 8  # a 4-lane engine of 8 slots: the slot batch is 32 rows, lane l owns slots 8l..8l+7
+
+
+def _lane_model(adapter, monkeypatch, **kwargs):
+    return mh.build_mtp_model(adapter, monkeypatch, lanes=LANES, lane_slots=LANE_SLOTS, **kwargs)
+
+
+def _lane_prefill(mtp, slots, keys, prompt_len=2):
+    tokens = torch.full((len(slots), prompt_len), 7, dtype=torch.int32)
+    return mtp.prefill_forward(
+        tokens=tokens,
+        prompt_lens=[prompt_len] * len(slots),
+        empty_slots=list(slots),
+        page_table=_table(keys),
+        kv_cache=mtp.kv_cache,
+        warmup_prefill=False,
+    )
+
+
+def _lane_batch(mtp, slots, keys, anchor=3, position=2, first=30):
+    """Prefill ``slots`` and take their first ordinary step over the slot batch (the plain lane decode): returns
+    the per-slot committed token, the slot batch's block-table keys and the wire size."""
+    total = LANES * LANE_SLOTS
+    _lane_prefill(mtp, slots, keys)
+    ks = [0] * total
+    for slot, key in zip(slots, keys):
+        ks[slot] = key
+    firsts = [first + i for i in range(len(slots))]
+    plain = [0] * total
+    for slot, token in zip(slots, firsts):
+        plain[slot] = token
+    out = mh._wire(mtp, slots, [anchor] * len(slots), [position] * len(slots), keys, total, result=_tensor(plain))
+    assert [int(out[slot]) for slot in slots] == firsts
+    return firsts, ks, total
+
+
+def _lane_propose(mtp, slots, firsts, total, position=3):
+    committed, posits = mh._committed(total, slots, firsts, [position] * len(slots))
+    return mh._propose(mtp, committed, posits)
+
+
+def test_lane_records_are_sized_per_lane_and_the_plan_publishes_the_flat_cap(adapter, monkeypatch, assistant_dir):
+    env = {"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1"}
+    mtp = _lane_model(adapter, monkeypatch, warm=False, env=env)
+    assert mtp._mtp_lane_geometry() == (LANES, LANE_SLOTS)
+    # the row cap is the lane's slots, not the folded batch: the 16-row band clamps to 8 rows (its larger K wins)
+    shapes, max_rows = mtp._mtp_resolve_shapes(LANES * LANE_SLOTS)
+    assert max_rows == LANE_SLOTS and shapes == ((1, 5), (5, 5), (8, 3))
+    one = mh.build_mtp_model(adapter, monkeypatch, warm=False, env=env)
+    assert one._mtp_lane_geometry() == (1, 0) and one._mtp_resolve_shapes(32) == (((1, 5), (5, 5), (8, 3), (16, 1)), 16)
+    # the warm decoder is built for the lane engine: the records that fit a lane, the table as the lane frame
+    warm = _lane_model(adapter, monkeypatch)
+    assert warm._mtp_decoder.lanes == LANES and warm._mtp_shapes == ((1, 5), (5, 5), (8, 3))
+    # the plan: under the lane fold the per-lane table is published as the flat cap at the folded max_num_seqs
+    # (the plugin's draft_cap reads the whole lane batch's live rows, which bounds nothing one lane can hold);
+    # off the fold the table itself, with the tail admission requires
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, {**env, "GEMMA4_GALAXY_LANES": "1"})
+        plan = module.Gemma4MTPContractForCausalLM.spec_plan(None, 128, 5)
+        assert plan.k_by_rows == ((128, 5),) and plan.effective_k == 5
+        assert module.spec_plan_k_by_rows_lanes(((5, 5), (8, 3), (16, 1)), 128) == ((128, 5),)
+        assert module.spec_plan_k_by_rows_lanes(((4, 3), (8, 1)), 64) == ((64, 3),)
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, env)
+        plan = module.Gemma4MTPContractForCausalLM.spec_plan(None, 128, 5)
+        assert plan.k_by_rows == ((5, 5), (8, 3), (16, 1), (128, 1)) and plan.effective_k == 5
+
+
+def test_lane_proposal_picks_the_busiest_lanes_record_and_hands_the_decoder_the_lane_frame(adapter, monkeypatch):
+    mtp = _lane_model(adapter, monkeypatch)
+    # lane 0: slots 0 and 1; lane 2: slots 16, 17, 18 (three rows: the busiest lane -> the (5, 5) record)
+    slots = [0, 1, 16, 17, 18]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, ks, total = _lane_batch(mtp, slots, keys)
+    assert len(_names(mtp, "decode")) == 1 and _names(mtp, "decode")[0][2][:2] == [2, 2]  # the plain lane decode
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert [int(proposal.num_valid[s]) for s in slots] == [5] * 5
+    assert int(proposal.num_valid.sum()) == 25, "only the live slots are offered drafts"
+    step = mh._steps(mtp)[0]
+    assert step[1] == (5, 5) and step[2] == slots and step[3] == firsts
+    table = step[7]
+    assert len(table) == LANES * 5, "the record table is the lane frame [lanes x B_v, blocks]"
+    assert table[0] == [10, 11, 0, 0] and table[1] == [12, 13, 0, 0], "lane 0's rows at frame rows 0.."
+    assert table[10:13] == [[14, 15, 0, 0], [16, 17, 0, 0], [18, 19, 0, 0]], "lane 2's rows at frame rows 10.."
+    assert all(row == [0, 0, 0, 0] for r, row in enumerate(table) if r not in (0, 1, 10, 11, 12)), "block 0 elsewhere"
+    assert len(_names(mtp, "reseed")) == 1 and _names(mtp, "reseed")[0][2] == slots, "every row reseeds once"
+    assert set(mtp._mtp_sessions) == set(slots)
+    # the verify over the slot batch: live rows at their slots, padding rows between them, every live row answered
+    # from the replay (no plain decode beside it)
+    drafts = proposal.draft_token_ids.tolist()
+    blocks = [[0] + [-1] * 5] * total
+    positions = [[-1] * 6] * total
+    valid = [0] * total
+    for slot, first in zip(slots, firsts):
+        blocks[slot] = mh._block(first, drafts[slot])
+        positions[slot] = mh._positions(3, 6)
+        valid[slot] = 5
+    out = mh._verify(mtp, blocks, positions, valid, ks)
+    assert len(_names(mtp, "decode")) == 1, "the verify answered every live row from the shared replay"
+    for i, slot in enumerate(slots):
+        assert out.argmax_ids[slot].tolist() == [150 + 10 * i + j for j in range(6)], slot
+    assert out.argmax_ids[2].tolist() == [-1] * 6 and out.argmax_ids[31].tolist() == [-1] * 6, "padding rows"
+    # the next proposal continues every row from its own verified column (one replay for both lanes, no reseed)
+    counts = [6, 2, 1, 4, 2]
+    committed = [[-1] * 6 for _ in range(total)]
+    posits = [[-1] * 6 for _ in range(total)]
+    for i, slot in enumerate(slots):
+        ids = out.argmax_ids[slot].tolist()
+        committed[slot] = [ids[j] if j < counts[i] else -1 for j in range(6)]
+        posits[slot] = mh._positions(4, counts[i])
+    counts_wire = [1] * total
+    for i, slot in enumerate(slots):
+        counts_wire[slot] = counts[i]
+    proposal = mtp.propose_draft_tokens(5, _tensor(committed), _tensor(posits), _tensor(counts_wire))
+    assert [int(proposal.num_valid[s]) for s in slots] == [5] * 5
+    step = mh._steps(mtp)[-1]
+    assert step[2] == slots and step[5] == [c - 1 for c in counts] and len(_names(mtp, "reseed")) == 1
+    # release of one lane's slot drops that session alone; the slot's generation closes
+    mtp.release_request(17)
+    assert 17 not in mtp._mtp_sessions and set(mtp._mtp_sessions) == {0, 1, 16, 18}
+
+
+def test_lane_proposal_takes_one_draft_length_for_every_lane_from_the_busiest(adapter, monkeypatch):
+    """One captured graph serves every column, so the step's K is the busiest lane's: a lone row on lane 0 beside
+    six rows on lane 1 is drafted at the (8, 3) record's K=3 (its solo band would be K=5)."""
+    mtp = _lane_model(adapter, monkeypatch)
+    slots = [0] + [8 + r for r in range(6)]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, _ks, total = _lane_batch(mtp, slots, keys)
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert [int(proposal.num_valid[s]) for s in slots] == [3] * 7
+    step = mh._steps(mtp)[0]
+    assert step[1] == (8, 3) and len(step[7]) == LANES * 8
+    assert step[7][0] == [10, 11, 0, 0] and step[7][8:14] == [[12 + 2 * r, 13 + 2 * r, 0, 0] for r in range(6)]
+    assert proposal.draft_token_ids[0, 3:].eq(0).all()
+
+
+def test_lane_rows_spread_over_lanes_fit_a_record_the_folded_batch_would_not(adapter, monkeypatch):
+    """Fifteen rows over three lanes (five each) run the (5, 5) record at K=5: on one column fifteen rows would
+    need the (16, 1) record. The record is sized by the busiest lane, not by the folded batch."""
+    mtp = _lane_model(adapter, monkeypatch)
+    slots = [lane * LANE_SLOTS + r for lane in (0, 1, 3) for r in range(5)]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, _ks, total = _lane_batch(mtp, slots, keys)
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert [int(proposal.num_valid[s]) for s in slots] == [5] * 15
+    step = mh._steps(mtp)[0]
+    assert step[1] == (5, 5) and step[2] == slots and len(step[7]) == LANES * 5
+    for lane, frame in ((0, 0), (1, 5), (3, 15)):
+        assert step[7][frame : frame + 5] == [[k, k + 1, 0, 0] for k in keys[5 * (0, 1, 3).index(lane) :][:5]], lane
+    assert all(row == [0, 0, 0, 0] for row in step[7][10:15]), "the idle lane's rows are block 0"
+
+
+def test_lane_rows_past_the_largest_record_on_one_lane_decline_the_step(adapter, monkeypatch):
+    """Six rows on lane 1 exceed the (5, 5) record (the largest here) while a lone row sits on lane 0: the step is
+    the plain lane decode (the O(1) all-declined proposal, no session opened) until that lane shrinks."""
+    mtp = _lane_model(adapter, monkeypatch, warm=False)
+    mh.install_decoder(mtp, shapes=((1, 5), (5, 5)), max_rows=5)
+    slots = [0] + [LANE_SLOTS + r for r in range(6)]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, _ks, total = _lane_batch(mtp, slots, keys)
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert int(proposal.num_valid.sum()) == 0 and not mh._steps(mtp)
+    assert "6 proposing rows on one lane exceed the largest record (5, 5)" in mtp._mtp_decline_logged
+    assert not mtp._mtp_sessions, "the fast decline opens no session"
+    # the lane shrinks to the record: the next proposal drafts for every live row of both lanes
+    mtp.release_request(LANE_SLOTS + 5)
+    live = slots[:-1]
+    committed, posits = mh._committed(total, live, firsts[:-1], [3] * len(live))
+    proposal = mh._propose(mtp, committed, posits)
+    assert [int(proposal.num_valid[s]) for s in live] == [5] * 6 and mh._steps(mtp)[0][1] == (5, 5)
+
 
 # -- 3.3 verify -------------------------------------------------------------------
 
 
-def test_verify_answers_from_the_retained_posterior_without_the_device(model):
+@pytest.mark.parametrize("mode", ["argmax_ids", "logits"])
+def test_verify_answers_from_the_retained_posterior_without_the_device(model, mode, adapter, monkeypatch):
+    """dFlash answers in argmax_ids mode only; the MTP rail answers either mode, read with the submission or
+    through the deferred read of asynchronous scheduling."""
     _start_solo(model)
     replays = model._spec_decoder.replays
     out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
@@ -447,23 +1161,68 @@ def test_verify_answers_from_the_retained_posterior_without_the_device(model):
     assert _names(model, "decode") == []
     assert model._dflash_retained.consumed is True
 
+    # -- the MTP rail: a deferred verify readback commits what the synchronous order commits
+    # Two rounds of verify / read / walk / propose: reading the verify's tensor later through
+    # ``read_decode_output(async_read=True)`` commits the same tokens, seeds the same columns and drives the
+    # decoder with the same calls as reading it with the submission.
+    runs = {}
+    for deferred in (False, True):
+        mtp = mh.build_mtp_model(adapter, monkeypatch)
+        mh._script_two_replays(mtp)
+        drafts = mh._start_solo(mtp).draft_token_ids[0].tolist()
+        committed1, count1, drafts2 = mh._verify_walk_propose(mtp, 150, 3, drafts, mode, deferred)
+        committed2, count2, drafts3 = mh._verify_walk_propose(mtp, committed1[-1], 3 + count1, drafts2, mode, deferred)
+        runs[deferred] = (
+            committed1,
+            count1,
+            drafts2,
+            committed2,
+            count2,
+            drafts3,
+            mh._steps(mtp),
+            _names(mtp, "reseed"),
+            _names(mtp, "decode"),
+            mtp._mtp_decoder.readbacks,
+        )
+    assert runs[True] == runs[False]
+    committed1, count1, drafts2, committed2, count2, drafts3, steps, reseeds, decodes, _ = runs[True]
+    assert (committed1, count1) == ([101, 102, 103, 477], 4) and (committed2, count2) == ([201, 202, 488], 3)
+    assert drafts2 == [201, 202, 203, 204, 205] and drafts3 == [301, 302, 303, 304, 305]
+    assert [step[5] for step in steps] == [[None], [3], [2]], "each proposal seeds from the committed column"
+    assert len(reseeds) == 1 and len(decodes) == 1, "the first plain step only; every verify was answered"
 
-def test_verify_tolerates_a_block_truncated_to_num_valid_drafts(model):
+
+def test_verify_tolerates_a_block_truncated_to_num_valid_drafts(model, mtp):
     _start_solo(model)
     out = _verify(model, [[150, 201, 202, -1, -1, -1]], [list(range(3, 9))], [2], keys=[10])
     assert out.argmax_ids[0].tolist()[:3] == [250, 251, 252]
 
+    # -- the MTP rail: verify with fewer drafts than proposed is a valid prefix
+    mh._start_solo(mtp)
+    out = mh._verify(mtp, [mh._block(150, [101, 102, 103])], [mh._positions(3, 4)], [3], [10])
+    assert out.argmax_ids.tolist() == [[150, 151, 152, 153, 154, 155]]
 
-def test_verify_refuses_draft_ids_this_model_did_not_propose(model, expect_error_base):
+
+def test_verify_refuses_draft_ids_this_model_did_not_propose(model, expect_error_base, mtp, expect_error):
     _start_solo(model)
     with expect_error_base(ValueError, "did not propose"):
         _verify(model, [[150, 201, 777, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
 
+    # -- the MTP rail: verify rejects drafts the model did not propose
+    mh._start_solo(mtp)
+    with expect_error(ValueError, "did not propose"):
+        mh._verify(mtp, [mh._block(150, [101, 102, 777, 104, 105])], [mh._positions(3, 6)], [5], [10])
 
-def test_verify_refuses_a_block_that_does_not_continue_the_proposal(model, expect_error_base):
+
+def test_verify_refuses_a_block_that_does_not_continue_the_proposal(model, expect_error_base, mtp, expect_error):
     _start_solo(model)
     with expect_error_base(RuntimeError, "does not continue"):
         _verify(model, [[151, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+
+    # -- the MTP rail: verify rejects a block that does not continue the proposal
+    mh._start_solo(mtp)
+    with expect_error(RuntimeError, "does not continue"):
+        mh._verify(mtp, [mh._block(151, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
 
 
 def test_verify_with_drafts_and_no_retained_proposal_raises(model, expect_error_base):
@@ -473,9 +1232,14 @@ def test_verify_with_drafts_and_no_retained_proposal_raises(model, expect_error_
         _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
 
 
-def test_verify_with_drafts_for_a_row_without_a_session_raises(model, expect_error_base):
+def test_verify_with_drafts_for_a_row_without_a_session_raises(model, expect_error_base, mtp, expect_error):
     with expect_error_base(RuntimeError, "owns no drafter session"):
         _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+
+    # -- the MTP rail: verify rejects drafts for a row without a session
+    mh._prefill(mtp)
+    with expect_error(RuntimeError, "owns no drafter session"):
+        mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
 
 
 def test_verify_for_a_padded_solo_block_answers_at_the_live_row(model):
@@ -494,7 +1258,7 @@ def test_verify_for_a_padded_solo_block_answers_at_the_live_row(model):
     assert bool(out.argmax_ids[1:].eq(-1).all())
 
 
-def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model):
+def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model, mtp, adapter, monkeypatch):
     """A peer joined after the proposal. The drafted row is answered from the
     device's own evaluation of its drafts; the peer takes the plain decode,
     which runs with the drafted row at position -1; speculation ends."""
@@ -519,8 +1283,56 @@ def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model):
     )
     assert proposal.num_valid.tolist() == [0, 0]
 
+    # -- the MTP rail: a peer joining takes the plain decode while the drafted row is answered
+    mh._start_solo(mtp)
+    mh._prefill(mtp, slot=1, key=20)
+    blocks = [mh._block(150, [101, 102, 103, 104, 105]), mh._block(9, [])]
+    out = mh._verify(mtp, blocks, [mh._positions(3, 6), mh._positions(2, 1)], [5, 0], [10, 20], result=_tensor([0, 42]))
+    assert out.argmax_ids[0].tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.argmax_ids[1, 0].item() == 42
+    assert _names(mtp, "decode")[-1] == ("decode", [150, 9], [-1, 2]), "the drafted row is excluded"
+    # The next proposal moves to the two-row record: the drafted row still seeds from the last
+    # replay under its row id (the decoder gathers across records); only the newcomer is reseeded.
+    proposal = mh._propose(
+        mtp, [[150, 151, 152, 153, 154, 155], [42] + [-1] * 5], [mh._positions(4, 6), [3] + [-1] * 5], counts=[6, 1]
+    )
+    assert proposal.num_valid.tolist() == [5, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [1], [42], [3])
+    assert mh._steps(mtp)[-1][1:6] == ((5, 5), [0, 1], [155, 42], [9, 3], [5, None])
+    # -- the MTP rail: the retained replay survives a straddle plain decode until the deferred read
+    # A logits verify whose peer row takes the plain decode (a synchronous device read inside the step)
+    # answers the drafted row from the retained replay; the deferred read after that straddle returns that
+    # same block, and the proposal that follows still seeds the drafted row from the replay's verify hidden.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._start_solo(mtp)
+    mh._prefill(mtp, slot=1, key=20)
+    decoder = mtp._mtp_decoder
+    replay = mtp._mtp_sessions[0].retained.replay
+    blocks = [mh._block(150, [101, 102, 103, 104, 105]), mh._block(9, [])]
+    out = mh._verify(
+        mtp,
+        blocks,
+        [mh._positions(3, 6), mh._positions(2, 1)],
+        [5, 0],
+        [10, 20],
+        mode="logits",
+        result=mh.logits_result(2, 40),
+    )
+    assert _names(mtp, "decode")[-1] == ("decode", [150, 9], [-1, 2]) and _names(mtp, "read")[-1] == ("read", False)
+    assert decoder.readbacks == 1, "the greedy-only replay was read back at the step, before the straddle"
+    host = mh._read(mtp, out)
+    assert host is out.logits
+    assert host[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert host[1, 0].float().argmax().item() == 41 and host[1, 1:].eq(0).all()
+    assert mtp._mtp_sessions[0].retained.replay is replay and mtp._mtp_last_replay is replay
+    committed = [[150, 151, 152, 153, 154, 155], [41] + [-1] * 5]
+    proposal = mh._propose(mtp, committed, [mh._positions(4, 6), [3] + [-1] * 5], counts=[6, 1])
+    assert proposal.num_valid.tolist() == [5, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [1], [41], [3])
+    assert mh._steps(mtp)[-1][1:6] == ((5, 5), [0, 1], [155, 41], [9, 3], [5, None])
 
-def test_straddle_verify_finds_the_owner_through_slot_remap(model):
+
+def test_straddle_verify_finds_the_owner_through_slot_remap(model, mtp):
     """The peer took row 0 and the owner moved to row 1 while its state still
     sits in slot 0; the runner says so with slot_remap and reports the move
     only after the step."""
@@ -540,20 +1352,65 @@ def test_straddle_verify_finds_the_owner_through_slot_remap(model):
     assert not model._spec_active
     model.note_state_slots_moved({0: 1, 1: 0})  # the runner settles the permutation afterwards
 
+    # -- the MTP rail: a moved slot reseeds under its new row id
+    mh._start_solo(mtp)
+    # The runner moves the request to row 2 inside a step (row 2 reads slot 0) and reports the
+    # move once the step is accepted; the proposal that follows uses the new row id.
+    blocks = [[0] + [-1] * 5, [0] + [-1] * 5, mh._block(150, [101, 102, 103, 104, 105])]
+    out = mh._verify(
+        mtp,
+        blocks,
+        [[-1] * 6, [-1] * 6, mh._positions(3, 6)],
+        [0, 0, 5],
+        [0, 0, 10],
+        slot_remap=[2, 1, 0],
+        sampling_params=_sampling(3),
+    )
+    assert out.argmax_ids[2].tolist() == [150, 151, 152, 153, 154, 155]
+    mtp.note_state_slots_moved({0: 2, 2: 0})
+    committed = [[-1] * 6, [-1] * 6, [150, 151, 152, 153, 154, 155]]
+    proposal = mh._propose(mtp, committed, [[-1] * 6, [-1] * 6, mh._positions(4, 6)], counts=[1, 1, 6])
+    assert proposal.num_valid.tolist() == [0, 0, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [2], [155], [9])
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [2], [155], [9], [None])
 
-def test_ordinary_step_finds_the_owner_through_slot_remap(model):
+
+def test_ordinary_step_finds_the_owner_through_slot_remap(model, mtp):
     _start_solo(model)
     out = _ordinary(model, [0, 150], [-1, 3], [0, 10], slot_remap=[1, 0])
     assert out.tolist() == [0, 250]
 
+    # -- the MTP rail: slot remap during a step reads the moved session
+    mh._start_solo(mtp)
+    out = mh._verify(
+        mtp,
+        [[0] + [-1] * 5, mh._block(150, [101, 102, 103, 104, 105])],
+        [[-1] * 6, mh._positions(3, 6)],
+        [0, 5],
+        [0, 10],
+        slot_remap=[1, 0],
+        sampling_params=_sampling(2),
+    )
+    assert out.argmax_ids[1].tolist() == [150, 151, 152, 153, 154, 155]
 
-def test_verify_for_a_row_whose_slot_owns_nothing_raises_even_at_the_owners_row(model, expect_error_base):
+
+def test_verify_for_a_row_whose_slot_owns_nothing_raises_even_at_the_owners_row(
+    model, expect_error_base, mtp, expect_error
+):
     _start_solo(model)
     with expect_error_base(RuntimeError, "owns no drafter session"):
         _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10], slot_remap=[3])
 
+    # -- the MTP rail: a session of a closed generation is refused
+    mh._start_solo(mtp)
+    mtp._spec_close_slot_generation(0)
+    with expect_error(RuntimeError, "generation"):
+        mh._ordinary(mtp, [150], [3], [10], result=_tensor([1]))
 
-def test_straddle_verify_rejects_host_sampling_before_consuming_a_proposal(model, expect_error_base):
+
+def test_straddle_verify_rejects_host_sampling_before_consuming_a_proposal(
+    model, expect_error_base, mtp, adapter, monkeypatch, expect_error
+):
     _start_solo(model)
     ordinary_result = DeviceResult(_logits(2, 500))
     model.results.append(ordinary_result)
@@ -572,6 +1429,83 @@ def test_straddle_verify_rejects_host_sampling_before_consuming_a_proposal(model
     assert model.results == [ordinary_result]
     assert model._dflash_retained is retained and not retained.consumed
     assert model._spec_active
+
+    # -- the MTP rail: logits verify returns the host block with zero padding
+    mh._prefill(mtp, rows=2)
+    mh._ordinary(mtp, [3, 4, 0], [2, 2, -1], [10, 12, 0], result=_tensor([30, 31, 0]))
+    proposal = mh._propose(
+        mtp, [[30] + [-1] * 5, [31] + [-1] * 5, [-1] * 6], [[3] + [-1] * 5, [3] + [-1] * 5, [-1] * 6]
+    )
+    drafts = proposal.draft_token_ids.tolist()
+    blocks = [mh._block(30, drafts[0]), mh._block(31, drafts[1][:2]), [0] + [-1] * 5]
+    out = mh._verify(
+        mtp, blocks, [mh._positions(3, 6), mh._positions(3, 3), [-1] * 6], [5, 2, 0], [10, 12, 0], mode="logits"
+    )
+    assert out.spec_mode == "logits" and out.argmax_ids is None and out.hidden is None
+    assert tuple(out.logits.shape) == (3, 6, mh.VOCAB) and out.logits.dtype == torch.bfloat16
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.logits[1].float().argmax(dim=-1).tolist() == [160, 161, 162, 163, 164, 165]
+    assert out.logits[2].eq(0).all(), "a padding row is all zeros"
+    assert mtp._mtp_decoder.results[-1].readbacks == 1, "one readback per replay, shared by its rows"
+    assert len(_names(mtp, "decode")) == 1
+    # -- the MTP rail: logits verify zeroes the columns past a shorter record
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._prefill(mtp, rows=6)
+    keys = [10 + 2 * r for r in range(6)]
+    mh._ordinary(mtp, [3] * 6, [2] * 6, keys, result=_tensor([30] * 6))
+    proposal = mh._propose(mtp, [[30] + [-1] * 5] * 6, [[3] + [-1] * 5] * 6)
+    drafts = proposal.draft_token_ids.tolist()
+    out = mh._verify(
+        mtp, [mh._block(30, drafts[r][:3]) for r in range(6)], [mh._positions(3, 4)] * 6, [3] * 6, keys, mode="logits"
+    )
+    assert tuple(out.logits.shape) == (6, 6, mh.VOCAB)
+    assert out.logits[0, :4].float().argmax(dim=-1).tolist() == [150, 151, 152, 153]
+    assert out.logits[:, 4:].eq(0).all()
+    # -- the MTP rail: logits verify refuses device sampling parameters
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._start_solo(mtp)
+    with expect_error(ValueError, "logits verify carries no device sampling parameters"):
+        mh._verify(
+            mtp,
+            [mh._block(150, [101, 102, 103, 104, 105])],
+            [mh._positions(3, 6)],
+            [5],
+            [10],
+            mode="logits",
+            sampling=True,
+        )
+    # -- the MTP rail: logits verify takes straddle rows from the plain decode logits
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._start_solo(mtp)
+    mh._prefill(mtp, slot=1, key=20)
+    blocks = [mh._block(150, [101, 102, 103, 104, 105]), mh._block(9, [])]
+    out = mh._verify(
+        mtp,
+        blocks,
+        [mh._positions(3, 6), mh._positions(2, 1)],
+        [5, 0],
+        [10, 20],
+        mode="logits",
+        result=mh.logits_result(2, 40),
+    )
+    assert _names(mtp, "decode")[-1] == ("decode", [150, 9], [-1, 2])
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.logits[1, 0].float().argmax().item() == 41 and out.logits[1, 1:].eq(0).all()
+    # -- the MTP rail: argmax verify without device sampling takes straddle rows from the plain logits
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._start_solo(mtp)
+    mh._prefill(mtp, slot=1, key=20)
+    blocks = [mh._block(150, [101, 102, 103, 104, 105]), mh._block(9, [])]
+    out = mh._verify(
+        mtp,
+        blocks,
+        [mh._positions(3, 6), mh._positions(2, 1)],
+        [5, 0],
+        [10, 20],
+        sampling=False,
+        result=mh.logits_result(2, 40),
+    )
+    assert out.argmax_ids[1, 0].item() == 41 and out.argmax_ids[0].tolist() == [150, 151, 152, 153, 154, 155]
 
 
 def test_draftless_host_verify_does_not_bootstrap_an_argmax_session(model, expect_error_base):
@@ -632,7 +1566,7 @@ def test_batched_draftless_verify_decodes_column_zero_only(model):
     assert bool(out.argmax_ids[:, 1:].eq(-1).all())
 
 
-def test_padded_rows_keep_the_sentinel_in_the_plain_decode(model):
+def test_padded_rows_keep_the_sentinel_in_the_plain_decode(model, mtp):
     blocks = torch.zeros((4, 6), dtype=torch.int32)
     positions = torch.full((4, 6), -1, dtype=torch.int32)
     positions[0] = torch.arange(100, 106)
@@ -647,8 +1581,100 @@ def test_padded_rows_keep_the_sentinel_in_the_plain_decode(model):
     )
     assert _names(model, "decode")[0][2] == [100, 200, -1, -1]
 
+    # -- the MTP rail: three non contiguous rows over two rounds keep every per row value aligned
+    # Slots 4, 9, 17 of a 20-row wire batch through propose/verify/propose/verify with different accepted
+    #     counts: the decoder receives each row's own anchor, position, seed column and table in record order,
+    #     and the runner receives each wire row's own posterior, in both accept modes.
+    live = [4, 9, 17]
+    keys = [10, 20, 30]
+    for slot, key in zip(live, keys):
+        mh._prefill(mtp, slot=slot, key=key)
+    first = [30, 31, 32]
+    mh._wire(
+        mtp,
+        live,
+        [3, 4, 5],
+        [2, 2, 2],
+        keys,
+        20,
+        _tensor([first[live.index(r)] if r in live else 0 for r in range(20)]),
+    )
+    committed, posits = mh._committed(20, live, first, [3, 3, 3])
+    proposal = mh._propose(mtp, committed, posits)
+    decoder = mtp._mtp_decoder
+    step = mh._steps(mtp)[-1]
+    assert step[1:7] == ((5, 5), live, first, [3, 3, 3], [None, None, None], 1024)
+    assert step[7][:3] == [[10, 11, 0, 0], [20, 21, 0, 0], [30, 31, 0, 0]] and step[7][3:] == [[0, 0, 0, 0]] * 2
+    for i, r in enumerate(live):
+        retained = mtp._mtp_sessions[r].retained
+        assert retained.shape_row == i and retained.row_id == r
+        assert retained.drafts == [100 + 10 * i + j for j in range(1, 6)]
+        assert proposal.draft_token_ids[r].tolist() == retained.drafts
+    # Round 1 verify (argmax mode): rows accept 5, 2 and 0 drafts; every wire row answers its own posterior.
+    valid = [5, 2, 0]
+    blocks = [[0] + [-1] * 5] * 20
+    positions = [[-1] * 6] * 20
+    for i, r in enumerate(live):
+        blocks[r] = mh._block(first[i], mtp._mtp_sessions[r].retained.drafts[: valid[i]])
+        positions[r] = mh._positions(3, 1 + valid[i])
+    out = mh._verify(
+        mtp,
+        blocks,
+        positions,
+        [valid[live.index(r)] if r in live else 0 for r in range(20)],
+        [keys[live.index(r)] if r in live else 0 for r in range(20)],
+    )
+    expected1 = [[150 + 10 * i + j for j in range(6)] for i in range(3)]
+    for i, r in enumerate(live):
+        assert out.argmax_ids[r].tolist() == expected1[i]
+    assert len(_names(mtp, "decode")) == 1, "no device forward for a fully answered verify"
+    # Round 2 propose: counts 6 / 3 / 1 commit the accepted prefix + bonus; each row seeds from ITS column.
+    counts = [6, 3, 1]
+    committed = [[-1] * 6 for _ in range(20)]
+    posits = [[-1] * 6 for _ in range(20)]
+    for i, r in enumerate(live):
+        committed[r] = [expected1[i][j] if j < counts[i] else -1 for j in range(6)]
+        posits[r] = mh._positions(4, counts[i])
+    proposal = mh._propose(
+        mtp, committed, posits, counts=[counts[live.index(r)] if r in live else 1 for r in range(20)]
+    )
+    step = mh._steps(mtp)[-1]
+    assert step[2] == live
+    assert step[3] == [expected1[i][counts[i] - 1] for i in range(3)]
+    assert step[4] == [3 + c for c in counts]
+    assert step[5] == [c - 1 for c in counts]
+    assert len(_names(mtp, "reseed")) == 1 and decoder.replays == 2
+    assert step[7][:3] == [[10, 11, 0, 0], [20, 21, 0, 0], [30, 31, 0, 0]]
+    for i, r in enumerate(live):
+        retained = mtp._mtp_sessions[r].retained
+        assert retained.shape_row == i and retained.row_id == r and retained.anchor_position == 3 + counts[i]
+        assert proposal.draft_token_ids[r].tolist() == [200 + 10 * i + j for j in range(1, 6)]
+    # Round 2 verify in logits mode (a sampled request in the batch): each wire row's columns are its own.
+    valid = [4, 5, 1]
+    blocks = [[0] + [-1] * 5] * 20
+    positions = [[-1] * 6] * 20
+    for i, r in enumerate(live):
+        blocks[r] = mh._block(expected1[i][counts[i] - 1], mtp._mtp_sessions[r].retained.drafts[: valid[i]])
+        positions[r] = mh._positions(3 + counts[i], 1 + valid[i])
+    out = mh._verify(
+        mtp,
+        blocks,
+        positions,
+        [valid[live.index(r)] if r in live else 0 for r in range(20)],
+        [keys[live.index(r)] if r in live else 0 for r in range(20)],
+        mode="logits",
+    )
+    assert tuple(out.logits.shape) == (20, 6, mh.VOCAB)
+    for i, r in enumerate(live):
+        assert out.logits[r].float().argmax(dim=-1).tolist() == [250 + 10 * i + j for j in range(6)]
+    for r in range(20):
+        if r not in live:
+            assert out.logits[r].eq(0).all()
 
-def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its_first_id(model):
+
+def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its_first_id(
+    model, mtp, adapter, monkeypatch, expect_error
+):
     """The scheduler dropped the drafts (it does near max_model_len). The
     retained posterior's first id is still the target's choice after the
     anchor, and the next propose commits one token."""
@@ -660,8 +1686,95 @@ def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its
     assert proposal.num_valid.tolist() == [5]
     assert _names(model, "commit")[-1] == ("commit", 1, 250)
 
+    # -- the MTP rail: an ordinary step answers from the retained proposal when no drafts were sent
+    # Without the resident decode (the runner reloads every decode's inputs) a greedy row whose retained
+    # proposal continues its token is answered from that proposal's column 0.
+    plain = mh.build_mtp_model(adapter, monkeypatch, resident=False)
+    mh._start_solo(plain)
+    out = mh._ordinary(plain, [150], [3], [10])
+    assert out.tolist() == [150] and len(_names(plain, "decode")) == 1
+    proposal = mh._propose(plain, [[150, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [5]
+    assert mh._steps(plain)[-1][5] == [0], "the seed column is the verified anchor column"
+    # -- the MTP rail: under the resident decode an ordinary step runs the plain decode and drops the proposal
+    # ``supports_async_decode`` (the class default) keeps the plain decode's device-resident token and
+    # position across ordinary steps, and the runner reloads them only after a verify, so no ordinary step is
+    # answered from the drafter: every live row runs the plain decode, the retained proposal is dropped, and
+    # the steady decode that follows (reload_inputs=False, host inputs stale) is accepted with its commands
+    # untouched.
+    assert mtp._spec_resident_decode_declared()
+    mh._start_solo(mtp)
+    out = mh._ordinary(mtp, [150], [3], [10], result=_tensor([150]))
+    assert out.tolist() == [150] and mtp._mtp_sessions[0].retained is None
+    assert _names(mtp, "decode")[-1] == ("decode", [150], [3])
+    steady = dict(
+        reload_inputs=False, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    out = mh._ordinary(mtp, [150], [4], [10], result="device", **steady)
+    assert out == "device" and mtp.decode_commands[-1] == steady
+    proposal = mh._propose(mtp, [[160] + [-1] * 5], [[5] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [5])
+    # -- the MTP rail: an ordinary step submitted before the proposal drops it and the next proposal reseeds
+    # Overlap under asynchronous scheduling: the runner submits ordinary step N+1 before step N's proposal is
+    # published, then publishes N's and N+1's proposals at their drains. The adapter sees propose, propose with
+    # no verify between: the first proposal is dropped rather than verified (contract s.4d), the row reseeds
+    # at the token the overlapped step committed, and the dropped drafts are never accepted by a verify.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    mh._ordinary(mtp, [150], [3], [10], result=_tensor([151]), **steady)
+    first = mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert first.draft_token_ids[0].tolist() == [101, 102, 103, 104, 105]
+    assert mtp._mtp_sessions[0].retained is not None and not mtp._mtp_sessions[0].retained.consumed
+    second = mh._propose(mtp, [[151] + [-1] * 5], [[4] + [-1] * 5])
+    assert second.draft_token_ids[0].tolist() == [201, 202, 203, 204, 205] and mtp._mtp_dropped_proposals == 1
+    assert mtp._mtp_sessions[0].dropped == 1
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [151], [4])
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [0], [151], [4], [None])
+    with expect_error(ValueError, "did not propose"):
+        mh._verify(mtp, [mh._block(151, [101, 102, 103, 104, 105])], [mh._positions(4, 6)], [5], [10])
+    out = mh._verify(mtp, [mh._block(151, [201, 202, 203, 204, 205])], [mh._positions(4, 6)], [5], [10])
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    # The session's summary line at release carries the dropped count; the engine-life total is logged and
+    # reset by release_persistent_capture.
+    mtp.release_request(0)
+    summary = [m for m in messages if m.startswith("Gemma4MTP contract summary: slot 0 (release)")]
+    assert len(summary) == 1 and summary[0].endswith(", 1 proposals dropped unverified"), summary
+    mtp.release_persistent_capture()
+    assert "Gemma4MTP speculative contract: 1 proposals dropped unverified over the engine's life" in messages
+    assert mtp._mtp_dropped_proposals == 0
+    # -- the MTP rail: an overtaken proposal whose first draft the overlapped step committed seeds the next
+    # The overlapped step's token against the dropped proposal's first draft is one position of acceptance
+    # evidence (observed on the row), and when they agree the replay's verify hidden at column 1 is the seed of
+    # the next proposal (no reseed): the row continues exactly as after a verify that accepted one draft.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    mh._ordinary(mtp, [150], [3], [10], result=_tensor([101]), **steady)
+    first = mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert first.draft_token_ids[0].tolist() == [101, 102, 103, 104, 105]
+    stats = mtp._mtp_sessions[0].stats
+    assert stats.ewma_accepted is None
+    second = mh._propose(mtp, [[101] + [-1] * 5], [[4] + [-1] * 5])
+    assert second.draft_token_ids[0].tolist() == [201, 202, 203, 204, 205] and mtp._mtp_dropped_proposals == 1
+    assert mtp._mtp_sessions[0].dropped == 1 and stats.ewma_accepted is not None
+    assert _names(mtp, "reseed") == [("reseed", (1, 5), [0], [150], [3])], "the first proposal reseeded; column 1 seeds"
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [0], [101], [4], [1])
+    out = mh._verify(mtp, [mh._block(101, [201, 202, 203, 204, 205])], [mh._positions(4, 6)], [5], [10])
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    # a rule-2 ordinary decode (a non-speculable peer) drops the proposal the same way, counted
+    mh._prefill(mtp, slot=1, key=20)
+    third = mh._propose(mtp, [[250] + [-1] * 5], [[5] + [-1] * 5], counts=[1])
+    assert third.num_valid.tolist() == [5] and mtp._mtp_sessions[0].retained is not None
+    mh._ordinary(mtp, [250, 3], [5, 2], [10, 20], result=_tensor([260, 40]))  # reloaded: first plain after a verify
+    assert mtp._mtp_sessions[0].retained is None and mtp._mtp_sessions[0].dropped == 2
+    assert mtp._mtp_dropped_proposals == 2
 
-def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model):
+
+def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model, mtp):
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     out = _ordinary(model, [251, 40], [6, 9], [10, 20], result="device")
@@ -669,6 +1782,20 @@ def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model):
     _ordinary(model, [7], [7], [10], result="device")
     proposal = _propose(model, [[8, -1, -1, -1, -1, -1]], [[8, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [0]
+
+    # -- the MTP rail: a peer leaving moves the survivor back to the solo record seeded from the last replay
+    mh._prefill(mtp, rows=2)
+    mh._ordinary(mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]))
+    mh._propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    mtp.release_request(1)
+    drafts = mtp._mtp_decoder.results[-1].drafts[0].tolist()
+    mh._verify(mtp, [mh._block(30, drafts), [0] + [-1] * 5], [mh._positions(3, 6), [-1] * 6], [5, 0], [10, 0])
+    proposal = mh._propose(
+        mtp, [[150, 151, 152, 153, 154, 155], [-1] * 6], [mh._positions(4, 6), [-1] * 6], counts=[6, 1]
+    )
+    assert proposal.num_valid.tolist() == [5, 0]
+    assert len(_names(mtp, "reseed")) == 1, "the survivor kept its row id: its seed is in the last replay"
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [0], [155], [9], [5])
 
 
 _PAD = [-1] * 6
@@ -696,7 +1823,7 @@ def test_a_step_without_the_owner_keeps_its_outstanding_proposal(model, anchors,
     assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
 
 
-def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(model):
+def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(model, mtp):
     _start_solo(model)
     out = _verify(
         model,
@@ -711,11 +1838,45 @@ def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(mod
     out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
 
+    # -- the MTP rail: a sampled request is verified in logits mode from its own columns
+    # The runner picks the mode per step (logits once a live row samples); the adapter answers either mode,
+    #     and in logits mode the sampled row's columns come from its own record row, not a neighbour's.
+    live = [2, 7]
+    for slot, key in zip(live, (10, 20)):
+        mh._prefill(mtp, slot=slot, key=key)
+    sampling = _sampling(10, temperature=[0.7 if r == 7 else 0.0 for r in range(10)])
+    mh._wire(
+        mtp, live, [3, 4], [2, 2], [10, 20], 10, _tensor([0, 0, 30, 0, 0, 0, 0, 31, 0, 0]), sampling_params=sampling
+    )
+    assert mtp._mtp_row_needs_logits == {2: False, 7: True}
+    committed, posits = mh._committed(10, live, [30, 31], [3, 3])
+    mh._propose(mtp, committed, posits)
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 1, "a sampled row in the replay: the logits are read back at proposal time"
+    assert mtp._mtp_sessions[7].retained.logits.float().argmax(dim=-1).tolist() == [160, 161, 162, 163, 164, 165]
+    blocks = [[0] + [-1] * 5] * 10
+    positions = [[-1] * 6] * 10
+    for i, r in enumerate(live):
+        blocks[r] = mh._block([30, 31][i], mtp._mtp_sessions[r].retained.drafts)
+        positions[r] = mh._positions(3, 6)
+    out = mh._verify(
+        mtp,
+        blocks,
+        positions,
+        [5 if r in live else 0 for r in range(10)],
+        [10 if r == 2 else 20 if r == 7 else 0 for r in range(10)],
+        mode="logits",
+    )
+    assert out.spec_mode == "logits"
+    assert out.logits[2].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.logits[7].float().argmax(dim=-1).tolist() == [160, 161, 162, 163, 164, 165]
+    assert decoder.readbacks == 1
+
 
 # -- caller-owned decode updates after drafter-served steps ----------------------
 
 
-def test_drafter_history_does_not_override_the_reload_commands(model):
+def test_drafter_history_does_not_override_the_reload_commands(model, mtp):
     commands = dict(
         reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
     )
@@ -734,6 +1895,12 @@ def test_drafter_history_does_not_override_the_reload_commands(model):
     assert model.decode_commands == [commands, commands]
     _ordinary(model, [7, 8], [7, 11], [10, 20], result="device", reload_inputs=False)
     assert model.reloads == [True, True, False]
+
+    # -- the MTP rail: accepted counts on the narrow step are consumed without reaching the plain decode
+    mh._prefill(mtp)
+    out = mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]), accepted_counts=_tensor([3]))
+    assert out.tolist() == [150]
+    assert "accepted_counts" not in mtp.decode_kwargs[-1] and "spec_mode" not in mtp.decode_kwargs[-1]
 
 
 def _decline_after_a_verify(model):
@@ -762,7 +1929,9 @@ def _peer_joins_an_outstanding_proposal(model):
 @pytest.mark.parametrize(
     "history", [_decline_after_a_verify, _peer_joins_an_outstanding_proposal], ids=["decline", "peer-joined"]
 )
-def test_a_plain_decode_after_a_drafter_served_step_refuses_resident_inputs(model, expect_error_base, history):
+def test_a_plain_decode_after_a_drafter_served_step_refuses_resident_inputs(
+    model, expect_error_base, history, mtp, expect_error
+):
     """A drafter-served row never updated the plain decode's resident token and
     position. Without reload_inputs the plain decode would start from the stale
     token, so the step raises before the device runs; a reloading decode clears it."""
@@ -776,6 +1945,13 @@ def test_a_plain_decode_after_a_drafter_served_step_refuses_resident_inputs(mode
     _ordinary(model, [a + 1 for a in anchors], [p + 1 for p in positions], keys, result="device", reload_inputs=False)
     assert model.reloads[-2:] == [True, False]
 
+    # -- the MTP rail: a plain decode after a drafter served step refuses stale resident inputs
+    mh._start_solo(mtp)
+    mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    with expect_error(RuntimeError, "reload_inputs=False"):
+        mh._ordinary(mtp, [160], [4], [10], result="device", reload_inputs=False)
+    assert mh._ordinary(mtp, [160], [4], [10], result="device") == "device"
+
 
 @pytest.mark.parametrize("reload_inputs", [True, False])
 def test_plain_decode_forwards_the_reload_command(model, reload_inputs):
@@ -784,7 +1960,7 @@ def test_plain_decode_forwards_the_reload_command(model, reload_inputs):
     assert model.reloads == [reload_inputs]
 
 
-def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, monkeypatch):
+def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, monkeypatch, mtp):
     """The block rail logs tokens per iteration on release; the contract rail
     logs the same per session, counting the first ordinary step as a step."""
     messages = []
@@ -794,8 +1970,31 @@ def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, 
     _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
     model.release_request(0)
     summary = [m for m in messages if "contract summary" in m]
-    assert summary == ["Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step"]
+    assert summary == [
+        "Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step, 2.00 accepted drafts/verify (EWMA over 1)"
+    ]
     assert model._dflash_steps == 0 and model._dflash_committed == 0
+
+    # -- the MTP rail: release drops the session and a new occupant opens a new generation
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    mh._start_solo(mtp)  # prefill: generation 1; the session is owned by (0, 1)
+    assert mtp._mtp_sessions[0].owner == (0, 1)
+    mtp.release_request(0)
+    assert mtp._mtp_sessions == {} and mtp._spec_slot_gen[0] == 2
+    assert [m for m in messages if "contract summary" in m] == [
+        "Gemma4MTP contract summary: slot 0 (release) 1 steps, 1 tokens, 1.00 tokens/step, no verified drafts"
+    ]
+    mh._prefill(mtp, key=20)
+    assert mtp._spec_slot_gen[0] == 3
+    mh._ordinary(mtp, [3], [2], [20], result=_tensor([160]))
+    mh._propose(mtp, [[160] + [-1] * 5], [[3] + [-1] * 5])
+    assert mtp._mtp_sessions[0].owner == (0, 3)
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [3])
+
+    # -- the acceptance-adaptive policy: the session summary carries the accepted-drafts EWMA (both rails)
+    _dflash_the_session_summary_reports_the_accepted_drafts_ewma(adapter, monkeypatch)
+    _mtp_the_session_summary_reports_the_accepted_drafts_ewma(adapter, monkeypatch)
 
 
 # -- rows that cannot use the fused argmax output --------------------------------
@@ -841,7 +2040,7 @@ def test_a_greedy_solo_row_under_a_grammar_bitmask_runs_the_plain_decode(model, 
     assert model._spec_pending is None and not model._spec_active
 
 
-def test_a_sampled_solo_row_is_never_proposed_for(model):
+def test_a_sampled_solo_row_is_never_proposed_for(model, mtp):
     sampled = _sampling(1, temperature=1.0)
     _prefill(model, prompt_len=2, key=10)
     _ordinary(model, [3], [2], [10], result="device", sampling_params=sampled)
@@ -850,6 +2049,30 @@ def test_a_sampled_solo_row_is_never_proposed_for(model):
     out = _ordinary(model, [600], [3], [10], result="device", sampling_params=sampled)
     assert out == "device"
     assert model._spec_decoder.replays == 0 and not model._spec_active
+
+    # -- the MTP rail: a deferred logits verify answers from the logits retained at proposal
+    mh._prefill(mtp, rows=2)
+    mh._ordinary(
+        mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]), sampling_params=_sampling(2, temperature=[0.7, 0.0])
+    )
+    mh._propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 1
+    drafts_a = mtp._mtp_sessions[0].retained.drafts
+    drafts_b = mtp._mtp_sessions[1].retained.drafts
+    # The scheduler runs B alone: B's verify and B's next proposal rewrite the shared buffer.
+    mh._verify(mtp, [[0] + [-1] * 5, mh._block(31, drafts_b)], [[-1] * 6, mh._positions(3, 6)], [0, 5], [0, 12])
+    mh._propose(mtp, [[-1] * 6, [160, 161, 162, 163, 164, 165]], [[-1] * 6, mh._positions(4, 6)], counts=[1, 6])
+    assert decoder.replays == 2 and decoder.readbacks == 1
+    assert decoder.buffer[0, 0].argmax().item() != 150, "the buffer now holds B's replay"
+    # A's deferred verify in logits mode answers from the logits retained with A's proposal. The
+    # step itself is host-sampled, so B's greedy-only replay, still live in the buffer, is read
+    # back for B's own future verify (one more readback, none of it for A).
+    out = mh._verify(
+        mtp, [mh._block(30, drafts_a), [0] + [-1] * 5], [mh._positions(3, 6), [-1] * 6], [5, 0], [10, 0], mode="logits"
+    )
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert decoder.readbacks == 2 and mtp._mtp_sessions[1].retained.logits is not None
 
 
 @pytest.mark.parametrize(
@@ -882,7 +2105,7 @@ def test_a_row_requesting_logprobs_keeps_the_ordinary_result_and_releases_its_se
     assert proposal.num_valid.tolist() == [0]
 
 
-def test_logprobs_for_another_row_leave_the_session_owners_proposal_alone(model):
+def test_logprobs_for_another_row_leave_the_session_owners_proposal_alone(model, mtp):
     _start_solo(model)
     sampling = _sampling(2, enable_log_probs=[False, True], num_logprobs=0)
     result = (_tensor([0, 600]), torch.tensor([0.0, -0.5]))
@@ -894,8 +2117,31 @@ def test_logprobs_for_another_row_leave_the_session_owners_proposal_alone(model)
     out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
 
+    # -- the MTP rail: a mixed replay reads the logits back exactly once at proposal time
+    mh._prefill(mtp, rows=3)
+    mixed = _sampling(3, temperature=[0.7, 0.0, 0.0])
+    mh._ordinary(mtp, [3, 4, 5], [2, 2, 2], [10, 12, 14], result=_tensor([30, 31, 32]), sampling_params=mixed)
+    mh._propose(mtp, [[30 + r] + [-1] * 5 for r in range(3)], [[3] + [-1] * 5] * 3)
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 1 and decoder.results[-1].readbacks == 1
+    for slot in range(3):
+        retained = mtp._mtp_sessions[slot].retained
+        assert tuple(retained.logits.shape) == (6, mh.VOCAB) and retained.logits.dtype == torch.bfloat16
+    drafts = [mtp._mtp_sessions[r].retained.drafts for r in range(3)]
+    out = mh._verify(
+        mtp,
+        [mh._block(30 + r, drafts[r]) for r in range(3)],
+        [mh._positions(3, 6)] * 3,
+        [5] * 3,
+        [10, 12, 14],
+        mode="logits",
+    )
+    assert decoder.readbacks == 1, "the verify answers from the retained host logits"
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.logits[2].float().argmax(dim=-1).tolist() == [170, 171, 172, 173, 174, 175]
 
-def test_logprobs_on_padding_do_not_disqualify_the_live_row(model):
+
+def test_logprobs_on_padding_do_not_disqualify_the_live_row(model, mtp):
     _prefill(model, prompt_len=2, key=10)
     out = _ordinary(
         model,
@@ -907,12 +2153,25 @@ def test_logprobs_on_padding_do_not_disqualify_the_live_row(model):
     assert out.tolist() == [150, 0, 0, 0]
     assert len(_names(model, "bootstrap")) == 1 and _names(model, "decode") == []
 
+    # -- the MTP rail: rows of a logits verify are read back at the next proposal
+    mh._start_solo(mtp)
+    mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10], mode="logits")
+    assert mtp._mtp_decoder.readbacks == 1, "a greedy-only replay is read back late, while its buffer is live"
+    mh._propose(mtp, [[150, 151, 152, 153, 154, 155]], [mh._positions(4, 6)], counts=[6])
+    assert mtp._mtp_decoder.readbacks == 2 and mtp._mtp_sessions[0].retained.logits is not None
 
-def test_a_greedy_row_with_top_k_and_top_p_still_speculates(model):
+
+def test_a_greedy_row_with_top_k_and_top_p_still_speculates(model, mtp):
     _prefill(model, prompt_len=2, key=10)
     out = _ordinary(model, [3], [2], [10], sampling_params=_sampling(1, top_k=20, top_p=0.9))
     assert out.tolist() == [150]
     assert len(_names(model, "bootstrap")) == 1
+
+    # -- the MTP rail: a greedy only replay performs no readback
+    mh._start_solo(mtp)
+    assert mtp._mtp_decoder.readbacks == 0 and mtp._mtp_sessions[0].retained.logits is None
+    mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    assert mtp._mtp_decoder.readbacks == 0
 
 
 @pytest.mark.parametrize(
@@ -938,11 +2197,16 @@ def test_a_padded_step_reads_only_the_live_rows_sampling(model, temperature, boo
         assert out == "device"
 
 
-def test_a_draftless_verify_of_a_greedy_solo_row_starts_the_session(model):
+def test_a_draftless_verify_of_a_greedy_solo_row_starts_the_session(model, mtp):
     _prefill(model, prompt_len=2, key=10)
     out = _verify(model, [[3, 0, 0, 0, 0, 0]], [list(range(2, 8))], [0], keys=[10])
     assert out.argmax_ids[0].tolist() == [150, -1, -1, -1, -1, -1]
     assert len(_names(model, "bootstrap")) == 1 and _names(model, "decode") == []
+
+    # -- the MTP rail: a draftless verify answers column zero from the retained proposal
+    mh._start_solo(mtp)
+    out = mh._verify(mtp, [mh._block(150, [])], [mh._positions(3, 1)], [0], [10])
+    assert out.argmax_ids[0, 0].item() == 150 and len(_names(mtp, "decode")) == 1
 
 
 @pytest.mark.parametrize("values", _NOT_GREEDY, ids=_NOT_GREEDY_IDS)
@@ -989,7 +2253,7 @@ def test_a_sampled_row_leaves_another_requests_outstanding_proposal_alone(model,
     assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
 
 
-def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model):
+def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model, mtp):
     """A request that changes from greedy to sampled must leave its argmax session."""
     _prefill(model, prompt_len=2, key=10)
     first = _verify(model, [[3, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[10])
@@ -1001,6 +2265,11 @@ def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model):
     assert ("release_decoder", False) in model.events
     proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [0]
+
+    # -- the MTP rail: a sampled row is not answered from the retained argmax on an ordinary step
+    mh._start_solo(mtp)
+    out = mh._ordinary(mtp, [150], [3], [10], result=_tensor([77]), sampling_params=_sampling(1, temperature=0.7))
+    assert out.tolist() == [77] and mtp._mtp_sessions[0].retained is None
 
 
 @pytest.mark.parametrize("verify", [False, True], ids=["ordinary", "draftless-verify"])
@@ -1068,7 +2337,7 @@ def test_sampled_request_after_greedy_completion_uses_the_real_decode_contract(
     assert sample_calls[0]["reset_sampling_state"] is True
 
 
-def test_argmax_eligibility_reads_per_row_values_and_shared_scalars(adapter):
+def test_argmax_eligibility_reads_per_row_values_and_shared_scalars(adapter, mtp, expect_error):
     can_use_argmax = adapter.Gemma4DFlashContractForCausalLM._dflash_row_can_use_argmax
     lists = _sampling(2, temperature=[0.0, 0.7])
     assert can_use_argmax(lists, 0) and not can_use_argmax(lists, 1)
@@ -1080,21 +2349,49 @@ def test_argmax_eligibility_reads_per_row_values_and_shared_scalars(adapter):
     log_probs = dataclasses.replace(_sampling(2), enable_log_probs=torch.tensor([False, True]))
     assert can_use_argmax(log_probs, 0) and not can_use_argmax(log_probs, 1)
 
+    # -- the MTP rail: a greedy row whose buffer was overwritten cannot answer a logits verify
+    mh._start_solo(mtp)  # greedy A at slot 0: no readback
+    mh._prefill(mtp, slot=1, key=20)
+    mh._ordinary(mtp, [0, 9], [-1, 2], [0, 20], result=_tensor([0, 42]))
+    mh._propose(mtp, [[-1] * 6, [42] + [-1] * 5], [[-1] * 6, [3] + [-1] * 5])
+    assert mtp._mtp_decoder.replays == 2 and mtp._mtp_decoder.readbacks == 0
+    with expect_error(RuntimeError, "overwritten the shared verify-logits buffer"):
+        mh._verify(
+            mtp,
+            [mh._block(150, [101, 102, 103, 104, 105]), [0] + [-1] * 5],
+            [mh._positions(3, 6), [-1] * 6],
+            [5, 0],
+            [10, 0],
+            mode="logits",
+        )
+
 
 # -- identity and release --------------------------------------------------------
 
 
-def test_release_of_the_owner_clears_the_retained_proposal(model):
+def test_release_of_the_owner_clears_the_retained_proposal(model, mtp):
     _start_solo(model)
     model.release_request(0)
     assert model._dflash_retained is None and not model._spec_active
     assert model._dflash_live_owner is None and model._spec_owner_slot is None
 
+    # -- the MTP rail: release of every request drops every session
+    mh._prefill(mtp, rows=2)
+    mh._ordinary(mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]))
+    mh._propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    mtp.release_request(None)
+    assert mtp._mtp_sessions == {}
 
-def test_release_of_another_slot_keeps_the_session(model):
+
+def test_release_of_another_slot_keeps_the_session(model, mtp):
     _start_solo(model)
     model.release_request(3)
     assert model._spec_active and model._dflash_retained is not None
+
+    # -- the MTP rail: release of another slot keeps the session
+    mh._start_solo(mtp)
+    mtp.release_request(3)
+    assert 0 in mtp._mtp_sessions and mtp._mtp_sessions[0].retained is not None
 
 
 def test_release_of_the_pending_owner_frees_its_taps(model):
@@ -1106,15 +2403,23 @@ def test_release_of_the_pending_owner_frees_its_taps(model):
     assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
 
 
-def test_a_reused_slot_does_not_match_a_stale_owner(model):
+def test_a_reused_slot_does_not_match_a_stale_owner(model, mtp):
     _prefill(model, prompt_len=2, key=10)
     model.release_request(0)  # the owner finished before decoding
     _prefill(model, prompt_len=2, key=20, rows=2)  # slots 0 and 1, never speculable
     out = _ordinary(model, [3], [2], [20], result="device")
     assert out == "device" and _names(model, "bootstrap") == []
 
+    # -- the MTP rail: a prefill into a slot drops its stale session
+    mh._start_solo(mtp)
+    mh._prefill(mtp, key=20)
+    assert mtp._mtp_sessions == {}
+    mh._ordinary(mtp, [3], [2], [20], result=_tensor([160]))
+    proposal = mh._propose(mtp, [[160] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
 
-def test_slot_moves_follow_the_owner(model):
+
+def test_slot_moves_follow_the_owner(model, mtp):
     _start_solo(model)
     model.note_state_slots_moved({0: 3, 3: 0})
     assert model._dflash_live_owner[0] == 3 and model._spec_owner_slot == 3
@@ -1123,13 +2428,34 @@ def test_slot_moves_follow_the_owner(model):
     model.release_request(3)
     assert not model._spec_active
 
+    # -- the MTP rail: slot moves follow the session
+    mh._start_solo(mtp)  # the prefill opened generation 1 of slot 0
+    mtp.note_state_slots_moved({0: 3, 3: 0})
+    assert set(mtp._mtp_sessions) == {3} and mtp._mtp_sessions[3].owner == (3, 1)
+    assert mtp._spec_slot_gen[3] == 1
+    out = mh._verify(
+        mtp,
+        [[0] + [-1] * 5, [0] + [-1] * 5, [0] + [-1] * 5, mh._block(150, [101, 102, 103, 104, 105])],
+        [[-1] * 6, [-1] * 6, [-1] * 6, mh._positions(3, 6)],
+        [0, 0, 0, 5],
+        [0, 0, 0, 10],
+    )
+    assert out.argmax_ids[3].tolist() == [150, 151, 152, 153, 154, 155]
 
-def test_release_persistent_capture_clears_the_rail_and_reaches_the_base(model):
+
+def test_release_persistent_capture_clears_the_rail_and_reaches_the_base(model, mtp):
     _start_solo(model)
     model.release_persistent_capture()
     assert model._dflash_retained is None and model._spec_pending is None
     assert ("release_decoder", True) in model.events
     assert model.base_releases == [1]
+
+    # -- the MTP rail: release persistent capture drops sessions releases the decoder and reaches the base
+    mh._start_solo(mtp)
+    mtp.release_persistent_capture()
+    assert mtp._mtp_sessions == {} and mtp._mtp_decoder is None and not mtp._mtp_captured
+    assert mtp.events[-1] == ("release",)
+    assert mtp.base_releases == [1]
 
 
 # -- 3.6 scheduler-chunked prefill ------------------------------------------------
@@ -1159,12 +2485,73 @@ def test_chunk_groups_below_the_context_window_are_freed(model):
     assert [tap.tag for tap in taps] == [(2, 0), (2, 1), (3, 0), (3, 1)]
 
 
-def test_a_solo_prefill_of_another_request_replaces_the_pending_taps(model):
+def test_a_cache_hit_prefill_on_the_mtp_rail_is_the_base_continuation(mtp):
+    """The MTP rail takes no prefill taps: a prefix-cache hit reaches ``Gemma4ForCausalLM.prefill_forward`` once
+    with the runner's ``start_pos`` intact (the base continues the cached KV from the SDPA-aligned restart, so the
+    target runs over the uncached tail only, never the whole prompt), drops the slot's session and does no drafter
+    work; the seed is the next proposal's reseed forward at the row's anchor. The 12B QB2 first hit of 2026-10-30
+    (2.97 s against 0.58 s for the same-position repeat) ran exactly this path: its cost was the continuation
+    programs' first-process compile at a new position (tt-metal-spec @8c78e6d4c71), not a target re-run."""
+    mh._start_solo(mtp)  # slot 0 holds a session from the cold request
+    generation = mtp._spec_slot_gen[0]
+    base, seen = mtp._harness_prefill_forward, []
+
+    def recording(self, *args, page_tables_per_layer=None, **kwargs):
+        seen.append((tuple(kwargs["tokens"].shape), list(kwargs["prompt_lens"]), list(kwargs.get("start_pos") or [])))
+        return base(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+
+    mtp._harness_prefill_forward = recording
+    before = len(mtp.events)
+    _prefill(mtp, prompt_len=300, key=20, start=256)  # the hit: 256 cached tokens of a 300-token prompt
+    assert seen == [((1, 300), [300], [256])]  # one base call, the cached prefix left to the base continuation
+    assert [event[0] for event in mtp.events[before:]] == ["prefill"]  # no reseed, step or readback at prefill
+    assert mtp._mtp_sessions == {} and mtp._spec_slot_gen[0] == generation + 1
+    mh._ordinary(mtp, [3], [300], [20], result=_tensor([160]))
+    proposal = mh._propose(mtp, [[160] + [-1] * 5], [[301] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
+    assert mh._names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [301])
+
+
+def test_a_solo_prefill_of_another_request_drops_the_pending_taps_and_takes_none(model, monkeypatch):
+    """Two rows prefilled before a proposal share their first step, so neither can bootstrap: the first's taps
+    are dropped and the second captures none (the hook stays disarmed); the base prefill still runs, eager."""
     _prefill(model, prompt_len=1024, key=10, slot=0)
     first = list(model._spec_pending[0])
     _prefill(model, prompt_len=64, key=20, slot=1)
     assert all(tap.releases == 1 for tap in first)
-    assert model._spec_pending[1] == 64 and model._dflash_pending_owner[0] == 1
+    assert model._spec_pending is None and model._dflash_pending_owner is None
+    assert model.model[0].tap_layers is None and _names(model, "prefill")[-1] == ("prefill", 1, [64], False)
+    # released before any step, the two rows are gone: the next solo prefill takes taps and bootstraps
+    model.release_request(0)
+    model.release_request(1)
+    _start_solo(model, prompt_len=2, key=30)
+    assert model._spec_active
+    # a session live on another row: a peer's solo prefill takes no taps, and the session stays
+    _prefill(model, prompt_len=2, key=40, slot=1)
+    assert model._spec_pending is None and model._spec_active and model.model[0].tap_layers is None
+    # rows the last step served and still live: the same (two live rows ended the session; both still
+    # decode when slot 2 prefills)
+    _ordinary(model, [3, 5], [3, 2], [30, 40], result="device")
+    assert not model._spec_active and model._dflash_live_slots == {0, 1}
+    _prefill(model, prompt_len=2, key=50, slot=2)
+    assert model._spec_pending is None and model.model[0].tap_layers is None
+    # the batch drained (every served and prefilled row released): the taps are taken again
+    for slot in (0, 1, 2):
+        model.release_request(slot)
+    assert model._dflash_live_slots == set() and model._dflash_prefilled_slots == set()
+    _prefill(model, prompt_len=2, key=60, slot=0)
+    assert model._spec_pending is not None and model._spec_pending[1] == 2 and model._dflash_pending_owner[0] == 0
+    # GEMMA4_DFLASH_TRACE_PLAIN_PREFILL=1: a prefill that takes no taps keeps the caller's trace setting; one
+    # that takes them stays eager
+    monkeypatch.setenv("GEMMA4_DFLASH_TRACE_PLAIN_PREFILL", "1")
+    _prefill(model, prompt_len=2, key=70, slot=1)  # slot 0 prefilled since the last step: this one takes none
+    assert _names(model, "prefill")[-1] == ("prefill", 1, [2], True) and model._spec_pending is None
+    model.release_request(1)
+    _prefill(model, prompt_len=2, key=80, slot=0)  # a new request in slot 0, alone again: taps, eager
+    assert _names(model, "prefill")[-1][3] is False and model._spec_pending is not None
+    # slot moves follow the sets
+    model.note_state_slots_moved({0: 3, 3: 0})
+    assert model._dflash_prefilled_slots == {3}
 
 
 def test_a_chunk_whose_earlier_taps_were_replaced_stores_nothing(model):
@@ -1209,7 +2596,7 @@ def test_every_prefill_on_this_rail_is_eager(model):
     assert all(event[3] is False for event in _names(model, "prefill"))
 
 
-def test_a_solo_prefill_keeps_a_live_session_for_its_straddle_verify(model):
+def test_a_solo_prefill_keeps_a_live_session_for_its_straddle_verify(model, mtp):
     _start_solo(model)
     _prefill(model, prompt_len=2, key=20, slot=1)
     assert model._spec_active and model._dflash_retained is not None
@@ -1224,11 +2611,37 @@ def test_a_solo_prefill_keeps_a_live_session_for_its_straddle_verify(model):
     assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
     assert model._spec_pending is None and not model._spec_active
 
+    # -- the MTP rail: a deferred greedy row is read back when a sampled request takes its first step
+    # G replays greedy-only (no readback); G's verify is deferred; S prefills and takes its narrow
+    #     step, which reads G's still-live replay back (exactly once); S's proposal overwrites the buffer;
+    #     G's logits verify answers G's own columns with no further readback.
+    mh._start_solo(mtp)  # G at slot 0
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 0 and mtp._mtp_sessions[0].retained.logits is None
+    mh._prefill(mtp, slot=1, key=20)  # S
+    mh._ordinary(
+        mtp, [0, 9], [-1, 2], [0, 20], result=_tensor([0, 42]), sampling_params=_sampling(2, temperature=[0.0, 0.7])
+    )
+    assert decoder.readbacks == 1 and mtp._mtp_sessions[0].retained.logits is not None
+    mh._propose(mtp, [[-1] * 6, [42] + [-1] * 5], [[-1] * 6, [3] + [-1] * 5])
+    assert decoder.replays == 2 and decoder.readbacks == 2, "S's own proposal reads its replay back"
+    assert decoder.buffer[0, 0].argmax().item() != 150, "the buffer now holds S's replay"
+    out = mh._verify(
+        mtp,
+        [mh._block(150, [101, 102, 103, 104, 105]), [0] + [-1] * 5],
+        [mh._positions(3, 6), [-1] * 6],
+        [5, 0],
+        [10, 0],
+        mode="logits",
+    )
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert decoder.readbacks == 2
+
 
 # -- 3.7 block-table hygiene ---------------------------------------------------------
 
 
-def test_prefill_zeroes_block_table_columns_past_the_prompt(model):
+def test_prefill_zeroes_block_table_columns_past_the_prompt(model, mtp):
     stale = _tensor([[10, 11, 99, 98]])
     model.prefill_forward(
         tokens=torch.full((1, 70), 7, dtype=torch.int32),
@@ -1243,6 +2656,32 @@ def test_prefill_zeroes_block_table_columns_past_the_prompt(model):
     assert page_table.tolist() == [[10, 11, 0, 0]]
     assert [t.tolist() for t in per_layer] == [[[10, 11, 0, 0]], [[10, 11, 0, 0]]]
     assert stale.tolist() == [[10, 11, 99, 98]]  # the runner's tensor is untouched
+
+    # -- the MTP rail: a reseed of a subset of the record rows carries only their tables
+    # Two rows in steady state and a newcomer: the reseed is the newcomer's own call (its table first,
+    #     zeros after), the replay's table lists every drafting row; the decoder's zero-padding check holds.
+    mh._prefill(mtp, rows=2)
+    mh._ordinary(mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]))
+    mh._propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    drafts = [mtp._mtp_sessions[r].retained.drafts for r in range(2)]
+    mh._prefill(mtp, slot=2, key=40)  # C joins: its first decode is the straddle verify below
+    blocks = [mh._block(30, drafts[0]), mh._block(31, drafts[1]), mh._block(9, [])]
+    mh._verify(
+        mtp,
+        blocks,
+        [mh._positions(3, 6), mh._positions(3, 6), mh._positions(2, 1)],
+        [5, 5, 0],
+        [10, 12, 40],
+        result=_tensor([0, 0, 42]),
+    )
+    committed = [[150, 151, 152, 153, 154, 155], [160, 161, 162, 163, 164, 165], [42] + [-1] * 5]
+    proposal = mh._propose(mtp, committed, [mh._positions(4, 6), mh._positions(4, 6), [3] + [-1] * 5], counts=[6, 6, 1])
+    assert proposal.num_valid.tolist() == [5, 5, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [2], [42], [3])
+    assert mtp._mtp_decoder.reseed_tables[-1] == [[40, 41, 0, 0]] + [[0, 0, 0, 0]] * 4
+    step = mh._steps(mtp)[-1]
+    assert step[2:6] == ([0, 1, 2], [155, 165, 42], [9, 9, 3], [5, 5, None])
+    assert step[7] == [[10, 11, 0, 0], [12, 13, 0, 0], [40, 41, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
 
 
 def test_prefill_masks_per_row_and_leaves_ring_layers_alone(adapter, monkeypatch):
@@ -1273,6 +2712,10 @@ def test_live_row_detection_uses_the_padding_sentinel(adapter):
     assert cls._dflash_live_rows(positions, 4) == [1]
     assert cls._dflash_live_rows(torch.tensor([5, -1, 7]), 3) == [0, 2]
     assert cls._dflash_live_rows(None, 2) == [0, 1]
+    # the retained proposal is a plain record
+    proposal = adapter.RetainedProposal(anchor_token=1, anchor_position=2, drafts=[3], posterior=[4, 5])
+    assert proposal.consumed is False
+    assert (proposal.anchor_token, proposal.anchor_position, proposal.drafts, proposal.posterior) == (1, 2, [3], [4, 5])
 
 
 def test_column_zero_narrowing_shapes_match_the_plain_decode(adapter):
@@ -1300,11 +2743,18 @@ def test_ring_advice_names_the_setting_and_the_resolved_numbers(adapter, monkeyp
     model._dflash_ring_advice()
     assert len(messages) == 1
 
-
-def test_retained_proposal_is_a_plain_record(adapter):
-    proposal = adapter.RetainedProposal(anchor_token=1, anchor_position=2, drafts=[3], posterior=[4, 5])
-    assert proposal.consumed is False
-    assert (proposal.anchor_token, proposal.anchor_position, proposal.drafts, proposal.posterior) == (1, 2, [3], [4, 5])
+    # -- the MTP rail: ring advice names the setting and the resolved numbers
+    messages = []
+    monkeypatch.setattr(adapter.logger, "warning", lambda message, *a, **k: messages.append(message))
+    mtp = mh.build_mtp_model(adapter, monkeypatch, ring=1024)
+    mtp._spec_ring_advice(mtp._SPEC_N, "Gemma4MTP speculative contract")
+    assert len(messages) == 1 and messages[0].startswith("Gemma4MTP speculative contract")
+    assert (
+        "GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16" in messages[0] and "ring 2048" in messages[0] and "P_v=6" in messages[0]
+    )
+    mtp = mh.build_mtp_model(adapter, monkeypatch, ring=2048)
+    mtp._spec_ring_advice(mtp._SPEC_N, "Gemma4MTP speculative contract")
+    assert len(messages) == 1
 
 
 # ===== merged from tests/unit/test_dflash_capture_release.py: Tests for the ``release_persistent_capture`` chain.
@@ -1322,62 +2772,14 @@ def test_contract_rail_releases_its_session_then_the_width_set_then_the_base(mod
     assert model.base_releases == [1]
 
 
-def _block_model(adapter):
-    """A block-rail model with a pending session, a carry and a recording decoder release."""
-    cls = adapter.Gemma4DFlashForCausalLM
-    model = cls.__new__(cls)
-    model.events = []
-    model._spec_pending = ([], 5)
-    model._spec_pending_owner = None
-    model._spec_carry = [1, 2]
-    model._spec_release_decoder = lambda drop_page_tables=True, teardown=False: model.events.append(
-        ("release_decoder", bool(teardown))
-    )
-    return model
+def test_contract_rail_reaches_the_base_when_its_own_release_fails(model, expect_error_dflash_capture_release):
+    _start_solo(model)
 
-
-def test_block_rail_teardown_releases_the_width_set_and_reaches_the_base(adapter):
-    model = _block_model(adapter)
-    model.release_persistent_capture()
-    assert model._spec_pending is None and model._spec_carry == []
-    assert model.events[-1] == ("release_decoder", True)
-    assert model.base_releases == [1]
-
-
-def test_block_rail_reaches_the_base_when_its_own_release_fails(adapter, expect_error_dflash_capture_release):
-    model = _block_model(adapter)
-
-    def failing(*args, **kwargs):
+    def failing(drop_page_tables=True, teardown=False):
         raise RuntimeError("trace release failed")
 
     model._spec_release_decoder = failing
     with expect_error_dflash_capture_release(RuntimeError, "trace release failed"):
-        model.release_persistent_capture()
-    assert model.base_releases == [1]
-
-
-def test_mtp_rail_reaches_the_base(adapter):
-    cls = adapter.Gemma4MTPForCausalLM
-    model = cls.__new__(cls)
-    model._spec_owner_slot = 3
-    calls = []
-    model._spec_release_session = lambda force=False: calls.append(force)
-    model.release_persistent_capture()
-    assert calls == [False]
-    assert model._spec_owner_slot is None
-    assert model.base_releases == [1]
-
-
-def test_mtp_rail_reaches_the_base_when_its_own_release_fails(adapter, expect_error_dflash_capture_release):
-    cls = adapter.Gemma4MTPForCausalLM
-    model = cls.__new__(cls)
-    model._spec_owner_slot = None
-
-    def failing(force=False):
-        raise RuntimeError("session release failed")
-
-    model._spec_release_session = failing
-    with expect_error_dflash_capture_release(RuntimeError, "session release failed"):
         model.release_persistent_capture()
     assert model.base_releases == [1]
 
@@ -1433,7 +2835,7 @@ def test_fused_bootstrap_resets_sampling_before_the_first_proposal_declines(mode
 
 
 @pytest.mark.parametrize("step", ["ordinary", "draftless-verify", "retained-verify"])
-def test_fused_outputs_apply_sampling_commands_and_remap_once_without_drawing(model, step):
+def test_fused_outputs_apply_sampling_commands_and_remap_once_without_drawing(model, step, adapter, monkeypatch):
     sampler = model.model[0].sampling
     if step == "retained-verify":
         _start_solo(model)
@@ -1470,8 +2872,43 @@ def test_fused_outputs_apply_sampling_commands_and_remap_once_without_drawing(mo
     assert sampler.seed_manager.seeds[row] == 17
     assert sampler.seed_manager.positions[row] == position
 
+    # -- the MTP rail: retained answers apply sampling commands and remap once without drawing
+    # Without the resident decode, so that the ordinary step too is answered from the retained proposal.
+    mtp = mh.build_mtp_model(adapter, monkeypatch, resident=False)
+    sampler = mtp.model[0].sampling
+    mh._start_solo(mtp)
+    sampler.seed_manager.events.clear()
+    mtp.sampling_commands.clear()
+    params = _sampling(2, seed=[None, 17])
+    commands = mh._commands()
+    kwargs = dict(sampling_params=params, slot_remap=[1, 0], **commands)
+    if step == "ordinary":
+        mh._ordinary(mtp, [0, 150], [-1, 3], [0, 10], **kwargs)
+    elif step == "draftless-verify":
+        mh._verify(
+            mtp, [[0] + [-1] * 5, mh._block(150, [])], [[-1] * 6, mh._positions(3, 1)], [0, 0], [0, 10], **kwargs
+        )
+    else:
+        mh._verify(
+            mtp,
+            [[0] + [-1] * 5, mh._block(150, [101, 102, 103, 104, 105])],
+            [[-1] * 6, mh._positions(3, 6)],
+            [0, 5],
+            [0, 10],
+            **kwargs,
+        )
+    assert len(_names(mtp, "decode")) == 1, "no device forward for the answered row"
+    assert len(mtp.sampling_commands) == 1
+    assert {name: mtp.sampling_commands[0][name] for name in commands if name != "reload_page_table"} == {
+        name: value for name, value in commands.items() if name != "reload_page_table"
+    }
+    events = sampler.seed_manager.events
+    assert len([event for event in events if event[0] == "remap"]) == 1
+    assert not any(event[0] == "draw" for event in events)
+    assert sampler.seed_manager.seeds[1] == 17 and sampler.seed_manager.positions[1] == 3
 
-def test_retained_fused_output_preserves_false_sampling_commands(model):
+
+def test_retained_fused_output_preserves_false_sampling_commands(model, mtp):
     _start_solo(model)
     sampler = model.model[0].sampling
     before = len(sampler.uploads)
@@ -1492,6 +2929,23 @@ def test_retained_fused_output_preserves_false_sampling_commands(model):
     assert model.sampling_commands[-1]["reload_sampling_params"] is False
     assert model.sampling_commands[-1]["reset_sampling_state"] is False
     assert not any(event[0] in {"reset", "align", "draw"} for event in sampler.seed_manager.events)
+
+    # -- the MTP rail: a logits verify answered from the replay follows the slot remap only
+    sampler = mtp.model[0].sampling
+    mh._start_solo(mtp)
+    sampler.seed_manager.events.clear()
+    mtp.sampling_commands.clear()
+    mh._verify(
+        mtp,
+        [[0] + [-1] * 5, mh._block(150, [101, 102, 103, 104, 105])],
+        [[-1] * 6, mh._positions(3, 6)],
+        [0, 5],
+        [0, 10],
+        mode="logits",
+        slot_remap=[1, 0],
+    )
+    assert [event[0] for event in sampler.seed_manager.events] == ["remap"]
+    assert mtp.sampling_commands == []
 
 
 def test_host_verify_rejection_preserves_seed_state_before_remap(model, expect_error_dflash_sampling_state):
@@ -1759,22 +3213,41 @@ class _RecordingDecoder:
             self._pv_widths[int(width)]["trace"] = object()
         return {int(width): 0.1 for width in widths}
 
+    def measure_widths(self, top_position):
+        captured = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
+        self.events.append(("measure", int(top_position), tuple(captured)))
+        return {w: (0, 40.0 + i, int(top_position), 60.0 + i) for i, w in enumerate(captured)}
 
-@pytest.fixture
-def warm_model(adapter, monkeypatch):
+
+def _warm(adapter, monkeypatch, plain_ms=33.0, env=None):
+    """A contract model whose fused decoder is the recording stub and whose base warmup is a no-op."""
     _RecordingDecoder.instances = []
     monkeypatch.setattr(
         sys.modules["models.demos.gemma4.tt.dflash_drafter"], "DFlashFusedDecoder", _RecordingDecoder, raising=False
     )
-    model = build_model(adapter, monkeypatch)
+    model = build_model(adapter, monkeypatch, env=env)
     model._spec_decoder = None
     model._spec_width_ladder = None
     model.model_args[0].max_seq_len = 4096
-    monkeypatch.setattr(adapter.Gemma4ForCausalLM, "warmup_model_decode", lambda self, *a, **k: "warm", raising=False)
+    model._harness_warmup_model_decode = lambda self, *a, **k: "warm"
+
+    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2, batch=None):
+        batch = int(batch or warmup_kwargs.get("max_batch_size") or model.model_args[0].max_batch_size)
+        model.events.append(("time_plain", list(page_table[:batch].shape), int(position)))
+        return plain_ms + position / 100.0 - (0.0 if batch == 32 else float(batch))
+
+    monkeypatch.setattr(adapter.Gemma4DFlashContractForCausalLM, "_spec_time_plain_step", time_plain_step)
     return model
 
 
-def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(warm_model):
+@pytest.fixture
+def warm_model(adapter, monkeypatch):
+    return _warm(adapter, monkeypatch)
+
+
+def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(
+    warm_model, adapter, monkeypatch, assistant_dir
+):
     model = warm_model
     assert model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64) == "warm"
     assert len(_RecordingDecoder.instances) == 1
@@ -1784,30 +3257,1180 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(wa
     assert model._spec_decoder is dec
     assert model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64) == "warm"
     assert len(_RecordingDecoder.instances) == 1
-    assert [e[0] for e in dec.events] == ["prepare", "capture"]
+    assert [e[0] for e in dec.events] == ["prepare", "capture", "measure"]
     assert dec.events[0][1] == dec.events[1][1] == tuple(model._spec_width_ladder)
 
+    # -- the MTP rail: warmup runs the base buckets then prepares then captures
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
+    built = mh.stub_drafter_modules(monkeypatch, mtp.events)
+    mh._warmup(mtp, False)
+    mh._warmup(mtp, True)
+    kinds = [event[0] for event in mtp.events]
+    # after the capture the policy measures the records (the per-layer tables installed first) and times the
+    # plain step at position 0 and at the top
+    assert kinds == [
+        "base_warmup",
+        "prepare",
+        "base_warmup",
+        "capture",
+        "refresh",
+        "measure",
+        "time_plain",
+        "time_plain",
+    ]
+    assert mtp.events[0] == ("base_warmup", False) and mtp.events[2] == ("base_warmup", True)
+    assert mtp.events[1] == ("prepare", [(1, 5), (5, 5)], 5)  # the default table: K=5 up to 5 live rows
+    assistant = dict(built[0][1])
+    assert built[0][0] == "assistant" and assistant["max_local_batch_size"] == 5  # the table's last max_rows
+    assert assistant["assistant_path"] == assistant_dir and assistant["max_seq_len"] == 1024 + 64
+    decoder = dict(built[1][1])
+    assert built[1][0] == "decoder" and decoder["draft_len"] == 5
+    assert tuple(decoder["page_table_torch"].shape) == (5, 8) and decoder["page_table_torch"].eq(0).all()
+    assert mtp._mtp_captured and mtp._mtp_max_rows == 5 and mtp._mtp_shapes == ((1, 5), (5, 5))
+    assert mtp._mtp_decoder.widths[(1, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
+    assert mtp._mtp_decoder.widths[(5, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
+    # -- the MTP rail: warmup caps the records at the engine batch and the row cap
+    mtp = mh.build_mtp_model(
+        adapter,
+        monkeypatch,
+        warm=False,
+        max_batch_size=6,
+        env={
+            "GEMMA4_ASSISTANT_MODEL": assistant_dir,
+            "GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1",  # a table past the engine batch: capped at (6, 3)
+            "GEMMA4_SPEC_MAX_ROWS": "8",
+            "GEMMA4_SPEC_MAX_ISL": "512",
+            "GEMMA4_SPEC_EXTRA_SHAPES": "5:3",  # the 1-5 row band's second draft length: a candidate, not the default
+        },
+    )
+    mh.stub_drafter_modules(monkeypatch, mtp.events)
+    mh._warmup(mtp, False)
+    assert mtp._mtp_shapes == ((1, 5), (5, 3), (5, 5), (6, 3)) and mtp._mtp_max_rows == 6
+    assert mtp._mtp_table_shapes == ((1, 5), (5, 5), (6, 3))
+    assert mtp._mtp_shape_for(3) == (5, 5) and mtp._mtp_shape_for(6) == (6, 3) and mtp._mtp_shape_for(7) is None
+    assert (5, 3) in mtp._mtp_widths
+    assert mtp._mtp_widths[(1, 5)] == adapter.mtp_pv_width_ladder(512, 5)
+    # -- the MTP rail: a traced only warmup prepares before it captures
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
+    mh.stub_drafter_modules(monkeypatch, mtp.events)
+    mh._warmup(mtp, True)
+    assert [event[0] for event in mtp.events] == [
+        "base_warmup",
+        "prepare",
+        "capture",
+        "refresh",
+        "measure",
+        "time_plain",
+        "time_plain",
+    ]
 
-def test_a_changed_ladder_between_preparation_and_capture_is_refused(warm_model, expect_error_dflash_width_prepare):
+    # -- the acceptance-adaptive policy: the traced warmup measures the cost lines and times the plain step,
+    # the env plain cost skips the timing, and the policy switched off measures nothing (both rails)
+    _dflash_the_traced_warmup_measures_every_captured_width_and_times_the_plain_step(adapter, monkeypatch)
+    _dflash_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch)
+    _dflash_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch)
+    _mtp_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(
+        adapter, monkeypatch, assistant_dir=assistant_dir
+    )
+    _mtp_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch, assistant_dir=assistant_dir)
+    _mtp_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, assistant_dir=assistant_dir)
+
+
+def test_a_changed_ladder_between_preparation_and_capture_is_refused(
+    warm_model, expect_error_dflash_width_prepare, adapter, monkeypatch, expect_error, assistant_dir, tmp_path
+):
     model = warm_model
     model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
     model._spec_width_ladder = [1234]
     with expect_error_dflash_width_prepare(RuntimeError, "widths changed"):
         model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
 
-
-def test_the_block_rail_passes_no_verify_count(adapter, monkeypatch):
-    _RecordingDecoder.instances = []
-    monkeypatch.setattr(
-        sys.modules["models.demos.gemma4.tt.dflash_drafter"], "DFlashFusedDecoder", _RecordingDecoder, raising=False
+    # -- the MTP rail: warmup refuses a second capture and a missing assistant
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
+    mh.stub_drafter_modules(monkeypatch, mtp.events)
+    mh._warmup(mtp, False)
+    mh._warmup(mtp, True)
+    with expect_error(RuntimeError, "captured twice"):
+        mh._warmup(mtp, True)
+    missing = mh.build_mtp_model(
+        adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": str(tmp_path / "none")}
     )
-    cls = adapter.Gemma4DFlashForCausalLM
-    model = cls.__new__(cls)
-    model.model = [object()]
-    model.model_args = [SimpleNamespace(max_seq_len=4096)]
-    model._spec_decoder = None
-    model._spec_width_ladder = None
-    model._spec_horizon = 256
-    model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1])
-    model._spec_capture_width_set([[("k", "v")]], 64, prepare_only=True)
-    assert _RecordingDecoder.instances[0].verify_count is None
+    with expect_error(RuntimeError, "GEMMA4_ASSISTANT_MODEL"):
+        mh._warmup(missing, False)
+
+
+# -- the composed vision class: the taps capture around the multimodal prefill ----------------------
+
+
+def _mm_prefill(model, tokens, prompt_len, *, start=None, key=10, offsets=None, lengths=None, pixel_values=None):
+    """One multimodal prefill call as the plugin makes it: payload plus placeholder metadata per user."""
+    kwargs = dict(
+        tokens=tokens,
+        prompt_lens=[prompt_len],
+        empty_slots=[0],
+        page_table=_table([key]),
+        kv_cache=model.kv_cache,
+        warmup_prefill=False,
+        mm_placeholder_offsets=[offsets],
+        mm_placeholder_lengths=[lengths],
+    )
+    if pixel_values is not None:
+        kwargs["pixel_values"] = [pixel_values]
+    if start is not None:
+        kwargs["start_pos"] = [start]
+    return model.prefill_forward(**kwargs)
+
+
+def _image_prompt(prompt_len, offset, length, image_id=5):
+    tokens = torch.full((1, prompt_len), 7, dtype=torch.int32)
+    tokens[0, offset : offset + length] = image_id
+    return tokens
+
+
+def test_composed_vision_class_keeps_the_dflash_contract_above_the_multimodal_prefill(adapter):
+    cls = adapter.Gemma4DFlashContractVisionForConditionalGeneration
+    contract = adapter.Gemma4DFlashContractForCausalLM
+    mro = cls.__mro__
+    assert mro.index(contract) < mro.index(adapter.Gemma4SpecContractBase) < mro.index(adapter.Gemma4DFlashBase)
+    assert mro.index(adapter.Gemma4DFlashBase) < mro.index(adapter.Gemma4VisionForConditionalGeneration)
+    assert mro.index(adapter.Gemma4VisionForConditionalGeneration) < mro.index(adapter.Gemma4ForCausalLM)
+    assert adapter.SupportsMultiModal in mro
+    # The taps override is the class's prefill, and it reaches the multimodal staging by calling the
+    # base prefill by name, not through super(), so the vision class adds nothing on that path.
+    assert cls.prefill_forward is contract.prefill_forward
+    source = inspect.getsource(contract.prefill_forward)
+    assert "Gemma4ForCausalLM.prefill_forward(self" in source and "super().prefill_forward" not in source
+    assert cls.decode_forward is contract.decode_forward and cls.propose_draft_tokens is contract.propose_draft_tokens
+    assert cls.model_capabilities["supports_spec_decode"] is True
+    registry = sys.modules["vllm.multimodal"].MULTIMODAL_REGISTRY
+    # -- the MTP rail: the composed vision classes keep the contract above the multimodal prefill
+    for name, vision, info in [
+        (
+            "Gemma4MTPContractVisionForConditionalGeneration",
+            "Gemma4VisionForConditionalGeneration",
+            "Gemma4ProcessingInfo",
+        ),
+        (
+            "Gemma4MTPContractUnifiedVisionForConditionalGeneration",
+            "Gemma4UnifiedVisionForConditionalGeneration",
+            "Gemma4UnifiedProcessingInfo",
+        ),
+    ]:
+        cls = getattr(adapter, name)
+        contract = adapter.Gemma4MTPContractForCausalLM
+        vision_cls = getattr(adapter, vision)
+        mro = cls.__mro__
+        assert mro.index(contract) < mro.index(adapter.Gemma4SpecContractBase) < mro.index(vision_cls)
+        assert mro.index(vision_cls) < mro.index(adapter.Gemma4ForCausalLM)
+        assert adapter.SupportsMultiModal in mro
+        # The contract's prefill_forward is the override; the next definition in the MRO is the
+        # multimodal-staging base prefill, untouched by the vision classes.
+        assert cls.prefill_forward is contract.prefill_forward
+        after = [c for c in mro[mro.index(contract) + 1 :] if "prefill_forward" in c.__dict__]
+        assert after[0] is adapter.Gemma4ForCausalLM
+        assert cls.decode_forward is contract.decode_forward
+        assert cls.propose_draft_tokens is contract.propose_draft_tokens
+        assert cls.model_capabilities["supports_spec_decode"] is True
+        if not isinstance(registry, SimpleNamespace):
+            factory = cls.__dict__["_processor_factory"]
+            assert factory.info is getattr(adapter, info)
+            assert factory.processor is adapter.Gemma4MultiModalProcessor
+            assert factory.dummy_inputs is adapter.Gemma4DummyInputsBuilder
+    cls, contract = adapter.Gemma4DFlashContractVisionForConditionalGeneration, adapter.Gemma4DFlashContractForCausalLM
+    if isinstance(registry, SimpleNamespace):
+        pytest.skip("vLLM absent: the registry is the conftest stub; registration is checked on the vLLM runners")
+    factory = cls.__dict__["_processor_factory"]
+    assert factory.info is adapter.Gemma4ProcessingInfo and factory.processor is adapter.Gemma4MultiModalProcessor
+
+
+def test_an_image_prefill_captures_taps_over_the_prefilled_rows_like_a_text_prefill(adapter, monkeypatch):
+    text = build_model(adapter, monkeypatch)
+    _prefill(text, prompt_len=8, key=10)
+    vision = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    vision.is_multimodal = True
+    vision.image_token_id = 5
+    _mm_prefill(vision, _image_prompt(8, 1, 4), 8, offsets=[1], lengths=[4], pixel_values=[torch.zeros(4, 8)])
+    for model in (text, vision):
+        taps, end = model._spec_pending
+        assert end == 8 and [tap.shape for tap in taps] == [(1, 1, 8, 8), (1, 1, 8, 8)]
+        assert _names(model, "capture")[-2:] == [("capture", [1, 2]), ("capture", None)]
+    # The multimodal payload and placeholder metadata reached the base prefill untouched, eagerly.
+    assert {"pixel_values", "mm_placeholder_offsets", "mm_placeholder_lengths"} <= set(vision.prefill_kwargs[-1])
+    assert _names(vision, "prefill") == [("prefill", 1, [8], False)]
+
+
+def test_a_continuation_whose_restart_the_base_moves_into_a_vision_item_is_not_speculable(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    model.is_multimodal = True
+    model.image_token_id = 5
+    _mm_prefill(model, _image_prompt(256, 10, 20), 256, offsets=[10], lengths=[20])
+    assert model._spec_pending[1] == 256
+    # A continuation at the SDPA-aligned 256 that cuts no item keeps the taps and extends them.
+    _mm_prefill(model, _image_prompt(400, 10, 20), 400, start=256, offsets=[10], lengths=[20])
+    taps, end = model._spec_pending
+    assert end == 400 and [tap.shape[2] for tap in taps] == [256, 256, 144, 144]
+    # A continuation at 256 cutting the image run [200, 300) is restarted at 128 by the base, which
+    # re-prefills rows 128..255: their taps would repeat, so the chunk runs without speculation.
+    model = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    model.is_multimodal = True
+    model.image_token_id = 5
+    _mm_prefill(model, _image_prompt(256, 10, 20), 256, offsets=[10], lengths=[20])
+    _mm_prefill(model, _image_prompt(400, 200, 100), 400, start=256, offsets=[200], lengths=[100])
+    assert model._spec_pending is None
+    assert _names(model, "capture")[-1] == ("capture", None)
+    assert _names(model, "prefill")[-1] == ("prefill", 1, [400], False), "the base prefill still runs"
+
+
+# ===== ctx-cache commit: every local KV head is merged (TP8 one head, TP4 two, replicated eight)
+def test_commit_ctx_caches_gathers_every_local_kv_head(drafter_module, monkeypatch):
+    """TP8 keeps the one-gather graph; TP4 (two local KV heads) and the replicated
+    drafter gather each head through the shared row map, stack the heads on dim 1
+    and write the whole cache (the old graph refused more than one head)."""
+    for local_kv in (1, 2, 8):
+        _commit_ctx_caches_case(drafter_module, monkeypatch, local_kv)
+
+
+def _commit_ctx_caches_case(drafter_module, monkeypatch, local_kv):
+    runtime = sys.modules["ttnn"]
+    calls = []
+
+    class T:
+        def __init__(self, shape, tag):
+            self.shape = tuple(shape)
+            self.tag = tag
+            self.freed = False
+
+        def __getitem__(self, idx):
+            head = idx[1]
+            calls.append(("slice", self.tag, head.start))
+            return T((self.shape[0], 1) + self.shape[2:], f"{self.tag}[{head.start}]")
+
+        def deallocate(self, force=False):
+            self.freed = True
+
+    def concat(ts, dim):
+        calls.append(("concat", dim, tuple(t.tag for t in ts)))
+        shape = list(ts[0].shape)
+        shape[dim] = sum(t.shape[dim] for t in ts)
+        return T(shape, "cat")
+
+    def reshape(t, shape):
+        calls.append(("reshape", tuple(shape)))
+        return T(shape, "view")
+
+    def embedding(idx, table, layout=None):
+        calls.append(("embedding", table.shape))
+        return T((1, idx.shape[1], table.shape[1]), "gathered")
+
+    def assign(src, dst):
+        calls.append(("assign", src.shape, dst.tag))
+
+    for name, fn in (("concat", concat), ("reshape", reshape), ("embedding", embedding), ("assign", assign)):
+        monkeypatch.setattr(runtime, name, fn, raising=False)
+
+    cls = drafter_module.DFlashFusedDecoder
+    dec = cls.__new__(cls)
+    cap, P_v, hd, layers = 2048, 6, 128, 2
+    dec.cap, dec.P_v = cap, P_v
+    dec.drafter = SimpleNamespace(local_kv=local_kv, head_dim=hd)
+    dec.merge_idx = T((1, cap), "merge_idx")
+    dec.ctx_k = [T((1, local_kv, cap, hd), f"k{li}") for li in range(layers)]
+    dec.ctx_v = [T((1, local_kv, cap, hd), f"v{li}") for li in range(layers)]
+    kv_new = [(T((1, local_kv, P_v, hd), f"kn{li}"), T((1, local_kv, P_v, hd), f"vn{li}")) for li in range(layers)]
+
+    dec._commit_ctx_caches(kv_new)
+
+    assigns = [c for c in calls if c[0] == "assign"]
+    assert [c[2] for c in assigns] == ["k0", "v0", "k1", "v1"]
+    assert all(c[1] == (1, local_kv, cap, hd) for c in assigns), "the whole cache is written"
+    gathers = [c for c in calls if c[0] == "embedding"]
+    assert len(gathers) == 2 * layers * local_kv
+    assert all(c[1] == (cap + P_v, hd) for c in gathers), "one head's [cache | new] rows per gather"
+    sliced_heads = sorted({c[2] for c in calls if c[0] == "slice"})
+    assert sliced_heads == list(range(local_kv))
+    head_stacks = [c for c in calls if c[0] == "concat" and c[1] == 1]
+    assert len(head_stacks) == (0 if local_kv == 1 else 2 * layers)
+    assert all(len(c[2]) == local_kv for c in head_stacks)
+    assert all(t.freed for layer in kv_new for t in layer)
+
+
+# ===== packed verify page tables follow vLLM's KV-cache group slots (not the layer type)
+def test_packed_verify_slot_sources_hand_every_group_its_own_table(drafter_module):
+    """vLLM-grouped per-layer tables with distinct block ids per group: each slot
+    reads its own group's row; with nothing installed every slot reads the flat
+    table; a slot whose layer has no installed table falls back to the flat row.
+    Then the slot-row padding rule and the K-cache source rule of the same page-table path."""
+    from models.demos.gemma4.tt.spec_decode import serving_kv_group_slots
+
+    types = (["sliding_attention"] * 5 + ["full_attention"]) * 8
+    slots, n_slots = serving_kv_group_slots(types)
+    assert n_slots == 6
+    blocks = 16
+    installed = [torch.arange(blocks, dtype=torch.int64).reshape(1, blocks) + 1000 * slots[i] for i in range(48)]
+    flat = torch.full((1, blocks), 7, dtype=torch.int64)
+
+    sources = drafter_module.packed_verify_slot_sources(installed, flat, slots)
+    assert len(sources) == n_slots
+    for slot, src in enumerate(sources):
+        assert torch.equal(src, installed[slots.index(slot)][0]), f"slot {slot}"
+    # every layer resolves to its own group's ids through its slot
+    for i in range(48):
+        assert int(sources[slots[i]][0]) == 1000 * slots[i], f"layer {i}"
+    # the old per-type rule would have read layer 0's row for layer 1
+    assert not torch.equal(sources[slots[1]], installed[0][0])
+
+    assert all(torch.equal(src, flat[0]) for src in drafter_module.packed_verify_slot_sources(None, flat, slots))
+    partial = list(installed)
+    partial[1] = None  # slot 1's first layer has no table -> flat
+    assert torch.equal(drafter_module.packed_verify_slot_sources(partial, flat, slots)[1], flat[0])
+
+    # the slot row pads and never clamps
+    src = torch.arange(5, dtype=torch.int64) + 1
+    padded = drafter_module.packed_verify_slot_row(src, 8)
+    assert padded.shape == (1, 8) and padded.dtype == torch.int32
+    assert padded[0].tolist() == [1, 2, 3, 4, 5, 0, 0, 0]
+    clipped = drafter_module.packed_verify_slot_row(src, 3)
+    assert clipped[0].tolist() == [1, 2, 3]
+    # The K cache prefers the served caches and tolerates None: under vLLM the attention modules' own
+    # kv_cache is None and the decoder verifies through the served per-layer [k, v] list; the demo paths
+    # hand caches per forward and get None (block 64).
+    served = [["k0", "v0"], ["k1", "v1"]]
+    layer_with_own = SimpleNamespace(self_attn=SimpleNamespace(kv_cache=["own_k", "own_v"]))
+    layer_without = SimpleNamespace(self_attn=SimpleNamespace(kv_cache=None))
+    f = drafter_module.packed_verify_k_cache
+    assert f(served, layer_without, 1) == "k1"
+    assert f(served, layer_with_own, 0) == "k0"
+    assert f(None, layer_with_own, 0) == "own_k"
+    assert f(None, layer_without, 0) is None
+    assert f([[None, None]], layer_without, 0) is None
+    assert f(served, layer_without, 5) is None
+
+
+# -- the acceptance-adaptive policy (tt/spec_policy.py) on this rail: helpers the tests above call as blocks
+
+
+# -- the acceptance-adaptive policy on this rail (tt/spec_policy.py) ------------------------------
+
+# The 31B CI leg: 46.9 ms per fused replay against the ~34 ms plain step (1.38x), one width rung.
+DFLASH_STEP_MS = 46.9
+DFLASH_PLAIN_MS = 34.0
+
+
+def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
+    """Install the cost table the traced warmup would have measured: one record, ``(1, 5)``, per width (flat
+    in the position)."""
+    model._spec_decoder.costs = {1024: float(step_ms)}
+    model._spec_costs = {("step", (1, 5), 1024): CostLine.flat(step_ms)}
+    model._spec_plain_cost = {32: CostLine.flat(plain_ms)}
+    return model
+
+
+def _costed(adapter, monkeypatch, served=True):
+    """A contract model with the CI leg's costs, a three-step retry at a 1.2 overhead (the cycle: the bootstrap
+    replay and one record step) and no probe, on a rung whose exploration bucket is full (``served``; False: a
+    cold rung, whose bucket admits no entry yet)."""
+    env = {
+        "GEMMA4_SPEC_RETRY_STEPS": "3",
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "1.2",  # the gate charges the whole one-step trial cycle
+        "GEMMA4_SPEC_PROBE_STEPS": "0",
+        "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
+        "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
+        "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
+    }
+    return _served(_with_costs(build_model(adapter, monkeypatch, env=env)), served)
+
+
+def _served(model, full=True):
+    """``model`` on an engine whose rungs served plain time enough: every rung's exploration bucket is full
+    (``SpecPolicy.rung_bucket``; the first plain decision caps it at the rung's capacity) and admits a reseeding
+    entry, as a cold rung's does not."""
+    if not full:
+        return model
+    for key in model._spec_costs or {}:
+        if key[0] == "step":
+            model._spec_policy.rung_bucket[int(key[2])] = 1e6
+    return model
+
+
+def _inform_prior(model, cond):
+    """Give the batch prior the conditionals ``cond`` as if every position had been observed many times (an
+    engine that served other requests before: its evidence, not the new row's own, is what a row blends with)."""
+    prior = model._spec_policy.prior
+    prior.cond = list(cond)
+    prior.informed = [True] * len(cond)
+    prior.observed = [100] * len(cond)
+
+
+def _dflash_rounds(model, accepted_per_round, key=10):
+    """Drive one solo request in the runner's order: per round the drafts its verify accepts (unused once
+    the session has ended and the row runs plain). Returns the draft length every proposal offered, the
+    first one right after the bootstrap; 0 is a plain step."""
+    proposal = _start_solo(model, key=key)
+    anchor, pos = 150, 3
+    offered = [int(proposal.num_valid[0])]
+    for accepted in accepted_per_round:
+        k = offered[-1]
+        if k:
+            drafts = proposal.draft_token_ids[0, :k].tolist()
+            out = _verify(model, [[anchor] + drafts], [list(range(pos, pos + 1 + k))], [k], keys=[key])
+            ids = out.argmax_ids[0].tolist()
+            n = min(int(accepted), k) + 1
+            committed = ids[:n] + [-1] * (6 - n)
+            positions = list(range(pos + 1, pos + 1 + n)) + [-1] * (6 - n)
+            proposal = _propose(model, [committed], [positions], counts=[n])
+            anchor, pos = ids[n - 1], pos + n
+        else:
+            assert _ordinary(model, [anchor], [pos], [key], result="device") == "device"
+            anchor, pos = anchor + 1, pos + 1
+            proposal = _propose(model, [[anchor] + [-1] * 5], [[pos] + [-1] * 5])
+        offered.append(int(proposal.num_valid[0]))
+    return offered
+
+
+def _dflash_without_a_cost_table_every_solo_greedy_request_speculates_and_a_warning_says_so_once(
+    adapter, monkeypatch, expect_error=None
+):
+    model = build_model(adapter, monkeypatch)
+    warned = []
+    monkeypatch.setattr(adapter.logger, "warning", lambda message, *a, **k: warned.append(str(message)))
+    _inform_prior(model, [0.0] * 5)  # with a table the policy would never start a session
+    assert _dflash_rounds(model, [0, 0, 0]) == [5, 5, 5, 5]
+    assert warned == [
+        "Gemma4DFlash adaptive K: no cost table (the warmup measured none and GEMMA4_SPEC_PLAIN_STEP_MS is "
+        "unset); speculation runs as without the policy"
+    ]
+
+
+def _dflash_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(
+    adapter, monkeypatch, expect_error=None
+):
+    """The optimistic prior's one-step trial draws on the rung's exploration bucket like every reseeding entry:
+    priced at every draft rejected (the bootstrap 46.9 and the step's 46.9 - 34 = 59.8 ms) it needs two plain
+    steps' refill at the fixture's 1.2 overhead (40.8 ms each), so a cold rung's first request runs plain
+    (reason "budget", the taps dropped) and two plain proposals later the next request bootstraps; with the
+    rung's bucket full the first request does at once, and its verify's counts feed the row's and the prior's
+    EWMAs."""
+    cold = _costed(adapter, monkeypatch, served=False)
+    _prefill(cold, prompt_len=2, key=10)
+    assert _ordinary(cold, [3], [2], [10], result="device") == "device" and _names(cold, "bootstrap") == []
+    assert cold._spec_policy.last_reason == "budget" and cold._spec_policy.rung_bucket == {1024: 0.0}
+    for pos in (3, 4):
+        proposal = _propose(cold, [[pos] + [-1] * 5], [[pos] + [-1] * 5])
+        assert proposal.num_valid.tolist() == [0]
+    assert cold._spec_policy.rung_bucket == {1024: pytest.approx(2 * 1.2 * 34.0)}
+    cold.release_request(0)
+    assert _dflash_rounds(cold, [2], key=20) == [5, 5], "the budget covers the trial: the bootstrap"
+    costed = _costed(adapter, monkeypatch)
+    assert _dflash_rounds(costed, [2]) == [5, 5]  # the verify carried 5 drafts and committed 3 tokens
+    stats = costed._dflash_stats
+    assert stats.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.ewma_accepted == 2.0 and stats.spec_steps == 1
+    assert costed._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]), "the batch prior learns too"
+    assert costed._dflash_retained.verified == 0, "the new proposal is not verified yet"
+
+
+def _dflash_rejections_end_the_session_and_the_request_runs_plain(adapter, monkeypatch, expect_error=None):
+    """From a 0.35 prior (1.53 tokens at 1.38x = 1.11x) the session starts; the record's own steps decide the
+    hold: the first verify commits one token (1.0 a step at 1.38x = 0.72x, below the exit gain, held once),
+    the second too, and the third proposal is the plain step: the session ends and every later step of the
+    request is the base decode. (Before the run credit the per-position EWMA at 0.1 held it seven steps.)"""
+    costed = _costed(adapter, monkeypatch)
+    _inform_prior(costed, [0.35] * 5)
+    assert _dflash_rounds(costed, [0] * 9) == [5, 5] + [0] * 8
+    assert len(_names(costed, "replay")) == 3 and len(_names(costed, "release_decoder")) == 1
+    assert _names(costed, "decode") == [("decode", [350 + i], [5 + i]) for i in range(7)]
+    assert not costed._spec_active and costed._dflash_stats is None
+    prior = costed._spec_policy.prior
+    assert prior.effective_cond(5) == pytest.approx([0.35 * 0.9**2] + [0.35] * 4)
+    assert costed._spec_policy.declined == 8, "the exit and the seven plain steps count toward the retry"
+    # the instrumentation: every closed interval is one step of the mode the proposal decided
+    calib = costed._spec_policy.calibration
+    assert calib.modes[("step", (1, 5), 1024)].steps == 2 and calib.modes[("plain", 32)].steps == 7
+    assert calib.reseeds[(1, 5)][0] == 1, "the bootstrap is the entry, measured once"
+    assert costed._spec_policy.request_steps == 3.0, "the ended session's steps feed the entry horizon"
+    assert calib.phases["replay"][0] == 2 and calib.phases["refresh"][0] == 3 and calib.phases["host"][0] == 10
+    assert all(stats.wall_sum >= 0.0 for stats in calib.modes.values())
+    assert calib.last_run_mean(("step", (1, 5), 1024)) == 1.0, "the run that failed"
+
+
+def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_proposal_is_the_retry(
+    adapter, monkeypatch, expect_error=None
+):
+    costed = _costed(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    _inform_prior(costed, [0.35] * 5)
+    _dflash_rounds(costed, [0] * 9)
+    costed.release_request(0)
+    _prefill(costed, key=20)
+    # the retry cycle, as served: the bootstrap replay plus one step less the plain step (59.8) and one record
+    # step as a loss (12.9), 72.7 ms over the eight plain steps since = 0.27 of them, within the fixture's 1.2
+    first = _ordinary(costed, [3], [2], [20])
+    assert len(_names(costed, "bootstrap")) == 2, "the retry is due: the session starts"
+    proposal = _propose(costed, [[int(first[0])] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and costed._spec_policy.declined == 0 and costed._spec_policy.trial
+    lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
+    assert lines[0] == (
+        "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted "
+        "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0, "
+        "pool none), gain 1.11x"
+    )
+    assert lines[1].startswith(
+        "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=5); EWMA accepted 0."
+    )
+    assert "(retry; was K=0)" in lines[2] and "gain 1.04x" in lines[2]
+    # another rejection: the trial's own step commits one token (0.72x), the policy declines at once and the
+    # request runs plain
+    anchor = int(first[0])
+    drafts = proposal.draft_token_ids[0, :5].tolist()
+    out = _verify(costed, [[anchor] + drafts], [list(range(3, 9))], [5], keys=[20])
+    ids = out.argmax_ids[0].tolist()
+    proposal = _propose(costed, [[ids[0]] + [-1] * 5], [[4] + [-1] * 5], counts=[1])
+    assert proposal.num_valid.tolist() == [0] and not costed._spec_active
+
+
+def _dflash_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_would_not_pay(
+    adapter, monkeypatch, expect_error=None
+):
+    # 1.43 expected tokens at 1.38x the plain step: 1.03x, below the entry margin but above the trial gain: the
+    # bootstrap is the request's one trial, logged as such, and one rejection ends the session
+    costed = _costed(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    _inform_prior(costed, [0.3] * 5)
+    _prefill(costed, prompt_len=2, key=10)
+    assert _ordinary(costed, [3], [2], [10], result="device") != "device"
+    assert len(_names(costed, "bootstrap")) == 1
+    proposal = _propose(costed, [[9] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and costed._spec_policy.trial
+    lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
+    assert "(trial; was none)" in lines[0] and "gain 1.03x" in lines[0]
+    drafts = proposal.draft_token_ids[0, :5].tolist()
+    out = _verify(costed, [[9] + drafts], [list(range(3, 9))], [5], keys=[10])
+    ids = out.argmax_ids[0].tolist()
+    proposal = _propose(costed, [[ids[0]] + [-1] * 5], [[4] + [-1] * 5], counts=[1])
+    assert proposal.num_valid.tolist() == [0] and not costed._spec_active and costed._spec_policy.declined == 1
+    # below the trial gain (1.11 expected tokens at 2.06x: 0.54x) the bootstrap is skipped: the taps are
+    # dropped and the request runs plain from its first step
+    costed = _with_costs(_costed(adapter, monkeypatch), step_ms=70.0)
+    _inform_prior(costed, [0.1] * 5)
+    _prefill(costed, prompt_len=2, key=10)
+    assert costed._spec_pending is None and costed.model[0].tap_layers is None, "no taps: the prior declines"
+    assert _ordinary(costed, [3], [2], [10], result="device") == "device"
+    assert _names(costed, "bootstrap") == [] and _names(costed, "replay") == []
+    assert costed._spec_pending is None
+    proposal = _propose(costed, [[9] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [0] and costed._spec_policy.declined == 1
+
+
+def _dflash_the_cost_table_is_consumed_as_measured(adapter, monkeypatch, expect_error=None):
+    """The same prior starts a session at the CI leg's replay cost (1.43x: the entry band), not at a dearer one
+    (0.96x: above the trial gain, but 1.97 tokens at 70 ms save nothing, so the bootstrap cannot pay) and not
+    at all below the trial gain."""
+    for step_ms, cond, bootstraps in ((46.9, 0.5, True), (70.0, 0.5, False), (70.0, 0.1, False)):
+        model = _served(_with_costs(build_model(adapter, monkeypatch), step_ms=step_ms))
+        _inform_prior(model, [cond] * 5)  # 1.97 expected tokens: 1.43x at 46.9 ms, 0.96x at 70 ms; 1.11: 0.54x
+        _prefill(model, prompt_len=2, key=10)
+        out = _ordinary(model, [3], [2], [10], result="device")
+        assert (len(_names(model, "bootstrap")) == 1) is bootstraps, (step_ms, cond)
+        assert (out == "device") is not bootstraps
+
+
+def _dflash_adaptive_off_keeps_the_rail_as_before_whatever_the_table_says(adapter, monkeypatch, expect_error=None):
+    model = _with_costs(build_model(adapter, monkeypatch, env={"GEMMA4_SPEC_ADAPTIVE": "0"}))
+    _inform_prior(model, [0.0] * 5)
+    assert _dflash_rounds(model, [0] * 7) == [5] * 8
+
+
+def _dflash_the_session_summary_reports_the_accepted_drafts_ewma(adapter, monkeypatch, expect_error=None):
+    costed = _costed(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    _dflash_rounds(costed, [5, 3])
+    costed.release_request(0)
+    assert [m for m in messages if "contract summary" in m] == [
+        "Gemma4DFlash contract summary: 3 steps, 11 tokens, 3.67 tokens/step, 4.80 accepted drafts/verify (EWMA over 2)"
+    ]
+
+
+def _dflash_the_composed_vision_rail_shares_the_policy(adapter, monkeypatch, expect_error=None):
+    vision = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    _with_costs(vision, step_ms=70.0)
+    _inform_prior(vision, [0.1] * 5)  # 1.11 expected tokens at 2.06x: 0.54x, below the trial gain
+    _prefill(vision, prompt_len=2, key=10)
+    assert _ordinary(vision, [3], [2], [10], result="device") == "device" and _names(vision, "bootstrap") == []
+
+
+def _dflash_the_traced_warmup_measures_every_captured_width_and_times_the_plain_step(
+    adapter, monkeypatch, expect_error=None
+):
+    warm_model = _warm(adapter, monkeypatch)
+    model = warm_model
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    assert model._spec_costs is None and _names(model, "time_plain") == []
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    ladder = sorted(model._spec_width_ladder)
+    top = 4096 - 6  # the context minus one verify block: every cost is a line from position 0 to here
+    assert model._spec_costs == {
+        ("step", (1, 5), w): CostLine(0, 40.0 + i, top, 60.0 + i) for i, w in enumerate(ladder)
+    }
+    assert model._spec_plain_cost == {32: CostLine(0, 33.0, top, 33.0 + top / 100.0)}
+    assert _names(_RecordingDecoder.instances[0], "measure") == [("measure", top, tuple(ladder))]
+    assert _names(model, "time_plain") == [
+        ("time_plain", [32, 64], 0),
+        ("time_plain", [32, 64], top),
+    ], "the decode warmup's zero table (batch x blocks) at position 0 and at the top"
+    model.release_persistent_capture()
+    assert model._spec_costs is None and model._spec_plain_cost is None
+    # every warmed decode bucket gets its own plain line (the bucket of a step's live rows is its prior)
+    model = _warm(adapter, monkeypatch)
+    model.tt_supported_decode_batch_sizes = (1, 8, 32)
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    assert [e[1] for e in _names(model, "time_plain")] == [[1, 64], [1, 64], [8, 64], [8, 64], [32, 64], [32, 64]]
+    assert model._spec_plain_cost == {
+        1: CostLine(0, 32.0, top, 32.0 + top / 100.0),
+        8: CostLine(0, 25.0, top, 25.0 + top / 100.0),
+        32: CostLine(0, 33.0, top, 33.0 + top / 100.0),
+    }
+    assert [model._spec_plain_bucket(n) for n in (1, 2, 8, 9, 32, 40)] == [1, 8, 8, 32, 32, 32]
+    assert model._spec_plain_ms_for(2, 0) == (25.0, 8)
+
+
+def _dflash_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch, expect_error=None):
+    model = _warm(adapter, monkeypatch, env={"GEMMA4_SPEC_PLAIN_STEP_MS": "35.5"})
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    assert model._spec_plain_cost == {32: CostLine(0, 35.5, 4096 - 6, 35.5)} and _names(model, "time_plain") == []
+
+
+def _dflash_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, expect_error=None):
+    model = _warm(adapter, monkeypatch, env={"GEMMA4_SPEC_ADAPTIVE": "0"})
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    assert [e[0] for e in _RecordingDecoder.instances[0].events] == ["prepare", "capture"]
+    assert model._spec_costs is None and model._spec_plain_cost is None
+
+
+# -- the acceptance-adaptive policy on the MTP rail (through ``mh``): helpers the tests above call as blocks
+
+
+# -- the acceptance-adaptive record choice (tt/spec_policy.py through the adapter) ---------------
+
+# Scripted step costs per record; with the plain step at mh.PLAIN_MS = 20 they are 2.5x / 2.5x / 1.75x / 1.5x.
+MTP_STEP_MS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
+
+
+def _mtp_adaptive(adapter, monkeypatch, env=None):
+    """A model with the scripted cost table, a three-step retry at a 0.4 overhead (the cycle: the reseed interval
+    and one record step) and no probe."""
+    # the pinned sequences read the scripted table: the host walls never calibrate a mode
+    env = {
+        "GEMMA4_SPEC_RETRY_STEPS": "3",
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.4",  # the gate charges the whole one-step trial cycle
+        "GEMMA4_SPEC_PROBE_STEPS": "0",
+        "GEMMA4_SPEC_CALIB_MIN": "1000",
+        "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
+        **(env or {}),
+    }
+    model = mh.build_mtp_model(adapter, monkeypatch, env=env)
+    mh.install_decoder(model, step_ms=MTP_STEP_MS, plain_ms=mh.PLAIN_MS)
+    return _served(model)
+
+
+def _mtp_rounds(mtp, accepted_per_round):
+    """Drive one request in the runner's order: per round the drafts its verify accepts (unused on a plain
+    step). Returns the draft length every proposal offered, the first one from the prior; 0 is a plain step."""
+    proposal = mh._start_solo(mtp)
+    anchor, pos = 150, 3
+    offered = [int(proposal.num_valid[0])]
+    for accepted in accepted_per_round:
+        k = offered[-1]
+        if k:
+            drafts = proposal.draft_token_ids[0, :k].tolist()
+            out = mh._verify(mtp, [mh._block(anchor, drafts)], [mh._positions(pos, 1 + k)], [k], [10])
+            ids = out.argmax_ids[0].tolist()
+            n = min(int(accepted), k) + 1
+            proposal = mh._propose(mtp, [ids[:n] + [-1] * (6 - n)], [mh._positions(pos + 1, n)], counts=[n])
+            anchor, pos = ids[n - 1], pos + n
+        else:
+            out = mh._ordinary(mtp, [anchor], [pos], [10], result=_tensor([anchor + 1]))
+            anchor, pos = int(out[0]), pos + 1
+            proposal = mh._propose(mtp, [[anchor] + [-1] * 5], [[pos] + [-1] * 5])
+        offered.append(int(proposal.num_valid[0]))
+    return offered
+
+
+def _mtp_the_first_proposal_speculates_from_the_optimistic_prior_and_high_acceptance_keeps_k5(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    assert _mtp_rounds(adaptive, [5, 5]) == [5, 5, 5]
+    assert [s[1] for s in mh._steps(adaptive)] == [(1, 5)] * 3
+    stats = adaptive._mtp_sessions[0].stats
+    assert stats.cond == [1.0] * 5 and stats.ewma_accepted == 5.0 and stats.spec_steps == 2
+
+
+def _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_counts_at_once(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    """Prior 0.3 at every position, the records costed as a one-row step on the device. With the (1,5) at 34 ms
+    against a 20 ms plain step (1.43 expected tokens = 0.84x, below the entry band, above the trial gain) and
+    a 170 ms reseed the first proposal is NO trial: 1.43 tokens at 34 ms save nothing, so the reseed cannot
+    pay, and the request runs plain (the 12B QB2 random c1 ran one such trial per request, 2026-10-30). With
+    the (1,5) at 26 ms (1.30x: 1.10x on the prior, under the 1.25 bar) and a 100 ms reseed the saving, 2.6 ms
+    a step over the 64-step horizon, covers the reseed: the first proposal replays it as the trial. Five
+    accepted drafts blend 0.4 x 1.0 + 0.6 x 0.43 = 0.66 into every position (2.5 tokens, 1.9x: the entry band)
+    and the request speculates on; a rejection blends to 0.20 (1.29 tokens, 0.99x: held once by the model),
+    the record's own next steps commit one token each (0.77x) and the request runs plain, no retry until the
+    cadence allows."""
+    reseeds = {(1, 5): 170.0, (5, 5): 200.0, (8, 3): 250.0, (16, 1): 300.0}
+    steps = {(1, 5): 34.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
+    model = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_MIN_GAIN": "1.10"})  # the 1.22x entry band
+    mh.install_decoder(model, step_ms=steps, plain_ms=mh.PLAIN_MS)
+    model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in reseeds.items()})
+    _inform_prior(model, [0.3] * 5)
+    mh._prefill(model)
+    mh._ordinary(model, [3], [2], [10], result=_tensor([150]))
+    proposal = mh._propose(model, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [0] and model._spec_policy.last_reason == "declined"
+    assert not model._mtp_sessions[0].trialed and mh._steps(model) == [], "the reseed cannot pay: no trial"
+    paying = {(1, 5): 100.0, (5, 5): 200.0, (8, 3): 250.0, (16, 1): 300.0}
+    cheaper = {(1, 5): 26.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
+    outcomes = {}
+    for name, rounds in (("accepted", [5, 5]), ("rejected", [0, 0, 0])):
+        model = _mtp_adaptive(adapter, monkeypatch)
+        mh.install_decoder(model, step_ms=cheaper, plain_ms=mh.PLAIN_MS)
+        model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in paying.items()})
+        messages = []
+        monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+        monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+        _inform_prior(model, [0.3] * 5)
+        offered = _mtp_rounds(model, rounds)
+        policy = model._spec_policy
+        outcomes[name] = (
+            offered,
+            [m for m in messages if m.startswith("Gemma4MTP adaptive K:")],
+            policy.last_reason,
+            policy.trial,
+            model._mtp_sessions[0].stats.effective_cond(5),
+        )
+        assert model._mtp_sessions[0].trialed
+    offered, lines, reason, trial, cond = outcomes["accepted"]
+    assert offered == [5, 5, 5] and "(trial; was none)" in lines[0] and "gain 1.10x" in lines[0]
+    assert "entry 100.0 ms" in lines[0] and len(lines) == 1 and reason == "gain" and not trial
+    assert cond == pytest.approx([0.4 * 1.0 + 0.6 * 0.433] * 5, abs=1e-3), "two own observations: 0.4 own, 0.6 prior"
+    offered, lines, reason, trial, cond = outcomes["rejected"]
+    assert offered == [5, 5, 5, 0] and "(trial; was none)" in lines[0] and reason == "exit" and not trial
+    assert "-> plain step (exit; was K=5)" in lines[1] and "per-position 0.22/0.30/0.30/0.30/0.30" in lines[1]
+
+
+def _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_drafts(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    _mtp_rounds(adaptive, [2])  # the verify carried 5 drafts and committed 3 tokens: 2 accepted, the third rejected
+    stats = adaptive._mtp_sessions[0].stats
+    assert stats.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.ewma_accepted == 2.0
+    assert adaptive._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]), "the batch prior learns too"
+    # one own observation at draft 3 (a rejection): the prior's only evidence there is this row's, so the
+    # row's outcome counts alone, and the unobserved tail is capped by it
+    assert stats.effective_cond(5) == pytest.approx([1.0, 1.0, 0.0, 0.0, 0.0])
+    assert adaptive._mtp_sessions[0].retained.verified == 0, "the new proposal is not verified yet"
+
+
+def _mtp_a_draftless_verify_and_an_ordinary_step_observe_nothing(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    mh._start_solo(adaptive)
+    mh._verify(adaptive, [mh._block(150, [])], [mh._positions(3, 1)], [0], [10])  # answered from the retained column 0
+    mh._propose(adaptive, [[150, 151, -1, -1, -1, -1]], [mh._positions(4, 2)], counts=[2])
+    stats = adaptive._mtp_sessions[0].stats
+    assert stats.spec_steps == 0 and stats.ewma_accepted is None and stats.cond == [1.0] * 5
+
+
+def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_plain_steps(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    """One verify at five accepted, then rejections of the first draft only, with 20 ms reseeds. The optimistic
+    prior's first proposal is a one-step trial of (1,5); the per-position EWMA at 0.1 keeps (8,3) (1.75x) the
+    best record, then (16,1) is held, and the record's OWN steps (one token each) end the hold after two
+    decisions below the exit gain. That run lost 7 ms (the reseed and five record steps for ten tokens), paid
+    from the rung's bucket, which the first plain decision caps at 1.5 trials (a 20 ms reseed and one (16,1)
+    step over plain: 45 ms). The model, whose deep positions were observed accepted once and never reached
+    again, still rates (1,5) at 1.71x after the cooldown's three plain steps, so the row re-enters (the
+    fixture never calibrates a pool: in serving the measured credit would refuse it) -- the exploration costs
+    one record step at every draft rejected, 30 ms, within the 45 the bucket holds -- and falls out the same
+    way, now 62 ms in overdraft; the cheapest record's retry, (16,1), priced as served (2.58 reseeds expected
+    before its overtaken replay takes, 30 each, plus one record step, 10: 87 ms) is more than the bucket can
+    ever hold mid-request, so the request runs plain to its end (the bucket refilling 8 ms a step)."""
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    adaptive._spec_costs.update({("reseed", shape): CostLine.flat(20.0) for shape in mh.DEFAULT_SHAPES})
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    offered = _mtp_rounds(adaptive, [5] + [0] * 21)
+    assert offered == [5, 5, 3, 1, 1, 0, 0, 0, 0, 5, 3, 5, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert [s[1] for s in mh._steps(adaptive)] == [(1, 5), (1, 5), (8, 3), (16, 1), (16, 1)] + [
+        (1, 5),
+        (8, 3),
+        (1, 5),
+        (16, 1),
+        (16, 1),
+    ]
+    assert len(_names(adaptive, "decode")) == 1 + 12, "the first step and the twelve plain steps ran the base decode"
+    assert [r[1:3] for r in _names(adaptive, "reseed")] == [((1, 5), [0]), ((1, 5), [0])]
+    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**9)
+    policy = adaptive._spec_policy
+    assert policy.declined == 9 and not policy.trial and policy.last_reason == "budget"
+    assert policy.rung_cap[1024] == pytest.approx(45.0) and policy.rung_bucket[1024] == pytest.approx(2.0)
+    reasons = [
+        re.search(r"\((\w+); was", line).group(1) for line in messages if line.startswith("Gemma4MTP adaptive K:")
+    ]
+    assert reasons == ["trial", "gain", "hold", "exit", "enter", "gain", "gain", "hold", "exit"]
+    assert "(trial; was none)" in messages[0] and "entry 20.0 ms" in messages[0], "the optimistic prior: a trial"
+    # the instrumentation: the closed intervals by mode, clean only without a switch, a reseed or a prefill
+    calib = policy.calibration
+    modes = {mode: (stats.steps, stats.clean + stats.outliers[0]) for mode, stats in calib.modes.items()}
+    assert modes[("step", (1, 5), 1024)] == (4, 1), "the first interval starts with a reseed"
+    assert modes[("step", (8, 3), 1024)] == (2, 0), "every (8,3) interval starts at a switch"
+    assert modes[("step", (16, 1), 1024)] == (4, 2)
+    assert modes[("plain", 32)] == (12, 10), "the plain steps after a record step are reported, never cost samples"
+    assert calib.reseeds[(1, 5)][0] == 2 and (16, 1) not in calib.reseeds
+    assert {name: calls for name, (calls, _ms) in calib.phases.items()} == {
+        "tables": 10,
+        "refresh": 1,
+        "reseed": 2,
+        "replay": 10,
+        "host": 23,
+        # the runner's call boundaries (8b3f194aca3): a gap per proposal-to-step and step-to-proposal, by the step's kind
+        "gap_pv_v": 10,
+        "gap_vp_v": 10,
+        "gap_pv_p": 12,
+        "gap_vp_p": 13,
+        "verify": 10,
+    }
+    assert calib.prefills == 1 and calib.window_prefills == 1
+    assert calib.total[0] == 22 and calib.total[2] == 6 + 12 + 9, "every closed interval, with its tokens"
+    assert (
+        sum(entry[0] for entry in calib.dirty.values()) + sum(s.clean + s.outliers[0] for s in calib.modes.values())
+        == 22
+    )
+    assert {cause: entry[0] for cause, entry in calib.dirty.items()} == {"reseed": 2, "switch": 7}
+
+
+def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    """Five rows select (5, 5) by rows; at 0.7 conditional acceptance (8, 3) pays better (2.53 tokens at 1.75x
+    beats 2.94 at 2.5x), and its three padding rows carry the null block."""
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh.install_decoder(mtp, step_ms=MTP_STEP_MS)
+    mtp._spec_policy.prior.cond = [0.7] * 5
+    mh._prefill(mtp, rows=5)
+    keys = [10 + 2 * r for r in range(5)]
+    mh._ordinary(mtp, [3] * 5, [2] * 5, keys, result=_tensor([30] * 5))
+    proposal = mh._propose(mtp, [[30] + [-1] * 5] * 5, [[3] + [-1] * 5] * 5)
+    assert proposal.num_valid.tolist() == [3] * 5
+    step = mh._steps(mtp)[-1]
+    assert step[1] == (8, 3) and step[2] == [0, 1, 2, 3, 4] and step[7][5:] == [[0, 0, 0, 0]] * 3
+    # a row joining a speculating batch stays out of the replay (its token from the plain decode the verify
+    # runs beside it) while its reseed does not pay over the entry horizon
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    mtp = mh.build_mtp_model(
+        adapter, monkeypatch, env={"GEMMA4_SPEC_PROBE_STEPS": "0", "GEMMA4_SPEC_CALIB_MIN": "1000"}
+    )
+    mh.install_decoder(mtp, step_ms=MTP_STEP_MS)
+    mh._prefill(mtp, rows=5)
+    keys = [10 + 2 * r for r in range(5)]
+    mh._ordinary(mtp, [3] * 5, [2] * 5, keys, result=_tensor([30] * 5))
+    proposal = mh._propose(mtp, [[30] + [-1] * 5] * 5, [[3] + [-1] * 5] * 5)  # the first proposal: every row reseeds
+    assert proposal.num_valid.tolist() == [5] * 5 and _names(mtp, "reseed")[-1][1:3] == ((5, 5), [0, 1, 2, 3, 4])
+    drafts = proposal.draft_token_ids.tolist()
+    blocks = [mh._block(30, drafts[r]) for r in range(5)]
+    out = mh._verify(mtp, blocks, [mh._positions(3, 6)] * 5, [5] * 5, keys)
+    ids = out.argmax_ids.tolist()
+    mtp._spec_costs.update({("reseed", shape): 5000.0 for shape in mh.DEFAULT_SHAPES})
+    # a sixth request joins: its first step is a plain decode beside the others' verify, then it proposes too
+    mh._prefill(mtp, slot=5, key=20)
+    committed = [ids[r] for r in range(5)] + [[40] + [-1] * 5]
+    posits = [mh._positions(4, 6)] * 5 + [[3] + [-1] * 5]
+    proposal = mh._propose(mtp, committed, posits, counts=[6] * 5 + [1])
+    # 64 x (4 x 20 - 35) = 2880 ms of saving over the horizon does not cover a 5000 ms reseed of (8,3): the
+    # five continuing rows replay (8,3) alone, the joiner commits its one token from the plain decode
+    assert proposal.num_valid.tolist() == [3] * 5 + [0]
+    step = _names(mtp, "step")[-1]
+    assert step[1] == (8, 3) and step[2] == [0, 1, 2, 3, 4] and len(_names(mtp, "reseed")) == 1
+    assert mtp._mtp_sessions[5].retained is None
+    line = [m for m in messages if "for 5/6 rows" in m]
+    assert len(line) == 1 and "-> record (8, 3) S_k=1024 for 5/6 rows (gain; was K=5)" in line[0]
+    assert "at 55.0 ms (2.75x plain 20.0, pool " in line[0] and "), gain 1.27x" in line[0]
+
+
+def _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    """The reseed is the entry cost: the saving over the entry horizon must cover it before a row enters. The
+    new request's trial is off here (GEMMA4_SPEC_TRIAL_GAIN above any gain): with it, a fresh request replays the
+    cheapest record once whatever the horizon says, the reseed charged all the same."""
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "0", "GEMMA4_SPEC_TRIAL_GAIN": "9"})
+    mh.install_decoder(mtp, step_ms=MTP_STEP_MS)
+    mtp._spec_costs.update({("reseed", shape): 2000.0 for shape in mh.DEFAULT_SHAPES})
+    # At 0.8 every record clears 1.10x ((8,3): 2.95 tokens at 1.75x = 1.69x), but the saving over the 64-step
+    # entry horizon, 64 x (2.95 x 20 - 35) = 1536 ms, does not cover a 2000 ms reseed: the row stays plain.
+    mtp._spec_policy.prior.cond = [0.8] * 5
+    mtp._spec_policy.prior.informed = [True] * 5
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    proposal = mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [0] and mh._steps(mtp) == []
+    assert mtp._mtp_sessions[0].trialed is False and mtp._spec_policy.last_reason == "declined"
+    for shape in mh.DEFAULT_SHAPES:
+        mtp._spec_costs[("reseed", shape)] = 0.0
+    mh._ordinary(mtp, [150], [3], [10], result=_tensor([151]))
+    proposal = mh._propose(mtp, [[151] + [-1] * 5], [[4] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [3] and _names(mtp, "reseed")[-1][1:4] == ((8, 3), [0], [151])
+
+
+def _mtp_a_row_continuing_in_the_last_replay_pays_no_reseed(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    cls = type(adaptive)
+    mh._start_solo(adaptive)
+    session = adaptive._mtp_sessions[0]
+    assert not cls._mtp_seed_continues(session, 0, adaptive._mtp_last_replay), "not verified yet"
+    mh._verify(adaptive, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
+    assert cls._mtp_seed_continues(session, 0, adaptive._mtp_last_replay)
+    assert not cls._mtp_seed_continues(session, 1, adaptive._mtp_last_replay), "a moved slot reseeds"
+    mh._ordinary(adaptive, [150], [3], [10], result=_tensor([151]))
+    assert not cls._mtp_seed_continues(session, 0, adaptive._mtp_last_replay), "a plain step drops the proposal"
+    # the runner proposes once more for a released request (its last committed block) before the next prefill:
+    # no session opens for it and nothing replays (the policy entered such a row on the measured credit -- a
+    # reseed and a replay nobody verifies after every speculating prose request on the 12B QB2 -- and booked it
+    # as a failed run when the prefill dropped it, 2026-10-30); the prefill clears the mark and the slot's next
+    # request proposes as any other
+    adaptive.release_request(0)
+    assert adaptive._mtp_released_slots == {0} and 0 not in adaptive._mtp_sessions
+    reseeds = len(_names(adaptive, "reseed"))
+    trailing = mh._propose(adaptive, [[151, 152, 153, -1, -1, -1]], [mh._positions(4, 3)], counts=[3])
+    assert trailing.num_valid.tolist() == [0] and 0 not in adaptive._mtp_sessions
+    assert len(_names(adaptive, "reseed")) == reseeds, "no replay, no reseed: the policy was not asked"
+    mh._prefill(adaptive, key=20)
+    assert adaptive._mtp_released_slots == set()
+    mh._ordinary(adaptive, [3], [2], [20], result=_tensor([150]))
+    proposal = mh._propose(adaptive, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and 0 in adaptive._mtp_sessions
+
+
+def _mtp_without_a_cost_table_the_rows_based_record_serves_and_a_warning_says_so_once(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    warned = []
+    monkeypatch.setattr(adapter.logger, "warning", lambda message, *a, **k: warned.append(str(message)))
+    mtp._spec_policy.prior.cond = [0.0] * 5  # with a table the policy would decline every record
+    assert _mtp_rounds(mtp, [0, 0]) == [5, 5, 5]
+    assert [s[1] for s in mh._steps(mtp)] == [(1, 5)] * 3
+    assert warned == [
+        "Gemma4MTP adaptive K: no cost table (the warmup measured none and GEMMA4_SPEC_PLAIN_STEP_MS is unset); "
+        "speculation runs as without the policy"
+    ]
+
+
+def _mtp_adaptive_off_keeps_the_rows_based_record_whatever_the_table_says(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_ADAPTIVE": "0"})
+    mh.install_decoder(mtp, step_ms=MTP_STEP_MS)
+    mtp._spec_policy.prior.cond = [0.0] * 5
+    assert _mtp_rounds(mtp, [0, 0]) == [5, 5, 5]
+
+
+def _mtp_a_bad_policy_knob_is_refused_when_the_adapter_is_built(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    with expect_error(ValueError, "GEMMA4_SPEC_MIN_GAIN must be at least 1.0, got 0.5"):
+        mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_MIN_GAIN": "0.5"})
+
+
+def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    # the switch ladder of the batched records at the 1.10 bar it documents: the record's own one-token steps
+    # end each hold after two decisions below the exit gain, the model (the deep positions observed accepted
+    # once, never reached again; the fixture's reseeds cost nothing and no pool calibrates) re-enters at once
+    # and the ladder repeats until the exploration retry on the cheapest record, (16,1)
+    adaptive = _mtp_adaptive(
+        adapter, monkeypatch, env={"GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1", "GEMMA4_SPEC_MIN_GAIN": "1.10"}
+    )
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    _mtp_rounds(adaptive, [5] + [0] * 21)
+    lines = [m for m in messages if m.startswith("Gemma4MTP adaptive K:")]
+    assert lines[0] == (
+        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted prior, "
+        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0, pool none), gain 2.40x"
+    )
+    targets = [re.search(r"-> (record \(\d+, \d+\) S_k=\d+|plain step)", line).group(1) for line in lines]
+    assert len(lines) == 17 and targets[:9] == [
+        "record (1, 5) S_k=1024",
+        "record (8, 3) S_k=1024",
+        "record (16, 1) S_k=1024",
+        "plain step",
+        "record (1, 5) S_k=1024",
+        "record (8, 3) S_k=1024",
+        "record (1, 5) S_k=1024",
+        "record (16, 1) S_k=1024",
+        "plain step",
+    ]
+    assert "per-position 0.50/1.00/1.00/1.00/1.00, expected 2.50 tokens/row at 35.0 ms" in lines[1], "its own outcome"
+    assert lines[3] == (
+        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=1); EWMA accepted 3.28, "
+        "per-position 0.66/1.00/1.00/1.00/1.00, plain 20.0 ms"
+    )
+    assert (
+        "(gain; was K=0)" in lines[4] and ", pool 1.00/1), gain 1.71x" in lines[4]
+    ), "the pool shows, the model decides"
+    assert (
+        "(retry; was K=0)" in lines[13]
+        and "at 30.0 ms (1.50x plain 20.0, pool 1.00/5), gain 0.84x" in lines[13]
+        and targets[13] == "record (16, 1) S_k=1024"
+    )
+    assert [m for m in messages if "proposing nothing" in m] == [], "the policy's plain steps use their own line"
+    # the stats line every GEMMA4_SPEC_STATS_STEPS proposals (window counters, then they start over)
+    stats = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: stats.append(str(message)))
+    windowed = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_STATS_STEPS": "4"})
+    _mtp_rounds(windowed, [5, 5, 5, 5, 5, 5, 5])
+    lines = [m for m in stats if m.startswith("Gemma4MTP adaptive stats:")]
+    assert len(lines) == 2 and lines[0].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 3 steps")
+    assert re.search(
+        r"\(1,5\)@1024: 3 steps, 18 tokens, 2 clean, \d+\.\d ms/step, 6\.00 tokens/step, \d+\.\d ms/token, "
+        r"total \d+\.\d ms/step \d+\.\d ms/token, ratio \d+\.\d\dx \| reseeds 1 at \d+\.\d ms \| "
+        r"dirty 1 steps, \d+ ms: reseed 1/\d+ \| total 3 steps, "
+        r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: (?:[a-z_]+ \d+\.\d(?:, )?)+ \| prefills 1 \| "
+        r"calibrated: none$",
+        lines[0],
+    )
+    phases = lines[0].split("phases ms/call: ")[1].split(" | prefills")[0]
+    # the first proposal follows the prefill's (plain) step; then the proposal's own phases and the runner's
+    # boundaries around the verify step
+    assert {name for name, _ms in (p.split(" ") for p in phases.split(", "))} == {
+        "gap_vp_p",
+        "tables",
+        "refresh",
+        "reseed",
+        "replay",
+        "host",
+        "gap_pv_v",
+        "verify",
+        "gap_vp_v",
+    }, phases
+    assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
+    assert "| reseeds 0 | total 4 steps, " in lines[1]
+    # the window opens on the previous verify's boundary gap, so its phases list does not start with "tables"
+    assert "tables" in lines[1].split("| phases ms/call: ")[1].split(" | prefills")[0]
+    assert "| prefills 0 | calibrated: none" in lines[1] and "dirty" not in lines[1]
+
+
+def _mtp_record_switches_are_rate_limited_to_one_line_per_interval(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 1.0)  # the module default; a block above zeroed it
+    # fifteen switches after the first decision, within the 1 s interval: the record's own one-token steps end
+    # each hold after two decisions and the model (the fixture's reseeds cost nothing) re-enters at once
+    _mtp_rounds(adaptive, [5] + [0] * 21)
+    assert len([m for m in messages if m.startswith("Gemma4MTP adaptive K:")]) == 1
+    assert adaptive._spec_policy_logged[0] == 5 and adaptive._spec_policy_logged[2] == 15
+
+
+def _mtp_the_session_summary_reports_the_accepted_drafts_ewma(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    _mtp_rounds(adaptive, [5, 3])
+    adaptive.release_request(0)
+    assert [m for m in messages if "contract summary" in m] == [
+        "Gemma4MTP contract summary: slot 0 (release) 3 steps, 11 tokens, 3.67 tokens/step, "
+        "4.80 accepted drafts/verify (EWMA over 2)"
+    ]
+    # the engine-life summary on release
+    adaptive.release_persistent_capture()
+    summary = [m for m in messages if m.startswith("Gemma4MTP adaptive summary:")]
+    assert len(summary) == 1 and summary[0].startswith(
+        "Gemma4MTP adaptive summary: engine life 2 steps | (1,5)@1024: 2 steps, 10 tokens"
+    )
+    assert adaptive._spec_policy.request_steps == 3.0, "the released session's steps feed the entry horizon"
+    assert "| reseeds 1 at " in summary[0] and "| prefills 1 | calibrated: none" in summary[0]
+
+
+def _mtp_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
+    costs = {("step", (1, 5), 1024): (0, 50.0, 1018, 70.0), ("step", (1, 5), 2048): 52.0, ("reseed", (1, 5)): 18.0}
+    mh.stub_drafter_modules(monkeypatch, mtp.events, costs=costs, plain_ms=21.5)
+    mh._warmup(mtp, True)
+    assert [event[0] for event in mtp.events] == [
+        "base_warmup",
+        "prepare",
+        "capture",
+        "refresh",
+        "measure",
+        "time_plain",
+        "time_plain",
+    ]
+    top = 1024 - 6  # the context minus one verify block: every cost is a line from position 0 to here
+    assert mtp._spec_costs == {key: CostLine.of(value) for key, value in costs.items()}
+    assert mtp._spec_plain_cost == {32: CostLine(0, 21.5, top, 21.5)}
+    assert _names(mtp, "measure") == [("measure", top, sorted(costs))]
+    zero = [[0] * 8] * 32  # the decode warmup's zero table: 32 rows, 8 blocks (the null block)
+    assert _names(mtp, "refresh") == [("refresh", [zero, zero])], "a bounded target's ring tables are installed first"
+    assert _names(mtp, "time_plain") == [("time_plain", 32, 0, zero), ("time_plain", 32, top, zero)]
+    assert mtp._mtp_step_tables is None, "the warmup's table is not a decode step the next proposal may read"
+    assert len(mtp._mtp_installed_tables) == 2
+    assert all(torch.equal(t, torch.tensor(zero, dtype=torch.int32)) for t in mtp._mtp_installed_tables)
+    mtp.release_persistent_capture()
+    assert mtp._spec_costs is None and mtp._spec_plain_cost is None
+    # every warmed decode bucket gets its own plain line, timed at 0 and at the top
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
+    mtp.tt_supported_decode_batch_sizes = (1, 32)
+    mh.stub_drafter_modules(monkeypatch, mtp.events, costs=costs, plain_ms=21.5)
+    mh._warmup(mtp, True)
+    assert [e[1:3] for e in _names(mtp, "time_plain")] == [(1, 0), (1, top), (32, 0), (32, top)]
+    assert _names(mtp, "time_plain")[0][3] == [[0] * 8]
+    assert mtp._spec_plain_cost == {1: CostLine(0, 20.5, top, 20.5), 32: CostLine(0, 21.5, top, 21.5)}
+
+
+def _mtp_the_plain_step_cost_from_the_env_skips_the_timed_replay(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    for raw, line in (("29", CostLine(0, 29.0, 1018, 29.0)), ("29,80", CostLine(0, 29.0, 1018, 80.0))):
+        env = {"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_PLAIN_STEP_MS": raw}
+        mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env=env)
+        mh.stub_drafter_modules(monkeypatch, mtp.events, costs={("step", (1, 5), 1024): 50.0})
+        mh._warmup(mtp, True)
+        assert _names(mtp, "time_plain") == [] and mtp._spec_plain_cost == {32: line}, raw
+
+
+def _mtp_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, assistant_dir=None, expect_error=None):
+    mtp = mh.build_mtp_model(
+        adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_ADAPTIVE": "0"}
+    )
+    mh.stub_drafter_modules(monkeypatch, mtp.events)
+    mh._warmup(mtp, True)
+    assert [event[0] for event in mtp.events] == ["base_warmup", "prepare", "capture"]
+    assert mtp._spec_costs is None and mtp._spec_plain_cost is None

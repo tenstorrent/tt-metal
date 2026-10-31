@@ -1,20 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A dFlash block step must not DROP the tokens it produced past its width.
+"""Host tests for the Gemma 4 speculative decoder (``tt/spec_decode.py``) and the pure helpers around it.
 
-One fused iteration commits an accepted prefix plus a bonus, up to V+1 tokens,
-so the block loop can pass ``_SPEC_BLOCK`` mid-iteration. Truncating with
-``block[:K]`` desyncs the stream from the session: the dropped tokens' KV is
-already written and ``dec.start`` has advanced past them, so the model keeps
-conditioning on tokens the caller never received. In prose that is an invisible
-gap, not an error -- which is why it needs a test rather than a warning.
-
-The excess is carried to the next step instead. Review finding on
-vllm-tt-plugin#118: "The current dFlash fill/truncate behavior needs resolution
-before the combined serving path is treated as correct."
-
-Host-only: the fused decoder is a stub, no device.
+Host-only: every decoder is a stub or a pure function, no device.
 """
 
 import pytest
@@ -36,9 +25,34 @@ from types import SimpleNamespace
 import ttnn
 from models.demos.gemma4.tests.unit.dflash_contract_harness import make_expect_error
 from models.demos.gemma4.tt.attention import SPEC_RING_HEADROOM_ENV, bounded_ring_modulo
+from models.demos.gemma4.tt.attention.decode import packed_verify_mask_span
 from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
-from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM as DF
-from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder, auto_draft_len, auto_draft_len_batched
+from models.demos.gemma4.tt.spec_decode import (
+    SPEC_K_BY_ROWS_DEFAULT,
+    SPEC_MASK_NEG,
+    SPEC_RECORD_MB_DEFAULT,
+    ServingStepResult,
+    SpeculativeDecoder,
+    auto_draft_len,
+    auto_draft_len_batched,
+    packed_verify_kv_groups,
+    parse_k_by_rows,
+    serving_mask_padded_bytes,
+    serving_mask_plan,
+    serving_mask_rows,
+    serving_masks_from_plan,
+    serving_masks_host,
+    serving_pad_rows,
+    serving_plan,
+    serving_seed_index,
+    serving_select_rows,
+    serving_trace_projection,
+    serving_verify_table_widths,
+    serving_width_for,
+    serving_width_ladder,
+    spec_capture_shapes,
+    spec_check_shape,
+)
 
 try:
     import vllm  # noqa: F401
@@ -46,277 +60,6 @@ try:
     _HAS_VLLM = True
 except ImportError:  # the CI unit runners have no vLLM: those sections skip
     _HAS_VLLM = False
-
-
-class _Dec:
-    """Scripted fused decoder: each step() yields one iteration's commit."""
-
-    def __init__(self, script, start=100):
-        self.script = list(script)
-        self.start = start
-        self.anchor = 11
-        self.calls = 0
-
-        class _D:
-            vocab = 32000
-
-        self.drafter = _D()
-
-    def step(self, first=False):
-        self.calls += 1
-        committed = self.script.pop(0)
-        self.start += len(committed)
-        return committed[:-1], committed[-1], len(committed)
-
-    def select_width(self, pos):
-        return 4096
-
-    def refresh_page_tables(self, row):
-        pass
-
-
-def _model(monkeypatch, script, block=8, carry=None, budget=10**9):
-    from types import SimpleNamespace
-
-    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
-
-    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", lambda self, *a, **k: "baseline")
-    m = DF.__new__(DF)
-    m._SPEC_BLOCK = block
-    m._spec_decoder = _Dec(script)
-    m._spec_active = True
-    m._spec_active_owner = None
-    m._spec_pending = None
-    m._spec_pending_owner = None
-    m._spec_first_step = False
-    m._spec_width_set = True
-    m._spec_width_ladder = [4096]
-    m._spec_budget_end = budget
-    m._spec_carry = list(carry or [])
-    m._spec_horizon = 2048
-    m._spec_decoder_bucket = None
-    m._spec_last_pt = None
-    m._bounded_sliding_kv_cache = False
-    m.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
-    return m
-
-
-def _bootstrap_via_width_set(m, anchor=11, start=100):
-    """Arm a session through the REAL _spec_bootstrap width-set branch.
-
-    That branch returns early, which is why it needs its own coverage: a reset
-    placed only on the capture path never ran for it.
-    """
-    m._spec_decoder.width_for = lambda pos: 4096
-    m._spec_decoder.prefill_ingest = lambda taps, n: None
-    m._spec_decoder.reseed = lambda a, s: None
-    m._spec_pending = (object(), int(start))
-    m._spec_pending_owner = None
-    DF._spec_bootstrap(
-        m,
-        anchor,
-        start,
-        torch.zeros((1, 8), dtype=torch.int32),
-        None,
-        page_tables_per_layer=None,
-    )
-
-
-def _run(m, pos=100):
-    return m.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([pos], dtype=torch.int32),
-    )
-
-
-def test_overshoot_is_carried_not_dropped(monkeypatch):
-    """Three 3-token iterations fill a width-8 block to 9. The 9th token must
-    survive into the next step, because its KV is already written."""
-    m = _model(monkeypatch, [[21, 22, 23], [24, 25, 26], [27, 28, 29]], block=8)
-    out = _run(m)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26, 27, 28]
-    assert m._spec_carry == [29]
-
-
-def test_carry_is_delivered_first_on_the_next_step(monkeypatch):
-    m = _model(monkeypatch, [[30, 31, 32], [33, 34, 35]], block=8, carry=[28, 29])
-    out = _run(m)
-    # carry first, then this step's iterations, in order
-    assert out[0].tolist() == [28, 29, 30, 31, 32, 33, 34, 35]
-    assert m._spec_carry == []
-
-
-def test_carry_counts_toward_the_width(monkeypatch):
-    """A carry large enough to fill the block must emit ZERO iterations: the
-    session is already that far ahead."""
-    m = _model(monkeypatch, [[99] * 3], block=4, carry=[41, 42, 43, 44])
-    out = _run(m)
-    assert out[0].tolist() == [41, 42, 43, 44]
-    assert m._spec_decoder.calls == 0
-
-
-def test_exact_fit_leaves_no_carry(monkeypatch):
-    m = _model(monkeypatch, [[21, 22, 23, 24], [25, 26, 27, 28]], block=8)
-    out = _run(m)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26, 27, 28]
-    assert m._spec_carry == []
-
-
-def test_eos_still_stops_and_fills_the_tail(monkeypatch):
-    """EOS ends the request, so the tail is EOS-filled and any carry behind it
-    is moot -- the scheduler trims at the first stop token."""
-    m = _model(monkeypatch, [[21, 1], [99, 99]], block=8)
-    out = _run(m)
-    row = out[0].tolist()
-    assert row[:2] == [21, 1]
-    assert set(row[2:]) == {1}
-    assert m._spec_decoder.calls == 1
-
-
-def test_release_request_drops_a_carry(monkeypatch):
-    """Teardown must drop it: the retained decoder outlives the request.
-
-    The decoder is deliberately kept alive across requests for reuse, so
-    anything request-scoped has to die in release_request. A carry left behind
-    is emitted as the NEXT request's first tokens.
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    assert m._spec_carry == [77]
-    DF.release_request(m, 0)
-    assert m._spec_carry == []
-
-
-def test_a_carry_never_crosses_a_session(monkeypatch):
-    """Through the REAL release and bootstrap, with no manual reset.
-
-    Both paths matter: release_request ends request A, and the width-set
-    branch of _spec_bootstrap arms request B and returns early -- a reset
-    placed only on the capture path left that branch leaking A's tokens into
-    B's first block.
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    assert m._spec_carry == [77]
-    DF.release_request(m, 0)
-    _bootstrap_via_width_set(m)
-    out = _run(m)
-    assert m._spec_carry == [] or 77 not in m._spec_carry
-    assert 77 not in out[0].tolist()
-
-
-def test_the_width_set_bootstrap_branch_clears_the_carry(monkeypatch):
-    """The early-returning branch specifically, since it is the one that leaked."""
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    _bootstrap_via_width_set(m)
-    assert m._spec_carry == []
-
-
-@pytest.mark.parametrize("width", [2, 4, 16, 64])
-def test_emitted_width_is_always_the_block_width(monkeypatch, width):
-    m = _model(monkeypatch, [[21, 22, 23]] * 128, block=width)
-    out = _run(m)
-    assert out.shape == (1, width)
-
-
-def test_releasing_another_request_preserves_the_owner_session(monkeypatch):
-    """Adaptive serving admits several live requests; this adapter keeps one
-    session. Aborting A must not tear down a session B owns.
-
-    The sequence that broke: A and B prefill separately, the client aborts A,
-    the runner calls release_request(A_slot), and release_request cleared the
-    GLOBAL session -- B's. B then decoded one baseline token against the full
-    block the scheduler had reserved for it, and the scheduler rejected the
-    width.
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = 3  # B owns the session, parked at state slot 3
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    DF.release_request(m, 1)  # A finishes at a different slot
-
-    assert m._spec_active is True, "B's live session must survive A's release"
-    assert m._spec_pending == ("taps", 10)
-    assert m._spec_owner_slot == 3
-
-
-def test_releasing_the_owner_still_tears_the_session_down(monkeypatch):
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    m._spec_owner_slot = 3
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    DF.release_request(m, 3)
-
-    assert m._spec_active is False
-    assert m._spec_pending is None
-    assert m._spec_carry == []
-    assert m._spec_owner_slot is None
-
-
-def test_the_owner_slot_follows_a_runner_gather(monkeypatch):
-    """The runner permutes per-slot state between decode steps and then releases
-    by the CURRENT slot, so the recorded owner has to move with it.
-
-    Without this the runner had to release by the slot the request was PREFILLED
-    into, and that is ambiguous: slots are reused, so one request's prefill slot
-    can be another live request's owner slot and the release clears the wrong
-    session (vllm-tt-plugin#118 review, finding 1).
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = 1
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    # Row 0 reads slot 1 and row 1 reads slot 0: the whole permutation arrives at
-    # once, because applying the pairs in sequence would move the owner twice.
-    DF.note_state_slots_moved(m, {1: 0, 0: 1})
-
-    assert m._spec_owner_slot == 0, "the owner followed its state to slot 0"
-    assert m._spec_active is True, "a gather is not a release"
-
-    # Releasing the pre-move slot is now somebody else's release.
-    DF.release_request(m, 1)
-    assert m._spec_active is True, "slot 1 is no longer this session's identity"
-
-    # Releasing the current slot tears it down.
-    DF.release_request(m, 0)
-    assert m._spec_active is False
-    assert m._spec_owner_slot is None
-
-
-def test_a_gather_that_does_not_touch_the_owner_leaves_it_alone(monkeypatch):
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = 3
-    m._spec_active = True
-
-    DF.note_state_slots_moved(m, {1: 0, 0: 1})
-
-    assert m._spec_owner_slot == 3
-    assert m._spec_active is True
-
-
-def test_a_gather_with_no_session_is_a_no_op(monkeypatch):
-    """Nothing armed, so there is no owner to move."""
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = None
-
-    DF.note_state_slots_moved(m, {1: 0, 0: 1})
-
-    assert m._spec_owner_slot is None
-
-
-def test_an_unknown_owner_slot_keeps_the_old_unconditional_behaviour(monkeypatch):
-    """The runner may supply no empty_slots; that is the pre-existing
-    single-session case and must not start leaking sessions."""
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    m._spec_owner_slot = None
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    DF.release_request(m, 7)
-
-    assert m._spec_active is False
-    assert m._spec_carry == []
 
 
 # ===== merged from tests/unit/test_dflash_bucket_ladder.py: Tests for the enumerable packed-verify bucket ladder.
@@ -485,10 +228,10 @@ def test_disarming_clears_the_cap():
 # ===== merged from tests/unit/test_dflash_warmup_prefill_trace.py: dFlash warms prefill eagerly: it never replays a prefill trace (tt-metal#57853).
 try:
     from models.demos.gemma4.tt.generator_vllm import (
+        Gemma4DFlashBase,
         Gemma4DFlashContractForCausalLM,
-        Gemma4DFlashForCausalLM,
         Gemma4ForCausalLM,
-        Gemma4MTPForCausalLM,
+        Gemma4MTPContractForCausalLM,
     )
 except ImportError:  # vLLM absent: this section's tests skip
     pass
@@ -516,18 +259,13 @@ def _captured_enable_trace(monkeypatch, cls, *, bounded):
 if _HAS_VLLM:
 
     @pytest.mark.parametrize("bounded", [False, True], ids=["unbounded", "bounded"])
-    @pytest.mark.parametrize(
-        "cls",
-        [Gemma4DFlashForCausalLM, Gemma4DFlashContractForCausalLM],
-        ids=["block_rail", "contract_rail"],
-    )
-    def test_dflash_warmup_never_captures_a_prefill_trace(monkeypatch, cls, bounded):
-        """Both rails, both bounded settings: the capture is always off.
+    def test_dflash_warmup_never_captures_a_prefill_trace(monkeypatch, bounded):
+        """Both bounded settings: the capture is always off.
 
         The unbounded case is the regression -- that is the one the inherited
         warmup left at True while runtime forced it False.
         """
-        assert _captured_enable_trace(monkeypatch, cls, bounded=bounded) is False
+        assert _captured_enable_trace(monkeypatch, Gemma4DFlashContractForCausalLM, bounded=bounded) is False
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -539,9 +277,9 @@ def test_the_override_is_scoped_to_the_dflash_rails():
     base warmup for the same reason. Asserting the identity of the bound
     function keeps this honest without re-stubbing the base's internals.
     """
-    assert Gemma4DFlashForCausalLM.warmup_model_prefill is not Gemma4ForCausalLM.warmup_model_prefill
-    assert Gemma4DFlashContractForCausalLM.warmup_model_prefill is Gemma4DFlashForCausalLM.warmup_model_prefill
-    assert Gemma4MTPForCausalLM.warmup_model_prefill is Gemma4ForCausalLM.warmup_model_prefill
+    assert Gemma4DFlashContractForCausalLM.warmup_model_prefill is not Gemma4ForCausalLM.warmup_model_prefill
+    assert Gemma4DFlashContractForCausalLM.warmup_model_prefill is Gemma4DFlashBase.warmup_model_prefill
+    assert Gemma4MTPContractForCausalLM.warmup_model_prefill is Gemma4ForCausalLM.warmup_model_prefill
 
 
 # ===== merged from tests/unit/test_dflash_width_set.py: Tests for the dFlash packed-verify WIDTH SET selection and migration.
@@ -880,340 +618,6 @@ def test_nothing_resolvable_reports_absence(monkeypatch, tmp_path):
     assert gv._target_weights_dir() is None
 
 
-# ===== merged from tests/unit/test_mtp_block_loop.py: Tests for the Gemma4 MTP decode block loop.
-try:
-    from models.demos.gemma4.tt.generator_vllm import Gemma4MTPForCausalLM as MTP
-except ImportError:  # vLLM absent: this section's tests skip
-    pass
-
-
-class _StubSession:
-    """Returns a scripted (committed, accepted_m) per ``serving_step`` call."""
-
-    def __init__(self, scripted):
-        self.scripted = list(scripted)
-        self.calls = []
-        self.released = False
-        self.restaged = []
-
-    def serving_step(self, cur_token, cur_pos):
-        self.calls.append((cur_token, cur_pos))
-        committed = self.scripted.pop(0)
-        return committed, len(committed) - 1  # m = accepted, committed = m+1
-
-    def serving_release(self):
-        self.released = True
-
-    def refresh_page_tables(self, page_table):
-        """The decode path re-stages the captured page tables whenever vLLM's
-        block table for the request changes; record the rows it was given."""
-        self.restaged.append(page_table.clone())
-
-
-class _Harness:
-    """Minimal stand-in exposing only what ``decode_forward`` touches on the
-    solo path with a live session."""
-
-    _SPEC_N = 6
-    _spec_budget_end = 10_000
-    _spec_horizon = 2048  # only read by the horizon-exhausted log line
-
-    def __init__(self, scripted, start_pos=100):
-        self._spec = _StubSession(scripted)
-        self._spec_cur = (11, start_pos)
-        self._spec_pending = None  # no bootstrap on this path
-        self._spec_pending_owner = None
-        # No page table is passed on this path, so ownership is unknown on both
-        # sides and the live session is served -- see _spec_active_is_mine.
-        self._spec_active_owner = None
-        self._eos = 1
-
-    def _eos_fill_id(self):
-        return self._eos
-
-    # real implementations, so the tests exercise shipped logic
-    _spec_pt_identity = staticmethod(MTP._spec_pt_identity)
-    # The adaptive gate counts REAL requests, not the padded decode wire width
-    # (the runner pads positions with -1); the stub drives it with one row.
-    _spec_real_batch = staticmethod(MTP._spec_real_batch)
-    _spec_pending_is_mine = MTP._spec_pending_is_mine
-    _spec_active_is_mine = MTP._spec_active_is_mine
-    run = MTP.decode_forward
-
-
-def _row(h, tokens=None):
-    """Drive just the block loop by calling decode_forward with a B=1 input."""
-    toks = torch.tensor([[11]], dtype=torch.int32) if tokens is None else tokens
-    return h.run(tokens=toks, start_pos=torch.tensor([[100]], dtype=torch.int32))
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_short_iterations_are_concatenated_to_a_full_row():
-    """Three 2-token iterations must produce ONE 6-wide row, not a padded 2."""
-    h = _Harness([[21, 22], [23, 24], [25, 26]])
-    out = _row(h)
-    assert out.shape == (1, 6)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    assert len(h._spec.calls) == 3  # looped rather than padding after one
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_position_advances_by_tokens_emitted():
-    """The session must resume from what was EMITTED. Iterations are driven from
-    (token, pos), so a wrong position re-drafts the wrong prefix."""
-    h = _Harness([[21, 22], [23, 24], [25, 26]], start_pos=100)
-    _row(h)
-    tok, pos = h._spec_cur
-    assert pos == 100 + 6
-    assert tok == 26
-    # each iteration was driven from the previous one's last token / next pos
-    assert h._spec.calls == [(11, 100), (22, 102), (24, 104)]
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_overshoot_truncates_and_resumes_from_emitted():
-    """A final iteration may overshoot N. The extra tokens are dropped and the
-    position reflects the row, so the next step re-drafts and overwrites them."""
-    h = _Harness([[21, 22, 23, 24], [25, 26, 27, 28]], start_pos=200)
-    out = _row(h)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    tok, pos = h._spec_cur
-    assert pos == 200 + 6 and tok == 26
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_full_iteration_needs_no_loop():
-    """High acceptance fills the row in one call; do not spin further."""
-    h = _Harness([[21, 22, 23, 24, 25, 26]])
-    out = _row(h)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    assert len(h._spec.calls) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_eos_stops_the_loop_and_fills_the_tail():
-    """A genuine stop is the ONLY case that may leave a short row; the tail is
-    EOS so upstream trims there."""
-    h = _Harness([[21, 1], [99, 99]])  # eos id is 1
-    out = _row(h)
-    assert out[0].tolist()[:2] == [21, 1]
-    assert out[0].tolist()[2:] == [1, 1, 1, 1]  # EOS-filled tail
-    assert len(h._spec.calls) == 1  # stopped, did not consume the next script
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_horizon_exhaustion_emits_eos_without_stepping():
-    """Past the horizon the packed verify would attend past its capture, so the
-    request ends cleanly instead of stepping again."""
-    h = _Harness([[21, 22]])
-    h._spec_budget_end = 100  # cur_pos starts at 100
-    out = _row(h)
-    assert out[0].tolist() == [1, 1, 1, 1, 1, 1]
-    assert h._spec.calls == []
-
-
-def _live_session_instance(monkeypatch, scripted, owner, baseline="baseline-out"):
-    """A real Gemma4MTPForCausalLM with a live session and no device.
-
-    ``__new__`` skips the device-bound ``__init__``; the attributes below are
-    everything ``decode_forward`` reads on the solo path. The BASE class's
-    ``decode_forward`` is the plain-baseline fallback the ownership check hands
-    off to, so it is stubbed to a sentinel -- the stub harness above cannot
-    reach it at all (zero-arg ``super()`` needs a real instance).
-    """
-    from types import SimpleNamespace
-
-    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
-
-    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", lambda self, *a, **k: baseline)
-    h = MTP.__new__(MTP)
-    h._spec = _StubSession(scripted)
-    h._spec_cur = (11, 100)
-    h._spec_pending = None
-    h._spec_pending_owner = None
-    h._spec_active_owner = owner
-    h._spec_budget_end = 10_000
-    h._spec_horizon = 2048
-    h._spec_first_step = False
-    h._spec_last_pt = None  # nothing staged yet -> the first step stages
-    h._bounded_sliding_kv_cache = False
-    h._spec_warm = False  # this harness drives a session directly, not via warmup
-    h.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
-    return h
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_live_session_is_refused_for_a_request_that_does_not_own_it(monkeypatch):
-    """A solo decode step can be scheduled for a request that is NOT the live
-    session's owner: async scheduling skips a request that has reached
-    max_tokens (upstream guards that skip on num_output_placeholders), so the
-    owner can drop out of a step while its session is still armed. Serving the
-    block loop here emits the OWNER's speculation for this request, against the
-    single placeholder the scheduler reserved for a non-owner. The session must
-    be released and the step served as plain baseline instead.
-    """
-    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
-    other = ("not-this-request",)
-    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]], other)
-    session = h._spec
-
-    out = h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        page_table=pt,
-    )
-
-    assert out == "baseline-out"
-    assert h._spec is None  # released
-    assert session.calls == []  # never speculated for the non-owner
-    assert h._spec_active_owner is None
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_live_session_is_served_for_its_own_owner(monkeypatch):
-    """The companion: a matching identity keeps the session and blocks."""
-    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
-    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]], MTP._spec_pt_identity(pt))
-
-    out = h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        page_table=pt,
-    )
-
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    assert h._spec is not None
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_page_tables_are_restaged_when_the_block_table_changes(monkeypatch):
-    """vLLM allocates a KV block only every block_size tokens, so a session
-    captured at prefill holds the prompt's blocks and zeros past them. The
-    fused verify binds its page tables at capture, so without a re-stage it
-    reads AND writes the null block once generation crosses out of the
-    prompt's last block (tt-metal#55548 D2 on the qwen36 MTP trace; here it
-    also reaches the host map behind the per-iteration hot-block uploads).
-    """
-    pt = torch.tensor([[3, 4, 5, 0]], dtype=torch.int32)
-    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]] * 4, None)
-    session = h._spec
-
-    h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert len(session.restaged) == 1  # first step stages the current table
-
-    # Same table on the next step: nothing to do.
-    h.decode_forward(
-        tokens=torch.tensor([[26]], dtype=torch.int32),
-        start_pos=torch.tensor([[106]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert len(session.restaged) == 1
-
-    # A newly allocated block appears -> re-stage.
-    grown = torch.tensor([[3, 4, 5, 9]], dtype=torch.int32)
-    h.decode_forward(
-        tokens=torch.tensor([[26]], dtype=torch.int32),
-        start_pos=torch.tensor([[112]], dtype=torch.int32),
-        page_table=grown,
-    )
-    assert len(session.restaged) == 2
-    assert session.restaged[-1].reshape(-1).tolist() == [3, 4, 5, 9]
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_a_warm_capture_with_no_active_request_serves_baseline(monkeypatch):
-    """The batch-to-solo transition with _spec_warm=True.
-
-    A warm release deliberately KEEPS the capture -- the warmup traces are a
-    process artifact, and freeing them would leave no captured widths and no
-    way to recapture -- and nulls the active request only. Gating on `_spec`
-    alone therefore fell through to `cur_token, cur_pos = self._spec_cur` and
-    raised TypeError on an ordinary two-requests-to-one transition.
-    """
-    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
-    owner = tuple(pt.reshape(-1).tolist())
-    h = _live_session_instance(monkeypatch, [[21, 22, 23]], owner)
-    h._spec_warm = True
-
-    # Step 1: two real requests -> release the session, keep the warm capture.
-    batched = h.decode_forward(
-        tokens=torch.tensor([[11], [12]], dtype=torch.int32),
-        start_pos=torch.tensor([[100], [100]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert batched == "baseline-out"
-    assert h._spec is not None, "a warm capture must survive the release"
-    assert h._spec_cur is None, "but no request owns it any more"
-
-    # Step 2: back to one request, no new prefill -> baseline, not TypeError.
-    solo = h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[101]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert solo == "baseline-out"
-
-
-def _warmup_stub(monkeypatch, tmp_path, assistant_env=None, cache_hit=False):
-    """An MTP instance whose warmup can be driven host-only.
-
-    ``__new__`` skips the device-bound ``__init__``. ``_spec_warmup_session`` is
-    stubbed to succeed, so anything that raises came from the pre-flight and not
-    from a capture failure.
-    """
-    monkeypatch.delenv("GEMMA4_ASSISTANT_MODEL", raising=False)
-    if assistant_env is not None:
-        monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_env)
-    # HF_MODEL drives the fallback candidate path f"{HF_MODEL}-assistant".
-    monkeypatch.setenv("HF_MODEL", str(tmp_path / "gemma-4-12B-it"))
-    # This box HAS the assistant in its real HF cache, so without pinning the
-    # resolver the "missing" case silently resolves and the test proves nothing.
-    import models.demos.gemma4.tt.generator_vllm as gv
-
-    monkeypatch.setattr(
-        gv, "_hf_resolve_repo", lambda repo, cache_dir_name: (str(tmp_path / "cached-assistant") if cache_hit else None)
-    )
-    if cache_hit:
-        (tmp_path / "cached-assistant").mkdir(exist_ok=True)
-    h = MTP.__new__(MTP)
-    h._spec = None
-    h._spec_warm = False
-    h._decode_warmup_complete = False
-    h._mtp_warmup_capture = True  # the default path, and the one CI uses
-    monkeypatch.setattr(MTP, "_spec_warmup_session", lambda self, kv, nb: None)
-    monkeypatch.setattr(MTP, "_spec_release_session", lambda self, force=False: None)
-    return h
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_a_missing_assistant_fails_warmup_instead_of_the_first_request(monkeypatch, tmp_path, expect_error):
-    """The batched benchmark never touches the drafter, so a server that boots
-    without one passes every throughput check and then dies on the first SOLO
-    request (EngineDeadError 500 at the coherence guard). Fail while starting."""
-    h = _warmup_stub(monkeypatch, tmp_path)
-    with expect_error(RuntimeError, "snapshot not found -- resolved"):
-        h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_an_operator_supplied_assistant_path_is_left_alone(monkeypatch, tmp_path):
-    """An explicit GEMMA4_ASSISTANT_MODEL is the operator's business: the
-    pre-flight must not second-guess it (it may be a repo id, not a dir)."""
-    h = _warmup_stub(monkeypatch, tmp_path, assistant_env="google/gemma-4-12B-it-assistant")
-    h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_an_existing_assistant_dir_passes_the_preflight(monkeypatch, tmp_path):
-    """The resolver finds a cached snapshot, so warmup proceeds to capture."""
-    h = _warmup_stub(monkeypatch, tmp_path, cache_hit=True)
-    h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
-
-
 # ===== merged from tests/unit/test_mtp_width_ladder.py: Tests for the MTP serving verify-width ladder and its per-step selection.
 try:
     from models.demos.gemma4.tt.generator_vllm import mtp_pv_width_ladder
@@ -1221,12 +625,13 @@ except ImportError:  # vLLM absent: this section's tests skip
     pass
 
 
-def _session(widths, ladder=None, draft_len=5):
-    """A decoder carrying a captured width set and nothing else."""
+def _records(shapes_widths):
+    """A decoder carrying prepared serving widths and nothing else (no device)."""
     spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
-    spec.draft_len = draft_len
-    spec._srv_widths = {int(w): {"pv_S_k": int(w)} for w in widths}
-    spec._srv_ladder = sorted(int(w) for w in (ladder if ladder is not None else widths))
+    spec._srv_records = {}
+    spec._srv_captured = False
+    spec._srv_shape_bufs = {shape: {} for shape in shapes_widths}
+    spec._srv_widths = {shape: sorted(ws) for shape, ws in shapes_widths.items()}
     return spec
 
 
@@ -1243,57 +648,57 @@ def test_ladder_doubles_and_covers_the_whole_context():
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_every_position_in_the_context_has_a_rung():
-    ladder = mtp_pv_width_ladder(262144, draft_len=5)
-    spec = _session(ladder)
-    for pos in (0, 1, 1000, 2048, 4096, 131072, 262143):
-        assert spec.srv_width_for(pos) is not None, pos
+def test_every_position_in_the_context_has_a_rung_per_shape():
+    for shape in [(1, 5), (5, 5), (8, 3), (16, 1)]:
+        k = shape[1]
+        ladder = mtp_pv_width_ladder(262144, draft_len=k)
+        spec = _records({shape: ladder})
+        for pos in (0, 1, 1000, 2048, 4096, 131072, 262143):
+            assert spec.serving_width_for(shape, pos) is not None, (shape, pos)
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_selection_is_the_narrowest_covering_width():
-    """Width is per-iteration BANDWIDTH here -- the masks are rebuilt on the
-    host and uploaded at [1, 1, P_v, S_k] every replay -- so a request must not
-    sit on a wider trace than its position needs."""
-    spec = _session([1024, 2048, 4096], draft_len=5)
-    assert spec.srv_width_for(0) == 1024
-    assert spec.srv_width_for(1024 - 7) == 1024
-    assert spec.srv_width_for(1024 - 6) == 2048
-    assert spec.srv_width_for(2048 - 6) == 4096
+    """Width is per-iteration BANDWIDTH -- the masks are rebuilt on the host
+    and uploaded at [B, 1, P, S_k] every replay -- so a step must not sit on a
+    wider rung than its highest position needs: need = pos + K + 2."""
+    assert serving_width_for([1024, 2048, 4096], 0, 5) == 1024
+    assert serving_width_for([1024, 2048, 4096], 1024 - 7, 5) == 1024
+    assert serving_width_for([1024, 2048, 4096], 1024 - 6, 5) == 2048
+    assert serving_width_for([1024, 2048, 4096], 2048 - 6, 5) == 4096
+    # a shorter draft needs less tail: (16, 1) stays on 1024 two positions longer
+    assert serving_width_for([1024, 2048], 1024 - 3, 1) == 1024
+    assert serving_width_for([1024, 2048], 1024 - 2, 1) == 2048
+    # order of the list is irrelevant
+    assert serving_width_for([4096, 1024, 2048], 0, 5) == 1024
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_position_past_the_captured_set_is_none_so_the_caller_can_capture():
-    """None is the signal to take the next rung off the ladder, which is what
-    replaces ending the request at the horizon."""
-    spec = _session([1024], ladder=[1024, 2048, 4096], draft_len=5)
-    assert spec.srv_width_for(2000) is None
-    need = 2000 + spec.draft_len + 2  # 2007
-    assert next(r for r in spec._srv_ladder if r >= need) == 2048
-    # and a position past that rung takes the one after it
-    assert next(r for r in spec._srv_ladder if r >= 3000 + spec.draft_len + 2) == 4096
+def test_position_past_the_prepared_set_is_none_so_the_adapter_declines():
+    """None is the signal to propose nothing for that step (plain decode):
+    nothing is captured during serving, so there is no next rung to take."""
+    assert serving_width_for([1024], 2000, 5) is None
+    spec = _records({(1, 5): [1024]})
+    assert spec.serving_width_for((1, 5), 2000) is None
+    assert spec.serving_width_for((1, 5), 1024 - 7) == 1024
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_no_captured_widths_means_no_width_set():
-    """A session set up the old way (single capture) must not take the width
-    path: srv_width_for reports None and serving_step leaves it alone."""
-    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
-    spec.draft_len = 5
-    spec._srv_widths = None
-    assert spec.srv_width_for(0) is None
+def test_width_query_rejects_unknown_shapes_and_unprepared_decoders():
+    spec = _records({(1, 5): [1024]})
+    with pytest.raises(ValueError, match="was not prepared"):  # allow-pytest.raises (pure value check)
+        spec.serving_width_for((5, 5), 0)
+    bare = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    bare._srv_records = None
+    with pytest.raises(RuntimeError, match="serving_prepare has not run"):  # allow-pytest.raises (pure)
+        bare.serving_width_for((1, 5), 0)
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-@pytest.mark.parametrize("draft_len", [3, 5, 7])
+@pytest.mark.parametrize("draft_len", [1, 3, 5, 7])
 def test_tail_follows_the_draft_length(draft_len):
-    """A verify block is P_v = K + 1 rows at pos..pos+K, so the width has to
+    """A verify block is P = K + 1 rows at pos..pos+K, so the width has to
     cover K + 2 past the position, not just the position."""
-    ladder = mtp_pv_width_ladder(8192, draft_len=draft_len)
-    spec = _session(ladder, draft_len=draft_len)
-    top = max(ladder)
-    assert spec.srv_width_for(top - draft_len - 2) == top
-    assert spec.srv_width_for(top - draft_len - 1) is None
+    widths = [1024, 2048, 8192]
+    top = max(widths)
+    assert serving_width_for(widths, top - draft_len - 2, draft_len) == top
+    assert serving_width_for(widths, top - draft_len - 1, draft_len) is None
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -1353,37 +758,72 @@ def _functions(tree):
             yield node
 
 
-def test_srv_upload_iter_binds_every_name_it_reads():
-    """The method that actually regressed, named so the failure is unmistakable."""
+def test_srv_upload_binds_every_name_it_reads():
+    """The per-replay upload (the method whose B=1 ancestor regressed), named so the failure is unmistakable."""
     tree = _module()
     module_names = _bound_at_module_level(tree)
-    target = [fn for fn in _functions(tree) if fn.name == "_srv_upload_iter"]
-    assert target, "_srv_upload_iter not found in spec_decode.py"
+    target = [fn for fn in _functions(tree) if fn.name == "_srv_upload"]
+    assert target, "_srv_upload not found in spec_decode.py"
     assert _free_names(target[0], module_names) == set()
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "serving_step",
-        "serving_reseed",
-        "serving_setup",
-        "serving_warmup_widths",
-        "_srv_upload_iter",
-        "_srv_capture_width",
-        "srv_width_for",
-        "refresh_page_tables",
-    ],
-)
-def test_serving_path_methods_bind_every_name_they_read(name):
+_SERVING_METHODS = [
+    "serving_prepare",
+    "serving_capture",
+    "serving_width_for",
+    "serving_refresh_page_tables",
+    "serving_reseed",
+    "serving_step",
+    "serving_release",
+    "_srv_alloc_shape",
+    "_srv_alloc_width",
+    "_srv_publish_hidden",
+    "_srv_publish_logits",
+    "_srv_trace_region_mb",
+    "_srv_trace_region_size_mb",
+    "_srv_iota_for",
+    "_srv_mask_chunks",
+    "_srv_masks_device",
+    "_srv_seed_rows",
+    "_srv_seed_gather",
+    "_srv_assemble_verify_x",
+    "_srv_body",
+    "_srv_upload",
+    "_srv_upload_tables",
+    "_srv_slot_table",
+    "_srv_logits_to_host",
+    "refresh_page_tables",
+    # the lane engine's record path (one record per mesh column over the lane frame)
+    "_srv_lane_mapper",
+    "_srv_frame_from_torch",
+    "_srv_from_torch",
+    "_srv_pos_tensors",
+    "_srv_tokens_tensor",
+    "_srv_seed_lists",
+    "_srv_seed_upload",
+    "_srv_eager_forward",
+    "_srv_host_tokens_frame",
+    "_srv_host_pos_frame",
+    "_srv_lane_columns",
+    "_srv_lane_groups",
+    "_srv_lane_reseed",
+    "_srv_lane_step",
+    "_srv_lane_upload",
+    "_srv_lane_upload_tables",
+    "_srv_lane_read_u32",
+    "_srv_lane_logits_to_host",
+    "_srv_copy_if_changed",
+]
+
+
+def test_serving_path_methods_bind_every_name_they_read():
     tree = _module()
     module_names = _bound_at_module_level(tree)
-    for fn in _functions(tree):
-        if fn.name == name:
-            free = _free_names(fn, module_names)
-            assert free == set(), f"{name} reads unbound name(s): {sorted(free)}"
-            return
-    pytest.skip(f"{name} is not defined in spec_decode.py")
+    defined = {fn.name: fn for fn in _functions(tree)}
+    for name in _SERVING_METHODS:
+        assert name in defined, f"{name} is not defined in spec_decode.py"
+        free = _free_names(defined[name], module_names)
+        assert free == set(), f"{name} reads unbound name(s): {sorted(free)}"
 
 
 # ===== merged from tests/unit/test_spec_draft_len.py: Host-only tests for the pure speculative draft-length policies.
@@ -1408,23 +848,38 @@ def test_auto_draft_len_prompt_boundary(prompt_len, expected):
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
-def test_auto_draft_len_env_override_wins(monkeypatch):
+def test_auto_draft_len_env_override_wins(monkeypatch, expect_error):
     monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "7")
     assert auto_draft_len(128) == 7
     assert auto_draft_len(131072) == 7
 
+    # -- the acceptance-adaptive policy (tt/spec_policy.py): its knobs read from the env
+    _policy_policy_config_defaults_are_on_with_the_documented_knobs()
+    _policy_policy_config_reads_every_knob_from_the_env()
+    _policy_bad_policy_knobs_are_refused_naming_the_knob(expect_error)
+
 
 @pytest.mark.usefixtures("_no_draft_len_env")
-def test_auto_draft_len_env_auto_defers_to_policy(monkeypatch):
+def test_auto_draft_len_env_auto_defers_to_policy(monkeypatch, expect_error):
     monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "auto")
     assert auto_draft_len(128) == 3
     assert auto_draft_len(4096) == 5
+
+    # -- the acceptance-adaptive policy: the record choice by expected tokens per cost, with hysteresis
+    _policy_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_step(expect_error)
+    _policy_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_as_it_falls()
+    _policy_the_margin_decides_between_a_marginal_record_and_the_plain_step()
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
 def test_auto_draft_len_custom_default():
     assert auto_draft_len(None, default=2) == 2
     assert auto_draft_len(64, default=2) == 2
+
+    # -- the acceptance-adaptive policy: the per-row acceptance statistics and the batch prior
+    _policy_acceptance_stats_update_only_the_positions_the_verify_reached()
+    _policy_expected_tokens_is_one_plus_the_running_product_of_the_conditionals()
+    _policy_a_new_row_starts_from_the_batch_prior_and_the_prior_learns_from_every_row()
 
 
 @pytest.mark.parametrize(
@@ -1445,9 +900,14 @@ def test_auto_draft_len_batched_row_cap(batch, prompt_len, expected):
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
-def test_auto_draft_len_batched_env_override_wins(monkeypatch):
+def test_auto_draft_len_batched_env_override_wins(monkeypatch, expect_error):
     monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "2")
     assert auto_draft_len_batched(4096, 32) == 2  # explicit K bypasses the cap
+
+    # -- the acceptance-adaptive policy: the measured cost table, the entry cost and the amortized retry
+    _policy_the_cost_table_is_consumed_as_measured(expect_error)
+    _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length()
+    _policy_prose_dwells_on_its_record_and_random_text_stays_plain()
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
@@ -1456,12 +916,17 @@ def test_auto_draft_len_batched_env_auto_defers_to_policy(monkeypatch):
     assert auto_draft_len_batched(4096, 8) == 3
     assert auto_draft_len_batched(4096, 32) == 0
 
+    # -- the acceptance-adaptive policy: the probe, the measured positions and the warmup line
+    _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps()
+    _policy_measure_positions_time_each_rung_at_the_first_position_it_serves()
+    _policy_describe_costs_lists_the_plain_step_then_every_record()
+
 
 # ===== merged from tests/unit/test_spec_plan.py: Tests for the model side of the plugin speculative contract (``spec_plan``).
 try:
     from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM
+    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM
 except ImportError:  # vLLM absent: this section's tests skip
     pass
 
@@ -1489,20 +954,10 @@ def drafter_snapshot(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_rejects_concurrency_above_one(drafter_snapshot):
-    """dFlash captures its fused verify at B=1, so B>1 cannot speculate."""
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=2, requested_k=_VERIFY)
-    assert isinstance(out, SpecReject)
-    assert "single-stream" in out.reason
-    # Nothing is speculable at this concurrency, so no K is offered.
-    assert out.supported_k == ()
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_k_is_a_set_not_a_range(drafter_snapshot):
     """A narrower K would need its own packed-verify capture, so it is refused
     and the one supported width is named."""
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY - 2)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY - 2)
     assert isinstance(out, SpecReject)
     assert out.supported_k == (_VERIFY,)
 
@@ -1512,7 +967,7 @@ def test_missing_drafter_is_refused_at_config_time(drafter_snapshot, monkeypatch
     """Without this the drafter resolves lazily and a missing checkpoint kills
     the engine at the FIRST REQUEST instead (EngineDeadError, no traceback)."""
     monkeypatch.setenv("GEMMA4_DFLASH_DRAFTER", "/nonexistent/dflash-drafter")
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert isinstance(out, SpecReject)
     assert out.supported_k == (_VERIFY,)
     # The message has to be actionable: it is surfaced verbatim to the operator.
@@ -1521,7 +976,7 @@ def test_missing_drafter_is_refused_at_config_time(drafter_snapshot, monkeypatch
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_plan_fields(drafter_snapshot):
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert isinstance(out, SpecPlan)
     assert out.effective_k == _VERIFY
     assert out.lanes_per_request == 1
@@ -1537,7 +992,7 @@ def test_effective_k_never_exceeds_requested(drafter_snapshot):
     """#110: ``effective_k <= requested_k``. The plugin publishes it back to
     ``speculative_config.num_speculative_tokens``, which upstream's scheduler
     reads to size its lookahead reservation."""
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY + 6)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY + 6)
     assert isinstance(out, SpecPlan)
     assert out.effective_k <= _VERIFY + 6
 
@@ -1560,7 +1015,7 @@ def test_fixed_cost_tracks_the_decoder_allocations(drafter_snapshot):
         + p_v * cfg["hidden_size"] * 2
         + p_v * 8
     )
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert out.extra_bytes_per_seq == expected
 
 
@@ -1569,9 +1024,9 @@ def test_unparseable_mesh_over_reserves_rather_than_under(drafter_snapshot, monk
     """Galaxy DP entries set no MESH_DEVICE. Falling back to tp=1 yields the
     LARGEST per-chip cache, so the plugin over-reserves; the failure the
     contract warns about is under-reserving."""
-    sharded = Gemma4DFlashForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
+    sharded = Gemma4DFlashContractForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
     monkeypatch.delenv("MESH_DEVICE", raising=False)
-    unknown_mesh = Gemma4DFlashForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
+    unknown_mesh = Gemma4DFlashContractForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
     assert unknown_mesh > sharded
 
 
@@ -1579,8 +1034,8 @@ def test_unparseable_mesh_over_reserves_rather_than_under(drafter_snapshot, monk
 def test_is_pure_and_frozen(drafter_snapshot, expect_error):
     """Called several times per launch; must be side-effect free and stable."""
     env_before = dict(os.environ)
-    first = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
-    second = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    first = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    second = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert first == second
     assert dict(os.environ) == env_before
     with expect_error(AttributeError, "effective_k"):
@@ -1767,20 +1222,16 @@ def test_the_check_is_on_the_ring_not_on_the_env_var(monkeypatch, expect_error):
 @pytest.mark.usefixtures("_clean_env")
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_every_real_speculating_class_gets_sized():
-    """The three shipped speculating classes, by their real _SPEC_N.
+    """The shipped speculating classes, by their real _SPEC_N.
 
     The fakes above pin the arithmetic; this pins the wiring. A new serving
     class that forgets ``_SPEC_N``, or one whose K changes, silently falls back
     to the exact-window ring -- which is the #57701 defect, and is invisible
     until someone reads generated text past the ring.
     """
-    from models.demos.gemma4.tt.generator_vllm import (
-        Gemma4DFlashContractForCausalLM,
-        Gemma4DFlashForCausalLM,
-        Gemma4MTPForCausalLM,
-    )
+    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM, Gemma4MTPContractForCausalLM
 
-    for cls in (Gemma4DFlashForCausalLM, Gemma4DFlashContractForCausalLM, Gemma4MTPForCausalLM):
+    for cls in (Gemma4DFlashContractForCausalLM, Gemma4MTPContractForCausalLM):
         os.environ.pop(SPEC_RING_HEADROOM_ENV, None)
         assert int(cls._SPEC_N) > 1, f"{cls.__name__} must declare a verify width"
         _auto_size_spec_ring(cls, _cfg(), bounded_sliding=True)
@@ -1788,71 +1239,6 @@ def test_every_real_speculating_class_gets_sized():
         assert ring - WINDOW >= cls._SPEC_N - 1, f"{cls.__name__}: ring {ring} cannot hold its drafts"
         # and the guard agrees, including for the rail that declines at the wrap
         _reserve_spec_ring_headroom(WINDOW, cls._SPEC_N, cls.__name__, declines_at_wrap=cls._SPEC_DECLINES_AT_RING_WRAP)
-
-
-# ===== merged from tests/unit/test_adaptive_real_batch.py: The adaptive gate must count REQUESTS, not the padded decode wire width.
-try:
-    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM as DF
-except ImportError:  # vLLM absent: this section's tests skip
-    pass
-
-
-if _HAS_VLLM:
-    real_batch = DF._spec_real_batch
-
-
-def _toks(n):
-    return torch.zeros(n, 1, dtype=torch.int32)
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_solo_request_padded_to_a_bucket_is_still_solo():
-    """The Galaxy case: one request, wire width 32."""
-    start = torch.cat([torch.tensor([121004]), torch.full((31,), -1)]).to(torch.int32)
-    assert real_batch(_toks(32), start) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_unpadded_solo_is_solo():
-    assert real_batch(_toks(1), torch.tensor([512], dtype=torch.int32)) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-@pytest.mark.parametrize("live", [2, 5, 31, 32])
-def test_partially_filled_batch_counts_live_rows(live):
-    start = torch.cat([torch.arange(live), torch.full((32 - live,), -1)]).to(torch.int32)
-    assert real_batch(_toks(32), start) == live
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_full_batch_has_no_padding():
-    assert real_batch(_toks(32), torch.arange(32, dtype=torch.int32)) == 32
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_position_zero_is_a_real_row_not_padding():
-    """-1 is the pad sentinel; 0 is a legitimate position and must not be
-    mistaken for one."""
-    start = torch.cat([torch.tensor([0, 0]), torch.full((30,), -1)]).to(torch.int32)
-    assert real_batch(_toks(32), start) == 2
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_two_dimensional_positions_are_flattened():
-    start = torch.cat([torch.tensor([7]), torch.full((7,), -1)]).to(torch.int32).reshape(8, 1)
-    assert real_batch(_toks(8), start) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_missing_positions_fall_back_to_the_wire_width():
-    """Nothing to count: keep the old behaviour rather than guessing solo."""
-    assert real_batch(_toks(4), None) == 4
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_all_rows_padded_never_reports_zero():
-    """A zero would make the gate divide-by-zero downstream; the floor is 1."""
-    assert real_batch(_toks(8), torch.full((8,), -1, dtype=torch.int32)) == 1
 
 
 # ===== merged from tests/unit/test_native_context_guard.py: Native-context guard: the serving templates waive vLLM's max_model_len check, so gemma4 must refuse a
@@ -1910,3 +1296,2124 @@ def test_unknown_native_stays_permissive(monkeypatch):
     # A model_args without the attribute (older adaptors) must not brick boots.
     monkeypatch.delenv("GEMMA4_ALLOW_BEYOND_NATIVE", raising=False)
     _assert_within_native_context(300_000, SimpleNamespace())
+
+
+# ===== Serving records (batched fused traces): the pure parts of the SpeculativeDecoder serving API.
+# Shape table -------------------------------------------------------------------------------------
+def test_default_k_by_rows_table_parses_to_the_catalog_entries():
+    # The default stops at 5 live rows: the (8,3) and (16,1) records lost every measured batch point (the 12B and
+    # 31B Galaxy at 8 rows per engine: -3 % and -13 % against plain, random prompts), so above the table the step is
+    # the plain decode (K=0) and the batched records stay a catalog opt-in.
+    assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5),)
+    assert parse_k_by_rows(" 5:5 , 8:3,16:1, ") == ((5, 5), (8, 3), (16, 1))
+    # the capture shapes are one (1, k_max) record plus one per entry
+    assert spec_capture_shapes(parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT), 5) == [(1, 5), (5, 5)]
+    table = parse_k_by_rows(" 5:5 , 8:3,16:1, ")
+    assert spec_capture_shapes(table, 5) == [(1, 5), (5, 5), (8, 3), (16, 1)]
+    # a table that already names (1, k_max) does not duplicate it
+    assert spec_capture_shapes(((1, 5), (8, 3)), 5) == [(1, 5), (8, 3)]
+    # bad tables are refused with the reason
+    for text, message in [
+        ("5:5,4:3", "max_rows must increase"),
+        ("5-5", "is not max_rows:k"),
+        ("5:x", "is not max_rows:k"),
+        ("", "has no entries"),
+        ("16:2", "above the 32-row argmax tile"),  # 16 * 3 = 48 rows
+        ("0:5", "must be >= 1"),
+        ("5:0", "must be >= 1"),
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure parser)
+            parse_k_by_rows(text)
+    # the tile rule is the only shape rule
+    assert spec_check_shape((16, 1)) == (16, 1)  # 32 rows exactly
+    assert spec_check_shape([1, 31]) == (1, 31)  # any (rows, drafts) pair, returned as an int tuple
+    for shape in [(32, 1), (11, 2), (1, 32)]:
+        with pytest.raises(ValueError, match="argmax tile"):  # allow-pytest.raises (pure)
+            spec_check_shape(shape)
+    with pytest.raises(ValueError, match="is \\(rows, drafts\\)"):  # allow-pytest.raises (pure)
+        spec_check_shape(5)
+
+
+# Plan ---------------------------------------------------------------------------------------------
+def test_a_plan_sorts_shapes_and_widths_and_drops_duplicates():
+    shapes, widths = serving_plan([(8, 3), (1, 5), (8, 3)], {(1, 5): [2048, 1024, 1024], (8, 3): (4096,)}, max_rows=16)
+    assert shapes == [(1, 5), (8, 3)]
+    assert widths == {(1, 5): [1024, 2048], (8, 3): [4096]}
+    # bad plans are refused
+    for shapes, widths, max_rows, message in [
+        ([(1, 5)], {}, 16, "no verify widths for shape"),
+        ([(1, 5)], {(1, 5): [1024], (5, 5): [1024]}, 16, "not prepared"),
+        ([(1, 5)], {(1, 5): [1000]}, 16, "multiples of 64"),
+        ([(1, 5)], {(1, 5): [0]}, 16, "multiples of 64"),
+        ([(16, 1)], {(16, 1): [1024]}, 8, "more rows than max_rows"),
+        ([], {}, 16, "at least one shape"),
+        ([(1, 5)], {(1, 5): [1024]}, 0, "max_rows must be >= 1"),
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_plan(shapes, widths, max_rows)
+
+
+# Seed index ---------------------------------------------------------------------------------------
+def test_seed_index_gathers_reseed_pool_rows_and_previous_verify_rows_per_record():
+    # the first step after a reseed gathers the reseed-pool rows
+    idx = serving_seed_index((5, 5), rows=[7, 3], seed_cols=[None, None], previous=None, seeded={7: 0, 3: 1})
+    assert idx == [32, 33, 32, 32, 32]  # padding rows mirror live row 0 (serving_pad_rows)
+    # a continuation in the same record gathers verify row r * P + col
+    prev = (5, [7, 3, 9])
+    idx = serving_seed_index((5, 5), rows=[7, 3, 9], seed_cols=[0, 5, 2], previous=prev, seeded={})
+    assert idx == [0 * 6 + 0, 1 * 6 + 5, 2 * 6 + 2, 0, 0]
+    # a continuation across shapes uses the previous record's geometry: (5,5) replayed rows [a, b, c]; the
+    # next step is (8,3) with rows [c, a]: the gather still indexes the 6-column layout of the replay that
+    # produced the hidden.
+    prev = (5, [10, 11, 12])
+    idx = serving_seed_index((8, 3), rows=[12, 10], seed_cols=[2, 5], previous=prev, seeded={})
+    assert idx[:2] == [2 * 6 + 2, 0 * 6 + 5]
+    assert idx[2:] == [idx[0]] * 6  # padding rows mirror row 0
+    # a reseeded row and a continuing row mix in one step
+    prev = (3, [1, 2])
+    idx = serving_seed_index((8, 3), rows=[2, 5], seed_cols=[3, None], previous=prev, seeded={5: 1})
+    assert idx[:2] == [1 * 4 + 3, 32 + 1]
+    # padding rows take row zero whatever its source: row 0 continues from the previous replay, so the
+    # mirrors gather that same verify row
+    idx = serving_seed_index((8, 3), rows=[5, 6], seed_cols=[2, None], previous=(3, [5]), seeded={6: 0})
+    assert idx == [0 * 4 + 2, 32, 2, 2, 2, 2, 2, 2]
+    # row 0 was reseeded: the mirrors gather its reseed-pool row
+    idx = serving_seed_index((5, 5), rows=[6, 5], seed_cols=[None, 2], previous=(3, [5]), seeded={6: 1})
+    assert idx == [33, 2, 33, 33, 33]
+    # padding rows mirror the first live row (the bounded ring pool has no null block)
+    assert serving_pad_rows([7, 3], 5) == [7, 3, 7, 7, 7]
+    assert serving_pad_rows([9], 1) == [9]
+    assert serving_pad_rows([4, 2, 1], 3) == [4, 2, 1]
+    with pytest.raises(ValueError, match="at least one live row"):  # allow-pytest.raises (pure)
+        serving_pad_rows([], 5)
+    with pytest.raises(ValueError, match="3 live rows for a 2-row record"):  # allow-pytest.raises (pure)
+        serving_pad_rows([1, 2, 3], 2)
+
+
+def test_seed_index_refuses_inconsistent_histories():
+    for rows, seed_cols, previous, seeded, message in [
+        ([1], [6], (5, [1]), {}, "outside 0..5"),
+        ([1], [-1], (5, [1]), {}, "outside 0..5"),
+        ([4], [0], (5, [1, 2]), {}, "last replay served rows"),
+        ([4], [None], (5, [4]), {}, "not in the last serving_reseed"),
+        ([4], [0], None, {}, "none ran"),
+        ([4, 4], [0, 0], (5, [4]), {}, "duplicate rows"),
+        ([1, 2, 3, 4, 5, 6], [0] * 6, (5, [1, 2, 3, 4, 5, 6]), {}, "expected 1..5"),
+        ([1], [0, 0], (5, [1]), {}, "seed_cols for 1 live rows"),
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_seed_index((5, 5), rows, seed_cols, previous, seeded)
+
+
+# Masks --------------------------------------------------------------------------------------------
+_W = 1024
+
+
+def test_serving_masks_are_p_row_per_batch_and_bf16():
+    mf, ms = serving_masks_host([100, 7, 0], P=6, window=_W, S_k=2048)
+    assert mf.shape == (3, 1, 6, 2048) and ms.shape == (3, 1, 6, 2048)
+    assert mf.dtype == torch.bfloat16 and ms.dtype == torch.bfloat16
+    neg = torch.tensor(SPEC_MASK_NEG, dtype=torch.bfloat16)
+    for m in (mf, ms):
+        assert set(m.float().unique().tolist()) <= {0.0, float(neg)}
+    # They match the batched host builder row for row: the old batched builder made [B, 1, H*P, S_k] on
+    # the host; the new one makes the P-row block and the in-trace H repeat tiles it. With H=1 they must
+    # agree exactly.
+    cs, B, P, S_k = [100, 7, 2000], 3, 6, 2048
+    ref_f, ref_s = SpeculativeDecoder._packed_mask_host(None, cs, B, P, 1, _W, S_k)
+    mf, ms = serving_masks_host(cs, P, _W, S_k)
+    assert torch.equal(mf, ref_f)
+    assert torch.equal(ms, ref_s)
+    # The head repeat reproduces the head-major layout: ttnn.repeat([1, 1, H, 1]) on [B, 1, P, S_k] tiles
+    # the whole P block per head, i.e. row h*P+p -- the packed SDPA layout the host builder produced directly.
+    cs, B, P, H, S_k = [5, 300], 2, 4, 3, 1024
+    ref_f, ref_s = SpeculativeDecoder._packed_mask_host(None, cs, B, P, H, _W, S_k)
+    mf, ms = serving_masks_host(cs, P, _W, S_k)
+    assert torch.equal(mf.repeat(1, 1, H, 1), ref_f)
+    assert torch.equal(ms.repeat(1, 1, H, 1), ref_s)
+    # the full mask is causal per row and the sliding mask adds the window
+    mf, ms = serving_masks_host([1500], P=3, window=_W, S_k=2048)
+    for p in range(3):
+        upper = 1500 + p
+        full_ok = (mf[0, 0, p] == 0).nonzero().reshape(-1)
+        assert full_ok.min() == 0 and full_ok.max() == upper and full_ok.numel() == upper + 1
+        slide_ok = (ms[0, 0, p] == 0).nonzero().reshape(-1)
+        assert slide_ok.min() == upper - _W + 1 and slide_ok.max() == upper and slide_ok.numel() == _W
+    # The padded bytes count the 32-row tile, not the logical rows: a [B, 1, P, S_k] TILE tensor pads P to
+    # 32 rows, so the device footprint of one mask (or one fp32 intermediate of the in-trace builder) is
+    # B * 32 * S_k * elem, whatever P is.
+    top = 263168
+    assert serving_mask_padded_bytes((1, 5), top) == 32 * top * 2
+    assert serving_mask_padded_bytes((16, 1), top) == 16 * 32 * top * 2
+    assert serving_mask_padded_bytes((16, 1), 32768, elem_bytes=4) == 16 * 32 * 32768 * 4  # one fp32 chunk, 67 MB
+    # P does not enter: (8, 1) and (8, 3) cost the same tile-padded bytes
+    assert serving_mask_padded_bytes((8, 1), top) == serving_mask_padded_bytes((8, 3), top) == 8 * 32 * top * 2
+    # the helper applies the tile rule like every other shape consumer
+    with pytest.raises(ValueError, match="argmax tile"):  # allow-pytest.raises (pure)
+        serving_mask_padded_bytes((16, 2), top)
+
+
+def test_the_ring_mask_spans_ring_slots_with_the_pv_host_inputs_rule():
+    """Bounded sliding: slot j holds position top - ((top - j) mod ring); query p may attend
+    it iff (P-1-p) <= d < (P-1-p)+W and d <= top, with d = (top - j) mod ring (_pv_host_inputs)."""
+    ring, P, W = 2048, 6, _W
+    cs = [3000, 10]
+    mf, ms = serving_masks_host(cs, P, W, S_k=4096, ring=ring)
+    assert ms.shape == (2, 1, P, ring)
+    assert mf.shape == (2, 1, P, 4096)
+    neg = torch.tensor(SPEC_MASK_NEG, dtype=torch.bfloat16)
+    jr = torch.arange(ring)
+    for b, c in enumerate(cs):
+        top = c + P - 1
+        d = torch.remainder(top - jr, ring)
+        for p in range(P):
+            lo = P - 1 - p
+            ok = (d >= lo) & (d < lo + W) & (d <= top)
+            ref = torch.where(ok, torch.tensor(0.0, dtype=torch.bfloat16), neg)
+            assert torch.equal(ms[b, 0, p], ref), (b, p)
+
+
+# In-trace mask builder: its plan + op-for-op emulation must equal the host reference --------------
+def test_device_mask_plan_equals_the_host_masks_unbounded():
+    for positions, P, S_k in [
+        ([100, 7, 2000], 6, 2048),
+        ([0], 6, 1024),  # anchor at position 0: only key 0 visible on row 0
+        ([1023, 1018], 6, 2048),  # rows straddle the window and the first rung
+        ([5000, 11, 300], 2, 8192),
+        ([40000], 4, 65536 + 1024),  # more than one SPEC_MASK_KEY_CHUNK of keys
+    ]:
+        plan = serving_mask_plan(positions, P)
+        assert plan["q"].tolist() == [[c + p for p in range(P)] for c in positions]
+        assert "tm" not in plan and "base" not in plan
+        got_f, got_s = serving_masks_from_plan(plan, S_k, _W)
+        ref_f, ref_s = serving_masks_host(positions, P, _W, S_k)
+        assert got_f.shape == ref_f.shape and got_s.shape == ref_s.shape
+        assert got_f.dtype == torch.bfloat16 and got_s.dtype == torch.bfloat16
+        assert torch.equal(got_f, ref_f), (positions, P, S_k)
+        assert torch.equal(got_s, ref_s), (positions, P, S_k)
+        # the in-trace build works at the packed height from the uploaded packed-row positions (row h*P+p of
+        # batch b = c_b + p): the twin at h local heads is the host mask repeated per head, no wide row repeat
+        for h in (4, 8):
+            rows = serving_mask_rows(positions, P, h)
+            assert rows.shape == (1, len(positions) * h * P) and rows.dtype == torch.int64
+            assert rows.tolist()[0] == [c + p for c in positions for _ in range(h) for p in range(P)]
+            assert rows.reshape(len(positions), h, P)[:, 0, :].tolist() == plan["q"].tolist()
+            hf, hs = serving_masks_from_plan(plan, S_k, _W, h=h)
+            assert hf.shape == (len(positions), 1, h * P, S_k) and hs.shape == hf.shape
+            assert torch.equal(hf, ref_f.repeat(1, 1, h, 1)) and torch.equal(hs, ref_s.repeat(1, 1, h, 1))
+
+
+def test_device_mask_plan_equals_the_host_masks_under_a_ring():
+    for positions, P, S_k, ring in [
+        ([3000, 10], 6, 4096, 2048),
+        ([2047, 2048, 2049], 6, 4096, 2048),  # the wrap boundary
+        ([0, 1], 2, 1024, 2048),  # early context: the ring's untouched tail is masked
+        ([70000, 1500], 4, 71680, 2048),
+        ([5, 4100], 6, 8192, 4096),
+    ]:
+        plan = serving_mask_plan(positions, P, ring=ring)
+        for b, c in enumerate(positions):
+            top = c + P - 1
+            assert int(plan["tm"][b]) == top % ring
+            assert int(plan["base"][b]) == top - top % ring
+        got_f, got_s = serving_masks_from_plan(plan, S_k, _W, ring=ring)
+        ref_f, ref_s = serving_masks_host(positions, P, _W, S_k, ring=ring)
+        assert got_s.shape == (len(positions), 1, P, ring)
+        assert torch.equal(got_f, ref_f), (positions, P, S_k, ring)
+        assert torch.equal(got_s, ref_s), (positions, P, S_k, ring)
+        hf, hs = serving_masks_from_plan(plan, S_k, _W, ring=ring, h=8)  # the packed height under a ring
+        assert torch.equal(hf, ref_f.repeat(1, 1, 8, 1)) and torch.equal(hs, ref_s.repeat(1, 1, 8, 1))
+    # The ring-slot position rule matches the modulo form: base + j - ring * [j > tm] is
+    # top - ((top - j) mod ring) for every slot, so the device form needs no modulo.
+    ring, P = 2048, 6
+    for c in (0, 7, 2042, 2043, 2048, 5000, 100000):
+        plan = serving_mask_plan([c], P, ring=ring)
+        top = c + P - 1
+        j = torch.arange(ring)
+        device_form = int(plan["base"][0]) + j - ring * (j > int(plan["tm"][0])).long()
+        modulo_form = top - torch.remainder(top - j, ring)
+        assert torch.equal(device_form, modulo_form), c
+
+
+# Page-table rows ----------------------------------------------------------------------------------
+def test_select_rows_picks_rows_zero_pads_padding_rows_and_narrow_sources():
+    table = torch.arange(1, 13).reshape(3, 4)  # rows 0..2, 4 blocks each
+    out = serving_select_rows(table, [2, 0], B=4, width=6, allow_clip=False)
+    assert out.dtype == torch.int64 and out.shape == (4, 6)
+    assert out[0].tolist() == [9, 10, 11, 12, 0, 0]
+    assert out[1].tolist() == [1, 2, 3, 4, 0, 0]
+    assert out[2:].abs().sum() == 0
+    # a wider source is clipped only when allowed
+    table = torch.tensor([[1, 2, 3, 0], [5, 6, 7, 8]])
+    # zeros past the width are not live blocks: fine either way
+    assert serving_select_rows(table, [0], 1, 3, allow_clip=False).tolist() == [[1, 2, 3]]
+    assert serving_select_rows(table, [1], 1, 3, allow_clip=True).tolist() == [[5, 6, 7]]
+    with pytest.raises(ValueError, match="live blocks past column 3"):  # allow-pytest.raises (pure)
+        serving_select_rows(table, [1], 1, 3, allow_clip=False)
+    # bad rows and shapes are refused
+    table = torch.tensor([[1, 2], [3, 4]])
+    with pytest.raises(ValueError, match="outside the 2-row page table"):  # allow-pytest.raises (pure)
+        serving_select_rows(table, [2], 1, 2, allow_clip=True)
+    with pytest.raises(ValueError, match="3 rows for a 2-row table"):  # allow-pytest.raises (pure)
+        serving_select_rows(table, [0, 1, 0], 2, 2, allow_clip=True)
+    with pytest.raises(ValueError, match="must be \\[rows, blocks\\]"):  # allow-pytest.raises (pure)
+        serving_select_rows(torch.zeros(1, 2, 2), [0], 1, 2, allow_clip=True)
+    # a 1-D row is a one-row table
+    assert serving_select_rows(torch.tensor([7, 8]), [0], 1, 2, allow_clip=True).tolist() == [[7, 8]]
+
+
+# Record bookkeeping on a device-free decoder ----------------------------------------------------
+def _bare_decoder(n_layers=3):
+    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    spec._srv_records = None
+    spec._srv_captured = False
+    spec._srv_shape_bufs = {}
+    spec._srv_per_layer = None
+    spec._srv_lanes, spec._srv_lane_slots, spec._srv_lane_devices = 1, 0, [0]
+    spec._srv_pool_v = spec._srv_pool_s = None
+    spec._srv_uploaded = {}
+    spec._srv_last = None
+    spec._srv_seeded = {}
+    spec.target = SimpleNamespace(layers=list(range(n_layers)))
+    return spec
+
+
+def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
+    """The serving rail on a recording ttnn: every device buffer a refresh, a reseed or a replay touches exists
+    after serving_prepare, for every record and rung, first-time row sets, seed-column patterns and positions
+    included; a buffer one of them would have to create is an error, never an allocation (the decode-trace
+    guard releases and re-captures every decode trace when the allocator grows after a capture, 0.7 s each)."""
+    import weakref
+
+    import models.demos.gemma4.tt.spec_decode as spec_decode_module
+
+    class _Buf:
+        made = [0]
+
+        def __init__(self, host, dtype=None, on_device=False):
+            _Buf.made[0] += 1
+            self.address = _Buf.made[0]
+            self.host, self.dtype, self.on_device, self.freed = host, dtype, on_device, False
+
+        @property
+        def shape(self):
+            return tuple(self.host.shape)
+
+        def buffer_address(self):
+            return self.address
+
+        def deallocate(self, force=False):
+            self.freed = True
+
+    allocated, ops, h2d, replays, forwards = [], [], [], [], []
+
+    def forbidden(name):
+        def call(*args, **kwargs):
+            raise AssertionError(f"ttnn.{name} would allocate on the device after serving_capture")
+
+        return call
+
+    def from_torch(t, device=None, layout=None, dtype=None, mesh_mapper=None):
+        buf = _Buf(t.clone(), dtype, on_device=device is not None)
+        if device is not None:
+            allocated.append(buf)  # the only device constructor the rail uses
+        return buf
+
+    def copy_host_to_device_tensor(host, dev):
+        assert dev.on_device and not dev.freed and not host.on_device
+        dev.host = host.host.clone()
+        h2d.append(dev.address)
+
+    def op(host, dtype=None, address=None):
+        out = _Buf(host, dtype, on_device=True)
+        if address is not None:
+            out.address = address  # a view: ttnn's same-volume reshape shares the source's buffer
+        ops.append(weakref.ref(out))  # an op output: freed explicitly or dropped (collected) before a call returns
+        return out
+
+    def gone(ref):
+        return ref() is None or ref().freed
+
+    def pad(t, pads, value=0.0):
+        return op(torch.zeros(1, 1, t.host.shape[2] + pads[2][1], t.host.shape[-1]), t.dtype)
+
+    def assign(src, dst):
+        dst.host = src.host
+
+    def copy(src, dst):
+        assert dst.on_device and not dst.freed and dst.address in prepared, "ttnn.copy writes a prepared buffer"
+        assert tuple(src.host.shape) == tuple(dst.host.shape), (src.host.shape, dst.host.shape)
+        dst.host = src.host.clone()
+        copies.append(dst.address)
+
+    traces = []
+
+    fake = SimpleNamespace(
+        ROW_MAJOR_LAYOUT=object(),
+        TILE_LAYOUT=object(),
+        DRAM_MEMORY_CONFIG=object(),
+        uint32=object(),
+        int32=object(),
+        bfloat16=object(),
+        float32=object(),
+        Tensor=type("Tensor", (), {}),
+        from_torch=from_torch,
+        copy_host_to_device_tensor=copy_host_to_device_tensor,
+        execute_trace=lambda mesh, tid, cq_id=0, blocking=False: replays.append(tid),
+        release_trace=lambda mesh, tid: None,
+        synchronize_device=lambda mesh: None,
+        get_device_tensors=lambda t: [t],
+        to_torch=lambda t: t.host,
+        to_memory_config=lambda t, cfg: t,
+        pad=pad,
+        assign=assign,
+        copy=copy,
+        reshape=lambda t, shape: op(t.host.reshape(*shape), t.dtype, address=t.address),
+        concat=lambda ts, dim: op(torch.cat([t.host for t in ts], dim=dim), ts[0].dtype),
+        permute=lambda t, dims: op(t.host.permute(*dims).contiguous(), t.dtype),
+        begin_trace_capture=lambda mesh, cq_id=0: traces.append(len(traces) + 1) or traces[-1],
+        end_trace_capture=lambda mesh, tid, cq_id=0: None,
+        BufferType=SimpleNamespace(TRACE=object()),
+        **{
+            name: forbidden(name)
+            for name in ("to_device", "zeros", "ones", "full", "empty", "arange", "allocate_tensor")
+        },
+    )
+    monkeypatch.setattr(spec_decode_module, "ttnn", fake)
+    prepared, copies = set(), []
+    shapes = [(1, 5), (5, 5), (8, 3), (16, 1)]
+    ladder = [2048, 8192, 32768, 131072, 263168]  # the 12B ladder
+    layer_types = ["sliding_attention", "sliding_attention", "full_attention", "sliding_attention", "full_attention"]
+    backbone, vocab, wire_rows = 64, 96, 32
+
+    def verify_forward(x, current_pos, current_pos_cache, page_table, kv_cache, page_tables_per_layer):
+        rows = int(x.host.shape[-1])
+        forwards.append((x.address, current_pos.address, current_pos_cache.address, rows))
+        return op(torch.zeros(1, 1, rows, vocab), fake.bfloat16), op(torch.zeros(1, 1, rows, backbone), fake.bfloat16)
+
+    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    spec.mesh_device, spec._mapper, spec._tp, spec.tt_kv_cache = object(), None, 8, []
+    spec.target = SimpleNamespace(
+        layers=list(range(len(layer_types))),
+        hf_config=SimpleNamespace(layer_types=layer_types),
+        last_kv_layer_by_type={"sliding_attention": 3, "full_attention": 4},
+        vocab_size=vocab,
+        ttnn_verify_forward=verify_forward,
+    )
+    spec._pv_ring = {"sliding_attention": None, "full_attention": None}
+    spec._pv_bs_t = {"sliding_attention": 128, "full_attention": 64}
+    spec._pv_ring_rep = {"sliding_attention": 3, "full_attention": 4}
+    spec._packed_H = lambda: 4  # local query heads: the packed-row positions are B x 4 x P per shape
+    spec._srv_blocks = ladder[-1] // 64
+    spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
+    spec._srv_flat_type = "full_attention"
+    spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
+    spec._srv_lanes, spec._srv_lane_slots, spec._srv_lane_devices = (
+        1,
+        0,
+        [0],
+    )  # the constructor's lane geometry (front-packed)
+    spec._srv_phase_ms, spec._srv_replay_blocking = {}, False  # the replay's sub-phases, the attribution knob off
+    spec._srv_seed_traces, spec._srv_traced_seed = {}, True  # serving_capture adds one seed trace per shape
+    spec._srv_sharded_draft_argmax, spec._srv_draft_consts = (
+        False,
+        {},
+    )  # the gathered drafter argmax (the sharded one is device-tested)
+    spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
+    spec._srv_measuring = False
+    spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
+    spec._srv_iota, spec._srv_records, spec._srv_shape_bufs = {}, {}, {}
+    spec._srv_widths, spec._srv_shapes = {shape: list(ladder) for shape in shapes}, shapes
+    spec._srv_captured = spec._srv_frozen = False
+    spec._srv_shapes, spec._srv_projection = shapes, SimpleNamespace(describe=lambda: "fake plan")
+    spec._srv_trace_region_mb = lambda: 0.0
+    spec._srv_trace_region_size_mb = lambda: None
+    # the REAL body runs over fakes of the drafter step, the packed verify, the seed gather, the masks and the
+    # argmax (their outputs are op outputs like any other), so the assembly of the record's outputs is the real one
+    spec._shared_kv = object()
+    spec.assistant = SimpleNamespace(
+        step=lambda tok, h, kv, d_ptl, d_pu, d_pi, gather_logits=True, rope_prepared=None: (
+            op(torch.zeros(1, 1, tok.host.shape[-1], vocab), fake.bfloat16),
+            op(h.host.clone(), fake.bfloat16),
+        ),
+        # the record body gathers the drafter's RoPE rows once per replay (``prepare_rope``) and frees them after
+        # the K steps (``release_rope``): host no-ops here, the device test asserts the hoisted and per-layer forms agree
+        prepare_rope=lambda pos: {},
+        release_rope=lambda prepared: None,
+    )
+    spec.target.ttnn_packed_verify_forward = lambda x, **kw: (
+        op(torch.zeros(1, 1, x.host.shape[-1], vocab), fake.bfloat16),
+        op(torch.zeros(1, 1, x.host.shape[-1], backbone), fake.bfloat16),
+    )
+    spec._srv_seed_gather = lambda S: op(torch.zeros(1, 1, S["B"], backbone), fake.bfloat16)
+    spec._srv_masks_device = lambda S, rec: (
+        op(torch.zeros(1, 1, 32, rec["S_k"]), fake.bfloat16),
+        op(torch.zeros(1, 1, 32, rec["S_k"]), fake.bfloat16),
+    )
+    spec._argmax_last = lambda logits, rows: op(torch.arange(rows).reshape(1, 1, rows), fake.uint32)
+    # serving_prepare's device set through the real allocators and the real eager bodies (the iotas are made
+    # here the way the real masks make them)
+    for shape in shapes:
+        B, K = shape
+        S = spec._srv_alloc_shape(shape)
+        assert S["v_pos"].shape == (1, B * (K + 1)) and S["v_pos_rows"].shape == (1, B * 4 * (K + 1))
+        spec._srv_shape_bufs[shape] = S
+        spec._srv_seed_rows(shape, [0] * B, [0] * B)
+        for w in ladder:
+            rec = spec._srv_alloc_width(shape, S, w)
+            prepared.update(buf.address for buf in allocated)
+            for _j0, n_keys in spec._srv_mask_chunks(w):
+                spec._srv_iota_for(n_keys)
+            outs = spec._srv_body(rec)
+            assert outs == (rec["verify_x"], rec["vidx"]), "the body returns the record's persistent outputs"
+            assert rec["verify_x"].shape == (1, B * (K + 1)) and rec["vidx"].shape == (1, 1, B * (K + 1))
+            spec._srv_records[(shape, w)] = rec
+    assert sorted(spec._srv_iota) == [1024, 2048, 8192, 32768]  # 263168 = 8 x 32768 + 1024
+    prepared = {buf.address for buf in allocated}
+    assert all(gone(ref) for ref in ops), "the eager bodies' transients are freed before they return"
+    outputs = {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()}
+    # the real capture binds only the record's own handles; an allocation inside it would be the one the
+    # decode-trace guard counted at the first served request (30 x 128 B + 10 x 64 B on the 12B Galaxy)
+    allocated.clear(), ops.clear()
+    spec.serving_capture()
+    assert spec._srv_captured and allocated == [] and all(gone(ref) for ref in ops)
+    assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
+    # the records take the first 20 trace ids, then one seed trace per shape (577308f7637)
+    assert [rec["id"] for rec in spec._srv_records.values()] == traces[:20] and len(traces) == 20 + len(shapes)
+    assert list(spec._srv_seed_traces) == list(shapes) and list(spec._srv_seed_traces.values()) == traces[20:]
+    spec._srv_frozen = True
+    ops.clear(), h2d.clear(), copies.clear(), forwards.clear()
+    # every record and rung: a first-time refresh, row set and position, a reseed, a seeded replay, then a
+    # continuing replay (seed columns from the last replay's verify hidden)
+    group_tables, used = {}, []
+    for shape in shapes:
+        B, K = shape
+        live = min(B, 3)
+        for w, first, last in SpeculativeDecoder.serving_measure_positions(ladder, K, None):
+            rec = spec._srv_records[(shape, w)]
+            for pos in sorted({first, last}):
+                tables = []
+                for slot in spec._srv_slots:
+                    t = group_tables.get((slot, pos))
+                    if t is None:
+                        t = torch.arange(wire_rows * spec._srv_blocks, dtype=torch.int32).reshape(wire_rows, -1) % 977
+                        t = group_tables[(slot, pos)] = t + pos % 5 + slot
+                    tables.append(t)
+                spec.serving_refresh_page_tables(tables)
+                rows = [(pos + 7 * i) % wire_rows for i in range(live)]
+                positions = [max(0, pos - i) for i in range(live)]
+                table = torch.zeros(B, spec._srv_blocks, dtype=torch.int32)
+                for i, r in enumerate(rows):
+                    table[i] = tables[0][r]
+                spec.serving_reseed(shape, rows, [1 + i for i in range(live)], positions, table)
+                used.append(spec._srv_seed_traces[shape])  # the reseed replays the shape's seed trace
+                result = spec.serving_step(shape, rows, [1 + i for i in range(live)], positions, table, [None] * live)
+                assert (result.width, result.live) == (w, live) and result.logits_to_host().shape == (
+                    live,
+                    K + 1,
+                    vocab,
+                )
+                assert result.drafts.shape == (live, K) and result.argmax_ids.shape == (live, K + 1)
+                cols = [min(K, i) for i in range(live)]
+                result = spec.serving_step(shape, rows, [2 + i for i in range(live)], positions, table, cols)
+                assert result.width == w
+                used.extend([rec["id"], rec["id"]])
+    assert allocated == [], [buf.shape for buf in allocated]
+    assert all(gone(ref) for ref in ops) and set(h2d) <= prepared and replays == used and copies == []
+    # the verify check (one served replay per shape and rung here) ran its plain forward on the shape's persistent
+    # seed inputs and compared row 0 of every live row: the recording argmax answers arange(rows), so the plain
+    # ids are 0..live-1 and the packed row-0 ids r * P -- rows past the first disagree, the first agrees
+    assert spec._srv_checked == {(shape, w): 1 for shape in shapes for w in ladder}
+    assert spec._srv_check_last == [] or all(plain != packed for _r, _p, plain, packed in spec._srv_check_last)
+    # a measurement replay (serving_measure_costs raises the flag around its zero-table steps) is never checked
+    spec._srv_measuring = True
+    spec.serving_step(shape, rows, [3 + i for i in range(live)], positions, table, cols)
+    spec._srv_measuring = False
+    used.append(rec["id"])
+    assert spec._srv_checked == {(shape, w): 1 for shape in shapes for w in ladder}
+    # the cost table itself: every row of the shape live for the reseed and the step lines (the covering record's
+    # cost), a one-row step beside it kept as the partial line only where cheaper; the flag is down afterwards and
+    # the measurement replays left the check counters alone
+    before = dict(spec._srv_checked)
+    costs = spec.serving_measure_costs(ladder[-1] - 8, repeats=1)
+    assert not spec._srv_measuring and spec._srv_checked == before
+    assert {key[:2] for key in costs if key[0] == "reseed"} == {("reseed", shape) for shape in shapes}
+    assert {key for key in costs if key[0] == "step"} == {("step", shape, w) for shape in shapes for w in ladder}
+    assert all(key[0] in ("reseed", "step", "partial") for key in costs)
+    partials = [key for key in costs if key[0] == "partial"]
+    assert all(costs[key][1] < costs[("step", key[1], key[2])][1] for key in partials)
+    assert all(key[1][0] > 1 for key in partials), "a one-row shape has no partial replay"
+    forwards.clear()
+    assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
+    assert all(
+        buf.address in prepared and not buf.freed
+        for rec in spec._srv_records.values()
+        for buf in (rec["verify_x"], rec["vidx"])
+    ), "the readbacks come from the records' persistent outputs"
+    seeds = {
+        (S["seed_tok"].address, S["seed_pu"].address, S["seed_pi"].address, S["B"])
+        for S in spec._srv_shape_bufs.values()
+    }
+    assert set(forwards) <= seeds, "every reseed forward ran on its shape's persistent inputs"
+    # a buffer a call would have to create is an error, never an allocation
+    with expect_error(RuntimeError, "a replay never allocates"):
+        spec._srv_iota_for(4096)
+    logits = spec._srv_logits
+    spec._srv_logits = None
+    with expect_error(RuntimeError, "a replay never allocates"):
+        spec._srv_publish_logits(_Buf(torch.zeros(1, 1, 32, vocab), fake.bfloat16, on_device=True))
+    spec._srv_logits = logits
+    pools = spec._srv_pool_v, spec._srv_pool_s
+    spec._srv_pool_v = None
+    with expect_error(RuntimeError, "a reseed never allocates"):
+        spec.serving_reseed((1, 5), [0], [1], [0], torch.zeros(1, spec._srv_blocks, dtype=torch.int32))
+    spec._srv_pool_v, spec._srv_pool_s = pools
+    assert allocated == []
+    # the release frees the reseed inputs with everything else and lifts the freeze
+    bufs, recs = list(spec._srv_shape_bufs.values()), list(spec._srv_records.values())
+    spec.serving_release()
+    assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi", "v_pos", "v_pos_rows"))
+    assert not spec._srv_frozen
+    assert all(rec[key].freed for rec in recs for key in ("verify_x", "vidx"))
+
+
+def test_capture_and_step_refuse_to_run_out_of_order(monkeypatch, expect_error):
+    spec = _bare_decoder()
+    spec.serving_release()  # a no-op before prepare
+    assert spec._srv_records is None
+    with pytest.raises(RuntimeError, match="serving_prepare has not run"):  # allow-pytest.raises (pure)
+        spec.serving_capture()
+    spec._srv_records = {}
+    spec._srv_shape_bufs = {(1, 5): {}}
+    spec._srv_widths = {(1, 5): [1024]}
+    with pytest.raises(RuntimeError, match="serving_capture has not run"):  # allow-pytest.raises (pure)
+        spec.serving_step((1, 5), [0], [1], [0], torch.zeros(1, 4, dtype=torch.int32), [None])
+    spec._srv_captured = True
+    with pytest.raises(RuntimeError, match="serving_capture already ran"):  # allow-pytest.raises (pure)
+        spec.serving_capture()
+    _rail_allocates_nothing_after_capture(monkeypatch, expect_error)
+
+
+def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
+    spec = _bare_decoder(n_layers=3)
+    spec.serving_refresh_page_tables(None)  # no-op, like refresh_page_tables
+    assert spec._srv_per_layer is None
+    tables = [torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), None, torch.tensor([5, 6])]
+    spec.serving_refresh_page_tables(tables)
+    assert spec._srv_per_layer[0].dtype == torch.int64 and spec._srv_per_layer[0].shape == (2, 2)
+    assert spec._srv_per_layer[1] is None
+    assert spec._srv_per_layer[2].shape == (1, 2)  # a 1-D row is a one-row table
+    # the layers of a KV group hand the same host table: it is converted once and kept shared (the group check
+    # then compares identities; converting and comparing every layer cost ~10 ms a refresh at 32 rows x 4096)
+    shared = torch.tensor([[7, 8], [9, 10]], dtype=torch.int32)
+    spec.serving_refresh_page_tables([shared, shared, shared])
+    assert spec._srv_per_layer[0] is spec._srv_per_layer[1] is spec._srv_per_layer[2]
+    assert spec._srv_per_layer[0].dtype == torch.int64 and spec._srv_per_layer[0].tolist() == [[7, 8], [9, 10]]
+    # tables that do not match the target are refused
+    for tables, error, message in [
+        ([torch.zeros(1, 2)] * 2, ValueError, "one table per target layer \\(3\\)"),
+        (torch.zeros(1, 2), ValueError, "one table per target layer"),
+        ([torch.zeros(1, 2), "x", None], TypeError, "must be a host torch tensor"),
+        ([torch.zeros(1, 2, 2), None, None], ValueError, "must be \\[rows, blocks\\]"),
+    ]:
+        spec = _bare_decoder(n_layers=3)
+        with pytest.raises(error, match=message):  # allow-pytest.raises (pure)
+            spec.serving_refresh_page_tables(tables)
+    # the step inputs are validated per row
+    for rows, anchors, positions, message in [
+        ([], [], [], "expected 1..5"),
+        ([0, 1, 2, 3, 4, 5], [1] * 6, [0] * 6, "expected 1..5"),
+        ([0, 1], [1], [0, 0], "lengths differ"),
+        ([0, 0], [1, 1], [0, 0], "duplicate rows"),
+        ([-1], [1], [0], "negative row"),
+        ([0], [1], [-3], "negative anchor/position"),
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            SpeculativeDecoder._srv_check_rows((5, 5), rows, anchors, positions)
+    # the step result reads its logits through its reader
+    seen = []
+    result = ServingStepResult(
+        shape=(5, 5),
+        width=1024,
+        live=2,
+        drafts=torch.zeros(2, 5, dtype=torch.int64),
+        argmax_ids=torch.zeros(2, 6, dtype=torch.int64),
+        logits=object(),
+        _reader=lambda: seen.append(1) or torch.zeros(2, 6, 8, dtype=torch.bfloat16),
+    )
+    assert result.logits_to_host().shape == (2, 6, 8)
+    assert seen == [1]
+    bare = ServingStepResult((1, 5), 1024, 1, torch.zeros(1, 5), torch.zeros(1, 6), None)
+    with pytest.raises(RuntimeError, match="no logits reader"):  # allow-pytest.raises (pure)
+        bare.logits_to_host()
+
+
+# --- packed verify KV write: the sharded-layout probe must run whenever the per-position loop runs ---
+
+
+def test_the_packed_write_probe_follows_the_fallback_loop():
+    from models.demos.gemma4.tt.attention.decode import packed_write_takes_fallback_loop
+
+    for kv_staging, embed_idx, is_kv_shared, expected in [
+        (None, None, False, True),  # no staging: the loop, probe needed
+        ("staging", None, False, True),  # staging attached but a positional write: still the loop
+        ("staging", "embed", False, False),  # loop-free staging fill: no probe
+        (None, "embed", False, True),  # embed index without staging cannot fill loop-free
+        ("staging", None, True, False),  # shared-KV layers write nothing
+    ]:
+        assert packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared) is expected, (
+            kv_staging,
+            embed_idx,
+            is_kv_shared,
+        )
+
+
+# Default width ladder (x4 from 2048) and the trace-region projection -------------------------------
+_DEFAULT_SHAPES = [(1, 5), (5, 5), (8, 3), (16, 1)]
+
+
+def test_default_ladder_is_x4_from_2048_up_to_the_top_rung():
+    assert serving_width_ladder(262144, 5) == [2048, 8192, 32768, 131072, 263168]
+    assert serving_width_ladder(131072, 5) == [2048, 8192, 32768, 131072, 132096]
+    assert serving_width_ladder(8192, 1) == [2048, 8192, 9216]
+    assert serving_width_ladder(1024, 5) == [2048]  # the top rung alone when it is the smallest
+    # the top rung is independent of K across the default table (every tail rounds to 263168)
+    assert {serving_width_ladder(262144, k)[-1] for _rows, k in _DEFAULT_SHAPES} == {263168}
+    # below the smallest rung the record still serves
+    ladder = serving_width_ladder(262144, 5)
+    assert serving_width_for(ladder, 0, 5) == 2048
+    assert serving_width_for(ladder, 2048 - 7, 5) == 2048
+    assert serving_width_for(ladder, 2048 - 6, 5) == 8192
+    # the rung override keeps the largest rungs
+    assert serving_width_ladder(262144, 5, max_rungs=2) == ladder[-2:] == [131072, 263168]
+    assert serving_width_ladder(262144, 5, max_rungs=1) == [263168]
+    assert serving_width_ladder(262144, 5, max_rungs=99) == ladder
+    with pytest.raises(ValueError, match="max_rungs must be >= 1"):  # allow-pytest.raises (pure)
+        serving_width_ladder(262144, 5, max_rungs=0)
+    # bad ladder parameters are refused
+    for kwargs, message in [
+        ({"max_context": 0, "draft_len": 5}, "must be >= 1"),
+        ({"max_context": 1024, "draft_len": 0}, "must be >= 1"),
+        ({"max_context": 1024, "draft_len": 5, "bucket": 100}, "multiple of 64"),
+        ({"max_context": 1024, "draft_len": 5, "factor": 1}, "factor >= 2"),
+        ({"max_context": 1024, "draft_len": 5, "smallest": 64}, "smallest >= bucket"),
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_width_ladder(**kwargs)
+
+
+def test_every_ladder_is_x4_spaced_and_ends_at_a_covering_top_rung():
+    for max_context in (1024, 4096, 8192, 65536, 131072, 262144, 300000):
+        for k in (1, 3, 5):
+            ladder = serving_width_ladder(max_context, k)
+            assert ladder == sorted(set(ladder)), (max_context, k)
+            for a, b in zip(ladder, ladder[1:]):
+                assert b == 4 * a or b == ladder[-1], (max_context, k, a, b)
+            assert all(w % 1024 == 0 for w in ladder), (max_context, k)
+            # the last position of the context gets a rung, and the rung count stays logarithmic
+            assert serving_width_for(ladder, max_context - 1, k) == ladder[-1], (max_context, k)
+            assert len(ladder) <= 6, (max_context, k)
+
+
+def test_the_plan_takes_the_default_ladder_per_shape_and_the_projection_counts_its_records():
+    shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
+    assert shapes == _DEFAULT_SHAPES
+    assert all(len(ws) == 5 for ws in widths.values())
+    assert widths[(16, 1)] == [2048, 8192, 32768, 131072, 263168]
+    _shapes, capped = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144, max_rungs=2)
+    assert all(ws == [131072, 263168] for ws in capped.values())
+    with pytest.raises(ValueError, match="needs max_context"):  # allow-pytest.raises (pure)
+        serving_plan(_DEFAULT_SHAPES, None, 16)
+    # the projection counts records per shape and adds the base
+    proj = serving_trace_projection(shapes, widths, record_mb=32.0, region_mb=512, base_mb=87)
+    assert proj.records == 20
+    assert proj.per_shape == {shape: 5 for shape in _DEFAULT_SHAPES}
+    assert proj.projected_mb == 87 + 20 * 32.0
+    assert proj.fits is False
+    assert "EXCEEDS" in proj.describe()
+    assert serving_trace_projection(shapes, widths, record_mb=32.0, region_mb=960, base_mb=87).fits is True
+    unknown = serving_trace_projection(shapes, widths, record_mb=32.0, base_mb=87)
+    assert unknown.fits is None and "not readable" in unknown.describe()
+    assert SPEC_RECORD_MB_DEFAULT == 32.0
+    with pytest.raises(ValueError, match="record_mb must be > 0"):  # allow-pytest.raises (pure)
+        serving_trace_projection(shapes, widths, record_mb=0)
+    # The 12B measurement fits the Galaxy but not QB2 at the full ladder: measured per-record trace sizes
+    # (12B TP8, width-independent) on top of the 87 MB plain traces.
+    measured = {(1, 5): 27.1, (5, 5): 31.9, (8, 3): 25.5, (16, 1): 21.9}
+    total = 87 + sum(len(widths[s]) * mb for s, mb in measured.items())
+    assert round(total, 1) == 619.0
+    assert total > 512 and total < 960
+    _shapes, three = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144, max_rungs=3)
+    assert 87 + sum(len(three[s]) * mb for s, mb in measured.items()) < 512
+
+
+# Alias guards and the seed-column convention -------------------------------------------------------
+def _calls_in(fn_name):
+    tree = _module()
+    fn = next(f for f in _functions(tree) if f.name == fn_name)
+    return [n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+
+
+def test_argmax_frees_its_slice_sources_only_when_they_are_copies():
+    """Both partial-slice frees in _argmax_last (the >32-row tile slices and the trimmed ids) are guarded by
+    _same_device_buffer, like the pad above them: a ttnn that serves a slice as a view must not lose its source.
+    The body stages are separate methods the device test can run eagerly, with the guarded frees inside them."""
+    calls = _calls_in("_argmax_last")
+    assert calls.count("_same_device_buffer") >= 3, calls
+    tree = _module()
+    names = {fn.name for fn in _functions(tree)}
+    assert {"_srv_seed_gather", "_srv_assemble_verify_x", "_srv_masks_device"} <= names
+    body_calls = _calls_in("_srv_body")
+    assert "_same_device_buffer" not in body_calls  # the guarded frees moved into the stage methods
+    body = next(f for f in _functions(tree) if f.name == "_srv_body")
+    method_calls = {
+        n.func.attr for n in ast.walk(body) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
+    assert {"_srv_seed_gather", "_srv_assemble_verify_x", "_srv_masks_device"} <= method_calls, method_calls
+
+
+def test_the_seed_column_is_the_pre_contract_current_mode():
+    """The adapter passes seed_cols = committed count - 1 = accepted drafts; the pre-contract B=1 production
+    mode picked the same verify row (_fused_shift_seed_row("current") = min(accepted, K)), and the gather
+    index lands on that row of the previous replay's hidden layout."""
+    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    spec._fused_shift_seed = "current"
+    K = 5
+    for accepted in range(K + 1):
+        committed = accepted + 1
+        assert committed - 1 == spec._fused_shift_seed_row(accepted, K)
+        idx = serving_seed_index((5, K), [3], [committed - 1], (K, [9, 3]), {})
+        assert idx[0] == 1 * (K + 1) + accepted
+
+
+# Packed-verify GQA groups at nkv_local >= 2 (the TP4 column) --------------------------------------
+def test_packed_kv_groups_are_contiguous_head_blocks_in_the_head_major_order():
+    """Row h*P+p of the packed Q (and of the [B,1,H*P,S_k] mask the body H-repeats) lands in the KV group the
+    head-sharded GQA map gives its head, so the kernel's row-range grouping by num_q_heads/num_kv_heads on the
+    logical head count is the right one for every TP (nkv_local = 1 on TP8, 2 on TP4 for the 12B)."""
+    for h_local, nkv_local in [(2, 1), (4, 1), (4, 2), (8, 4), (8, 2)]:
+        for P in (2, 4, 6):
+            groups = packed_verify_kv_groups(h_local, nkv_local, P)
+            assert [g for g, _a, _b in groups] == list(range(nkv_local)), (h_local, nkv_local, P)
+            assert groups[0][1] == 0 and groups[-1][2] == h_local * P, (h_local, nkv_local, P)
+            heads_per_kv = h_local // nkv_local
+            for g, first, last in groups:
+                assert last - first == (h_local * P) // nkv_local  # num_q_heads / num_kv_heads, rows per KV head
+                for row in range(first, last):
+                    head, _p = divmod(row, P)
+                    assert head // heads_per_kv == g, (row, head, g)
+    # uneven head splits are refused
+    with pytest.raises(ValueError, match="do not split evenly"):  # allow-pytest.raises (pure)
+        packed_verify_kv_groups(6, 4, 2)
+    with pytest.raises(ValueError, match="must be >= 1"):  # allow-pytest.raises (pure)
+        packed_verify_kv_groups(4, 0, 2)
+
+
+# Width-matched verify tables per layer type (hybrid kv-cache groups) ------------------------------
+_HYBRID_12B = {"sliding_attention": 256, "full_attention": 128}  # tokens per block, HMA byte-unified pools
+_SINGLE_POOL = {"sliding_attention": 64, "full_attention": 64}
+_NO_RING = {"sliding_attention": None, "full_attention": None}
+
+
+def test_hybrid_pools_get_one_width_per_type_spanning_the_same_mask():
+    """Each type's table times its own block size spans the rung: one block size for both types would
+    give the full-attention table half the mask (the packed SDPA then attends 1024 tokens under a
+    2048-wide mask and reads the mask rows at the wrong pitch for every batch row past the first)."""
+    for s_k, sliding, full in [(2048, 8, 16), (8192, 32, 64), (263168, 1028, 2056)]:
+        widths = serving_verify_table_widths(s_k, _HYBRID_12B, _NO_RING, blocks=4096)
+        assert widths == {"sliding_attention": sliding, "full_attention": full}, s_k
+        assert all(widths[lt] * _HYBRID_12B[lt] == s_k for lt in widths), s_k
+    # a single pool is the control
+    assert serving_verify_table_widths(2048, _SINGLE_POOL, _NO_RING, blocks=4096) == {
+        "sliding_attention": 32,
+        "full_attention": 32,
+    }
+    # a bounded ring sizes the sliding table from the ring
+    ring = {"sliding_attention": 2048, "full_attention": None}
+    widths = serving_verify_table_widths(8192, _SINGLE_POOL, ring, blocks=4096)
+    assert widths == {"sliding_attention": 32, "full_attention": 128}
+    # a hybrid ring pool: the ring in tokens over the sliding type's own block size
+    widths = serving_verify_table_widths(8192, _HYBRID_12B, ring, blocks=4096)
+    assert widths == {"sliding_attention": 8, "full_attention": 64}
+    # the adapter's table width never caps a type: the top rung rounds max_context + K + 2 up, so a type at the
+    # plugin's own block size always needs more columns than the adapter's table (zero-padded, block 0). The 31B
+    # at TP4 (sliding block 64, full 128 under hybrid groups; a 4096-column plugin table at 262144 context): a
+    # 4096-column sliding table under the 263168-wide mask made the kernel read the mask's second row tile
+    # (packed rows 32-47) 32 tiles early, 1024 keys ahead, and its 256K verify accepted drafts the target would
+    # not have produced; 128K (2048 columns) and the one-row-tile geometries (12B TP4, 31B TP8) were untouched.
+    widths = serving_verify_table_widths(263168, _HYBRID_12B, _NO_RING, blocks=1500)
+    assert widths == {"sliding_attention": 1028, "full_attention": 2056}
+    _31B_TP4 = {"sliding_attention": 64, "full_attention": 128}
+    widths = serving_verify_table_widths(263168, _31B_TP4, _NO_RING, blocks=4096)
+    assert widths == {"sliding_attention": 4112, "full_attention": 2056}
+    assert all(widths[lt] * _31B_TP4[lt] == 263168 for lt in widths)
+    assert serving_verify_table_widths(131072, _31B_TP4, _NO_RING, blocks=4096) == {
+        "sliding_attention": 2048,
+        "full_attention": 1024,
+    }
+    # the paged packed verify refuses a table that does not span its mask (the kernel's mask pitch)
+    assert packed_verify_mask_span(4112, 64, 263168) == 263168 and packed_verify_mask_span(2056, 128, 263168) == 263168
+    with pytest.raises(ValueError, match="262144 keys but the mask is 263168"):  # allow-pytest.raises (pure)
+        packed_verify_mask_span(4096, 64, 263168)
+    # misaligned geometries are refused
+    for s_k, bs, ring, blocks, message in [
+        (2048, {"full_attention": 96}, {}, 64, "rung 2048 is not a multiple"),
+        (8192, {"sliding_attention": 96}, {"sliding_attention": 2048}, 64, "ring 2048 is not a multiple"),
+        (2048, {"full_attention": 0}, {}, 64, "block size must be >= 1"),
+        (0, {"full_attention": 64}, {}, 64, "must be >= 1"),
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_verify_table_widths(s_k, bs, ring, blocks)
+
+
+# ===== KV group slots: the serving records follow vLLM's hybrid KV-cache grouping, not the layer type
+from models.demos.gemma4.tt.spec_decode import serving_check_group_tables, serving_kv_group_slots  # noqa: E402
+
+
+def _layer_types(pattern, repeats):
+    return list(pattern) * repeats
+
+
+def test_kv_group_slots_follow_vllm_strided_groups_for_the_12b_and_31b_patterns():
+    """vLLM takes group_size = min(count per type) and gives group g the layers
+    layers_of_type[g::num_groups]: five sliding groups (layers i, i+6, i+12, ...)
+    and one full group for both Gemma 4 dense patterns."""
+    for repeats in (8, 10):  # 12B: 40 sliding + 8 full; 31B: 50 sliding + 10 full
+        types = _layer_types(["sliding_attention"] * 5 + ["full_attention"], repeats)
+        slots, n_slots = serving_kv_group_slots(types)
+        assert n_slots == 6
+        assert slots == [i % 6 for i in range(len(types))]
+        for g in range(5):
+            members = [i for i, s in enumerate(slots) if s == g]
+            assert members == [6 * k + g for k in range(repeats)]
+        assert [i for i, s in enumerate(slots) if s == 5] == [6 * k + 5 for k in range(repeats)]
+    # a uniform model collapses to one slot
+    slots, n_slots = serving_kv_group_slots(["full_attention"] * 12)
+    assert (slots, n_slots) == ([0] * 12, 1)
+    assert serving_kv_group_slots([]) == ([], 0)
+    # 7 sliding + 3 full: 7 is not a multiple of 3, so the sliding layers get a slot each (always correct)
+    types = ["sliding_attention"] * 7 + ["full_attention"] * 3
+    slots, n_slots = serving_kv_group_slots(types)
+    assert slots[:7] == list(range(7))
+    assert slots[7:] == [7, 7, 7]
+    assert n_slots == 8
+
+
+def test_group_table_check_accepts_identical_tables_per_slot_and_rejects_a_mismatch(expect_error):
+    types = _layer_types(["sliding_attention"] * 5 + ["full_attention"], 2)
+    slots, n_slots = serving_kv_group_slots(types)
+    tables = [torch.arange(8, dtype=torch.int64).reshape(2, 4) + 100 * slots[i] for i in range(len(types))]
+    serving_check_group_tables(tables, slots)  # identical per slot
+    serving_check_group_tables([None] * len(types), slots)  # every layer flat
+    shared = [tables[slots[i]] for i in range(len(types))]
+    serving_check_group_tables(shared, slots)  # the same object per slot
+    bad = list(tables)
+    bad[6] = bad[6] + 1  # layer 6 is slot 0 like layer 0, but differs
+    with expect_error(ValueError, "layers 0 and 6 differ inside KV group slot 0"):
+        serving_check_group_tables(bad, slots)
+    mixed = list(tables)
+    mixed[6] = None
+    with expect_error(ValueError, "slot 0"):
+        serving_check_group_tables(mixed, slots)
+
+
+def test_every_layer_verifies_and_reseeds_through_its_own_group_table(monkeypatch):
+    """vLLM-grouped per-layer tables with DISTINCT block ids per group: after the
+    upload, the table bound to every layer (its slot) holds that layer's own
+    installed rows, for the drafter/reseed tables and the width-clipped verify
+    tables alike; padding rows mirror row 0. The per-type records of the old
+    code gave 32 of the 40 sliding layers another group's block ids."""
+    types = _layer_types(["sliding_attention"] * 5 + ["full_attention"], 8)
+    slots, n_slots = serving_kv_group_slots(types)
+    B, blocks, s_k = 4, 16, 2048
+    bs = {"sliding_attention": 256, "full_attention": 128}
+    widths = {lt: s_k // b for lt, b in bs.items()}  # 8 / 16 columns
+    installed = [torch.arange(8 * blocks, dtype=torch.int64).reshape(8, blocks) + 1000 * slots[i] for i in range(48)]
+
+    spec = _bare_decoder(n_layers=48)
+    spec._srv_slots, spec._srv_n_slots = slots, n_slots
+    spec._srv_blocks = blocks
+    spec._pv_ring = {"sliding_attention": None, "full_attention": None}
+    spec._pv_ring_rep = {"sliding_attention": 0, "full_attention": 5}
+    spec.target.last_kv_layer_by_type = {"sliding_attention": 46, "full_attention": 47}
+    spec.target.hf_config = SimpleNamespace(layer_types=types)
+    spec.serving_refresh_page_tables(installed)  # passes the slot check
+    shape = (B, 5)
+    d_slots = [SimpleNamespace(shape=(B, blocks), tag=("d", s)) for s in range(n_slots)]
+    v_slots = [SimpleNamespace(shape=(B, widths[types[slots.index(s)]]), tag=("v", s)) for s in range(n_slots)]
+    spec._srv_shape_bufs[shape] = {"B": B, "d_ptl_slots": d_slots, "d_ptl_list": [d_slots[s] for s in slots]}
+    rec = {"S_k": s_k, "v_ptl_slots": v_slots, "v_ptl_list": [v_slots[s] for s in slots]}
+    uploads = {}
+    monkeypatch.setattr(
+        spec,
+        "_srv_copy_if_changed",
+        lambda key, host, dev, dtype, layout=None: uploads.__setitem__(dev.tag, host.clone()),
+    )
+
+    rows, live = [2, 7], 2
+    spec._srv_upload_tables(shape, rows, live, torch.zeros(B, blocks, dtype=torch.int64), rec)
+
+    assert len(uploads) == 2 * n_slots
+    for i in range(48):
+        want = installed[i][rows]
+        d = uploads[spec._srv_shape_bufs[shape]["d_ptl_list"][i].tag]
+        assert torch.equal(d[:live], want.to(torch.int32)), f"layer {i} drafter table"
+        assert torch.equal(d[live:], d[0].expand(B - live, -1)), f"layer {i} padding rows"
+        v = uploads[rec["v_ptl_list"][i].tag]
+        w = widths[types[i]]
+        assert v.shape == (B, w), f"layer {i} verify width"
+        assert torch.equal(v[:live], want[:, :w].to(torch.int32)), f"layer {i} verify table"
+    # the old per-type collapse would have given layer 1 (slot 1) layer 0's (slot 0) ids:
+    assert not torch.equal(
+        uploads[rec["v_ptl_list"][1].tag][:live], installed[0][rows][:, : widths["sliding_attention"]].to(torch.int32)
+    )
+
+
+# ===== Acceptance-adaptive speculation (tt/spec_policy.py): the pure policy, exercised from the draft-length
+# policy tests above (helpers, not collected).
+# ===== Acceptance-adaptive draft length (tt/spec_policy.py): the pure policy functions.
+from models.demos.gemma4.tt.spec_policy import (  # noqa: E402
+    SPEC_ADAPTIVE_ENV,
+    SPEC_CALIB_MIN_ENV,
+    SPEC_CALIB_PROBE_STEPS_ENV,
+    SPEC_ENTRY_HORIZON_ENV,
+    SPEC_EWMA_ENV,
+    SPEC_EXIT_GAIN_ENV,
+    SPEC_MIN_GAIN_ENV,
+    SPEC_PLAIN_STEP_MS_ENV,
+    SPEC_PROBE_STEPS_ENV,
+    SPEC_RETRY_OVERHEAD_ENV,
+    SPEC_RETRY_STEPS_ENV,
+    SPEC_STATS_STEPS_ENV,
+    SPEC_TRIAL_GAIN_ENV,
+    AcceptanceStats,
+    Calibration,
+    CostLine,
+    ModeStats,
+    RecordCandidate,
+    RecordChoice,
+    SpecPolicy,
+    SpecPolicyConfig,
+    cost_at,
+    describe_costs,
+    mode_name,
+    rank_records,
+)
+
+_PLAIN = 20.0
+# Step costs per record: 2.5x / 2.5x / 1.75x / 1.5x the plain step.
+_COSTS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
+
+
+def _cands(costs, n=1, width=2048):
+    return [RecordCandidate(shape, width, ms) for shape, ms in costs.items() if shape[0] >= n]
+
+
+def _row(cond, alpha=0.2):
+    """A row whose conditionals were observed at ``cond`` (every position informed, as verifies would leave it)."""
+    stats = AcceptanceStats(5, alpha)
+    stats.cond = list(cond)
+    stats.informed = [True] * 5
+    return stats
+
+
+def _served(policy, widths=(2048, 1024)):
+    """``policy`` on an engine whose rungs served plain time enough: their exploration buckets are full
+    (``SpecPolicy.rung_bucket``; the first plain decision caps them at the rung's capacity) and admit a reseeding
+    entry, as a cold rung's bucket does not (every exploration out of the plain regime draws on it)."""
+    for width in widths:
+        policy.rung_bucket[width] = 1e6
+    return policy
+
+
+def _policy_policy_config_defaults_are_on_with_the_documented_knobs(expect_error=None):
+    assert SpecPolicyConfig.from_env({}) == SpecPolicyConfig(
+        adaptive=True,
+        min_gain=1.25,
+        exit_gain=0.95,
+        entry_horizon=64,
+        retry_steps=8,
+        retry_overhead=0.01,
+        probe_steps=32,
+        ewma=0.1,
+        plain_step_ms=None,
+    )
+
+
+def _policy_policy_config_reads_every_knob_from_the_env(expect_error=None):
+    env = {
+        SPEC_ADAPTIVE_ENV: "0",
+        SPEC_MIN_GAIN_ENV: "1.25",
+        SPEC_EXIT_GAIN_ENV: "0.9",
+        SPEC_ENTRY_HORIZON_ENV: "16",
+        SPEC_RETRY_STEPS_ENV: "4",
+        SPEC_RETRY_OVERHEAD_ENV: "0.05",
+        SPEC_PROBE_STEPS_ENV: "0",
+        SPEC_EWMA_ENV: "0.5",
+        SPEC_PLAIN_STEP_MS_ENV: "22.5",
+    }
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,))
+    env.update({SPEC_STATS_STEPS_ENV: "64", SPEC_CALIB_MIN_ENV: "3", SPEC_CALIB_PROBE_STEPS_ENV: "0"})
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,), 64, 3, 0)
+    env.update({SPEC_STATS_STEPS_ENV: "64", SPEC_CALIB_MIN_ENV: "3", SPEC_CALIB_PROBE_STEPS_ENV: "0"})
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,), 64, 3, 0)
+    assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: " "}).plain_step_ms is None
+    assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: "31,83"}).plain_step_ms == (31.0, 83.0)
+    assert SpecPolicyConfig.from_env({}).trial_gain == 0.6 and SpecPolicyConfig.from_env(env).trial_gain == 0.6
+    assert SpecPolicyConfig.from_env({SPEC_TRIAL_GAIN_ENV: "0.8"}).trial_gain == 0.8
+
+
+_BAD_POLICY_KNOBS = [
+    (SPEC_ADAPTIVE_ENV, "maybe", "must be 1 or 0"),
+    (SPEC_MIN_GAIN_ENV, "0.9", "must be at least 1.0"),
+    (SPEC_EXIT_GAIN_ENV, "1.5", r"must be in \[0.0, 1.25\]"),
+    (SPEC_RETRY_STEPS_ENV, "-1", "must be at least 0"),
+    (SPEC_PROBE_STEPS_ENV, "2.5", "must be an integer"),
+    (SPEC_EWMA_ENV, "1.5", r"must be in \[0.0, 1.0\]"),
+    (SPEC_PLAIN_STEP_MS_ENV, "-3", "must be positive"),
+    (SPEC_TRIAL_GAIN_ENV, "-0.1", "must be at least 0.0"),
+]
+
+
+def _policy_bad_policy_knobs_are_refused_naming_the_knob(expect_error):
+    for name, value, message in _BAD_POLICY_KNOBS:
+        with expect_error(ValueError, f"{name} {message}"):
+            SpecPolicyConfig.from_env({name: value})
+
+
+def _policy_acceptance_stats_update_only_the_positions_the_verify_reached(expect_error=None):
+    stats = AcceptanceStats(5, 0.5)
+    stats.observe(accepted=2, verified=5)  # drafts 1 and 2 accepted, draft 3 rejected, 4 and 5 never reached
+    assert stats.cond == [1.0, 1.0, 0.5, 1.0, 1.0] and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.ewma_accepted == 2.0 and stats.spec_steps == 1
+    stats.observe(accepted=3, verified=3)  # a shorter verify, every carried draft accepted: no rejection seen
+    assert stats.cond == [1.0, 1.0, 0.75, 1.0, 1.0] and stats.observed == [2, 2, 2, 0, 0]
+    assert stats.ewma_accepted == 2.5 and stats.spec_steps == 2
+    stats.observe(accepted=0, verified=0)  # a draftless verify observes nothing
+    assert stats.spec_steps == 2
+    stats.observe(accepted=9, verified=9)  # clamped to the draft length
+    assert stats.observed == [3, 3, 3, 1, 1] and stats.ewma_accepted == 3.75
+
+
+def _policy_expected_tokens_is_one_plus_the_running_product_of_the_conditionals(expect_error=None):
+    stats = _row([0.9, 0.5, 0.5, 0.0, 1.0])
+    assert stats.accept_probs(5) == pytest.approx([0.9, 0.45, 0.225, 0.0, 0.0])
+    assert stats.expected_tokens(1) == pytest.approx(1.9)
+    assert stats.expected_tokens(3) == pytest.approx(2.575)
+    assert stats.expected_tokens(5) == pytest.approx(2.575)
+    assert stats.expected_tokens(0) == 1.0
+
+
+def _policy_a_new_row_starts_from_the_batch_prior_and_the_prior_learns_from_every_row(expect_error=None):
+    policy = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
+    first = policy.new_row()
+    assert first.cond == [1.0] * 5, "optimistic until the first verify"
+    policy.observe(first, accepted=0, verified=5)
+    assert policy.prior.cond[0] == 0.5 and first.cond[0] == 0.5
+    second = policy.new_row()
+    assert second.cond == [0.5, 1.0, 1.0, 1.0, 1.0] and second.observed == [0] * 5 and second.ewma_accepted is None
+    policy.observe(second, accepted=5, verified=5)
+    assert first.cond[0] == 0.5 and second.cond[0] == 0.75 and policy.prior.cond[0] == 0.75
+    # a row's own observations count at once: at a position with n < ROW_MIN_OBSERVATIONS of its own it reads
+    # n / (n + others) of its own mean outcome and the rest of the prior, others being the prior's evidence
+    # beyond the row's own (at most 3; one verify at 5 accepted moves it most of the way), from three on its
+    # own EWMA as before; a request that stays plain observes nothing
+    informed = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
+    informed.prior.cond, informed.prior.informed = [0.2] * 5, [True] * 5
+    informed.prior.observed = [100] * 5  # other rows' evidence
+    row = informed.new_row()
+    assert row.effective_cond(5) == pytest.approx([0.2] * 5) and row.own_sum == [0.0] * 5
+    informed.observe(row, accepted=5, verified=5)
+    assert informed.prior.cond[0] == pytest.approx(0.6) and row.cond[0] == pytest.approx(0.6)
+    assert row.effective_cond(5) == pytest.approx([0.7] * 5), "0.25 x own 1.0 + 0.75 x prior 0.6"
+    assert row.expected_tokens(5) == pytest.approx(1 + 0.7 + 0.49 + 0.343 + 0.2401 + 0.16807)
+    informed.observe(row, accepted=0, verified=5)
+    assert row.effective_cond(2) == pytest.approx(
+        [0.38, 0.7]
+    ), "n=2 at draft 1: 0.4 x 0.5 + 0.6 x 0.3; draft 2 unreached"
+    informed.observe(row, accepted=0, verified=5)
+    assert row.observed[0] == 3 and row.cond[0] == pytest.approx(0.15)
+    assert row.effective_cond(1) == pytest.approx([0.15]), "three own observations: the row's own EWMA, as before"
+    untouched = informed.new_row()
+    assert untouched.effective_cond(1) == pytest.approx([informed.prior.cond[0]]) and untouched.spec_steps == 0
+    # the prior's evidence is what other rows observed: a row alone on a fresh engine reads its own outcome
+    alone = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
+    only = alone.new_row()
+    alone.observe(only, accepted=2, verified=5)
+    assert alone.prior.observed == [1, 1, 1, 0, 0] and only.observed == [1, 1, 1, 0, 0]
+    assert only.effective_cond(5) == [1.0, 1.0, 0.0, 0.0, 0.0], "no evidence beyond its own: the outcome alone"
+    peer = alone.new_row()
+    alone.observe(peer, accepted=5, verified=5)
+    assert only.effective_cond(3) == pytest.approx([1.0, 1.0, 0.5 * 0.0 + 0.5 * 0.75]), "one other verify: 1/(1+1)"
+
+
+def _policy_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_step(expect_error=None):
+    rows = [_row([1.0] * 5), _row([0.5] * 5)]
+    ranked = rank_records(_cands(_COSTS), rows, _PLAIN)
+    # (8,3): 4 + 1.875 tokens over two rows at 1.75x; (1,5) and (5,5): 6 + 1.96875 at 2.5x; (16,1): 2 + 1.5 at 1.5x
+    assert [c.shape for c in ranked] == [(8, 3), (1, 5), (5, 5), (16, 1)]
+    assert ranked[0].expected_tokens == pytest.approx(5.875) and ranked[0].gain == pytest.approx(5.875 / 2 / 1.75)
+    assert ranked[1].gain == pytest.approx(7.96875 / 2 / 2.5) and ranked[3].gain == pytest.approx(3.5 / 2 / 1.5)
+    assert all(c.reason == "gain" and c.rows == 2 and c.entry_ms == 0.0 for c in ranked)
+    assert ranked[0].tokens_per_row == pytest.approx(5.875 / 2)
+    with expect_error(ValueError, "negative entry cost"):
+        rank_records([RecordCandidate((1, 5), 2048, 50.0, -1.0)], rows, _PLAIN)
+    with expect_error(ValueError, "positive plain step cost"):
+        rank_records(_cands(_COSTS), rows, 0.0)
+    with expect_error(ValueError, "non-positive cost"):
+        rank_records([RecordCandidate((1, 5), 2048, 0.0)], rows, _PLAIN)
+    with expect_error(ValueError, "at least one drafting row"):
+        rank_records(_cands(_COSTS), [], _PLAIN)
+    # a partial replay drafts for its members only: a row left out commits one token from the plain decode
+    partial = rank_records([RecordCandidate((8, 3), 2048, 35.0 + 20.0, 0.0, members=(0,))], rows, _PLAIN)[0]
+    assert partial.members == (0,) and partial.expected_tokens == pytest.approx(4.0 + 1.0)
+    assert partial.gain == pytest.approx(2.5 / 2.75)
+    with expect_error(ValueError, "members"):
+        rank_records([RecordCandidate((8, 3), 2048, 35.0, 0.0, members=(0, 2))], rows, _PLAIN)
+    with expect_error(ValueError, "members"):
+        rank_records([RecordCandidate((8, 3), 2048, 35.0, 0.0, members=())], rows, _PLAIN)
+
+
+def _policy_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_as_it_falls(expect_error=None):
+    policy = SpecPolicy(SpecPolicyConfig(probe_steps=0), 5)
+
+    def choice(cond):
+        return policy.decide(_cands(_COSTS), [_row(cond)], _PLAIN, 5)
+
+    assert choice([1.0] * 5).shape == (1, 5)  # 6 tokens at 2.5x: 2.4x
+    assert choice([0.7] * 5).shape == (8, 3)  # 2.53 at 1.75x = 1.45x beats 2.94 at 2.5x = 1.18x
+    assert choice([0.8, 0.2, 0.2, 0.2, 0.2]).shape == (16, 1)  # only the first draft lands: 1.8 at 1.5x = 1.20x
+    # 1.4 at 1.5x = 0.93x: below the exit gain, but a speculating batch never leaves on one step
+    held = choice([0.4] * 5)
+    assert held.shape == (16, 1) and held.reason == "hold" and policy.below_exit == 1
+    assert choice([0.4] * 5) is None and policy.below_exit == 0 and policy.last_k == 0
+    # the entry cooldown: a batch that just left waits retry_steps plain steps before any reseeding entry (the
+    # 12B Galaxy at 32 users ran enter-exit-enter cycles at a 250 ms reseed each, the arrival waves re-trialing
+    # between); the retry's cadence counts the same steps, note_plain_steps too, an entry-free record waits for
+    # nothing
+    cooled = _served(SpecPolicy(SpecPolicyConfig(probe_steps=0, retry_steps=3, retry_overhead=1.0), 5))
+    good, weak = [_row([0.7] * 5)], [_row([0.4] * 5)]
+    entering = [RecordCandidate((8, 3), 2048, 35.0, 230.0)]  # 2.53 tokens at 1.75x: 1.45x, the reseed pays
+    assert cooled.decide(entering, good, _PLAIN, 3, fresh=True).reason == "enter" and cooled.since_exit is None
+    assert cooled.decide(_cands(_COSTS), weak, _PLAIN, 3).reason == "hold"
+    assert cooled.decide(_cands(_COSTS), weak, _PLAIN, 3) is None and cooled.since_exit == 0 and cooled.cooling()
+    assert cooled.decide(entering, good, _PLAIN, 3) is None and cooled.last_reason == "cooldown"
+    assert not cooled.would_speculate(entering, good, _PLAIN) and cooled.since_exit == 1
+    assert cooled.decide(entering, good, _PLAIN, 3, fresh=True) is None and cooled.last_reason == "cooldown"
+    assert not cooled.would_speculate(entering, good, _PLAIN, fresh=True) and cooled.since_exit == 2
+    cooled.note_plain_steps()
+    assert cooled.since_exit == 3 and not cooled.cooling()
+    assert cooled.decide(entering, good, _PLAIN, 3).reason == "enter" and cooled.since_exit is None
+    # a new batch (every row at its first proposal) is not cooled by its predecessor's exit: the cooldown is
+    # against one batch's enter-exit-enter cycles, and the first proposal is the entry whose reseed is verified
+    cooled.since_exit = 0
+    assert cooled.cooling() and not cooled.would_speculate(entering, good, _PLAIN)
+    newcomer = [_row([0.7] * 5)]
+    assert cooled.would_speculate(entering, newcomer, _PLAIN, fresh=True) and not cooled.cooling()
+    assert cooled.decide(entering, newcomer, _PLAIN, 3, fresh=True).reason == "enter" and cooled.since_exit is None
+    free = SpecPolicy(SpecPolicyConfig(probe_steps=0, retry_steps=3), 5)
+    assert free.decide(_cands(_COSTS), good, _PLAIN, 3).reason == "gain"
+    assert (
+        free.decide(_cands(_COSTS), weak, _PLAIN, 3).reason == "hold"
+        and free.decide(_cands(_COSTS), weak, _PLAIN, 3) is None
+    )
+    assert free.decide(_cands(_COSTS), good, _PLAIN, 3).reason == "gain" and free.since_exit is None
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(_COSTS), weak, _PLAIN, 3) is None, "declined, not an exit"
+
+
+def _policy_the_margin_decides_between_a_marginal_record_and_the_plain_step(expect_error=None):
+    row = _row([0.8, 0.2, 0.2, 0.2, 0.2])  # (16,1): 1.8 tokens at 1.5x the plain step = 1.20x
+    assert SpecPolicy(SpecPolicyConfig(min_gain=1.15), 5).decide(_cands(_COSTS), [row], _PLAIN, 5).shape == (16, 1)
+    assert SpecPolicy(SpecPolicyConfig(min_gain=1.25), 5).decide(_cands(_COSTS), [row], _PLAIN, 5) is None
+    # hysteresis: once in, the same row is held down to the exit gain, and leaves after EXIT_STEPS below it
+    policy = SpecPolicy(SpecPolicyConfig(min_gain=1.15, exit_gain=1.0), 5)
+    assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "gain"
+    weaker = _row([0.6, 0.2, 0.2, 0.2, 0.2])  # 1.6 tokens: 1.07x, between the exit and the entry gain
+    assert policy.decide(_cands(_COSTS), [weaker], _PLAIN, 5).reason == "hold"
+    weakest = _row([0.4, 0.2, 0.2, 0.2, 0.2])  # 1.4 tokens: 0.93x, below the exit gain
+    assert policy.decide(_cands(_COSTS), [weakest], _PLAIN, 5).reason == "hold" and policy.below_exit == 1
+    assert policy.decide(_cands(_COSTS), [weakest], _PLAIN, 5) is None
+    assert policy.decide(_cands(_COSTS), [weaker], _PLAIN, 5) is None, "1.07x does not re-enter: no hold from plain"
+
+
+def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
+    """The same acceptance picks another record when the measured costs change."""
+    row = _row([0.7] * 5)
+    cheap_k5 = {**_COSTS, (1, 5): 36.0}  # 1.8x: 2.94 tokens -> 1.63x, above (8,3)'s 1.45x
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(cheap_k5), [row], _PLAIN, 5).shape == (1, 5)
+    dear = {shape: ms * 2 for shape, ms in _COSTS.items()}
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(dear), [row], _PLAIN, 5) is None
+    # entering costs the reseed: the saving over the entry horizon, 64 x (2.53 x 20 - 35) = 1000 ms, must cover it
+    # -- at a request's first proposal (``fresh``: every row at its first step), where the reseed's replay is
+    # verified. Mid-request the entry is priced as served under asynchronous scheduling: the plain step the
+    # runner has in flight overtakes the replay, which takes only when every row's first draft matches the
+    # token it committed, so the cycle (the reseed, the wasted replay, the reload: 900 + 35 - 20 on the table)
+    # is paid 1 / 0.7 = 1.43 times over, 1308 ms against the 1000 ms saving
+    enter = _served(SpecPolicy(SpecPolicyConfig(), 5)).decide(
+        [RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True
+    )
+    assert enter.reason == "enter" and enter.entry_ms == 900.0
+    assert (
+        _served(SpecPolicy(SpecPolicyConfig(), 5)).decide(
+            [RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3
+        )
+        is None
+    ), "mid-request: 1.43 reseeds expected, 1308 ms against the 1000 ms saving"
+    mid = _served(SpecPolicy(SpecPolicyConfig(), 5))
+    assert mid.decide([RecordCandidate((8, 3), 2048, 35.0, 600.0)], [_row([0.7] * 5)], _PLAIN, 3).reason == "enter"
+    assert mid.entry_cost(RecordChoice((8, 3), 2048, 1, 2.53, 35.0, 600.0, 1.45, "gain"), _PLAIN) == pytest.approx(
+        (600.0 + 35.0 - 20.0) / 0.7
+    )
+    assert (
+        _served(SpecPolicy(SpecPolicyConfig(), 5)).decide(
+            [RecordCandidate((8, 3), 2048, 35.0, 1100.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True
+        )
+        is None
+    )
+    assert (
+        _served(SpecPolicy(SpecPolicyConfig(entry_horizon=8), 5)).decide(
+            [RecordCandidate((8, 3), 2048, 35.0, 200.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True
+        )
+        is None
+    )
+    # a rung that served nothing yet admits no reseeding entry, however good the statistics: the rung's
+    # exploration bucket, which fills at GEMMA4_SPEC_RETRY_OVERHEAD of every plain step's cost (0.2 ms a 20 ms
+    # step) up to 1.5 trials (the trial priced with every draft rejected: 900 + 3 x (35 - 20) = 945, so 1417.5),
+    # must hold the entry's expected loss, 945 ms on a rung without a pool: 4725 plain steps
+    cold = SpecPolicy(SpecPolicyConfig(), 5)
+    assert cold.decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True) is None
+    assert cold.last_reason == "budget" and cold.rung_bucket == {2048: pytest.approx(0.2)}
+    assert cold.rung_cap == {2048: pytest.approx(1417.5)}
+    cold.rung_bucket[2048] = 944.9
+    assert cold.decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True) is None
+    cold.rung_bucket[2048] = 945.0
+    assert (
+        cold.decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True).reason
+        == "enter"
+    )
+    # every cost is a line in the position, read at the step's top position
+    line = CostLine(0, 30.0, 1000, 80.0)
+    assert [line.at(p) for p in (-5, 0, 500, 1000, 5000)] == [30.0, 30.0, 55.0, 80.0, 80.0]
+    assert cost_at(30.0, 700) == 30.0 and cost_at((0, 30.0, 1000, 80.0), 250) == 42.5 and cost_at(line, 250) == 42.5
+    assert CostLine.of(line) is line and CostLine.flat(7.0, 100) == CostLine(0, 7.0, 100, 7.0)
+    assert CostLine(0, 30.0, 0, 80.0).at(10) == 30.0, "a line without a span is flat"
+    # online calibration: a mode reads the warmup table until it has min_samples counted steps, then the table
+    # scaled by the median ratio of its walls to the table at each step's own position; a dirty step (a prefill
+    # ran inside it) counts like a clean one: the mode in force served that wall (the batch points lost to plain
+    # on arrival stalls, joins and switches each clean step looked profitable through)
+    calib = Calibration(2)
+    mode = ("step", (8, 3), 2048)
+    assert calib.step_ms(mode, 35.0) == 35.0 and not calib.calibrated(mode)
+    calib.note_step(mode, 80.0, 3, True, 40.0, 1)  # ratio 2.0
+    calib.note_step(mode, 90.0, 3, False, 40.0, 1, cause="prefill")  # dirty: counted, calibrates, not clean
+    assert calib.calibrated(mode) and calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.125)
+    assert calib.modes[mode].steps == 2 and calib.modes[mode].clean == 1 and calib.modes[mode].busy == 2
+    calib.note_step(mode, 100.0, 3, True, 40.0, 1)  # ratio 2.5
+    assert calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.25)
+    assert calib.step_ms(mode, 136.0) == pytest.approx(136.0 * 2.25), "the position stays in the table"
+    assert calib.tokens_per_row(mode) == 3.0 and calib.modes[mode].tokens == 9
+    # a record not yet calibrated at a rung where a sibling is reads the siblings' median ratio: the overhead
+    # over the table is the serving path's, and an uncalibrated sibling at 1.0x outranked the calibrated record
+    # on cost alone (the 12B QB2 random c1 switched (1,3) to (5,3) to (8,3) at one row, 2026-10-30)
+    assert calib.step_ms(("step", (16, 1), 2048), 30.0) == pytest.approx(30.0 * 2.25), "the rung's ratio"
+    assert calib.step_ms(("step", (16, 1), 8192), 30.0) == 30.0, "another rung: the table"
+    assert calib.step_ms(("plain", 8), 30.0) == 30.0, "the plain step is its own"
+    # a plain step after a record step (the plain probe, or the first step after an exit) is a clean plain sample:
+    # it calibrates the plain cost and resets the probe cadence; a record step after a plain step stays a switch
+    probe = Calibration(2)
+    probe.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    probe.note_step(("step", (1, 5), 2048), 50.0, 3, False, 45.0, 1, cause="switch")
+    probe.note_step(("step", (1, 5), 2048), 50.0, 3, True, 45.0, 1)
+    assert probe.steps_without("plain") == 2 and probe.dirty == {"switch": [1, 50.0]}
+    probe.note_step(("plain", 1), 48.0, 1, False, 20.0, 1, cause="switch")
+    assert probe.steps_without("plain") == 0, "a plain step after a record step ends the probe cadence"
+    assert probe.modes[("plain", 1)].clean == 1 and probe.modes[("plain", 1)].busy == 1, "but it is no cost sample"
+    assert probe.modes[("plain", 1)].steps == 2 and probe.dirty == {"switch": [2, 98.0]}
+    assert probe.step_ms(("plain", 1), 20.0) == 20.0, "the reload bubble never reaches the plain estimate"
+    assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
+    # the measured tokens per row are a throughput (a mean; never the median: a row taking 1,1,1,5,6 tokens on
+    # five verifies commits tokens where the median 1 read the record as a loss), pooled over the records of
+    # one draft length at the rung: the drafter's acceptance does not depend on the record's rows, so an
+    # unreplayed sibling reads the calibrated one's instead of the model (whose deep positions sit at the
+    # prior) and cannot outrank it on the model alone. While the batch serves a record the credit is the
+    # current run's own steps (one sample is enough: the run says what the record delivers now)
+    skew = Calibration(5)
+    for tokens in (1, 1, 1, 5, 6):
+        skew.note_step(("step", (1, 5), 263168), 150.0, tokens, True, 150.0, 1)
+    assert skew.run_samples(("step", (1, 5), 263168)) == 5
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(2.8)
+    assert skew.tokens_per_row(("step", (5, 5), 263168)) == pytest.approx(2.8), "same draft length, same rung"
+    assert skew.tokens_per_row(("step", (8, 3), 263168)) is None, "another draft length is its own"
+    assert skew.tokens_per_row(("step", (1, 5), 2048)) is None, "another rung is its own"
+    assert not skew.calibrated(("step", (5, 5), 263168)), "its step cost still reads the table"
+    # ... but a rung never measured prices its first trial on the freshest pool of the draft length anywhere
+    # (the acceptance is the text's, not the rung's): the 256K pool at 2.8 for a 2048 trial at K=5, none at K=3
+    assert skew.pool_credit_any(5) == pytest.approx(2.8) and skew.pool_credit_any(3) is None
+    assert skew.tokens_rows_sum == pytest.approx(14.0) and skew.served_intervals == 5, "every served interval's tokens"
+    skew.note_step(("step", (5, 5), 263168), 200.0, 10, True, 200.0, 5)  # 2 per row joins the pool
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(16 / 6)
+    # a switch (or a prefill) inside the interval moves the wall, not the acceptance: the replay continues the
+    # seed, so the step feeds the pool (the probe of the next draft length is such a step, and a pool the
+    # probe never fed kept a low reading from an earlier run for the rest of the request); the step right
+    # after a reseed drafts from a fresh seed and feeds nothing
+    skew.note_step(("step", (1, 5), 263168), 160.0, 4, False, 150.0, 1, cause="switch")
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(20 / 7)
+    skew.note_step(("step", (1, 5), 263168), 200.0, 6, False, 150.0, 1, cause="reseed")
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(20 / 7), "the post-reseed step: no sample"
+    # the run ends: a run with min_samples prices the next entry by its whole mean (the steps before an exit
+    # are the low ones that caused it: an EWMA of them read the 12B QB2's (1,5) at 2.2-2.8 tokens a row after
+    # runs that averaged 3.3-4.2, and no request after the first re-entered, 2026-10-30)
+    skew.end_run()
+    assert skew.run_samples(("step", (1, 5), 263168)) == 0
+    assert skew.last_run_mean(("step", (1, 5), 263168)) == pytest.approx(20 / 7)
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(20 / 7)
+    assert skew.pool_credit(("step", (1, 5), 263168)) == (pytest.approx(20 / 7), 7)
+    assert skew.pool_known(("step", (5, 5), 263168)) and not skew.pool_known(("step", (8, 3), 263168))
+    # a run too short to measure (one one-token step at a request's tail) does not price the next entry: the
+    # pool's last CALIB_WINDOW samples across runs do
+    skew.note_step(("step", (1, 5), 263168), 150.0, 1, True, 150.0, 1)
+    skew.end_run()
+    assert skew.last_run_mean(("step", (1, 5), 263168)) == 1.0
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(21 / 8)
+    # a pool no step fed for pool_stale intervals is stale: the model decides again (the K=5 pool the 31B QB2
+    # froze at 1.54 after an exit outranked by its K=3 sibling for the server's life); any noted step is the clock
+    stale = Calibration(2, pool_stale=3)
+    for tokens in (3, 3):
+        stale.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
+    stale.end_run()
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == 3.0
+    for _ in range(3):
+        stale.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == 3.0, "fed 3 intervals ago: fresh"
+    stale.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) is None, "4 intervals: stale"
+    assert stale.pool_known(("step", (1, 5), 2048)), "stale, but known: a trial on it needs the entry bar"
+    stale.note_step(("step", (1, 5), 2048), 50.0, 4, True, 45.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == 4.0, "one fresh sample: a run, which reads its own step"
+    assert SpecPolicyConfig.from_env({"GEMMA4_SPEC_POOL_STALE_STEPS": "7"}).pool_stale == 7
+    assert SpecPolicy(SpecPolicyConfig(pool_stale=9), 5).calibration.pool_stale == 9
+    regime = Calibration(2)  # four random-prompt verifies at 1.5 a row, then prose at 3.3: the run decides
+    for tokens in (1.5, 1.5, 1.5, 1.5):
+        regime.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
+    regime.end_run()
+    assert regime.tokens_per_row(("step", (1, 5), 2048)) == 1.5
+    for _ in range(2):
+        regime.note_step(("step", (1, 5), 2048), 50.0, 3.3, True, 45.0, 1)
+    assert regime.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(
+        3.3
+    ), "a new run reads its own steps at once, whatever the pool held"
+    regime.end_run()
+    assert regime.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(3.3), "two samples: enough to measure here"
+    # the walls a retry cycle pays, as served: the interval that starts with a reseed (per shape) and the plain
+    # step after a record step
+    assert regime.reseed_step_ms((1, 5)) is None and regime.after_record_ms() is None
+    regime.note_step(("step", (1, 5), 2048), 80.0, 2, False, 45.0, 1, cause="reseed")
+    regime.note_step(("step", (1, 5), 2048), 76.0, 2, False, 45.0, 1, cause="reseed")
+    regime.note_step(("plain", 1), 46.0, 1, False, 20.0, 1, cause="switch")
+    assert regime.reseed_step_ms((1, 5)) == 78.0 and regime.reseed_step_ms((8, 3)) is None
+    assert regime.after_record_ms() == 46.0
+    skew.note_step(("plain", 1), 80.0, 1, True, 80.0, 1)
+    assert skew.tokens_per_row(("plain", 1)) is None, "the plain step pools nothing and needs its own samples"
+    # an outlier: a clean sample above 3x the running median once four samples exist; reported, never averaged in
+    for wall in (84.0, 88.0):
+        calib.note_step(mode, wall, 3, True, 40.0, 1)
+    calib.note_step(mode, 800.0, 3, True, 40.0, 1)
+    assert calib.modes[mode].outliers == [1, 800.0] and calib.modes[mode].clean == 4
+    # an idle interval (every row of the previous step ended before this one: the gap between requests) is
+    # reported, never counted; a dirty stall of any size the mode was in force for is counted
+    calib.note_step(mode, 16000.0, 1, False, 40.0, 1, cause="prefill", idle=True)
+    assert calib.dirty["idle"] == [1, 16000.0] and calib.modes[mode].idle == [1, 16000.0]
+    assert calib.modes[mode].busy == 5 and calib.step_ms(mode, 40.0) == pytest.approx(40.0 * 2.2)
+    calib.note_step(mode, 400.0, 3, False, 40.0, 1, cause="prefill")  # 10x the table: an arrival's prefill
+    assert calib.modes[mode].busy == 6 and calib.step_ms(mode, 40.0) == pytest.approx(40.0 * 2.225)
+    assert calib.dirty == {"prefill": [2, 490.0], "idle": [1, 16000.0]} and calib.tokens_per_row(mode) == 3.0
+    assert calib.reseed_ms((8, 3), 250.0) == 250.0
+    calib.note_reseed((8, 3), 300.0, 250.0)
+    calib.note_reseed((8, 3), 350.0, 250.0)
+    assert calib.reseed_ms((8, 3), 250.0) == pytest.approx(250.0 * 1.3) and calib.reseeds[(8, 3)][0] == 2
+    assert calib.reseed_ms((8, 3), 500.0) == pytest.approx(650.0), "a ratio too: the position stays in the line"
+    assert calib.steps_without("plain") == 8 and calib.steps_without("step") == 2  # a dirty or idle step resets nothing
+    calib.note_step(("plain", 8), 31.0, 8, True, 30.0, 8)
+    assert calib.steps_without("plain") == 0 and calib.steps_without("step") == 3
+    with expect_error(ValueError, "min_samples"):
+        Calibration(0)
+    # the entry horizon follows the measured request length (steps), capped by GEMMA4_SPEC_ENTRY_HORIZON
+    policy = SpecPolicy(SpecPolicyConfig(entry_horizon=64), 5)
+    assert policy.entry_horizon() == 64 and policy.entry_horizon(10) == 10
+    policy.note_request_steps(34)
+    assert policy.request_steps == 34.0 and policy.entry_horizon() == 34
+    policy.note_request_steps(10)
+    assert policy.request_steps == pytest.approx(28.0) and policy.entry_horizon() == 28
+    assert policy.entry_horizon(500) == 64
+    # a saving of 64 x 15.7 = 1002 ms covers a 500 ms reseed over the configured horizon, not over 20 steps
+    entering = [RecordCandidate((8, 3), 2048, 35.0, 500.0)]
+    row = _row([0.7] * 5)  # 2.53 tokens: 15.7 ms saved per step at plain 20
+    assert _served(SpecPolicy(SpecPolicyConfig(), 5)).decide(entering, [row], _PLAIN, 3).reason == "enter"
+    assert _served(SpecPolicy(SpecPolicyConfig(), 5)).decide(entering, [row], _PLAIN, 3, remaining=20) is None
+    short = _served(SpecPolicy(SpecPolicyConfig(), 5))
+    short.note_request_steps(20)
+    assert short.decide(entering, [row], _PLAIN, 3) is None, "the measured request length caps the horizon"
+    assert not short.would_speculate(entering, [row], _PLAIN) and short.would_speculate(entering, [row], _PLAIN, 64)
+    # the shape's measured run length caps it too: the longest of its last RUN_LENGTH_RUNS runs (the steps served
+    # on its records between one end_run and the next). A run of 10 (157 ms of saving) refuses the 500 ms
+    # entry, one of 40 (628 ms) takes it; no run ended measures nothing, and a declined trial is no run (the
+    # one-step trials of a random-prompt point pinned a record at one step a reseed for the prose after it)
+    churn = _served(SpecPolicy(SpecPolicyConfig(), 5))  # the served steps commit 3 tokens a row: 25 ms saved a step
+    for _ in range(10):
+        churn.calibration.note_step(("step", (8, 3), 2048), 60.0, 24, True, 57.0, 8)
+    assert churn.calibration.run_length((8, 3)) is None
+    assert churn.decide(entering, [row], _PLAIN, 3).reason == "enter", "no run ended: the configured horizon"
+    assert churn.calibration.run_length((8, 3)) == 10.0, "the entry ended the run of 10"
+    assert churn.decide(entering, [row], _PLAIN, 3) is None and not churn.would_speculate(entering, [row], _PLAIN)
+    paying = rank_records([RecordCandidate((8, 3), 2048, 35.0, 150.0)], [row], _PLAIN)[0]
+    assert churn.entry_pays(paying, _PLAIN, entry=150.0), "a 150 ms entry over a run of 10 at 15.7 ms a step"
+    assert not churn.entry_pays(paying, _PLAIN), "mid-request it is 1.43 x (150 + 35 - 20) = 236 ms: not over 10"
+    for _ in range(40):
+        churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 24, False, 57.0, 8, cause="rows")
+    churn.calibration.end_run()
+    assert churn.calibration.run_length((8, 3)) == 40.0
+    assert churn.decide(entering, [row], _PLAIN, 3) is None, "mid-request: 1.43 x 515 = 736 ms, not over 40 steps"
+    assert churn.decide(entering, [_row([0.7] * 5)], _PLAIN, 3, fresh=True).reason == "enter", "a first proposal: 500"
+    for _ in range(2):
+        churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 24, True, 57.0, 8)
+    churn.calibration.end_run(trial=True)
+    assert churn.calibration.run_length((8, 3)) == 40.0, "a declined trial is no run"
+    for length in (3, 4, 5, 6):
+        for _ in range(length):
+            churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 24, True, 57.0, 8)
+        churn.calibration.end_run()
+    assert churn.calibration.run_length((8, 3)) == 6.0, "the 40 fell out of the last four runs"
+    assert churn.calibration.run_length((16, 1)) is None, "another shape's runs are its own"
+    # the measured tokens per row of a calibrated record replace the acceptance model
+    measured = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=1.2)]
+    assert rank_records(measured, [row], _PLAIN)[0].expected_tokens == pytest.approx(1.2)
+    # ... bounded, for a row with verifies of its own, by what it accepts: a pool is the last steps served on
+    # the record, the row says what it accepts now (a 3.9 pool against a row observed at 0.4 a position credits
+    # the row's 1.62); a row the batch prior alone describes takes the measurement as it stands
+    generous = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=3.9)]
+    assert rank_records(generous, [row], _PLAIN)[0].expected_tokens == pytest.approx(3.9), "no verify of its own"
+    seen = _row([0.4] * 5)
+    seen.observe(2, 5)
+    seen.cond = [0.4] * 5
+    assert rank_records(generous, [seen], _PLAIN)[0].expected_tokens == pytest.approx(seen.expected_tokens(3))
+    assert rank_records(generous, [seen, row], _PLAIN)[0].expected_tokens == pytest.approx(
+        seen.expected_tokens(3) + 3.9
+    )
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(measured, [row], _PLAIN, 3) is None
+    partial = [RecordCandidate((8, 3), 2048, 55.0, 0.0, members=(0,), tokens_per_row=3.0)]
+    assert rank_records(partial, [row, row], _PLAIN)[0].expected_tokens == pytest.approx(3.0 + 1.0)
+
+
+def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
+    # the exploration retry: a one-step trial's cycle is the reseed interval (entry + step, 30, less the plain
+    # step) plus one record step as a loss: 20 / (3 x 20) = 0.33 within a 0.4 overhead at the 4th decision
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
+    row = _row([0.4] * 5)  # (16,1): 1.4 tokens at 1.5x = 0.93x, the cheapest record and above min_gain / 4
+    kinds = []
+    for _ in range(8):
+        choice = policy.decide(_cands(_COSTS), [row], _PLAIN, 5)
+        kinds.append(None if choice is None else (choice.shape, choice.reason))
+    assert kinds == [None, None, None, ((16, 1), "retry"), None, None, None, ((16, 1), "retry")]
+    assert policy.declined == 0 and policy.last_k == 1 and policy.trial
+    assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the exit gain is not held"
+    assert policy.last_reason == "declined" and policy.since_exit is None, "a failed trial is no exit: no cooldown"
+    # a longer trial holds its record for trial_steps steps, then the hold rule decides on what its steps
+    # delivered; an overtaken step (the replay never verified: a plain step the runner had in flight committed
+    # past it, contract s.4d) does not age the trial, and the trial goes on when the row continues (its first
+    # draft matched the committed token) but ends when every candidate carries an entry again (a miss: the row
+    # must reseed, and one reseed per trial is what the random-prompt points can afford)
+    held = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry" and held.trial_age == 1
+    held.note_overtaken()
+    assert held.trial_age == 0
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial" and held.trial_age == 1
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial" and held.trial_age == 2
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "trial_steps held: the hold rule decides"
+    held.note_overtaken()
+    assert held.trial_age == 0 and not held.trial, "nothing to un-age once declined"
+    missed = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    missed.decide(_cands(_COSTS), [row], _PLAIN, 5)
+    assert missed.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
+    missed.note_overtaken()
+    reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
+    assert missed.decide(reseeding, [row], _PLAIN, 5) is None and missed.last_reason == "declined" and not missed.trial
+    # a trial that clears the exit gain on its own steps continues as a hold: the entry bar covered the reseed
+    # it already paid (a record at 1.0-1.25x measured was dropped for 240 plain steps a request on the 12B QB2
+    # prose c1, 2026-10-30); the hold then leaves after EXIT_STEPS decisions below the exit gain
+    dwell = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    dwell.decide(_cands(_COSTS), [row], _PLAIN, 5)
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
+    k1 = ("step", (16, 1), 2048)
+    dwell.calibration.note_step(k1, 30.0, 1, True, 30.0, 1)  # the trial's steps: 1 token (0.67x: held), then 2
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial"
+    dwell.calibration.note_step(k1, 30.0, 2, True, 30.0, 1)
+    continued = dwell.decide(_cands(_COSTS), [row], _PLAIN, 5)  # 1.5 tokens at 1.5x = 1.0x on the run's own steps
+    assert (continued.reason, continued.tokens_per_row, continued.gain) == ("hold", 1.5, pytest.approx(1.0))
+    assert continued.measured and not dwell.trial and dwell.calibration.run_samples(k1) == 2
+    for _ in range(3):
+        dwell.calibration.note_step(k1, 30.0, 1, True, 30.0, 1)  # 1,2,1,1,1: 1.2 = 0.8x
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "hold" and dwell.below_exit == 1
+    dwell.calibration.note_step(k1, 30.0, 1, True, 30.0, 1)
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5) is None and dwell.last_reason == "exit"
+    assert dwell.calibration.run_samples(k1) == 0, "the exit ends the run"
+    assert dwell.calibration.last_run_mean(k1) == pytest.approx(7 / 6)
+    # two tokens a step on the trial's own steps (1.33x) clear the entry bar: the trial is a gain at once
+    again = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    again.decide(_cands(_COSTS), [row], _PLAIN, 5)
+    assert again.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
+    again.calibration.note_step(k1, 30.0, 2, True, 30.0, 1)
+    assert again.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "gain" and not again.trial
+    # A reseeding retry is exploration drawing on the rung's bucket, which fills at GEMMA4_SPEC_RETRY_OVERHEAD
+    # of every plain step's cost (0.6 ms a 20 ms step at 3 %) up to 1.5 trials -- the trial priced with every
+    # draft rejected: the cheapest reseeding record's entry (30) plus one record step at its cost over the plain
+    # step (10), 40 ms, so a 60 ms bucket -- pays every failed run's realized loss and is never reset (the old
+    # cadence, 3 % of the plain steps since the last record step, re-entered four times inside eight 128-token
+    # random requests on the 12B QB2, 2026-10-30). Mid-request the retry is priced as served under asynchronous
+    # scheduling: the expected reseeds before its replay takes (1 / the row's 0.4 first-position acceptance =
+    # 2.5) times the cycle (the 40 ms reseed interval on the table), plus the record step, 110 ms: more than
+    # the bucket can hold, so a row accepting that little never explores mid-request
+    reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(300))
+    assert policy.last_reason == "budget" and policy.rung_bucket == {1024: 60.0} and policy.rung_cap == {1024: 60.0}
+    k1_choice = rank_records([RecordCandidate((16, 1), 1024, 30.0, 30.0)], [row], _PLAIN)[0]
+    assert policy.trial_estimate(reseeding, _PLAIN) == 40.0 and policy.entry_cost(k1_choice, _PLAIN) == 100.0
+    assert policy.explore_cost(k1_choice, _PLAIN, 1) == pytest.approx(110.0)
+    # at a request's first proposal (a fresh row at its first step) the replay is verified and the trial costs
+    # the 40 ms: the bucket holds it after 67 plain steps, so the retry is the 68th decision
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    first = next(
+        i for i in range(1, 300) if policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is not None
+    )
+    assert first == 68 and policy.last_reason == "retry" and policy.last_k == 1 and policy._at_start
+    assert policy.rung_bucket[1024] == pytest.approx(40.2)
+    # the retry served one step at one token (the interval noted as the adapter would) and the hold rule
+    # declined: the run's realized loss, (30 + 30) charged less the 20 ms its token would have cost plain, comes
+    # out of the bucket (0.8 ms left); with the measured async walls (the reseed interval 80, the plain step
+    # after a record step 45) the trial is priced 65 (the reload is part of it, and of the 97.5 ms capacity), so
+    # the next first-proposal retry is the 108th decision after
+    policy.calibration.note_step(("step", (16, 1), 1024), 80.0, 1, False, 30.0, 1, cause="reseed")
+    assert (
+        policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is None and policy.last_reason == "declined"
+    )
+    assert policy.rung_bucket[1024] == pytest.approx(0.8)
+    policy.calibration.note_step(("plain", 1), 45.0, 1, False, 20.0, 1, cause="switch")
+    assert policy.retry_cycle_ms(k1_choice, _PLAIN) == pytest.approx(85.0)
+    assert (
+        next(i for i in range(1, 400) if policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is not None)
+        == 108
+    )
+    assert policy.trial_estimate(reseeding, _PLAIN) == 65.0 and policy.rung_cap == {1024: pytest.approx(97.5)}
+    # an entry-free record (nothing to amortize) retries at retry_steps, and a declined one-step trial the
+    # calibration saw no interval of measures no loss: the 4th and the 8th decision, as before
+    free = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    kinds = [free.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None for _ in range(8)]
+    assert kinds == [False, False, False, True, False, False, False, True] and free.rung_cap == {}
+    # a reseed is part of the trial: 900 + 10 = 910 over 0.4 of the plain step cost (8 ms a step) needs 114 steps
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
+    reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
+    assert all(policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is None for _ in range(114))
+    assert policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True).reason == "retry"
+    assert policy.rung_cap == {1024: pytest.approx(1365.0)}
+    # a three-step trial charges three record steps: 30 + 30 = 60 at 3 % needs 100 plain steps
+    longer = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=3), 5)
+    reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
+    assert (
+        next(i for i in range(1, 300) if longer.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is not None)
+        == 101
+    )
+    assert longer.rung_cap == {1024: pytest.approx(90.0)}
+    # a record serving has measured at break-even or better re-enters on that evidence, outside the bucket,
+    # once its entry as served pays over the horizon (the 12B QB2 prose c1 waited 337 plain steps after a 1.1x
+    # run under the overhead bound alone): (8,3) measured at 2.0 tokens (1.14x) with a 230 ms reseed saves 5 ms
+    # a step, 320 over the horizon; for a row accepting its first draft at 0.8 the mid-request cycle is 1.25 x
+    # 245 = 306 and the retry is the 4th decision; for the 0.4 row it is 2.5 x 245 = 612, beyond the horizon and
+    # beyond the bucket's 367.5 ms capacity (exploration, mid-request: never), while at a first proposal the
+    # reseed alone (230) pays and the record re-enters on evidence at the 4th decision too
+    paid = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.0)]
+    steady = _row([0.8, 0.4, 0.4, 0.4, 0.4])
+    quick = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    assert [quick.decide(paid, [steady], _PLAIN, 3) is None for _ in range(3)] == [True] * 3
+    assert quick.decide(paid, [steady], _PLAIN, 3).reason == "retry"
+    unsure = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    assert all(unsure.decide(paid, [row], _PLAIN, 3) is None for _ in range(2000)) and unsure.last_reason == "budget"
+    assert unsure.rung_bucket == {2048: pytest.approx(367.5)} and unsure.rung_cap == {2048: pytest.approx(367.5)}
+    starts = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    assert (
+        next(i for i in range(1, 50) if starts.decide(paid, [_row([0.4] * 5)], _PLAIN, 3, fresh=True) is not None) == 4
+    )
+    assert starts.last_reason == "retry" and starts.measured_pays(
+        rank_records(paid, [_row([0.4] * 5)], _PLAIN)[0], _PLAIN
+    )
+    # at 1.6 tokens (0.91x) it is exploration too, 2.5 x 245 + 3 = 615.5 mid-request: never
+    short = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.6)]
+    slow = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    assert all(slow.decide(short, [row], _PLAIN, 3) is None for _ in range(2000)) and slow.last_reason == "budget"
+    # ... unless its last run failed (the pool's older samples describe the text before it: prose, then random
+    # prompts) or its measured run length cannot amortize the cycle (marginal random prompts: runs of a few steps)
+    # -- then the record is exploration like any other: the bucket decides (a cold rung waits), not the credit.
+    failed = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    for _ in range(2):
+        failed.calibration.note_step(("step", (8, 3), 2048), 35.0, 1, True, 35.0, 1)
+    failed.calibration.end_run(trial=True)
+    assert failed.calibration.last_run_mean(("step", (8, 3), 2048)) == 1.0
+    assert all(failed.decide(paid, [steady], _PLAIN, 3) is None for _ in range(10)) and failed.last_reason == "budget"
+    assert not failed.measured_pays(rank_records(paid, [steady], _PLAIN)[0], _PLAIN)
+    assert _served(failed).decide(paid, [steady], _PLAIN, 3).reason == "retry", "a full bucket: an exploration"
+    brief = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    for _ in range(3):
+        brief.calibration.note_step(("step", (8, 3), 2048), 35.0, 2, True, 35.0, 1)
+    brief.calibration.end_run()
+    assert brief.calibration.run_length((8, 3)) == 3.0
+    assert all(brief.decide(paid, [steady], _PLAIN, 3) is None for _ in range(10)), "3 x 5 ms cannot pay 306"
+    assert brief.last_reason == "budget" and not brief.measured_pays(rank_records(paid, [steady], _PLAIN)[0], _PLAIN)
+    # a record the statistics rule out (gain below min_gain / 4) is never retried
+    hopeless = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
+    assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
+    # a record that could not clear the entry gain with every draft accepted is hopeless at its cost: never
+    # retried, trialed or held, whatever the rows accept (a (16,1) at 2.7x plain: 2 tokens a step = 0.75x at best)
+    never_pays = [RecordCandidate((16, 1), 1024, 2.7 * _PLAIN, 0.0, tokens_per_row=2.0)]
+    sure = _row([1.0] * 5)
+    eager = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
+    assert eager.viable(never_pays, _PLAIN) == [] and eager.viable(_cands(_COSTS), _PLAIN) == _cands(_COSTS)
+    assert all(eager.decide(never_pays, [sure], _PLAIN, 5, fresh=True) is None for _ in range(5))
+    assert eager.last_reason == "hopeless" and not eager.would_speculate(never_pays, [sure], _PLAIN, fresh=True)
+    eager.last_k = 1
+    assert eager.decide(never_pays, [sure], _PLAIN, 5) is None and eager.last_k == 0, "not held either"
+    within = [RecordCandidate((16, 1), 1024, 1.5 * _PLAIN, 0.0)]  # 2 tokens at 1.5x: 1.33x at best, viable
+    assert eager.viable(within, _PLAIN) == within and eager.decide(within, [sure], _PLAIN, 5, fresh=True) is not None
+    never = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=0, retry_overhead=1.0), 5)
+    assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
+    # a new request's trial: declined otherwise, a fresh step replays the cheapest record (entry plus step) once
+    # when the gain estimate clears trial_gain and the reseed pays over the horizon, whatever the retry cadence
+    # says; reason "trial", continued only under the hold rule
+    fresh = _served(SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0, trial_steps=1), 5))
+    trial = fresh.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True)
+    assert (trial.shape, trial.reason, trial.gain) == ((16, 1), "trial", pytest.approx(1.4 * 20 / 30)) and fresh.trial
+    assert fresh.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the exit gain is not held"
+    assert fresh.would_speculate(_cands(_COSTS), [row], _PLAIN, fresh=True)
+    assert not fresh.would_speculate(_cands(_COSTS), [row], _PLAIN)
+    dear = [RecordCandidate((16, 1), 2048, 50.0)]  # 2 tokens at most at 2.5x plain: 0.8x, hopeless at its cost
+    assert fresh.decide(dear, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "hopeless"
+    pricey = [RecordCandidate((1, 5), 2048, 80.0)]  # 6 tokens at most at 4x plain (1.5x, viable); the row's 1.66: 0.41x
+    assert fresh.decide(pricey, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
+    assert (
+        SpecPolicy(SpecPolicyConfig(trial_steps=1, trial_gain=0.4), 5)
+        .decide(pricey, [row], _PLAIN, 5, fresh=True)
+        .reason
+        == "trial"
+    )
+    # a trial with a reseed below break-even on the engine's own estimate reseeds for nothing (the 12B QB2
+    # random c1 ran one per request at 0.64-1.00x, ~150 ms each under asynchronous scheduling): the reseed
+    # must pay over the horizon at that estimate. The row's 1.66 tokens at (1,5)'s 50 ms save nothing; a 0.6
+    # row (2.18 tokens on (8,3): 1.25x, under the 1.25 bar) saves 8.6 ms a step, 550 over the horizon
+    with_entry = [RecordCandidate((1, 5), 2048, 50.0, 170.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
+    assert fresh.decide(with_entry, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
+    mid = _row([0.6] * 5)
+    assert fresh.decide([RecordCandidate((8, 3), 2048, 35.0, 100.0)], [mid], _PLAIN, 3, fresh=True).reason == "trial"
+    assert fresh.decide([RecordCandidate((8, 3), 2048, 35.0, 600.0)], [mid], _PLAIN, 3, fresh=True) is None
+    # a record serving has ever measured calib_min steps of at its rung gets no trial below the entry bar, fresh
+    # or stale (the measured credit when fresh, the model's estimate when stale)
+    known = SpecPolicy(SpecPolicyConfig(retry_steps=0, probe_steps=0, trial_steps=1, calib_min=2, pool_stale=3), 5)
+    for _ in range(2):
+        known.calibration.note_step(("step", (16, 1), 2048), 30.0, 2, True, 30.0, 1)  # 2 tokens: 1.33x
+    known.calibration.end_run()
+    measured_now = known.calibration.tokens_per_row(("step", (16, 1), 2048))
+    assert measured_now == 2.0
+    for _ in range(4):
+        known.calibration.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert known.calibration.tokens_per_row(("step", (16, 1), 2048)) is None, "stale"
+    assert known.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True) is None, "0.93x on the model: under the bar"
+    rich = _row([0.9] * 5)  # (16,1): 1.9 tokens at 1.5x = 1.27x on the model, at the bar
+    assert known.decide(_cands(_COSTS), [rich], _PLAIN, 5, fresh=True).reason == "gain"
+    # a batch of more than one row reseeds into a record only on the entry gain (``entry_bar``): a new batch's
+    # trial needs the cheapest candidate's own estimate at the bar, the hypothesis that its new rows accept every
+    # draft admits nothing, and there is no exploration retry -- a marginal record at rows desynchronizes the
+    # batch, and a client keeping c requests in flight then prefills one arrival at a time inside the other rows'
+    # decode (the 31B QB2 random c8, v51: a 47-step (8,3) run at an estimated 1.00x, 1.16x on its steps, -12 %
+    # TPOT on the point). Eight rows at 0.9/0.1/0.1/0.1/0.1 (2.0 tokens a step at K=3) on the (8,3) at 35 ms
+    # (1.75x plain): 1.14x on the prior, under the 1.30 bar, so no trial with three new rows (the hypothesis
+    # reads 2.75 tokens a row, 1.57x, and is not consulted), none with five new rows of eight, none all new at a
+    # first proposal; the same prior at one row trials the record at trial_gain
+    batch = [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)]
+    eight = _served(
+        SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    )
+    only83 = [c for c in _cands(_COSTS, n=8) if c.shape == (8, 3)]
+    assert rank_records(only83, batch, _PLAIN)[0].gain == pytest.approx(1.999 * 20 / 35, abs=1e-3)
+    hyped = rank_records(only83, batch, _PLAIN, optimistic=(0, 1, 2))
+    assert hyped[0].expected_tokens == pytest.approx(5 * 1.999 + 12, abs=1e-2)
+    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0,)) is None and eight.last_reason == "declined"
+    assert not eight.would_speculate(only83, batch, _PLAIN, fresh=(0, 1, 2))
+    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None and eight.last_reason == "declined"
+    assert eight.entry_bar() == 1.30 and eight._rows == 8
+    both = _cands(_COSTS, n=8)
+    assert rank_records(both, batch, _PLAIN)[0].shape == (16, 1)  # 1.9 tokens at 1.5x: 1.27x, the best and cheapest
+    assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)) is None and eight.last_reason == "declined"
+    reseeding8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
+    assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None and eight.last_reason == "declined"
+    assert eight._attempts == pytest.approx(1 / 0.9**8) and not eight._at_start
+    newbatch = [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)]
+    assert eight.decide(reseeding8, newbatch, _PLAIN, 3, fresh=True) is None and eight._at_start
+    assert eight.last_reason == "declined"
+    single = _served(
+        SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    )
+    one = [_row([0.9, 0.1, 0.1, 0.1, 0.1])]
+    assert single.decide(reseeding8, one, _PLAIN, 3, fresh=True).reason == "trial" and single.entry_bar() == 1.0
+    # a record serving measured at the rung is credited its measured tokens per row for the new rows too, and at
+    # rows enters on that evidence only at the bar: 1.46 a row (0.83x) and 1.9 (1.09x) are declined, not trialed,
+    # whether seven rows of eight are new (the 26B's arrival waves) or all are; 2.4 (1.37x) enters. Between
+    # break-even and the bar a single row re-enters on the bucket (exploration, "retry"); rows do not
+    measured8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.46)]
+    wave = tuple(range(7))
+    assert rank_records(measured8, batch, _PLAIN, optimistic=wave)[0].expected_tokens == pytest.approx(8 * 1.46)
+    assert eight.decide(measured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "declined"
+    unmeasured8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0)]
+    assert eight.decide(unmeasured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "declined"
+    assert eight.decide(unmeasured8, newbatch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
+    good = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.4)]  # measured above the bar: an entry
+    assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
+    assert eight.measured_pays(rank_records(good, batch, _PLAIN)[0], _PLAIN)
+    assert (
+        eight.decide(measured8, [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)], _PLAIN, 3, fresh=True) is None
+        and eight.last_reason == "declined"
+    ), "all new: a measured record below the entry bar (0.83x) gets no trial either"
+    even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.9)]  # 1.09x: below the 1.30 bar
+    assert eight.decide(even, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
+    assert not eight.measured_pays(rank_records(even, batch, _PLAIN)[0], _PLAIN)
+    rows_retry = _served(SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=1, probe_steps=0), 5))
+    assert all(rows_retry.decide(even, batch, _PLAIN, 3) is None for _ in range(4))
+    assert rows_retry.last_reason == "declined"
+    one_retry = _served(SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=1, probe_steps=0), 5))
+    assert one_retry.decide(even, one, _PLAIN, 3) is None and one_retry.decide(even, one, _PLAIN, 3).reason == "retry"
+    assert rank_records(even, batch, _PLAIN)[0].measured and not rank_records(reseeding8, batch, _PLAIN)[0].measured
+    with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
+        eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))
+    # an unmeasured record is not entered on the optimistic default prior alone (no position observed, the
+    # 12B QB2's 256K record: 6 tokens a row expected, 0.8-0.9x served for 20 steps): the step is a one-step
+    # trial, and its verify decides at once, the row's own outcome counting alone at positions the prior never
+    # observed
+    blank = _served(SpecPolicy(SpecPolicyConfig(probe_steps=0), 5))
+    naive = blank.new_row()
+    assert not SpecPolicy.informed([naive]) and SpecPolicy.informed([row])
+    reseeding = [RecordCandidate((1, 5), 2048, 50.0, 20.0)]
+    assert blank.decide(reseeding, [naive], _PLAIN, 5) is None and blank.last_reason == "declined"
+    assert not blank.would_speculate(reseeding, [naive], _PLAIN)
+    assert blank.would_speculate(reseeding, [naive], _PLAIN, fresh=True)
+    first = blank.decide(reseeding, [naive], _PLAIN, 5, fresh=True)
+    assert (first.reason, first.gain, blank.trial_limit) == ("trial", pytest.approx(6.0 / 2.5), 1)
+    blank.observe(naive, 0, 5)  # the one step: nothing accepted
+    assert naive.effective_cond(5) == [0.0] * 5 and naive.expected_tokens(5) == 1.0
+    assert blank.decide(_cands(_COSTS), [naive], _PLAIN, 5) is None and blank.last_reason == "declined"
+    keen = _served(SpecPolicy(SpecPolicyConfig(probe_steps=0), 5))
+    eager_row = keen.new_row()
+    keen.decide(reseeding, [eager_row], _PLAIN, 5, fresh=True)
+    keen.observe(eager_row, 4, 5)  # four of five: 5 tokens at 2.5x = 2.0x, the hold continues
+    assert eager_row.effective_cond(5) == [1.0, 1.0, 1.0, 1.0, 0.0]
+    assert keen.decide(_cands(_COSTS), [eager_row], _PLAIN, 5).reason == "gain" and not keen.trial
+    free = SpecPolicy(SpecPolicyConfig(), 5)  # entry-free (no reseed to pay): the default prior may replay
+    assert free.decide([RecordCandidate((1, 5), 2048, 50.0, 0.0)], [free.new_row()], _PLAIN, 5).reason == "gain"
+    # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
+    # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized; the
+    # hold then resumes its record (reseeding) under the hold rule, no exit and no retry (a probe was a full
+    # exit before: the 26B QB2 served 27 in a window and re-entered each by a retry, 2026-10-30)
+    probing = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)
+    rows = [_row([1.0] * 5)]
+    kinds = []
+    for _ in range(6):
+        reseeds = (
+            [RecordCandidate(s, 2048, ms, 20.0) for s, ms in _COSTS.items()] if probing.probing else _cands(_COSTS)
+        )
+        choice = probing.decide(reseeds, rows, _PLAIN, 5)
+        kinds.append(None if choice is None else choice.reason)
+        if choice is not None:
+            probing.calibration.note_step(("step", choice.shape, choice.width), 50.0, 6, True, 50.0, 1)
+        else:
+            probing.calibration.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert kinds == ["gain", "gain", "gain", None, "resume", "gain"] and probing.last_reason == "gain"
+    assert probing.calibration.steps_without("plain") == 2 and probing.declined == 0 and not probing.trial
+    assert probing.calibration.run_samples(("step", (1, 5), 2048)) == 5, "the probe did not end the run"
+    never = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=0, probe_steps=0), 5)
+    for _ in range(6):
+        assert never.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
+        never.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
+    costly = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=3, retry_overhead=0.03, probe_steps=0), 5)
+    for _ in range(6):  # 5 tokens forgone x 20 ms over 3+ steps is far above 3 % of them: no probe
+        assert costly.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
+        costly.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
+
+
+def _serve(policy, requests, length, costs, reseeds, plain_ms, width=2048, dirty_every=37, reload_ms=5.0):
+    """Drive ``policy`` the way the MTP adapter does over a stream of requests (one wave of rows at a time, each
+    ``length`` tokens, their accepted drafts per verify from ``requests``) at the rung ``width``: the first
+    proposal is fresh and every candidate carries the reseed; a row verified on the last replay continues
+    entry-free; the step after a reseed is uncounted and a record switch dirty (``Calibration.note_step`` as
+    the adapter calls it); the plain step after a record step carries the runner's reload (``reload_ms``) and
+    is reported only; every ``dirty_every``-th record step has a prefill inside it; a record chosen from the
+    plain regime mid-request is overtaken once (one plain token, one observation of its first draft, the trial
+    goes on when it matched). Returns ``(steps, record steps, trial episodes, entries from plain, loss)``, the
+    loss in ms against every token served plain."""
+    steps = spec = episodes = entries = 0
+    loss = 0.0
+    last_mode = None
+    overtaken_pending = False
+    for req in requests:
+        rows_ = [[list(seq), 0, 0, policy.new_row(), False] for seq in req]  # seq, index, committed, stats, trialed
+        first = True
+        continuing = False
+        while any(r[2] < length for r in rows_):
+            n = len(rows_)
+            stats = [r[3] for r in rows_]
+            fresh = tuple(i for i, r in enumerate(rows_) if r[3].spec_steps == 0 and not r[4] and not continuing)
+            if overtaken_pending:
+                policy.note_overtaken()
+                overtaken_pending = False
+            cands = [
+                RecordCandidate(
+                    shape,
+                    width,
+                    cost,
+                    0.0 if continuing else reseeds[shape],
+                    tokens_per_row=policy.calibration.tokens_per_row(("step", shape, width)),
+                )
+                for shape, cost in costs.items()
+                if shape[0] >= n
+            ]
+            choice = policy.decide(cands, stats, plain_ms, 5 if n == 1 else 3, fresh=fresh)
+            steps += 1
+            if choice is None:
+                mode = ("plain", 1 if n == 1 else 32)
+                after_record = last_mode is not None and last_mode[0] == "step"
+                for r in rows_:
+                    r[2] += 1
+                wall = plain_ms + (reload_ms if after_record else 0.0)
+                policy.calibration.note_step(
+                    mode, wall, n, not after_record, plain_ms, n, "switch" if after_record else None
+                )
+                loss += wall - plain_ms
+                continuing = False
+            else:
+                for i in fresh:
+                    rows_[i][4] = True
+                spec += 1
+                entry = choice.entry_ms > 0.0
+                if entry and (last_mode is None or last_mode[0] == "plain"):
+                    entries += 1
+                    if policy.last_reason in ("trial", "retry"):
+                        episodes += 1  # a trial or retry taken from the plain regime (its overtaken step continues it)
+                k = choice.shape[1]
+                mode = ("step", choice.shape, width)
+                if entry:
+                    policy.calibration.note_reseed(choice.shape, reseeds[choice.shape], reseeds[choice.shape])
+                overtaken = entry and not first and last_mode is not None and last_mode[0] == "plain"
+                if overtaken:
+                    matched = True
+                    for r in rows_:
+                        a = r[0][r[1]] if r[1] < len(r[0]) else 0
+                        r[1] += 1
+                        policy.observe(r[3], 1 if a >= 1 else 0, 1)
+                        r[2] += 1
+                        matched = matched and a >= 1
+                    wall = reseeds[choice.shape] + choice.cost_ms
+                    policy.calibration.note_step(mode, wall, n, False, costs[choice.shape], n, "reseed")
+                    loss += wall - plain_ms
+                    overtaken_pending = True
+                    continuing = matched
+                else:
+                    tokens = 0
+                    for r in rows_:
+                        a = min(r[0][r[1]] if r[1] < len(r[0]) else 0, k)
+                        r[1] += 1
+                        policy.observe(r[3], a, k)
+                        r[2] += a + 1
+                        tokens += a + 1
+                    if entry:
+                        cause = "reseed"
+                    elif last_mode != mode:
+                        cause = "switch"
+                    elif spec % dirty_every == 0:
+                        cause = "prefill"
+                    else:
+                        cause = None
+                    wall = choice.cost_ms + (reseeds[choice.shape] if entry else 0.0)
+                    policy.calibration.note_step(mode, wall, tokens, cause is None, costs[choice.shape], n, cause)
+                    loss += wall - tokens * plain_ms / n
+                    continuing = True
+            last_mode = mode
+            first = False
+        for r in rows_:
+            policy.note_request_steps(steps)
+        policy.calibration.note_step(last_mode, 500.0, n, False, None, n, "prefill", idle=True)
+    return steps, spec, episodes, entries, loss
+
+
+def _policy_prose_dwells_on_its_record_and_random_text_stays_plain(expect_error=None):
+    """The served points of the 12B QB2 (the v49 block run, 2026-10-30) at its calibrated costs, as the adapter
+    drives the policy. Prose at 3-4 tokens a step with occasional dirty steps speculates almost every step once
+    a request has measured the record, re-entering on the credit at every request's first proposal. Random text
+    at 1.0-1.5 tokens a step stays plain within 1 % of it: after a failed run no reseeding entry at the rung
+    until the budget covers the loss (order 1000 plain tokens a row), and a new request does not reset that
+    clock. Prose after random re-enters through one exploration retry and holds. A rung never measured (the
+    256K first visit) admits no trial inside 2 x 128 random tokens, and prose at a rung whose record pays
+    reaches the hold in its second 256-token request."""
+    costs = {(1, 3): 49.0, (1, 5): 55.5, (5, 3): 57.1, (5, 5): 56.5, (8, 3): 55.4}  # the 2048 rung, one row
+    reseeds = {(1, 3): 20.6, (1, 5): 21.2, (5, 3): 30.2, (5, 5): 30.2, (8, 3): 34.4}
+    plain = 21.5
+    # prose: the answer's start accepts less (5,2,2,2,1,1 on the log's requests), the body 2-5 drafts a verify
+    # (3-6 tokens a step at K=5), the tail little
+    body = [5, 2, 3, 4, 2, 3, 5, 2, 2, 4, 3, 5, 1, 3, 4, 2, 5, 3, 2, 4]
+    prose = [5, 2, 2, 2, 1, 1] + body * 6 + [1, 1, 0, 1, 0]
+    policy = _served(SpecPolicy(SpecPolicyConfig(), 5))
+    policy.prior.cond, policy.prior.informed = [0.5] * 5, [True] * 5  # an engine that served other text before
+    policy.prior.observed = [100] * 5
+    warm = _serve(policy, [[prose]], 255, costs, reseeds, plain)
+    steps, spec, episodes, entries, loss = _serve(policy, [[prose]] * 6, 255, costs, reseeds, plain)
+    assert spec / steps >= 0.9, (warm, steps, spec, episodes, entries)
+    assert entries <= 6 + 2 and episodes <= 2, "one reseed per request (its entry), re-entries only after a dip"
+    assert loss < -0.25 * steps * plain, "a quarter of the plain time saved at least"
+    # the record delivered: (1,5) at 55.5 ms commits ~3.8 tokens a step against the 21.5 ms plain step
+    assert policy.calibration.tokens_per_row(("step", (1, 5), 2048)) > 3.0
+    assert policy.rung_bucket[2048] == pytest.approx(policy.rung_cap[2048]), "every run paid: the bucket is full"
+    # random text: a draft lands now and then (1.2 tokens a step); the first request enters on the prose credit
+    # (evidence: the last run paid) and fails, and that run's realized loss (the reseed, the replay, the steps
+    # at one token) comes out of the rung's bucket; with the credit's last run failed every next entry is an
+    # exploration priced on that run's tokens, admitted once the bucket refilled at 1 % of the plain time --
+    # the one trial per ~15 s the bucket allows, so the eight requests cost at most a trial on evidence plus
+    # that rate (1.5 % here; 1 % in the long run)
+    noise = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 1]
+    random_text = noise * 7
+    steps, spec, episodes, entries, loss = _serve(policy, [[random_text]] * 8, 127, costs, reseeds, plain)
+    assert spec / steps < 0.05 and entries <= 4, (steps, spec, episodes, entries, loss)
+    assert 0.0 < loss <= 0.015 * steps * plain, (loss, steps)
+    assert policy.rung_bucket[2048] < policy.rung_cap[2048], "a trial's worth drawn, refilling"
+    # prose after random: the exploration waits for the bucket (the random trials left it in overdraft, and the
+    # trial priced on the failed run's tokens, ~90 ms, refills at 1 % of 21.5 ms steps: up to three plain prose
+    # requests), re-enters the record (its own steps clear the exit gain) and from then on every request enters
+    # at once on the run's measured credit
+    waited = _serve(policy, [[prose]] * 4, 255, costs, reseeds, plain)
+    assert waited[3] >= 1 and waited[1] >= 100 and waited[2] <= 2, waited
+    steps, spec, episodes, entries, loss = _serve(policy, [[prose]] * 3, 255, costs, reseeds, plain)
+    assert spec / steps >= 0.9 and entries <= 3, (steps, spec, episodes, entries)
+    assert loss < 0.0 and policy.rung_bucket[2048] >= 0.95 * policy.rung_cap[2048], "paid: the bucket (re)filled"
+    # the 256K rung, never measured: plain 33.1 ms, (1,5) at 136 (4.1x), reseeds 33; two 128-token random
+    # requests (the 1 user 256K point) admit no trial -- priced at every draft rejected, the trial needs ~1000
+    # plain steps of budget at 1 % -- and cost nothing over plain (the v49 policy entered on the prior the
+    # coherence requests had left at 1.0 and lost 6 %)
+    top = {(1, 3): 129.0, (1, 5): 136.0, (5, 3): 295.0, (5, 5): 311.0, (8, 3): 440.0}
+    top_reseeds = {(1, 3): 32.3, (1, 5): 32.9, (5, 3): 61.3, (5, 5): 61.2, (8, 3): 83.7}
+    far = SpecPolicy(SpecPolicyConfig(), 5)
+    far.prior.cond, far.prior.informed, far.prior.observed = [1.0] * 5, [True] * 5, [20] * 5  # all-accept text
+    steps, spec, episodes, entries, loss = _serve(far, [[random_text]] * 2, 127, top, top_reseeds, 33.1, width=263168)
+    assert (steps, spec, entries, loss) == (254, 0, 0, 0.0) and far.last_reason == "budget"
+    assert far.rung_bucket[263168] == pytest.approx(254 * 0.01 * 33.1) and far.rung_cap[263168] > 400
+    # ... and where the 256K record pays (2.2x the plain step: 73 ms) on an engine whose prior says prose
+    # (0.75 a position: (1,5) at 1.49x, an entry), the rung still serves its budget first -- the entry priced at
+    # every draft rejected, 33 + 3 x (73 - 33) = 153 ms, is 1 % of 461 plain steps at 256K -- so prose reaches
+    # the hold at its third 256-token request's first proposal and keeps it
+    cheap = {(1, 3): 66.0, (1, 5): 73.0, (5, 3): 150.0, (5, 5): 160.0, (8, 3): 220.0}
+    near = SpecPolicy(SpecPolicyConfig(), 5)
+    near.prior.cond, near.prior.informed, near.prior.observed = [0.75] * 5, [True] * 5, [100] * 5
+    served = [_serve(near, [[prose]], 255, cheap, top_reseeds, 33.1, width=263168) for _ in range(3)]
+    assert [(r[0], r[1]) for r in served[:2]] == [(255, 0), (255, 0)] and near.rung_bucket[263168] > 100, served
+    assert served[2][1] >= 0.9 * served[2][0] and served[2][4] < 0.0 and served[2][3] == 1, served[2]
+
+
+def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps(expect_error=None):
+    policy = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=3), 5)
+    rows = [_row([0.7] * 5) for _ in range(5)]
+    out = [(c.shape, c.reason) for c in (policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5) for _ in range(7))]
+    assert out == [
+        ((8, 3), "gain"),
+        ((8, 3), "gain"),
+        ((5, 5), "probe"),
+        ((8, 3), "gain"),
+        ((8, 3), "gain"),
+        ((5, 5), "probe"),
+        ((8, 3), "gain"),
+    ]
+    # at the cap, and on a plain step, the count restarts
+    policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5)
+    assert policy.below_cap == 2
+    policy.decide(_cands(_COSTS, n=5), [_row([1.0] * 5) for _ in range(5)], _PLAIN, 5)
+    assert policy.below_cap == 0 and policy.last_k == 5
+    policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5)
+    for _ in range(2):  # two decisions below the exit gain leave for the plain step
+        policy.decide(_cands(_COSTS, n=5), [_row([0.1] * 5) for _ in range(5)], _PLAIN, 5)
+    assert policy.below_cap == 0 and policy.last_k == 0
+    # entering (a reseed this step) is not a step below the cap: no probe starts from it
+    entering = _served(SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=1), 5))
+    choice = entering.decide([RecordCandidate((8, 3), 2048, 35.0, 1.0)], rows, _PLAIN, 5)
+    assert choice.reason == "enter" and entering.below_cap == 0
+    # without a larger record the probe step keeps the choice
+    only = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=1), 5)
+    assert only.decide([RecordCandidate((16, 1), 2048, 30.0)], rows, _PLAIN, 5).reason == "gain"
+
+
+def _policy_measure_positions_time_each_rung_at_the_first_position_it_serves(expect_error=None):
+    widths = [2048, 8192, 32768]
+    positions = SpeculativeDecoder.serving_measure_positions(widths, 5)
+    assert positions == [(2048, 0, 2041), (8192, 2042, 8185), (32768, 8186, 32761)]
+    for w, first, last in positions:
+        assert serving_width_for(widths, first, 5) == w and serving_width_for(widths, last, 5) == w
+    assert SpeculativeDecoder.serving_measure_positions(widths, 5, top_position=10000) == [
+        (2048, 0, 2041),
+        (8192, 2042, 8185),
+        (32768, 8186, 10000),
+    ]
+    assert SpeculativeDecoder.serving_measure_positions([4096, 1024, 1024], 1) == [(1024, 0, 1021), (4096, 1022, 4093)]
+    assert SpeculativeDecoder.serving_measure_positions([4096], 1, top_position=0) == [(4096, 0, 0)]
+
+
+def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=None):
+    costs = {
+        ("step", (1, 5), 2048): (0, 50.0, 2041, 52.0),
+        ("step", (1, 5), 8192): 52.5,
+        ("reseed", (1, 5)): CostLine(0, 18.0, 1018, 30.0),
+        ("step", (16, 1), 2048): 30.0,
+        ("partial", (16, 1), 2048): (0, 24.0, 2045, 24.5),  # a one-row replay the warmup found cheaper
+    }
+    assert describe_costs(costs, CostLine(0, 20.0, 1018, 60.0)) == (
+        "plain 20.0@0..60.0@1018 | (1, 5): S_k 2048 50.0@0..52.0@2041, S_k 8192 52.5; reseed 18.0@0..30.0@1018 | "
+        "(16, 1): S_k 2048 30.0 [1 row 24.0@0..24.5@2045]"
+    )
+    assert describe_costs({}, 20.0) == "plain 20.0" and describe_costs({}, None) == "plain unmeasured"
+    # the plain step per decode bucket, and the stats line's pieces
+    assert describe_costs({}, {1: 22.7, 32: CostLine(0, 30.7, 262138, 217.1)}) == (
+        "plain b1 22.7, b32 30.7@0..217.1@262138"
+    )
+    assert mode_name(("plain", 8)) == "plain[b=8]" and mode_name(("step", (8, 3), 2048)) == "(8,3)@2048"
+    stats = ModeStats()
+    assert stats.describe("plain[b=8]") == "plain[b=8]: 0 steps, 0 tokens, 0 clean"
+    stats.note(31.0, 8, True, 30.0, 8)
+    stats.note(33.0, 8, True, 30.0, 8)
+    stats.note(99.0, 8, False, 30.0, 8)
+    assert stats.describe("plain[b=8]") == (
+        "plain[b=8]: 3 steps, 24 tokens, 2 clean, 32.0 ms/step, 8.00 tokens/step, 4.0 ms/token, "
+        "total 54.3 ms/step 6.8 ms/token, ratio 1.10x"
+    )
+    for wall in (30.0, 32.0, 900.0):
+        stats.note(wall, 8, True, 30.0, 8)
+    assert stats.describe("plain[b=8]").endswith(
+        "3.9 ms/token, total 45.0 ms/step 5.6 ms/token, ratio 1.07x, outliers 1 at 900.0 ms"
+    )
+    assert stats.tokens_per_row() == 1.0 and stats.clean == 4 and stats.busy == 5
+    stats.note(5000.0, 8, False, 30.0, 8, idle=True)
+    assert stats.describe("plain[b=8]").endswith("outliers 1 at 900.0 ms, idle 1 at 5000.0 ms") and stats.busy == 5
+    calib = Calibration(8)
+    calib.note_step(("plain", 8), 31.0, 8, True, 30.0, 8)
+    calib.note_step(("plain", 8), 250.0, 8, False, 30.0, 8, cause="switch")
+    calib.note_reseed((8, 3), 248.0, 240.0)
+    calib.note_phase("replay", 41.5)
+    calib.note_phase("replay", 42.5)
+    calib.note_prefill()
+    assert calib.describe() == (
+        "plain[b=8]: 2 steps, 16 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, "
+        "total 31.0 ms/step 3.9 ms/token, ratio 1.03x | "
+        "reseeds 1 at 248.0 ms | dirty 1 steps, 250 ms: switch 1/250 | total 2 steps, 281 ms, 16 tokens, "
+        "17.6 ms/token | phases ms/call: replay 42.0 | prefills 1 | calibrated: none"
+    )
+    calib.flush_window()
+    assert calib.describe() == "reseeds 0 | prefills 0 | calibrated: none"
+    assert calib.describe(window=False).startswith("plain[b=8]: 2 steps, 16 tokens, 1 clean")

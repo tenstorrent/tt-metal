@@ -7,14 +7,25 @@ from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.demos.gemma4.tt import generator_trace as gt
+from models.demos.gemma4.tt.attention.continuation import continuation_sdpa_table_cols
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Mixin
 from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
-from models.demos.gemma4.tt.warmup_isls import ENV_VAR, parse_warmup_isls, run_prefill_ladder, warmup_prefill_isls
+from models.demos.gemma4.tt.warmup_isls import (
+    ENV_VAR,
+    continuation_tails,
+    parse_warmup_isls,
+    run_prefill_ladder,
+    run_prefix_continuation_warmup,
+    warmup_page_table_with_real_blocks,
+    warmup_prefill_isls,
+)
+from models.tt_transformers.tt.common import get_padded_prefill_len
 
 
 class _View:
@@ -54,9 +65,75 @@ def test_no_growth_no_recapture(monkeypatch):
     g._g4_alloc_check_pending = True
     assert not g._g4_trace_guard_should_recapture("k")
     assert g._g4_trace_alloc_baseline["k"][0] == 900
-    levels[ttnn.BufferType.DRAM] = 950  # above the lowest level seen: a post-capture allocation
+    # GEMMA4_TRACE_GUARD_DUMP=1 names the trigger: the blocks new since the baseline (snapshotted at the passing
+    # check above) with the tensors held at their addresses, and the tensors held now that were not held then
+    import models.demos.gemma4.tt.generator as generator_module
+
+    monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "1")
     g._g4_alloc_check_pending = True
-    assert g._g4_trace_guard_should_recapture("k")
+    assert not g._g4_trace_guard_should_recapture("k")  # still 900: the snapshot is taken here
+    assert g._g4_guard_baseline_state["blocks"]["DRAM"] == {(0, 900), ((1 << 20) - 4096, 4096)}
+    grown = _View(900)
+    grown.total_bytes_allocated_per_bank += 50
+    grown.block_table.insert(1, {"address": "900", "size": "50", "allocated": "yes"})
+    grown.block_table[2] = {"address": "950", "size": str((1 << 20) - 950 - 4096), "allocated": "no"}
+    monkeypatch.setattr(
+        ttnn, "get_memory_view", lambda mesh, bt: grown if bt == ttnn.BufferType.DRAM else _View(levels[bt])
+    )
+    output = SimpleNamespace(buffer_address=lambda: 900, dtype="DataType.BFLOAT16", shape=(1, 1, 32, 8))
+    g.trace_output_decode["k"] = [output]
+    g.model[0].stray = SimpleNamespace(buffer_address=lambda: 123456, dtype="DataType.INT32", shape=(32, 4096))
+    # the walk descends into objects (the sampler's state, a layer's attention), not only containers
+    g.model[0].sampling.tt_sampling = SimpleNamespace(
+        k_tensor=SimpleNamespace(buffer_address=lambda: 777, dtype="DataType.UINT32", shape=(32,)), rng=lambda: None
+    )
+    logged = []
+    monkeypatch.setattr(generator_module.logger, "warning", lambda message, *a, **k: logged.append(message.format(*a)))
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("k")  # above the lowest level seen: a post-capture allocation
+    assert logged[-1] == (
+        "Gemma4: trace guard dump (re-capture 1/8): 1 new block(s), +50 B per bank; counted below the largest free "
+        "gap: 1 block(s), +50 B; histogram: DRAM 50B x1 below; blocks: DRAM 50B@900 below "
+        "owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].sampling.tt_sampling.k_tensor UINT32 "
+        "[32], model[0].stray INT32 [32,4096]"
+    )
+    assert logged[-2].startswith("Gemma4: device allocations grew after the decode-trace capture")
+    # a block above the largest free gap (a kernel binary, top-down) is listed but not counted
+    grown.block_table.append({"address": str((1 << 20) - 4096 - 2048), "size": "2048", "allocated": "yes"})
+    grown.block_table[2]["size"] = str((1 << 20) - 950 - 4096 - 2048)
+    g._g4_guard_dump(1, 8)
+    assert logged[-1].startswith(
+        "Gemma4: trace guard dump (re-capture 1/8): 2 new block(s), +2098 B per bank; counted below the largest free "
+        "gap: 1 block(s), +50 B; histogram: DRAM 2048B x1 above, DRAM 50B x1 below; blocks: DRAM 2048B@1042432 "
+        "above owner=?, DRAM 50B@900 below owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | "
+    )
+    # without a block table the line carries the allocator statistics instead; off, nothing is snapshotted
+    bare = SimpleNamespace(total_bytes_allocated_per_bank=975, largest_contiguous_bytes_free_per_bank=7, block_table=[])
+    monkeypatch.setattr(ttnn, "get_memory_view", lambda mesh, bt: bare)
+    g._g4_guard_baseline_state = {
+        "blocks": {"DRAM": None, "L1": None},
+        "stats": {"DRAM": (900, 9), "L1": (10, 1)},
+        "tensors": set(),
+    }
+    g._g4_guard_dump(2, 8)
+    assert logged[-1] == (
+        "Gemma4: trace guard dump (re-capture 2/8): 0 new block(s), +0 B per bank; counted below the largest free "
+        "gap: 0 block(s), +0 B; histogram: none; blocks: none | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].sampling.tt_sampling.k_tensor UINT32 "
+        "[32], model[0].stray INT32 [32,4096] | no block table: "
+        "DRAM allocated 900 -> 975, largest free 9 -> 7; L1 allocated 10 -> 975, largest free 1 -> 7"
+    )
+    # long lists are capped at 32 entries and say how many more there are
+    g.trace_output_decode["many"] = [
+        SimpleNamespace(buffer_address=lambda i=i: 5000 + i, dtype="DataType.INT32", shape=(1,)) for i in range(40)
+    ]
+    g._g4_guard_dump(3, 8)
+    assert logged[-1].count("generator.trace_output_decode['many']") == 31 and "and 11 more" in logged[-1]
+    monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "0")
+    del g._g4_guard_baseline_state
+    g._g4_note_decode_trace_captured("k")
+    assert not hasattr(g, "_g4_guard_baseline_state")
 
 
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
@@ -107,6 +184,19 @@ def test_warmup_captured_trace_gets_its_baseline_at_the_first_replay(monkeypatch
     g = _guard(monkeypatch, levels)
     assert not g._g4_trace_guard_should_recapture("w")  # no baseline yet: recorded, no re-capture
     assert g._g4_trace_alloc_baseline["w"] == g._g4_alloc_levels()
+    # A capture (the warmup's next bucket, or a key first replayed after a release) allocates its own trace
+    # inputs and output after the other keys' captures (the 12B at TP8: 328064 B per bank for the batch-32
+    # key); they are the generator's, not a stray allocation under a replay, so every key's baseline moves:
+    # the older key's next check re-baselines instead of releasing every trace again (the re-capture cascade).
+    levels[ttnn.BufferType.DRAM] += 328064
+    g._g4_note_decode_trace_captured("c")
+    assert g._g4_trace_alloc_baseline == {"c": g._g4_alloc_levels()}
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("w")
+    assert g._g4_trace_alloc_baseline["w"] == g._g4_alloc_levels()
+    levels[ttnn.BufferType.DRAM] += 4480  # a stray allocation after that capture still re-captures
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("w")
 
 
 def test_release_drops_every_trace_and_resets_sampling(monkeypatch):
@@ -120,13 +210,28 @@ def test_release_drops_every_trace_and_resets_sampling(monkeypatch):
     g._prev_decode_batch = 128  # the feedback buffer is found through this key: it must survive the release
     g.trace_output_decode["a"] = [SimpleNamespace()]  # dropped, never freed by the release
     g._g4_trace_alloc_baseline["a"] = (1, 2)
-    g._g4_release_decode_traces("test")
+    assert g._g4_release_decode_traces("test") == 2
     assert sorted(released) == [11, 12]
     assert resets == [1]
     assert not g.trace_ids_decode["a"] and not g.trace_output_decode["a"]
     assert g._g4_trace_alloc_baseline == {}
     assert g._g4_recapture_without_precompile  # the live request's sampler state must not be touched
     assert g._prev_decode_batch == 128
+    # With nothing left to drop, a release the decode warmup caused is logged at INFO (the wider bucket grows
+    # the tables the first bucket allocated); a serving-time release stays a WARNING.
+    import models.demos.gemma4.tt.generator as generator_module
+
+    logged = []
+    for level in ("info", "warning"):
+        monkeypatch.setattr(
+            generator_module.logger, level, lambda message, *a, _l=level, **k: logged.append((_l, message.format(*a)))
+        )
+    assert g._g4_release_decode_traces("warmup bucket grew the tables", in_warmup=True) == 0
+    assert g._g4_release_decode_traces("serving-time grow") == 0
+    assert [(level, text.split(":")[-1].strip()) for level, text in logged] == [
+        ("info", "warmup bucket grew the tables"),
+        ("warning", "serving-time grow"),
+    ]
 
 
 # ===== merged from tests/unit/test_trace_guard_arming_host.py: Host-only: when the decode-trace allocation guard walks the allocator (``ChunkedPrefillPageTableGuardMixin``).
@@ -398,9 +503,12 @@ class _FakeGenerator:
         self.data_parallel = data_parallel
         self.paged = paged
         self.calls = []
+        self.tables = []
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
-        return {"tokens": (batch_size, seq_len), "page_table": object() if self.paged else None, "model_id": model_id}
+        # the stock mock table: all zeros (every column the null block 0), 128-token blocks
+        table = torch.zeros(batch_size, -(-seq_len // 128), dtype=torch.int32) if self.paged else None
+        return {"tokens": (batch_size, seq_len), "page_table": table, "model_id": model_id}
 
 
 def _prefill_recorder(gen):
@@ -408,6 +516,7 @@ def _prefill_recorder(gen):
         gen.calls.append(
             (kwargs["model_id_warmup"], kwargs["tokens"][1], kwargs["enable_trace"], kwargs["warmup_prefill"])
         )
+        gen.tables.append(kwargs["page_table"])
 
     return prefill_forward
 
@@ -424,12 +533,74 @@ def test_ladder_runs_once_per_process_and_per_model():
         (1, 4096, False, False),
         (1, 8192, False, False),
     ]
+    # the mock tables hold real block ids (one per column): the 8192 ladder's second chunk is an eager
+    # continuation over them, as a served chunk is, with no "chunk_page_table has no real block ids" warning
+    for table, (_, isl, _, _) in zip(gen.tables, gen.calls):
+        assert tuple(table.shape) == (1, isl // 128) and bool((table > 0).all()), "real block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
     # second (capture) pass: nothing runs again
     assert (
         run_prefill_ladder(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), ladder=[4096, 8192], chunk=4096)
         == []
     )
     assert len(gen.calls) == 4
+
+
+def test_prefix_continuation_warmup_prefills_every_reachable_tail_past_one_chunk_once_per_process():
+    calls = []
+
+    def prefill_forward(**kwargs):
+        calls.append(kwargs)
+
+    # every padded length a remnant past a cached prefix can take (get_padded_prefill_len), each a program set of
+    # its own: the served 12B QB2 paid 4.0 s on its first 2048-token tail, a length the ISL ladder never runs
+    assert continuation_tails(4096, get_padded_prefill_len) == [128, 1024, 2048, 4096]
+    assert continuation_tails(4096, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048]
+    assert continuation_tails(2048, get_padded_prefill_len) == [128, 1024, 2048]
+    assert continuation_tails(8192, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048, 4096]
+    gen = _FakeGenerator(data_parallel=2)
+    tails = [128, 1024, 2048]
+    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096, tails=tails)
+    assert [c["start_pos"] for c in calls] == [[4096]] * 6, "every tail per model, past one chunk"
+    assert [c["tokens"] for c in calls] == [(1, 4096 + t) for _ in range(2) for t in tails]
+    assert all(c["enable_trace"] is False and c["kv_cache"] == "kv" for c in calls)
+    assert [c["model_id_warmup"] for c in calls] == [0] * 3 + [1] * 3
+    # the mock user holds real block ids: a zero table (the null block) never reads the prior window at boot, so
+    # the served hit compiled the continuation's programs on the first cached request
+    for c, t in zip(calls, tails * 2):
+        table = c["page_table"]
+        assert tuple(table.shape) == (1, (4096 + t) // 128) and bool((table > 0).all()), "non-zero block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
+    # the pool bound: ids wrap inside [1, pool) when the kv pool is known; real tables and fakes pass through
+    assert warmup_page_table_with_real_blocks(torch.zeros(1, 6, dtype=torch.int32), pool_blocks=4).tolist() == [
+        [1, 2, 3, 1, 2, 3]
+    ]
+    real = torch.tensor([[9, 4, 0]], dtype=torch.int32)
+    assert warmup_page_table_with_real_blocks(real) is real and warmup_page_table_with_real_blocks(None) is None
+    # the global layers' SDPA table (attention/continuation.py): one width per model and tail - the context's
+    # blocks plus the tail's, at the stick multiple - for the warmup past one chunk and for a served hit at any
+    # position, so the warmup's tail compiles the program the hit runs
+    assert [continuation_sdpa_table_cols(262144, 4096, t, 64) for t in (128, 1024, 2048, 4096)] == [
+        4104,
+        4112,
+        4128,
+        4160,
+    ]
+    assert all(
+        continuation_sdpa_table_cols(262144, start, t, 64) == continuation_sdpa_table_cols(262144, 4096, t, 64)
+        for start in (128, 2432, 130944, 258048)
+        for t in (128, 1024, 2048, 4096)
+    )
+    calls.clear()
+    assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert calls == [], "once per process"
+    single = _FakeGenerator(data_parallel=1)
+    assert run_prefix_continuation_warmup(single, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert [c["tokens"] for c in calls] == [(1, 4096 + 128)], "the default tail is the short hit"
+    calls.clear()
+    off = _FakeGenerator(data_parallel=1, paged=False)
+    assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert calls == [], "no cached prefix to continue from with paged attention off"
 
 
 def test_ladder_stops_at_the_chunk_when_paged_attention_is_off():

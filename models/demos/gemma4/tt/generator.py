@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import os
 import time
 from collections import defaultdict
@@ -820,6 +821,14 @@ class ChunkedPrefillPageTableGuardMixin:
                 return int(pt.shape[0]) if pt.dim() > 1 else 1
         return None
 
+    @staticmethod
+    def _page_tables_identity(page_tables_per_layer):
+        """What makes a per-layer host table list the one already installed: the same tensor objects (kept alive
+        by the record, so an id cannot be reused by a later table) at the same in-place version, in order."""
+        return tuple(
+            (id(pt), int(pt._version)) if isinstance(pt, torch.Tensor) else None for pt in page_tables_per_layer
+        )
+
     @classmethod
     def _install_per_layer_page_tables(cls, model, page_tables_per_layer, *, writer):
         """H2D the per-layer tables into the persistent buffers for their row count and record the writer.
@@ -828,7 +837,10 @@ class ChunkedPrefillPageTableGuardMixin:
         a prefill must re-upload after a decode wrote (its trace inputs rewrite the device table), so a prefill
         forces the upload unless the last writer for this row count was prefill: then the host-side "unchanged"
         shortcut of ``update_persistent_per_layer_page_tables`` may skip the H2D (the chunks of one long prompt,
-        back-to-back prefills on the same table).
+        back-to-back prefills on the same table). A prefill handing this row count the very host tables it
+        already holds (the same tensor objects, unmodified: the restore after a sequential per-user prefill, the
+        chunks of one prompt) is not even compared: the per-layer pad-and-compare of every layer is the host
+        cost of an install when nothing changed (``install=...xN`` on the prefill perf line).
         """
         if not hasattr(model, "update_persistent_per_layer_page_tables"):
             return
@@ -837,8 +849,16 @@ class ChunkedPrefillPageTableGuardMixin:
         if writers is None:
             writers = {}
             model._g4_page_table_writer_by_rows = writers
+        installed = getattr(model, "_g4_page_tables_installed_by_rows", None)
+        if installed is None:
+            installed = {}
+            model._g4_page_tables_installed_by_rows = installed
         last_writer = writers.get(rows) if rows is not None else None
         force = writer == "prefill" and last_writer != "prefill"
+        identity = cls._page_tables_identity(page_tables_per_layer)
+        held = installed.get(rows) if rows is not None else None
+        if writer == "prefill" and not force and held is not None and held[0] == identity:
+            return  # the device already holds exactly these tables, written by prefill
         t0 = time.perf_counter()
         model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
         add = getattr(model, "_g4_pf_add", None)
@@ -848,6 +868,8 @@ class ChunkedPrefillPageTableGuardMixin:
         if rows is None:
             return
         writers[rows] = writer
+        # The tensors are kept with the identity so their ids stay theirs while the record lives.
+        installed[rows] = (identity, list(page_tables_per_layer)) if writer == "prefill" else None
 
     @classmethod
     def _page_tables_written_by_prefill(cls, models, per_submesh) -> bool:
@@ -2461,6 +2483,15 @@ class ChunkedPrefillPageTableGuardMixin:
                     moved,
                 )
                 self._g4_lane_trace_registry().pop((k, S), None)
+                # The frame's trace goes back to the trace region with the frame: a popped id kept its trace
+                # buffers for the life of the process (the decode-trace leak of 2026-10-18, here per frame; the
+                # 32x128 frame alone is a sizeable slice of the region). The last replay of this frame was read
+                # back before this call, so nothing of it is in flight. Its persistent inputs and output go with
+                # the registry entry.
+                try:
+                    ttnn.release_trace(mesh, entry["trace_id"])
+                except Exception as e:  # noqa: BLE001 - the frame is off either way; the region keeps the buffers
+                    logger.warning("Gemma4: releasing the dropped lane prefill trace {}x{} raised {!r}", k, S, e)
                 return None
             t_stage = time.perf_counter()
             legacy = fit_table_width(page_tables.to(torch.int32), entry["needed_blocks"])
@@ -3183,6 +3214,7 @@ class ChunkedPrefillPageTableGuardMixin:
         if baseline is None:
             # Captured by a warmup path: the level at this first replay is the baseline.
             self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            self._g4_guard_snapshot()
             return False
         if not getattr(self, "_g4_alloc_check_pending", True):
             # nothing but replays since the last check: no new persistent allocation (the ``alloc`` arming
@@ -3199,6 +3231,7 @@ class ChunkedPrefillPageTableGuardMixin:
             # The level right after the capture can still include tensors the warmup frees later; the
             # lowest level seen at a replay is the true quiescent baseline, so track it downwards.
             self._g4_trace_alloc_baseline[decode_trace_key] = tuple(min(b, c) for b, c in zip(baseline, current))
+            self._g4_guard_snapshot()
             return False
         limit = int(os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_MAX", "8"))
         now = time.monotonic()
@@ -3232,10 +3265,220 @@ class ChunkedPrefillPageTableGuardMixin:
             self._g4_trace_guard_recaptures,
             limit,
         )
+        if self._g4_guard_dump_on():
+            self._g4_guard_dump(self._g4_trace_guard_recaptures, limit)
         return True
 
-    def _g4_release_decode_traces(self, reason: str) -> None:
-        """Release every captured decode trace (and the sampling traces bound to its logits)."""
+    # GEMMA4_TRACE_GUARD_DUMP=1 names the trigger of a fire: one WARNING line per fire listing the allocator blocks
+    # that exist at the fire and did not at the baseline (the allocated entries of the DRAM and L1 block tables,
+    # snapshotted at every baseline the guard takes or keeps), split into the blocks below the largest free gap
+    # (the ones the guard counts) and above it (kernel binaries and other top-down allocations, never counted), as
+    # a histogram per (type, size, region) and per block with the ttnn tensors the generator or a model holds at
+    # that address (one walk through attributes, containers and the objects on the way -- the sampler and its
+    # state, a layer's attention, the drafter decoder -- keyed by buffer address and by id), plus the tensors held
+    # now that were not held at the baseline. Without a block table the line carries the allocator statistics
+    # instead (allocated and largest free bytes per bank, baseline -> now). Off (the default): nothing is read,
+    # snapshotted or walked.
+    #   Gemma4: trace guard dump (re-capture N/MAX): K new block(s), +B B per bank; counted below the largest free
+    #   gap: J block(s), +C B; histogram: TYPE SIZEB xN below|above, ...; blocks: TYPE SIZEB@ADDR below|above
+    #   owner=PATH DTYPE [SHAPE]; ..., ... | new tensors held: PATH DTYPE [SHAPE], ... | no block table: TYPE
+    #   allocated A -> B, largest free C -> D
+    _G4_GUARD_DUMP_ENTRIES = 32
+
+    @staticmethod
+    def _g4_guard_dump_on() -> bool:
+        return os.environ.get("GEMMA4_TRACE_GUARD_DUMP", "0") == "1"
+
+    def _g4_guard_views(self):
+        """``{"DRAM": view, "L1": view}`` of the first mesh; a view that cannot be read is left out."""
+        args = getattr(self, "model_args", None) or []
+        mesh = getattr(args[0], "mesh_device", None) if args else None
+        views = {}
+        for name, buffer_type in (("DRAM", ttnn.BufferType.DRAM), ("L1", ttnn.BufferType.L1)):
+            try:
+                views[name] = ttnn.get_memory_view(mesh, buffer_type)
+            except Exception:  # noqa: BLE001 - diagnostics only
+                continue
+        return views
+
+    @staticmethod
+    def _g4_guard_blocks(view):
+        """``{(address, size)}`` of the allocated blocks of a memory view, or None without a block table."""
+        try:
+            table = list(view.block_table)
+        except Exception:  # noqa: BLE001
+            return None
+        if not table:
+            return None
+        return {
+            (int(b.get("address", 0)), int(b.get("size", 0)))
+            for b in table
+            if str(b.get("allocated", "")).lower() in ("yes", "true", "1")
+        }
+
+    @staticmethod
+    def _g4_guard_stats(view):
+        """(allocated bytes per bank, largest contiguous free bytes per bank) of a memory view."""
+        return tuple(
+            int(getattr(view, name, 0) or 0)
+            for name in ("total_bytes_allocated_per_bank", "largest_contiguous_bytes_free_per_bank")
+        )
+
+    def _g4_guard_tensors(self, budget=60000, max_depth=8):
+        """``{id(tensor): (path, tensor)}`` of every ttnn tensor the generator or its models hold, reached through
+        attributes and containers (dicts, lists, tuples, sets, and the ``__dict__`` of any object on the way: the
+        sampler, its penalties and seed state, a layer's attention and config, the drafter decoder); ``budget``
+        bounds the walk, ``max_depth`` the nesting. Host torch tensors, callables, modules and classes are leaves."""
+        found, seen, stack = {}, set(), []
+        roots = [("generator", self)] + [(f"model[{i}]", m) for i, m in enumerate(getattr(self, "model", None) or [])]
+        for name, root in roots:
+            stack.append((name, root, 0))
+        while stack and budget > 0:
+            path, value, depth = stack.pop()
+            budget -= 1
+            if callable(getattr(value, "buffer_address", None)):
+                found.setdefault(id(value), (path, value))
+                continue
+            if depth >= max_depth or id(value) in seen:
+                continue
+            if isinstance(value, (str, bytes, int, float, bool, type, torch.Tensor)) or value is None:
+                continue
+            if inspect.isroutine(value) or inspect.ismodule(value):
+                continue
+            seen.add(id(value))
+            if isinstance(value, dict):
+                items = [(f"{path}[{key!r}]", item) for key, item in value.items()]
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                items = [(f"{path}[{i}]", item) for i, item in enumerate(value)]
+            else:
+                attrs = getattr(value, "__dict__", None)
+                if not isinstance(attrs, dict):
+                    continue
+                items = [(f"{path}.{key}", item) for key, item in attrs.items()]
+            for item_path, item in items:
+                stack.append((item_path, item, depth + 1))
+        return found
+
+    @staticmethod
+    def _g4_guard_gap(view):
+        """The address the largest free block of a memory view starts at (the gap ``_g4_dram_bottom_up_bytes``
+        counts below), or None without a block table / free block."""
+        try:
+            table = list(view.block_table)
+        except Exception:  # noqa: BLE001
+            return None
+        gap_start, gap_size = None, -1
+        for b in table:
+            if str(b.get("allocated", "")).lower() in ("no", "false", "0") and int(b.get("size", 0)) > gap_size:
+                gap_start, gap_size = int(b.get("address", 0)), int(b.get("size", 0))
+        return gap_start
+
+    def _g4_guard_snapshot(self) -> None:
+        """GEMMA4_TRACE_GUARD_DUMP=1: the allocated blocks, allocator statistics and held tensors at a baseline."""
+        if not self._g4_guard_dump_on():
+            return
+        views = self._g4_guard_views()
+        self._g4_guard_baseline_state = {
+            "blocks": {name: self._g4_guard_blocks(view) for name, view in views.items()},
+            "stats": {name: self._g4_guard_stats(view) for name, view in views.items()},
+            "tensors": set(self._g4_guard_tensors()),
+        }
+
+    @staticmethod
+    def _g4_guard_describe(path, tensor):
+        try:
+            dtype = str(tensor.dtype).replace("DataType.", "")
+        except Exception:  # noqa: BLE001
+            dtype = "-"
+        try:
+            shape = "[" + ",".join(str(int(d)) for d in tensor.shape) + "]"
+        except Exception:  # noqa: BLE001
+            shape = "-"
+        return f"{path} {dtype} {shape}"
+
+    @staticmethod
+    def _g4_guard_capped(items, cap):
+        extra = len(items) - cap
+        return items[:cap] + ([f"and {extra} more"] if extra > 0 else [])
+
+    def _g4_guard_dump(self, n, limit) -> None:
+        """One WARNING line naming what grew since the baseline (``GEMMA4_TRACE_GUARD_DUMP=1``, after a fire)."""
+        state = getattr(self, "_g4_guard_baseline_state", None) or {"blocks": {}, "stats": {}, "tensors": set()}
+        views = self._g4_guard_views()
+        tensors = self._g4_guard_tensors()
+        by_address = {}
+        for path, tensor in tensors.values():
+            try:
+                by_address.setdefault(int(tensor.buffer_address()), []).append((path, tensor))
+            except Exception:  # noqa: BLE001 - a tensor whose address cannot be read is listed by id only
+                continue
+        entries, no_table, histogram = [], [], {}
+        count = total = counted = counted_bytes = 0
+        for name, view in views.items():
+            blocks = self._g4_guard_blocks(view)
+            before = state["blocks"].get(name)
+            if blocks is None or before is None:
+                was, now = state["stats"].get(name, (0, 0)), self._g4_guard_stats(view)
+                no_table.append(f"{name} allocated {was[0]} -> {now[0]}, largest free {was[1]} -> {now[1]}")
+                continue
+            gap = self._g4_guard_gap(view)
+            for address, size in sorted(blocks - before, key=lambda block: (-block[1], block[0])):
+                region = "below" if gap is None or address < gap else "above"
+                count += 1
+                total += size
+                if region == "below":
+                    counted += 1
+                    counted_bytes += size
+                histogram[(name, size, region)] = histogram.get((name, size, region), 0) + 1
+                owners = by_address.get(address)
+                owner = "; ".join(self._g4_guard_describe(p, t) for p, t in owners) if owners else "?"
+                entries.append(f"{name} {size}B@{address} {region} owner={owner}")
+        held = sorted(self._g4_guard_describe(p, t) for i, (p, t) in tensors.items() if i not in state["tensors"])
+        cap = self._G4_GUARD_DUMP_ENTRIES
+        bars = [
+            f"{name} {size}B x{times} {region}"
+            for (name, size, region), times in sorted(histogram.items(), key=lambda kv: (kv[0][0], -kv[0][1], kv[0][2]))
+        ]
+        line = (
+            f"Gemma4: trace guard dump (re-capture {n}/{limit}): {count} new block(s), +{total} B per bank; "
+            f"counted below the largest free gap: {counted} block(s), +{counted_bytes} B; histogram: "
+            + (", ".join(bars) if bars else "none")
+            + "; blocks: "
+            + (", ".join(self._g4_guard_capped(entries, cap)) if entries else "none")
+            + " | new tensors held: "
+            + (", ".join(self._g4_guard_capped(held, cap)) if held else "none")
+        )
+        if no_table:
+            line += " | no block table: " + "; ".join(no_table)
+        logger.warning("{}", line)
+
+    def _g4_note_decode_trace_captured(self, decode_trace_key) -> None:
+        """A decode trace was just captured for ``decode_trace_key``: its baseline is the level now, and every
+        other key's baseline is re-taken at that key's next replay.
+
+        A capture allocates the key's own trace inputs and output after the
+        other keys' captures (the 12B at TP8: the ``[32, V/8]`` bf16 logits,
+        262144 B per bank; a ``[batch, 4096]`` int32 page table, 16384 B per
+        bank per 8 rows; three 128 B controls: 328064 B per bank for the
+        batch-32 key, 278848 for a key of 8 rows or fewer). With per-key
+        baselines a key captured lazily after a release (a bucket first
+        replayed later) read as a stray allocation to the older keys' next
+        check, which released every trace again: a cascade of 0.7 s
+        re-captures, one per first use of a bucket (10 in one 32-user point
+        of the MTP rail). The capture's own buffers are this generator's,
+        not a stray allocation under a replay, so they move every baseline.
+        """
+        self._g4_trace_alloc_baseline = {decode_trace_key: self._g4_alloc_levels()}
+        self._g4_guard_snapshot()
+
+    def _g4_release_decode_traces(self, reason: str, *, in_warmup: bool = False) -> int:
+        """Release every captured decode trace (and the sampling traces bound to its logits).
+
+        Returns the number of traces released. ``in_warmup`` marks a release
+        the decode warmup itself caused (its buckets reallocating the
+        per-layer page tables), logged at INFO; any other release is a
+        WARNING.
+        """
         released = 0
         for _key, tids in list(self.trace_ids_decode.items()):
             if not tids:
@@ -3262,7 +3505,8 @@ class ChunkedPrefillPageTableGuardMixin:
         self.prev_page_table = None
         self._g4_trace_alloc_baseline = {}
         self._g4_recapture_without_precompile = True
-        logger.warning("Gemma4: released {} decode trace(s): {}", released, reason)
+        (logger.info if in_warmup else logger.warning)("Gemma4: released {} decode trace(s): {}", released, reason)
+        return released
 
     def _decode_forward_trace_text(
         self,
@@ -3307,7 +3551,7 @@ class ChunkedPrefillPageTableGuardMixin:
             self.trace_ids_decode[decode_trace_key] = trace_ids
             self.trace_inputs_decode[decode_trace_key] = device_inputs
             self.trace_output_decode[decode_trace_key] = tt_out_trace
-            self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            self._g4_note_decode_trace_captured(decode_trace_key)
             self._g4_alloc_dump(f"cap_b{batch}_")
 
         for i in range(self.data_parallel):

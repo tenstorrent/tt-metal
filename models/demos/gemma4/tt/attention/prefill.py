@@ -16,6 +16,12 @@ import ttnn
 from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
+from .continuation import (
+    align_sdpa_chunks,
+    continuation_chunked_sdpa_enabled,
+    pad_page_table_cols,
+    sliding_continuation_sdpa,
+)
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
     _paged_fill_cache,
@@ -75,6 +81,25 @@ def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_de
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+
+def continuation_fill_rows(valid_seq_len, rows, host_cut):
+    """Rows of the padded chunk the unbounded K/V fill writes, or None for the whole chunk.
+
+    With the continuation's host fill cut (``PrefillContinuation.fill_table`` with ``valid_cols``) the columns
+    past the prompt's real blocks are the null block 0, so the chunk is filled whole: one ``paged_fill_cache``
+    program per bucket, where the tile-rounded valid length keyed a kernel build per new prompt length (its
+    writer compiles per input height; 12B P300X2 2026-10-30: 0.8-2.1 s on the first hit of each length). The
+    legacy device-sliced, batched and demo tables may hold real blocks past the prompt, so they keep the
+    tile-rounded cap (``0 < cap < rows``; None when the cap covers the chunk or no length is known).
+    """
+    if valid_seq_len is None or host_cut is not None:
+        return None
+    rows = int(rows)
+    v = min(int(valid_seq_len), rows)
+    # Tile-ceil so the writer sees a legal RM height; unused rows inside the last tile sit on pad columns (0).
+    tile_end = min(((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT, rows)
+    return tile_end if 0 < tile_end < rows else None
 
 
 def _merge_bounded_boundary_fill(tt_x, valid_seq_len, modulo):
@@ -167,17 +192,45 @@ def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False)
     return k_out, v_out
 
 
+def ring_hygiene_rows(modulo, window):
+    """``(rows, first_slot)`` of the bounded ring a fresh fill must zero: the slots a query past the fill can
+    read stale, ``[modulo - rows, modulo)``.
+
+    Decode at position ``p`` reads slots ``(p - W + 1 .. p) % ring`` (``W`` the
+    sliding window); the slots of positions below 0 wrap to the ring's end,
+    ``[ring + p - W + 1, ring)``. A slot below ``W`` is read only at a
+    position that has written it, so with a ring of exactly the window the
+    stale reads are the whole ring past the prompt (zeroed whole, as before),
+    and with a ring sized for speculation (``_auto_size_spec_ring``: 2048 for
+    the 1024 window) they are the headroom half ``[W, ring)`` alone -- a
+    window's worth of zeros either way, not a ring's. No window (or a window
+    the ring does not exceed) keeps the whole ring. Pure host arithmetic.
+    """
+    modulo = int(modulo or 0)
+    window = int(window or 0)
+    if modulo <= 0:
+        return 0, 0
+    rows = window if 0 < window < modulo else modulo
+    return rows, modulo - rows
+
+
 def _zero_fill_ring(config, k_cache, v_cache, nkv_local, fill_page_table, user_id, block_size, paged_modulo_kwargs):
-    """Write a whole window of zeros into the user's bounded ring (both caches) from a persistent zero buffer kept on
-    ``config`` (allocated on the first, eager, call: a trace capture only records the fills)."""
+    """Zero the slots of the user's bounded ring a query past the fill could read stale (both caches), from a
+    persistent zero buffer kept on ``config`` (allocated on the first, eager, call: a trace capture only records
+    the fills): the whole ring when it is the window, the headroom half of a ring sized for speculation
+    (``ring_hygiene_rows``), steered there by a rotated table (``_ring_fill_page_table``, a device op the capture
+    records like the fills). A table not sized to the ring (another block grid) is zeroed whole, as before."""
     modulo = int(paged_modulo_kwargs.get("cache_position_modulo") or 0)
     if modulo <= 0:
         return
-    key = (int(nkv_local), modulo, int(config.head_dim), k_cache.dtype)
+    rows, first_slot = ring_hygiene_rows(modulo, getattr(config, "sliding_window", None))
+    if first_slot and int(fill_page_table.shape[-1]) != modulo // int(block_size):
+        rows, first_slot = modulo, 0
+    key = (int(nkv_local), rows, int(config.head_dim), k_cache.dtype)
     cached = getattr(config, "_g4_ring_zero_fill", None)
     if cached is None or cached[0] != key:
         zeros = ttnn.zeros(
-            [1, int(nkv_local), modulo, int(config.head_dim)],
+            [1, int(nkv_local), rows, int(config.head_dim)],
             dtype=k_cache.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=k_cache.device(),
@@ -185,10 +238,36 @@ def _zero_fill_ring(config, k_cache, v_cache, nkv_local, fill_page_table, user_i
         )
         config._g4_ring_zero_fill = (key, zeros)
         cached = config._g4_ring_zero_fill
-    for cache in (k_cache, v_cache):
-        _paged_fill_cache(
-            cache, cached[1], fill_page_table, batch_idx=user_id, block_size=block_size, **paged_modulo_kwargs
-        )
+    table = _ring_fill_page_table(fill_page_table, first_slot, modulo, block_size) if first_slot else fill_page_table
+    try:
+        for cache in (k_cache, v_cache):
+            _paged_fill_cache(cache, cached[1], table, batch_idx=user_id, block_size=block_size, **paged_modulo_kwargs)
+    finally:
+        if table is not fill_page_table:
+            table.deallocate(True)
+
+
+def _deferred_fill_hygiene(cfg, k_fill, v_fill, k_cache, v_cache, page_table, user_id, block_size, paged_modulo_kwargs):
+    """The ring hygiene of a deferred fill at ring offset 0, returning the ``(k, v)`` fills to write.
+
+    A ring of exactly the window keeps the fill zero-extended to the window
+    (``_zero_extend_ring_fill``: the slots past the prompt are the ones a
+    short request's queries wrap onto). A ring sized for speculation has its
+    headroom half zeroed instead (``_zero_fill_ring``) and the fill goes in
+    as it is: nothing past the fill inside the window is read before this
+    request writes it, so extending the fill to the ring (twice the window's
+    writes, per sliding layer, per prefill) bought nothing. A fill that
+    already covers the window leaves no slot a wrap could read.
+    """
+    modulo = int(paged_modulo_kwargs.get("cache_position_modulo") or 0)
+    rows, first_slot = ring_hygiene_rows(modulo, getattr(cfg, "sliding_window", None))
+    if first_slot:
+        if int(k_fill.shape[-2]) < rows:
+            _zero_fill_ring(
+                cfg, k_cache, v_cache, int(k_fill.shape[1]), page_table, user_id, block_size, paged_modulo_kwargs
+            )
+        return k_fill, v_fill
+    return _zero_extend_ring_fill(k_fill, modulo), _zero_extend_ring_fill(v_fill, modulo)
 
 
 def _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, head_dim):
@@ -588,9 +667,17 @@ def flush_deferred_bounded_fills(layers):
         if batched_pending:
             cfg._deferred_bounded_fill_batched = None
             for p in batched_pending:
-                _mod = p["paged_modulo_kwargs"].get("cache_position_modulo")
-                k_f = _zero_extend_ring_fill(p["k_fill"], _mod)
-                v_f = _zero_extend_ring_fill(p["v_fill"], _mod)
+                k_f, v_f = _deferred_fill_hygiene(
+                    cfg,
+                    p["k_fill"],
+                    p["v_fill"],
+                    p["k_cache"],
+                    p["v_cache"],
+                    p["page_table"],
+                    p["user_id"],
+                    p["block_size"],
+                    p["paged_modulo_kwargs"],
+                )
                 try:
                     _paged_fill_cache(
                         p["k_cache"],
@@ -630,8 +717,17 @@ def flush_deferred_bounded_fills(layers):
             # Zeroing the rest of the ring clears a previous occupant's KV; on a
             # resumed chunk those slots hold this request's own in-window KV.
             if chunk_offset == 0:
-                k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
-                v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
+                k_merged, v_merged = _deferred_fill_hygiene(
+                    cfg,
+                    k_merged,
+                    v_merged,
+                    pending["k_cache"],
+                    pending["v_cache"],
+                    pending["page_table"],
+                    pending["user_id"],
+                    pending["block_size"],
+                    pending["paged_modulo_kwargs"],
+                )
             fill_page_table = _ring_fill_page_table(
                 pending["page_table"], chunk_offset, pending["modulo"], pending["block_size"]
             )
@@ -931,6 +1027,56 @@ def _fused_prefill_qkv_ok(tt_q, cos_cache, weights) -> bool:
     return len(cs) == 4 and cs[0] == 1 and cs[1] == 1 and cs[2] >= shape[2] and cs[3] == shape[3]
 
 
+def _sliding_continuation_inputs(continuation, tt_q, k_cache, config, weights, tp, sliding_window):
+    """The window frame and SDPA config of a sliding layer's eager continuation (attention/continuation.py):
+    ``(window_table, rel_start_tensor, program_config, paged_cache_geometry)``, or None when the group's host
+    table is unknown (the caller keeps the device-side gather). The SDPA chunk sizes are capped at the hit alignment
+    and fitted to the frame-relative start so every hit offset keys one program."""
+    nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+    block_size = effective_block_size(k_cache, config.head_dim, nkv_local)
+    program_config = prefill_sdpa_program_config(
+        config.head_dim,
+        int(tt_q.shape[-2]),
+        sliding_window=sliding_window,
+        num_heads=int(tt_q.shape[1]),
+        device_grid=sdpa_device_grid(tt_q),
+    )
+    program_config, align = align_sdpa_chunks(program_config, 0)  # the capped chunks plan the frame
+    inputs = continuation.sliding_inputs(block_size, sliding_window, align)
+    if inputs is None:
+        return None
+    window_table, start_tensor, rel_start, _cols = inputs
+    program_config, _align = align_sdpa_chunks(program_config, rel_start)  # fitted to the start (a no-op when aligned)
+    geometry = None
+    if block_size != int(k_cache.padded_shape[2]) or nkv_local != int(k_cache.padded_shape[1]):
+        geometry = ttnn.PagedCacheGeometryOverride(block_size=block_size, num_kv_heads=nkv_local)
+    return window_table, start_tensor, program_config, geometry
+
+
+def _global_continuation_sdpa_inputs(continuation, page_table, block_size, chunk_offset):
+    """``(page_table, start)`` of a global layer's eager-continuation chunked SDPA.
+
+    The op's tensor-start path compiles its K extent from the page table's width (``Sk = Sq + cols * block``,
+    sdpa_program_factory.cpp ``max_prefix_tokens_flexible``) and walks K at run time only up to the start tensor
+    plus the chunk (reader_interleaved.cpp ``valid_Skt_bound = min(chunk_start / 32 + valid_Sqt, valid_Skt)``), so
+    the group's host table goes in at one width per model and chunk length (``PrefillContinuation.padded_table``:
+    the served context's blocks plus the chunk's) with the device start tensor: a program keyed on neither the
+    position nor the prompt length, and the null-block columns past the user's blocks are never read. The device
+    table at its own width (the prompt's chunk grid, which the generator already pads to the stick multiple) keyed
+    one program per 512 prompt tokens: the served 12B QB2's first 5122-token prompt compiled its second chunk for
+    1.4 s after a boot warmup of the same start and tail at another width (2026-10-30). Without a host table (a
+    device table handed straight through) that table is used as is: with the start tensor when its row is a whole
+    number of 32-byte sticks, else with the Python-int start (the legacy path, keyed on the position).
+    """
+    padded = continuation.padded_table(block_size)
+    if padded is not None:
+        return padded, continuation.start_tensor
+    width = int(page_table.shape[-1])
+    if width == pad_page_table_cols(width):
+        return page_table, continuation.start_tensor
+    return page_table, chunk_offset
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -951,8 +1097,15 @@ def _prefill_forward_single(
     sliding_tail_end=None,
     mm_attn_mask=None,
     traced_short_bucket=False,
+    continuation=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
+
+    ``continuation`` (``LayerContinuation``, eager chunks at a Python-int ``chunk_start_idx > 0`` on the unbounded
+    substrate, ``GEMMA4_CONTINUATION_CHUNKED_SDPA=1``): the position-independent inputs of the chunk — the fill
+    table cut on the host, the global layers' device-tensor chunk start and, for sliding layers without a vision
+    mask, the window frame of one chunked paged SDPA with ``sliding_window_size`` in place of the per-block tail
+    gather + square SDPA. None keeps the paths below as they were.
 
     ``traced_short_bucket`` (the traced short single-user bucket under bounded sliding, see
     ``generator_trace.short_prefill_stash_skipped``): the kernel-capped ring fill first zeroes the whole ring from a
@@ -985,6 +1138,26 @@ def _prefill_forward_single(
         chunk_offset = int(chunk_start_idx) if chunk_start_idx is not None else 0
         chunk_offset_tensor = None
         need_cross_chunk = is_chunked and chunk_offset > 0
+    # The eager continuation's position-independent programs (attention/continuation.py): unbounded substrate only
+    # (the bounded ring keeps its own path; a device-tensor offset is the traced multi-chunk).
+    eager_continuation = (
+        continuation is not None
+        and is_chunked
+        and chunk_offset is not None
+        and chunk_offset > 0
+        and config.cache_position_modulo is None
+    )
+    # With the continuation path on, the next eager unbounded chunk reads its window from the paged cache, so the
+    # cross-chunk stash (whose slices are keyed on the chunk's real length) is not produced; a vision chunk keeps it
+    # for the square SDPA of the chunk after it.
+    skip_sliding_stash = (
+        continuation_chunked_sdpa_enabled()
+        and config.cache_position_modulo is None
+        and not isinstance(chunk_start_idx, ttnn.Tensor)
+        and mm_attn_mask is None
+        and page_table is not None
+        and kv_cache is not None
+    )
     # Generator-level chunked prefill on a sliding-window layer (any chunk,
     # including the first). Handled via the in-memory window tail below rather
     # than the full-prefix paged read used for full-attention layers.
@@ -1010,6 +1183,19 @@ def _prefill_forward_single(
     # Hybrid kv-cache groups: ``chunk_page_table`` is sliced from the full-attention group's table, but a
     # sliding layer's blocks live in its own ``page_table``; slice that at the chunk's block range (eager only).
     _own_chunk_slice = None
+    # The continuation's host fill cut nulls the columns past the chunk's real blocks (``valid_cols``), so the
+    # padded chunk is written whole: the pad rows past the prompt land in the null block 0 and the fill runs one
+    # ``paged_fill_cache`` program per bucket instead of one per tile-rounded valid length (its writer compiles
+    # per input height: every new prompt length past the hit cost a kernel build, ~0.8-2 s, 2026-10-30).
+    _host_cut = None
+    _valid_cols = None
+    if valid_seq_len is not None and not isinstance(valid_seq_len, (list, tuple)):
+        try:
+            _valid_rows = min(int(valid_seq_len), int(hidden_states.shape[-2]))
+        except (TypeError, ValueError):
+            _valid_rows = None
+        if _valid_rows is not None and _valid_rows > 0:
+            _valid_cols = _valid_rows  # rows; converted to this layer's block grid below
     if (
         is_chunked
         and chunk_offset is not None
@@ -1029,9 +1215,23 @@ def _prefill_forward_single(
         _cols = max(1, -(-int(hidden_states.shape[-2]) // _bs)) if _bs > 0 else int(chunk_page_table.shape[-1])
         _c0 = chunk_offset // _bs if _bs > 0 else -1
         if _c0 >= 0 and _c0 + _cols <= int(page_table.shape[-1]):
-            _rows = int(page_table.shape[0])
-            _own_chunk_slice = ttnn.slice(page_table, [0, _c0], [_rows, _c0 + _cols])
-            fill_page_table = _own_chunk_slice
+            _host_cut = (
+                continuation.fill_table(
+                    _bs,
+                    _c0,
+                    _cols,
+                    valid_cols=(-(-_valid_cols // _bs) if (_valid_cols is not None and _bs > 0) else None),
+                )
+                if eager_continuation
+                else None
+            )
+            if _host_cut is not None:
+                # The group's table cut on the host (a fixed shape); the device slice is keyed on the column.
+                fill_page_table = _host_cut
+            else:
+                _rows = int(page_table.shape[0])
+                _own_chunk_slice = ttnn.slice(page_table, [0, _c0], [_rows, _c0 + _cols])
+                fill_page_table = _own_chunk_slice
 
     xqkv = apply_qkv_projection(hidden_states, weights)
 
@@ -1263,23 +1463,20 @@ def _prefill_forward_single(
                 # through extra page-table columns; valid_seq_len caps the fill.
                 # Extra columns pad with 0 (vLLM null block).
                 k_fill, v_fill = tt_k, tt_v
-                if valid_seq_len is not None:
-                    v = min(int(valid_seq_len), int(tt_k.shape[-2]))
-                    # Tile-ceil so the writer sees a legal RM height; unused
-                    # rows inside the last tile sit on pad columns (0).
-                    tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
-                    tile_end = min(tile_end, int(tt_k.shape[-2]))
-                    if 0 < tile_end < int(tt_k.shape[-2]):
-                        k_fill = ttnn.slice(
-                            tt_k,
-                            [0, 0, 0, 0],
-                            [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
-                        )
-                        v_fill = ttnn.slice(
-                            tt_v,
-                            [0, 0, 0, 0],
-                            [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
-                        )
+                # The host fill cut already routes the rows past the prompt's blocks to the null block, so the
+                # padded chunk is filled whole (a fixed height per bucket; ``continuation_fill_rows``).
+                tile_end = continuation_fill_rows(valid_seq_len, int(tt_k.shape[-2]), _host_cut)
+                if tile_end is not None:
+                    k_fill = ttnn.slice(
+                        tt_k,
+                        [0, 0, 0, 0],
+                        [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
+                    )
+                    v_fill = ttnn.slice(
+                        tt_v,
+                        [0, 0, 0, 0],
+                        [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
+                    )
                 _paged_fill_cache(
                     k_cache,
                     k_fill,
@@ -1342,10 +1539,25 @@ def _prefill_forward_single(
         )
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
+        # The eager continuation: one chunked paged SDPA over the window frame (attention/continuation.py) in
+        # place of the per-block tail gather + square SDPA below; vision chunks keep the square (the op takes
+        # no mask in chunked mode).
+        continuation_inputs = None
+        if (
+            eager_continuation
+            and not use_persistent_tail
+            and mm_attn_mask is None
+            and kv_cache is not None
+            and continuation.has_host_table()
+        ):
+            continuation_inputs = _sliding_continuation_inputs(
+                continuation, tt_q, kv_cache[0], config, weights, tp, sliding_window
+            )
         # No stash on an APC cache-hit resume (or after a failed stash); on the unbounded substrate the prior
         # window still sits in the paged pool, so rebuild the tail from there. Eager path only.
         if (
-            sliding_tail_in is None
+            continuation_inputs is None
+            and sliding_tail_in is None
             and not use_persistent_tail
             and chunk_offset is not None
             and chunk_offset > 0
@@ -1366,7 +1578,27 @@ def _prefill_forward_single(
                 kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
                 lane_device_index=_owner_lane_device_index(mesh_config),
             )
-        if sliding_tail_in is not None:
+        if continuation_inputs is not None:
+            _win_table, _win_start, _win_cfg, _win_geometry = continuation_inputs
+            _paged_k, _paged_v = kv_cache
+            tt_sdpa = sliding_continuation_sdpa(
+                tt_q,
+                _paged_k,
+                _paged_v,
+                _win_table,
+                _win_start,
+                user_id,
+                sliding_window=sliding_window,
+                program_config=_win_cfg,
+                compute_kernel_config=sdpa_ckc,
+                paged_cache_geometry=_win_geometry,
+            )
+            if sliding_tail_in is not None:
+                # An eager stash from the previous chunk; the frame reads the same rows from the paged cache.
+                for _t in sliding_tail_in:
+                    _t.deallocate(True)
+                sliding_tail_in = None
+        elif sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
             # Traced short first-buckets stash an unpadded tail (< hist); pad
             # here so concat stays square. Eager APC often already padded.
@@ -1474,14 +1706,18 @@ def _prefill_forward_single(
         # Slices may be views of tt_k/tt_v; clone (+ left-pad if short) so the
         # tail outlives parent dealloc across vLLM cross-call chunked prefill
         # (#51041) and APC short-first-grant continuations.
-        sliding_tail_stash = _clone_sliding_prefill_tail(
-            tt_k,
-            tt_v,
-            hist,
-            config.head_dim,
-            valid_seq_len=valid_seq_len,
-            # Tensor chunk_start_idx ⇒ traced multi-chunk; skip short-pad alloc.
-            allow_short_pad=not use_persistent_tail,
+        sliding_tail_stash = (
+            None
+            if skip_sliding_stash
+            else _clone_sliding_prefill_tail(
+                tt_k,
+                tt_v,
+                hist,
+                config.head_dim,
+                valid_seq_len=valid_seq_len,
+                # Tensor chunk_start_idx ⇒ traced multi-chunk; skip short-pad alloc.
+                allow_short_pad=not use_persistent_tail,
+            )
         )
         if sliding_tail_stash is None:
             k_tail_out = v_tail_out = None
@@ -1512,15 +1748,22 @@ def _prefill_forward_single(
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         recompute = mm_attn_mask is not None and os.environ.get("GEMMA4_MM_PAGED_RECOMPUTE", "1") != "0"
         q_tiles, q_device = _vision_q_tiles(tt_q, mm_attn_mask) if recompute else ([], None)
+        # The eager continuation: the group's table at the served context's width with the device-tensor start
+        # (``_global_continuation_sdpa_inputs``), one SDPA program per model and chunk length.
+        sdpa_table, base_offset = page_table, chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset
+        if eager_continuation:
+            sdpa_table, base_offset = _global_continuation_sdpa_inputs(
+                continuation, page_table, effective_block_size(k_cache, config.head_dim, nkv_local), chunk_offset
+            )
         tt_sdpa = chunked_prefill_sdpa(
             tt_q,
             k_cache,
             v_cache,
-            page_table,
+            sdpa_table,
             user_id,
             config.head_dim,
             scale=1.0,
-            base_offset=chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset,
+            base_offset=base_offset,
             num_kv_heads=nkv_local,
             mesh_config=mesh_config,
         )
@@ -1604,6 +1847,7 @@ def _prefill_forward_single(
     if (
         sliding_tail_out is None
         and not traced_short_bucket
+        and not skip_sliding_stash
         and config.is_sliding
         and sliding_window is not None
         and tt_k is not None
@@ -1665,6 +1909,7 @@ def prefill_forward(
     sliding_tail_end=None,
     mm_attn_mask=None,
     traced_short_bucket=False,
+    continuation=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -1708,6 +1953,7 @@ def prefill_forward(
             sliding_tail_end=sliding_tail_end,
             mm_attn_mask=mm_attn_mask,
             traced_short_bucket=traced_short_bucket,
+            continuation=continuation,
         )
 
     tp = mesh_config.tp if mesh_config else 1

@@ -163,7 +163,7 @@ def _plain_greedy_bN(spec, anchor_token, anchor_pos, n, pad):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
+def test_verify_batched_matches_sequential(mesh_device, device_params, reset_seeds):
     """The batched multi-position verify forward must match sequential single
     verify, position-for-position. Guards the paged-cache write path: a single
     batched paged_update_cache races when candidates share a physical block, so
@@ -347,7 +347,7 @@ def _kv_to_tt(k_torch, mesh_device, num_kv_heads, num_attention_heads, tp, num_d
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_step_pcc_vs_hf(mesh_device, reset_seeds):
+def test_assistant_step_pcc_vs_hf(mesh_device, device_params, reset_seeds):
     """Isolated assistant-forward fidelity vs HF.
 
     Feeds IDENTICAL inputs — target raw-token embedding, a random seed hidden,
@@ -625,7 +625,7 @@ def _depage(k_cache, page_table_torch, n_pos, block_size, mesh_device, replicate
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
+def test_assistant_first_step_vs_hf_realistic(mesh_device, device_params, reset_seeds):
     """Faithful first-step check with REAL inputs.
 
     Runs a real prefill, then feeds the REAL drafter seed (target pre-final-norm
@@ -813,7 +813,7 @@ def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
 @_needs_assistant
 @_assistant_probe
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_export_tt_spec_features(mesh_device, reset_seeds):
+def test_export_tt_spec_features(mesh_device, device_params, reset_seeds):
     """Export per-step TT drafter inputs + TT target greedy chain (DISCRIMINATOR).
 
     Plain-greedy decode on the TT target; at each step record the drafter seed
@@ -920,7 +920,7 @@ def test_export_tt_spec_features(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
+def test_assistant_recurrent_vs_hf_realistic(mesh_device, device_params, reset_seeds):
     """Localize the TT drafter (assistant.step) divergence vs HF across ALL K
     recurrent steps on REAL features (the discriminator showed the clean HF
     drafter hits 1.44 on TT features while the TT drafter only gets 0.21, so the
@@ -1098,7 +1098,7 @@ def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_step_pcc_real(mesh_device, reset_seeds):
+def test_assistant_step_pcc_real(mesh_device, device_params, reset_seeds):
     """Per-stage TT-vs-HF fidelity on REAL features (localizes the drafter bug).
 
     Unlike test_assistant_step_pcc_vs_hf (random OOD inputs), this feeds the REAL
@@ -1313,7 +1313,7 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
+def test_drafter_per_position_tt_vs_hf(mesh_device, device_params, reset_seeds):
     """Per-position TT-vs-HF free-running drafts on IDENTICAL seeds (reproduces
     both 1.44 (HF) and 0.17 (TT) in one harness and localizes the divergent
     positions). At each greedy position both drafters run K free-running steps
@@ -1456,7 +1456,7 @@ def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
+def test_tt_drafter_greedychain_acceptance(mesh_device, device_params, reset_seeds):
     """TT drafter acceptance vs the TRUE greedy chain (TT analog of the HF
     discriminator). DISAMBIGUATES drafter vs verify:
 
@@ -1556,7 +1556,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
+def test_spec_decode_matches_greedy(mesh_device, device_params, reset_seeds):
     """Greedy spec-decode matches plain greedy decode, EXCEPT at target near-ties.
 
     The verify forward runs batched (anchor + K drafts), so it uses the per-user
@@ -1668,7 +1668,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_verify_batchsize_invariance(mesh_device, reset_seeds):
+def test_verify_batchsize_invariance(mesh_device, device_params, reset_seeds):
     """Isolate batch-size numerics from spec accept logic.
 
     Greedy-decode the SAME prompt twice, advancing one token per step, but with
@@ -1765,7 +1765,7 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
 @_needs_assistant
 @_assistant_probe
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
+def test_spec_decode_perf_breakdown(mesh_device, device_params, reset_seeds):
     """Device-time breakdown to project the achievable (traced) spec-decode speedup.
 
     Times, on-device with NO host readback, the per-op latency of:
@@ -1905,7 +1905,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
+def test_spec_decode_sampling_acceptance(mesh_device, device_params, reset_seeds):
     """Measure SAMPLING-mode acceptance (production config: temp/top_p/top_k).
 
     Speculative SAMPLING accepts draft d_i with prob min(1, p_target(d_i)/q_draft(d_i)),
@@ -1994,7 +1994,7 @@ def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_spec_decode_traced(mesh_device, reset_seeds):
+def test_spec_decode_traced(mesh_device, device_params, reset_seeds):
     """Traced spec-decode: correctness (vs untraced greedy) + traced tok/s/u.
 
     Opens the device with a trace region and runs greedy spec-decode through the
@@ -2103,7 +2103,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_verify_trace_batched_capture(mesh_device, reset_seeds):
+def test_verify_trace_batched_capture(mesh_device, device_params, reset_seeds):
     """ISOLATED probe: does a batch=K+1 VERIFY trace capture + replay on a clean device?
 
     The batched verify trace was previously flagged as "replay HANGS" but that
@@ -2237,7 +2237,7 @@ def test_verify_trace_batched_capture(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_ondevice_argmax_probe(mesh_device, reset_seeds):
+def test_ondevice_argmax_probe(mesh_device, device_params, reset_seeds):
     """PROBE (eager, no trace): on-device argmax -> token id -> re-embed.
 
     The fused single-iteration trace needs the drafter recurrence and the verify
@@ -2366,7 +2366,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_iter_eager(mesh_device, reset_seeds):
+def test_fused_iter_eager(mesh_device, device_params, reset_seeds):
     """EAGER fused iteration == _draft + _verify + host argmax (same anchor).
 
     _fused_iter does the K drafter steps, verify-input assembly, and both argmaxes
@@ -2458,7 +2458,7 @@ def test_fused_iter_eager(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_loop_eager(mesh_device, reset_seeds):
+def test_fused_loop_eager(mesh_device, device_params, reset_seeds):
     """EAGER fused LOOP (generate_fused) — the real loop pattern, no re-prefill.
 
     Runs the on-device fused iteration repeatedly, advancing the anchor via the
@@ -2560,7 +2560,7 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_loop_traced(mesh_device, reset_seeds):
+def test_fused_loop_traced(mesh_device, device_params, reset_seeds):
     """FUSED single-iteration TRACE: K drafter steps + verify in ONE CCL trace.
 
     The draft/verify alternation deadlocks when distinct CCL traces interleave;
@@ -2661,7 +2661,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_trace_minimal(mesh_device, reset_seeds):
+def test_fused_trace_minimal(mesh_device, device_params, reset_seeds):
     """ISOLATE the fused trace: prefill ONCE, then traced generate_fused.
 
     No eager reference loop and no second prefill (those confound with a
@@ -2743,7 +2743,7 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_verify_seqkv_cost(mesh_device, reset_seeds):
+def test_verify_seqkv_cost(mesh_device, device_params, reset_seeds):
     """MEASURE how much of the verify cost is the sequential_kv_write loop.
 
     Captures a batch=(K+1) verify-only trace TWICE: once with the race-safe
@@ -2857,7 +2857,7 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_draft_step_breakdown(mesh_device, reset_seeds):
+def test_draft_step_breakdown(mesh_device, device_params, reset_seeds):
     """MEASURE where a single drafter step's ~15 ms goes on tp=4.
 
     Times a traced drafter step (full) vs a step with lm_head + its 262144-wide
@@ -2964,7 +2964,7 @@ def test_draft_step_breakdown(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_argmax_cost(mesh_device, reset_seeds):
+def test_argmax_cost(mesh_device, device_params, reset_seeds):
     """Time ttnn.argmax over a 262144-wide vocab (the suspected fused-iter cost).
 
     Drafter does 4 argmax over [1,1,1,V]; verify does 1 over [1,1,K+1,V]. If each
@@ -2981,7 +2981,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
     def _time_argmax(rows, width, mapper, mode="bare"):
-        """mode: 'bare' = argmax on TILE; 'mc' = argmax(use_multicore); 'untile_mc' = untilize+argmax(use_multicore)."""
+        """mode: 'bare' = argmax on TILE; 'untile_mc' = untilize + argmax (multicore on a ROW_MAJOR input, no keyword today)."""
         t = ttnn.from_torch(
             torch.randn(1, 1, rows, width),
             device=mesh_device,
@@ -2994,7 +2994,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
             if mode == "bare":
                 return ttnn.argmax(t, dim=-1, keepdim=False)
             tu = ttnn.untilize(t, use_multicore=True)
-            r = ttnn.argmax(tu, dim=-1, keepdim=False, use_multicore=True)
+            r = ttnn.argmax(tu, dim=-1, keepdim=False)
             tu.deallocate(True)
             return r
 
@@ -3028,6 +3028,65 @@ def test_argmax_cost(mesh_device, reset_seeds):
         logger.info(
             f"[argmax] {mode}: [1,1,1,{V}]={m1:.2f} ms, [1,1,{K+1},{V}]={m5:.2f} ms, fused-total~={4*m1+m5:.1f} ms"
         )
+    shard_mc = _time_argmax(1, V // tp, replicate, mode="untile_mc")
+    logger.info(
+        f"[argmax] untile_mc per-shard over [1,1,1,{V//tp}] = {shard_mc:.2f} ms (the TP-sharded drafter logits)"
+    )
+
+    # width-parallel alternatives on the TILE tensor: the row max (the bandwidth floor of one pass over the
+    # logits) and topk(k=32) whose first index is the argmax (ties: first index, like ttnn.argmax)
+    def _time_op(rows, width, fn, label):
+        t = ttnn.from_torch(
+            torch.randn(1, 1, rows, width),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=replicate,
+        )
+        try:
+            out = fn(t)  # compile
+        except Exception as exc:  # the op may refuse the width: report, never fail the probe on it
+            logger.info(
+                f"[argmax] {label} over [1,1,{rows},{width}]: unsupported ({type(exc).__name__}: {str(exc)[:120]})"
+            )
+            t.deallocate(True)
+            return None
+        ttnn.synchronize_device(mesh_device)
+        for o in out if isinstance(out, (tuple, list)) else (out,):
+            o.deallocate(True)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        out = fn(t)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ms = (time.perf_counter() - t0) / reps * 1e3
+        ttnn.release_trace(mesh_device, tid)
+        logger.info(f"[argmax] {label} over [1,1,{rows},{width}] = {ms:.2f} ms")
+        for o in out if isinstance(out, (tuple, list)) else (out,):
+            o.deallocate(True)
+        t.deallocate(True)
+        return ms
+
+    for rows in (1, K + 1):
+        _time_op(rows, V, lambda t: ttnn.max(t, dim=-1, keepdim=True), "max")
+        _time_op(rows, V, lambda t: ttnn.topk(t, k=32, dim=-1), "topk32")
+    _time_op(1, V // tp, lambda t: ttnn.topk(t, k=32, dim=-1), "topk32 per-shard")
+    # topk's first index must be the argmax (random logits: no ties)
+    ref = torch.randn(1, 1, K + 1, V)
+    t = ttnn.from_torch(ref, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
+    try:
+        _vals, idxs = ttnn.topk(t, k=32, dim=-1)
+        got = ttnn.to_torch(ttnn.get_device_tensors(idxs)[0])[0, 0, :, 0].to(torch.int64).tolist()
+        want = ref.to(torch.bfloat16).float().argmax(-1)[0, 0].tolist()
+        logger.info(f"[argmax-chk] topk32 first index ok={got == want} got={got} want={want}")
+        idxs.deallocate(True)
+        _vals.deallocate(True)
+    except Exception as exc:
+        logger.info(f"[argmax-chk] topk32 unsupported at V={V}: {type(exc).__name__}: {str(exc)[:120]}")
+    t.deallocate(True)
 
     # ── CORRECTNESS: known argmax per row, bare vs untilize+multicore ────────
     def _check(rows):
@@ -3040,7 +3099,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
         )
         bare = ttnn.argmax(t, dim=-1, keepdim=False)
         tu = ttnn.untilize(t, use_multicore=True)
-        mc = ttnn.argmax(tu, dim=-1, keepdim=False, use_multicore=True)
+        mc = ttnn.argmax(tu, dim=-1, keepdim=False)
 
         def _to_list(x):
             h = ttnn.to_torch(ttnn.get_device_tensors(x)[0]) if tp > 1 else ttnn.to_torch(x)
@@ -3067,14 +3126,14 @@ def test_argmax_cost(mesh_device, reset_seeds):
             host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
         )
         tu = ttnn.untilize(t, use_multicore=True)
-        mc = ttnn.argmax(tu, dim=-1, keepdim=False, use_multicore=True)
+        mc = ttnn.argmax(tu, dim=-1, keepdim=False)
         h = ttnn.to_torch(ttnn.get_device_tensors(mc)[0]) if tp > 1 else ttnn.to_torch(mc)
         got = [int(v) for v in h.reshape(-1)[:real_rows]]
         # time it (trace)
         ttnn.synchronize_device(mesh_device)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tu2 = ttnn.untilize(t, use_multicore=True)
-        mc2 = ttnn.argmax(tu2, dim=-1, keepdim=False, use_multicore=True)
+        tu2 = ttnn.untilize(t)
+        mc2 = ttnn.argmax(tu2, dim=-1, keepdim=False)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
@@ -3097,7 +3156,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_spec_decode_batched(mesh_device, reset_seeds):
+def test_spec_decode_batched(mesh_device, device_params, reset_seeds):
     """End-to-end BATCHED (B>1) greedy speculative decode for B independent users.
 
     Each iteration drafts every user at batch=1 and runs ONE batched packed
@@ -3263,3 +3322,545 @@ def test_spec_decode_batched(mesh_device, reset_seeds):
         f"batched user-0 diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
         f"top-2 gap={gap:.3f} >= {near_tie_gap}); indicates a batched accept/commit/KV-write bug"
     )
+
+
+# ── serving records: (B_v, K_v) shapes through prepare / capture / reseed / step ─────────────────
+# Written for the (1,4) mesh with a trace region; NOT run in the device-free pass that added them.
+_SERVING_SHAPES = [(1, 5), (5, 5), (8, 3), (16, 1)]
+_SERVING_MAX_ROWS = 16
+_SERVING_PROMPTS = [
+    "The capital of France is",
+    "Water boils at a temperature of",
+    "The largest planet in our solar system is",
+    "The author of Romeo and Juliet is",
+    "The chemical symbol for gold is",
+    "The speed of light is approximately",
+    "The first president of the United States was",
+    "The square root of sixty-four is",
+]
+
+
+def _serving_page_tables(rows, blocks_per_user):
+    """[rows, blocks_per_user] int32: user u owns blocks 1 + u*bpu .. ; block 0 is the null block that
+    padding rows write into (their page-table rows are all zero)."""
+    pt = torch.zeros(rows, blocks_per_user, dtype=torch.int32)
+    for u in range(rows):
+        pt[u] = torch.arange(1 + u * blocks_per_user, 1 + (u + 1) * blocks_per_user, dtype=torch.int32)
+    return pt
+
+
+def _serving_build(mesh_device, max_seq_len, draft_len):
+    """Target + assistant at 16 rows, the KV pool for 16 users of ``max_seq_len`` plus the null block, and the
+    SpeculativeDecoder over the 16-row page table."""
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+    num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
+    num_layers = int(num_layers) if num_layers else None
+    block_size = 64
+    bpu = math.ceil(max_seq_len / block_size)
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=1 + _SERVING_MAX_ROWS * bpu)
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=_SERVING_MAX_ROWS,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+        max_local_batch_size=_SERVING_MAX_ROWS,
+    )
+    page_table = _serving_page_tables(_SERVING_MAX_ROWS, bpu)
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=set(),  # the parity loops run a fixed token count
+        draft_len=draft_len,
+    )
+    return generator, tt_kv_cache, tokenizer, spec, page_table
+
+
+def _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len, prompts=None):
+    """Prefill each user into its own blocks; returns (anchors, positions). ``prompts`` overrides the
+    per-user default prompt (``prompts[i]`` for ``users[i]``)."""
+    from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
+    anchors, positions = [], []
+    for i, u in enumerate(users):
+        in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+            [prompts[i] if prompts else _SERVING_PROMPTS[u % len(_SERVING_PROMPTS)]],
+            tokenizer,
+            generator.model_args,
+            True,
+            n_new,
+            max_prefill_len=max_seq_len,
+        )
+        in_pt = torch.stack(in_pt).view(1, -1)
+        generator.prefill_forward_text(
+            in_pt,
+            page_table=page_table[u : u + 1],
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+        )
+        positions.append(prefill_lens[0] - 1)
+        anchors.append(int(encoded[0][prefill_lens[0] - 1]))
+    return anchors, positions
+
+
+def _plain_greedy_user(spec, page_row, anchor_token, anchor_pos, n):
+    """Reference greedy decode of ONE user through its own page-table row (``_plain_greedy`` reads row 0 of
+    ``spec.page_table_torch``). Returns (tokens, top-2 gaps per step, logits of the first step)."""
+    out, gaps = [], []
+    tok, pos = anchor_token, anchor_pos
+    first_logits = None
+    pt = ttnn.from_torch(
+        page_row.reshape(1, -1).to(torch.int32),
+        device=spec.mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=spec._mapper,
+    )
+    for _ in range(n):
+        x = spec._tokens_tensor([tok])
+        pu, pi = spec._pos_tensors([pos])
+        logits, hidden = spec.target.ttnn_verify_forward(
+            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt, kv_cache=spec.tt_kv_cache
+        )
+        lh = spec._logits_to_host(logits).reshape(-1).float()
+        for t in (logits, hidden, x, pu, pi):
+            t.deallocate(True)
+        if first_logits is None:
+            first_logits = lh.clone()
+        top2 = torch.topk(lh, 2)
+        gaps.append(float(top2.values[0] - top2.values[1]))
+        tok = int(top2.indices[0])
+        out.append(tok)
+        pos += 1
+    pt.deallocate(True)
+    return out, gaps, first_logits
+
+
+def _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, context):
+    """Every row's serving output equals its plain-greedy reference up to the first target near-tie."""
+    for r, (gen, ref, gap) in enumerate(zip(outs, refs, gaps)):
+        n = min(len(gen), len(ref))
+        first_div = next((i for i in range(n) if gen[i] != ref[i]), None)
+        if first_div is None:
+            continue
+        logger.info(
+            f"[{context}] row {r} first divergence at idx {first_div}: serving={gen[first_div]} "
+            f"greedy={ref[first_div]} top-2 gap={gap[first_div]:.4f} (near-tie={near_tie_gap})"
+        )
+        assert gap[first_div] < near_tie_gap, (
+            f"[{context}] row {r} diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
+            f"gap={gap[first_div]:.3f} >= {near_tie_gap}); an accept/commit/KV-write or seed-gather defect"
+        )
+
+
+def _serving_run(spec, shape, rows, anchors, positions, page_tables, n_new, reseed_at=None):
+    """Drive ``shape`` greedily for ``rows`` until every row holds ``n_new`` tokens; the seed column follows the
+    ``_fused_shift_seed_row("current")`` rule (the row of the last matched target token). Checks every result's
+    shapes and that the device argmax agrees with the host argmax of the logits readback (ties excepted).
+    Returns (outs, accepts, results, host_logits): ``host_logits[i]`` is step i's ``logits_to_host()`` read at
+    that step -- a result's ``logits`` is the decoder's ONE shared buffer, valid only until the next
+    serving_step or serving_reseed, so it is read before the loop drives the decoder again."""
+    B, K = shape
+    P = K + 1
+    V = spec.target.vocab_size
+    live = len(rows)
+    anchors, positions = list(anchors), list(positions)
+    spec.serving_reseed(shape, rows, anchors, positions, page_tables)
+    seed_cols = [None] * live
+    outs = [[] for _ in rows]
+    accepts = [[] for _ in rows]
+    results = []
+    host_logits = []
+    it = 0
+    while min(len(o) for o in outs) < n_new:
+        if reseed_at is not None and it == reseed_at:
+            # mid-stream exact reseed: the next step reads the reseed pool for every row
+            spec.serving_reseed(shape, rows, anchors, positions, page_tables)
+            seed_cols = [None] * live
+        res = spec.serving_step(shape, rows, anchors, positions, page_tables, seed_cols)
+        assert res.shape == shape and res.live == live
+        assert res.drafts.shape == (live, K) and res.argmax_ids.shape == (live, P)
+        assert res.logits is spec._srv_logits, "every record publishes into the decoder's shared logits buffer"
+        assert tuple(res.logits.shape)[:3] == (1, 1, 32), tuple(res.logits.shape)
+        lh = res.logits_to_host()  # read now: the next step or reseed overwrites the shared buffer
+        assert lh.shape == (live, P, V), lh.shape
+        assert lh.dtype == torch.bfloat16
+        host_arg = lh.float().argmax(-1)
+        differ = (host_arg != res.argmax_ids).nonzero()
+        for r, p in differ.tolist():
+            a, b = int(host_arg[r, p]), int(res.argmax_ids[r, p])
+            assert lh[r, p, a] == lh[r, p, b], f"device argmax {b} != host argmax {a} at row {r} col {p}, not a tie"
+        results.append(res)
+        host_logits.append(lh)
+        for r in range(live):
+            drafts = res.drafts[r].tolist()
+            g = res.argmax_ids[r].tolist()
+            m = next((i for i in range(K) if drafts[i] != g[i]), K)
+            committed = drafts[:m] + [g[m]]
+            outs[r].extend(committed)
+            accepts[r].append(m)
+            positions[r] += m + 1
+            anchors[r] = committed[-1]
+            seed_cols[r] = min(m, K)
+        it += 1
+        assert it <= 4 * n_new, "the serving loop did not converge"
+    return outs, accepts, results, host_logits
+
+
+@_needs_assistant
+@pytest.mark.parametrize("shape", _SERVING_SHAPES, ids=lambda s: f"B{s[0]}K{s[1]}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_record_matches_plain_greedy(mesh_device, device_params, reset_seeds, shape):
+    """One serving record per default shape: prepare + capture (masks built in-trace from the uploaded
+    positions, no host masks), then per live row greedy parity with the plain decode (up to the first
+    target near-tie, the contract of test_spec_decode_batched), the [live, P, V] bf16 readback of the
+    shared logits buffer against the device argmax, a mid-stream exact reseed, a second pass with one
+    PADDING row (the adapter sends a zero table row; the decoder mirrors live row 0 for it) that must
+    leave the live rows' parity intact, and a third pass where row 0 holds a prompt longer than 2048
+    tokens: its first proposal and a mid-run reseed happen past 2048 on the wider rung (2048 -> 4096),
+    where the acceptance floor must still hold."""
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    B, K = shape
+    max_seq_len = 4096
+    widths = [2048, 4096]
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, K)
+
+    spec.serving_prepare([shape], {shape: widths}, max_rows=_SERVING_MAX_ROWS)
+    assert set(spec._srv_records) == {(shape, w) for w in widths}
+    spec.serving_capture()
+    assert all(spec._srv_records[(shape, w)]["id"] is not None for w in widths)
+
+    # a prompt past the 2048 rung: its anchor sits on the 4096 rung from the first proposal on
+    long_ids = tokenizer.encode(" ".join(f"item {i}" for i in range(1500)))[:2300]
+    long_prompt = tokenizer.decode(long_ids)
+    long_len = len(tokenizer.encode(long_prompt))
+    assert 2048 + 8 < long_len < max_seq_len - 4 * n_new, long_len
+
+    passes = [(live, None) for live in sorted({B, max(1, B - 1)}, reverse=True)] + [(1, [long_prompt])]
+    for live, prompts in passes:
+        users = list(range(live))
+        label = f"serving {shape} live={live}" + (" long-prompt" if prompts else "")
+        # padding rows: zero page-table rows, which serving_step requires (it mirrors row 0 for them)
+        page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
+        page_tables[:live] = page_table[:live]
+
+        anchors, positions = _serving_prefill(
+            generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len, prompts=prompts
+        )
+        if prompts:
+            assert positions[0] > 2048, positions
+            assert spec.serving_width_for(shape, positions[0] + 4 * n_new) == 4096
+        refs, gaps, ref_first = [], [], []
+        for r, u in enumerate(users):
+            ref, gap, first = _plain_greedy_user(spec, page_table[u], anchors[r], positions[r], n_new)
+            refs.append(ref)
+            gaps.append(gap)
+            ref_first.append(first)
+        # the reference wrote KV past the anchors: re-prefill, then serve
+        anchors, positions = _serving_prefill(
+            generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len, prompts=prompts
+        )
+        outs, accepts, results, host_logits = _serving_run(
+            spec, shape, users, anchors, positions, page_tables, n_new, reseed_at=2 if (live == B or prompts) else None
+        )
+        ttnn.synchronize_device(mesh_device)
+        if prompts:
+            assert all(res.width == 4096 for res in results), [res.width for res in results]
+
+        # the verify is the target: column 0 of the first step is the plain next token, and its logits
+        # match the plain decode's logits for every live row
+        first = results[0]
+        for r in range(live):
+            assert _pcc(host_logits[0][r, 0], ref_first[r]) > 0.99, f"row {r} column-0 logits vs plain decode"
+            if first.argmax_ids[r, 0].item() != refs[r][0]:
+                assert gaps[r][0] < near_tie_gap, f"row {r}: first verify token differs at a confident position"
+        _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, label)
+        mean_acc = [sum(a) / len(a) for a in accepts]
+        logger.info(f"[{label}] accepted/iter per row: {[round(a, 2) for a in mean_acc]}")
+        logger.info(f"[{label}] accepted per step per row (reseed at step 2 when set): {accepts}")
+        for r, u in enumerate(users):
+            logger.info(f"  row {r} (user {u}): {tokenizer.decode(outs[r][:n_new])!r}")
+        # Committed-token parity alone cannot see a verify that is right in column 0 and wrong in the
+        # draft columns (every draft rejected, the text still greedy): the acceptance floor does. A
+        # healthy drafter accepts ~1.7-2.8 of K=5 per step on these prompts; a broken verify ~0.05.
+        min_accept = float(os.environ.get("GEMMA4_SPEC_MIN_ACCEPT", 0.5))
+        overall = sum(sum(a) for a in accepts) / max(1, sum(len(a) for a in accepts))
+        assert overall >= min(min_accept, K), (
+            f"[{label}] accepted {overall:.2f} of K={K} per step (floor {min_accept}): "
+            "the verify's draft columns or the drafts themselves are wrong while column 0 stays right"
+        )
+    spec.serving_release()
+    assert spec._srv_records is None
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_all_shapes_capture_and_switch(mesh_device, device_params, reset_seeds):
+    """All four default shapes x a two-rung ladder captured in one process (every graph eager before the
+    first capture), then consecutive steps that switch shape: the seed gather indexes the PREVIOUS record's
+    (B_prev, P_prev) hidden layout, and the verify's column 0 stays the plain next token of every row."""
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    max_seq_len = 2048
+    n_new = 8
+    widths = [1024, 2048]
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, 5)
+
+    spec.serving_prepare(_SERVING_SHAPES, {s: widths for s in _SERVING_SHAPES}, max_rows=_SERVING_MAX_ROWS)
+    assert len(spec._srv_records) == len(_SERVING_SHAPES) * len(widths)
+    projection = spec._srv_projection
+    assert projection.records == len(_SERVING_SHAPES) * len(widths)
+    assert projection.base_mb >= 0.0  # the plain traces already in the region
+    logger.info(f"[serving all shapes] {projection.describe()}")
+    spec.serving_capture()
+    assert all(rec["id"] is not None for rec in spec._srv_records.values())
+    # every capture reports its measured trace bytes (the budget the ladder is sized against)
+    measured = {key: rec["trace_mb"] for key, rec in spec._srv_records.items()}
+    assert all(mb > 0.0 for mb in measured.values()), measured
+    logger.info(f"[serving all shapes] measured trace MB per record: { {k: round(v, 1) for k, v in measured.items()} }")
+    assert spec.serving_width_for((5, 5), 1024 - 7) == 1024
+    assert spec.serving_width_for((5, 5), 1024 - 6) == 2048
+    assert spec.serving_width_for((16, 1), 2048 - 3) == 2048
+    assert spec.serving_width_for((16, 1), 2048 - 2) is None
+
+    users = list(range(8))
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+    refs = [_plain_greedy_user(spec, page_table[u], anchors[r], positions[r], 1) for r, u in enumerate(users)]
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+
+    def _tables(shape, rows):
+        pt = torch.zeros(shape[0], page_table.shape[1], dtype=torch.int32)
+        for r, u in enumerate(rows):
+            pt[r] = page_table[u]
+        return pt
+
+    # step 1: (5, 5) on users 0..4, fresh seeds
+    rows = [0, 1, 2, 3, 4]
+    spec.serving_reseed((5, 5), rows, [anchors[u] for u in rows], [positions[u] for u in rows], _tables((5, 5), rows))
+    res = spec.serving_step(
+        (5, 5), rows, [anchors[u] for u in rows], [positions[u] for u in rows], _tables((5, 5), rows), [None] * 5
+    )
+    assert res.width == 1024 and res.logits_to_host().shape == (5, 6, spec.target.vocab_size)
+    assert res.logits is spec._srv_logits
+    for r, u in enumerate(rows):
+        if res.argmax_ids[r, 0].item() != refs[u][0][0]:
+            assert (
+                refs[u][1][0] < near_tie_gap
+            ), f"user {u}: verify column 0 != plain next token at a confident position"
+    # commit column 0 only (no draft accepted) so every row advances by one and seeds from column 0
+    for u in rows:
+        anchors[u] = res.argmax_ids[rows.index(u), 0].item()
+        positions[u] += 1
+    # step 2: (8, 3) on users [4, 2, 0, 5, 6, 7] -- three continue from the (5, 5) hidden, three are new
+    rows2 = [4, 2, 0, 5, 6, 7]
+    new = [5, 6, 7]
+    spec.serving_reseed((8, 3), new, [anchors[u] for u in new], [positions[u] for u in new], _tables((8, 3), new))
+    seed_cols = [0, 0, 0, None, None, None]
+    res2 = spec.serving_step(
+        (8, 3), rows2, [anchors[u] for u in rows2], [positions[u] for u in rows2], _tables((8, 3), rows2), seed_cols
+    )
+    assert res2.shape == (8, 3) and res2.live == 6
+    assert res2.drafts.shape == (6, 3) and res2.argmax_ids.shape == (6, 4)
+    # the shared buffer now holds the (8, 3) replay: 6 x 4 rows, read before the next step
+    assert res2.logits is res.logits
+    assert res2.logits_to_host().shape == (6, 4, spec.target.vocab_size)
+    # the continuing rows' verify column 0 is the plain next token after the committed one
+    for r, u in enumerate([4, 2, 0]):
+        ref2, gap2, _ = _plain_greedy_user(spec, page_table[u], anchors[u], positions[u], 1)
+        if res2.argmax_ids[r, 0].item() != ref2[0]:
+            assert gap2[0] < near_tie_gap, f"user {u}: verify column 0 after the shape switch is not the plain token"
+    # step 3: (16, 1) with every user, all continuing from the (8, 3) hidden except the (5, 5)-only ones
+    for u in rows2:
+        anchors[u] = res2.argmax_ids[rows2.index(u), 0].item()
+        positions[u] += 1
+    rows3 = rows2 + [1, 3]
+    spec.serving_reseed(
+        (16, 1), [1, 3], [anchors[u] for u in [1, 3]], [positions[u] for u in [1, 3]], _tables((16, 1), [1, 3])
+    )
+    res3 = spec.serving_step(
+        (16, 1),
+        rows3,
+        [anchors[u] for u in rows3],
+        [positions[u] for u in rows3],
+        _tables((16, 1), rows3),
+        [0] * 6 + [None, None],
+    )
+    assert res3.shape == (16, 1) and res3.live == 8 and res3.argmax_ids.shape == (8, 2)
+    # a row that the last replay did not serve cannot continue from it
+    with pytest.raises(ValueError, match="last replay served rows"):  # allow-pytest.raises (contract check)
+        spec.serving_step((1, 5), [9], [anchors[0]], [positions[0]], _tables((1, 5), [0]), [0])
+    spec.serving_release()
+
+
+def _serving_read(spec, t):
+    return ttnn.to_torch(ttnn.get_device_tensors(t)[0]) if spec._tp > 1 else ttnn.to_torch(t)
+
+
+def _serving_upload(spec, host, dev, dtype, layout):
+    h = ttnn.from_torch(host, layout=layout, dtype=dtype, mesh_mapper=spec._mapper)
+    ttnn.copy_host_to_device_tensor(h, dev)
+    h.deallocate(True)
+
+
+@_needs_assistant
+@pytest.mark.parametrize("shape", _SERVING_SHAPES, ids=lambda s: f"B{s[0]}K{s[1]}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, shape):
+    """Every per-row stage of the record body, run EAGERLY at B rows and checked row by row against host
+    truth. A defect that leaves the verify's anchor column right but the draft columns wrong at B > 1 must
+    live in one of them: (a) the seed gather from the hidden pools through the uploaded row index (rows r' != r,
+    a reseeded row); (b) the in-trace masks at per-row positions (equal to serving_masks_host, H-repeated);
+    (c) the user-major verify-input assembly from known columns; (d) the 32-row argmax at B rows;
+    (e) the drafter's first step at B rows against a batch-1 step per row with the same token, seed hidden,
+    position and page-table row (the real reseed -> gather -> assistant.step path)."""
+    from models.demos.gemma4.tt.spec_decode import serving_masks_host, serving_seed_index
+
+    B, K = shape
+    P = K + 1
+    width = 2048
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, width, K)
+    spec.serving_prepare([shape], {shape: [width]}, max_rows=_SERVING_MAX_ROWS)
+    S = spec._srv_shape_bufs[shape]
+    rec = spec._srv_records[(shape, width)]
+    bb = spec._srv_backbone
+    H = spec._packed_H()
+    rows = list(range(B))
+    page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
+    page_tables[:B] = page_table[:B]
+
+    # (a) seed gather: pool_v row i holds i + 1, pool_s row i holds 100 + i (bf16-exact), whole rows
+    pool_v_host = (torch.arange(32).float() + 1).reshape(1, 1, 32, 1).expand(1, 1, 32, bb).contiguous()
+    pool_s_host = (torch.arange(32).float() + 100).reshape(1, 1, 32, 1).expand(1, 1, 32, bb).contiguous()
+    _serving_upload(spec, pool_v_host.to(torch.bfloat16), spec._srv_pool_v, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    _serving_upload(spec, pool_s_host.to(torch.bfloat16), spec._srv_pool_s, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    # the previous replay served the rows in reverse (r' != r), row r continues from column min(r, K), the
+    # last row was reseeded into reseed-pool row 0
+    seed_cols = [min(r, K) for r in rows]
+    seed_cols[-1] = None
+    idx = serving_seed_index(shape, rows, seed_cols, (K, rows[::-1]), {rows[-1]: 0})
+    _serving_upload(spec, torch.tensor([idx], dtype=torch.int64), S["seed_idx"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    h = spec._srv_seed_gather(S)
+    got = _serving_read(spec, h).float().reshape(-1, bb)[:B]
+    h.deallocate(True)
+    table_host = torch.cat([pool_v_host, pool_s_host], dim=2).reshape(64, bb)
+    for r in range(B):
+        assert torch.equal(got[r], table_host[idx[r]]), f"gather row {r}: pool row {idx[r]} expected, got {got[r, :3]}"
+
+    # (b) masks: distinct per-row positions, the device build equals the host reference H-repeated
+    positions = [(37 * r + 11) % (width - P - 2) for r in range(B)]
+    anchors = [5 + r for r in range(B)]
+    spec._srv_upload(rec, rows, B, anchors, positions, page_tables, idx)
+    mf, ms = spec._srv_masks_device(S, rec)
+    ring = spec._pv_ring.get("sliding_attention")
+    ref_f, ref_s = serving_masks_host(positions, P, spec._pv_window, width, ring=ring)
+    got_f, got_s = _serving_read(spec, mf), _serving_read(spec, ms)
+    mf.deallocate(True)
+    ms.deallocate(True)
+    assert tuple(got_f.shape) == (B, 1, H * P, width), got_f.shape
+    assert tuple(got_s.shape) == (B, 1, H * P, ring if ring else width), got_s.shape
+    for b in range(B):
+        assert torch.equal(got_f[b], ref_f.repeat(1, 1, H, 1)[b]), f"full mask row {b} (position {positions[b]})"
+        assert torch.equal(got_s[b], ref_s.repeat(1, 1, H, 1)[b]), f"sliding mask row {b} (position {positions[b]})"
+
+    # (c) assembly: known draft columns -> row b = [anchor_b, d1_b, .., dK_b]
+    draft_cols = [spec._tokens_tensor([1000 * p + r for r in range(B)]) for p in range(1, P)]
+    vx = spec._srv_assemble_verify_x(S, draft_cols)
+    got_x = _serving_read(spec, vx).to(torch.int64).reshape(B, P)
+    for r in range(B):
+        expected = [anchors[r]] + [1000 * p + r for p in range(1, P)]
+        assert got_x[r].tolist() == expected, f"verify_x row {r}: {got_x[r].tolist()} != {expected}"
+
+    # (d) the 32-row argmax at B rows: one peak per row
+    Vt = 4096
+    peaks = [(7919 * r + 13) % Vt for r in range(B)]
+    logits_host = torch.full((1, 1, B, Vt), -2.0)
+    for r in range(B):
+        logits_host[0, 0, r, peaks[r]] = 3.0
+    logits_t = ttnn.from_torch(
+        logits_host.to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=spec._mapper,
+    )
+    ids = spec._argmax_last(logits_t, rows=B)
+    assert _serving_read(spec, ids).to(torch.int64).reshape(-1)[:B].tolist() == peaks
+
+    # (e) the drafter at B rows vs batch 1 per row, through the real reseed -> gather path
+    V = spec.target.vocab_size
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, rows, 8, width)
+    spec.serving_reseed(shape, rows, anchors, positions, page_tables)
+    idx_rs = [32 + r for r in range(B)]
+    spec._srv_upload(rec, rows, B, anchors, positions, page_tables, idx_rs)
+    h = spec._srv_seed_gather(S)
+    logits_b, h_next = spec.assistant.step(S["anchor_tok"], h, spec._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"])
+    lb = spec._logits_to_host(logits_b).float().reshape(-1, V)[:B]
+    for t in (logits_b, h_next):
+        t.deallocate(True)
+    # the record body's form: the RoPE rows gathered once per layer type for the K steps (prepare_rope) are the
+    # gathers the attention makes per layer, so the step's logits are bit-identical to the per-layer form above
+    rope = spec.assistant.prepare_rope(S["d_pu"])
+    logits_r, h_next = spec.assistant.step(
+        S["anchor_tok"], h, spec._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"], rope_prepared=rope
+    )
+    spec.assistant.release_rope(rope)
+    lr = spec._logits_to_host(logits_r).float().reshape(-1, V)[:B]
+    for t in (logits_r, h_next, h):
+        t.deallocate(True)
+    assert torch.equal(
+        lr, lb
+    ), f"[stages {shape}] the drafter step with the hoisted RoPE rows differs from the per-layer form"
+    for r in range(B):
+        tok1 = spec._tokens_tensor([anchors[r]])
+        pu1, pi1 = spec._pos_tensors([positions[r]])
+        h1 = spec._srv_seed_gather({"seed_idx": spec._tokens_tensor([32 + r])})
+        tables1 = {lt: spec._pv_from_torch(page_tables[r : r + 1], ttnn.int32) for lt in spec._pv_ring}
+        logits1, h1_next = spec.assistant.step(tok1, h1, spec._shared_kv, tables1, pu1, pi1)
+        l1 = spec._logits_to_host(logits1).float().reshape(-1)
+        for t in (logits1, h1_next, h1, tok1, pu1, pi1, *tables1.values()):
+            t.deallocate(True)
+        pcc = _pcc(lb[r], l1)
+        top2 = torch.topk(l1, 2)
+        gap = float(top2.values[0] - top2.values[1])
+        logger.info(
+            f"[stages {shape}] drafter row {r}: pcc vs batch-1 {pcc:.5f}, top-1 {int(top2.indices[0])}, gap {gap:.3f}"
+        )
+        assert pcc > 0.99, f"drafter row {r} at B={B} differs from the batch-1 step (pcc {pcc:.4f})"
+        if int(torch.argmax(lb[r])) != int(top2.indices[0]):
+            assert (
+                gap < 0.5
+            ), f"drafter row {r} at B={B}: top-1 {int(torch.argmax(lb[r]))} vs batch-1 {int(top2.indices[0])}"
+    spec.serving_release()

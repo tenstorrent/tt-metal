@@ -68,11 +68,20 @@ def test_prefill_forces_after_decode_and_first_write_only():
     Gemma4Generator._install_per_layer_page_tables(m, tables, writer="prefill")  # first write: forced
     Gemma4Generator._install_per_layer_page_tables(
         m, tables, writer="prefill"
-    )  # chunk 2 of the same prompt: not forced
+    )  # chunk 2 of the same prompt: the very tables the device holds, not even compared
     Gemma4Generator._install_per_layer_page_tables(m, tables, writer="decode")  # decode never forces
     Gemma4Generator._install_per_layer_page_tables(m, tables, writer="prefill")  # after decode: forced again
-    assert m._calls == [True, False, False, True], m._calls
+    assert m._calls == [True, False, True], m._calls
     assert m._g4_page_table_writer_by_rows == {1: "prefill"}
+    # new host objects with equal content are compared by the update (its own unchanged shortcut), a table
+    # modified in place is uploaded again, and the restore after a sequential prefill (the same list) is free
+    same = [t.clone() for t in tables]
+    Gemma4Generator._install_per_layer_page_tables(m, same, writer="prefill")
+    same[0][0, 0] = 7
+    Gemma4Generator._install_per_layer_page_tables(m, same, writer="prefill")
+    Gemma4Generator._install_per_layer_page_tables(m, same, writer="prefill")
+    assert m._calls == [True, False, True, False, False], m._calls
+    assert m._g4_page_tables_installed_by_rows[1][1] is not same and m._g4_page_tables_installed_by_rows[1][1] == same
 
 
 def test_row_counts_are_tracked_independently():
@@ -83,9 +92,10 @@ def test_row_counts_are_tracked_independently():
     Gemma4Generator._install_per_layer_page_tables(m, many, writer="decode")
     Gemma4Generator._install_per_layer_page_tables(
         m, one, writer="prefill"
-    )  # the 1-row buffers were last written by prefill
-    assert m._calls == [True, False, False], m._calls
+    )  # the 1-row buffers were last written by prefill and hold these very tables: skipped
+    assert m._calls == [True, False], m._calls
     assert m._g4_page_table_writer_by_rows == {1: "prefill", 32: "decode"}
+    assert m._g4_page_tables_installed_by_rows == {1: (Gemma4Generator._page_tables_identity(one), one), 32: None}
 
 
 def test_models_without_persistent_tables_are_left_alone():

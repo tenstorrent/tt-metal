@@ -97,23 +97,31 @@
   team: models
   budget_type: vllm
 
-# Product path on QB2: 256k + chunked prefill + B=32.
+# Product path on QB2: 256k + chunked prefill + B=32, served through the MTP speculative
+# contract adapter as the tt-inference-server QB2 release entry is (the plain decode is this
+# rail's fallback for rows above the record cap, declined steps and unsupported requests, so the
+# leg still covers it). A 4-chip column is TP4 (two local KV heads, the unsplit packed SDPA path
+# the 8-chip column never takes): the shield QB2 eval accepted about one draft in a hundred
+# while the tp=8 leg accepted 2.7-5.1 of 6, so this leg separates TP4 from batch. The trace
+# region holds the 20 speculative records plus the plain traces.
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
-  server-timeout: 20
+  server-timeout: 25
   benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 768000000}'
   server-default-top-k: 32
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  additional-benchmark-args: "--max-concurrency 5 --num-prompts 10 --temperature 0"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
   multimodal: false
   skus:
     bh_quietbox_2:
       timeout: 40
       tier: 1
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: vllm
 
@@ -168,40 +176,6 @@
   team: models
   budget_type: vllm
 
-- name: "Gemma4-31B dFlash tp=8"
-  model: google/gemma-4-31B-it
-  coherence-test: true
-  server-timeout: 25
-  benchmark-timeout: 5
-  mesh-device: P150x8
-  arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  # conc-1 AT THE CLIENT, ON PURPOSE. The adaptive engine speculates only when
-  # decoding ALONE, so at the default --num-prompts 32 with no
-  # --max-concurrency the benchmark measured the plain batched baseline and
-  # never exercised speculation, while the single-request coherence guard did --
-  # a broken spec path passed perf and failed coherence. Driving one request at
-  # a time makes every decode solo, so both the benchmark and the guard take the
-  # spec path. Batched perf and batched coherency are tracked by
-  # "Gemma4-31B tp=8" instead.
-  #
-  # max_num_seqs stays 32: what selects speculation is how many requests are
-  # RESIDENT, not this cap. Setting it to 1 is not needed and hangs the device --
-  # requests 1 and 2 served, then request 3 died in the drafter read with
-  # "TT_THROW system_memory_manager ... TIMEOUT: device timeout ... the device is
-  # unrecoverable". Same failure at max_num_seqs=1 on a BH Galaxy.
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
-  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8"
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_DFLASH_MAX_SPEC_ISL=131072"
-  multimodal: false
-  skus:
-    bh_loudbox:
-      timeout: 35
-      tier: 2
-  owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-  budget_type: vllm
-
 # dFlash on the plugin's speculative contract: vLLM schedules the drafts and
 # the plugin verifies and accepts them, so every step streams. Server flags
 # match "Gemma4-31B dFlash tp=8" apart from the class, --speculative-config and
@@ -243,20 +217,33 @@
   team: models
   budget_type: vllm
 
-- name: "Gemma4-12B MTP tp=8"
+- name: "Gemma4-12B MTP contract tp=8"
   model: google/gemma-4-12B-it
   coherence-test: true
   server-timeout: 25
-  benchmark-timeout: 5
+  benchmark-timeout: 10
   mesh-device: P150x8
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  # conc-1 at the CLIENT -- see the dFlash leg above, including why
-  # max_num_seqs stays 32. Batched perf and batched coherency are tracked by
-  # "Gemma4-12B tp=8".
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
-  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8"
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 768000000}'
+  # trace_region_size 768 MB: measured on this leg (3 GB probe run): 87 MB of plain decode traces plus
+  # 20 speculative records (4 shapes x the 5-rung x4 ladder) at 22-32 MB each = ~620 MB; the capture
+  # pass logs the TRACE region usage per record.
+  # MTP drafter on the plugin's speculative contract: vLLM schedules the drafts,
+  # the plugin verifies and accepts them. The coherence request runs alone (the
+  # (1,5) record); the benchmark runs 16 greedy requests at once with 2600-token
+  # outputs, so the (16,1), (8,3) and (5,5) records and the width rungs past 2048
+  # are all verified on a device (read the SpecDecoding metrics in the server log:
+  # a mean acceptance length near 1.0 means the records draft garbage).
+  # --async-scheduling: the MTP contract class declares supports_async_spec_decode
+  #   (tt-metal#63019: Blackhole async is 6-21 % faster than sync); the leg proves
+  #   the deferred verify readback and the overlapped ordinary steps on a device.
+  # GEMMA4_HYBRID_KV_CACHE_GROUPS=1 + unbounded sliding KV + prefix caching: the
+  # tt-inference-server release entries' KV layout (sliding layers on vLLM's
+  # 256-token blocks, full layers on 128), which no speculative capture had run
+  # before the shield 12B QB2 eval accepted ~1 % of its drafts.
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  additional-benchmark-args: "--max-concurrency 16 --num-prompts 32 --temperature 0 --random-output-len 2600"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_PREFIX_CACHING=1"
   multimodal: false
   skus:
     bh_loudbox:
@@ -265,7 +252,6 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: vllm
-
 
 - name: "Gemma4-26B-A4B"
   # The served QB2 config of tt-inference-server (dev catalog, P300X2 block): the (4,1) column mesh

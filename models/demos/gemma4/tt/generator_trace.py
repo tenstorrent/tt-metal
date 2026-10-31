@@ -9,7 +9,12 @@ import os
 import torch
 from loguru import logger
 
-from models.demos.gemma4.tt.warmup_isls import run_prefill_ladder, warmup_prefill_isls
+from models.demos.gemma4.tt.warmup_isls import (
+    continuation_tails,
+    run_prefill_ladder,
+    run_prefix_continuation_warmup,
+    warmup_prefill_isls,
+)
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
@@ -1315,7 +1320,13 @@ def _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, *, prefill_forward_fn
         return
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
     chunk = int(getattr(model_args, "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
-    run_prefill_ladder(generator, kv_cache, prefill_forward, ladder, chunk=chunk)
+    warmed = run_prefill_ladder(generator, kv_cache, prefill_forward, ladder, chunk=chunk)
+    if warmed:
+        # The shapes a prefix-cache hit (or a scheduler chunk past the first) prefills: every padded tail length
+        # past cached tokens, eager, compiled here and not on a request. The chunk-long tail is the ladder's own
+        # second chunk when an ISL above the chunk ran.
+        tails = continuation_tails(chunk, get_padded_prefill_len, skip_chunk=any(int(isl) > chunk for isl in warmed))
+        run_prefix_continuation_warmup(generator, kv_cache, prefill_forward, chunk=chunk, tails=tails)
 
 
 def warmup_gemma4_model_prefill(
