@@ -4,6 +4,11 @@
 
 #include "unary_op_utils.hpp"
 
+#include <array>
+#include <cctype>
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <optional>
 #include <type_traits>
 #include <tt_stl/assert.hpp>
@@ -1262,5 +1267,133 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
             TT_THROW("Unsupported parameter type for index {}", index);
         },
         op.base);
+}
+
+std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    // SOFTCAP validates its beta on a cache miss only, so its value has to stay in the program key. ROUND and
+    // POLYGAMMA keep their parameters compiled in: the compiler folds them (a constant 0 drops ROUND's scaling
+    // multiplies, which otherwise turn -0.0 into +0.0), and the runtime form rounds differently.
+    const auto type = op_chain.empty() ? UnaryOpType::IDENTITY : op_chain[0].type();
+    if (op_chain.size() != 1 || op_chain[0].empty() || type == UnaryOpType::SOFTCAP || type == UnaryOpType::ROUND ||
+        type == UnaryOpType::POLYGAMMA || uses_dedicated_compute_kernel(type, input_dtype)) {
+        return std::nullopt;
+    }
+    RuntimeScalarDefines out{.defines = get_block_defines(op_chain, "0", "0", input_dtype)};
+    const auto is_ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    uint32_t count = 0;
+    for (const char* name : {"SFPU_OP_CHAIN_0_INIT_0", "SFPU_OP_CHAIN_0_FUNC_0"}) {
+        auto it = out.defines.find(name);
+        if (it == out.defines.end()) {
+            continue;
+        }
+        const std::string& src = it->second;
+        std::string dst;
+        int template_depth = 0;
+        size_t i = 0;
+        while (i < src.size()) {
+            const char c = src[i];
+            const bool starts_token = i == 0 || !is_ident(src[i - 1]);
+            if (!starts_token || !std::isdigit(static_cast<unsigned char>(c))) {
+                template_depth += c == '<' ? 1 : (c == '>' ? -1 : 0);
+                dst += c;
+                ++i;
+                continue;
+            }
+            const bool hex = c == '0' && i + 1 < src.size() && (src[i + 1] == 'x' || src[i + 1] == 'X');
+            size_t j = hex ? i + 2 : i;
+            while (j < src.size() && (hex ? std::isxdigit(static_cast<unsigned char>(src[j]))
+                                          : std::isdigit(static_cast<unsigned char>(src[j])))) {
+                ++j;
+            }
+            // Only a function argument can take a runtime value; template arguments stay in the source. A literal
+            // counts when it carries the u suffix, or is a bare decimal after a comma (the first argument is the
+            // Dest index and stays).
+            const bool has_digits = j > (hex ? i + 2 : i);
+            const bool suffixed = j < src.size() && src[j] == 'u' && (j + 1 == src.size() || !is_ident(src[j + 1]));
+            size_t p = i;
+            while (p > 0 && src[p - 1] == ' ') {
+                --p;
+            }
+            const bool bare_after_comma =
+                !hex && p > 0 && src[p - 1] == ',' && (j == src.size() || (!is_ident(src[j]) && src[j] != '.'));
+            if (template_depth != 0 || !has_digits || !(suffixed || bare_after_comma)) {
+                dst.append(src, i, j - i);
+                i = j;
+                continue;
+            }
+            if (count == out.scalars.size()) {
+                return std::nullopt;
+            }
+            out.scalars[count] = static_cast<uint32_t>(std::stoul(src.substr(i, j - i), nullptr, hex ? 16 : 10));
+            dst += fmt::format("packed_scalar{}", count + 1);
+            ++count;
+            i = suffixed ? j + 1 : j;
+        }
+        out.key += dst;
+        out.key += ';';
+        it->second = std::move(dst);
+    }
+    if (count == 0) {
+        return std::nullopt;
+    }
+    out.defines["UNARY_RUNTIME_SCALARS"] = "1";
+    return out;
+}
+
+const RuntimeScalarDefines* get_runtime_scalar_defines_cached(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    // Rebuilding the defines formats every SFPU string, which costs more than the rest of a cache-hit dispatch,
+    // so the per-call paths look the result up by op type, dtype and the raw parameter bytes. Chains that can
+    // never take runtime scalars return before building a key.
+    if (op_chain.size() != 1 || op_chain[0].empty()) {
+        return nullptr;
+    }
+    struct Key {
+        std::array<std::byte, 64> bytes{};
+        size_t size = 0;
+        bool operator==(const Key& other) const {
+            return size == other.size && std::equal(bytes.begin(), bytes.begin() + size, other.bytes.begin());
+        }
+    };
+    Key key;
+    bool fits = true;
+    const auto append = [&](const void* data, size_t size) {
+        if (key.size + size > key.bytes.size()) {
+            fits = false;
+            return;
+        }
+        std::memcpy(key.bytes.data() + key.size, data, size);
+        key.size += size;
+    };
+    const auto type = op_chain[0].type();
+    const size_t variant_index = op_chain[0].base.index();
+    append(&type, sizeof(type));
+    append(&input_dtype, sizeof(input_dtype));
+    append(&variant_index, sizeof(variant_index));
+    std::visit([&](const auto& params) { append(params.data(), params.size_bytes()); }, op_chain[0].get_params());
+
+    struct Entry {
+        Key key;
+        std::optional<RuntimeScalarDefines> value;
+    };
+    constexpr size_t kEntries = 8;
+    thread_local std::array<Entry, kEntries> cache;
+    thread_local size_t next = 0;
+    thread_local std::optional<RuntimeScalarDefines> uncached;
+    if (!fits) {
+        uncached = get_runtime_scalar_defines(op_chain, input_dtype);
+        return uncached.has_value() ? &*uncached : nullptr;
+    }
+    for (auto& entry : cache) {
+        if (entry.key.size != 0 && entry.key == key) {
+            return entry.value.has_value() ? &*entry.value : nullptr;
+        }
+    }
+    auto& entry = cache[next];
+    next = (next + 1) % kEntries;
+    entry.key = key;
+    entry.value = get_runtime_scalar_defines(op_chain, input_dtype);
+    return entry.value.has_value() ? &*entry.value : nullptr;
 }
 }  // namespace ttnn::operations::unary::utils
