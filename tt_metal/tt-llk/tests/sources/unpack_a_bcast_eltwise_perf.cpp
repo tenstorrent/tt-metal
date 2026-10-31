@@ -48,7 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_bcastA_B_init_();
+        _llk_unpack_bcastA_B_init_(formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -93,7 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, ckernel::MathFidelity::LoFi>(SRCA_REUSE_COUNT);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(SRCA_REUSE_COUNT);
         PROFILER_SYNC();
     }
     {

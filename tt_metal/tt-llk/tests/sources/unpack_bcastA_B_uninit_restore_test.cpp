@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FACE_R_DIM,
         num_faces,
         num_faces);
-    _llk_unpack_bcastA_B_init_();
+    _llk_unpack_bcastA_B_init_(formats_array[0].unpack_A_dst);
     _llk_unpack_bcastA_B_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), params.SRCA_REUSE_COUNT);
 
     // Wait until the run-0 packer has drained before touching unpacker state.
