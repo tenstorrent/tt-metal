@@ -9,12 +9,16 @@ The residual stream is replicated on every chip of the row (each sub-block ends 
 import os
 
 import ttnn
+from loguru import logger
 
 from .attention import TtMiMoAttention
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .moe import TtMiMoMoE
 from .moe_stream import ReduceExpand, is_dram_interleaved
 from .profiling import zone
+
+# tt/model.py MIMO_DEBUG_ROWS (debug, eager decode)
+DEBUG_ROWS = [int(r) for r in os.environ.get("MIMO_DEBUG_ROWS", "").split(",") if r]
 
 
 class TtRMSNorm:
@@ -326,6 +330,13 @@ class TtMiMoDecoderLayer:
             gathered.deallocate(True)
         if fused is None:
             h2 = self.post_norm(x2)
+        if DEBUG_ROWS:  # eager decode only (tt/model.py MIMO_DEBUG_ROWS): the attention block's residual and norm rows
+            r2 = ttnn.to_torch(ttnn.get_device_tensors(x2)[0]).float()[0, 0]
+            n2 = ttnn.to_torch(ttnn.get_device_tensors(h2)[0]).float()[0, 0]
+            logger.info(
+                f"MIMO_DEBUG_ROWS layer {self.layer_idx} attention: x2 {[round(float(r2[r].norm()), 3) for r in DEBUG_ROWS]}"
+                f" h2 {[round(float(n2[r].norm()), 3) for r in DEBUG_ROWS]}"
+            )
         nxt = fused["next"] if fused is not None and return_norm else None
         out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt)
         if fused is None:
