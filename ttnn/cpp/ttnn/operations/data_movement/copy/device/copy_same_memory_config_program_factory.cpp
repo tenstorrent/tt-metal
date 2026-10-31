@@ -15,6 +15,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 
 namespace ttnn::prim {
 
@@ -202,12 +203,18 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     desc.kernels.push_back(std::move(writer_desc));
 
     if (convert_dtype) {
+        ComputeConfigDescriptor compute_config{};
+        if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+                input.device()->arch(), input_cb_data_format, output_cb_data_format)) {
+            compute_config.fp32_dest_acc_en = true;
+        }
+
         KernelDescriptor compute_g1;
         compute_g1.kernel_source = KERNEL_COMPUTE_ELTWISE_COPY;
         compute_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_g1.core_ranges = core_group_1;
         compute_g1.compile_time_args = {num_units_per_core_group_1};
-        compute_g1.config = ComputeConfigDescriptor{};
+        compute_g1.config = compute_config;
         desc.kernels.push_back(std::move(compute_g1));
 
         if (!core_group_2.ranges().empty()) {
@@ -216,7 +223,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
             compute_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
             compute_g2.core_ranges = core_group_2;
             compute_g2.compile_time_args = {num_units_per_core_group_2};
-            compute_g2.config = ComputeConfigDescriptor{};
+            compute_g2.config = compute_config;
             desc.kernels.push_back(std::move(compute_g2));
         }
     }
