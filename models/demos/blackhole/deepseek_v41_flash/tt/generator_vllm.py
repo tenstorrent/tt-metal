@@ -1459,6 +1459,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         )
         return out.argmax_ids[:, :1].to(torch.int32).reshape(W, 1)
 
+    def _apc_dec_poll(self, ps):
+        """DSV41_APC_DECODE=1: tell the prefix cache how far each stepped user has got (halo capture when a chunk multiple was crossed)"""
+        apc = getattr(self.m, "apc", None)
+        if apc is None or not apc.decode:
+            return
+        for p in ps:
+            apc.decode_poll(int(p), int(self.book.n[int(p)]))
+
     def _flush_keys(self, why):
         fl = getattr(self.m, "flush_key_exports", None)  # (a model without the lazy key hand-off has nothing pending)
         if fl is not None:
@@ -1565,6 +1573,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             out = self.m.decode_forward_bucket(Ub, tok_B, pos_B, phys, enable_trace=bool(enable_trace), samp=samp_args)
             for (i, r, pos), (_, p, _) in zip(rows, rows_p):
                 self.book.note_fed(p, pos, int(tok_B[r]))
+        self._apc_dec_poll([p for _, p, _ in rows_p])
         self.bucket_calls[Ub] = self.bucket_calls.get(Ub, 0) + 1
         self.timing["decode"] = time.perf_counter() - t0
         self._calls["decode"] += 1
@@ -1679,6 +1688,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         """The plugin finished / preempted the request of logical ``slot``: free its pages (the model user is reused by the next prefill into that slot)."""
         p = self.slots.release(int(slot))
         if p is not None:
+            apc = getattr(self.m, "apc", None)
+            if (
+                apc is not None and apc.decode
+            ):  # DSV41_APC_DECODE=1: snapshot of the decode state before its pages are released
+                apc.decode_finish(p, self.book.context(p))
             if hasattr(self.m, "release_user"):
                 self.m.release_user(
                     p
@@ -2008,6 +2022,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 if bool(sel.any()):
                     self.book.tok[pp[sel], pos_t[sel] + j] = X[rr[sel], j].to(torch.int32)
             self.book.n[pp] = pos_t + m_t + 1
+            self._apc_dec_poll(pp.tolist())
             self.spec_drafts[pp] = d[rr, :K].to(torch.int32)
             if self.spec_adapt is not None:
                 if runner.conf is not None:

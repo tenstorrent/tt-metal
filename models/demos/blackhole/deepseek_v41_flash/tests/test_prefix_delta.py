@@ -229,3 +229,59 @@ def check_equal_full(full, toks, s):
     for c in range(COLS):
         assert torch.equal(full.carried["keys"][c], keys[c])
     assert torch.equal(full.carried["kvt"][0], kvt) and torch.equal(full.pool[0], pool)
+
+
+def test_decode_output_snapshot_flow(monkeypatch):
+    """PrefixCache.decode_poll / decode_finish (DSV41_APC_DECODE=1): one halo capture per crossed chunk multiple beyond the prompt's own, the record at the latest capture, delta read from the end of the
+    cached prompt blocks, a following prompt (prompt + answer + more) hits it"""
+    import types
+
+    from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as PC
+
+    monkeypatch.setenv("DSV41_APC_DELTA", "1")
+    monkeypatch.setenv("DSV41_APC_DECODE", "1")
+    monkeypatch.setenv("DSV41_APC_MARGIN", str(CHUNK))
+    monkeypatch.delenv("DSV41_APC_GRID", raising=False)
+    monkeypatch.delenv("DSV41_APC_FILE", raising=False)
+    caps, reads, restored = [], [], []
+
+    def begin(model, b, s, toks, s_lo=0):
+        return types.SimpleNamespace(s=s, toks=torch.as_tensor(toks)[:s].clone(), s_lo=s_lo)
+
+    monkeypatch.setattr(PC, "snapshot_begin", begin)
+    monkeypatch.setattr(PC, "snapshot_finish", lambda model, p: snap_at(p.toks, p.s, p.s_lo))
+    monkeypatch.setattr(PC, "delta_unsupported", lambda m, c: "")
+    monkeypatch.setattr(PC, "decode_unsupported", lambda m: "")
+    monkeypatch.setattr(PC, "restore_users", lambda m, snap, bs: restored.append(snap) or 0.0)
+    monkeypatch.setattr(PC, "decode_halo_begin", lambda m, b, s: caps.append(s) or (s, "cap"))
+
+    def dsnap(model, b, s, toks, s_lo, halo):
+        reads.append((s, s_lo))
+        assert halo == (s, "cap")
+        return snap_at(torch.as_tensor(toks).long().reshape(-1), s, s_lo)
+
+    monkeypatch.setattr(PC, "decode_snapshot", dsnap)
+    cache = PC.PrefixCache(types.SimpleNamespace(), CHUNK, 10**9, "all", log=lambda *_: None)
+    t = toks_of(400, 21)
+    prompt = t[:76]
+    for B in range(CHUNK, 72 + 1, CHUNK):  # the prompt's own tip snapshot at 72
+        cache.begin_snapshot(0, B, prompt)
+    cache.finish_pending()
+    assert cache.store.has(prompt, 72)
+    for n in range(77, 200):  # decode: 77 .. 199 tokens hold KV
+        cache.decode_poll(0, n)
+    assert caps == [80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192]
+    cache.decode_finish(0, t[:199])
+    assert reads == [(192, 72)]  # the answer's blocks only: the prompt's blocks up to 72 are cached
+    rec = cache.lookup(0, t, 300)
+    assert rec.s == 192
+    cache.restore_group(rec, [0])
+    check_equal_full(restored[-1], t, 192)
+    # a user that never crossed a new multiple stores nothing; a stale state (n goes down) restarts
+    cache.decode_poll(1, 100)
+    cache.decode_poll(1, 101)
+    cache.decode_finish(1, t[:101])
+    assert reads == [(192, 72)]
+    cache.decode_poll(2, 150)
+    cache.decode_poll(2, 90)  # new request on the same user
+    assert cache.dec[2]["s0"] == 88 and cache.dec[2]["cap"] is None

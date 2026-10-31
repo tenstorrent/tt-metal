@@ -630,6 +630,115 @@ def snapshot_finish(model, pend):
     return snap
 
 
+# ---- decode-output snapshots (DSV41_APC_DECODE=1, needs the delta store) --------------------------------------------------------------------------------
+# State of a user at the END of its decode, converted to the carried prefill state at a chunk multiple s <= the tokens the model holds:
+#   pool latents      the same pool rows the prefill sink writes (decode appends them): ``read_pool_latents`` as for a prefill snapshot;
+#   index keys        decode slab ``dec.k_cache`` [U,1,nl,128] per chip, entry e on column e % cols at slot e // cols = the single-trace prefill slab (global slot Cc + e on column p % cols): the same
+#                     per-column rows, read as they are;
+#   halo (kv rows of the positions s-128..s-1, 40 layers)   only the sliding-window RING survives decode, so the halo is gathered from the ring when the committed length crosses s
+#                     (``decode_halo_begin``, one non-blocking gather), the latest crossing per user is kept.
+def _halo_names(model):
+    return [
+        (n, int(n[1:].split(".")[0]))
+        for n, sp in carried_specs(model).items()
+        if sp.kind == "full" and n.endswith(".halo")
+    ]
+
+
+def decode_halo_begin(model, b, s):
+    """Enqueue the gather of the 128 kv rows [s - 128, s) of every layer's ring of user ``b`` (bf16 whatever the pool dtype) and the non-blocking read of the result from one chip of its mesh row.
+    -> (s, {layer id: slot into the handle}, host tensor handle [1, 1, nlayers * 128, 512], event)"""
+    pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
+    names = _halo_names(model)
+    r, u, R = b // pool.T, b % pool.T, pool.ring_rows
+    pos = (s - 128 + torch.arange(128)) % R
+    ids_l = []
+    for _, lid in names:
+        base = pool.ring_base(model.attns[lid].ring_slot) + u * R
+        ids_l.append(base + pos)
+    ids = torch.cat(ids_l)
+    m = int(ids.numel())
+    idm = torch.zeros(rows, 1, 1, m, dtype=torch.int64)
+    idm[r, 0, 0] = ids
+    d_ids = ttnn.from_torch(
+        idm.to(torch.int32),
+        device=md,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols)),
+    )
+    g = _gather_pool(pool, d_ids)
+    h = ttnn.from_device(ttnn.get_device_tensors(g)[r * cols], blocking=False)
+    ttnn.deallocate(g)
+    ttnn.deallocate(d_ids)
+    ev = ttnn.record_event(md, 0)
+    return s, {lid: i for i, (_, lid) in enumerate(names)}, h, ev
+
+
+def decode_keys_rows(model, b, L, q0, q1):
+    """rows [q0, q1) of the decode key slab of user ``b`` (index-key owner layer ``L``), one torch bf16 [1, 1, q1 - q0, 128] per mesh column"""
+    dec = model.dec_idx[L]
+    r, u, cols = b // model.U, b % model.U, model.cols
+    if q1 <= q0:
+        return [torch.zeros(1, 1, 0, 128, dtype=torch.bfloat16) for _ in range(cols)]
+    part = ttnn.slice(dec.k_cache, [u, 0, q0, 0], [u + 1, 1, q1, 128])
+    out = [
+        ttnn.to_torch(ttnn.get_device_tensors(part)[r * cols + c])
+        .to(torch.bfloat16)
+        .reshape(1, 1, q1 - q0, 128)
+        .clone()
+        for c in range(cols)
+    ]
+    ttnn.deallocate(part)
+    return out
+
+
+def decode_unsupported(model):
+    """-> why the decode state of this build cannot be converted (else '')"""
+    specs = carried_specs(model)
+    if not _sources(model) or not PG.read_on():
+        return "needs the paged prefill read mode (latents in the pool)"
+    for name, sp in specs.items():
+        if sp.kind == "tail":
+            if not (name.endswith(".keys") and sp.start >= 0):
+                return f"{name} is not a single-trace key slab"
+            L = int(name[1:].split(".")[0])
+            dec = model.dec_idx.get(L)
+            if dec is None or not getattr(dec, "cs", False) or L not in model.index_owner:
+                return f"layer {L} has no column-sharded decode key slab"
+        elif not name.endswith(".halo"):
+            return f"carried tensor {name} has no decode source"
+    for _, lid in _halo_names(model):
+        if getattr(getattr(model, "attns", {}).get(lid), "ring_slot", None) is None:
+            return f"layer {lid} has no ring slot"
+    return ""
+
+
+def decode_snapshot(model, b, s, toks, s_lo, halo):
+    """-> PrefixSnapshot (delta read of [s_lo, s)) of user ``b`` from its DECODE state; ``halo`` = what ``decode_halo_begin`` returned for ``s`` (the handle is read here)"""
+    t0 = time.perf_counter()
+    cols = model.cols
+    hs, slot_of, h, ev = halo
+    assert hs == s
+    ttnn.event_synchronize(ev)
+    hal = ttnn.to_torch(h).reshape(-1, 128, 512).clone()
+    snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone(), s_lo=s_lo)
+    for name, sp in carried_specs(model).items():
+        if sp.kind == "full":
+            lid = int(name[1:].split(".")[0])
+            snap.carried[name] = [hal[slot_of[lid]].reshape(1, 1, 128, 512)] * cols
+        else:
+            L = int(name[1:].split(".")[0])
+            q0, q1 = sp.count(s_lo), sp.count(s)
+            snap.carried[name] = decode_keys_rows(model, b, L, q0, q1)
+            snap.tails += (name,)
+    for src in _sources(model):
+        snap.pool[src] = read_pool_latents(model, b, src, s // P.SRC_RATIO[src], s_lo // P.SRC_RATIO[src])
+    snap.seconds = time.perf_counter() - t0
+    return snap
+
+
 def restore_user(model, snap, b):
     return restore_users(model, snap, [b])
 
@@ -1043,6 +1152,13 @@ class PrefixCache:
         )  # DSV41_APC_DELTA=1: block / delta snapshots (``DeltaStore``); checked against the model's carried tensors at the first snapshot
         self.store = DeltaStore(chunk, budget_bytes) if self.delta else PrefixStore(chunk, budget_bytes)
         self.delta_step = int(os.environ.get("DSV41_APC_DELTA_STEP", "0")) if self.delta else 0
+        self.decode = (
+            self.delta and os.environ.get("DSV41_APC_DECODE", "0") == "1"
+        )  # snapshot at the end of decode (needs the delta store)
+        self.dec_lag = int(
+            os.environ.get("DSV41_APC_DECODE_LAG", "100")
+        )  # a halo is only captured while the committed length is at most this far past the chunk multiple (ring slack)
+        self.dec = {}
         self.enabled = True
         # the continuation must rewrite the last WINDOW (128) positions of the prompt: the ring rows decode reads, ``prev_cs`` (last token) and the drafter taps. The extra ring rows of a spec build
         # (288 rows = window + slack for speculative writes) hold positions that no attention reads, so they need not be rewritten: margin 128 for both pools.
@@ -1330,6 +1446,69 @@ class PrefixCache:
             return None
         snap = self.store.lookup(kt, end, end, margin=self.margin, zone=zone)
         return snap if snap is not None and snap.s > min_s else None
+
+    # ---- decode output (DSV41_APC_DECODE=1): the next turn's prompt contains this request's answer ----------------------------------------------------------
+    def decode_ok(self):
+        """decode-output snapshots are on, the delta store is in use and the build can convert its decode state (checked once, logged)"""
+        if not self.decode or not self.delta or not isinstance(self.store, DeltaStore) or not self.active():
+            return False
+        if "_dec_ok" not in self.__dict__:
+            why = decode_unsupported(self.m)
+            self._dec_ok = not why
+            if why:
+                self.log(f"prefix cache: DSV41_APC_DECODE ignored ({why})")
+        return self._dec_ok
+
+    def decode_poll(self, b, n):
+        """after a decode / verify step: user ``b`` holds the KV of ``n`` tokens. When n crossed a new multiple s of the chunk that lies beyond the first one seen for this request (the prompt's own tip is
+        already a prefill snapshot), capture the halo of s from the rings now (they only keep the last ``ring_rows`` positions). Keeps the latest capture.
+        """
+        if not self.decode_ok():
+            return
+        C = self.chunk
+        s = n // C * C
+        st = self.dec.get(b)
+        if st is not None and n < st["last_n"]:  # (a new request on this user that was never finished here)
+            st = None
+        if st is None:
+            self.dec[b] = st = {"s0": s, "cap": None, "last_n": n}
+        st["last_n"] = n
+        if s <= st["s0"] or (st["cap"] is not None and s <= st["cap"][0]) or n - s > self.dec_lag:
+            return
+        try:
+            st["cap"] = decode_halo_begin(self.m, b, s)
+            self.stats["dec_captures"] = self.stats.get("dec_captures", 0) + 1
+        except Exception as e:  # (never let the cache break a decode step)
+            self.log(f"prefix cache: decode halo capture failed for user {b} at {s}: {e!r}")
+            self.decode = False
+
+    def decode_drop(self, b):
+        self.dec.pop(b, None)
+
+    def decode_finish(self, b, tokens):
+        """the request of user ``b`` ended (before its pages are released): store the decode-state snapshot at the latest captured s (``tokens``: every token whose KV the model holds)."""
+        st = self.dec.pop(b, None)
+        if st is None or st["cap"] is None or not self.decode_ok():
+            return
+        s = st["cap"][0]
+        tokens = torch.as_tensor(tokens).long().reshape(-1)
+        if tokens.numel() < s or self._has_image(tokens, s):
+            return
+        t0 = time.perf_counter()
+        self.finish_pending()
+        kt = tokens[:s]
+        if self.store.has(kt, s, True):
+            return
+        try:
+            s_lo = self._delta_start(kt, s)
+            snap = decode_snapshot(self.m, b, s, tokens, s_lo, st["cap"])
+        except Exception as e:
+            self.log(f"prefix cache: decode snapshot of user {b} at {s} failed: {e!r}")
+            self.decode = False
+            return
+        snap.full, snap.kind, snap.serial = True, "dec", self.serial
+        self._store(snap, b, s, time.perf_counter() - t0, "decode")
+        self.stats["dec_snapshots"] = self.stats.get("dec_snapshots", 0) + 1
 
     def _delta_start(self, kt, B):
         """delta snapshots: the first token of the rows still to read at ``B`` = the end of the longest run of cached (or already pending) blocks of this chain; 0 = a whole snapshot. A model whose carried
