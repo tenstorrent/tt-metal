@@ -1021,6 +1021,7 @@ class PerfConfig(TestConfig):
                 TestConfig.TENSIX_LOCATION,
                 0xFFB40000 + 4 * 0x1000 + 248 * 4,
                 [port3_mode],
+                safe_mode=False,
             )
         if (
             PerfConfig.TEST_COUNTER == 1
