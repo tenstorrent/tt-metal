@@ -44,9 +44,12 @@ void kernel_main() {
     CircularBuffer work(cb_work);
     state.wait_front(K * per_core);
     diag.wait_front(K * per_core);
-    work.reserve_back(per_core);
+    // Push one q|k|v group at a time so the writer can drain it while compute runs on: reserving all
+    // per_core pages in one call and holding them until the end is what deadlocked iteration 8
+    // (writer waits cb_state -> compute waits cb_work -> cycle).
     for (uint32_t i0 = 0; i0 < per_core; i0 += GROUP) {
         const uint32_t nn = (per_core - i0 < GROUP) ? (per_core - i0) : GROUP;
+        work.reserve_back(nn);
         tile_regs_acquire();
         for (uint32_t i = 0; i < nn; i++) {
             const uint32_t c = i0 + i;
@@ -59,11 +62,11 @@ void kernel_main() {
         tile_regs_wait();
         for (uint32_t i = 0; i < nn; i++) {
             silu_tile(i);
-            pack_tile<true>(i, cb_work, i0 + i);
+            pack_tile<true>(i, cb_work, i);
         }
         tile_regs_release();
+        work.push_back(nn);
     }
-    work.push_back(per_core);
 
     state.pop_front(K * per_core);
     diag.pop_front(K * per_core);

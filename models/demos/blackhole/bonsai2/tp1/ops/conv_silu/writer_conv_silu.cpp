@@ -49,22 +49,20 @@ void kernel_main() {
     CircularBuffer qkv(cb_qkv);
 
     // ---- conv + silu row ----------------------------------------------------
-    work.wait_front(per_core);
-    // cb_work holds this head's [q..., k..., v...] channel tiles in that order.
-    const auto write_group = [&](uint32_t dst_first_channel_tile, uint32_t n, uint32_t src_tile0) {
+    // cb_work arrives one group at a time (compute pushes a group, we pop it), which is what breaks
+    // the reader/compute/writer cycle.
+    const auto write_group = [&](uint32_t dst_first_channel_tile, uint32_t n) {
+        work.wait_front(n);
         for (uint32_t i = 0; i < n; i++) {
             noc.async_write(
-                work,
-                cv,
-                tb,
-                {.offset_bytes = (src_tile0 + i) * tb},
-                {.page_id = dst_first_channel_tile + i});
+                work, cv, tb, {.offset_bytes = i * tb}, {.page_id = dst_first_channel_tile + i});
         }
+        noc.async_writes_flushed();
+        work.pop_front(n);
     };
-    write_group(q_col, kd_t, 0);
-    write_group(k_col, kd_t, kd_t);
-    write_group(v_col, v_t, 2 * kd_t);
-    noc.async_writes_flushed();
+    write_group(q_col, kd_t);
+    write_group(k_col, kd_t);
+    write_group(v_col, v_t);
 
     // ---- the shifted ring ---------------------------------------------------
     // row j <- old state row j+1 for j < K-1; row K-1 <- the new input row.
@@ -89,7 +87,6 @@ void kernel_main() {
         }
     }
     noc.async_write_barrier();
-    work.pop_front(per_core);
     st.pop_front(K * per_core);
     qkv.pop_front(per_core);
 }
