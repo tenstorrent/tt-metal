@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -1438,6 +1439,74 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockIdFreeGolden) {
     EXPECT_TRUE(is_close_vectors<float>(
         result_floats, golden, [](float a, float b) { return is_close(a, b, /*rtol=*/0.05f, /*atol=*/0.2f); }));
     EXPECT_TRUE(check_pcc(result_floats, golden, /*min_pcc=*/0.99));
+}
+
+// llk_matmul_pack with out_of_order_output=true must pack DST tile (start_tile_index + i) to output page
+// (output_tile_index + i): the out-of-order address helper is stateless, so the loop has to offset the page
+// index per DST tile. The kernel copies four distinct tiles to DST[0..3] and packs the two DST halves swapped,
+// one out-of-order llk_matmul_pack call each: (0, c_16, 2, 2) then (2, c_16, 2, 0), so pages 0..3 must hold DST
+// tiles 2, 3, 0, 1. Nonzero start_tile_index and output_tile_index in different calls make the three wrong
+// loops distinguishable: a constant page index gives pages {3, -, 1, -} (second tile of each half overwrites the
+// first, "-" never written); a page index of just tile_index gives {0, 1, 2, 3}; output_tile_index + tile_index
+// (no start rebase) gives {-, -, 2, 3}. Each wrong loop leaves a wrong tile on a page it writes, so a stale page
+// left in L1 by an earlier program cannot mask it (the call order is what makes the no-rebase loop overwrite
+// pages 2, 3 with the wrong half). Wormhole and Blackhole share the defect; Quasar has no llk_matmul_pack.
+TEST_F(LLKMeshDeviceFixture, TensixMatmulPackOutOfOrderPacksEachDestTileToItsOwnPage) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "llk_matmul_pack is not implemented on Quasar";
+    }
+    constexpr std::uint32_t ntiles = 4;
+    constexpr std::uint32_t half = ntiles / 2;
+    constexpr std::uint32_t tile_elems = constants::TILE_HW;
+    // Tile t holds the integers 1 + tile_value_stride * t .. values_per_tile + tile_value_stride * t, so no two
+    // tiles share a value and every tile differs from every other at every element. Integers up to 256 are
+    // exact in Float16_b (8-bit significand), which bounds the largest value.
+    constexpr std::uint32_t values_per_tile = 50;
+    constexpr std::uint32_t tile_value_stride = 60;
+    constexpr std::uint32_t max_exact_bf16_integer = 256;
+    static_assert(tile_value_stride > values_per_tile, "tile value ranges must not overlap");
+    static_assert(
+        values_per_tile + tile_value_stride * (ntiles - 1) <= max_exact_bf16_integer,
+        "stimulus values must stay exactly representable in Float16_b");
+    std::vector<bfloat16> src(ntiles * tile_elems);
+    for (std::uint32_t t = 0; t < ntiles; ++t) {
+        for (std::uint32_t i = 0; i < tile_elems; ++i) {
+            src[t * tile_elems + i] = bfloat16(static_cast<float>(1 + tile_value_stride * t + (i % values_per_tile)));
+        }
+    }
+    const auto src_u32 = pack_bfloat16_vec_into_uint32_vec(src);
+    constexpr std::uint32_t bf16_per_u32 = sizeof(std::uint32_t) / sizeof(bfloat16);
+    const std::uint32_t page_u32 = tile_elems / bf16_per_u32;
+
+    for (auto& device : this->devices_) {
+        auto result = unit_tests::llk::single_core::run_unary(
+            *device,
+            tt::DataFormat::Float16_b,
+            tt::DataFormat::Float16_b,
+            src_u32,
+            ntiles,
+            /*fp32_dest_acc_en=*/false,
+            "tests/tt_metal/tt_metal/test_kernels/compute/matmul_pack_out_of_order.cpp",
+            /*cb_depth_tiles=*/ntiles);
+        ASSERT_EQ(result.size(), src_u32.size());
+        // Which input tile an output page holds (-1: none of them, i.e. the page was never written).
+        auto page_holds = [&](std::uint32_t page) -> int {
+            for (std::uint32_t t = 0; t < ntiles; ++t) {
+                if (std::equal(
+                        result.begin() + page * page_u32,
+                        result.begin() + (page + 1) * page_u32,
+                        src_u32.begin() + t * page_u32)) {
+                    return static_cast<int>(t);
+                }
+            }
+            return -1;
+        };
+        for (std::uint32_t page = 0; page < ntiles; ++page) {
+            const std::uint32_t expected_dst_tile = (page + half) % ntiles;
+            EXPECT_EQ(page_holds(page), static_cast<int>(expected_dst_tile))
+                << "output page " << page << " must hold DST tile " << expected_dst_tile << " (-1: no input tile)";
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
