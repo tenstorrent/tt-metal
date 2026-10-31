@@ -1962,9 +1962,15 @@ class Model:
                         apc.grid is not None
                     ):  # M0': tip / divergence boundaries of each new prompt (total length: plugin prefill_total, or the end of a row that ends here)
                         for b_, t_, st_, e_ in wave:
-                            if st_ == 0 and not (vis and b_ in vis):
+                            if st_ == 0 and (not (vis and b_ in vis) or apc.images_enabled()):
                                 tot_ = None if totals is None else totals.get(b_)
-                                apc.new_prompt(b_, t_, e_ if tot_ is None else tot_, zone.get(b_, 0) if rep else 0)
+                                apc.new_prompt(
+                                    b_,
+                                    t_,
+                                    e_ if tot_ is None else tot_,
+                                    zone.get(b_, 0) if rep else 0,
+                                    vs=vis.get(b_) if vis else None,
+                                )
                     new_ = self._apc_restore_wave(
                         cand, apc, vis, zone if rep else None
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
