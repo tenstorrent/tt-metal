@@ -176,11 +176,19 @@ def accessor_args(tensor) -> list[int]:
     return list(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
 
 
-def cb_descriptor(index: int, dtype, page_bytes: int, pages: int, cores: ttnn.CoreRangeSet) -> ttnn.CBDescriptor:
+def cb_descriptor(
+    index: int, dtype, page_bytes: int, pages: int, cores: ttnn.CoreRangeSet, tile_rows: int | None = None
+) -> ttnn.CBDescriptor:
+    """``tile_rows`` (default None = the 32 x 32 tile): the tile height of a narrow tile, 1 for the 1 x 32 tiles whose
+    ``page_bytes`` is 64 (BF16) or 128 (FP32): the two valid-row chunks of row 0, face 0 then face 1."""
+
+    tile = {} if tile_rows is None else {"tile": ttnn.TileDescriptor(tile_rows, TILE)}
     return ttnn.CBDescriptor(
         total_size=pages * page_bytes,
         core_ranges=range_merge.apply(cores, "cb"),
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes)],
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes, **tile)
+        ],
     )
 
 

@@ -139,7 +139,7 @@ def _stream(tensor, outer: int, inner: int, first: int, inner_stride: int, outer
     return [tensor.buffer_address(), outer, inner, first, inner_stride, outer_stride, batch]
 
 
-def _reader(cores, streams, consts, runtime, gate=None):
+def _reader(cores, streams, consts, runtime, gate=None, source=None, defines=()):
     """streams: [(tensor, cb)]; consts: [(kind, cb)]; runtime: per core -> (stream args lists, const bits list);
     ``gate`` = (stream index, program semaphore id, count): that stream is read once the semaphore reached the count
     (a producer of the same program signals that its pages are complete), then the semaphore is reset."""
@@ -152,21 +152,22 @@ def _reader(cores, streams, consts, runtime, gate=None):
     for slot in range(4):  # the kernel defines four accessor sets; unused slots repeat the first tensor's
         compile_args += fp.accessor_args(streams[min(slot, len(streams) - 1)][0])
     return fp.reader_kernel(
-        READER,
+        source or READER,
         cores,
         compile_args,
         [(core, [a for args in stream_args for a in args] + list(bits)) for core, (stream_args, bits) in runtime],
+        defines=defines,
     )
 
 
-def _writer(cores, streams, runtime):
+def _writer(cores, streams, runtime, source=None, defines=()):
     """streams: [(tensor, cb)]; runtime: per core -> list of (count, first, stride, batch) per stream."""
 
     compile_args = [len(streams), *[cb for _, cb in streams], *[0] * (3 - len(streams))]
     for slot in range(3):
         compile_args += fp.accessor_args(streams[min(slot, len(streams) - 1)][0])
     return fp.writer_kernel(
-        WRITER,
+        source or WRITER,
         cores,
         compile_args,
         [
@@ -180,6 +181,7 @@ def _writer(cores, streams, runtime):
             )
             for core, per_stream in runtime
         ],
+        defines=defines,
     )
 
 
@@ -566,7 +568,20 @@ def _core_set(cores) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
 
-def _mcast_writer(cores, runtime, *, src_cb, dst_cb, tiles, tiles_tensor=None, extra=None, sem=0, sem_bits=None):
+def _mcast_writer(
+    cores,
+    runtime,
+    *,
+    src_cb,
+    dst_cb,
+    tiles,
+    tiles_tensor=None,
+    extra=None,
+    sem=0,
+    sem_bits=None,
+    source=None,
+    defines=(),
+):
     """runtime: per core -> (dst tile offset, rect, (first, stride) for the tiles tensor, (count, first, stride, batch) extra).
     ``sem_bits`` (selects the v2 writer): per core, the semaphore increment (that sender's own bit) as runtime arg 13.
     """
@@ -597,10 +612,25 @@ def _mcast_writer(cores, runtime, *, src_cb, dst_cb, tiles, tiles_tensor=None, e
                 ],
             )
         )
-    return fp.writer_kernel(MCAST_WRITER if sem_bits is None else MCAST_WRITER2, cores, compile_args, args)
+    return fp.writer_kernel(
+        source or (MCAST_WRITER if sem_bits is None else MCAST_WRITER2), cores, compile_args, args, defines=defines
+    )
 
 
-def _mcast_reader(cores, streams, runtime, *, recv_cb, recv_tiles, senders, zero_cb=NONE_CB, sem=0, per_sender=False):
+def _mcast_reader(
+    cores,
+    streams,
+    runtime,
+    *,
+    recv_cb,
+    recv_tiles,
+    senders,
+    zero_cb=NONE_CB,
+    sem=0,
+    per_sender=False,
+    source=None,
+    defines=(),
+):
     """streams: [(tensor, cb)] (<= 2, each CB holds its whole stream); runtime: per core -> stream arg lists."""
 
     compile_args = [
@@ -616,10 +646,11 @@ def _mcast_reader(cores, streams, runtime, *, recv_cb, recv_tiles, senders, zero
     for slot in range(2):
         compile_args += fp.accessor_args(streams[min(slot, len(streams) - 1)][0])
     return fp.reader_kernel(
-        MCAST_READER2 if per_sender else MCAST_READER,
+        source or (MCAST_READER2 if per_sender else MCAST_READER),
         cores,
         compile_args,
         [(core, [a for args in stream_args for a in args]) for core, stream_args in runtime],
+        defines=defines,
     )
 
 

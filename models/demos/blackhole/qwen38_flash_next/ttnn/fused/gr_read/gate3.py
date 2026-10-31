@@ -48,6 +48,19 @@ MAX_ROWS = 16
 LOWRANK3 = fp.kernel_source(NAME, "lowrank_compute3.cpp")
 GATE3 = fp.kernel_source(NAME, "gate_compute3.cpp")
 
+# QWEN38_GR_GATE_TINY (default "1"), rows == 1: every CB of the program except the up weight's holds 1 x 32 tiles (row 0
+# only: face 0 row 0 then face 1 row 0, 64 B BF16 / 128 B FP32) instead of 32 x 32 tiles.  The compute kernels are the
+# same files; the readers and writers move the two valid-row chunks of a DRAM page (reader_t / mcast_reader_t / writer_t /
+# mcast_writer_t).  Row 0 of the block and the injection is bit for bit today's; the other rows of their pages are not written.
+TINY_ENV = "QWEN38_GR_GATE_TINY"
+TINY_BF16, TINY_FP32 = 2 * fp.TILE, 4 * fp.TILE
+FACE_FP32_BYTES, FACE_BF16_BYTES = 16 * 16 * 4, 16 * 16 * 2  # face 1 sits one face after face 0 in a DRAM tile page
+SCRATCH_CB = 19  # the worker reader's staging of face 1 row 0 (BRANCHES x 64 B)
+READER_T = fp.kernel_source(NAME, "reader_t.cpp")
+MCAST_READER_T = fp.kernel_source(NAME, "mcast_reader_t.cpp")
+MCAST_WRITER_T = fp.kernel_source(NAME, "mcast_writer_t.cpp")
+WRITER_T = fp.kernel_source(NAME, "writer_t.cpp")
+
 
 ROWTRIM_ENV = "QWEN38_GR_GATE_ROWTRIM"
 ROWTRIM_MAX_ROWS = 4
@@ -63,6 +76,12 @@ def rowtrim_defines(rows: int):
     if os.environ.get(ROWTRIM_ENV, "1") == "1" and 1 <= rows <= ROWTRIM_MAX_ROWS:
         return [("QWEN38_GR_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS))]
     return []
+
+
+def tiny_enabled(rows: int) -> bool:
+    import os
+
+    return os.environ.get(TINY_ENV, "1") == "1" and rows == 1
 
 
 def enabled(rows: int) -> bool:
@@ -101,22 +120,42 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
     inject = [producers[inject_core]]
     w_set, p_set, all_set = _core_set(workers), _core_set(producers), _core_set(workers + producers)
     plain_set, inject_set = _core_set(plain), _core_set(inject)
+    tiny = tiny_enabled(rows)
+    bf16_page, fp32_page = (TINY_BF16, TINY_FP32) if tiny else (TILE_BF16, TILE_FP32)
+    shape_rows = 1 if tiny else None  # the 1 x 32 tile
     cbs = [
-        fp.cb_descriptor(0, FP32, TILE_FP32, t * TP_SIZE, p_set),
-        fp.cb_descriptor(1, FP32, TILE_FP32, 1, p_set),
-        fp.cb_descriptor(2, BF16, TILE_BF16, t, p_set),
-        fp.cb_descriptor(16, BF16, TILE_BF16, t, p_set),
-        fp.cb_descriptor(17, BF16, TILE_BF16, 1, inject_set),
-        fp.cb_descriptor(8, BF16, TILE_BF16, PARTIAL_TILES, all_set),
-        fp.cb_descriptor(9, BF16, TILE_BF16, BRANCHES * PARTIAL_TILES, w_set),
-        fp.cb_descriptor(10, BF16, TILE_BF16, BRANCHES, w_set),
-        fp.cb_descriptor(11, BF16, TILE_BF16, 1, w_set),
-        fp.cb_descriptor(12, BF16, TILE_BF16, BRANCHES, w_set),
-        fp.cb_descriptor(13, BF16, TILE_BF16, BRANCHES, w_set),
-        fp.cb_descriptor(14, BF16, TILE_BF16, BRANCHES, w_set),
-        fp.cb_descriptor(15, FP32, TILE_FP32, BRANCHES, w_set),
-        fp.cb_descriptor(18, BF16, TILE_BF16, 1, w_set),
+        fp.cb_descriptor(0, FP32, fp32_page, t * TP_SIZE, p_set, shape_rows),
+        fp.cb_descriptor(1, FP32, fp32_page, 1, p_set, shape_rows),
+        fp.cb_descriptor(2, BF16, bf16_page, t, p_set, shape_rows),
+        fp.cb_descriptor(16, BF16, bf16_page, t, p_set, shape_rows),
+        fp.cb_descriptor(17, BF16, bf16_page, 1, inject_set, shape_rows),
+        fp.cb_descriptor(8, BF16, bf16_page, PARTIAL_TILES, all_set, shape_rows),
+        fp.cb_descriptor(9, BF16, TILE_BF16, BRANCHES * PARTIAL_TILES, w_set),  # the up weight: whole tiles
+        fp.cb_descriptor(10, BF16, bf16_page, BRANCHES, w_set, shape_rows),
+        fp.cb_descriptor(11, BF16, bf16_page, 1, w_set, shape_rows),
+        fp.cb_descriptor(12, BF16, bf16_page, BRANCHES, w_set, shape_rows),
+        fp.cb_descriptor(13, BF16, bf16_page, BRANCHES, w_set, shape_rows),
+        fp.cb_descriptor(14, BF16, bf16_page, BRANCHES, w_set, shape_rows),
+        fp.cb_descriptor(15, FP32, fp32_page, BRANCHES, w_set, shape_rows),
+        fp.cb_descriptor(18, BF16, bf16_page, 1, w_set, shape_rows),
     ]
+    if tiny:
+        cbs.append(fp.cb_descriptor(SCRATCH_CB, BF16, TINY_BF16, BRANCHES, w_set))
+    reader_kw = (
+        {"source": READER_T, "defines": [("GT_CHUNK", str(TINY_FP32 // 2)), ("GT_SRC_FACE", str(FACE_FP32_BYTES))]}
+        if tiny
+        else {}
+    )
+    mcast_writer_kw = {"source": MCAST_WRITER_T, "defines": [("GT_DST_FACE", str(FACE_BF16_BYTES))]} if tiny else {}
+    mcast_reader_kw = (
+        {
+            "source": MCAST_READER_T,
+            "defines": [("GT_SRC_FACE", str(FACE_BF16_BYTES)), ("GT_SCRATCH_CB", str(SCRATCH_CB))],
+        }
+        if tiny
+        else {}
+    )
+    writer_kw = {"source": WRITER_T, "defines": [("GT_DST_FACE", str(FACE_BF16_BYTES))]} if tiny else {}
     reader = _reader(
         p_set,
         [(gathered_partials, 0)],
@@ -125,6 +164,7 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
             (core, ([_stream(gathered_partials, t, TP_SIZE, c * t, PARTIAL_TILES, 1, t * TP_SIZE)], [0]))
             for c, core in enumerate(producers)
         ],
+        **reader_kw,
     )
     trim = rowtrim_defines(rows)
     computes = [
@@ -139,6 +179,7 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
             dst_cb=8,
             tiles=t,
             extra=(injection, NONE_CB),
+            **mcast_writer_kw,
         ),
         _mcast_writer(
             inject_set,
@@ -147,6 +188,7 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
             dst_cb=8,
             tiles=t,
             extra=(injection, 17),
+            **mcast_writer_kw,
         ),
     ]
     receiver = _mcast_reader(
@@ -166,6 +208,7 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
         recv_tiles=PARTIAL_TILES,
         senders=n_producers,
         zero_cb=11,
+        **mcast_reader_kw,
     )
     gate_k = fp.compute_kernel(
         GATE3,
@@ -175,7 +218,7 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
         fp32_dest=True,
         unpack_to_dest_fp32=(10, 12, 13),
     )
-    writer = _writer(w_set, [(block, 18)], [(core, [(1, j, 1, 1)]) for j, core in enumerate(workers)])
+    writer = _writer(w_set, [(block, 18)], [(core, [(1, j, 1, 1)]) for j, core in enumerate(workers)], **writer_kw)
     # the partials, the flat row and the up weight once, the block and the injection out; the low-rank row multicast
     # into the gate cores' CB (L1); the fold, typecast, silu and 2 sigmoid, the up matmul, sigmoid, gate
     # multiply and branch sum
