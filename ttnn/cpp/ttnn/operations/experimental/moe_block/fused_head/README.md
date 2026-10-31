@@ -10,12 +10,33 @@ latent down + all-to-all.
 
 | Piece | Where | State |
 |---|---|---|
-| Layout planner (`head_plan.fit`) and its sizing closure (`SeEngine3` arena sizing, `se_rs.RsPlan` + `plan_transport`, `RouterStream.layout_of`, `routing_a2a` sizes, the routing exchange's paths, `router_placement`) | `device/head_plan.*`, `device/head_sizing.*` | done; exact parity with the reference on 230 cases |
+| Layout planner (`head_plan.fit`) and its sizing closure | `device/head_plan.*`, `device/head_sizing.*` | done; exact parity with the reference on 230 cases |
 | Block-level plan (`FusedHead.plan` / `model_checks` / `shape`) cached in `MoEBlockResources` | `fused_head.*` (`plan_fused_head`) | done |
-| Kernels (se_engine3, x_gather3, router_stream, routing_stream Y sender, routing_a2a planner via `_plan_fn`, prep_stream route words) | `device/kernels/` | materialized as files, not yet compiled on device |
-| Device operation, program factory, `override_runtime_arguments` | `device/` | not written |
-| Reference dump (`dump_ref_fused_head.py`, lead runs it in the reference tree) | tests | written, not run |
-| Bit-exact device test, op host-timing test | tests | need the device op |
+| Kernels | `device/kernels/` | materialized as files, not yet compiled on device |
+| Host model + per-chip programs (`HeadSE3._run`, `SeEngine3.pieces`, `XGather3.pieces`, `RouterStream.pieces`, `RoutingStream`) | `device/head_program.*` | done; programs compared with the reference's on the mock Galaxy |
+| Device operation (WorkloadDescriptor factory, address-only cache hits), host entry, weights | `device/fused_head_device_operation.*`, `fused_head.*` | done, not run on device |
+| Bit-exact device test, host timing | `test_fused_head.py` | written; needs the reference dump (`dump_ref_fused_head.py`) and a Galaxy |
+
+## The device operation
+
+`ttnn.experimental.moe_block.fused_head(x, weights, resources=, dtypes=, accumulators=)` runs one program a chip and
+returns `FusedHeadOutputs` (se, rows, xbuf, route, latent, and the combine plan: counts, regions, token_index, table,
+plan - the resources' tensors). `prepare_fused_head_weights` lays out the shared expert's and the router's weights
+(SeEngine3.upload, RouterStream.upload) from host tensors. The first call plans the head, builds the host model and
+creates the persistent words in the resources (`fused_head/...`); later calls only launch.
+
+Differences from the reference, none in what the kernels compute or in their NoC / fabric traffic:
+- the arena is a program CB, the first CB on every core it spans, so it lands at the L1 CB base on every core and
+  chip; the CBs over its regions bind to a non-owning view of that range, and every arena address a kernel takes is
+  the base plus the region's offset (a constant). No per-call arena tensor, no holes or settling;
+- the persistent words (mailboxes, flags, counters, the reference's global semaphores) are word tensors of the
+  resources; several arguments point inside them, so the program hash carries the resources' serial (one cached
+  program per resources object) instead of their addresses. DRAM tensors are bound as bases (address-only hits);
+- the addresses the reference baked into defines (SE_EW, RT_ENG, RT_MSYNC, RT_PWORD, RT_PART) are common runtime args;
+- fabric connections are main's (`append_fabric_connection_rt_args`); the kernel_lib multicast families use main's
+  `Mcast::attach`; their semaphore ids differ from the reference's;
+- the routing planner's torus tie split (RAP_YT) and the gather's ring ties follow `MoEBlockConfig.tie_rule` and main's
+  fabric (NorthEast); the reference's references for the tests are dumped with `TT_FABRIC_TIE_PARITY=0` to match.
 
 ## Host plan
 
@@ -55,5 +76,8 @@ the files and compares it with the reference's.
   reference's answers for GLM-5.3, K3, K2.7, GLM-5.3-Flash, DSv4.1-Flash at rows 128 .. 2048 a mesh row on 8x4
   (line and torus), 2x4 and a ring of 4, plus fit()'s options, other accumulator counts, TP 2 / 8, one link and
   smaller free L1. Regenerate with `dump_head_plan_golden.py` in the reference environment.
-- `dump_ref_fused_head.py` (reference environment, a Galaxy): saves the head's per-chip inputs and outputs (se, rows,
-  xbuf, route, latent, the routing plan tensors) for the device test, under `$MOE_BLOCK_REFS/fused_head/`.
+- `test_head_program_parity.py` (host only, the mock Galaxy, `MOE_BLOCK_REFS`): `fused_head_programs` (the per-chip
+  program descriptors, not launched) against the reference's, dumped by `dump_head_programs.py` on the same mock:
+  kernels, core ranges, compile-time / runtime / common args (addresses as buffer + offset), defines, CBs.
+- `test_fused_head.py` (a Galaxy, `MOE_BLOCK_REFS`): bit-exact against `dump_ref_fused_head.py`'s cases, and the host
+  cost a call.

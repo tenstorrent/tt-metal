@@ -4,7 +4,7 @@
 """Reference outputs of the fused head (models/demos/moe_block/moe_block.py FusedHead on mstaletovic/moe-trim) for the
 C++ op's bit-exact device test. Run by the lead on a Galaxy in the reference tree's environment (it opens the mesh):
 
-    cd /data/mstaletovic/tt-metal-trimb && python <this tree>/tests/ttnn/unit_tests/operations/experimental/moe_block/\
+    cd /data/mstaletovic/tt-metal-trimb && TT_FABRIC_TIE_PARITY=0 python <this tree>/tests/ttnn/unit_tests/operations/experimental/moe_block/\
 fused_head/dump_ref_fused_head.py [--mesh 8x4] [--fabric FABRIC_2D_TORUS_XY] [--models glm53,k3] [--chunk 5120]
 
 Each case (op "fused_head", case "<model>-<R>x<C>-c<chunk>-uniform-s<seed>"): the head built as MoEBlock builds it
@@ -47,7 +47,7 @@ def x_of(T, H, seed):
     return torch.randn(T, H, generator=g)
 
 
-def dump(mesh, R, C, name, chunk, seed, A, hz):
+def dump(mesh, R, C, name, chunk, seed, A, hz, fabric):
     from models.demos.moe_block.moe_block import MODELS, FusedHead, Geometry, MoEDtypes
 
     model = {"glm53": MODELS["glm53"], "k3": MODELS["kimi_k3"], "k27": MODELS["kimi_k27"]}.get(name) or MODELS[name]
@@ -105,9 +105,21 @@ def dump(mesh, R, C, name, chunk, seed, A, hz):
             tp_wraps=g.tp_wraps,
             sp_wraps=g.sp_wraps,
             layout=dataclasses.asdict(lay) if lay is not None else None,
-            weights="weights_of(model, seed): test_moe_block.random_weights",
+            fabric=fabric,
+            weights="weights.pt: gate, up [Is, H], down [H, Is], latent_down [Hr, H], router_weight [E, H], router_bias [E]",
             x="x_of(chunk, H, seed): torch.randn(chunk, H, Generator(seed + 1)), bfloat16",
         ),
+    )
+    from models.demos.moe_block.moe_block import split_gate_up
+
+    gate, up = split_gate_up(w.shared["gate_up"].float())
+    host = dict(gate=gate, up=up, down=w.shared["down"].float(), router_weight=w.router["weight"].float())
+    host["router_bias"] = w.router["bias"].float()
+    if model.latent_dim:
+        host["latent_down"] = w.latent["down"].float()
+    torch.save(
+        {k: v.contiguous() for k, v in host.items()},
+        hz.case_dir("fused_head", f"{name}-{R}x{C}-c{chunk}-uniform-s{seed}") / "weights.pt",
     )
     for t in outs.values():
         ttnn.deallocate(t)
@@ -129,7 +141,7 @@ def main():
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(R, C))
     try:
         for name in a.models.split(","):
-            dump(mesh, R, C, name, a.chunk, a.seed, a.accumulators, hz)
+            dump(mesh, R, C, name, a.chunk, a.seed, a.accumulators, hz, a.fabric)
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

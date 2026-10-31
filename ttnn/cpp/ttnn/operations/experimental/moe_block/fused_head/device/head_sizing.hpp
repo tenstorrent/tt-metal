@@ -14,10 +14,12 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <tuple>
 #include <string>
 #include <utility>
 #include <variant>
@@ -27,6 +29,7 @@ namespace ttnn::operations::experimental::moe_block::fused_head {
 
 namespace head_math {
 inline int64_t al64(int64_t v) { return (v + 63) / 64 * 64; }
+inline int64_t al16(int64_t v) { return (v + 15) / 16 * 16; }
 inline int64_t ceil_div(int64_t a, int64_t b) { return (a + b - 1) / b; }
 }  // namespace head_math
 
@@ -133,6 +136,29 @@ public:
     std::vector<std::pair<uint32_t, uint32_t>> zone_slots(uint32_t p, uint32_t cx, uint32_t cy, RsDir d) const;
     uint32_t zone_tiles(RsDir d) const;
 
+    // ---- the device build's tables (se_rs.RsPlan) ----
+    struct Arrival {
+        uint32_t entry, slot, threshold;
+    };
+    struct PortUnit {
+        uint32_t entry, block, mask, slot0, slot1;
+        bool pieces;
+    };
+    uint32_t link(uint32_t k) const { return k % nv; }
+    std::optional<uint32_t> up(uint32_t p, RsDir d) const;
+    // per direction (fwd, bwd): [(entry, zone slot, threshold)]
+    std::array<std::vector<Arrival>, 2> arrivals(uint32_t p, uint32_t cx, uint32_t cy) const;
+    std::vector<PortUnit> port_units(uint32_t p, RsDir d) const;
+    std::vector<RsDir> finb_readers(uint32_t p, uint32_t cx, uint32_t cy) const;
+    std::vector<std::pair<uint32_t, uint32_t>> port_cores(uint32_t l) const;  // (cx, cy) of link l, k order
+    std::tuple<uint32_t, uint32_t, uint32_t> fin_map(uint32_t p, uint32_t cx, uint32_t cy) const;
+    uint32_t prefix_mask(uint32_t q, uint32_t h, RsDir d, uint32_t slot) const;
+    uint32_t counts_word(uint32_t cx, uint32_t cy) const;
+    uint32_t finb_off(uint32_t p, uint32_t cx, uint32_t cy, uint32_t e) const;
+    std::vector<uint32_t> pass_widths(uint32_t cx) const;
+    std::vector<std::pair<uint32_t, std::vector<uint32_t>>> pass_bases(uint32_t p, uint32_t cx, uint32_t cy) const;
+    std::vector<uint32_t> compute_args(uint32_t p, uint32_t cx, uint32_t cy) const;
+
 private:
     bool needs_hold(uint32_t p, uint32_t cx, uint32_t cy, uint32_t e) const;
 };
@@ -156,15 +182,39 @@ struct SeEngineArgs {
 struct SeEngineSizing {
     explicit SeEngineSizing(const SeEngineArgs& a);  // throws SizingError / ArenaTooLarge
 
-    uint32_t NCH, KT, HT, NTH, KB, NSG, SPS, S0, S1, NPG, NPD, KBD, NSD, NB, WSLOT, wtb;
-    uint32_t POMAX, PWDMAX, LWMAX = 0, WRING = 0, HSL = 1;
-    std::vector<uint32_t> po;
+    SeEngineArgs args;  // (args.rs: not owned - valid while the caller's RsPlan is)
+    uint32_t GX, GY, MT, CR, rows, H, I, shards;
+    uint32_t NCH, KT, HT, NTH, KB, NSG, SPS, S0, S1, NPG, NGU, NPD, KBD, NSD, NB, WSLOT, wtb;
+    uint32_t POMAX, PWDMAX, PGW, LWMAX = 0, LT = 0, WRING = 0, HSL = 1, XR = 0, PFULL = 0, PBCT = 0;
+    int64_t LATP = 0, xown_t = 0, wown_t = 0, acc_pages = 0;
+    bool xring = false, xfree = false;
+    std::vector<uint32_t> fam0, fam1;  // the x families' owner columns
+    std::vector<uint32_t> po, h0, n0d, lw, l0;
     std::vector<std::vector<uint32_t>> wg, wd;
+    // the router logits on the engine (args.router)
+    uint32_t ETC = 0, RG = 0, KC = 0;
+    bool rtr_zones = false, rtr_latz = false, rtr_overlay = false;
+    Regions rs_sizes;  // the reduce-scatter's regions (se_engine3._rs_regions)
     int64_t arena_bytes = 0;
     Regions off;    // region offsets, arena order
     Regions sizes;  // each region's bytes (overlays share their host's)
+    std::vector<int64_t> seq_ends;  // the sequential regions' bounds (the CB ring check's)
+    // compute kernel groups: columns with the same (gate / up widths, down widths), in first-column order
+    std::vector<std::pair<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>, std::vector<uint32_t>>> groups;
 
     int64_t dram_w_bytes() const { return int64_t(KT * 2 * HT + HT * NTH) * wtb; }
+    int64_t at(const std::string& region) const;  // off[region]
+    bool in_fam0(uint32_t c) const;
+    bool in_fam1(uint32_t c) const;
+    // (owner column, family, index in the family) of x step j
+    std::tuple<uint32_t, uint32_t, uint32_t> owner(uint32_t j) const;
+    // chunk m's local row tile lr -> the global row tile
+    uint32_t grow(uint32_t m, uint32_t lr) const;
+    // (first local row, rows) of core row cy's MT row tiles in owner block b (latent / prep)
+    std::pair<uint32_t, uint32_t> la_rows(uint32_t cy, uint32_t b) const;
+    uint32_t bsize(uint32_t c, uint32_t b) const;
+    int64_t lrdy_bytes() const { return 16 * int64_t(std::max<uint32_t>(4, NCH)); }
+    bool fin_rows() const;  // se_engine3._fin_rows
 };
 
 // ---- router_stream.RouterStream ----

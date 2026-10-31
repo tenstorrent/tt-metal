@@ -7,11 +7,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 
 #include "ttnn/operations/experimental/moe_block/common/moe_block_config.hpp"
@@ -160,6 +163,123 @@ void bind_fused_head(nb::module_& mod) {
         requirements, then head_plan_fit on the mesh's compute grid, fabric payload and the config's DRAM fallback.
         Computed once and kept in the resources. l1_free: free L1 a core the head may take (default the planner's
         host figure).)doc");
+
+    nb::class_<FusedHeadWeights>(
+        mod, "FusedHeadWeights", "The shared expert's and the router's weights in the head's layouts.")
+        .def(
+            nb::init<Tensor, Tensor, Tensor, Tensor>(),
+            nb::arg("w"),
+            nb::arg("w_router"),
+            nb::arg("router_bias"),
+            nb::arg("router_index"))
+        .def_rw("w", &FusedHeadWeights::w)
+        .def_rw("w_router", &FusedHeadWeights::w_router)
+        .def_rw("router_bias", &FusedHeadWeights::router_bias)
+        .def_rw("router_index", &FusedHeadWeights::router_index);
+    nb::class_<FusedHeadOutputs>(mod, "FusedHeadOutputs", "The fused head's outputs (the resources' tensors).")
+        .def_ro("se", &FusedHeadOutputs::se)
+        .def_ro("rows", &FusedHeadOutputs::rows)
+        .def_ro("xbuf", &FusedHeadOutputs::xbuf)
+        .def_ro("route", &FusedHeadOutputs::route)
+        .def_ro("latent", &FusedHeadOutputs::latent)
+        .def_ro("counts", &FusedHeadOutputs::counts)
+        .def_ro("regions", &FusedHeadOutputs::regions)
+        .def_ro("token_index", &FusedHeadOutputs::token_index)
+        .def_ro("table", &FusedHeadOutputs::table)
+        .def_ro("plan", &FusedHeadOutputs::plan);
+
+    ttnn::bind_function<"prepare_fused_head_weights", "ttnn.experimental.moe_block.">(
+        mod,
+        R"doc(
+        The shared expert's and the router's weights in the fused head's layouts (its planned engine), once a layer.
+
+        Args:
+            gate, up: the shared expert's [Is, H] (host, float32 or bfloat16).
+            down: [H, Is].
+            latent_down: a latent model's [Hr, H] (None without).
+            router_weight: [E, H] (E: the router's candidates, num_experts x fold); router_bias: [E].
+
+        Keyword args:
+            resources, dtypes, accumulators, l1_free: as fused_head.
+
+        Returns:
+            FusedHeadWeights (device tensors).
+        )doc",
+        &prepare_fused_head_weights,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::arg("down"),
+        nb::arg("latent_down"),
+        nb::arg("router_weight"),
+        nb::arg("router_bias"),
+        nb::kw_only(),
+        nb::arg("resources"),
+        nb::arg("dtypes"),
+        nb::arg("accumulators"),
+        nb::arg("l1_free") = nb::none());
+
+    ttnn::bind_function<"fused_head", "ttnn.experimental.moe_block.">(
+        mod,
+        R"doc(
+        The MoE block's head as one program a chip: the x all-gather over TP into the shared expert's matmul cores,
+        its down + reduce-scatter, the router (logits, top-K, the owners' joint routing rows), the routing exchange and
+        the combine planner (the combine's plan tensors), the dispatch prep (this chip's owned rows into the dispatch
+        buffer, their route words) and, with a latent, the latent down + all-to-all.
+
+        Args:
+            x: this chip's [1, 1, rows, H / TP] (rows: a mesh row's tokens), bfloat16 TILE, DRAM.
+            weights: prepare_fused_head_weights'.
+
+        Keyword args:
+            resources: the block's MoEBlockResources.
+            dtypes: MoEDtypes (the shared expert's weights / fidelity).
+            accumulators: the combine's accumulator count (the routing planner's instances at most).
+            x_full: the DRAM fallback's gathered x [1, 1, rows, H] (only when the plan took the fallback).
+            l1_free: the free L1 a core the head may take (default the planner's host figure).
+
+        Returns:
+            FusedHeadOutputs: se, rows, xbuf, route, latent, and the combine plan (counts, regions, token_index, table,
+            plan) - the resources' tensors, rewritten each call.
+
+        The plan, the host model and the persistent words are made on the first call and kept in the resources; a
+        repeated call patches only the tensors' addresses.
+        )doc",
+        &fused_head,
+        nb::arg("x"),
+        nb::arg("weights"),
+        nb::kw_only(),
+        nb::arg("resources"),
+        nb::arg("dtypes"),
+        nb::arg("accumulators"),
+        nb::arg("x_full") = nb::none(),
+        nb::arg("l1_free") = nb::none());
+
+    nb::class_<FusedHeadPrograms>(mod, "FusedHeadPrograms", "fused_head_programs' answer (tests).")
+        .def_prop_ro(
+            "programs",
+            [](const FusedHeadPrograms& p) {
+                nb::list out;
+                for (const auto& [c, d] : p.programs) {
+                    out.append(nb::make_tuple(nb::make_tuple(c[0], c[1]), nb::cast(d, nb::rv_policy::copy)));
+                }
+                return out;
+            })
+        .def_ro("addresses", &FusedHeadPrograms::addresses)
+        .def_ro("fabric_starts", &FusedHeadPrograms::fabric_starts);
+    mod.def(
+        "fused_head_programs",
+        &fused_head_programs,
+        nb::arg("x"),
+        nb::arg("weights"),
+        nb::kw_only(),
+        nb::arg("resources"),
+        nb::arg("dtypes"),
+        nb::arg("accumulators"),
+        nb::arg("x_full") = nb::none(),
+        nb::arg("l1_free") = nb::none(),
+        R"doc(
+        The per-chip program descriptors fused_head would launch, without launching (tests: compared with the
+        reference's on a mock mesh).)doc");
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

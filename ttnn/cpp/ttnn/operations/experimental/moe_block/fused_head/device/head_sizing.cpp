@@ -17,9 +17,9 @@ namespace ttnn::operations::experimental::moe_block::fused_head {
 
 namespace head_sizing_detail {
 
+using head_math::al16;
 using head_math::al64;
 using head_math::ceil_div;
-int64_t al16(int64_t v) { return (v + 15) / 16 * 16; }
 int64_t floor_div(int64_t a, int64_t b) {
     int64_t q = a / b;
     return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
@@ -645,11 +645,259 @@ uint32_t RsPlan::zone_tiles(RsDir d) const {
     return m;
 }
 
+std::optional<uint32_t> RsPlan::up(uint32_t p, RsDir d) const {
+    int64_t q = d == RsDir::Fwd ? int64_t(p) - 1 : int64_t(p) + 1;
+    if (kind != RsKind::Line) {
+        return uint32_t(pymod(q, G));
+    }
+    if (q >= 0 && q < G) {
+        return uint32_t(q);
+    }
+    return std::nullopt;
+}
+
+std::array<std::vector<RsPlan::Arrival>, 2> RsPlan::arrivals(uint32_t p, uint32_t cx, uint32_t cy) const {
+    const uint32_t h = half(k(cx, cy));
+    const auto& sc = transport.chips[p];
+    const auto& ents = sc.entries[h];
+    std::array<std::vector<Arrival>, 2> out;
+    for (RsDir d : {RsDir::Fwd, RsDir::Bwd}) {
+        const auto& lst = sc.arrivals.at({h, d});
+        if (lst.empty()) {
+            continue;
+        }
+        const uint32_t u = *up(p, d);
+        std::vector<uint32_t> seq;
+        for (uint32_t b : transport.chips[u].entries[h]) {
+            if (transport.chips[u].roles.at({b, h}).dir == d && count(cx, cy, b) > 0) {
+                seq.push_back(b);
+            }
+        }
+        for (uint32_t slot = 0; slot < lst.size(); ++slot) {
+            const uint32_t b = lst[slot];
+            out[static_cast<int>(d)].push_back(
+                {index_of(ents, b), slot, count(cx, cy, b) > 0 ? index_of(seq, b) + 1 : 0});
+        }
+    }
+    return out;
+}
+
+std::vector<RsPlan::PortUnit> RsPlan::port_units(uint32_t p, RsDir d) const {
+    const auto& sc = transport.chips[p];
+    const auto q = down(p, d);
+    std::vector<PortUnit> out;
+    const auto& ents = sc.entries[0];
+    for (uint32_t e = 0; e < ents.size(); ++e) {
+        const uint32_t b = ents[e];
+        uint32_t mask = 0;
+        for (uint32_t h = 0; h < 2; ++h) {
+            if (role(p, b, h).dir == d) {
+                mask |= 1u << h;
+            }
+        }
+        if (!mask) {
+            continue;
+        }
+        uint32_t slots[2] = {0, 0};
+        for (uint32_t h = 0; h < 2; ++h) {
+            if ((mask >> h) & 1) {
+                slots[h] = index_of(transport.chips[*q].arrivals.at({h, d}), b);
+            }
+        }
+        bool pieces = pm && out.empty();
+        for (uint32_t h = 0; h < 2; ++h) {
+            if ((mask >> h) & 1) {
+                pieces = pieces && role(p, b, h).start;
+            }
+        }
+        out.push_back({e, b, mask, slots[0], slots[1], pieces});
+    }
+    return out;
+}
+
+std::vector<RsDir> RsPlan::finb_readers(uint32_t p, uint32_t cx, uint32_t cy) const {
+    const uint32_t h = half(k(cx, cy));
+    std::vector<RsDir> out;
+    for (RsDir d : {RsDir::Fwd, RsDir::Bwd}) {
+        if (!down(p, d)) {
+            continue;
+        }
+        for (const auto& u : port_units(p, d)) {
+            if (((u.mask >> h) & 1) && count(cx, cy, u.block) > 0) {
+                out.push_back(d);
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>> RsPlan::port_cores(uint32_t l) const {
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    for (uint32_t cy = 0; cy < GY; ++cy) {
+        for (uint32_t cx = 0; cx < GX; ++cx) {
+            if (link(k(cx, cy)) == l) {
+                out.emplace_back(cx, cy);
+            }
+        }
+    }
+    return out;
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t> RsPlan::fin_map(uint32_t p, uint32_t cx, uint32_t cy) const {
+    if (scatter == -1) {
+        return {cy * MT * NB + s[cx], NB, w[cx]};
+    }
+    const auto [r0, nr] = rows_in(cy, p);
+    if (nr == 0) {
+        return {0, NTH, 1};
+    }
+    return {(cy * MT + r0 - p * RB) * NTH + n0[cx], NTH, pn[cx]};
+}
+
+uint32_t RsPlan::prefix_mask(uint32_t q, uint32_t h, RsDir d, uint32_t slot) const {
+    const auto& arr = transport.chips[q].arrivals;
+    auto it = arr.find({h, d});
+    uint32_t m = 0;
+    if (it != arr.end()) {
+        for (uint32_t i = 0; i < slot && i < it->second.size(); ++i) {
+            m |= 1u << it->second[i];
+        }
+    }
+    return m;
+}
+
+uint32_t RsPlan::counts_word(uint32_t cx, uint32_t cy) const {
+    if (P >= 256) {
+        fail("se_rs: a core's sub-block of " + std::to_string(P) + " tiles > 255 (the counts word's bytes)");
+    }
+    if (G <= 4) {
+        uint32_t w_ = 0;
+        for (uint32_t b = 0; b < G; ++b) {
+            w_ += count(cx, cy, b) << (8 * b);
+        }
+        return w_;
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> nz;
+    for (uint32_t b = 0; b < G; ++b) {
+        if (count(cx, cy, b)) {
+            nz.emplace_back(b, count(cx, cy, b));
+        }
+    }
+    if (!(scatter == -2 && nz.size() <= 2)) {
+        fail("se_rs: TP > 4 needs the rows scatter with a core's rows in at most two blocks");
+    }
+    while (nz.size() < 2) {
+        nz.emplace_back(0xFF, 0);
+    }
+    return nz[0].first | nz[0].second << 8 | nz[1].first << 16 | nz[1].second << 24;
+}
+
+uint32_t RsPlan::finb_off(uint32_t p, uint32_t cx, uint32_t cy, uint32_t e) const {
+    const auto& ents = entries(p, half(k(cx, cy)));
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < e; ++i) {
+        n += count(cx, cy, ents[i]);
+    }
+    return n;
+}
+
+std::vector<uint32_t> RsPlan::pass_widths(uint32_t cx) const {
+    std::vector<uint32_t> out;
+    for (const auto& ps : column_passes(0, cx)) {
+        out.push_back(ps.pw);
+    }
+    return out;
+}
+
+std::vector<std::pair<uint32_t, std::vector<uint32_t>>> RsPlan::pass_bases(uint32_t p, uint32_t cx, uint32_t cy) const {
+    std::vector<std::pair<uint32_t, std::vector<uint32_t>>> out;
+    const auto& ents = entries(p, half(k(cx, cy)));
+    const auto hold = hold_offs(p, cx, cy).first;
+    auto at = [&](uint32_t e, uint32_t within) -> uint32_t {
+        auto it = hold.find(e);
+        if (it != hold.end()) {
+            return (it->second + within) | (1u << 31);
+        }
+        return finb_off(p, cx, cy, e) + within;
+    };
+    for (const auto& ps : column_passes(p, cx)) {
+        std::vector<uint32_t> bases;
+        if (scatter == -1) {
+            const uint32_t e = *ps.entry, b = ents[e];
+            const uint32_t off = ps.c0 - b * NB - s[cx];
+            for (uint32_t r = 0; r < MT; ++r) {
+                bases.push_back(at(e, r * w[cx] + off));
+            }
+        } else {
+            for (uint32_t r = 0; r < MT; ++r) {
+                const uint32_t b = (cy * MT + r) / RB;
+                const auto [r0, nr] = rows_in(cy, b);
+                if (pm) {
+                    bases.push_back(at(index_of(ents, b), nr * (ps.c0 - n0[cx]) + (r - r0) * ps.pw));
+                } else {
+                    bases.push_back(at(index_of(ents, b), (r - r0) * pn[cx] + ps.c0 - n0[cx]));
+                }
+            }
+        }
+        out.emplace_back(ps.pw, bases);
+    }
+    return out;
+}
+
+std::vector<uint32_t> RsPlan::compute_args(uint32_t p, uint32_t cx, uint32_t cy) const {
+    const auto o = ops(p, cx, cy);
+    std::vector<uint32_t> out = {uint32_t(o.size())};
+    for (const auto& [kind_, i] : o) {
+        out.push_back(static_cast<uint32_t>(kind_) | (i << 8));
+    }
+    for (const auto& [pw, bases] : pass_bases(p, cx, cy)) {
+        out.push_back(pw);
+        out.insert(out.end(), bases.begin(), bases.end());
+    }
+    const uint32_t h = half(k(cx, cy));
+    const auto& ents = entries(p, h);
+    const auto hold = hold_offs(p, cx, cy).first;
+    const auto arr = arrivals(p, cx, cy);
+    const auto zf = zone_slots(p, cx, cy, RsDir::Fwd), zb = zone_slots(p, cx, cy, RsDir::Bwd);
+    for (uint32_t e = 0; e < ents.size(); ++e) {
+        const uint32_t b = ents[e];
+        const RsDir d = role(p, b, h).dir;
+        std::optional<uint32_t> sf, sb;
+        for (const auto& a : arr[0]) {
+            if (a.entry == e && !sf) {
+                sf = a.slot;
+            }
+        }
+        for (const auto& a : arr[1]) {
+            if (a.entry == e && !sb) {
+                sb = a.slot;
+            }
+        }
+        const uint32_t mode = (sf ? 1 : 0) | (sb ? 2 : 0) | (d == RsDir::Fin ? 4 : 0);
+        auto it = hold.find(e);
+        out.push_back(count(cx, cy, b));
+        out.push_back(mode);
+        out.push_back(sf ? zf[*sf].first : 0);
+        out.push_back(sb ? zb[*sb].first : 0);
+        out.push_back(it != hold.end() ? it->second : 0);
+        out.push_back(finb_off(p, cx, cy, e));
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // SeEngine3 sizing
 
-SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
-    const uint32_t GX = a.GX, GY = a.GY, MT = a.MT, CR = GY * MT;
+SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
+    GX = a.GX;
+    GY = a.GY;
+    MT = a.MT;
+    CR = GY * MT;
+    rows = a.rows;
+    H = a.H;
+    I = a.I;
+    shards = a.shards;
     if (a.rows % (32 * CR) != 0) {
         fail(
             "se_engine3: " + std::to_string(a.rows) + " rows are not whole chunks of CR = GY " + std::to_string(GY) +
@@ -673,8 +921,12 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
     SPS = NSG / a.shards;
     const uint32_t nf = NSG / 2;
     std::tie(S0, S1) = subsets(SPS / 2, GX);
-    auto in_fam0 = [&](uint32_t c) { return c < S0; };
-    auto in_fam1 = [&](uint32_t c) { return c >= GX - std::min(S1, GX); };
+    for (uint32_t c = 0; c < S0; ++c) {
+        fam0.push_back(c);
+    }
+    for (uint32_t c = GX - S1; c < GX; ++c) {
+        fam1.push_back(c);
+    }
     const auto pairs = column_split(HT, GX, 1);
     if (vmin(pairs) < 1) {
         fail(
@@ -682,9 +934,10 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
             " without a gate / up pair");
     }
     po = pairs;
+    h0 = prefix(pairs);
     POMAX = vmax(pairs);
     const uint32_t DT = kDestTiles;
-    const uint32_t PGW = 8 / MT;
+    PGW = 8 / MT;
     const uint32_t pwmax = PGW / 2 * 2;
     NPG = 0;
     for (uint32_t p : pairs) {
@@ -693,8 +946,11 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
     for (uint32_t p : pairs) {
         wg.push_back(split_pad(2 * p, NPG, 2));
     }
+    NGU = NPG;
+    LT = a.latent.value_or(0);
     if (a.latent) {
-        const auto lw = column_split(*a.latent, GX, 1);
+        lw = column_split(*a.latent, GX, 1);
+        l0 = prefix(lw);
         if (vmin(lw) < 1) {
             fail(
                 "se_engine3: the latent's " + std::to_string(*a.latent) + " tiles leave a column of the " +
@@ -708,8 +964,9 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
         }
         NPG += npl;
     }
-    const int64_t LATP = a.latent ? int64_t(NCH > 1 ? a.shards : 1) * MT * LWMAX : 0;
+    LATP = a.latent ? int64_t(NCH > 1 ? a.shards : 1) * MT * LWMAX : 0;
     const auto pnd = column_split(NTH, GX, 1);
+    n0d = prefix(pnd);
     PWDMAX = DT / MT;
     NPD = 0;
     for (uint32_t p : pnd) {
@@ -769,10 +1026,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
         case WeightDtype::Bf4: wtb = 576; break;
         case WeightDtype::Bf16: wtb = 2048; break;
     }
-    auto bsize = [&](uint32_t c, uint32_t b) -> uint32_t {
-        return b < NPG * NSG ? KB * wg[c][b / NSG] : KBD * wd[c][(b - NPG * NSG) / NSD];
-    };
-    int64_t wown_t = 0;
+    wown_t = 0;
     for (uint32_t c = 0; c < GX; ++c) {
         for (uint32_t cy = 0; cy < GY; ++cy) {
             int64_t sum = 0;
@@ -786,11 +1040,16 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
     for (uint32_t c = 0; c < GX; ++c) {
         nown = std::max(nown, (in_fam0(c) ? nf / S0 : 0) + (in_fam1(c) ? nf / S1 : 0));
     }
-    const uint32_t XR = a.xring ? std::min(a.xring, NCH) : NCH;
-    const bool xring = XR < NCH;
-    const bool xfree = xring && a.prep && !a.latent;
-    const int64_t xown_t = int64_t(XR) * nown * MT * KB;
-    const uint32_t PFULL = a.latent ? LWMAX : KB;
+    XR = a.xring ? std::min(a.xring, NCH) : NCH;
+    xring = XR < NCH;
+    xfree = xring && a.prep && !a.latent;
+    xown_t = int64_t(XR) * nown * MT * KB;
+    PFULL = a.latent ? LWMAX : KB;
+    for (uint32_t d = 1; d <= kDestTiles; ++d) {
+        if (PFULL % d == 0) {
+            PBCT = d;
+        }
+    }
 
     // se_engine3._rs_regions: the same at every W ring / h slot count
     Regions rsr0;
@@ -823,6 +1082,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
             rsr0.emplace_back("ffree", 16 * int64_t(std::max<uint32_t>(2, NCH - 1)));
         }
     }
+    rs_sizes = rsr0;
     const std::vector<std::pair<uint32_t, uint32_t>> tries =
         NCH == 1 ? std::vector<std::pair<uint32_t, uint32_t>>{{0, 1}, {5, 1}, {4, 1}, {3, 1}}
                  : std::vector<std::pair<uint32_t, uint32_t>>{{0, 2}, {5, 2}, {5, 1}, {4, 1}, {3, 1}};
@@ -834,7 +1094,7 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
         for (const auto& x : wg) {
             busiest = std::max(busiest, vsum(x));
         }
-        const int64_t acc_pages = int64_t(MT) * busiest;
+        acc_pages = int64_t(MT) * busiest;
         off.clear();
         o = 0;
         Regions rsr = rsr0;
@@ -874,6 +1134,13 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
             set_region(off, k_, o);
             o = al64(o + v);
         }
+        {
+            std::set<int64_t> e{o};
+            for (const auto& [_, v] : off) {
+                e.insert(v);
+            }
+            seq_ends.assign(e.begin(), e.end());
+        }
         if (!ovl.empty()) {
             const int64_t room = region(off, "out") - region(off, "xin");
             const int64_t hold = region(ovl, "hold"), finb = region(ovl, "finb");
@@ -898,9 +1165,9 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
         }
         if (a.router) {
             const auto [ET, KTO] = *a.router;
-            const uint32_t ETC = ceil_div(ET, GX);
+            ETC = ceil_div(ET, GX);
             const uint32_t MTR = MT * NCH;
-            const uint32_t RG = ETC * MTR <= DT ? MTR : (ETC * MT <= DT ? MT : 1);
+            RG = ETC * MTR <= DT ? MTR : (ETC * MT <= DT ? MT : 1);
             if (ETC * RG > DT) {
                 fail("the router logits on the engine: ETC x its row group in DEST");
             }
@@ -923,7 +1190,8 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
             Regions rsz;
             int64_t need = 0;
             const int64_t lim = std::min(o + zgrow, std::max(o, arena_max));
-            for (uint32_t KC : kcs) {
+            for (uint32_t kc : kcs) {
+                KC = kc;
                 rsz = {
                     {"rx", int64_t(2) * KC * MTR * 2048},
                     {"rw", int64_t(2) * ETC * KC * 2048},
@@ -965,9 +1233,69 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) {
     for (const auto& [k_, v] : off) {
         sizes.emplace_back(k_, v < o ? *ends.upper_bound(v) - v : 0);
     }
+    if (a.router) {  // (the router's buffers over a region another chip writes: those writes wait for "router done")
+        const int64_t lo = at("rx"), hi = at("ro") + int64_t(ETC) * MT * NCH * 4096;
+        auto over = [&](const std::string& k, int64_t v) { return v > 0 && at(k) < hi && lo < at(k) + v; };
+        if (rs) {
+            rtr_zones = over("arrf", region(rs_sizes, "arrf")) || over("arrb", region(rs_sizes, "arrb"));
+        }
+        if (a.latent) {
+            rtr_latz = over("latz", int64_t(shards - 1) * MT * LWMAX * 2048 + int64_t(NCH - 1) * LATP * 2048);
+        }
+    }
+    rtr_overlay = rtr_zones || rtr_latz;
     if (o > arena_max) {
         throw ArenaTooLarge("se_engine3: arena too large", o, arena_max);
     }
+    for (uint32_t c = 0; c < GX; ++c) {
+        auto key = std::make_pair(wg[c], wd[c]);
+        auto it = std::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.first == key; });
+        if (it == groups.end()) {
+            groups.push_back({key, {c}});
+        } else {
+            it->second.push_back(c);
+        }
+    }
+}
+
+int64_t SeEngineSizing::at(const std::string& k) const { return region(off, k); }
+bool SeEngineSizing::in_fam0(uint32_t c) const { return std::find(fam0.begin(), fam0.end(), c) != fam0.end(); }
+bool SeEngineSizing::in_fam1(uint32_t c) const { return std::find(fam1.begin(), fam1.end(), c) != fam1.end(); }
+
+std::tuple<uint32_t, uint32_t, uint32_t> SeEngineSizing::owner(uint32_t j) const {
+    const uint32_t f = j & 1;
+    const auto& fam = f ? fam1 : fam0;
+    const uint32_t S = f ? S1 : S0;
+    return {fam[(j / 2) % S], f, (j / 2) % S};
+}
+
+uint32_t SeEngineSizing::grow(uint32_t m, uint32_t lr) const {
+    if (NCH == 1 || shards == 1) {
+        return m * CR + lr;
+    }
+    const uint32_t rbc = CR / shards;
+    return (lr / rbc) * (rows / 32 / shards) + m * rbc + lr % rbc;
+}
+
+std::pair<uint32_t, uint32_t> SeEngineSizing::la_rows(uint32_t cy, uint32_t b) const {
+    const uint32_t RB = CR / shards;
+    uint32_t first = 0, n = 0;
+    for (uint32_t r = 0; r < MT; ++r) {
+        if ((cy * MT + r) / RB == b) {
+            first = n ? first : r;
+            ++n;
+        }
+    }
+    return {n ? first : 0, n};
+}
+
+uint32_t SeEngineSizing::bsize(uint32_t c, uint32_t b) const {
+    return b < NPG * NSG ? KB * wg[c][b / NSG] : KBD * wd[c][(b - NPG * NSG) / NSD];
+}
+
+bool SeEngineSizing::fin_rows() const {
+    const RsPlan* rs = args.rs;
+    return rs != nullptr && rs->scatter == -1 && NCH > 1 && shards > 1 && (CR / shards) % MT != 0;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
