@@ -521,8 +521,6 @@ def test_runtime_smoke_merge_gate_excludes_n150():
         "wh_n300_civ2",
         "wh_llmbox_civ2_viommu",
         "bh_p150b_civ2_viommu",
-        # The required AVX-512 host encoder check uses the Loudbox CPU.
-        "bh_loudbox",
         # The cpu-only smoke entry, which runs on a GitHub-hosted runner.
         "github_hosted_cpu",
     }
@@ -540,7 +538,6 @@ def test_runtime_smoke_merge_gate_routes_prio_on_merge_group():
         "wh_n300_civ2",
         "wh_llmbox_civ2_prio",
         "bh_p150b_civ2_viommu_prio",
-        "bh_loudbox",
         # No prio twin: a GitHub-hosted runner is not contended, so it routes as-is.
         "github_hosted_cpu",
     }

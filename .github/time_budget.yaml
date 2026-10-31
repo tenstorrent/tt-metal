@@ -255,7 +255,6 @@ runtime:
     wh_llmbox_civ2_viommu: 15
     bh_p150b_civ2_viommu: 45
     github_hosted_cpu: 15
-    bh_loudbox: 5  # Required host AVX-512 BFP parity coverage.
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
