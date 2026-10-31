@@ -62,10 +62,32 @@ void AttnResBlockStatsDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         shape[3],
         queries_shape);
+
+    TT_FATAL(
+        args.cluster_axis.has_value() == tensor_args.gathered.has_value(),
+        "AttnResBlockStats gathers across an axis into a caller's buffer: give both or neither");
+    if (tensor_args.gathered.has_value()) {
+        const auto& gathered = *tensor_args.gathered;
+        const auto view = queries.device()->get_view();
+        TT_FATAL(view.is_mesh_2d() && *args.cluster_axis < 2, "AttnResBlockStats gathers across a 2D mesh axis");
+        const uint32_t ring_size = *args.cluster_axis == 0 ? view.num_rows() : view.num_cols();
+        operations::check_tensor(gathered, "AttnResBlockStats", "gathered", {DataType::FLOAT32});
+        TT_FATAL(!gathered.memory_config().is_sharded(), "AttnResBlockStats gathers into an interleaved buffer");
+        TT_FATAL(
+            gathered.padded_shape() == ttnn::Shape({1, num_candidates(tensor_args), shape[2], TILE_WIDTH * ring_size}),
+            "AttnResBlockStats gathers into [1, {}, {}, {}], got {}",
+            num_candidates(tensor_args),
+            shape[2],
+            TILE_WIDTH * ring_size,
+            gathered.padded_shape());
+    }
 }
 
 tt::tt_metal::TensorSpec AttnResBlockStatsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.gathered.has_value()) {
+        return tensor_args.gathered->tensor_spec();
+    }
     const uint32_t num_tokens = tensor_args.sealed.front().logical_shape()[2];
     return tt::tt_metal::TensorSpec(
         ttnn::Shape({1, num_candidates(tensor_args), num_tokens, TILE_WIDTH}),
@@ -74,6 +96,9 @@ tt::tt_metal::TensorSpec AttnResBlockStatsDeviceOperation::compute_output_specs(
 
 Tensor AttnResBlockStatsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.gathered.has_value()) {
+        return *tensor_args.gathered;
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.queries.device());
 }
 
@@ -84,13 +109,21 @@ namespace ttnn::prim {
 Tensor attn_res_block_stats(
     const std::vector<Tensor>& sealed,
     const Tensor& queries,
+    const std::optional<Tensor>& gathered,
+    std::optional<uint32_t> cluster_axis,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::AttnResBlockStatsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};
-    auto tensor_args = OperationType::tensor_args_t{.sealed = sealed, .queries = queries};
+        .output_mem_config = output_mem_config,
+        .compute_kernel_config = compute_kernel_config,
+        .cluster_axis = cluster_axis,
+        .topology = topology,
+        .num_links = num_links};
+    auto tensor_args = OperationType::tensor_args_t{.sealed = sealed, .queries = queries, .gathered = gathered};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

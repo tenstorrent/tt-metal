@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats {
@@ -23,9 +24,20 @@ namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats
 // `queries` is `[1, 1, d, 32]` with column 0 zero and query r in column 1 + r, so one
 // accumulator takes both reductions: the dots land in the query columns and the sum of
 // squares, a matmul of the squared row against a column of ones, in column 0.
+//
+// With `cluster_axis`, the statistics are gathered across that mesh axis in the same
+// program: each rank's land in tile column `rank` of `gathered`, `[1, C, N, 32 * P]`, which is
+// returned, and a rank's rows go to its peers as they are summed rather than after the
+// pass. `gathered` must sit at one address on every chip and stay allocated across calls:
+// peers write into it by address, and a buffer freed and reallocated between two calls can
+// still be in use on a chip that has not caught up.
 ttnn::Tensor attn_res_block_stats(
     const std::vector<ttnn::Tensor>& sealed,
     const ttnn::Tensor& queries,
+    const std::optional<ttnn::Tensor>& gathered,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<ttnn::ccl::Topology> topology,
+    uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 

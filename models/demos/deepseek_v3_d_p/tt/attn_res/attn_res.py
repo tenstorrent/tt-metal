@@ -174,6 +174,7 @@ class TtAttnRes(LightweightModule):
         self.tt_ccl = tt_ccl
         # Sized by the token count, which reaches the op and not the constructor.
         self._exchange_scratch = {}
+        self._gathered_stats_by_shape = {}
         self._exchange_sem = None
         # Creating a global semaphore resets it through a blocking mesh write, and a write
         # inside a trace capture region is fatal. The set has to predate any capture, so it
@@ -355,23 +356,6 @@ class TtAttnRes(LightweightModule):
             topology=self.topology[self.tp_axis],
         )
 
-    def _all_gather(self, tensor):
-        """Every TP rank's `tensor` side by side on the last dim. Does not consume it.
-
-        One collective where `_all_reduce` is two — a reduce-scatter and an all-gather,
-        each a program per chip — for a consumer that sums the partials itself.
-        """
-        barriers, _, gather = self._tp_semaphores()
-        return ttnn.experimental.all_gather_async(
-            tensor,
-            dim=3,
-            cluster_axis=self.tp_axis,
-            multi_device_global_semaphore=gather,
-            barrier_semaphore=barriers[1],
-            num_links=self.num_links,
-            topology=self.topology[self.tp_axis],
-        )
-
     def _collective(self, wide):
         """One all-reduce over the TP axis. Does not consume `wide`.
 
@@ -533,8 +517,9 @@ class TtAttnRes(LightweightModule):
         return self.one_pass_squares and self.stats_dtype == ttnn.float32 and len(queries) < ttnn.TILE_SIZE
 
     def _inter_block_fused(self, sealed, queries, num_closed):
-        """`inter_block` as three dispatches: both statistics in one pass over the sealed set,
-        one collective, and the scoring and the mixture in a second pass.
+        """`inter_block` as two dispatches: both statistics in one pass over the sealed set,
+        gathered across the tensor-parallel axis in the same program, then the scoring and
+        the mixture in a second pass.
 
         Each pass reads every sealed tile once, for all the block's read sites. The composed
         chain reads the set three times and adds a dozen more dispatches — typecasts around
@@ -543,13 +528,18 @@ class TtAttnRes(LightweightModule):
         how prefill runs. The scores are also kept in fp32 the whole way here, where the
         composed chain narrowed the reduced statistics to bf16.
         """
-        local = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
-            sealed, self._score_columns(queries), compute_kernel_config=STATS_FIDELITY
-        )
         # Gathered rather than reduced: the mixture sums the ranks' partials in fp32 dest, so
-        # the collective only has to move them.
-        stats = self._all_gather(local)
-        ttnn.deallocate(local)
+        # the exchange only has to move them — and moves each candidate's rows while the
+        # pass is still reducing the next, rather than after it as a separate collective.
+        stats = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
+            sealed,
+            self._score_columns(queries),
+            gathered=self._gathered_stats(sealed, sealed[0].shape[-2]),
+            cluster_axis=self.tp_axis,
+            topology=self.topology[self.tp_axis],
+            num_links=self.num_links,
+            compute_kernel_config=STATS_FIDELITY,
+        )
 
         outputs = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
             sealed,
@@ -559,7 +549,6 @@ class TtAttnRes(LightweightModule):
             eps=self.eps,
             num_closed_sites=num_closed,
         )
-        ttnn.deallocate(stats)
         return tuple(outputs)
 
     def _dots_by_site(self, v, queries):
@@ -650,6 +639,26 @@ class TtAttnRes(LightweightModule):
             )
             self._exchange_scratch[num_tokens] = stats
         return stats
+
+    def _gathered_stats(self, sealed, num_tokens):
+        """Where a block's statistics are gathered: `[1, C, N, 32 * tp]` float32, rank p's in
+        tile column p.
+
+        Kept for the walk, one per sealed-set depth, for the same reason as the read's
+        exchange buffer: peers write into it by address, so it has to sit at the same
+        address on every chip and must not be freed and reallocated while a chip that has
+        not caught up could still be using that memory.
+        """
+        num_candidates = sum(snapshot.shape[1] for snapshot in sealed)
+        key = (num_candidates, num_tokens)
+        if key not in self._gathered_stats_by_shape:
+            self._gathered_stats_by_shape[key] = ttnn.zeros(
+                [1, num_candidates, num_tokens, ttnn.TILE_SIZE * self.tp_factor],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+        return self._gathered_stats_by_shape[key]
 
     def _mix(self, v, weights):
         """Weighted sum over the candidate axis, one per read site batched on

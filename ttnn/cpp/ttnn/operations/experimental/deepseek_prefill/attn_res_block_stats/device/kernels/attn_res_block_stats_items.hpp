@@ -60,3 +60,20 @@ struct AttnResBlockStatsSplit {
     // Whether this core leads its row: every core where rows are whole.
     static bool leads(uint32_t first) { return chunks_per_row == 1 || unit(first).chunk == 0; }
 };
+
+// Progress counts packed into bit fields of a semaphore word, so one atomic increment
+// advances one count and several counts share a semaphore: a field never carries into the
+// next as long as its count stays below 2^width.
+//
+// A row leader counts, per other run of its row, the candidates that run has handed over;
+// the gather core counts, per candidate, the rows whose sum is parked.
+struct AttnResProgressFields {
+    uint32_t width;  // bits per field
+
+    constexpr uint32_t per_word() const { return 32 / width; }
+    constexpr uint32_t word(uint32_t field) const { return field / per_word(); }
+    constexpr uint32_t increment(uint32_t field) const { return 1u << (width * (field % per_word())); }
+    constexpr uint32_t count(uint32_t value, uint32_t field) const {
+        return (value >> (width * (field % per_word()))) & ((1u << width) - 1);
+    }
+};
