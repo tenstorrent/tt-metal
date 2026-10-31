@@ -19,6 +19,13 @@ OPTIMAL_FLAG = "QWEN38_MM2_OPTIMAL"
 PLEKV_FLAG = "QWEN38_MM2_PLEKV"  # default "1": the PLE key+value merged linear (edge_trim ple_kv) through this program
 # (K, N) shapes whose readers sit on the DRAM banks' optimal NOC0 workers when QWEN38_MM2_OPTIMAL is "1" (the default)
 OPTIMAL_SHAPES = frozenset({(2560, 2304)})  # the QSA merged projection
+BALANCE_FLAG = (
+    "QWEN38_MM2_BALANCE"  # default "1": the K blocks of a column spread over all banks (equal bytes per bank)
+)
+# (K, N) shapes laid out balanced while QWEN38_MM2_BALANCE is "1" (the default; the other shapes already have equal bytes per bank)
+BALANCE_SHAPES = frozenset(
+    {(2560, 2112)}
+)  # GDN in-proj: gate_up gains nothing (kernel fixed cost), the others are even
 MAX_PACKET_BYTES = 16384
 _WORKERS: dict = {}
 
@@ -26,6 +33,10 @@ _WORKERS: dict = {}
 def enabled() -> bool:
     # default on: bitwise to the stock DRAM-sharded program; e2e A/B on the 1x8 line 16.28/16.54 -> 15.76/15.75 ms/token
     return os.environ.get(FLAG, "1") == "1"
+
+
+def balance_enabled(k: int | None = None, n: int | None = None) -> bool:
+    return os.environ.get(BALANCE_FLAG, "1") == "1" and (k is None or (k, n) in BALANCE_SHAPES)
 
 
 def plekv_enabled() -> bool:
@@ -157,12 +168,86 @@ def column_groups(n: int, nb: int, cols: int, banks: int = BANKS):
     return m1.column_groups(n, nb, banks, cols)
 
 
-def relayout(w: torch.Tensor, nb: int, cols: int, banks: int = BANKS) -> torch.Tensor:
+def balance_plan(k: int, n: int, nb: int, cols: int, blk: int, banks: int = BANKS):
+    """Balanced placement: ``(units, tiles_per_bank, home)`` (``home[g]`` = the bank next to which group ``g``'s reader sits); ``units[g][j]`` = ``(bank, first tile in the bank shard)`` of K block ``j`` of
+    core group ``g`` (blk rows x ncols tiles, K row by K row).  Whole groups go to the banks first (the reader sits next to its home bank); then the last blocks of the groups of the fullest bank move to the emptiest bank while that lowers the fullest bank.
+    """
+    kt = k // TILE
+    groups = column_groups(n, nb, cols, banks)
+    nblk = kt // blk
+    size = [blk * g[2] for g in groups]
+    load = [0] * banks
+    home = [0] * len(groups)
+    for g in sorted(
+        range(len(groups)), key=lambda g: (-size[g], g)
+    ):  # whole groups, largest first, to the emptiest bank
+        home[g] = min(range(banks), key=lambda x: (load[x], x))
+        load[home[g]] += size[g] * nblk
+    bank_of = [[home[g]] * nblk for g in range(len(groups))]
+    moved = [0] * len(groups)
+    while True:
+        hi = max(range(banks), key=lambda x: (load[x], -x))
+        lo = min(range(banks), key=lambda x: (load[x], x))
+        cand = [
+            g
+            for g in range(len(groups))
+            if moved[g] < nblk and bank_of[g][nblk - 1 - moved[g]] == hi and load[lo] + size[g] < load[hi]
+        ]
+        if not cand:
+            break
+        g = min(cand, key=lambda g: (moved[g], -size[g]))
+        bank_of[g][nblk - 1 - moved[g]] = lo
+        moved[g] += 1
+        load[hi] -= size[g]
+        load[lo] += size[g]
+    fill = [0] * banks
+    units = [[None] * nblk for _ in groups]
+    for j in range(nblk):
+        for g in range(len(groups)):
+            b = bank_of[g][j]
+            units[g][j] = (b, fill[b])
+            fill[b] += size[g]
+    return units, max(fill), home
+
+
+def relayout_balanced(w: torch.Tensor, nb: int, cols: int, blk: int, banks: int = BANKS) -> torch.Tensor:
+    k, n = w.shape
+    kt = k // TILE
+    units, tpb, _home = balance_plan(k, n, nb, cols, blk, banks)
+    wp = torch.zeros(k, banks * nb * TILE, dtype=w.dtype)
+    wp[:, :n] = w
+    tiles = wp.reshape(kt, TILE, banks * nb, TILE).permute(2, 0, 1, 3)  # [col, k, 32, 32]
+    out = torch.zeros(tpb, banks, TILE, TILE, dtype=w.dtype)
+    for g, (b0, c0, ncols, _first) in enumerate(column_groups(n, nb, cols, banks)):
+        seg = tiles[b0 * nb + c0 : b0 * nb + c0 + ncols].permute(1, 0, 2, 3)  # [k, j, 32, 32]
+        for j, (b, off) in enumerate(units[g]):
+            out[off : off + blk * ncols, b] = seg[j * blk : (j + 1) * blk].reshape(blk * ncols, TILE, TILE)
+    return out.permute(0, 2, 1, 3).reshape(tpb * TILE, banks * TILE)
+
+
+def unlayout_balanced(
+    r: torch.Tensor, k: int, n: int, nb: int, cols: int, blk: int, banks: int = BANKS
+) -> torch.Tensor:
+    kt = k // TILE
+    units, tpb, _home = balance_plan(k, n, nb, cols, blk, banks)
+    t = r.reshape(tpb, TILE, banks, TILE).permute(0, 2, 1, 3)  # [tile, bank, 32, 32]
+    wp = torch.zeros(banks * nb, kt, TILE, TILE, dtype=r.dtype)
+    for g, (b0, c0, ncols, _first) in enumerate(column_groups(n, nb, cols, banks)):
+        seg = torch.stack(
+            [t[off : off + blk * ncols, b].reshape(blk, ncols, TILE, TILE) for b, off in units[g]]
+        ).reshape(kt, ncols, TILE, TILE)
+        wp[b0 * nb + c0 : b0 * nb + c0 + ncols] = seg.permute(1, 0, 2, 3)
+    return wp.permute(1, 2, 0, 3).reshape(k, banks * nb * TILE)[:, :n]
+
+
+def relayout(w: torch.Tensor, nb: int, cols: int, banks: int = BANKS, blk: int | None = None) -> torch.Tensor:
     """A weight ``[K, N]`` (N <= banks * nb * 32, zero padded) -> ``[T * 32, banks * 32]`` with T = (K / 32) * nb: bank b's shard column
     holds, core group after core group (m1.column_groups), the group's tiles K row by K row (``ncols`` adjacent tile columns per row):
     one core's whole weight is ONE contiguous byte range of its bank's shard (offset = first column in the bank * K tiles * tile bytes).
     """
     k, n = w.shape
+    if blk is not None and balance_enabled(k, n):
+        return relayout_balanced(w, nb, cols, blk, banks)
     kt = k // TILE
     wp = torch.zeros(k, banks * nb * TILE, dtype=w.dtype)
     wp[:, :n] = w
@@ -174,8 +259,12 @@ def relayout(w: torch.Tensor, nb: int, cols: int, banks: int = BANKS) -> torch.T
     return out.permute(0, 2, 1, 3).reshape(kt * nb * TILE, banks * TILE)
 
 
-def unlayout(r: torch.Tensor, k: int, n: int, nb: int, cols: int, banks: int = BANKS) -> torch.Tensor:
+def unlayout(
+    r: torch.Tensor, k: int, n: int, nb: int, cols: int, banks: int = BANKS, blk: int | None = None
+) -> torch.Tensor:
     """The inverse of ``relayout`` (the real columns; the padding is dropped)."""
+    if blk is not None and balance_enabled(k, n):
+        return unlayout_balanced(r, k, n, nb, cols, blk, banks)
     kt = k // TILE
     t = r.reshape(kt * nb, TILE, banks, TILE).permute(0, 2, 1, 3)  # [tile, bank, 32, 32]
     wp = torch.zeros(banks * nb, kt, TILE, TILE, dtype=r.dtype)
@@ -190,7 +279,7 @@ def cache_name(base: str, k: int, n: int, nb: int, cols: int) -> str:
     return f"{base}_mm2_k{k}_n{n}_nb{nb}_c{cols}"
 
 
-def to_device(mesh, r: torch.Tensor, dtype, nb: int, kt: int, cache_file_name=None):
+def to_device(mesh, r: torch.Tensor, dtype, nb: int, kt: int, cache_file_name=None):  # nb * kt = tiles per bank
     """The re-laid host tensor ``[T*32, 8*32]`` -> one DRAM width-sharded tensor (tile column per bank)."""
     return ttnn.as_tensor(
         r.reshape(1, 1, *r.shape),
@@ -202,10 +291,11 @@ def to_device(mesh, r: torch.Tensor, dtype, nb: int, kt: int, cache_file_name=No
     )
 
 
-def from_stock(mesh, weight, k: int, n: int, nb: int, cols: int, cache_file_name=None):
+def from_stock(mesh, weight, k: int, n: int, nb: int, cols: int, cache_file_name=None, blk: int | None = None):
     """Re-lay a stock DRAM-sharded weight (its decoded values; BFP8 -> bf16 -> BFP8 is exact for decoded values) into the x60 layout."""
     w = ttnn.to_torch(weight).reshape(-1, weight.shape[-1])[:k, :n].to(torch.bfloat16)
-    return to_device(mesh, relayout(w, nb, cols), weight.dtype, nb, k // TILE, cache_file_name)
+    r = relayout(w, nb, cols, blk=blk)
+    return to_device(mesh, r, weight.dtype, r.shape[0] // TILE, 1, cache_file_name)
 
 
 # ----------------------------------------------------------------------------------------------------------- the program
@@ -342,6 +432,8 @@ def mm_stream2_program(
         raise ValueError(f"mm_stream2 needs the weight sharded one tile column per DRAM bank 0..7, got {shard_cores}")
     groups = column_groups(n, nb, cols)
     count = len(groups)
+    balance = balance_enabled(k, n)
+    units, _tpb, home = balance_plan(k, n, nb, cols, blk) if balance else (None, 0, None)
     act_cores = [
         c
         for r in act.memory_config().shard_spec.grid.ranges()
@@ -358,7 +450,8 @@ def mm_stream2_program(
             for c in placement.rectangle_cores((r.start.x, r.start.y, r.end.x, r.end.y))
         }
     live = set(map(tuple, exclude)) | out_cores | set(map(tuple, act_cores))
-    assign, vcs, hub_cc, merged, ranges = _plan(mesh, groups, act_cores, live, place)
+    plan_groups = [(home[i], *g[1:]) for i, g in enumerate(groups)] if balance else groups
+    assign, vcs, hub_cc, merged, ranges = _plan(mesh, plan_groups, act_cores, live, place)
     cores_used = {(c.x, c.y) for c in assign.values()} | {(hub_cc.x, hub_cc.y)}
     if cores_used & live:
         raise RuntimeError(f"mm_stream2 cores overlap live cores: {sorted(cores_used & live)}")
@@ -402,6 +495,7 @@ def mm_stream2_program(
         ("shards", shards),
         ("shard_tiles", shard_tiles),
         ("w_tile_bytes", tile_bytes),
+        ("balance", int(balance)),
     ]
     shard_xy = []
     for c in out_shard_cores:
@@ -450,6 +544,8 @@ def mm_stream2_program(
             ("page_tiles", page_tiles(block_tiles, tile_bytes)),
         ]
         rt = [(assign[i], [weight.buffer_address(), groups[i][0], groups[i][1] * kt * tile_bytes, vcs[i]]) for i in idx]
+        if balance:
+            rt = [(c, a + [v for b_, off in units[i] for v in (b_, off * tile_bytes)]) for (c, a), i in zip(rt, idx)]
         kernels.append(fp.reader_kernel(KERNELS["reader"], cs, [], rt, named=rnamed))
     ranges_args = [len(ranges), count]
     for r, nn in ranges:
@@ -569,7 +665,7 @@ def admits(act, weight, memory_config) -> bool:
     return (int(weight.shape[-2]), int(weight.shape[-1])) in SHAPES and int(act.shape[-1]) == int(weight.shape[-2])
 
 
-def relaid_weight(mesh, weight, k, n, cols):
+def relaid_weight(mesh, weight, k, n, cols, blk=None):
     """The weight re-laid for ``mm_stream2`` (built once per weight tensor, at its first, eager call; per device: the shards differ)."""
     hit = _RELAID.get(id(weight))
     if hit is not None and hit[0] is weight:
@@ -579,7 +675,8 @@ def relaid_weight(mesh, weight, k, n, cols):
     parts = []
     for t in ttnn.get_device_tensors(weight):
         w = ttnn.to_torch(t).reshape(-1, t.shape[-1])[:k, :n].to(torch.bfloat16)
-        parts.append(relayout(w, nb, cols))
+        parts.append(relayout(w, nb, cols, blk=blk))
+    kt_nb = parts[0].shape[0] // TILE  # tiles per bank
     stacked = torch.stack(parts).unsqueeze(0) if len(parts) > 1 else parts[0].reshape(1, 1, *parts[0].shape)
     if len(parts) > 1:
         mapper = ttnn.ShardTensor2dMesh(mesh, tuple(mesh.shape), dims=(None, 1))
@@ -589,7 +686,7 @@ def relaid_weight(mesh, weight, k, n, cols):
             layout=ttnn.TILE_LAYOUT,
             dtype=weight.dtype,
             mesh_mapper=mapper,
-            memory_config=weight_memory_config(BANKS, kt * nb),
+            memory_config=weight_memory_config(BANKS, kt_nb),
         )
     else:
         new = ttnn.from_torch(
@@ -597,7 +694,7 @@ def relaid_weight(mesh, weight, k, n, cols):
             device=mesh,
             layout=ttnn.TILE_LAYOUT,
             dtype=weight.dtype,
-            memory_config=weight_memory_config(BANKS, kt * nb),
+            memory_config=weight_memory_config(BANKS, kt_nb),
         )
     _RELAID[id(weight)] = (weight, new)
     return new
@@ -623,7 +720,7 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
     k, n = int(weight.shape[-2]), int(weight.shape[-1])
     key = (id(mesh), k, n, weight.dtype)
     if key not in _OUT:
-        relaid_weight(mesh, weight, k, n, SHAPES[(k, n)][0])
+        relaid_weight(mesh, weight, k, n, SHAPES[(k, n)][0], SHAPES[(k, n)][1])
         result = stock()
         _OUT[key] = (tuple(int(v) for v in result.shape), result.memory_config(), result.tensor_topology())
         STOCK_CALLS[(k, n)] = STOCK_CALLS.get((k, n), 0) + 1
@@ -633,7 +730,7 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
         hit is None or hit[0] is not weight
     ):  # first call of THIS weight: eager warmup builds its re-laid copy and runs the stock op
         cols, blk, place = SHAPES[(k, n)]
-        relaid_weight(mesh, weight, k, n, cols)
+        relaid_weight(mesh, weight, k, n, cols, blk)
         return stock()
     shape, out_cfg, topology = _OUT[key]
     from .. import moe_experts

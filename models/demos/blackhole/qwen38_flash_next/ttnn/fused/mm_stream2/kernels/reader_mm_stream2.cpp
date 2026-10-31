@@ -32,7 +32,10 @@ void kernel_main() {
 
     CircularBuffer w(cb_w);
     const uint32_t base = w.get_write_ptr();
-    const uint64_t bank_base = get_noc_addr_from_bank_id<true>(bank, 0);
+    // QWEN38_MM2_BALANCE: the K blocks of this core's columns sit in several banks; args 4 + 2b, 5 + 2b = block b's
+    // bank, byte offset
+    constexpr bool balance = get_named_compile_time_arg_val("balance") != 0;
+    uint64_t bank_base = get_noc_addr_from_bank_id<true>(bank, 0);
     noc_async_read_one_packet_set_state<true>(bank_base, page_bytes, vc);
     uint32_t src = w_addr + offset;
     FUSED_ZONE("fz_mm_r");
@@ -41,6 +44,11 @@ void kernel_main() {
     w.reserve_back(block_tiles * (in_flight - 1));
 #endif
     for (uint32_t b = 0; b < blocks; ++b) {
+        if constexpr (balance) {
+            bank_base = get_noc_addr_from_bank_id<true>(get_arg_val<uint32_t>(4 + 2 * b), 0);
+            noc_async_read_one_packet_set_state<true>(bank_base, page_bytes, vc);
+            src = w_addr + get_arg_val<uint32_t>(5 + 2 * b);
+        }
         noc_async_read_set_trid(trid_issue);
         uint32_t dst = base + slot * block_bytes;
         for (uint32_t p = 0; p < pages; ++p) {

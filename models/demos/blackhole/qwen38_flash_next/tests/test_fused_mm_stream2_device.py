@@ -98,9 +98,11 @@ def sentinel_run(device, act, weight2, spec, nb, exclude):
 def check(device, op, weight, spec, seeds, act_cfg, prog, ccfg, nb, tag):
     k, n = spec["k"], spec["n"]
     exclude = placement.reserved_cores(device)
-    w2 = m2.from_stock(device, weight, k, n, nb, spec["cols"])
+    w2 = m2.from_stock(device, weight, k, n, nb, spec["cols"], blk=spec["blk"])
     # host + device round trip: the re-laid tensor decodes to the stock tensor's values
-    back = m2.unlayout(ttnn.to_torch(w2).reshape(-1, 8 * 32).to(torch.bfloat16), k, n, nb, spec["cols"])
+    back = m2.unlayout(
+        ttnn.to_torch(w2).reshape(-1, 8 * 32).to(torch.bfloat16), k, n, nb, spec["cols"], blk=spec["blk"]
+    )
     orig = ttnn.to_torch(weight).reshape(-1, weight.shape[-1])[:k, :n].to(torch.bfloat16)
     assert torch.equal(
         back.view(torch.int16), orig.view(torch.int16)
@@ -205,7 +207,7 @@ def test_dispatch_ablation(mesh_device):
         device=device,
         memory_config=wcfg,
     )
-    w2 = m2.from_stock(device, weight, spec["k"], spec["n"], nb, spec["cols"])
+    w2 = m2.from_stock(device, weight, spec["k"], spec["n"], nb, spec["cols"], blk=spec["blk"])
     act = fresh_act(device, act_cfg, spec["k"], 0)
     exclude = placement.reserved_cores(device)
     for abl in ("empty", "empty,nosem", "empty,cbs="):
