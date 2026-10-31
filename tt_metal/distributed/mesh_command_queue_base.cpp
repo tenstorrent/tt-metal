@@ -135,6 +135,7 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     uint32_t device_y = 0;
 
     std::vector<uint32_t> shard_data = std::vector<uint32_t>(total_write_size_per_shard / sizeof(uint32_t), 0);
+    this->prepare_shard_reads();
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
             std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
@@ -345,19 +346,60 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     std::vector<MemoryPin> memory_pins) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+
+    // Same as enqueue_write_shard_to_sub_grid: the graph-capture hook is per-thread, and the shard
+    // reads below run on dispatch_thread_pool_ workers, so check it on the calling thread.
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(buffer.get())) {
+        return;
+    }
+
+    // A sharded read issues a command sequence per core; an interleaved one issues too little to pay for the workers.
+    const bool fan_out = is_sharded(buffer->get_reference_buffer()->buffer_layout());
     bool has_pinned_memory = false;
-    for (const auto& shard_data_transfer : shard_data_transfers) {
+    std::vector<uint32_t> local_shards;
+    local_shards.reserve(shard_data_transfers.size());
+    std::vector<uint32_t> device_ids;
+    for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
+        const auto& shard_data_transfer = shard_data_transfers[shard_idx];
         if (mesh_device_->impl().is_local(shard_data_transfer.shard_coord())) {
-            auto pinned_memory = experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer);
-            has_pinned_memory = has_pinned_memory || pinned_memory != nullptr;
-            this->read_shard_from_device(
-                *buffer,
-                shard_data_transfer.shard_coord(),
-                shard_data_transfer.host_data(),
-                pinned_memory,
-                shard_data_transfer.region(),
-                num_txns_per_device);
+            has_pinned_memory =
+                has_pinned_memory || experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer) != nullptr;
+            local_shards.push_back(static_cast<uint32_t>(shard_idx));
+            if (fan_out) {
+                device_ids.push_back(mesh_device_->impl().get_device(shard_data_transfer.shard_coord())->id());
+            }
+        }
+    }
+    if (!local_shards.empty()) {
+        this->prepare_shard_reads();
+    }
+
+    const auto read_shard = [this, &shard_data_transfers, &buffer](
+                                uint32_t shard_idx, std::unordered_map<IDevice*, uint32_t>& num_txns) {
+        const auto& shard_data_transfer = shard_data_transfers[shard_idx];
+        this->read_shard_from_device(
+            *buffer,
+            shard_data_transfer.shard_coord(),
+            shard_data_transfer.host_data(),
+            experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer),
+            shard_data_transfer.region(),
+            num_txns);
+    };
+    std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+    if (fan_out) {
+        // One count per call, so that the workers don't share a map.
+        std::vector<std::unordered_map<IDevice*, uint32_t>> num_txns_per_call(local_shards.size());
+        dispatch_thread_pool_->parallel_for(device_ids, [&read_shard, &local_shards, &num_txns_per_call](size_t i) {
+            read_shard(local_shards[i], num_txns_per_call[i]);
+        });
+        for (const auto& num_txns : num_txns_per_call) {
+            for (const auto& [device, count] : num_txns) {
+                num_txns_per_device[device] += count;
+            }
+        }
+    } else {
+        for (uint32_t shard_idx : local_shards) {
+            read_shard(shard_idx, num_txns_per_device);
         }
     }
     this->submit_memcpy_request(num_txns_per_device, blocking, std::move(memory_pins));

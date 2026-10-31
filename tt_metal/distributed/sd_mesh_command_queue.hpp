@@ -32,6 +32,7 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void prepare_shard_reads() override;
     void submit_memcpy_request(
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         bool blocking,

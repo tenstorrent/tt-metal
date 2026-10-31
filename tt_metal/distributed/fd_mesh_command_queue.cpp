@@ -876,8 +876,6 @@ void FDMeshCommandQueue::read_shard_from_device(
 
     auto* device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    // Reading from device would clobber prefetcher cache, so reset it now
-    this->reset_prefetcher_cache_manager();
 
     if (is_sharded(shard_view->buffer_layout())) {
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
@@ -1846,6 +1844,9 @@ std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t work
 void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
 
 void FDMeshCommandQueue::invalidate_prefetcher_cache_after_pinned_write() { this->reset_prefetcher_cache_manager(); }
+
+// Reading from device would clobber prefetcher cache
+void FDMeshCommandQueue::prepare_shard_reads() { this->reset_prefetcher_cache_manager(); }
 
 int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
     return this->prefetcher_cache_manager_->get_cache_sizeB();
