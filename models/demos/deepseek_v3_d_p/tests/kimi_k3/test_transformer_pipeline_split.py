@@ -161,7 +161,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
     assert rank1.inbound_planes == 1 + BOUNDARY // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
     slabs = {
-        name: attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+        name: attach_kda_states(mesh_device, model, sp_axis=sp_axis, tp_axis=tp_axis)
         for name, model in (("rank0", rank0), ("rank1", rank1))
     }
     # A KV cache per rank: `schedule.kv_slot` is rank-local, so rank 1's MLA layers (15, 19, 23)
