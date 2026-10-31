@@ -7,6 +7,7 @@
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -87,19 +88,24 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
-
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
+
+    // Each page is read from src into the CB and written from the CB to dst, so its CB slot must keep the
+    // same alignment as the src/dst pages (64 B for DRAM on Blackhole), not just the L1 alignment.
+    const uint32_t page_alignment =
+        std::max({tt::tt_metal::hal::get_l1_alignment(), src_buffer->alignment(), dst_buffer->alignment()});
+
+    const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
+        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, page_alignment);
 
     ProgramDescriptor desc;
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     const uint32_t cb_index = 0;
-    // Must round the same way as size_per_l1_bank below, or a 16-mod-32 page_size overruns the CB.
-    const uint32_t aligned_page_size = tt::align(page_size, tt::tt_metal::hal::get_l1_alignment());
+    // Must round the same way as size_per_l1_bank above, or a 16-mod-32 page_size overruns the CB.
+    const uint32_t aligned_page_size = tt::align(page_size, page_alignment);
     desc.cbs.push_back(CBDescriptor{
         .total_size = size_per_l1_bank,
         .core_ranges = all_cores,
