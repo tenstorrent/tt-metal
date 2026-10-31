@@ -1,0 +1,14 @@
+{
+  "head": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+    "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "a44150fbcf5a11d838b6adbf7da54347f6d7c3d9838bab614b9017b7a6b46507",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "483cdcfd120bc0521993b99519cfdca0ce4cbc657d9d3e57740ee2ad58f3b5eb",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "4e81a7bdb5e52dc07db3a623bb8b58d9c9e552621f1ab5e3f4e52a927763fbba",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "126983147a9043d8c14109300d1f27e84284998f912ee7f1708042ef464bd2e9",
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": "0abdc4374e699ae20ce26dc43d5f2d9078b0ecb41698aa2d7a0d13a743180699",
+    "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "7d3f4d7c71ff30f3dcac67ba8d1b47737f80e46f06efd235a4cdf6bfe43a5372",
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd"
+  }
+}

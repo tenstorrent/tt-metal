@@ -1,0 +1,20 @@
+{
+  "environment": {
+    "TT_MODEL_BRINGUP_ROOT": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.22",
+    "TT_AUTODEBUG_ROOT": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-autodebug/0.1.8",
+    "setup": "BRINGUP_EXPORTS=$(python_env/bin/python \"$TT_MODEL_BRINGUP_ROOT/scripts/environment.py\") && eval \"$BRINGUP_EXPORTS\""
+  },
+  "measurement": "TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config <config-path> --id <config-id>",
+  "default_acceptance": "TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --id selected_default --acceptance",
+  "selected_batches": [
+    "--id selected_b32 --batch 32 --acceptance",
+    "--id selected_b16 --batch 16",
+    "--id selected_b8 --batch 8"
+  ],
+  "tracked_state": "TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --id selected_state_b<B> --batch <B> --state (B=1,32)",
+  "smoke": "TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config <config-path> --id <smoke-id> --smoke",
+  "report": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.finalize_datatype_evidence",
+  "hardware": "Local four Blackhole p300c ASICs, TP4 Ring mesh1x4",
+  "serialization": "All hardware jobs sequential; inspection-only AutoDebug/review overlap no hardware.",
+  "final_default_refresh": "TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --id selected_default"
+}

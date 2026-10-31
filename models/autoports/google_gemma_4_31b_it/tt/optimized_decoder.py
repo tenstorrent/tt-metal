@@ -278,7 +278,11 @@ class OptimizedDecoder(LightweightModule):
                     if self.prefill_l1 and (name.startswith("mlp.") or name == "self_attn.o_proj")
                     else ttnn.DRAM_MEMORY_CONFIG
                 ),
-                dtype=ttnn.bfloat8_b if name in ("mlp.gate_proj", "mlp.up_proj") else ttnn.bfloat16,
+                dtype=(
+                    getattr(self, "prefill_activation_dtype", ttnn.bfloat8_b)
+                    if name in ("mlp.gate_proj", "mlp.up_proj")
+                    else getattr(self, "residual_dtype", ttnn.bfloat16)
+                ),
             )
             if name in self.output_padding:
                 out = ttnn.slice(out, [0] * len(out.shape), [*tuple(out.shape)[:-1], self.hidden])
@@ -306,7 +310,7 @@ class OptimizedDecoder(LightweightModule):
                 program_config=config,
                 compute_kernel_config=kernel,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
+                dtype=getattr(self, "residual_dtype", ttnn.bfloat16),
             )
         else:
             role = self.geometry[name]
@@ -323,7 +327,7 @@ class OptimizedDecoder(LightweightModule):
                 program_config=config,
                 compute_kernel_config=kernel,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
+                dtype=getattr(self, "residual_dtype", ttnn.bfloat16),
             )
         if name in self.output_padding:
             out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)

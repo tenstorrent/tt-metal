@@ -16,11 +16,14 @@ import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 
 from .multichip_decoder import MultichipDecoder
+from .precision import POLICIES, load_precision
 from .weights import HF_MODEL, HF_REVISION, PinnedWeights
 
 
 class Gemma4Model:
-    def __init__(self, mesh_device, *, layer_indices=None, head_mode="dram"):
+    def __init__(self, mesh_device, *, layer_indices=None, head_mode="dram", precision_config=None):
+        self.precision_config = load_precision(precision_config)
+        policy = self.precision_config
         self.mesh = mesh_device
         self.head_mode = head_mode
         self.config = AutoConfig.from_pretrained(HF_MODEL, revision=HF_REVISION).text_config
@@ -40,6 +43,8 @@ class Gemma4Model:
         self.layers = []
         for index in self.layer_indices:
             print("LOAD_LAYER", index, flush=True)
+            groups = dict(policy["weight_groups"])
+            groups.update(policy["layer_exceptions"].get(str(index), {}))
             self.layers.append(
                 MultichipDecoder.from_state_dict(
                     loader.layer(index),
@@ -47,6 +52,15 @@ class Gemma4Model:
                     layer_idx=index,
                     mesh_device=mesh_device,
                     decode_gather_buffers=self.gather_pool,
+                    precision=groups["mlp"],
+                    attention_precision=groups["attention"],
+                    down_precision=groups["down"],
+                    cache_dtype=getattr(ttnn, policy["kv_cache_dtype"]),
+                    residual_dtype=getattr(ttnn, policy["residual_dtype"]),
+                    norm_dtype=getattr(ttnn, policy["norm_dtype"]),
+                    decode_ccl_dtype=getattr(ttnn, policy["ccl_dtype"]["decode"]),
+                    activation_dtype=getattr(ttnn, policy["activation_dtype"]),
+                    prefill_ccl_bfp8=policy["ccl_dtype"]["prefill"] == "bfloat8_b",
                     sliding_cache_tokens=2048 if c.layer_types[index] == "sliding_attention" else None,
                 )
             )
@@ -56,9 +70,13 @@ class Gemma4Model:
         embedding = terminal[names[0]]
         # Lookup shards hidden width; LM head shards vocabulary. They represent the
         # same HF tied weight but need distinct physical orientations and layouts.
-        self.embedding = self.upload(embedding, layout=ttnn.ROW_MAJOR_LAYOUT, shard=1)
+        self.embedding = self.upload(
+            embedding, dtype=getattr(ttnn, policy["embedding_dtype"]), layout=ttnn.ROW_MAJOR_LAYOUT, shard=1
+        )
         record_memory("embedding")
-        self.lm_head = self.upload(embedding.T.contiguous(), dtype=ttnn.bfloat8_b, shard=1)
+        self.lm_head = self.upload(
+            embedding.T.contiguous(), dtype=getattr(ttnn, POLICIES[policy["weight_groups"]["lm_head"]][0]), shard=1
+        )
         if head_mode == "dram":
             full_head = self.lm_head
             dram = mesh_device.dram_grid_size()
@@ -76,11 +94,13 @@ class Gemma4Model:
         elif head_mode != "interleaved":
             raise ValueError("Unknown head mode")
         record_memory("lm_head")
-        self.norm_weight = self.upload(terminal[names[1]].to(torch.bfloat16).reshape(1, 1, 1, -1))
+        self.norm_weight = self.upload(
+            terminal[names[1]].to(torch.bfloat16).reshape(1, 1, 1, -1), dtype=getattr(ttnn, policy["norm_dtype"])
+        )
         record_memory("final_norm")
         self.embed_scale = float(torch.tensor(math.sqrt(c.hidden_size), dtype=torch.bfloat16))
         self.kernel = BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=getattr(ttnn.MathFidelity, policy["compute_fidelities"]["lm_head"]),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -147,7 +167,7 @@ class Gemma4Model:
             logits = ttnn.linear(
                 x,
                 self.lm_head,
-                dtype=ttnn.bfloat16,
+                dtype=getattr(ttnn, self.precision_config["logits_dtype"]),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.kernel,
                 core_grid=ttnn.CoreGrid(x=8, y=8),
@@ -178,7 +198,7 @@ class Gemma4Model:
                 part = ttnn.linear(
                     x,
                     weight,
-                    dtype=ttnn.bfloat16,
+                    dtype=getattr(ttnn, self.precision_config["logits_dtype"]),
                     memory_config=output_memory,
                     program_config=pc,
                     compute_kernel_config=self.kernel,

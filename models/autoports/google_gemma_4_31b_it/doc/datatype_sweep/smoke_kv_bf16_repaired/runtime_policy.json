@@ -1,0 +1,117 @@
+{
+  "policy": {
+    "config_id": "kv_bf16",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat16",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "layers": [
+    {
+      "index": 0,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": {
+          "math_fidelity": "MathFidelity.LoFi",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "False",
+          "packer_l1_acc": "True"
+        },
+        "mlp": {
+          "math_fidelity": "MathFidelity.LoFi",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "False",
+          "packer_l1_acc": "True"
+        },
+        "down": {
+          "math_fidelity": "MathFidelity.LoFi",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "False",
+          "packer_l1_acc": "True"
+        }
+      },
+      "cache_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 5,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": {
+          "math_fidelity": "MathFidelity.LoFi",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "False",
+          "packer_l1_acc": "True"
+        },
+        "mlp": {
+          "math_fidelity": "MathFidelity.LoFi",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "False",
+          "packer_l1_acc": "True"
+        },
+        "down": {
+          "math_fidelity": "MathFidelity.LoFi",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "False",
+          "packer_l1_acc": "True"
+        }
+      },
+      "cache_dtype": "DataType.BFLOAT16",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    }
+  ],
+  "head_dtype": "DataType.BFLOAT8_B",
+  "head_kernel": {
+    "math_fidelity": "MathFidelity.HiFi2",
+    "math_approx_mode": "False",
+    "fp32_dest_acc_en": "True",
+    "packer_l1_acc": "True"
+  }
+}

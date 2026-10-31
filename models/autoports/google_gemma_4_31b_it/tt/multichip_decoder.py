@@ -23,9 +23,14 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("Multichip decoder requires this run's TP4 mesh")
         candidate_baseline = kwargs.pop("_candidate_baseline", False)
         obj.decode_gather_buffers = kwargs.pop("decode_gather_buffers", {})
+        obj.residual_dtype = kwargs.pop("residual_dtype", ttnn.bfloat16)
+        obj.decode_ccl_dtype = kwargs.pop("decode_ccl_dtype", ttnn.bfloat16)
+        norm_dtype = kwargs.pop("norm_dtype", ttnn.bfloat16)
         obj.topology = ttnn.Topology.Linear if candidate_baseline else ttnn.Topology.Ring
         obj.residual_sharded = kwargs.pop("residual_sharded", False)
-        obj.prefill_ccl_bfp8 = not candidate_baseline
+        obj.prefill_ccl_bfp8 = kwargs.pop("prefill_ccl_bfp8", not candidate_baseline)
+        cache_dtype = kwargs.pop("cache_dtype", ttnn.bfloat8_b)
+        activation_dtype = kwargs.pop("activation_dtype", ttnn.bfloat8_b)
         obj.carry_reduced = not candidate_baseline
         obj.cache_position_modulo = kwargs.pop("sliding_cache_tokens", None)
         if obj.cache_position_modulo not in (None, 2048):
@@ -38,6 +43,7 @@ class MultichipDecoder(OptimizedDecoder):
             "bfp8": (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
             "bfp8_lofi": (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
             "bfp4": (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi),
+            "bfp4_hifi2": (ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2),
         }
         attention_policy = kwargs.pop("attention_precision", "bfp4")
         down_policy = kwargs.pop("down_precision", policy)
@@ -154,7 +160,7 @@ class MultichipDecoder(OptimizedDecoder):
                         )
                     ][0]
                     if name.endswith("proj.weight")
-                    else ttnn.bfloat16
+                    else norm_dtype
                 ),
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -183,9 +189,10 @@ class MultichipDecoder(OptimizedDecoder):
         )
         obj.decoding = False
         obj.carry = True
-        obj.cache_dtype = ttnn.bfloat8_b
+        obj.cache_dtype = cache_dtype
+        obj.prefill_activation_dtype = activation_dtype
         obj.activation_precision = {
-            "prefill_gate_up_and_intermediate": "bfloat8_b",
+            "prefill_gate_up_and_intermediate": str(activation_dtype),
             "residual_and_norm": "bfloat16",
             "decode": "bfloat16",
         }
@@ -197,7 +204,7 @@ class MultichipDecoder(OptimizedDecoder):
             "mlp.gate_proj": {"cores": 28, "block": 6, "readers": 1},
             "mlp.up_proj": {"cores": 28, "block": 6, "readers": 1},
             "mlp.down_proj": {"cores": 8, "block": 7, "readers": 2},
-            "prefill_q": 128,
+            "prefill_q": 64 if cache_dtype == ttnn.bfloat16 and not obj.sliding_window else 128,
             "prefill_k": 128,
         }
         if not candidate_baseline:
@@ -253,14 +260,14 @@ class MultichipDecoder(OptimizedDecoder):
                     full = ttnn.zeros(
                         (1, 1, batch, 5376),
                         device=mesh_device,
-                        dtype=ttnn.bfloat16,
+                        dtype=obj.decode_ccl_dtype,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
                     local = ttnn.zeros(
                         (1, 1, batch, 1344),
                         device=mesh_device,
-                        dtype=ttnn.bfloat16,
+                        dtype=obj.decode_ccl_dtype,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
@@ -271,13 +278,13 @@ class MultichipDecoder(OptimizedDecoder):
                         obj.decode_gather_buffers[name] = ttnn.zeros(
                             (1, 1, 32, 5376),
                             device=mesh_device,
-                            dtype=ttnn.bfloat16,
+                            dtype=obj.decode_ccl_dtype,
                             layout=ttnn.TILE_LAYOUT,
                             memory_config=obj._working_memory(full, 8),
                         )
                     backing = obj.decode_gather_buffers[name]
-                    if tuple(backing.shape) != (1, 1, 32, 5376) or backing.dtype != ttnn.bfloat16:
-                        raise ValueError("Expected BF16 32-row decode gather workspace")
+                    if tuple(backing.shape) != (1, 1, 32, 5376) or backing.dtype != obj.decode_ccl_dtype:
+                        raise ValueError("Decode gather workspace must match the requested CCL dtype and 32-row shape")
                     # All supported logical batches occupy one physical tile row.
                     # The next norm consumes this storage before another gather
                     # can overwrite it; returned residuals never alias it.
@@ -303,7 +310,7 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=output.memory_config() if output is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        return ttnn.typecast(out, ttnn.bfloat16) if compressed else out
+        return ttnn.typecast(out, self.residual_dtype) if compressed else out
 
     def _norm(self, x, name=None):
         rows = math.prod(tuple(x.padded_shape)[:-1])
@@ -366,7 +373,7 @@ class MultichipDecoder(OptimizedDecoder):
                 ),
                 compute_kernel_config=self.linear_kernels["attention" if name.startswith("self_attn.") else "down"],
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
+                dtype=self.residual_dtype,
             )
             out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
             out = ttnn.slice(out, [0] * len(out.shape), [*tuple(out.shape)[:-1], self.hidden])
@@ -375,7 +382,9 @@ class MultichipDecoder(OptimizedDecoder):
         if name not in self.output_padding:
             return out
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-        if self.prefill_ccl_bfp8 and not self.decoding:
+        if self.decoding and out.dtype != self.decode_ccl_dtype:
+            out = ttnn.typecast(out, self.decode_ccl_dtype)
+        elif self.prefill_ccl_bfp8 and not self.decoding:
             out = ttnn.typecast(out, ttnn.bfloat8_b)
         out = ttnn.experimental.reduce_scatter_minimal_async(
             out,
@@ -395,8 +404,8 @@ class MultichipDecoder(OptimizedDecoder):
         )
         if not self.residual_sharded:
             out = self._gather(out, group=name)
-        if out.dtype != ttnn.bfloat16:
-            out = ttnn.typecast(out, ttnn.bfloat16)
+        if out.dtype != self.residual_dtype:
+            out = ttnn.typecast(out, self.residual_dtype)
         if self.decoding and not self.residual_sharded and self.carry_reduced:
             out = ttnn.to_memory_config(out, self._working_memory(out, 8))
         return out

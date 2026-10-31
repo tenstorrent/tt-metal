@@ -1,0 +1,1474 @@
+{
+  "policy": {
+    "config_id": "baseline_bfp4_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "layers": [
+    {
+      "index": 0,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe0d50>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe0cf0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe0d80>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 1,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe0db0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe0f30>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe16b0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 2,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe1770>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe1980>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe20a0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 3,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2160>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2370>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2a90>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 4,
+      "weights": {
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2b50>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2d60>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe3480>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 5,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2c70>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe3750>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe3630>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 6,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0a040>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc09ce0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0a730>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 7,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0a7f0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0aa00>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0b5a0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 8,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0b660>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0b870>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0bf90>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 9,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08e70>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08d50>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08cf0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 10,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08c30>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08a20>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc080c0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 11,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc0b3f0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08300>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dc08b10>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 12,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbae370>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbae310>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbad2c0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 13,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbad200>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbac2d0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbac0f0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 14,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbac030>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbafc00>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbaf4e0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 15,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbaf420>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbaf210>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbad980>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 16,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbad8f0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbacdb0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbac870>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 17,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbade30>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbadc50>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbad7d0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 18,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbadbc0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbae4c0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e40c0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 19,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e4180>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e4390>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e4ab0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 20,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e4b70>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e4d80>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e54a0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 21,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e5560>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e5770>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e5e90>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 22,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e5f50>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e6160>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e6880>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 23,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e6ca0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e6ac0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e6070>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 24,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e6a30>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e7570>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35100e7c60>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 25,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510100030>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101005d0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510100690>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 26,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510100750>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510100960>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101080>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 27,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101140>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101350>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101a70>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 28,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101b30>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101d40>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510102460>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 29,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510102880>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101026a0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510101c50>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 30,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510102610>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510103150>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510103840>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 31,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510103a20>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011c1b0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011c270>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 32,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011c330>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011c540>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011cc60>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 33,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011cd20>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011cf30>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011d650>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 34,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011d710>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011d920>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011e040>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 35,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011e460>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011e280>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011d830>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 36,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011e1f0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011ed30>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011f420>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 37,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011f4e0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011f6f0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351011fe10>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 38,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510130150>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510130210>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510130840>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 39,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510130900>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510130b10>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510131230>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 40,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101312f0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510131500>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510131c20>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 41,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510132040>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510131e60>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510131410>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 42,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510131dd0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510132910>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510133000>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 43,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101330c0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101332d0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101339f0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 44,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510133bd0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014c360>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014c420>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 45,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014c4e0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014c6f0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014ce10>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 46,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014ced0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014d0e0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014d800>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 47,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014dc20>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014da40>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014cff0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 48,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014d9b0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014e4f0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014ebe0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 49,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014eca0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014eeb0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014f5d0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 50,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014f690>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014f8a0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e351014ffc0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 51,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101600c0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101602d0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101609f0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 52,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510160ab0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510160cc0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101613e0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 53,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510161800>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510161620>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510160bd0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 54,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510161590>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101620d0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101627c0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 55,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510162880>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510162a90>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101631b0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 56,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510163270>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510163480>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510163ba0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 57,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510163d80>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510178510>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101785d0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 58,
+      "weights": {
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.qkv_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510178690>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101788a0>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510178fc0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    },
+    {
+      "index": 59,
+      "weights": {
+        "input_layernorm.weight": "DataType.BFLOAT16",
+        "mlp.down_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.gate_proj.weight": "DataType.BFLOAT4_B",
+        "mlp.up_proj.weight": "DataType.BFLOAT4_B",
+        "post_attention_layernorm.weight": "DataType.BFLOAT16",
+        "post_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "pre_feedforward_layernorm.weight": "DataType.BFLOAT16",
+        "self_attn.k_norm.weight": "DataType.BFLOAT16",
+        "self_attn.o_proj.weight": "DataType.BFLOAT4_B",
+        "self_attn.q_norm.weight": "DataType.BFLOAT16",
+        "self_attn.qk_proj.weight": "DataType.BFLOAT4_B"
+      },
+      "kernels": {
+        "attention": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101793e0>",
+        "mlp": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e3510179200>",
+        "down": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e35101787b0>"
+      },
+      "cache_dtype": "DataType.BFLOAT8_B",
+      "activation_dtype": "DataType.BFLOAT8_B",
+      "prefill_ccl_bfp8": true
+    }
+  ],
+  "head_dtype": "DataType.BFLOAT8_B",
+  "head_kernel": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e352dbe2e20>"
+}

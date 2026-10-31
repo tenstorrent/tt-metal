@@ -1,0 +1,20 @@
+{
+  "selected_config_sha256": "af0969d87723dccb3a1199c01632ae720324f68c0287e8e327566a754be2d410",
+  "default_runtime_policy_exact": true,
+  "evidence": "selected_default/runtime_policy.json",
+  "construction": "tt.generator.build_generator -> Gemma4Generator -> Gemma4Model -> load_precision(None)",
+  "required_artifact": "doc/datatype_sweep/selected_precision_config.json",
+  "baseline_override": "configs/baseline_bfp4_lofi.json",
+  "context_default": 262144,
+  "vllm_adapter": null,
+  "vllm_note": "Integration is explicitly excluded from stage08. Future serving construction inherits the required model/generator default; no stock adapter or untested vLLM propagation is claimed.",
+  "final_source_runtime_evidence": [
+    "selected_state_b1/runtime_policy.json",
+    "selected_state_b32/runtime_policy.json",
+    "selected_b32/runtime_policy.json",
+    "selected_b16/runtime_policy.json",
+    "selected_b8/runtime_policy.json",
+    "selected_default/runtime_policy.json"
+  ],
+  "final_source_hashes_match": true
+}

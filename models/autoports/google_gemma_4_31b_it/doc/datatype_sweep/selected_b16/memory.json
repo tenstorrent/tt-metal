@@ -1,0 +1,30 @@
+{
+  "constructed": {
+    "num_banks": 8,
+    "total_bytes_per_bank": 4255564160,
+    "total_bytes_allocated_per_bank": 1966360192,
+    "largest_contiguous_bytes_free_per_bank": 2277641088
+  },
+  "prepared": {
+    "num_banks": 8,
+    "total_bytes_per_bank": 4255564160,
+    "total_bytes_allocated_per_bank": 1971509888,
+    "largest_contiguous_bytes_free_per_bank": 2272506752
+  },
+  "inventory": {
+    "decoder_weights": 4411965440,
+    "decoder_state": 299059200,
+    "embedding": 704643072,
+    "lm_head": 198180864,
+    "final_norm": 344064,
+    "rope": 805306368,
+    "kv_cache": 9269411840,
+    "page_tables": 31457280,
+    "sampler": 53248,
+    "prepared_prefill": 1397248,
+    "generator_state": 8521728,
+    "sum_owned_dram_bytes": 15730340352,
+    "allocator_bytes": 15730881536,
+    "unattributed_allocator_bytes": 541184
+  }
+}

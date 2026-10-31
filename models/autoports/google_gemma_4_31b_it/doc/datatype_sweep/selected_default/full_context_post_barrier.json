@@ -1,0 +1,27 @@
+{
+  "scope": "full60layers",
+  "context": 262144,
+  "boundaries": [
+    {
+      "prompt_tokens": 262143,
+      "output": [
+        236795
+      ]
+    },
+    {
+      "prompt_tokens": 262144,
+      "output": [
+        35769
+      ]
+    }
+  ],
+  "last_decode_input_position": 262143,
+  "last_decode_output": [
+    35769
+  ],
+  "positions_after": [
+    262144
+  ],
+  "host_sampling_compatibility_equal": true,
+  "host_sampling_logit_reads": 8
+}

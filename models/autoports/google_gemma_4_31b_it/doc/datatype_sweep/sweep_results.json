@@ -1,0 +1,1575 @@
+[
+  {
+    "config_id": "baseline_bfp4_lofi",
+    "dtype_policy": {
+      "config_id": "baseline_bfp4_lofi",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 94.26279400940984,
+    "decode_tps": 37.455568771782836,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/baseline_bfp4_lofi.json --id baseline_bfp4_lofi",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/baseline_bfp4_lofi/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/baseline_bfp4_lofi/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 660.8037239639089,
+      "decode_tps": 34.29608109376546,
+      "decode_ms": 29.157850346399663,
+      "samples": [
+        {
+          "ttft_ms": 660.8037239639089,
+          "decode_tps": 34.296893603794,
+          "decode_ms": 29.157159582796087,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 656.5716110053472,
+          "decode_tps": 34.294991604687766,
+          "decode_ms": 29.158776637907398,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 660.8179389731959,
+          "decode_tps": 34.29608109376546,
+          "decode_ms": 29.157850346399663,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "decoder_bfp4_hifi2",
+    "dtype_policy": {
+      "config_id": "decoder_bfp4_hifi2",
+      "weight_groups": {
+        "attention": "bfp4_hifi2",
+        "mlp": "bfp4_hifi2",
+        "down": "bfp4_hifi2",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "HiFi2",
+        "mlp": "HiFi2",
+        "down": "HiFi2",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "HiFi2",
+      "mlp": "HiFi2",
+      "down": "HiFi2",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 95.35645903088152,
+    "decode_tps": 33.21321091172314,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/decoder_bfp4_hifi2.json --id decoder_bfp4_hifi2",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/decoder_bfp4_hifi2/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/decoder_bfp4_hifi2/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 783.2011629943736,
+      "decode_tps": 30.696451828534265,
+      "decode_ms": 32.57705501553888,
+      "samples": [
+        {
+          "ttft_ms": 782.3236080002971,
+          "decode_tps": 30.696067245135918,
+          "decode_ms": 32.57746316536557,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 783.2011629943736,
+          "decode_tps": 30.6964945871539,
+          "decode_ms": 32.57700963739643,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 784.2408760334365,
+          "decode_tps": 30.696451828534265,
+          "decode_ms": 32.57705501553888,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "decoder_bfp8_lofi",
+    "dtype_policy": {
+      "config_id": "decoder_bfp8_lofi",
+      "weight_groups": {
+        "attention": "bfp8_lofi",
+        "mlp": "bfp8_lofi",
+        "down": "bfp8_lofi",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.99,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 102.56507800659165,
+    "decode_tps": 27.59415198284303,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/decoder_bfp8_lofi.json --id decoder_bfp8_lofi",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/decoder_bfp8_lofi/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/decoder_bfp8_lofi/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 692.4484919873066,
+      "decode_tps": 25.85542805885291,
+      "decode_ms": 38.67659811022156,
+      "samples": [
+        {
+          "ttft_ms": 691.1196369910613,
+          "decode_tps": 25.85542805885291,
+          "decode_ms": 38.67659811022156,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 700.8047300041653,
+          "decode_tps": 25.850587844113907,
+          "decode_ms": 38.683839842647785,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 692.4484919873066,
+          "decode_tps": 25.856955320872594,
+          "decode_ms": 38.67431364561189,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "decoder_bfp8",
+    "dtype_policy": {
+      "config_id": "decoder_bfp8",
+      "weight_groups": {
+        "attention": "bfp8",
+        "mlp": "bfp8",
+        "down": "bfp8",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "HiFi2",
+        "mlp": "HiFi2",
+        "down": "HiFi2",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "HiFi2",
+      "mlp": "HiFi2",
+      "down": "HiFi2",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.96,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 102.88571997079998,
+    "decode_tps": 27.247130687605093,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/decoder_bfp8.json --id decoder_bfp8",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/decoder_bfp8/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/decoder_bfp8/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 808.9179350063205,
+      "decode_tps": 25.53219013663358,
+      "decode_ms": 39.16624444078537,
+      "samples": [
+        {
+          "ttft_ms": 814.4862140179612,
+          "decode_tps": 25.53219013663358,
+          "decode_ms": 39.16624444078537,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 806.8666059989482,
+          "decode_tps": 25.532916196216984,
+          "decode_ms": 39.165130700901386,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 808.9179350063205,
+          "decode_tps": 25.531880363049858,
+          "decode_ms": 39.16671963758752,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "head_bfp4",
+    "dtype_policy": {
+      "config_id": "head_bfp4",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp4"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 93.86267000809312,
+    "decode_tps": 38.07137675104611,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --id selected_default",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/selected_default/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/selected_default/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp4/readiness_accuracy.json",
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 656.1773680150509,
+      "decode_tps": 34.82999900522996,
+      "decode_ms": 28.71088224406332,
+      "samples": [
+        {
+          "ttft_ms": 656.1773680150509,
+          "decode_tps": 34.83027947887592,
+          "decode_ms": 28.710651047359125,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 658.0996289849281,
+          "decode_tps": 34.827641377565186,
+          "decode_ms": 28.71282580290283,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 654.0913589997217,
+          "decode_tps": 34.82999900522996,
+          "decode_ms": 28.71088224406332,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "head_bfp4_hifi2",
+    "dtype_policy": {
+      "config_id": "head_bfp4_hifi2",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp4_hifi2"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 94.18565797386691,
+    "decode_tps": 37.54388211359444,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/head_bfp4_hifi2.json --id head_bfp4_hifi2",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp4_hifi2/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp4_hifi2/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 658.7527670199051,
+      "decode_tps": 34.625991256869334,
+      "decode_ms": 28.880039637901007,
+      "samples": [
+        {
+          "ttft_ms": 658.8251820066944,
+          "decode_tps": 34.62833268033439,
+          "decode_ms": 28.87808689004265,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 657.9543399857357,
+          "decode_tps": 34.625991256869334,
+          "decode_ms": 28.880039637901007,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 658.7527670199051,
+          "decode_tps": 34.62513890334105,
+          "decode_ms": 28.880750566563297,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "head_bfp8_lofi",
+    "dtype_policy": {
+      "config_id": "head_bfp8_lofi",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8_lofi"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.93,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 94.35507701709867,
+    "decode_tps": 37.449697113129815,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/head_bfp8_lofi.json --id head_bfp8_lofi",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp8_lofi/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp8_lofi/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 658.5986890131608,
+      "decode_tps": 34.30424308391922,
+      "decode_ms": 29.150912834709054,
+      "samples": [
+        {
+          "ttft_ms": 658.5986890131608,
+          "decode_tps": 34.30573333391067,
+          "decode_ms": 29.14964651146273,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 661.6074710036628,
+          "decode_tps": 34.30424308391922,
+          "decode_ms": 29.150912834709054,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 655.9246780234389,
+          "decode_tps": 34.30173840068647,
+          "decode_ms": 29.15304140911958,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "kv_bf16",
+    "dtype_policy": {
+      "config_id": "kv_bf16",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.91,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 111.20944400317967,
+    "decode_tps": 37.45711016139114,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/kv_bf16.json --id kv_bf16",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/kv_bf16/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/kv_bf16/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": false,
+    "memory_basis": "kv_capacity_estimate.json: BF16 cannot retain the 32x32768 pool",
+    "status": "fail",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 717.0236459933221,
+      "decode_tps": 34.126459132771295,
+      "decode_ms": 29.302776362160294,
+      "samples": [
+        {
+          "ttft_ms": 716.6544289793819,
+          "decode_tps": 34.126459132771295,
+          "decode_ms": 29.302776362160294,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 717.8808379685506,
+          "decode_tps": 34.125976071436824,
+          "decode_ms": 29.303191149951964,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 717.0236459933221,
+          "decode_tps": 34.12795488510852,
+          "decode_ms": 29.30149208666302,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "activation_bf16",
+    "dtype_policy": {
+      "config_id": "activation_bf16",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.92,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 94.74227100145072,
+    "decode_tps": 37.42392321668329,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/activation_bf16.json --id activation_bf16",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/activation_bf16/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/activation_bf16/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 670.7925390219316,
+      "decode_tps": 34.29524106070496,
+      "decode_ms": 29.158564543399198,
+      "samples": [
+        {
+          "ttft_ms": 671.101143991109,
+          "decode_tps": 34.295986570161304,
+          "decode_ms": 29.15793070872131,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 668.5711369500495,
+          "decode_tps": 34.29524106070496,
+          "decode_ms": 29.158564543399198,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 670.7925390219316,
+          "decode_tps": 34.29519026379401,
+          "decode_ms": 29.15860773210861,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "ccl_bf16",
+    "dtype_policy": {
+      "config_id": "ccl_bf16",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "top1": 0.91,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 94.5852969889529,
+    "decode_tps": 37.48147323455007,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/ccl_bf16.json --id ccl_bf16",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/ccl_bf16/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/ccl_bf16/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 657.316669006832,
+      "decode_tps": 34.29617048675553,
+      "decode_ms": 29.15777434644429,
+      "samples": [
+        {
+          "ttft_ms": 658.5915650357492,
+          "decode_tps": 34.29617048675553,
+          "decode_ms": 29.15777434644429,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 654.936095001176,
+          "decode_tps": 34.29635252546768,
+          "decode_ms": 29.157619582357135,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 657.316669006832,
+          "decode_tps": 34.29372671961503,
+          "decode_ms": 29.1598521261916,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  },
+  {
+    "config_id": "head_bfp4_decode_ccl8",
+    "dtype_policy": {
+      "config_id": "head_bfp4_decode_ccl8",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp4"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "compute_fidelity_policy": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "top1": 0.92,
+    "top5": 1.0,
+    "top100": 1.0,
+    "ttft_ms": 94.12151202559471,
+    "decode_tps": 37.40979813256463,
+    "measurement_regime": "traced teacher-forcing; 161 prompt tokens, 100 continuation positions; B1",
+    "reference": "bringup/references/google_gemma_4_31b_it_aime24_chat.refpt",
+    "token_count": 100,
+    "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/configs/head_bfp4_decode_ccl8.json --id head_bfp4_decode_ccl8",
+    "hardware": "4 Blackhole p300c ASICs",
+    "mesh": [
+      1,
+      4
+    ],
+    "trace_evidence": {
+      "ids": {
+        "model": "MeshTraceId(0)",
+        "sampling": "MeshTraceId(1)"
+      },
+      "counters": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      }
+    },
+    "runtime_policy": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp4_decode_ccl8/runtime_policy.json",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/head_bfp4_decode_ccl8/source_manifest.json",
+    "commit": "c673ec5a40de93afe05c3383a359eb6df0cb71d1",
+    "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_DEVICE_PROFILER": "0",
+      "setup": "installed model-bringup/0.1.22/scripts/environment.py"
+    },
+    "search_evidence": null,
+    "accuracy_pass": true,
+    "long_prefix_pass": true,
+    "memory_pass": true,
+    "memory_basis": "BFP8 KV; baseline target pool fits, selected policy revalidated at batch32",
+    "status": "pass",
+    "token_out": {
+      "scope": "full60layers",
+      "source": "autoregressive",
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch_size": 1,
+      "concurrent_requests": 1,
+      "ttft_ms": 660.7280459720641,
+      "decode_tps": 34.58715011479326,
+      "decode_ms": 28.912471732451017,
+      "samples": [
+        {
+          "ttft_ms": 660.7280459720641,
+          "decode_tps": 34.58693019049828,
+          "decode_ms": 28.91265557516058,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 660.035606008023,
+          "decode_tps": 34.5887746895929,
+          "decode_ms": 28.911113763763385,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        },
+        {
+          "ttft_ms": 661.1137079889886,
+          "decode_tps": 34.58715011479326,
+          "decode_ms": 28.912471732451017,
+          "counters": {
+            "model_replays": 127,
+            "sample_replays": 128,
+            "token_refreshes": 0,
+            "position_refreshes": 1,
+            "page_refreshes": 0,
+            "readbacks": 2,
+            "captures": 0
+          }
+        }
+      ],
+      "streaming_exact": true,
+      "diagnostics": {
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_DEVICE_PROFILER": "0",
+        "TT_METAL_WATCHER": "0"
+      },
+      "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+    }
+  }
+]

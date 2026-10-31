@@ -1,0 +1,32 @@
+{
+  "host_policy_tests": {
+    "passed": 7,
+    "failed": 0,
+    "evidence": "host_tests_final.log"
+  },
+  "source_hooks": {
+    "exit_code": 0,
+    "evidence": [
+      "source_checks.log",
+      "report_source_checks.log",
+      "final_staged_checks.log"
+    ]
+  },
+  "context_contract": {
+    "exit_code": 0,
+    "target": 262144,
+    "supported": 262144,
+    "evidence": "context_check.log"
+  },
+  "agentic_serving": {
+    "exit_code": 1,
+    "severity": "ADVISORY",
+    "reason": "Tied embedding and vocabulary projection require different BF16 row-major hidden-sharded and BFP4 tiled transposed vocabulary-sharded representations. Explicit two-copy bytes, rationale and allocator/performance evidence are recorded in memory_plan.json. No hard error reported.",
+    "evidence": "agentic_check.log"
+  },
+  "plots": "Both inspected; all11 full policies plotted, frontier marked, selected red, dotted accuracy gates.",
+  "stage_review": {
+    "verdict": "clean-pass",
+    "evidence": "stage_review.md"
+  }
+}

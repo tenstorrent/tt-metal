@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    "baseline_bfp4_lofi",
+    "decoder_bfp4_hifi2",
+    "decoder_bfp8_lofi",
+    "decoder_bfp8",
+    "head_bfp4",
+    "head_bfp4_hifi2",
+    "head_bfp8_lofi",
+    "kv_bf16",
+    "activation_bf16",
+    "ccl_bf16",
+    "head_bfp4_decode_ccl8"
+  ],
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98,
+    "top100": 1.0
+  },
+  "ranking": "traced teacher-forcing decode tokens/s/user; token-out conflict checks required",
+  "rationale": "Existing decoder already BFP4/LoFi throughout; compare legal fidelity controls and canonical BFP8, lower the BFP8 head, isolate activation/CCL/KV switches."
+}

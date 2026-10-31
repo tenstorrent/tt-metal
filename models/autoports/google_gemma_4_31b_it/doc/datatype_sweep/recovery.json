@@ -1,0 +1,36 @@
+{
+  "failure": "Parent queue exited143 during B16 weight loading; no exception or hang logged; termination source unknown.",
+  "owners_before_reset": [],
+  "owner_check": "No run_datatype processes; /proc/*/fd symlinks scanned for /dev/tenstorrent. fuser unavailable.",
+  "killed_processes": [],
+  "recovery": [
+    {
+      "command": "timeout 60 python_env/bin/tt-smi -ls --local",
+      "exit_code": 0,
+      "devices": 4
+    },
+    {
+      "command": "timeout 180 python_env/bin/tt-smi -r",
+      "exit_code": 0
+    },
+    {
+      "command": "timeout 60 python_env/bin/tt-smi -ls --local",
+      "exit_code": 0,
+      "devices": 4
+    },
+    {
+      "command": "timeout120 Python TTNN Ring mesh(1,4) open/close, trace_region_size=0",
+      "exit_code": 0,
+      "result": "MESH_SMOKE_OK"
+    }
+  ],
+  "second_reset": false,
+  "locks_cleared": false,
+  "triage": "No live stalled process remained; no hang inferred.",
+  "autofix": "Not a model failure; restart incomplete measurement after recovery.",
+  "resume": "Same stage08 attempt, individual selected_b16, selected_b8 and selected_default commands.",
+  "rerun_results": {
+    "selected_b16": "exit0; performance_b16.json",
+    "selected_b8": "exit0; performance_b8.json"
+  }
+}

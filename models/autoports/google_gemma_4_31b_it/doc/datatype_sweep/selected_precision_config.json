@@ -1,0 +1,28 @@
+{
+  "config_id": "head_bfp4",
+  "weight_groups": {
+    "attention": "bfp4",
+    "mlp": "bfp4",
+    "down": "bfp4",
+    "lm_head": "bfp4"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "mlp": "LoFi",
+    "down": "LoFi",
+    "lm_head": "LoFi"
+  },
+  "activation_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {
+    "prefill": "bfloat8_b",
+    "decode": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "max_seq_len": 262144
+}

@@ -1,0 +1,31 @@
+[
+  {
+    "batch": 1,
+    "kv_bfp8_bytes": 3074949120,
+    "kv_bf16_bytes": 5788139520,
+    "estimated_bf16_headroom": 20788353024,
+    "basis": "BFP8 1088B vs BF16 2048B per 32x32 tile; unchanged non-KV allocations and transient reserve from stage07. Analytical capacity estimate; BF16 B1 allocator inventory is measured separately in kv_bf16/memory.json. B32 cache alone exceeds usable DRAM, so no knowingly impossible B32 allocation was attempted.",
+    "measured_bf16_kv_bytes": 5788139520
+  },
+  {
+    "batch": 32,
+    "kv_bfp8_bytes": 18538823680,
+    "kv_bf16_bytes": 34896609280,
+    "estimated_bf16_headroom": -8367516160,
+    "basis": "BFP8 1088B vs BF16 2048B per 32x32 tile; unchanged non-KV allocations and transient reserve from stage07. Analytical capacity estimate; BF16 B1 allocator inventory is measured separately in kv_bf16/memory.json. B32 cache alone exceeds usable DRAM, so no knowingly impossible B32 allocation was attempted."
+  },
+  {
+    "batch": 16,
+    "kv_bfp8_bytes": 9269411840,
+    "kv_bf16_bytes": 17448304640,
+    "estimated_bf16_headroom": 9112074240,
+    "basis": "BFP8 1088B vs BF16 2048B per 32x32 tile; unchanged non-KV allocations and transient reserve from stage07. Analytical capacity estimate; BF16 B1 allocator inventory is measured separately in kv_bf16/memory.json. B32 cache alone exceeds usable DRAM, so no knowingly impossible B32 allocation was attempted."
+  },
+  {
+    "batch": 8,
+    "kv_bfp8_bytes": 4634705920,
+    "kv_bf16_bytes": 8724152320,
+    "estimated_bf16_headroom": 17851975680,
+    "basis": "BFP8 1088B vs BF16 2048B per 32x32 tile; unchanged non-KV allocations and transient reserve from stage07. Analytical capacity estimate; BF16 B1 allocator inventory is measured separately in kv_bf16/memory.json. B32 cache alone exceeds usable DRAM, so no knowingly impossible B32 allocation was attempted."
+  }
+]

@@ -24,18 +24,25 @@ class Gemma4Generator(Generator):
         *,
         layer_indices=None,
         batch_size=1,
-        max_seq_len=262144,
+        max_seq_len=None,
         kv_cache=None,
         page_table=None,
         host_page_tables=None,
         pool_tokens=None,
         output_capacity=None,
         head_mode="dram",
+        precision_config=None,
     ):
-        self.model = Gemma4Model(mesh_device, layer_indices=layer_indices, head_mode=head_mode)
+        self.model = Gemma4Model(
+            mesh_device, layer_indices=layer_indices, head_mode=head_mode, precision_config=precision_config
+        )
         self.mesh = mesh_device
         self.batch = batch_size
+        if max_seq_len is None:
+            max_seq_len = self.model.precision_config["max_seq_len"]
         self.context = max_seq_len
+        if max_seq_len > self.model.precision_config["max_seq_len"]:
+            raise ValueError("Requested context exceeds the precision capability contract")
         self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL, revision=HF_REVISION)
         generation = GenerationConfig.from_pretrained(HF_MODEL, revision=HF_REVISION)
         eos = generation.eos_token_id
@@ -92,8 +99,16 @@ class Gemma4Generator(Generator):
         self.buffered_sample_trace = None
         self.model_trace = None
         self.sample_trace = None
-        self.logits = self.model.upload(torch.zeros(1, 1, self.batch, self.model.config.vocab_size), shard=3)
-        self.inactive_logits = self.model.upload(torch.zeros(1, 1, 1, self.model.config.vocab_size), shard=3)
+        self.logits = self.model.upload(
+            torch.zeros(1, 1, self.batch, self.model.config.vocab_size),
+            dtype=getattr(ttnn, self.model.precision_config["sampling_dtype"]),
+            shard=3,
+        )
+        self.inactive_logits = self.model.upload(
+            torch.zeros(1, 1, 1, self.model.config.vocab_size),
+            dtype=getattr(ttnn, self.model.precision_config["sampling_dtype"]),
+            shard=3,
+        )
         self.prefill = PreparedPrefill(self.model, self.context, host_page_tables)
         self.prepared = False
         self.counters = dict(
