@@ -290,22 +290,44 @@ class PrefillTracker:
 
     def __init__(self):
         self.users: dict[int, tuple[int, torch.Tensor]] = {}
+        self.reported: dict[
+            int, int
+        ] = (
+            {}
+        )  # piece lag (DSV41_PIECE_LAG): the end vLLM believes the user has reached, when the model computed less (an unaligned / image-cut piece end)
 
-    def update(self, p: int, end: int, tokens: torch.Tensor) -> None:
+    def update(self, p: int, end: int, tokens: torch.Tensor, reported: int | None = None) -> None:
         self.users[p] = (int(end), tokens[: int(end)].clone().reshape(-1).long())
+        self.reported[p] = int(end if reported is None else reported)
 
-    def find(self, start: int, prefix: torch.Tensor, exclude=()):
+    def bump(self, p: int, reported: int) -> None:
+        """a piece of user ``p`` was skipped (nothing to compute before its cut): vLLM's next piece starts at ``reported``"""
+        if p in self.users:
+            self.reported[p] = int(reported)
+
+    def find(self, start: int, prefix: torch.Tensor, exclude=(), lag: bool = False):
         """physical slot of the in-progress user whose processed prefix is exactly ``prefix`` (``start`` tokens), else None. ``exclude``: slots already taken by another row of the same call
-        (two prompts that share their first ``start`` tokens have identical carried state, each continuation must get its own).
+        (two prompts that share their first ``start`` tokens have identical carried state, each continuation must get its own). ``lag``: also a user whose model-side end is below ``start``
+        (its last piece was cut back to a chunk boundary: ``reported`` end == ``start``) and whose computed prefix matches ``prefix[:end]``: the caller resumes at ``users[p][0]``.
         """
         prefix = prefix.reshape(-1).long()
         for p, (end, toks) in self.users.items():
             if p not in exclude and end == start and toks.numel() == start and torch.equal(toks, prefix):
                 return p
+        if lag:
+            for p, (end, toks) in self.users.items():
+                if (
+                    p not in exclude
+                    and end < start == self.reported.get(p, end)
+                    and toks.numel() == end
+                    and torch.equal(toks, prefix[:end])
+                ):
+                    return p
         return None
 
     def drop(self, p: int) -> None:
         self.users.pop(p, None)
+        self.reported.pop(p, None)
 
     def parked(self) -> dict[int, int]:
         return {p: end for p, (end, _) in self.users.items()}

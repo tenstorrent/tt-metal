@@ -749,6 +749,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         # in-progress prompt, bind the continuations of a call before claiming users for its new prompts (the plugin shifts state slots when the first finisher starts decoding), and tell the
         # plugin how many prompts the rows can still hold (``prefill_row_capacity``). Off = the shipped placement, unchanged.
         self.row_aware = os.environ.get("DSV41_PREFILL_ROW_AWARE", "0") == "1"
+        # DSV41_PIECE_LAG=1 (default off): a prefill piece that does not end its prompt is cut back to a chunk boundary (and before an image span); vLLM's next piece (it believes the piece
+        # reached its own end) resumes at the model's carried end instead of recomputing the whole prompt from position 0 (IMAGE_CUT_NOTES.md)
+        self.piece_lag = os.environ.get("DSV41_PIECE_LAG", "0") == "1"
         self.final_seen = False  # the plugin sent prefill_final flags at least once
         self.pf_done = (
             set()
@@ -1033,6 +1036,19 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             return first[rows].to(torch.int32).reshape(N)
         return logits[rows].float().reshape(N, 1, -1)
 
+    def _lag_start(self, p, st):
+        """start of the continuation piece of user ``p`` that vLLM reports at ``st``: ``st`` when the carried state is at ``st``, the model's carried end when the previous piece was cut back
+        (piece lag: tokens [end, st) are computed now), else None (the carried state is gone: recompute from position 0).
+        """
+        r = self.m.__dict__.get("pf_resume", {}).get(p)
+        if r == st:
+            return st
+        if self.piece_lag and p in self.inprog.users:
+            end = self.inprog.users[p][0]
+            if r == end < st == self.inprog.reported.get(p, end):
+                return end
+        return None
+
     def _busy_rows(self):
         """Mesh rows that hold the carried state of a prompt in progress (one prefill slot per row: another prompt prefilled in such a row evicts it). A user counts while its
         carried state is intact (the model's ``pf_resume`` equals its recorded end) and its last piece did not end its prompt.
@@ -1070,14 +1086,17 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             st = starts[i]
             if st <= 0:
                 continue
-            p = self.inprog.find(st, toks[i, :st], exclude=[c for c in chosen if c is not None])
+            p = self.inprog.find(st, toks[i, :st], exclude=[c for c in chosen if c is not None], lag=self.piece_lag)
+            r_ = None if p is None else self._lag_start(p, st)
             if p is not None:
                 self.slots.bind(
                     empty_slots[i], p
                 )  # (also when its carried state is gone: it recomputes in its own user, no second user is claimed)
                 self.slots.live.add(p)
                 chosen[i] = p
-            if p is None or resume.get(p) != st:
+            if r_ is not None:
+                eff[i] = r_
+            else:
                 (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                     f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                 )
@@ -1206,11 +1225,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     hit_rows.add(i)
             if st > 0 and p is None:
                 p = self.inprog.find(
-                    st, toks[i, :st], exclude=phys
+                    st, toks[i, :st], exclude=phys, lag=self.piece_lag
                 )  # (prompts with the same prefix have the same carried state: each continuation takes a distinct one)
-                if p is not None and self.m.__dict__.get("pf_resume", {}).get(p) != st:
+                r_ = None if p is None else self._lag_start(p, st)
+                if p is not None and r_ is None:
                     p = None  # its carried prefill state was lost (re-captured trace / unmasked trace): recompute from position 0
                 if p is not None:
+                    st = r_  # (the previous piece was cut back: resume at the model's carried end)
                     self.slots.bind(slot, p)
                     self.slots.live.add(p)
                 else:
@@ -1238,16 +1259,34 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         # image request gets pieces cut by the budget / first-step cap anywhere. Such a piece is shortened to the chunk boundary below the span (nothing to compute when that is not past its start); the
         # request's next piece then finds no carried state and recomputes from position 0 (vision_state.cut_end).
         ends = [int(e) for e in ends]
+        rep_ends = list(ends)  # the ends vLLM reported (its next piece of a request starts there)
         skipped = set()
+        if self.piece_lag and prefill_final is not None and len(prefill_final) == N:
+            # a piece that does not end its prompt must end on a chunk boundary: the model resumes only from one (an unaligned end would make the next piece recompute from position 0). The rest
+            # of the piece is computed with the next piece (the tracker keeps vLLM's end as ``reported``).
+            C_ = self._interleave_chunk()
+            for i, (p, t, st, e) in enumerate(items):
+                a_ = e // C_ * C_
+                if prefill_final[i] or a_ >= e:
+                    continue
+                if a_ <= st:
+                    skipped.add(i)
+                    logger.info(
+                        f"DSV4.1 prefill (interleave): piece [{st}, {e}) of user {p} ends inside a chunk: nothing to compute before {a_}, continued with the next piece"
+                    )
+                else:
+                    items[i], ends[i] = (p, t, st, a_), a_
         if self.vbook is not None:
             for i, (p, t, st, e) in enumerate(items):
+                if i in skipped:
+                    continue
                 pv_, gr_ = self._mm_row(mm, i)
                 if pv_ is None:
                     continue
                 cut = self.vbook.cut_end(toks[i], e, gr_, align=self._interleave_chunk())
                 if cut < e:
                     logger.warning(
-                        f"DSV4.1 prefill (interleave): piece [{st}, {e}) of user {p} ends inside an image span: {'nothing to compute before the image' if cut <= st else f'shortened to [{st}, {cut})'}; the request recomputes from 0 at its next piece"
+                        f"DSV4.1 prefill (interleave): piece [{st}, {e}) of user {p} ends inside an image span: {'nothing to compute before the image' if cut <= st else f'shortened to [{st}, {cut})'}; {'the next piece resumes at the carried end (piece lag)' if self.piece_lag else 'the request recomputes from 0 at its next piece'}"
                     )
                     if cut <= st:
                         skipped.add(i)
@@ -1323,11 +1362,15 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         t_call1 = time.perf_counter()
         for i in skipped:  # (the scheduler discards the token of a piece that does not finish its prompt)
             res[phys[i]] = (0, None)
+            if self.piece_lag:
+                self.inprog.bump(
+                    phys[i], rep_ends[i]
+                )  # (its next piece resumes at the carried end; vLLM reports rep_ends[i] as the start)
         for i, p in enumerate(phys):
             if i in skipped:
                 continue
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
-            self.inprog.update(p, ends[i], toks[i])
+            self.inprog.update(p, ends[i], toks[i], reported=rep_ends[i])
             if self.row_aware:
                 self.final_seen = self.final_seen or final_map is not None
                 if final_map is not None and final_map.get(p):
