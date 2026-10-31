@@ -14,7 +14,6 @@ namespace ttnn::operations::experimental::moe_block {
 namespace config_detail {
 constexpr uint32_t TILE = 32;
 }  // namespace config_detail
-using namespace config_detail;
 
 void ExpertActivation::validate() const {
     if (kind == ExpertActivationKind::ClampedSilu || kind == ExpertActivationKind::SwigluOai) {
@@ -40,20 +39,23 @@ void MoEModelDims::validate() const {
     TT_FATAL(
         K <= router.topk_groups * (E / router.expert_groups),
         "moe_block: top_k can't exceed the experts of the kept groups");
-    TT_FATAL(emb_dim % TILE == 0, "moe_block: emb_dim {} is not a whole number of tiles", emb_dim);
+    TT_FATAL(emb_dim % config_detail::TILE == 0, "moe_block: emb_dim {} is not a whole number of tiles", emb_dim);
     TT_FATAL(
-        routed_expert_hidden_dim % TILE == 0,
+        routed_expert_hidden_dim % config_detail::TILE == 0,
         "moe_block: routed_expert_hidden_dim {} is not a whole number of tiles",
         routed_expert_hidden_dim);
     TT_FATAL(
         shared_expert_hidden_dim.has_value() == shared_expert_activation.has_value(),
         "moe_block: a shared expert needs both its hidden dim and its activation");
     if (shared_expert_hidden_dim.has_value()) {
-        TT_FATAL(*shared_expert_hidden_dim % TILE == 0, "moe_block: shared_expert_hidden_dim not tile aligned");
+        TT_FATAL(
+            *shared_expert_hidden_dim % config_detail::TILE == 0,
+            "moe_block: shared_expert_hidden_dim not tile aligned");
         shared_expert_activation->validate();
     }
     if (latent_dim.has_value()) {
-        TT_FATAL(*latent_dim % TILE == 0 && *latent_dim < emb_dim, "moe_block: latent_dim {}", *latent_dim);
+        TT_FATAL(
+            *latent_dim % config_detail::TILE == 0 && *latent_dim < emb_dim, "moe_block: latent_dim {}", *latent_dim);
     }
     routed_expert_activation.validate();
 }
