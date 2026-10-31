@@ -37,6 +37,9 @@ from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import BLOCK_SIZE, MiMoV2ForCausalLM
 
 CORPUS = "ttnn/cpp/ttnn/operations/**/*.[hc]pp"
+# Under tracy (TT_METAL_DEVICE_PROFILER=1) the device's profiler buffer is read after every step: a verify replays
+# thousands of programs, more than the buffer holds.
+PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 
 def say(msg):
@@ -141,6 +144,8 @@ def main():
                 pos = end
             last.append(int(logits[0, -1].argmax()))
         say(f"prefilled {users} x {a.ctx} tokens in {time.time() - t0:.0f} s")
+        if PROFILING:
+            ttnn.ReadDeviceProfiler(mesh)
 
         k = a.k
         for plain, n in [(m == "plain", n) for m in a.modes.split(",") for n in users_list]:
@@ -160,6 +165,8 @@ def main():
                         tokens, positions, tables[0], kv, enable_trace=True, page_tables_per_layer=layer_tables
                     )
                     times.append(time.perf_counter() - t1)
+                    if PROFILING:
+                        ttnn.ReadDeviceProfiler(mesh)
                     for r in range(n):
                         tok[r], pos[r] = int(logits[r, 0].argmax()), pos[r] + 1
                     per_step_tokens.append(1.0)
@@ -211,6 +218,8 @@ def main():
                         cpos[r, :c] = torch.arange(pos[r] + 1, pos[r] + 1 + c, dtype=torch.int32)
                     drafts = model.propose_draft_tokens(k, committed, cpos, counts)
                     times.append(time.perf_counter() - t1)
+                    if PROFILING:
+                        ttnn.ReadDeviceProfiler(mesh)
                     got = []
                     for r in range(n):
                         c = int(counts[r])

@@ -115,6 +115,10 @@ def verify_grouped():
 # the adapter packs a step's requests into the lowest groups and replays the narrowest trace that holds them: one
 # request scans on 64 cores, two on 32 each. MIMO_VERIFY_VARIANTS=0: one trace over every group.
 VERIFY_VARIANTS = os.environ.get("MIMO_VERIFY_VARIANTS", "1") == "1"
+# The cores still split evenly over the attended groups, so the longest context sets the time when the requests'
+# contexts differ (AgentX: tens of K beside hundreds of K). MIMO_VERIFY_SEQUENTIAL=1: one SDPA per group, each on the
+# whole grid, back to back (the time is then the sum of the contexts' scans, plus a launch per group).
+VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "0") == "1"
 
 
 def verify_variants():
@@ -1250,21 +1254,45 @@ class TtMiMoAttention:
                 t.deallocate(True)
         if slots < all_slots:
             cur_pos = ttnn.slice(cur_pos, (0,), (slots,))
-        attn, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
-            q_grouped,
-            k_cache,
-            v_cache,
+        sdpa = dict(
             head_dim_v=self.v_head_dim,
-            page_table_tensor=group_table,
-            cur_pos_tensor=cur_pos,
             scale=self.scale,
-            program_config=self._split_sdpa_program(groups, width * k_cache.shape[-2]),
             compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             return_lse=True,
             spec_multi_pos_tiles=cands,
             **({"spec_multi_pos_packed": True} if packed else {}),
-        )  # [1, groups, cands * 32, 128], [.., 1]
+        )
+        mla = ttnn.transformer.paged_flash_multi_latent_attention_decode
+        if VERIFY_SEQUENTIAL and groups > 1:
+            parts = []
+            for g in range(groups):
+                q_g = ttnn.slice(q_grouped, (0, g, 0, 0), (1, g + 1, cands * TILE, dk))
+                t_g = ttnn.slice(group_table, (g, 0), (g + 1, width))
+                p_g = ttnn.slice(cur_pos, (g * cands,), ((g + 1) * cands,))
+                program = self._split_sdpa_program(1, width * k_cache.shape[-2])
+                parts.append(
+                    mla(
+                        q_g, k_cache, v_cache, page_table_tensor=t_g, cur_pos_tensor=p_g, program_config=program, **sdpa
+                    )
+                )
+                for t in (q_g, t_g, p_g):
+                    t.deallocate(True)
+            attn = ttnn.concat([o for o, _ in parts], dim=1, memory_config=parts[0][0].memory_config())
+            lse = ttnn.concat([l for _, l in parts], dim=1, memory_config=parts[0][1].memory_config())
+            for o, l in parts:
+                o.deallocate(True)
+                l.deallocate(True)
+        else:
+            attn, lse = mla(
+                q_grouped,
+                k_cache,
+                v_cache,
+                page_table_tensor=group_table,
+                cur_pos_tensor=cur_pos,
+                program_config=self._split_sdpa_program(groups, width * k_cache.shape[-2]),
+                **sdpa,
+            )  # [1, groups, cands * 32, 128], [.., 1]
         q_slots.deallocate(True)
         group_table.deallocate(True)
         if slots < all_slots:
