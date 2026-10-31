@@ -68,11 +68,19 @@ def test_minimal_matmul(
     subblock_w,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
 ):
     M, K, N = 16384, 16384, 16384
 
     compute_grid = get_mesh_grid_size(mesh_device)
     compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+    if grid_size is not None:
+        # x by y, like the other didt 11x10 grids
+        if grid_size[0] > compute_grid.x or grid_size[1] > compute_grid.y:
+            pytest.fail(
+                f"--grid-size {grid_size[0]}x{grid_size[1]} exceeds the device grid {compute_grid.x}x{compute_grid.y}"
+            )
+        compute_with_storage_grid_size = grid_size
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
 
     in0_shape = [M, K]
