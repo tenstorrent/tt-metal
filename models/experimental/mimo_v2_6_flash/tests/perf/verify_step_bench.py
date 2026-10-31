@@ -63,6 +63,35 @@ def prompts(path, n, users):
     return out
 
 
+def breakdown(m, mesh, n=20):
+    """Each captured trace replayed ``n`` times on idle inputs (every position -1: no K / V written, no request's
+    work): the fixed cost of each program of a step."""
+    m.spec_inputs.reset()
+    traces = []
+    if m.decode_trace is not None:
+        traces.append(("decode", m.decode_trace["id"]))
+    for key, tr in m.verify_traces.items():
+        traces.append((f"verify {key}", tr["id"]))
+        if tr["accept"] is not None:
+            traces.append((f"accept {key}", tr["accept"]))
+    mtp = m.mtp
+    if mtp is not None:
+        traces.append(("mtp draft", mtp.trace["id"]))
+        if getattr(mtp, "trace_one", None) is not None:
+            traces.append(("mtp draft layer 0", mtp.trace_one["id"]))
+        if mtp.backfill_trace is not None:
+            mtp.history.upload_backfill()
+            traces.append(("mtp backfill", mtp.backfill_trace))
+    for name, tid in traces:
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh)
+        say(f"breakdown {name}: {1e3 * (time.perf_counter() - t0) / n:.2f} ms idle")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ctx", type=int, default=150_000)
@@ -73,6 +102,7 @@ def main():
     p.add_argument("--budget", type=int, default=4096, help="prefill tokens per step")
     p.add_argument("--modes", default="spec,plain", help="spec (verify + propose) and / or plain decode steps")
     p.add_argument("--k", type=int, default=MAX_DRAFTS, help="drafts per request (at most MAX_DRAFTS)")
+    p.add_argument("--breakdown", action="store_true", help="also time each captured trace alone on idle inputs")
     a = p.parse_args()
     users_list = [int(x) for x in a.users.split(",")]
     users = max(users_list)
@@ -236,6 +266,8 @@ def main():
                 f"users={n} mode={mode} step_ms={1e3 * med:.2f} mean={1e3 * statistics.mean(t):.2f} "
                 f"tokens_per_step={tps:.2f} tok_s={tps / statistics.mean(t):.1f}"
             )
+        if a.breakdown:
+            breakdown(model.models[0], mesh)
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
