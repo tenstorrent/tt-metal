@@ -665,6 +665,86 @@ def test_sqrt_family_negative_zero_regression(
     )
 
 
+def _fp16_lanes(mask, x, got, limit=4):
+    """The first *limit* lanes of *mask* as ``x -> got``."""
+    return ", ".join(
+        f"{x[i].item()!r} -> {got[i].item()!r}"
+        for i in mask.nonzero().flatten()[:limit].tolist()
+    )
+
+
+# For x >= 0, hardmish(x) is x; this checks every positive normal fp16. dest_acc=Yes is a 32-bit Dest, the control.
+# Blackhole skips dest_acc=No because Float16 input with dest accumulation off is unsupported there.
+@pytest.mark.parametrize(
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=lambda d: f"dest_acc_{d.name}",
+)
+def test_hardmish_float16_dest_identity_branch(dest_acc: DestAccumulation):
+    formats = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    # 32 tiles, so blocks divide evenly at both Dest widths (8 or 4 tiles per half).
+    input_dimensions = [256, 128]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+
+    # 0x0400..0x7BFF: every positive normal fp16, ending at 65504. Subnormals are left out
+    # because the unpack flushes them, which is the unpack and not the op.
+    probes = torch.arange(0x0400, 0x7C00, dtype=torch.int16).view(torch.float16)
+    # Quadratic-branch inputs exact in fp16 and bf16, so they show the op ran whatever the round.
+    sentinels = {-0.5: -0.375, -1.0: -0.5, -1.5: -0.375, -4.0: 0.0}
+    num_sentinel_lanes = num_elements - probes.numel()
+    sentinel_in = torch.tensor(list(sentinels), dtype=torch.float16).repeat(
+        num_sentinel_lanes // len(sentinels)
+    )
+    sentinel_out = torch.tensor(list(sentinels.values()), dtype=torch.float16).repeat(
+        num_sentinel_lanes // len(sentinels)
+    )
+    src_fp16 = torch.cat([probes, sentinel_in])
+    src_A = src_fp16.to(torch.float32)
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.Hardmish,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=False,
+            check_golden=False,
+        ),
+        dtype=torch.float32,
+    ).to(torch.float16)
+    assert res.numel() == num_elements, "result and stimulus differ in length"
+
+    # By value: -4.0 answers a zero whose sign the kernel does not pin.
+    res_sentinel = res[probes.numel() :]
+    off = res_sentinel != sentinel_out
+    num_off = int(off.sum())
+    assert num_off == 0, (
+        f"hardmish missed {num_off} of {off.numel()} quadratic-branch sentinels "
+        f"(dest_acc={dest_acc.name}), e.g. hardmish({sentinel_in[off][0].item()!r}) = "
+        f"{res_sentinel[off][0].item()!r}, expected {sentinel_out[off][0].item()!r}. The "
+        "op did not run on fp16 values, so the identity-branch checks would prove nothing."
+    )
+
+    x, got = probes, res[: probes.numel()]
+    wrong = got.view(torch.int16) != x.view(torch.int16)
+    num_wrong = int(wrong.sum())
+    nonfinite = wrong & ~torch.isfinite(got)
+    assert num_wrong == 0, (
+        f"hardmish(x) != x on {num_wrong} of {x.numel()} positive fp16 inputs "
+        f"(dest_acc={dest_acc.name}), e.g. {_fp16_lanes(wrong, x, got)}; "
+        f"{int(nonfinite.sum())} non-finite: {_fp16_lanes(nonfinite, x, got) or 'none'}. "
+        "For x >= 0 hardmish is the identity; a mismatch on a 16-bit Dest is the result being "
+        "rounded to bf16 although the Dest holds fp16a. See ckernel_sfpu_hardmish.h."
+    )
+
+
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).
