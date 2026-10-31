@@ -993,13 +993,18 @@ class PerfConfig(TestConfig):
     def _rc_prelude(self):
         """RC experiment. LLK_RC_PRE: comma list of this test's run types, run unrecorded before the measured
         pass (unknown names are an error). LLK_RC_HOOK: python file with hook(location), called after the
-        prelude, right before the measured kernel. LLK_RC_LOG: append one line per step."""
-        pre = [n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()]
+        prelude, right before the measured kernel. LLK_RC_LOG: append one line per step.
+        """
+        pre = [
+            n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()
+        ]
         by_name = {rt.name: (t, r, rt) for t, r, rt in self.rc_all_configs}
         log = os.environ.get("LLK_RC_LOG")
         for name in pre:
             if name not in by_name:
-                raise ValueError(f"LLK_RC_PRE: {name} not declared by this test ({sorted(by_name)})")
+                raise ValueError(
+                    f"LLK_RC_PRE: {name} not declared by this test ({sorted(by_name)})"
+                )
             self._rc_run_unrecorded(*by_name[name])
             if log:
                 with open(log, "a") as f:
@@ -1023,8 +1028,16 @@ class PerfConfig(TestConfig):
         window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            _pre = {n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()}
-            _extra = [c for c in self.rc_all_configs if c[2].name in _pre and c not in self.run_configs]
+            _pre = {
+                n.strip()
+                for n in os.environ.get("LLK_RC_PRE", "").split(",")
+                if n.strip()
+            }
+            _extra = [
+                c
+                for c in self.rc_all_configs
+                if c[2].name in _pre and c not in self.run_configs
+            ]
             for templates, runtimes, run_type in self.run_configs + _extra:
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
@@ -1043,6 +1056,16 @@ class PerfConfig(TestConfig):
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
         PerfConfig.TEST_COUNTER += 1
+
+        # Every Wormhole kernel ends with the pack TRISC as the last L1 port-3 requester (trisc.cpp), so every kernel
+        # starts from that arbiter state, except the first one on a core in this process: it follows whatever ran
+        # there before. Run the first test's first kernel once unrecorded so that one starts from it too.
+        if (
+            PerfConfig.TEST_COUNTER == 1
+            and not TestConfig.TEST_TARGET.run_simulator
+            and os.environ.get("LLK_PORT3_FIRST", "1") != "0"
+        ):
+            self._rc_run_unrecorded(*self.run_configs[0])
 
         self._rc_prelude()
 
