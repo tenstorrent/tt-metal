@@ -93,7 +93,8 @@ FusedHeadWeights prepare_fused_head_weights(
     std::optional<int64_t> l1_free = std::nullopt);
 
 // The head's planned layout, programs' host model and persistent words on the block's resources (made once; a call
-// only reads them).
+// only reads them). l1_free: the free L1 a core the head plans on (default: measured on the mesh now, as
+// FusedHead.env - the L1 left under the lowest occupied address, less what the block keeps after planning).
 struct FusedHeadSetup {
     std::shared_ptr<const HeadModel> model;
     HeadProgramConfig config;

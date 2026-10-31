@@ -191,6 +191,21 @@ def test_head_program_parity(mesh, case):
             where = f"chip ({r},{c}) kernel {i} {Path(k.kernel_source).name}"
             if _crs_cores(k.core_ranges) != _cores(kr["core_ranges"]):
                 errors.append(f"{where}: cores differ")
+            cfg, rcfg = k.config, kr["config"]
+            if rcfg["type"] == "compute":
+                mine_cfg = dict(
+                    math_fidelity=str(cfg.math_fidelity).split(".")[-1],
+                    fp32_dest_acc_en=bool(cfg.fp32_dest_acc_en),
+                    dst_full_sync_en=bool(cfg.dst_full_sync_en),
+                    math_approx_mode=bool(cfg.math_approx_mode),
+                    unpack_to_dest_mode=[j for j, m in enumerate(cfg.unpack_to_dest_mode) if "Fp32" in str(m)],
+                )
+                if mine_cfg != {k_: v for k_, v in rcfg.items() if k_ != "type"}:
+                    errors.append(f"{where}: compute config {mine_cfg}, the reference {rcfg}")
+            else:
+                noc = lambda n: 0 if str(n).split(".")[-1] in ("NOC_0", "RISCV_0_default") else 1  # noqa: E731
+                if str(cfg.processor).split(".")[-1] != rcfg["processor"] or noc(cfg.noc) != noc(rcfg["noc"]):
+                    errors.append(f"{where}: {cfg.processor} / {cfg.noc}, the reference {rcfg}")
             ct = list(k.compile_time_args)
             if ct != kr["compile_time_args"]:
                 errors.append(f"{where}: compile-time args {ct}, the reference {kr['compile_time_args']}")

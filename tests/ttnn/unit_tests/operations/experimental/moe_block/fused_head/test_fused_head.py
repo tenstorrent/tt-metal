@@ -82,6 +82,13 @@ class Head:
         )
         self.dtypes = mb.MoEDtypes()
         self.A = cfg["accumulators"]
+        self.l1 = cfg.get("l1_free")  # (the free L1 the reference's head planned on: the same layout)
+        fit = mb.plan_fused_head(self.res, self.dtypes, self.A, self.l1)
+        assert fit.ok, fit.why
+        lay = fit.planned[0].lay
+        got = {k: getattr(lay, k) for k in ("GY", "MT", "NCH", "KB", "on_engine", "GX", "compact", "split", "xdram")}
+        assert cfg["layout"] is None or got == cfg["layout"], f"planned {got}, the reference built {cfg['layout']}"
+        assert not lay.xdram, "the DRAM fallback's cases need x_full (not dumped yet)"
         w = torch.load(hz.case_dir("fused_head", meta["case"]) / "weights.pt")
         host = lambda k: ttnn.from_torch(w[k].float(), dtype=ttnn.float32) if k in w else None  # noqa: E731
         self.w = mb.prepare_fused_head_weights(
@@ -94,11 +101,14 @@ class Head:
             resources=self.res,
             dtypes=self.dtypes,
             accumulators=self.A,
+            l1_free=self.l1,
         )
         self.x = hz.to_mesh(ref, "x", mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     def __call__(self):
-        return mb.fused_head(self.x, self.w, resources=self.res, dtypes=self.dtypes, accumulators=self.A)
+        return mb.fused_head(
+            self.x, self.w, resources=self.res, dtypes=self.dtypes, accumulators=self.A, l1_free=self.l1
+        )
 
 
 @pytest.fixture(scope="module", params=CASES)

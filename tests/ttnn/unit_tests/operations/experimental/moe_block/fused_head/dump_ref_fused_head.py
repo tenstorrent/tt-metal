@@ -56,17 +56,25 @@ def dump(mesh, R, C, name, chunk, seed, A, hz, fabric):
     fit = FusedHead.plan(g, model, dtypes, mesh=mesh, accumulators=A)
     assert fit.ok, fit.why
     w = weights_of(model, seed)
-    head = FusedHead(
-        mesh,
-        g,
-        model,
-        w,
-        [],
-        deterministic=True,
-        accumulators=A,
-        fidelity=dtypes.shared_fidelity,
-        w_dtype=dtypes.shared_weights,
-    )
+    # (the free L1 the head's build planned on - HeadSE3 refits on the device's: the C++ op is given the same)
+    from models.demos.moe_block.tt import se_engine3
+
+    real, seen = se_engine3.l1_free_bytes, []
+    se_engine3.l1_free_bytes = lambda m: seen.append(real(m)) or seen[-1]
+    try:
+        head = FusedHead(
+            mesh,
+            g,
+            model,
+            w,
+            [],
+            deterministic=True,
+            accumulators=A,
+            fidelity=dtypes.shared_fidelity,
+            w_dtype=dtypes.shared_weights,
+        )
+    finally:
+        se_engine3.l1_free_bytes = real
     H = model.emb_dim
     x = x_of(chunk, H, seed).bfloat16()
     # (chip (r, c) holds rows r of the chunk's SP split, columns c of H's TP split)
@@ -106,6 +114,7 @@ def dump(mesh, R, C, name, chunk, seed, A, hz, fabric):
             sp_wraps=g.sp_wraps,
             layout=dataclasses.asdict(lay) if lay is not None else None,
             fabric=fabric,
+            l1_free=seen[-1],
             weights="weights.pt: gate, up [Is, H], down [H, Is], latent_down [Hr, H], router_weight [E, H], router_bias [E]",
             x="x_of(chunk, H, seed): torch.randn(chunk, H, Generator(seed + 1)), bfloat16",
         ),
