@@ -30,6 +30,16 @@ from models.demos.blackhole.qwen38_flash_next.tools import runtime_admission
 # -- the settings ----------------------------------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _line_fabric(monkeypatch):
+    """The descriptor pins below name the line descriptors; QWEN38_RING=auto would ask the cluster for its type."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn import contracts
+
+    monkeypatch.setenv("QWEN38_RING", "0")
+    monkeypatch.setattr(contracts, "_RING", None)
+
+
 def _devices(tmp_path: Path, nodes) -> Path:
     root = tmp_path / "tenstorrent"
     root.mkdir(exist_ok=True)

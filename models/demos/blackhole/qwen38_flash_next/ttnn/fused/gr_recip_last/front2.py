@@ -188,6 +188,7 @@ def _transport_program(mesh, stats, partials, rows, *, semaphores, cbs, kernels,
     cbs = list(cbs)
     # the stats phase's landing slots + staging: one raw L1 buffer on the transport cores AND the norm cores (one address on all)
     cbs.append(fp.cb_descriptor(stats.pack_cb, gr_read.BF16, (TP_SIZE + 2) * slot_a, 1, pack_cores))
+    ring = gr_fold.ring_route()
     mesh_program = ttnn.MeshProgramDescriptor()
     for rank, (coordinate, node) in enumerate(geometry.ranks()):
         base = [rank, 0, 0]
@@ -233,6 +234,7 @@ def _transport_program(mesh, stats, partials, rows, *, semaphores, cbs, kernels,
                     ttnn.CoreRangeSet([ttnn.CoreRange(cores[i], cores[i])]),
                     compile_args[i],
                     [(cores[i], base + list(per_link_args[i]))],
+                    defines=[("QWEN38_RING_ROUTE", "1")] if ring else (),
                 )
                 for i in range(links)
             ]
@@ -245,12 +247,14 @@ def _transport_program(mesh, stats, partials, rows, *, semaphores, cbs, kernels,
             semaphores=semaphores,
         )
         backward = [
-            ttnn.setup_fabric_connection(node, geometry.nodes[rank - 1], i, seed, cores[i]) if rank > 0 else []
+            ttnn.setup_fabric_connection(node, geometry.nodes[(rank - 1) % TP_SIZE], i, seed, cores[i])
+            if (rank > 0 or ring)
+            else []
             for i in range(links)
         ]
         forward = [
-            ttnn.setup_fabric_connection(node, geometry.nodes[rank + 1], i, seed, cores[i])
-            if rank + 1 < TP_SIZE
+            ttnn.setup_fabric_connection(node, geometry.nodes[(rank + 1) % TP_SIZE], i, seed, cores[i])
+            if (rank + 1 < TP_SIZE or ring)
             else []
             for i in range(links)
         ]

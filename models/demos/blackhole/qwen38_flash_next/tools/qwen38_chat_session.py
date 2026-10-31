@@ -116,11 +116,11 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROWS,
-    FABRIC_CONFIG,
     LONG_CHUNK_ROWS,
     MESH_SHAPE,
     TP_SIZE,
     Qwen38MeshContract,
+    fabric_config,
     is_slab_rows,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import ZERO_EMBEDDING_TOKEN
@@ -2097,7 +2097,7 @@ def open_partition_b_mesh(
     route, route_nodes = hardware_profile.route, hardware_profile.route_nodes
     lock_proof = hardware_profiles.verify_inherited_locks(hardware_profile)
     marker("before-fabric-enable")
-    ttnn.set_fabric_config(**FABRIC_CONFIG)
+    ttnn.set_fabric_config(**fabric_config())
     mesh = None
     try:
         marker("before-mesh-open")

@@ -105,10 +105,10 @@ from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_QSA_CACHE_CAPACITIES, Qwen38ResidentContext
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     DEFAULT_SLAB_ROWS,
-    FABRIC_CONFIG,
     MESH_SHAPE,
     SLAB_ROWS_RULE,
     TP_SIZE,
+    fabric_config,
     is_slab_rows,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, SAMPLING_CANDIDATES_PER_DEVICE
@@ -837,19 +837,26 @@ class Qwen38VLLMSlot:
     generator: torch.Generator | None = None
 
 
+class _ModelCapabilities:
+    """Class attribute computed on first access, so the ring choice (``contracts.ring_enabled``) is not made at import time."""
+
+    def __get__(self, instance, owner) -> dict:
+        return {
+            "fabric_config": fabric_config(),
+            "supports_device_penalties": True,
+            "supports_chunked_prefill": False,
+            "supports_prefix_caching": False,
+            "supports_async_decode": False,
+            "supports_sample_on_device": True,
+        }
+
+
 class Qwen38ForCausalLM:
     """vLLM adapter over the traced chain: one resident slot, host sampling from full-vocabulary logits, no MTP.
     ``supports_sample_on_device`` admits the plugin's ``sample_on_device_mode`` (``decode_only``): the sampled decode
     steps then return the token the adapter draws on the host from the same row (module docstring)."""
 
-    model_capabilities = {
-        "fabric_config": dict(FABRIC_CONFIG),
-        "supports_device_penalties": True,
-        "supports_chunked_prefill": False,
-        "supports_prefix_caching": False,
-        "supports_async_decode": False,
-        "supports_sample_on_device": True,
-    }
+    model_capabilities = _ModelCapabilities()
     decode_input_update_contract = 1
 
     def __init__(

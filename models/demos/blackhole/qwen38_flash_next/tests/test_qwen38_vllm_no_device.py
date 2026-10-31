@@ -53,6 +53,16 @@ def _guarded_host_path(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _line_fabric(monkeypatch):
+    """The capability pins below expect FABRIC_1D; QWEN38_RING=auto would ask the cluster (a device) for its type."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn import contracts
+
+    monkeypatch.setenv("QWEN38_RING", "0")
+    monkeypatch.setattr(contracts, "_RING", None)
+
+
+@pytest.fixture(autouse=True)
 def _write_token_row_path(monkeypatch):
     """The op-order pins below were written for the token-row write; QWEN38_TOKEN_FEEDBACK is on by default (x53), so
     pin the write path here and let the token-feedback tests set or delete the variable themselves."""

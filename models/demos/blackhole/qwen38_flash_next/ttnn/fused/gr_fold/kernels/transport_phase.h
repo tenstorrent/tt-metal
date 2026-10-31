@@ -81,7 +81,16 @@ struct LineSender {
     template <uint32_t RING>
     FORCE_INLINE void open(uint32_t my_rank, size_t& arg_idx) {
         rank = my_rank;
+#if defined(QWEN38_RING_ROUTE)
+        // ring of RING ranks: forward + backward = RING - 1; odd ranks forward RING / 2, even ranks RING / 2 - 1
+        // (stock static_alternate); every rank has both connections
+        constexpr uint32_t half = RING / 2;
 #if defined(COMPILE_FOR_BRISC)
+        range = (rank & 1) ? half : RING - 1 - half;
+#else
+        range = (rank & 1) ? RING - 1 - half : half;
+#endif
+#elif defined(COMPILE_FOR_BRISC)
         range = RING - 1 - rank;  // forward: the ranks above
 #else
         range = rank;  // backward: the ranks below

@@ -36,6 +36,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MESH_SHAPE,
     Qwen38MeshContract,
     TensorPlacement,
+    fabric_config,
     replicate_tensor_2d_mesh_mapper,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import Qwen38TTNNRoPE
@@ -51,7 +52,7 @@ RESIDUAL_BRANCHES = 4
 DEVICE_PARAMS = {
     "l1_small_size": 24576,
     "num_command_queues": 2,
-    "fabric_config": FABRIC_CONFIG["config"],
+    "fabric_config": fabric_config()["config"],
     "reliability_mode": FABRIC_CONFIG["reliability_mode"],
     "fabric_tensix_config": FABRIC_CONFIG["fabric_tensix_config"],
     "trace_region_size": 0,

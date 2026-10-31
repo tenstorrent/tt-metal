@@ -38,6 +38,16 @@ HOST_TWO_B = replace(HOST_ONE_B, host="host-two")
 TABLE = {**HARDWARE_PROFILES, "host-one": HOST_ONE_B, "host-one-a": HOST_ONE_A, "host-two": HOST_TWO_B}
 
 
+@pytest.fixture(autouse=True)
+def _line_fabric(monkeypatch):
+    """The descriptor pins below name the line descriptors; QWEN38_RING=auto would ask the cluster for its type."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn import contracts
+
+    monkeypatch.setenv("QWEN38_RING", "0")
+    monkeypatch.setattr(contracts, "_RING", None)
+
+
 def _resolve(name: str | None, *, host: str, visible: str | None = None) -> ResidentHardwareProfile:
     environment = {key: value for key, value in os.environ.items() if key != "TT_VISIBLE_DEVICES"}
     if visible is not None:

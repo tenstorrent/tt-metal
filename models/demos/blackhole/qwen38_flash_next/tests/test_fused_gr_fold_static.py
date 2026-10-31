@@ -189,7 +189,7 @@ def test_runtime_arg_layout_matches_the_python_side():
         in BUILDER
     )
     assert "base+=[vforxyint.consumersforvinxy]" in BUILDER
-    assert "ifrank>0else[]" in BUILDER and "ifrank+1<TP_SIZEelse[]" in BUILDER
+    assert "if(rank>0orring)else[]" in BUILDER and "if(rank+1<TP_SIZEorring)else[]" in BUILDER
     # BRISC forward (ranks above) takes the forward connection, NCRISC backward (ranks below) the backward one; the
     # program's own semaphores are in the seed descriptor before the connections' (backward, then forward)
     assert "transport(fp.reader_kernel,backward)+transport(fp.writer_kernel,forward)" in BUILDER
@@ -574,3 +574,23 @@ def test_row_mode_4_nobarrier_double_buffers_by_a_persistent_call_parity():
     assert brisc.index("done.wait(1);") < brisc.index("*call_counter=*call_counter+1;")
     assert "ifconstexpr(!NOBARRIER){line.arrive(" in flat(KERNEL2) and "NOBARRIER==(B_ROW_MODE==4)" in flat(KERNEL2)
     assert 'os.environ.get("QWEN38_GR_NOBARRIER","0")=="1"' in flat(inspect.getsource(gr_fold))
+
+
+def test_ring_switch_auto_is_galaxy_only(monkeypatch):
+    import ttnn
+    from models.demos.blackhole.qwen38_flash_next.ttnn import contracts
+
+    kinds = ttnn.cluster.ClusterType
+    asked = []
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: asked.append(1) or kinds.BLACKHOLE_GALAXY)
+    for mode, cluster_calls, expected in (("1", 0, True), ("0", 0, False), ("auto", 1, True)):
+        monkeypatch.setenv("QWEN38_RING", mode)
+        monkeypatch.setattr(contracts, "_RING", None)
+        asked.clear()
+        assert contracts.ring_enabled() is expected and len(asked) == cluster_calls
+        assert contracts.ring_enabled() is expected and len(asked) == cluster_calls  # evaluated once
+        assert (contracts.fabric_config()["config"] == ttnn.FabricConfig.FABRIC_1D_RING) is expected
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: kinds.P150_X4)
+    monkeypatch.delenv("QWEN38_RING")
+    monkeypatch.setattr(contracts, "_RING", None)
+    assert contracts.ring_enabled() is False

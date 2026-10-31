@@ -265,7 +265,14 @@ def mesh_device_profile_name(fallback: str, environ: Mapping[str, str] = os.envi
 
 
 def mesh_graph_descriptor_path(profile: ResidentHardwareProfile) -> Path | None:
-    return None if profile.mesh_graph_descriptor is None else Path(__file__).with_name(profile.mesh_graph_descriptor)
+    if profile.mesh_graph_descriptor is None:
+        return None
+    from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import ring_enabled
+
+    name = (
+        profile.mesh_graph_descriptor.replace("_line_", "_ring_") if ring_enabled() else profile.mesh_graph_descriptor
+    )
+    return Path(__file__).with_name(name)
 
 
 def export_mesh_graph_descriptor(profile: ResidentHardwareProfile) -> None:

@@ -254,8 +254,16 @@ def _row_mode(t, links, mode=None):
     return 3, -(-(my_tiles * packed) // 16) * 16
 
 
+def ring_route() -> bool:
+    """Every custom fabric exchange routes over the 1x8 ring (wrap connections rank 0 <-> rank 7, ring ranges in
+    ``LineSender::open``) when ``contracts.ring_enabled()`` (``QWEN38_RING``)."""
+    from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import ring_enabled
+
+    return ring_enabled()
+
+
 def transport_mesh_program(
-    mesh, transports, *, semaphores, cbs, kernels=lambda rank: [], links: int = 1
+    mesh, transports, *, semaphores, cbs, kernels=lambda rank: [], links: int = 1, ring: bool | None = None
 ) -> "ttnn.MeshProgramDescriptor":
     """One ProgramDescriptor per mesh coordinate: ``kernels(rank)`` plus, per link, the transport core's reader (NCRISC,
     backward) and writer (BRISC, forward) with the device's rank and fabric connections.  One ``Transport`` runs
@@ -310,6 +318,7 @@ def transport_mesh_program(
                     ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
                 )
             )
+    ring = ring_route() if ring is None else ring
     mesh_program = ttnn.MeshProgramDescriptor()
     for rank, (coordinate, node) in enumerate(geometry.ranks()):
         before, after = (first.delays or {}).get(rank, (0, 0))
@@ -355,6 +364,7 @@ def transport_mesh_program(
                     ttnn.CoreRangeSet([ttnn.CoreRange(cores[i], cores[i])]),
                     compile_args[i],
                     [(cores[i], base + list(per_link_args[i]))],
+                    defines=[("QWEN38_RING_ROUTE", "1")] if ring else (),
                 )
                 for i in range(links)
             ]
@@ -367,13 +377,15 @@ def transport_mesh_program(
             semaphores=semaphores,
         )
         backward = [
-            ttnn.setup_fabric_connection(node, geometry.nodes[rank - 1], i, seed, cores[i]) if rank > 0 else []
+            ttnn.setup_fabric_connection(node, geometry.nodes[(rank - 1) % TP_SIZE], i, seed, cores[i])
+            if (rank > 0 or ring)
+            else []
             for i in range(links)
         ]
         forward = [
             (
-                ttnn.setup_fabric_connection(node, geometry.nodes[rank + 1], i, seed, cores[i])
-                if rank + 1 < TP_SIZE
+                ttnn.setup_fabric_connection(node, geometry.nodes[(rank + 1) % TP_SIZE], i, seed, cores[i])
+                if (rank + 1 < TP_SIZE or ring)
                 else []
             )
             for i in range(links)

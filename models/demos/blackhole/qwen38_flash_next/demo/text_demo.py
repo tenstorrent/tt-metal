@@ -45,7 +45,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import resolve_route
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTEXT_HEADROOM
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import FABRIC_CONFIG, MESH_SHAPE
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import FABRIC_CONFIG, MESH_SHAPE, fabric_config
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -72,6 +72,7 @@ def device_params(request):
     params = dict(request.param)
     profile = hardware_profiles.resolve_hardware_profile(hardware_profiles.mesh_device_profile_name("p150-x8"))
     hardware_profiles.export_mesh_graph_descriptor(profile)
+    params["fabric_config"] = fabric_config()["config"]
     if tuple(profile.system_mesh_local_shape) != tuple(MESH_SHAPE):
         pytest.fail(
             f"hardware profile {profile.lane} has the physical mesh shape {tuple(profile.system_mesh_local_shape)}, "

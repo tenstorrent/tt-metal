@@ -29,6 +29,35 @@ FABRIC_CONFIG = {
     "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
     "fabric_tensix_config": ttnn.FabricTensixConfig.DISABLED,
 }
+
+
+_RING: bool | None = None
+
+
+def ring_enabled() -> bool:
+    """Whether fabric and every custom exchange use the 1x8 ring (FABRIC_1D_RING, the ring mesh graph descriptor, wrap
+    connections).  ``QWEN38_RING``: "auto" (default), "1" force the ring, "0" force the line.  "auto" is the ring only on a
+    Blackhole Galaxy: the ring is verified there, the target p150 x8 host is not verified for a 1x8 ring.  The cluster
+    type is read once, on first use, so call this before the mesh opens and not at import time."""
+    global _RING
+    if _RING is None:
+        mode = os.environ.get("QWEN38_RING", "auto")
+        if mode not in ("auto", "0", "1"):
+            raise ValueError(f"QWEN38_RING must be auto, 0 or 1, got {mode!r}")
+        _RING = mode == "1" or (
+            mode == "auto" and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        )
+    return _RING
+
+
+def fabric_config() -> dict:
+    """``FABRIC_CONFIG`` with the ring fabric when ``ring_enabled()``; use this where the mesh is opened."""
+    config = dict(FABRIC_CONFIG)
+    if ring_enabled():
+        config["config"] = ttnn.FabricConfig.FABRIC_1D_RING
+    return config
+
+
 POSITION_SCALAR_SHAPE = (1, 1, 1, 1)
 POSITION_INDEX_ROW_SHAPE = (1, 1, 1, ttnn.TILE_SIZE)
 # P & ~3 lane mask.  Kept in a tensor: values >= 2**31 must not take the scalar
