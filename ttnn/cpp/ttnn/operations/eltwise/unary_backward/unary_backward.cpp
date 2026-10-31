@@ -667,26 +667,21 @@ std::vector<Tensor> acosh_bw(
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
 
+    Tensor is_pole = ttnn::eq(in_sq, 1.0f, std::nullopt, output_mem_config);
+    Tensor is_nan = ttnn::logical_or(
+        ttnn::lt(in_sq, 1.0f, std::nullopt, output_mem_config),
+        ttnn::logical_and(is_pole, ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+
     Tensor check_condition =
         ttnn::multiply(ttnn::signbit(grad, output_mem_config), -1.0f, std::nullopt, output_mem_config);
 
     grad_a = ttnn::where(
-        ttnn::logical_or(
-            ttnn::lt(in_sq, 1.0f, std::nullopt, output_mem_config),
-            ttnn::logical_and(
-                ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
-                ttnn::eqz(grad, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            std::nullopt,
-            output_mem_config),
+        is_nan,
         t_nan,
         ttnn::where(
-            ttnn::logical_and(
-                ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
-                ttnn::ge(input, -1.0f, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
+            is_pole,
             ttnn::multiply(
                 ttnn::add(
                     check_condition, ttnn::eqz(check_condition, output_mem_config), std::nullopt, output_mem_config),
