@@ -39,7 +39,12 @@ void kernel_main() {
             dfb_in0.reserve_back(num_tiles_per_row);
             uint32_t l1_write_addr = dfb_in0.get_write_ptr();
             const uint32_t pad_bytes = padded_X_size << 5;  // "<< 5" = "* tile_height"
-            dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, pad_bytes, pad_value);
+            if (pad_value == 0 && (pad_bytes & 15) == 0) {
+                noc.async_write_zeros(dfb_in0, pad_bytes);
+                noc.write_zeros_l1_barrier();
+            } else {
+                dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, pad_bytes, pad_value);
+            }
             dfb_in0.push_back(num_tiles_per_row);
         }
     };
@@ -77,8 +82,18 @@ void kernel_main() {
         }
 
         const uint32_t row_pad_bytes = padding_rows * padded_X_size;
-        dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, row_pad_bytes, pad_value);
+        // Zero padding goes through the NoC zero engine instead of a scalar store loop.
+        const uint32_t pad_offset = l1_write_addr - dfb_in0.get_write_ptr();
+        const bool use_zero_engine = (pad_value == 0) && row_pad_bytes != 0 && ((pad_offset | row_pad_bytes) & 15) == 0;
+        if (use_zero_engine) {
+            noc.async_write_zeros(dfb_in0, row_pad_bytes, {.offset_bytes = pad_offset});
+        } else {
+            dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, row_pad_bytes, pad_value);
+        }
         noc.async_read_barrier();
+        if (use_zero_engine) {
+            noc.write_zeros_l1_barrier();
+        }
         dfb_in0.push_back(num_tiles_per_row * has_rows);
     };
 
