@@ -38,7 +38,9 @@ def test_flag_is_the_one_call_slab_under_the_switch():
 def test_owner_row_and_owned_buffers_cover_the_program():
     assert "if self.moe_post_fused or self.slab_combine_fused:" in MOE
     assert '("expert_owner",) if (self.moe_post_fused or self.slab_combine_fused) else ()' in MOE
-    assert 'for name in ("expert_mapping", "local_combine_output", "expert_owner"):' in MOE  # released with the rest
+    assert (
+        'for name in ("expert_mapping", "local_combine_output", "expert_owner", "expert_owner_spread"):' in MOE
+    )  # released with the rest
 
 
 def test_slab_reduce_takes_the_program_under_admission_and_keeps_the_blocks():

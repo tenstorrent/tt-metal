@@ -52,7 +52,16 @@ CBS = (
 CB_INDEX = {name: index for name, index, _dtype, _bytes, _pages in CBS}
 READER_ARGS = ("pages", "scores", "indices", "owner", "shared", "sig", "tile_col", "rows")
 WRITER_ARGS = ("out", "tile_col")
+FOLD_ENV = "QWEN38_MOE_POST_FOLD"  # default "1": the writer core zero-seeds the tiles and reads the sigmoid tile, the owner row is spread
+OWNER_PAGES = 8  # the spread owner tensor: one page per DRAM bank, read by core (tile_col % OWNER_PAGES)
+CB_ZDONE = ("cb_zdone", 9, U16, 64, 1)  # writer -> reader: the zero seeds have landed
 DEVICE_ENV = "QWEN38_FUSED_MOE_POST_DEVICE"  # the gate's device index (owner row) on one chip
+
+
+def fold_on() -> bool:
+    import os
+
+    return os.environ.get(FOLD_ENV, "1") == "1"
 
 
 def owner_rows(devices: int = TP_SIZE) -> torch.Tensor:
@@ -85,7 +94,7 @@ def _check_inputs(pages, scores, indices, owner, shared, sigmoid) -> int:
     ):
         raise ValueError(f"moe_post pages must be ROW_MAJOR bf16 [{TOP_K}, {rows}, {HIDDEN}], got {list(pages.shape)}")
     if (
-        tuple(int(v) for v in owner.shape) != (1, EXPERTS)
+        tuple(int(v) for v in owner.shape) not in ((1, EXPERTS), (OWNER_PAGES, EXPERTS))
         or owner.dtype != U16
         or owner.layout != ttnn.ROW_MAJOR_LAYOUT
     ):
@@ -128,16 +137,21 @@ def moe_post_program(pages, scores, indices, owner, shared, sigmoid, out, *, row
     work = fp.split_work(HIDDEN_TILES, mesh)
     cores = fp.core_rectangle(work)
     stage_pages = rows * TOP_K + 1
-    named = [(name, index) for name, index, _dtype, _bytes, _pages in CBS] + [
+    fold = fold_on()
+    cb_table = CBS + ((CB_ZDONE,) if fold else ())
+    owner_pages = int(owner.shape[0])
+    fold_defines = [("MP_FOLD", "1")] if fold else []
+    named = [(name, index) for name, index, _dtype, _bytes, _pages in cb_table] + [
         ("top_k", TOP_K),
         ("has_sig", 0 if sigmoid is None else 1),
         ("stage_pages", stage_pages),
         ("owner_bytes", OWNER_BYTES),
         ("route_contiguous", route_contiguous(scores, indices)),
+        *((("fold", 1), ("owner_pages", owner_pages)) if fold else ()),
     ]
     cbs = [
         fp.cb_descriptor(index, dtype, page_bytes, stage_pages if pages_ is None else pages_, cores)
-        for _name, index, dtype, page_bytes, pages_ in CBS
+        for _name, index, dtype, page_bytes, pages_ in cb_table
     ]
     sig = shared if sigmoid is None else sigmoid  # the absent sigmoid's accessor args still have to be laid out
     reader = fp.reader_kernel(
@@ -167,28 +181,40 @@ def moe_post_program(pages, scores, indices, owner, shared, sigmoid, out, *, row
             )
             for w in work
         ],
+        defines=fold_defines,
         named=named,
     )
     writer = fp.writer_kernel(
         KERNELS["writer"],
         cores,
-        fp.accessor_args(out),
-        [(w.core, [out.buffer_address(), w.start]) for w in work],
+        [*fp.accessor_args(out), *(fp.accessor_args(sig) if fold else [])],
+        [(w.core, [out.buffer_address(), w.start, *([sig.buffer_address()] if fold else [])]) for w in work],
+        defines=fold_defines,
         named=named,
     )
     compute = fp.compute_kernel(
-        KERNELS["compute"], cores, [], named=named, fidelity=ttnn.MathFidelity.HiFi4, fp32_dest=True
+        KERNELS["compute"],
+        cores,
+        [],
+        defines=fold_defines,
+        named=named,
+        fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest=True,
     )
     return fp.program_descriptor([reader, writer, compute], cbs=cbs)
 
 
-def moe_post(pages, scores, indices, owner, shared, *, sigmoid=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def moe_post(
+    pages, scores, indices, owner, shared, *, sigmoid=None, memory_config=ttnn.DRAM_MEMORY_CONFIG, owner_spread=None
+):
     """The layer's local MoE sum ``[1, 1, rows, 2560]`` bf16 TILE: the score-weighted sum of the owned slots of
     ``pages`` (``moe_compute``'s ``[10, rows, 2560]`` ROW_MAJOR local combine buffer; unowned slots are never read)
     plus ``shared`` (TILE ``[1, 1, rows, 2560]``: the gated shared partial, or the ungated down-linear shard when
     ``sigmoid`` -- its column-broadcast sigmoid tile -- is given).  ``scores`` / ``indices`` are the ROW_MAJOR routing
     rows, ``owner`` this device's ``[1, 512]`` uint16 expert owner row."""
 
+    if owner_spread is not None and fold_on():
+        owner = owner_spread  # ``owner`` in one page per DRAM bank (QWEN38_MOE_POST_FOLD=1)
     rows = _check_inputs(pages, scores, indices, owner, shared, sigmoid)
     mesh = pages.device()
     out = fp.stamp_topology(fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh, memory_config), pages)
@@ -236,7 +262,9 @@ def _compute_config(mesh):
     )
 
 
-def moe_post_composed(pages, scores, indices, owner, shared, *, sigmoid=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def moe_post_composed(
+    pages, scores, indices, owner, shared, *, sigmoid=None, memory_config=ttnn.DRAM_MEMORY_CONFIG, owner_spread=None
+):
     """The composed chain on one chip, op for op as the model issues it: tilize of the pages,
     ``deepseek_moe_fast_reduce_nc_fused`` with this device's ownership (the model's reader keeps the scores of the
     experts whose owner is on its cluster axis; on one chip ``cluster_axis=1`` keeps expert ``e`` when the mapping

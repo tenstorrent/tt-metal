@@ -559,6 +559,7 @@ class Qwen38TTNNMoE:
     slab_combine_fused = False
     routing_in_l1 = False
     expert_owner = None
+    expert_owner_spread = None
     # The prefill slab's dense-linear policy (ttnn/prefill_dense: the QWEN38_PREFILL_DENSE_* switches) for the shared
     # expert's slab linears; the router and every decode linear never read it.
     prefill_dense: Qwen38TTNNPrefillDense | None = None
@@ -789,6 +790,16 @@ class Qwen38TTNNMoE:
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 0)),
                 )
                 mesh_contract.validate_tensor(self.expert_owner, placement=TensorPlacement.EXPERT_SHARDED, shard_dim=0)
+                if self.moe_post_fused and fused.moe_post.fold_on():
+                    # the same owner row in one page per DRAM bank: the 80 post cores read different banks
+                    self.expert_owner_spread = ttnn.from_torch(
+                        fused.moe_post.owner_rows(MESH_SHAPE[1]).repeat_interleave(fused.moe_post.OWNER_PAGES, 0),
+                        device=mesh_device,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        dtype=ttnn.uint16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 0)),
+                    )
             if self.slab and not self.slab_one_call:
                 if self.routed_tokens != LONG_PREFILL_CHUNK_ROWS:
                     raise ValueError(f"a slab MoE instance routes {LONG_PREFILL_CHUNK_ROWS} tokens per call")
@@ -834,7 +845,7 @@ class Qwen38TTNNMoE:
                 failures.append(("block_instance", error))
             else:
                 self.block_instance = None
-        for name in ("expert_mapping", "local_combine_output", "expert_owner"):
+        for name in ("expert_mapping", "local_combine_output", "expert_owner", "expert_owner_spread"):
             tensor = getattr(self, name, None)
             if tensor is None:
                 continue
@@ -1435,6 +1446,7 @@ class Qwen38TTNNMoE:
             shared_partial,
             sigmoid=sigmoid,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            owner_spread=self.expert_owner_spread,
         )
         if _shape(local_sum) != self.row_contract.full_hidden:
             raise RuntimeError(

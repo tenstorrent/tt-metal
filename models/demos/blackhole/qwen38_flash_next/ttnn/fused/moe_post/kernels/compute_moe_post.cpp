@@ -50,6 +50,65 @@ void kernel_main() {
     DataflowBuffer gated(cb_gated);
     DataflowBuffer out(cb_out);
 
+#ifdef MP_FOLD
+    // fold build: the shared partial times its sigmoid first (both tiles are there long before the activation tiles),
+    // then the weighted sum.  The two stages share no data; each runs its own init, so every element sees the same ops.
+    compute_kernel_hw_startup(cb_act, cb_scores, cb_routed);
+    {
+        FUSED_ZONE("fz_mp_c_sig");
+        // ---- binary_ng SFPU multiply of the ungated shared partial by its broadcast sigmoid (has_sig) ----
+        shared.wait_front(1);
+        if constexpr (has_sig) {
+            sig.wait_front(1);
+            gated.reserve_back(1);
+            mul_binary_tile_init();
+            tile_regs_acquire();
+            reconfig_data_format_srca(cb_act, cb_shared);
+            copy_init(cb_shared);
+            copy_tile(cb_shared, 0, 0);
+            reconfig_data_format_srca(cb_shared, cb_sig);
+            copy_init(cb_sig);
+            copy_tile(cb_sig, 0, 1);
+            mul_binary_tile<false>(0, 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_gated);
+            pack_tile(0, cb_gated);
+            tile_regs_release();
+            gated.push_back(1);
+            shared.pop_front(1);
+            sig.pop_front(1);
+            gated.wait_front(1);
+        }
+    }
+
+    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_act, cb_scores);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
+        cb_act, cb_scores, 1 /*acc_to_dest*/)));
+    reconfig_data_format(cb_act, cb_scores);
+    {
+        FUSED_ZONE("fz_mp_c_wait");
+        scores.wait_front(top_k);
+        act.wait_front(top_k);
+    }
+    {
+        FUSED_ZONE("fz_mp_c_mac");
+        tile_regs_acquire();
+        for (uint32_t k = 0; k < top_k; ++k) {
+            mul_tiles_bcast_cols(cb_act, cb_scores, k, k, 0);
+        }
+        tile_regs_commit();
+        routed.reserve_back(1);
+        pack_reconfig_data_format(cb_routed);
+        tile_regs_wait();
+        pack_tile(0, cb_routed);
+        tile_regs_release();
+        routed.push_back(1);
+        act.pop_front(top_k);
+        scores.pop_front(top_k);
+    }
+
+#else
     // ---- deepseek_moe_fast_reduce_nc_fused_compute.cpp ----
     compute_kernel_hw_startup(cb_act, cb_scores, cb_routed);
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_act, cb_scores);
@@ -105,6 +164,8 @@ void kernel_main() {
             gated.wait_front(1);
         }
     }
+
+#endif
 
     {
         FUSED_ZONE("fz_mp_c_add");

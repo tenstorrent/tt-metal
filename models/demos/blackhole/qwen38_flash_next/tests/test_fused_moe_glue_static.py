@@ -54,13 +54,15 @@ def test_post_cb_table_and_named_args():
     assert len(set(indices)) == len(indices) and max(indices) < 32 and mp.CB_INDEX["cb_out"] == 16
     for name in ("cb_act", "cb_scores"):
         assert dict((n, p) for n, _i, _d, _b, p in mp.CBS)[name] == mp.TOP_K
-    extra = {"top_k", "has_sig", "stage_pages", "owner_bytes", "route_contiguous"}
+    extra = {"top_k", "has_sig", "stage_pages", "owner_bytes", "route_contiguous", "owner_pages", "cb_zdone"}
     for kernel in ("reader", "compute", "writer"):
         names = _named(POST[kernel])
         assert names, kernel
         assert names <= set(mp.CB_INDEX) | extra, names - set(mp.CB_INDEX)
     assert _runtime_indices(POST["reader"]) == list(range(len(mp.READER_ARGS)))
-    assert _runtime_indices(POST["writer"]) == list(range(len(mp.WRITER_ARGS)))
+    assert _runtime_indices(POST["writer"]) == list(
+        range(len(mp.WRITER_ARGS) + 1)
+    )  # + the fold build's sigmoid address
     assert POST["reader"].count("next_compile_time_args_offset()") == 5  # six accessors chained
     program = inspect.getsource(mp.moe_post_program)
     for tensor in ("pages", "scores", "indices", "owner", "shared", "sig"):
@@ -82,13 +84,17 @@ def test_post_compute_pins_the_replaced_ops_instruction_sequences():
     assert "mul_binary_tile<false>(0, 1, 0)" in compute
     assert "binary_tiles_init<true, EltwiseBinaryType::ELWADD>(cb_routed, cb_rhs)" in compute
     assert "add_tiles(cb_routed, cb_rhs, 0, 0, 0)" in compute and "add_binary_tile" not in compute
+    assert (
+        "#ifdef MP_FOLD" in compute
+    )  # the fold build runs the sigmoid multiply first; the plain order is pinned below
+    compute = compute.split("#else\n", 1)[1]
     mac, mul, add = (
         compute.index(call)
         for call in ("mul_tiles_bcast_cols(cb_act", "mul_binary_tile<false>(0, 1, 0)", "add_tiles(cb_routed")
     )
     assert mac < mul < add
     program = inspect.getsource(mp.moe_post_program)
-    assert "fidelity=ttnn.MathFidelity.HiFi4, fp32_dest=True" in program
+    assert "fidelity=ttnn.MathFidelity.HiFi4,\n        fp32_dest=True," in program
 
 
 def test_post_reader_face_addressing_and_score_tiles():

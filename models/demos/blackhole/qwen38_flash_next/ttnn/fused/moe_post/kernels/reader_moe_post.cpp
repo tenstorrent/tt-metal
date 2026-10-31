@@ -42,6 +42,10 @@ void kernel_main() {
     constexpr uint32_t cb_sig = get_named_compile_time_arg_val("cb_sig");
     constexpr uint32_t top_k = get_named_compile_time_arg_val("top_k");
     constexpr uint32_t has_sig = get_named_compile_time_arg_val("has_sig");
+#ifdef MP_FOLD
+    constexpr uint32_t cb_zdone = get_named_compile_time_arg_val("cb_zdone");
+    constexpr uint32_t owner_pages = get_named_compile_time_arg_val("owner_pages");
+#endif
     constexpr uint32_t stage_pages = get_named_compile_time_arg_val("stage_pages");
     constexpr uint32_t owner_bytes = get_named_compile_time_arg_val("owner_bytes");
     constexpr uint32_t route_contiguous = get_named_compile_time_arg_val("route_contiguous");
@@ -88,6 +92,44 @@ void kernel_main() {
     uint32_t owned[32];
     {
         FUSED_ZONE("fz_mp_r_setup");
+#ifdef MP_FOLD
+        // fold build: the writer core seeds the activation tiles and reads the sigmoid tile (cb_zdone says the zeros
+        // landed); the owner row comes from this core's own DRAM bank page; the routing reads go out before anything
+        // else
+        shared_tile.reserve_back(1);
+        noc.async_read(
+            shared, CoreLocalMem<uint32_t>(shared_tile.get_write_ptr()), tile_bytes, {.page_id = tile_col}, {});
+        act.reserve_back(top_k);
+        act_base = act.get_write_ptr();
+        score_tiles.reserve_back(top_k);
+        stile_base = score_tiles.get_write_ptr();
+        owner_row.reserve_back(1);
+        owner_base = owner_row.get_write_ptr();
+        noc.async_read(owner, CoreLocalMem<uint32_t>(owner_base), owner_bytes, {.page_id = tile_col % owner_pages}, {});
+        route.reserve_back(2);
+        idx_base = route.get_write_ptr();
+        sc_base = idx_base + 32 * route_pitch;
+        if constexpr (route_contiguous) {
+            route_words = indices.get_aligned_page_size() / 2;
+            noc_async_read(indices.get_noc_addr(0), idx_base, rows * 2 * route_words);
+            noc_async_read(scores.get_noc_addr(0), sc_base, rows * 2 * route_words);
+        } else {
+            for (uint32_t j = 0; j < rows; ++j) {
+                noc.async_read(
+                    indices, CoreLocalMem<uint32_t>(idx_base + j * route_pitch), route_bytes, {.page_id = j}, {});
+                noc.async_read(
+                    scores, CoreLocalMem<uint32_t>(sc_base + j * route_pitch), route_bytes, {.page_id = j}, {});
+            }
+        }
+        // the score tiles' zeros: the reader's share of the seeding (the writer core seeds the activation tiles)
+        noc.async_write_zeros(CoreLocalMem<uint32_t>(stile_base), top_k * tile_bytes, {});
+        DataflowBuffer zdone(cb_zdone);
+        noc.async_read_barrier();
+        zdone.wait_front(1);
+        zdone.pop_front(1);
+        shared_tile.push_back(1);
+    }
+#else
         // the shared partial tile (and the sigmoid tile) first: the reads overlap the routing work
         shared_tile.reserve_back(1);
         noc.async_read(
@@ -129,6 +171,7 @@ void kernel_main() {
             sig_tile.push_back(1);
         }
     }
+#endif
 
     {
         FUSED_ZONE("fz_mp_r_scores");
