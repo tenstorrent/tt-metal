@@ -421,6 +421,7 @@ ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-devel
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @jonathansuTT
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_prefill/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/tt-ops-code-gen
 ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT
@@ -547,6 +548,7 @@ tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
 tests/ttnn/unit_tests/kernel_lib/ @tenstorrent/metalium-developers-kernel-lib
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement
+tests/ttnn/unit_tests/operations/ccl/**/test_matmul_reduce_scatter_prefill_bh.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/tt-ops-code-gen
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
 tests/ttnn/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce

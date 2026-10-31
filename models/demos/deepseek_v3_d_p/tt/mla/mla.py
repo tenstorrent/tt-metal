@@ -1153,21 +1153,25 @@ class ttMLA:
         layer and shared: _q_stem consumes it for q_b_proj, and (when present) TtIndexer.forward reads
         it for the indexer queries — so the sparse path no longer recomputes the q_a stem."""
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
-        qr = ttnn.linear(
-            hidden_states,
-            self.q_a_proj_weight,
-            **self._get_mm_kwargs("q_a_proj", seq_len_local),
-        )
-
-        # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
-            qr = self._tp_all_reduce(qr, self._q_a_latent_gather_output, seq_len_local)
+            qr = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self.q_a_proj_weight,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            qr = self._tp_all_gather(qr, self._q_a_latent_gather_output, seq_len_local)
+        else:
+            qr = ttnn.linear(
+                hidden_states,
+                self.q_a_proj_weight,
+                **self._get_mm_kwargs("q_a_proj", seq_len_local),
+            )
         return self._q_a_norm(qr, norm_memory_config)
 
     def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
-        assert (
-            seq_len_local == self.active_seq_len_local
-        ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
         x = ttnn.experimental.reduce_scatter_minimal_async(
             x,
             persistent_output_buffers=None,
@@ -1179,6 +1183,12 @@ class ttMLA:
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
+        return self._tp_all_gather(x, gather_output, seq_len_local)
+
+    def _tp_all_gather(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        assert (
+            seq_len_local == self.active_seq_len_local
+        ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
         return ttnn.experimental.high_bw_all_gather(
             x,
             dim=3,
@@ -1635,23 +1645,20 @@ class ttMLA:
             g = self._output_gate(hidden_states, seq_len_local)
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
-        v_out = ttnn.linear(
+        if self.tp_factor > 1:
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                v_out,
+                self.o_proj_weight,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+        return ttnn.linear(
             v_out,
             self.o_proj_weight,
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
-        if self.tp_factor > 1:
-            return ttnn.experimental.reduce_scatter_minimal_async(
-                v_out,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
-                cluster_axis=self.tp_axis,
-            )
-        return v_out
 
     # Expects activation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
