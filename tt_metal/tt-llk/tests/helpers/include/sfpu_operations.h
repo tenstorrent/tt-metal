@@ -492,6 +492,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::cbrt)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(cube_root_init<APPROX_MODE>);
+        ckernel::sfpu::cbrt_bf16_tile_init<!is_fp32_dest_acc_en && ITERATIONS == 32>();
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
