@@ -55,9 +55,7 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | hardtanh, clamp, clip,   | all                            | exact                          |
 | threshold, tril, triu,   |                                |                                |
 | bitcast                  |                                |                                |
-| round                    | decimals None, 0               | exact                          |
-|                          | decimals 6, 7                  | ULP ≤ 1                        |
-|                          | decimals < 0                   | abs ≤ 10^-decimals + 2 ULP     |
+| round                    | all decimals                   | exact                          |
 | selu                     | golden < SNB                   | exactly 0                      |
 |                          | default scale/alpha            | ULP ≤ 3                        |
 |                          | scale * alpha = 1              | ULP ≤ 1                        |
@@ -387,16 +385,12 @@ def test_bitcast(device):
 def test_round(device, decimals):
     """round(x, decimals), including both ends of the supported -6..7 range.
 
-    | decimals | Input range | Check                     | Reason                                 |
-    |----------|-------------|---------------------------|----------------------------------------|
-    | None, 0  | all         | exact                     | round to integer                       |
-    | 6, 7     | overflow    | ±inf                      | x * 10^decimals overflows (7.8% of the |
-    |          |             |                           | lattice at 6, 9.1% at 7)               |
-    |          | elsewhere   | ULP ≤ 1                   | one rounding of the rescale            |
-    | < 0      | all         | abs ≤ 10^-decimals        | near a tie, the device's or the        |
-    |          |             | + 2 ULP                   | golden's float32 quotient can round to |
-    |          |             |                           | the next step (62 ULP at decimals=-3,  |
-    |          |             |                           | x = 1.447e8)                           |
+    | decimals | Input range | Check | Reason                                         |
+    |----------|-------------|-------|------------------------------------------------|
+    | None, 0  | all         | exact | round to integer                               |
+    | 6, 7     | overflow    | ±inf  | x * 10^decimals overflows (7.8% of the lattice |
+    |          |             |       | at 6, 9.1% at 7)                               |
+    | ≠ 0      | elsewhere   | exact |                                                |
     """
     input_tensor = generate_float32_bits()
 
@@ -416,12 +410,19 @@ def test_round(device, decimals):
     label = f"round(decimals={decimals})"
     _assert_inf_matches(golden, result, label)
     finite = torch.isfinite(golden)
-    golden, result = golden[finite], result[finite]
-    if decimals > 0:
-        assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
-    else:
-        bound = 10.0**-decimals + 2 * ulp(golden)
-        _assert_abs_within(golden, result, bound, label)
+    assert_equal(golden[finite], result[finite])
+
+
+@pytest.mark.parametrize("decimals", [-6, -3, -2, -1, 1, 2, 3, 7])
+def test_round_near_ties(device, decimals):
+    torch.manual_seed(0)
+    ties = ((torch.randint(-(2**15), 2**15, (32, 32), dtype=torch.float64) + 0.5) * 10.0**-decimals).float()
+    up = torch.nextafter(ties, torch.full_like(ties, math.inf))
+    down = torch.nextafter(ties, torch.full_like(ties, -math.inf))
+    input_tensor = torch.cat([ties, up, down])
+
+    result = ttnn.to_torch(ttnn.round(to_float32_tt_tensor(input_tensor, device), decimals=decimals))
+    assert_equal(torch.round(input_tensor, decimals=decimals), result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
