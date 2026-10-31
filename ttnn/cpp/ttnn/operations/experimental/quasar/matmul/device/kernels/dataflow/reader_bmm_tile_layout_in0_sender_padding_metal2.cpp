@@ -426,7 +426,8 @@ void kernel_main() {
                         // stalls right after RBD). All the usual intervening work is gated out here:
                         //   - IN0_SHARDED: the borrowed shard is already resident, so there is no
                         //     interleaved NOC read (#ifndef IN0_SHARDED block skipped), and
-                        //     EXTRACT_SHARD_SUB_BLOCKS is off on this path (shard_w == in0_block_w), so
+                        //     EXTRACT_SHARD_SUB_BLOCKS is off on this path (shard_w == in0_block_w and
+                        //     at most one of the row-block / col-block counts exceeds 1), so
                         //     the sub-block self-read is skipped too;
                         //   - SKIP_MCAST (mcast_in1): the in0 mcast/sem block is elided;
                         //   - in0_last_ktile_w == 0 (K % 32 == 0): pad_last_ktile is skipped.
