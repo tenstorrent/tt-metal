@@ -399,7 +399,7 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
         const auto& range = ranges[i];
         os << "{";
         os << R"("start":{"x":)" << range.start_coord.x << R"(,"y":)" << range.start_coord.y << R"(},)";
-        os << R"("end":{"x":)" << range.end_coord.x << R"(,"y":)" << range.end_coord.y << R"()";
+        os << R"("end":{"x":)" << range.end_coord.x << R"(,"y":)" << range.end_coord.y << R"(})";
         os << "}";
         if (i < ranges.size() - 1) {
             os << ", ";
