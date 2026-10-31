@@ -1574,7 +1574,7 @@ class Qwen38TTNNPLE:
         key_fp32 = ttnn.typecast(key_global, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
         query_fp32 = ttnn.typecast(query_global, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
         _deallocate(key_global, query_global)
-        products = ttnn.multiply(key_fp32, query_fp32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        products = ttnn.multiply(key_fp32, query_fp32, memory_config=dram)
         _deallocate(key_fp32, query_fp32)
         unscaled_gate = ttnn.sum(
             products, dim=3, keepdim=True, memory_config=dram, compute_kernel_config=self.compute_config
