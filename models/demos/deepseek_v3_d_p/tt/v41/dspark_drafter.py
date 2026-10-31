@@ -697,6 +697,12 @@ class TtDSparkDrafter:
             self._tap_is_zero = zero
             self._staged_use_tap32 = inputs["use_tap32"]
         else:
+            if tap32 is not None:
+                # the device copy first: a device op ahead of the host write (the page's
+                # write took 0.3 ms in most rounds and 2.3 to 3.1 in some, as if waiting for the dispatch to wake)
+                ttnn.copy(tap32, self.buffers["tap32"])
+                tap32 = None
+                tick("tap32")
             for k, v in inputs.items():
                 if k == "tap" and zero and self._tap_is_zero:
                     continue  # the buffer already holds the zero tap (0.5 MB a chip, 32 chips, every round)
