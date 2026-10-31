@@ -200,8 +200,13 @@ class PagedUpdateRows:
             for u in range(start, start + per[i]):
                 units += [u // nkv, u % nkv]
             start += per[i]
-            rt_r[core.x][core.y] = [src.buffer_address(), page_table.buffer_address(), cache.buffer_address()]
-            rt_r[core.x][core.y] += idx_addrs + [per[i]] + units
+            # one assignment per core: the bound per-core entry is a VectorUInt32 and takes no list `+=`
+            rt_r[core.x][core.y] = (
+                [src.buffer_address(), page_table.buffer_address(), cache.buffer_address()]
+                + idx_addrs
+                + [per[i]]
+                + units
+            )
             rt_c[core.x][core.y] = [per[i]]
             rt_w[core.x][core.y] = [cache.buffer_address(), per[i]]
         # the stock paged_update_cache's compute config at the loop's call (no compute_kernel_config): LoFi /
