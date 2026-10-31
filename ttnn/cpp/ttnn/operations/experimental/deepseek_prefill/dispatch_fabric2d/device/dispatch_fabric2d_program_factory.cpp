@@ -134,9 +134,9 @@ L1Layout compute_l1_layout(
 //
 // Nothing resets them between launches, so the kernels undo each launch's count. `filled` and `freed` are
 // set to zero at end of run, and `untilized` too for a TILE input. `fwd_arrived` is lowered by the count
-// consumed, which stays right without relying on the launch credit. `launch_credit` is lowered by the one
-// credit taken at the start of the send loop, because the downstream chip can grant the next launch's credit
-// before this launch ends.
+// consumed plus the upstream sender's end-of-stream mark, which stays right without relying on the launch
+// credit. `launch_credit` is lowered by the one credit taken at the start of the send loop, because the
+// downstream chip can grant the next launch's credit before this launch ends.
 struct StreamSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;

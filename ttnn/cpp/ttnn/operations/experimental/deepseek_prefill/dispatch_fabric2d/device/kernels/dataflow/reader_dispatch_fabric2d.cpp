@@ -450,6 +450,19 @@ void local_phase(
     queue.release_unready();
 }
 
+// The upstream sender raises fwd_arrived once past its forwarded pages when its stream ends, with a flush that
+// lands every last-hop delivery it made to this chip first. Nothing else on this chip waits for those
+// deliveries, so without this wait the program can finish while output pages are still arriving.
+void wait_for_upstream_end(uint32_t consumed) {
+    volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
+    while (true) {
+        invalidate_l1_cache();
+        if (*arrived > consumed) {
+            return;
+        }
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -526,12 +539,16 @@ void kernel_main() {
         queue.mark_ready();
         queue.flush_publish();
 
+        // Only after CMD_END is published: the upstream end mark follows the upstream reader's CMD_END, so
+        // waiting before ours would chain every chip's end around the ring.
+        wait_for_upstream_end(consumed);
+
         noc_async_atomic_barrier();
-        // Subtract what this launch consumed rather than zeroing. The upstream sender's launch credit
-        // (sender_dispatch_fabric2d.cpp) keeps its next launch's signals out until this chip has started that
-        // launch; subtracting stays right without relying on it. The NoC only has an atomic add, so this adds the
-        // two's complement; both counts are bounded by the section, so the wrap is exact.
-        noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), (uint32_t)(0u - consumed));
+        // Subtract what this launch consumed, plus the end mark, rather than zeroing. The upstream sender's launch
+        // credit (sender_dispatch_fabric2d.cpp) keeps its next launch's signals out until this chip has started
+        // that launch; subtracting stays right without relying on it. The NoC only has an atomic add, so this adds
+        // the two's complement; both counts are bounded by the section, so the wrap is exact.
+        noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), (uint32_t)(0u - (consumed + 1u)));
         noc_async_atomic_barrier();
         if constexpr (ct.untilize_tile_rows > 0) {
             // Safe only here: the wait before the first token read saw all untilize_tile_rows increments,

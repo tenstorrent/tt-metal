@@ -241,6 +241,10 @@ void kernel_main() {
     wait_for_filled(0);
     take_launch_credit();
     pump_stream(fabric);
+    // End-of-stream mark: one count past the forwarded pages. Its flush makes the downstream router finish
+    // every earlier write of this stream first, last-hop deliveries included, so the downstream reader's wait
+    // for it keeps that chip's program open until all of them have landed.
+    signal_downstream(fabric, 1);
     // Even on a stream that sent no token, the launch credit is on the cable.
     drain_fabric(fabric);
 
