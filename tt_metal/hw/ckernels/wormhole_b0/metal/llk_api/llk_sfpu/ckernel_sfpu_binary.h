@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
@@ -300,6 +301,222 @@ inline void calculate_sfpu_binary_mul(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    if constexpr (ITERATIONS == 8) {
+        {
+            const std::uint32_t a0 = dst_index_in0 * 64, a1 = dst_index_in1 * 64, ao = dst_index_out * 64;
+#ifndef DISABLE_SFPLOADMACRO
+            if constexpr (!is_fp32_dest_acc_en) {
+                TTI_SFPLOADI(6, 0, 32640);
+                TTI_SFPLOADI(7, 2, 32767);
+                TTI_REPLAY(0, 12, 1, 1);
+                TT_SFPLOADMACRO((0 << 2) | 1, 0, 3, a1);
+                TT_SFPLOAD(3, 0, 3, a1);
+                TTI_SFPMAD(12, 1, 13, 0, 0);
+                TTI_SFPNOT(0, 3, 4, 0);
+                TTI_SFPMAD(0, 1, 14, 0, 0);
+                TTI_SFPSETMAN(0, 4, 4, 1);
+                TTI_SFPMAD(1, 0, 10, 5, 0);
+                TTI_SFPMULI(16128, 4, 0);
+                TTI_SFPMAD(0, 5, 0, 0, 0);
+                TT_SFPLOAD(2, 0, 3, a0);
+                TTI_SFPMAD(1, 0, 10, 1, 0);
+                TTI_SFPNOP;
+                TTI_SFPMAD(0, 1, 0, 0, 0);
+                TTI_SFPMOV(0, 3, 1, 2);
+                TTI_SFPMUL(0, 4, 9, 0, 0);
+                TTI_SFPNOP;
+                TTI_SFPSETSGN(0, 0, 1, 0);
+                TTI_SFPMUL(2, 1, 9, 1, 0);
+                TTI_SFPNOP;
+                TTI_SFPMOV(0, 1, 0, 2);
+                TTI_SFPSETCC(0, 3, 0, 6);
+                TTI_SFPMOV(0, 2, 0, 0);
+                TTI_SFPSETSGN(0, 6, 0, 0);
+                TTI_SFPSETCC(0, 2, 0, 6);
+                TTI_SFPLOADI(0, 0, 32704);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPMOV(0, 0, 1, 2);
+                TTI_SFPSHFT(4080, 0, 1, 1);
+                TTI_SFPLOADI(2, 2, 1);
+                TTI_SFPAND(0, 2, 1, 0);
+                TTI_SFPIADD(0, 7, 0, 4);
+                TTI_SFPIADD(0, 1, 0, 4);
+                TTI_SFPLOADI(1, 0, 65535);
+                TTI_SFPAND(0, 1, 0, 0);
+                TT_SFPSTORE(0, 0, 2, ao);
+#pragma GCC unroll 1
+                for (int d = 1; d < ITERATIONS; d++) {
+                    TTI_REPLAY(0, 12, 0, 0);
+                    TTI_SFPMAD(0, 1, 0, 0, 0);
+                    TTI_SFPMOV(0, 3, 1, 2);
+                    TTI_SFPMUL(0, 4, 9, 0, 0);
+                    TTI_SFPNOP;
+                    TTI_SFPSETSGN(0, 0, 1, 0);
+                    TTI_SFPMUL(2, 1, 9, 1, 0);
+                    TTI_SFPNOP;
+                    TTI_SFPMOV(0, 1, 0, 2);
+                    TTI_SFPSETCC(0, 3, 0, 6);
+                    TTI_SFPMOV(0, 2, 0, 0);
+                    TTI_SFPSETSGN(0, 6, 0, 0);
+                    TTI_SFPSETCC(0, 2, 0, 6);
+                    TTI_SFPLOADI(0, 0, 32704);
+                    TTI_SFPENCC(3, 0, 0, 10);
+                    TTI_SFPMOV(0, 0, 1, 2);
+                    TTI_SFPSHFT(4080, 0, 1, 1);
+                    TTI_SFPLOADI(2, 2, 1);
+                    TTI_SFPAND(0, 2, 1, 0);
+                    TTI_SFPIADD(0, 7, 0, 4);
+                    TTI_SFPIADD(0, 1, 0, 4);
+                    TTI_SFPLOADI(1, 0, 65535);
+                    TTI_SFPAND(0, 1, 0, 0);
+                    TT_SFPSTORE(0, 0, 2, ao);
+                }
+                return;
+            }
+#else
+            if constexpr (!is_fp32_dest_acc_en) {
+                TTI_SFPLOADI(6, 0, 32640);
+                TTI_SFPLOADI(7, 2, 32767);
+                TTI_REPLAY(0, 12, 1, 1);
+                TT_SFPLOAD(3, 0, 3, a1);
+                TTI_SFPMOV(0, 3, 1, 2);
+                TTI_SFPSETMAN(0, 11, 1, 0);
+                TTI_SFPMAD(12, 1, 13, 0, 0);
+                TTI_SFPNOT(0, 3, 4, 0);
+                TTI_SFPMAD(0, 1, 14, 0, 0);
+                TTI_SFPSETMAN(0, 4, 4, 1);
+                TTI_SFPMAD(1, 0, 10, 5, 0);
+                TTI_SFPMULI(16128, 4, 0);
+                TTI_SFPMAD(0, 5, 0, 0, 0);
+                TT_SFPLOAD(2, 0, 3, a0);
+                TTI_SFPMAD(1, 0, 10, 1, 0);
+                TTI_SFPNOP;
+                TTI_SFPMAD(0, 1, 0, 0, 0);
+                TTI_SFPMOV(0, 3, 1, 2);
+                TTI_SFPMUL(0, 4, 9, 0, 0);
+                TTI_SFPNOP;
+                TTI_SFPSETSGN(0, 0, 1, 0);
+                TTI_SFPMUL(2, 1, 9, 1, 0);
+                TTI_SFPNOP;
+                TTI_SFPMOV(0, 1, 0, 2);
+                TTI_SFPSETCC(0, 3, 0, 6);
+                TTI_SFPMOV(0, 2, 0, 0);
+                TTI_SFPSETSGN(0, 6, 0, 0);
+                TTI_SFPSETCC(0, 2, 0, 6);
+                TTI_SFPLOADI(0, 0, 32704);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPMOV(0, 0, 1, 2);
+                TTI_SFPSHFT(4080, 0, 1, 1);
+                TTI_SFPLOADI(2, 2, 1);
+                TTI_SFPAND(0, 2, 1, 0);
+                TTI_SFPIADD(0, 7, 0, 4);
+                TTI_SFPIADD(0, 1, 0, 4);
+                TTI_SFPLOADI(1, 0, 65535);
+                TTI_SFPAND(0, 1, 0, 0);
+                TT_SFPSTORE(0, 0, 2, ao);
+#pragma GCC unroll 1
+                for (int d = 1; d < ITERATIONS; d++) {
+                    TTI_REPLAY(0, 12, 0, 0);
+                    TTI_SFPNOP;
+                    TTI_SFPMAD(0, 1, 0, 0, 0);
+                    TTI_SFPMOV(0, 3, 1, 2);
+                    TTI_SFPMUL(0, 4, 9, 0, 0);
+                    TTI_SFPNOP;
+                    TTI_SFPSETSGN(0, 0, 1, 0);
+                    TTI_SFPMUL(2, 1, 9, 1, 0);
+                    TTI_SFPNOP;
+                    TTI_SFPMOV(0, 1, 0, 2);
+                    TTI_SFPSETCC(0, 3, 0, 6);
+                    TTI_SFPMOV(0, 2, 0, 0);
+                    TTI_SFPSETSGN(0, 6, 0, 0);
+                    TTI_SFPSETCC(0, 2, 0, 6);
+                    TTI_SFPLOADI(0, 0, 32704);
+                    TTI_SFPENCC(3, 0, 0, 10);
+                    TTI_SFPMOV(0, 0, 1, 2);
+                    TTI_SFPSHFT(4080, 0, 1, 1);
+                    TTI_SFPLOADI(2, 2, 1);
+                    TTI_SFPAND(0, 2, 1, 0);
+                    TTI_SFPIADD(0, 7, 0, 4);
+                    TTI_SFPIADD(0, 1, 0, 4);
+                    TTI_SFPLOADI(1, 0, 65535);
+                    TTI_SFPAND(0, 1, 0, 0);
+                    TT_SFPSTORE(0, 0, 2, ao);
+                }
+                return;
+            }
+#endif
+            if constexpr (is_fp32_dest_acc_en) {
+                TTI_REPLAY(0, 16, 1, 1);
+                TT_SFPLOAD(2, 0, 3, a1);
+                TTI_SFPSETEXP(127, 2, 0, 1);
+                TTI_SFPSETSGN(1, 0, 5, 1);
+                TTI_SFPMAD(12, 5, 13, 1, 0);
+                TT_SFPLOAD(3, 0, 3, a0);
+                TTI_SFPMAD(1, 5, 14, 1, 0);
+                TTI_SFPSETEXP(127, 3, 4, 1);
+                TTI_SFPMAD(5, 1, 10, 6, 0);
+                TTI_SFPEXEXP(0, 2, 0, 0);
+                TTI_SFPMAD(1, 6, 1, 1, 0);
+                TTI_SFPEXEXP(0, 3, 7, 1);
+                TTI_SFPMUL(4, 1, 9, 6, 0);
+                TTI_SFPNOP;
+                TTI_SFPMAD(6, 5, 4, 4, 0);
+                TTI_SFPMOV(0, 0, 5, 2);
+                TTI_SFPMAD(4, 1, 6, 4, 0);
+                TTI_SFPIADD(0, 7, 5, 6);
+                TTI_SFPEXEXP(0, 4, 1, 1);
+                TTI_SFPIADD(0, 5, 1, 4);
+                TTI_SFPIADD(1, 1, 6, 5);
+                TTI_SFPSETMAN(0, 2, 5, 1);
+                TTI_SFPSHFT(4095, 0, 1, 1);
+                TTI_SFPSHFT(4095, 0, 6, 1);
+                TTI_SFPSETEXP(0, 5, 6, 0);
+                TTI_SFPSETEXP(0, 4, 1, 0);
+                TTI_SFPMUL(1, 6, 9, 4, 0);
+                TTI_SFPIADD(4095, 7, 1, 9);
+                TTI_SFPIADD(3841, 7, 7, 1);
+                TTI_SFPIADD(126, 0, 1, 9);
+                TTI_SFPIADD(3968, 0, 0, 1);
+                TTI_SFPCOMPC(0, 0, 0, 0);
+                TTI_SFPLOADI(0, 0, 32640);
+                TTI_SFPXOR(0, 0, 5, 0);
+                TTI_SFPMUL(3, 5, 9, 4, 0);
+                TTI_SFPSETSGN(0, 2, 1, 1);
+                TTI_SFPIADD(0, 0, 1, 2);
+                TTI_SFPMOV(0, 2, 4, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TT_SFPSTORE(4, 0, 2, ao);
+#pragma GCC unroll 1
+                for (int d = 1; d < ITERATIONS; d++) {
+                    TTI_REPLAY(0, 16, 0, 0);
+                    TTI_SFPIADD(0, 7, 5, 6);
+                    TTI_SFPEXEXP(0, 4, 1, 1);
+                    TTI_SFPIADD(0, 5, 1, 4);
+                    TTI_SFPIADD(1, 1, 6, 5);
+                    TTI_SFPSETMAN(0, 2, 5, 1);
+                    TTI_SFPSHFT(4095, 0, 1, 1);
+                    TTI_SFPSHFT(4095, 0, 6, 1);
+                    TTI_SFPSETEXP(0, 5, 6, 0);
+                    TTI_SFPSETEXP(0, 4, 1, 0);
+                    TTI_SFPMUL(1, 6, 9, 4, 0);
+                    TTI_SFPIADD(4095, 7, 1, 9);
+                    TTI_SFPIADD(3841, 7, 7, 1);
+                    TTI_SFPIADD(126, 0, 1, 9);
+                    TTI_SFPIADD(3968, 0, 0, 1);
+                    TTI_SFPCOMPC(0, 0, 0, 0);
+                    TTI_SFPLOADI(0, 0, 32640);
+                    TTI_SFPXOR(0, 0, 5, 0);
+                    TTI_SFPMUL(3, 5, 9, 4, 0);
+                    TTI_SFPSETSGN(0, 2, 1, 1);
+                    TTI_SFPIADD(0, 0, 1, 2);
+                    TTI_SFPMOV(0, 2, 4, 0);
+                    TTI_SFPENCC(3, 0, 0, 10);
+                    TT_SFPSTORE(4, 0, 2, ao);
+                }
+                return;
+            }
+        }
+    }
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     for (int d = 0; d < ITERATIONS; d++) {
@@ -375,6 +592,15 @@ inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
         // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
         sfpu_reciprocal_init<false>();
+        if constexpr (BINOP == BinaryOp::DIV) {
+            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+#ifndef DISABLE_SFPLOADMACRO
+            TTI_SFPSETMAN(0, p_sfpu::LCONST_neg1, 12, 0);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x0084);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+            TTI_SFPCONFIG(0, 4 + 0, 0);
+#endif
+        }
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
     }
