@@ -65,6 +65,7 @@ from ..reference.mtp import load_mtp_weights
 from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
 from ..reference.spec_decode import (
+    ADAPTIVE,
     DRAFT_GROUPS,
     GROUP_SLOTS,
     MAX_DRAFTS,
@@ -185,6 +186,7 @@ class TtMiMoMTP:
         self.backfill = backfill
         self.history = None  # MtpHistory (setup_cache, with ``backfill`` and the decode RoPE tables)
         self.trace = None
+        self.trace_one = None  # adaptive groups: the draft program with layer 0 alone (groups of 2 slots)
         self.backfill_trace = None
         self._inputs = None  # the one-layer draft program's inputs (``_trace_inputs``)
 
@@ -340,14 +342,16 @@ class TtMiMoMTP:
         rows.deallocate(True)
         return hidden
 
-    def _body_layers(self):
+    def _body_layers(self, count=None):
         """The every-layer draft program: the plan step, the hidden gather, then pass i on MTP layer i with its tokens
-        (written by the tokens step for i >= 1), and the drafts step. Reads the decode RoPE tables once."""
+        (written by the tokens step for i >= 1), and the drafts step. Reads the decode RoPE tables once. ``count``: run
+        the first ``count`` layers only (groups of 2 slots draft one token; the drafts step's later drafts are stale
+        and never offered)."""
         m, li, chain = self.model, self.inputs, self.model.spec_chain
         chain.plan_layers()
         cos, sin = m.rope_table_rows(li.rope, m.rope_tables[:2])
         hidden = self._gather_hidden()
-        for i, layer in enumerate(self.layers):
+        for i, layer in enumerate(self.layers[:count]):
             if i:
                 chain.tokens(i)
             h = self._pass(li.tokens[i], hidden, li.pos, li.serial, cos, sin, self.heads[i], layer)
@@ -432,9 +436,9 @@ class TtMiMoMTP:
             ]
         return self._inputs
 
-    def _run_body(self, inputs):
+    def _run_body(self, inputs, count=None):
         if self.multi:
-            self._body_layers()
+            self._body_layers(count)
         else:
             self._body(inputs)
 
@@ -468,6 +472,16 @@ class TtMiMoMTP:
         ttnn.end_trace_capture(m.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(m.mesh_device)
         self.trace = {"id": trace_id, "inputs": inputs}
+        if ADAPTIVE and self.multi and len(self.layers) > 1:
+            # Adaptive draft groups: passes in groups of 2 slots draft one token, from layer 0 alone (set_width).
+            m.spec_inputs.reset()
+            self._body_layers(count=1)
+            ttnn.synchronize_device(m.mesh_device)
+            one_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
+            self._body_layers(count=1)
+            ttnn.end_trace_capture(m.mesh_device, one_id, cq_id=0)
+            ttnn.synchronize_device(m.mesh_device)
+            self.trace_one = {"id": one_id, "inputs": inputs}
         if self.history is not None:
             # The backfill program: compiled by an idle run (an idle upload fills the rings' scratch blocks and leaves
             # the stash), then captured.
@@ -484,6 +498,9 @@ class TtMiMoMTP:
         if self.trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.trace["id"])
             self.trace = None
+        if self.trace_one is not None:
+            ttnn.release_trace(self.model.mesh_device, self.trace_one["id"])
+            self.trace_one = None
         if self.backfill_trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.backfill_trace)
             self.backfill_trace = None
@@ -495,6 +512,10 @@ class TtMiMoMTP:
                 "an MTP draft before warmup_model_decode captured the draft trace (it captures it with enable_trace: "
                 "the plugin's trace_mode 'all' or 'decode_only', with enable_model_warmup)"
             )
+
+    def _draft_trace(self):
+        """The draft trace for the current group width: layer 0 alone for groups of 2 slots (one draft each)."""
+        return self.trace_one if self.width == 2 and self.trace_one is not None else self.trace
 
     def set_width(self, width):
         """Draft groups of ``width`` slots from the next draft on: the page table maps group g's slots g * width ..
@@ -553,7 +574,7 @@ class TtMiMoMTP:
         )
         self.last_inputs_s = time.perf_counter() - t
         ttnn.copy_host_to_device_tensor(host, m.spec_inputs.mtp_packed)
-        ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(m.mesh_device, self._draft_trace()["id"], cq_id=0, blocking=False)
 
     def enqueue_chained(self):
         """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
@@ -561,7 +582,7 @@ class TtMiMoMTP:
         decode RoPE tables (without them the host copies the draft's cos / sin: ``enqueue``)."""
         self._require_trace()
         assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
-        ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.model.mesh_device, self._draft_trace()["id"], cq_id=0, blocking=False)
 
     def read_drafts(self, anchor, group=0):
         """Draft group ``group``'s drafts of the anchor slot, from the result page the drafts step wrote (blocks until
