@@ -6,7 +6,7 @@
 # one owning pipeline and one time budget.
 
 - name: ttnn release matmul tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode and not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 50

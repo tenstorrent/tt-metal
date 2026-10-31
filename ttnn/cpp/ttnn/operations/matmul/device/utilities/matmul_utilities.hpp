@@ -400,10 +400,14 @@ bool use_dram_sharded_multicore(
 // Cores for the multi-core pipeline (num_workers_per_dram_bank >= 2): cores_per_bank logical worker cores
 // per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
 // coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
-// the banks so every bank gets its nearest core first. Only the per-bank optimal worker is queried
-// from the device, so the result is the same for every chip of a mesh.
+// the banks so every bank gets its nearest core first. coord: the chip the cores run on (its own per-bank
+// optimal workers: the chips of a mesh can be harvested differently); nullptr: the first chip's.
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
-    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks);
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks,
+    const tt::tt_metal::distributed::MeshCoordinate* coord = nullptr);
 
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
@@ -429,10 +433,13 @@ void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 
+// coord: the mesh coordinate of the chip the readers run on (its own bank-to-worker placement: chips of one mesh can
+// be harvested differently); nullptr: the first chip's placement.
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores);
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate* coord = nullptr);
 
 }  // namespace ttnn::prim::dram_sharded_helpers
