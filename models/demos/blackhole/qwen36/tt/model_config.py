@@ -325,6 +325,34 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.gdn_value_dim_tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
+        # QWEN36_DECODE_HARVEST_GRID (default off): re-grid the TP=8 decode 1D-mcast matmuls (tp_common tables). Blackhole
+        # chips whose harvested Tensix column is in the east half (NOC0 x >= 10) run the tuned 80-core BFP8 grids 17% slower
+        # than west-harvested chips (64/64 chips on d21u08 + d21u14); the BFP8 table evens them out in isolation. The BFP4
+        # table retunes the BFP8-tuned grids for bfloat4_b weights. in0_block_w is unchanged, so every output element
+        # accumulates in the same order (bit-identical).
+        hg = tpc.decode_harvest_grids() if tp8 else {}
+        if hg:
+            ibw_gu = mlp_decode_ibw
+            spec = {  # attr: (K, N, fused activation, in0_block_w cap)
+                "down": ("mlp_w2_decode_1d_progcfg", self.hidden_dim // tp, self.dim, None, 8),
+                "wo": ("attn_wo_decode_1d_progcfg", self.attn_out_dim_tp, self.dim, None, 8),
+                "gdnout": ("gdn_out_decode_1d_progcfg", self.gdn_value_dim_tp, self.dim, None, 8),
+                "gdnin": ("gdn_qkvz_decode_1d_progcfg", self.dim, self.gdn_qkvzab_dim_tp, None, 8),
+                "qkv": ("attn_qkv_decode_1d_progcfg", self.dim, self.attn_qkv_fused_dim_tp, None, 8),
+                "w1": ("mlp_w1_decode_1d_progcfg", self.dim, self.hidden_dim // tp, ttnn.UnaryOpType.SILU, ibw_gu),
+                "w3": ("mlp_w3_decode_1d_progcfg", self.dim, self.hidden_dim // tp, None, ibw_gu),
+            }
+            for key, (cols, rows) in hg.items():
+                attr, k, n, act, ibw = spec[key]
+                if cols > self.decode_grid_w:
+                    continue
+                setattr(
+                    self,
+                    attr,
+                    tpc.create_matmul_1d_decode_progcfg(
+                        M, k, n, num_cores=cols * rows, fused_activation=act, grid_w=cols, max_in0_block_w=ibw
+                    ),
+                )
 
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()

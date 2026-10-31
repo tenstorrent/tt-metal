@@ -1847,6 +1847,33 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
+DECODE_HARVEST_GRID_ENV = "QWEN36_DECODE_HARVEST_GRID"
+# (cols, rows) per TP=8 decode 1D-mcast matmul, from single-chip sweeps on both harvest kinds (d21u14, M=32; see
+# .claude/tmp/qwen38-perf/slowchips): the grid with the lowest max(east-harvested, west-harvested) us/op.
+# BFP8: removes the 17% east-harvest penalty in isolation, but the production-loop harness is flat (+-0.1 ms).
+# BFP4 (QWEN36_GPTQ_BFP4=1): the BFP8-tuned 80-core grids are 10-14% off for BFP4 on every chip; this table is -0.4 ms
+# per step at 32K / 4K. Keys not listed keep the tuned grid.
+DECODE_HARVEST_GRID_BFP8 = "down=12x4,wo=12x4,gdnout=12x4,qkv=11x3,w1=11x7,w3=11x7"
+DECODE_HARVEST_GRID_BFP4 = "gdnin=8x5,down=11x5,w1=11x4,w3=11x4"
+
+
+def decode_harvest_grids():
+    """QWEN36_DECODE_HARVEST_GRID (default off): {key: (cols, rows)} for the decode 1D matmul re-grid. "1" = the table for
+    the active weight preset (BFP4 under QWEN36_GPTQ_BFP4=1, else BFP8); or an explicit "down=12x4,gdnin=8x5,..."."""
+    v = os.environ.get(DECODE_HARVEST_GRID_ENV, "0").strip()
+    if v in ("", "0"):
+        return {}
+    if v == "1":
+        v = DECODE_HARVEST_GRID_BFP4 if os.environ.get("QWEN36_GPTQ_BFP4", "0") == "1" else DECODE_HARVEST_GRID_BFP8
+    out = {}
+    for item in v.split(","):
+        key, grid = item.split("=")
+        cols, rows = (int(t) for t in grid.lower().split("x"))
+        out[key.strip()] = (cols, rows)
+    logger.info(f"{DECODE_HARVEST_GRID_ENV}: decode 1D matmul grids {out}")
+    return out
+
+
 def create_matmul_1d_decode_progcfg(
     m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, max_in0_block_w=8
 ):
