@@ -1188,3 +1188,8 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   single-card device job on a Galaxy whose mesh a run depends on, or only without the per-card reset.
 - 05:06 owner reset the boards; dirty marks cleared; box test PASS (13 s); note OV-34 (FIX.15: mesh-only, rule 19); resumed --until FIX.15.
 - 07:45 FIX.15 PASS a3ba02c5615 (110-core cap: device +3.4 ms a chunk, wall within noise; K.1 incl. Paris through tt-d-gen PASS: first since 10-29). DS41-175 out of date (rule 19): note OV-35. Queued P.18 WINDOW_TILES (owner, after FIX.15; gate = ladder + profile + K.1); run --until P.18.
+- 10:15 OWNER: queue the opportunities (report /scratch/dnijemcevic/opportunities/report.md, efforts recalibrated: the
+  analysis agent's were ~10-15x high; skill rule added), served copies untouched, bundled to save testing: P.21
+  CHEAP_BUNDLE (#9 #7 #8 #10), P.22 ROPE_CHAINS (#2 #4, + K.1), P.23 OWN_ROWS (#1, + K.1); each item behind its own
+  setting. First the profile measurement: F236 framework hook (model.steady_state(start) before timed runs) after P.18
+  commits + FIX.16 STEADY_STATE_PROFILE (DS41 hook) held until then.
