@@ -1296,6 +1296,30 @@ def test_softmax_rank_0_rejects_out_of_range_dim(device, expect_error, op, dim):
 
 
 @pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
+@pytest.mark.parametrize(
+    "shape", [(96,), (64, 96), (2, 64, 96), (1, 2, 64, 96)], ids=["rank1", "rank2", "rank3", "rank4"]
+)
+@pytest.mark.parametrize("dim_from_end", [True, False], ids=["dim_negative", "dim_positive"])
+def test_softmax_last_dim_any_rank(device, op, shape, dim_from_end):
+    # softmax_in_place unsqueezes to 4D but passed the caller's dim unchanged, so a rank 1-3 input failed
+    # the last-dim check.
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    dim = -1 if dim_from_end else len(shape) - 1
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(op(tt_input, dim=dim))
+    assert tt_output.shape == torch_input.shape
+    assert_numeric_metrics(
+        F.softmax(torch_input.float(), dim=dim),
+        tt_output.float(),
+        pcc_threshold=0.999,
+        rtol=0.120,
+        atol=0.040,
+        frobenius_threshold=0.032,
+    )
+
+
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
 def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
     tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
