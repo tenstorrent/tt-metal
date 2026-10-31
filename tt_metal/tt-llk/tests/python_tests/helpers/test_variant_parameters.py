@@ -992,6 +992,22 @@ class ENABLE_DIRECT_INDEXING(TemplateParameter):
 
 
 @dataclass
+class PERF_STAGE(TemplateParameter):
+    perf_stage: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int PERF_STAGE = {self.perf_stage};"
+
+
+@dataclass
+class SINKHORN_ITERS(TemplateParameter):
+    sinkhorn_iters: int = 20
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SINKHORN_ITERS = {self.sinkhorn_iters};"
+
+
+@dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
