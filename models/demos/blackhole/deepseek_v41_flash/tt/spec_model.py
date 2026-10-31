@@ -556,6 +556,7 @@ class SpecRunner:
             t["pack_b"],
         )
         self.cur_bucket = P
+        self.cur_logits = t.get("logits")
 
     def capture_trace(self):
         dec = self.dec
@@ -586,6 +587,9 @@ class SpecRunner:
                 t["tid_a"] = ttnn.begin_trace_capture(self.md, cq_id=0)
                 dec.forward_verify()
                 ttnn.end_trace_capture(self.md, t["tid_a"], cq_id=0)
+                t[
+                    "logits"
+                ] = dec.logits  # (trace A's output buffer of this bucket: read back by the grammar-mask device tests)
                 t["tid_s"] = SamplerTraces(self.samp)  # (reads the logits buffer of THIS bucket's verify trace)
                 t["tid_s"].capture(dec.forward_sampler)
                 if self.mask_on:  # the same sampler behind the grammar bias (replayed by a round that carries a mask)
