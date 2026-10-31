@@ -458,6 +458,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::exp2)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE, is_fp32_dest_acc_en>);
+        ckernel::sfpu::exp2_bf16_tile_init<!is_fp32_dest_acc_en && APPROX_MODE == true && ITERATIONS == 32>();
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {

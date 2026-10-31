@@ -626,6 +626,16 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::exp2_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_exp2,
+            (true /* APPROXIMATE */, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -641,6 +651,7 @@ ALWI void exp2_tile(uint32_t idst) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::exp2_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
