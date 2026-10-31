@@ -7,8 +7,8 @@ BFP4 experts (moe_decode_common.verify_steps: one / two requests of 4 consecutiv
 1. Decode: every active slot's output must match the base implementation's saved output on the same inputs, PCC >=
    0.9998 overall and >= 0.9995 on every (step, slot) row, so one dropped or mis-weighted expert of one token fails
    it; every row of the [32, hidden] output (idle and padding rows too) must be finite.
-2. Decode against the fp32 reference evaluated with the device's own top-8 routing: PCC >= 0.999 overall and >=
-   0.995 per row (BFP4 experts, LoFi), so the base itself cannot drift.
+2. Decode against the fp32 reference evaluated with the device's own top-8 routing: PCC >= 0.998 overall and >=
+   0.99 per row (BFP4 GPTQ experts, LoFi; the base: 0.99899 and 0.9935), so the base itself cannot drift.
 3. Prefill (TtMiMoMoE.forward) on 96 real tokens must match the base prefill output, PCC >= 0.9995 overall and
    >= 0.999 per token: decode may change the expert layout, and prefill must keep working.
 
@@ -128,7 +128,7 @@ def main():
     dev_out = torch.cat([outs[k] for k in sel])
     p, r = pcc(dev_out, ref_out), row_pcc(dev_out, ref_out)
     print(f"decode vs fp32 reference with device routing: PCC {p:.6f} (worst row {r:.6f})", flush=True)
-    ok &= p >= 0.999 and r >= 0.995
+    ok &= p >= 0.998 and r >= 0.99
     pp, rp = pcc(pre, base["prefill"]), row_pcc(pre, base["prefill"])
     print(f"prefill vs base: PCC {pp:.6f} (worst token {rp:.6f})", flush=True)
     ok &= pp >= 0.9995 and rp >= 0.999

@@ -9,14 +9,16 @@ prompts (moe_decode_common.verify_steps):
 - two_requests: 4 consecutive tokens of each of two requests.
 
 These are the MoE calls of an AgentX verify step with one or two requests per engine (adaptive draft groups, K=3).
-Each shape's CALLS forward_decode calls are captured in one trace; each replay is timed between device syncs. A
-sample is the mean of the two shapes' per-call times in one replay round; the metric is the median sample:
+CALLS forward_decode calls are captured in one trace, which replays with each shape's tokens copied into its input
+tensors (as the model's verify trace does), each replay timed between device syncs. A sample is the mean of the two
+shapes' per-call times in one replay round; the metric is the median sample:
 
     MOE_VERIFY_SAMPLE us=<mean per call of the two shapes>
     MOE_VERIFY_METRIC us=<median>
 """
 
 import argparse
+import os
 import statistics
 import time
 
@@ -29,6 +31,7 @@ CALLS = 20
 REPLAYS = 7
 USERS = 8
 SHAPES = ("one_request", "two_requests")
+ORDER = os.environ.get("MOE_VERIFY_ORDER")  # e.g. "two_requests,one_request" (a debugging aid)
 
 
 def main():
@@ -43,31 +46,33 @@ def main():
     mesh, row = common.open_row(trace_region_size=64 * 1024 * 1024)
     try:
         moe = common.build_moe(row, cfg, "model_bfp4experts", ttnn.bfloat4_b, users=USERS)
-        traces = {}
-        for name in SHAPES:
-            x, mask = common.step_inputs(row, inputs, steps[name])
-            for _ in range(2):  # compile + warm the program cache before capture
-                moe.forward_decode(x, mask).deallocate(True)
-            ttnn.synchronize_device(row)
-            trace_id = ttnn.begin_trace_capture(row, cq_id=0)
-            outs = [moe.forward_decode(x, mask) for _ in range(CALLS)]
-            ttnn.end_trace_capture(row, trace_id, cq_id=0)
-            ttnn.synchronize_device(row)
-            traces[name] = (trace_id, outs, x, mask)
+        # One trace, replayed with each shape's tokens written into its input tensors, as the model's verify trace
+        # (a second capture of the same layer replays the first one's routing state: only one capture is valid).
+        shapes = ORDER.split(",") if ORDER else list(SHAPES)
+        x, mask = common.step_inputs(row, inputs, steps[shapes[0]])
+        host = {name: common.step_inputs(row, inputs, steps[name], host=True) for name in shapes}
+        for _ in range(2):  # compile + warm the program cache before capture
+            moe.forward_decode(x, mask).deallocate(True)
+        ttnn.synchronize_device(row)
+        trace_id = ttnn.begin_trace_capture(row, cq_id=0)
+        outs = [moe.forward_decode(x, mask) for _ in range(CALLS)]
+        ttnn.end_trace_capture(row, trace_id, cq_id=0)
+        ttnn.synchronize_device(row)
 
-        times = {name: [] for name in SHAPES}
+        times = {name: [] for name in shapes}
         for _ in range(REPLAYS):
-            for name in SHAPES:
+            for name in shapes:
+                ttnn.copy_host_to_device_tensor(host[name][0], x)
+                ttnn.copy_host_to_device_tensor(host[name][1], mask)
                 ttnn.synchronize_device(row)
                 t0 = time.perf_counter()
-                ttnn.execute_trace(row, traces[name][0], cq_id=0, blocking=False)
+                ttnn.execute_trace(row, trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(row)
                 times[name].append((time.perf_counter() - t0) / CALLS * 1e6)
-        for trace_id, outs, x, mask in traces.values():
-            ttnn.release_trace(row, trace_id)
-            for t in outs + [x, mask]:
-                t.deallocate(True)
-        for name in SHAPES:
+        ttnn.release_trace(row, trace_id)
+        for t in outs + [x, mask]:
+            t.deallocate(True)
+        for name in shapes:
             print(f"MOE_VERIFY_SHAPE {name} us={statistics.median(times[name][1:]):.2f}", flush=True)
         samples = [statistics.mean(times[n][r] for n in SHAPES) for r in range(1, REPLAYS)]  # replay 0 warms
         for s in samples:

@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Adaptive draft groups (MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=adaptive) in the vLLM adapter: a pass's group width
-follows its request count (reference.spec_decode.pass_width), except on a pass that relays chain rows, whose relay
-step reads the commit of the group each row held in the pass it chains onto: there the width and the groups stay
-until a pass the host builds. Host only; skipped unless the process runs with both variables set."""
+follows its request count (reference.spec_decode.pass_width). On a pass that relays chain rows, whose relay step
+reads the commit of the group each row held in the pass it chains onto, a wider width waits for a pass the host
+builds, and a narrower one keeps every group's owner and ring. Host only; skipped unless the process runs with both
+variables set."""
 
 from types import SimpleNamespace
 
@@ -39,8 +40,9 @@ def test_three_to_two_requests_widens_on_a_host_built_pass():
     assert m.set_widths == [4] and m.chain_stats["width_changes"] == 1
 
 
-def test_a_relay_pass_keeps_the_width_and_the_groups():
-    # The same two requests chained onto the pass before: slot 2's relay reads group 2 of that pass's page.
+def test_a_relay_pass_does_not_widen():
+    # The same two requests chained onto the pass before: slot 2's relay reads group 2 of that pass's page, which
+    # groups of 4 slots do not have.
     m = adapter(2, [0, None, 2, None])
     assert m._set_width(0, 2, hold=True) == 2
     assert m.group_owners[0] == [0, None, 2, None] and m.mtp_ring[0] == ["ring"] * DRAFT_GROUPS
@@ -53,3 +55,12 @@ def test_a_relay_pass_at_the_right_width_changes_nothing():
     m = adapter(4, [0, 1, None, None])
     assert m._set_width(0, 2, hold=True) == 4
     assert m.chain_stats == {"width_changes": 0, "width_holds": 0} and m.group_owners[0][:2] == [0, 1]
+
+
+def test_a_relay_pass_narrows_keeping_the_groups():
+    # Two requests in groups 0 and 1 of 4 slots chain on while a third joins: groups of 2 slots, the relayed rows
+    # keep groups 0 and 1 (and their rings), the third takes a free group.
+    m = adapter(4, [0, 1, None, None])
+    assert m._set_width(0, 3, hold=True) == 2
+    assert m.group_owners[0] == [0, 1, None, None] and m.mtp_ring[0] == ["ring"] * DRAFT_GROUPS
+    assert m.set_widths == [2] and m.chain_stats == {"width_changes": 1, "width_holds": 0}

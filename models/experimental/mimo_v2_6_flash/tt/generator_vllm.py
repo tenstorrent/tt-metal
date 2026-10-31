@@ -1677,23 +1677,30 @@ class MiMoV2ForCausalLM:
 
     def _set_width(self, lane, live, hold=False):
         """The draft-group width of the lane's next pass, for ``live`` requests (reference.spec_decode.pass_width). A
-        change empties every group (the requests take groups again; their MTP rings and stash backfill before their
-        next draft) and points the MTP drafter's page table at the new groups. ``hold``: the pass relays chain rows,
-        whose relay step reads the commit of the group each row held in the pass it chains onto, so the width (and
-        the groups) stay; the next pass the host builds changes it."""
-        width = pass_width(live)
-        if width != self.lane_width[lane] and hold:
+        change on a pass the host builds empties every group (the requests take groups again; their MTP rings and
+        stash backfill before their next draft) and points the MTP drafter's page table at the new groups.
+
+        ``hold``: the pass relays chain rows, whose relay step reads the commit of the group each row held in the pass
+        it chains onto (the same group index), and whose drafts continue that group's ring without a backfill. A
+        narrower width there (more requests: more, smaller groups) keeps every group's owner and ring: each group
+        index of the wider width exists at the narrower one, and ring g's blocks do not depend on the width; the new
+        requests take the free groups. A wider one (fewer requests) may not have a relayed row's group, so the width
+        stays until the next pass the host builds."""
+        width, current = pass_width(live), self.lane_width[lane]
+        if width == current:
+            return width
+        if hold and width > current:
             self.chain_stats["width_holds"] += 1
-            return self.lane_width[lane]
-        if width != self.lane_width[lane]:
-            self.lane_width[lane] = width
+            return current
+        self.lane_width[lane] = width
+        if not hold:
             self.group_owners[lane] = [None] * DRAFT_GROUPS
             self.mtp_ring[lane] = [None] * DRAFT_GROUPS
             self.dflash_ring[lane] = [None] * DRAFT_GROUPS
-            mtp = self.models[lane].mtp
-            if mtp is not None and hasattr(mtp, "set_width"):
-                mtp.set_width(width)
-            self.chain_stats["width_changes"] += 1
+        mtp = self.models[lane].mtp
+        if mtp is not None and hasattr(mtp, "set_width"):
+            mtp.set_width(width)
+        self.chain_stats["width_changes"] += 1
         return width
 
     def _draft_groups(self, lane, slots, prompt=False, compact=False, width=None):

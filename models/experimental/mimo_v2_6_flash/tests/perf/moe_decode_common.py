@@ -68,19 +68,21 @@ def build_moe(row, cfg, cache_tag, expert_dtype, ckpt=None, users=USERS):
     return moe
 
 
-def device_inputs(row, x_rows, active=None):
+def device_inputs(row, x_rows, active=None, host=False):
     """x_rows [users, hidden] -> (x [1, 1, 32, hidden] bf16, token mask [1, 1, 32, 1]) on the row; ``active`` (bool
-    [users]): the slots that hold a token (default: every row), the others idle (mask 0)."""
+    [users]): the slots that hold a token (default: every row), the others idle (mask 0). ``host``: host tensors laid
+    out for the row (to copy into device ones)."""
     x = torch.zeros(32, x_rows.shape[-1])
     x[: x_rows.shape[0]] = x_rows
     on = torch.zeros(32, dtype=torch.bool)
     on[: x_rows.shape[0]] = True if active is None else torch.as_tensor(active)
     mask = on.to(torch.bfloat16).reshape(1, 1, 32, 1)
     rep = ttnn.ReplicateTensorToMesh(row)
+    dev = None if host else row
     x_tt = ttnn.from_torch(
-        x.reshape(1, 1, 32, -1).bfloat16(), device=row, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+        x.reshape(1, 1, 32, -1).bfloat16(), device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
     )
-    m_tt = ttnn.from_torch(mask, device=row, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep)
+    m_tt = ttnn.from_torch(mask, device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep)
     return x_tt, m_tt
 
 
@@ -135,7 +137,7 @@ def verify_steps(cfg, steps):
     return out
 
 
-def step_inputs(row, inputs, idx):
+def step_inputs(row, inputs, idx, host=False):
     """(x, mask) of one verify_steps step: rows ``idx`` of ``inputs``, -1 slots idle (zero rows, mask 0)."""
     x_rows = torch.stack([inputs[i] if i >= 0 else torch.zeros(inputs.shape[-1]) for i in idx])
-    return device_inputs(row, x_rows, [i >= 0 for i in idx])
+    return device_inputs(row, x_rows, [i >= 0 for i in idx], host=host)
