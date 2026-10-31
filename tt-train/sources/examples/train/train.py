@@ -43,7 +43,6 @@ from ttml.common.performance import (
 )
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
-    build_causal_mask,
     build_mesh,
     create_optimizer,
     get_tt_metal_runtime_root,
@@ -513,14 +512,6 @@ def run_training(
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
-    # DeepSeek's composite SDPA needs the mask passed explicitly; gpt2/llama/qwen3 use a fused
-    # SDPA that materializes its own causal mask internally, so only build it for DeepSeek.
-    attn_mask_for_model = None
-    if model_cfg.model_type == "deepseek":
-        attn_mask_for_model = ttml.autograd.Tensor.from_numpy(
-            build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-        )
-
     mesh = ttml.mesh()
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
     # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
@@ -608,7 +599,6 @@ def run_training(
         optimizer=optimizer,
         lr_lambda=lr_lambda,
         callbacks=callbacks,
-        attention_mask=attn_mask_for_model,
         checkpoint_saver=saver,
         checkpoint_loader=loader,
         compute_loss_func=_causal_lm_loss,
@@ -742,13 +732,6 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     model, tokenizer, model_cfg, loaded_step = load_for_inference(args.model_path)
     seq_len = model_cfg.max_sequence_length
 
-    # As in training: only DeepSeek's composite SDPA needs the mask; the fused SDPA applies it itself.
-    causal_mask = None
-    if model_cfg.model_type == "deepseek":
-        causal_mask = ttml.autograd.Tensor.from_numpy(
-            build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-        )
-
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
     vocab_str = (
@@ -798,13 +781,14 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     ]
     print_header(f"{model_cfg.model_type} - inference", sections)
 
+    # No mask: the fused SDPA applies the causal mask itself, and DeepSeek's MLA takes none.
     text, elapsed, first_token_s = generate(
         model,
         tokenizer,
         args.prompt,
         args.max_new_tokens,
         seq_len,
-        causal_mask,
+        mask=None,
         temperature=args.temperature,
         top_k=args.top_k,
     )
