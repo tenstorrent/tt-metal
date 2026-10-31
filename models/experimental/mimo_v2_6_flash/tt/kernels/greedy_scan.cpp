@@ -25,13 +25,23 @@ FORCE_INLINE uint32_t sort_key(uint16_t bf16) {
     const uint32_t b = bf16;
     return (b & 0x8000u) ? (~b & 0xFFFFu) : (b | 0x8000u);
 }
-FORCE_INLINE uint32_t sort_key(uint32_t fp32) { return (fp32 & 0x80000000u) ? ~fp32 : (fp32 | 0x80000000u); }
+FORCE_INLINE uint32_t sort_key(uint32_t fp32) {
+    return fp32 ^ (static_cast<uint32_t>(static_cast<int32_t>(fp32) >> 31) | 0x80000000u);
+}
 
+// The 16 values of one face row: loaded first so the loads overlap, then compared in index order (strict: ties keep
+// the lowest index).
 template <typename T>
 FORCE_INLINE void scan_row(uint32_t base, uint32_t col0, uint32_t& best_key, uint32_t& best_idx) {
     const volatile tt_l1_ptr T* v = reinterpret_cast<volatile tt_l1_ptr T*>(base);
+    T vals[16];
+#pragma GCC unroll 16
     for (uint32_t c = 0; c < 16; ++c) {
-        const uint32_t k = sort_key(static_cast<T>(v[c]));
+        vals[c] = v[c];
+    }
+#pragma GCC unroll 16
+    for (uint32_t c = 0; c < 16; ++c) {
+        const uint32_t k = sort_key(vals[c]);
         if (k > best_key) {
             best_key = k;
             best_idx = col0 + c;
