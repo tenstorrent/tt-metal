@@ -203,7 +203,7 @@ class DSV41PrefillModel:
                     mesh_mapper=self.shard_rc,
                 ),
             )
-            self._vis_dirty[C] = False
+            self._vis_dirty[id(vb[0])] = False
         self._bufs[C] = (tok, er, vb)
         return self._bufs[C]
 
@@ -236,11 +236,7 @@ class DSV41PrefillModel:
                 out["vl"] = self._own_layout(img.float())
                 out["ov"] = self._own_layout(ovr.to(torch.bfloat16))
                 keep = (~img).reshape(B, C, 1).to(torch.bfloat16)
-                self._vis_dirty[C] = True
-            elif self._vis_dirty.get(C):  # a window without images after one with: clear the buffers once
-                out["vl"] = torch.zeros(rows * (R // self.cols), self.cols)
-                out["ov"] = torch.zeros(rows * (R // self.cols), self.cols * DIM, dtype=torch.bfloat16)
-                self._vis_dirty[C] = False
+                # (the 'clear after an image window' is decided at upload time, per vision buffer: ``upload_inputs``)
         if active is not None:
             act = torch.as_tensor(active).long()
             for lid in self.engram:
@@ -299,6 +295,17 @@ class DSV41PrefillModel:
                 if hasattr(self, "h2d_bytes")
                 else prepped[lid].numel() * 2 * self.cols
             )
+        if self.vis and vb is not None and "ov" not in prepped and self._vis_dirty.get(id(vb[0])):
+            # a window without images after one with, in THIS context's vision buffers: clear them once. (The flag used to be keyed by the chunk size and reset at prep time: a call on the one-slot
+            # context, or a lookahead prep that was never uploaded, cleared the flag while the Up=U context kept its stale image mask / embedding rows -> a later text-only window of that
+            # context saw image rows.)
+            n_ = prepped["tok"].shape[0] // self.cols
+            prepped = dict(prepped)
+            prepped["vl"] = torch.zeros(n_, self.cols)
+            prepped["ov"] = torch.zeros(n_, self.cols * DIM, dtype=torch.bfloat16)
+            self._vis_dirty[id(vb[0])] = False
+        elif self.vis and vb is not None and "ov" in prepped:
+            self._vis_dirty[id(vb[0])] = True
         if "ov" in prepped:
             ov_dev, vl_dev = vb
             h2d(
