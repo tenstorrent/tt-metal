@@ -130,7 +130,7 @@ PLE_EARLY_DECODE_VARIABLE = (
     "QWEN38_PLE_EARLY"  # "1": B=1 decode does the PLE lookup + host row before HEAD (default off)
 )
 TOKEN_FEEDBACK_VARIABLE = "QWEN38_TOKEN_FEEDBACK"  # B=1 decode skips the token-row write when the device row already holds the token (default on since x53: -0.35..-0.62 ms; "0" off)
-HOST_FAST_VARIABLE = "QWEN38_HOST_FAST"  # "1": B=1 decode skips redundant per-step host work (default off)
+HOST_FAST_VARIABLE = "QWEN38_HOST_FAST"  # default "1": B=1 decode skips redundant per-step host work (one policy parse, no loop guard, persistent token read, PLE proofs behind the TAIL enqueue); "0": the guarded path
 BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": candidate rows for the sampled lanes
 BATCH_NORMALIZER_VARIABLE = (
     "QWEN38_BATCH_NORMALIZER"  # "1" (default) / "0": the device normalizer for top-k-off sampled rows
@@ -1068,7 +1068,8 @@ class Qwen38ForCausalLM:
 
         def open_chain(warm_hook: Callable[[Any], None] | None) -> Any:
             options = {} if warm_hook is None else {"warm_hook": warm_hook}
-            if os.environ.get("QWEN38_GREEDY_TAIL", "0") == "1" and max_batch_size == 1:
+            # QWEN38_GREEDY_TAIL default on; "0" keeps the candidate chain in the TAIL
+            if os.environ.get("QWEN38_GREEDY_TAIL", "1") == "1" and max_batch_size == 1:
                 # the single-slot host sampler draws from the full-vocabulary row, never the candidate row: the TAIL
                 # traces skip the candidate chain (tools/qwen38_sampling_step.SKIP_CANDIDATE_ROW)
                 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step
@@ -1260,7 +1261,7 @@ class Qwen38ForCausalLM:
         if not 0 <= token_id < TOKENIZER_SIZE:
             raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
         policy = history = None
-        host_fast = os.environ.get(HOST_FAST_VARIABLE) == "1"
+        host_fast = os.environ.get(HOST_FAST_VARIABLE, "1") == "1"
         if host_fast:  # one parse of the contract: device_greedy_contract's rule on the policy this step needs anyway
             greedy_token = False
             if sampling_params is not None:

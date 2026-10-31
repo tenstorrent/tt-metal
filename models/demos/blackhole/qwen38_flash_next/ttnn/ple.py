@@ -912,8 +912,12 @@ class Qwen38ResidentPLELookup:
         embeddings = torch.frombuffer(payload, dtype=torch.bfloat16).reshape(*ids.shape, host.embedding_head_dim)
         return embeddings.flatten(-2), next_context
 
-    def lookup_token(self, token_id: int, context: tuple[int, int] | None) -> tuple[bytearray, tuple[int, int]]:
-        """One decode step: the sixteen hashed rows as one 5,120 B payload and the next ``(c1, x)`` context."""
+    def lookup_token(
+        self, token_id: int, context: tuple[int, int] | None, proofs: list | None = None
+    ) -> tuple[bytearray, tuple[int, int]]:
+        """One decode step: the sixteen hashed rows as one 5,120 B payload and the next ``(c1, x)`` context.  ``proofs``
+        (a list): the per-shard identity proofs after the reads are not run here but appended to it, for a caller that
+        runs them later (``prove_deferred``) and must not trust the payload before that."""
 
         for value in (token_id, *(() if context is None else context)):
             if isinstance(value, bool) or type(value) is not int or not 0 <= value < self.vocab_size:
@@ -928,9 +932,9 @@ class Qwen38ResidentPLELookup:
             head_vocab_sizes=self.head_vocab_sizes,
             head_offsets=self.head_offsets,
         )
-        return self._read_token_rows(ids), next_context
+        return self._read_token_rows(ids, proofs), next_context
 
-    def _read_token_rows(self, hashed: Sequence[int]) -> bytearray:
+    def _read_token_rows(self, hashed: Sequence[int], proofs: list | None = None) -> bytearray:
         """:meth:`_read_rows` for the decode step's few rows: one ``preadv`` per row straight into the payload (no
         WILLNEED, no per-row ``bytes``, no dict), then one identity proof per touched shard file after the reads.
         The proof after the reads covers everything since the open: the identity holds the size, mtime and ctime,
@@ -957,9 +961,21 @@ class Qwen38ResidentPLELookup:
                 raise ValueError(f"truncated sparse row {row} for {reader.name}")
             start = end
             proving.setdefault(reader.shard, reader)
-        for reader in proving.values():
-            reader.prove_identity("after")
+        if proofs is not None:
+            proofs.extend(proving.values())
+        else:
+            for reader in proving.values():
+                reader.prove_identity("after")
         return payload
+
+    @staticmethod
+    def prove_deferred(proofs: list) -> None:
+        """Run the identity proofs ``lookup_token(..., proofs)`` left (same check, same error as the inline form)."""
+
+        pending = list(proofs)
+        proofs.clear()
+        for reader in pending:
+            reader.prove_identity("after")
 
     def lookup_tokens(
         self, tokens: Sequence[int], context: tuple[int, int] | None

@@ -243,6 +243,21 @@ def token_row_host_value(host: torch.Tensor) -> int:
     return int(value)
 
 
+def token_row_numpy_value(host: Any) -> int:
+    """token_row_host_value for the persistent host tensor's numpy image (QWEN38_HOST_FAST read): the same checks (FP32,
+    TOKEN_ROW_SHAPE, finite, integral) on the same element, without a torch view per step."""
+
+    array = host.to_numpy()
+    if array.dtype.name != "float32" or array.shape != tuple(TOKEN_ROW_SHAPE):
+        raise ResidentDecodeError(
+            f"token row readback is {array.dtype} {tuple(array.shape)}, expected FP32 {TOKEN_ROW_SHAPE}"
+        )
+    value = array.item(0)
+    if not math.isfinite(value) or value != int(value):
+        raise ResidentDecodeError(f"token row holds the non-integral value {value}")
+    return int(value)
+
+
 def require_token_row_holds(token_row: Any, expected: torch.Tensor, *, label: str) -> None:
     """Require all TP_SIZE replicas of ``token_row`` to equal the host row ``expected``."""
 

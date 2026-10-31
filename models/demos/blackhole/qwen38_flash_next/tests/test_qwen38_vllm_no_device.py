@@ -45,6 +45,14 @@ from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic impor
 
 
 @pytest.fixture(autouse=True)
+def _guarded_host_path(monkeypatch):
+    """These tests pin the guarded decode path (QWEN38_HOST_FAST=0: guard, device_greedy_contract, token_row_value);
+    the default is the host-fast path, which the device runs check."""
+
+    monkeypatch.setenv("QWEN38_HOST_FAST", "0")
+
+
+@pytest.fixture(autouse=True)
 def _write_token_row_path(monkeypatch):
     """The op-order pins below were written for the token-row write; QWEN38_TOKEN_FEEDBACK is on by default (x53), so
     pin the write path here and let the token-feedback tests set or delete the variable themselves."""

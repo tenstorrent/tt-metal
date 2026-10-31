@@ -2285,6 +2285,18 @@ class Qwen38ChainMTP:
         return summary
 
 
+HOST_FAST_VARIABLE = "QWEN38_HOST_FAST"  # default "1": B=1 decode skips redundant per-step host work; "0": guarded path
+HOST_SPIN_VARIABLE = (
+    "QWEN38_HOST_SPIN"  # default "1" (with HOST_FAST): poll a non-blocking token read instead of a blocking wait; the
+)
+# sleeping wait made every host phase after it slower and the step time noisy (one core spins per decode step); "0" off
+SPIN_TIMEOUT_S = 60.0
+
+
+def host_fast_enabled() -> bool:
+    return os.environ.get(HOST_FAST_VARIABLE, "1") == "1"
+
+
 @dataclass
 class Qwen38TracedChain:
     """The runner's single-trace chain kept open for serving: 8 decode traces, the persistent token row, the PLE
@@ -2387,6 +2399,16 @@ class Qwen38TracedChain:
         ttnn._ttnn_execute_trace(self.mesh, self.tail_trace_ids[residue], cq_id=0, blocking=False)
         if self.mtp is not None:
             self.mtp.step_written = False
+        self.prove_ple_reads()  # the PLE row's identity proofs run behind the enqueued TAIL, not between HEAD and TAIL
+
+    def prove_ple_reads(self) -> None:
+        """Run the PLE row reads' identity proofs left by a deferred ``prepare_ple_row`` (host fast); raises the
+        same error as the inline proof.  Also called before the next lookup and at every blocking readback fence, so
+        no payload outlives its proof."""
+
+        proofs = getattr(self, "_ple_proofs", None)
+        if proofs:
+            self.built_target.model.layers[1].ple.resident_lookup.prove_deferred(proofs)
 
     def refresh_ple_row(self, token_id: int, context: tuple[int, int] | None) -> tuple[int, int]:
         """Scalar n-gram hash of (x_t, context), 16 PLE rows by pread, 5,120 B ROW_MAJOR write behind HEAD(t)."""
@@ -2400,7 +2422,12 @@ class Qwen38TracedChain:
         HEAD(t) is enqueued (QWEN38_PLE_EARLY)."""
 
         ple_owner = self.built_target.model.layers[1].ple
-        payload, next_context = ple_owner.resident_lookup.lookup_token(token_id, context)
+        self.prove_ple_reads()
+        if host_fast_enabled():  # the proofs follow the TAIL enqueue (execute_tail), outside the HEAD -> TAIL window
+            proofs = self.__dict__.setdefault("_ple_proofs", [])
+            payload, next_context = ple_owner.resident_lookup.lookup_token(token_id, context, proofs)
+        else:
+            payload, next_context = ple_owner.resident_lookup.lookup_token(token_id, context)
         if os.environ.get("QWEN38_PLE_UPLOAD", "reuse") not in ("0", "fresh") and not getattr(
             self, "_ple_upload_pending", False
         ):
@@ -2433,6 +2460,7 @@ class Qwen38TracedChain:
         """A blocking readback of a TAIL that ran after the last upload completed: the persistent PLE host buffer is
         free again.  Called only by the blocking readback sites (read_token_row, the full-logits read)."""
 
+        self.prove_ple_reads()
         self._ple_upload_pending = False
 
     def read_token_row_nonblocking(self) -> Any:
@@ -2450,15 +2478,62 @@ class Qwen38TracedChain:
         return resident_decode.token_row_host_value(ttnn.to_torch(pending))
 
     def read_token_row(self) -> int:
-        if os.environ.get("QWEN38_HOST_FAST") == "1":  # the same blocking read of device 0's replica, one call less
-            value = resident_decode.token_row_host_value(
-                ttnn.to_torch(ttnn.from_device(ttnn.get_device_tensors(self.token_row_io)[0], blocking=True))
-            )
+        if host_fast_enabled() and os.environ.get(HOST_SPIN_VARIABLE, "1") == "1":
+            value = self._read_token_row_spin()
+        elif host_fast_enabled():
+            value = self._read_token_row_fast()
         else:
             value = resident_decode.token_row_value(self.token_row_io)  # blocking: the TAIL after the upload is done
         self._token_row_value = value  # what the device's token row holds now (nothing runs between read and HEAD)
         self.mark_ple_fenced()
         return value
+
+    def _token_read_cache(self) -> tuple[Any, Any, Any]:
+        """Device 0's replica of the token row and one persistent host tensor of the same spec, built once per
+        ``token_row_io`` object (the row is replicated; the blocking read takes device 0's copy as before)."""
+
+        cache = self.__dict__.get("_token_cache")
+        if cache is None or cache[0] is not self.token_row_io:
+            shard = ttnn.get_device_tensors(self.token_row_io)[0]
+            cache = self._token_cache = (self.token_row_io, shard, ttnn.from_device(shard, blocking=True))
+        return cache
+
+    def _read_token_row_fast(self) -> int:
+        """The blocking read of device 0's replica into the persistent host tensor (no per-step host allocation, no
+        mesh-tensor lookup), the id taken from its numpy image with token_row_host_value's checks."""
+
+        cache = self.__dict__.get("_token_cache")
+        if cache is None or cache[0] is not self.token_row_io:
+            host = self._token_read_cache()[2]  # first read of this row: from_device made the host tensor, and read it
+        else:
+            host = cache[2]
+            ttnn.copy_device_to_host_tensor(cache[1], host, blocking=True)
+        return resident_decode.token_row_numpy_value(host)
+
+    def _read_token_row_spin(self) -> int:
+        """QWEN38_HOST_SPIN (default with HOST_FAST): a non-blocking copy into a host tensor that holds NaN, polled until the
+        first element changes (the device's id is a finite integer)."""
+
+        shard = self._token_read_cache()[1]
+        sentinel = self.__dict__.get("_spin_sentinel")
+        if sentinel is None:
+            sentinel = self._spin_sentinel = torch.full(resident_decode.TOKEN_ROW_SHAPE, float("nan"))
+        host = ttnn.from_torch(sentinel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_device_to_host_tensor(shard, host, blocking=False)
+        polls = 0
+        deadline = time.perf_counter() + SPIN_TIMEOUT_S
+        while True:
+            value = host.to_numpy().item(0)
+            polls += 1
+            if value == value:
+                break
+            if polls % 4096 == 0 and time.perf_counter() > deadline:
+                raise resident_decode.ResidentDecodeError("token row spin read: no value after 60 s")
+        log = self.__dict__.setdefault("spin_poll_log", [])
+        if len(log) < 4096:
+            log.append(polls)
+        self._spin_keep = (host, self.__dict__.get("_spin_keep", (None,))[0])  # keep the last two host tensors alive
+        return resident_decode.token_row_numpy_value(host)
 
     def position(self) -> int:
         return self.state.position.read()

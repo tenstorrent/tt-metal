@@ -257,7 +257,7 @@ WARM_POLICY = Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=20, top_p=0.95, m
 WARM_UNIFORM = 0.37500011920928955  # 6291458 * 2**-24
 
 
-# QWEN38_GREEDY_TAIL=1 (set by the vLLM adapter's single-slot open, tools/qwen38_vllm.py): the TAIL traces carry no candidate
+# QWEN38_GREEDY_TAIL (default "1"; set by the vLLM adapter's single-slot open, tools/qwen38_vllm.py): the TAIL traces carry no candidate
 # row.  That adapter's host sampler draws from the FULL-vocabulary row (the retained logits' gather), never from the
 # candidate row, so the per-shard top-k chain (~228 us per step) is dead weight in every TAIL.  Only with no device sampler
 # (the sampler reads the row).
