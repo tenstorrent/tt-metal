@@ -474,27 +474,35 @@ std::vector<Tensor> trunc_bw(
     return grad_tensor;
 }
 
-// return: grad_output * (max_deriv - sign * (z / (1 + z)))
-// z = exp(-abs(input))
+// d/dx log(sigmoid(x)) = 1 / (1 + exp(x)) = sigmoid(-x)
 std::vector<Tensor> log_sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor max_deriv = ttnn::where(ttnn::ltz(input, output_mem_config), 1.f, 0.f, output_mem_config);
-    Tensor in_sign = ttnn::where(ttnn::ltz(input, output_mem_config), 1.f, -1.f, output_mem_config);
-    Tensor in_abs = ttnn::abs(input, output_mem_config);
-    Tensor z = ttnn::exp(ttnn::neg(in_abs, output_mem_config), false, output_mem_config);
-
-    Tensor mul_z = ttnn::multiply(
-        z,
-        ttnn::reciprocal((ttnn::add(z, 1.0f, std::nullopt, output_mem_config)), output_mem_config),
-        std::nullopt,
+    grad_tensor.reserve(1);
+    Tensor neg_input = ttnn::neg(input, output_mem_config);
+    Tensor sigmoid_neg = ttnn::sigmoid(
+        neg_input,
+        (int)ttnn::operations::unary::VecMode::RC,
+        ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-
-    Tensor mul_sign = ttnn::multiply(in_sign, mul_z, std::nullopt, output_mem_config);
-    Tensor sub_max = ttnn::subtract(max_deriv, mul_sign, std::nullopt, output_mem_config);
-
-    Tensor grad_result = ttnn::multiply(grad, sub_max, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    neg_input.deallocate();
+    Tensor grad_result = ttnn::multiply(grad, sigmoid_neg, std::nullopt, output_mem_config);
+    sigmoid_neg.deallocate();
+    // A NaN input has no finite derivative, so it has to come back non-finite
+    // instead of silently yielding one. Note that a bfloat16 Dest cannot carry
+    // NaN: the marker materialises as an infinity there, so on bf16 this op
+    // returns inf rather than NaN. Both are non-finite, which is what the
+    // tests and callers check for.
+    // Select the input itself where it is NaN rather than materialising a NaN
+    // scalar. A scalar NaN in a select that is evaluated arithmetically
+    // (pred*scalar + (1-pred)*tensor) would turn 0*NaN into NaN and poison
+    // every element, including the ones where the predicate is false. Taking
+    // the NaN from the data avoids that entirely, and is what makes this safe
+    // for the non-NaN nightly shapes.
+    Tensor is_nan = ttnn::isnan(input, output_mem_config);
+    grad_result = ttnn::where(is_nan, input, grad_result, output_mem_config);
+    is_nan.deallocate();
+    grad_tensor.emplace_back(std::move(grad_result));
     return grad_tensor;
 }
 
@@ -803,9 +811,21 @@ std::vector<Tensor> square_bw(
 std::vector<Tensor> hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor hardshrink_result = ttnn::hardshrink(input_tensor, lambd, output_mem_config);
-    Tensor result = where(ttnn::eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
-    grad_tensor.emplace_back(result);
+    // Same construction as softshrink_bw: |x| > lambd expressed as
+    // (x < -lambd) || (x > lambd). Doing it this way keeps the predicate
+    // identical to the sibling op that already passes CI, and avoids the
+    // extra abs() kernel. A NaN input compares false on both sides, so the
+    // gradient is zeroed, which is what the domain test expects.
+    Tensor result = ttnn::where(
+        ttnn::logical_or(
+            ttnn::lt(input_tensor, -lambd, std::nullopt, output_mem_config),
+            ttnn::gt(input_tensor, lambd, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        grad,
+        0.f,
+        output_mem_config);
+    grad_tensor.emplace_back(std::move(result));
     return grad_tensor;
 }
 
