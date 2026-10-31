@@ -298,7 +298,9 @@ inline void _llk_unpack_A_mop_config_(
  * @note On the plain path, a face shorter than 16 rows waits for math and zeroes both SrcA banks
  *       (see @ref _llk_unpack_A_mop_config_). Re-run this init after any op that writes SrcA, for example a
  *       MOVD2A or MOVB2A.
- * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
+ * @note Asserted unsupported: COL broadcast on tiles other than 32x32; transpose_of_faces on faces
+ *       shorter than 16 rows or on 2-face tiles; within-face transpose on faces shorter than 16 rows or
+ *       with unpack to dest (any tile, tt-llk#1702); ROW broadcast with unpack to dest on 32x16.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -322,6 +324,14 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     LLK_ASSERT(transpose_of_faces == 0 || num_faces == 4 || num_faces == 1, "Transpose requires num_faces == 4 or 1 (32x32 and 16x16 only)");
+    // Within-face transpose (haloize mode) with 32-bit unpack to dest gives wrong output on every tile
+    // shape, 32x32 included (tt-llk#1702 item 15). The compute API uses transpose_of_faces here and
+    // transposes within faces on the math thread (transpose_dest) instead.
+    LLK_ASSERT(
+        within_face_16x16_transpose == 0 || !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format),
+        "Within-face transpose is not supported with unpack to dest; use transpose_dest on the math thread (tt-llk#1702)");
+    // Within-face transpose swaps rows and columns of a 16x16 face; a face with fewer rows gives wrong output.
+    LLK_ASSERT(within_face_16x16_transpose == 0 || face_r_dim == MAX_FACE_R_DIM, "Within-face transpose requires 16-row faces");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
