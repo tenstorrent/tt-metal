@@ -97,7 +97,7 @@ void FreeListOpt::init() {
 }
 
 std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bottom_up, DeviceAddr address_limit) {
-    DeviceAddr alloc_size = align(std::max(size_bytes, min_allocation_size_));
+    DeviceAddr alloc_size = allocation_size(size_bytes);
 
     // Find the best free block by looking at the segregated free blocks, if we can find a block in it's size class
     // we can be confident that it's the best block to allocate from. Else, look at the next size class. However the
@@ -109,6 +109,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     std::vector<size_t>* segregated_list = nullptr;
     size_t segregated_item_index = 0;
     DeviceAddr best_address = bottom_up ? ~(DeviceAddr)0 : 0;
+    size_t target_offset = 0;
 
     for (size_t i = size_segregated_index; i < free_blocks_segregated_by_size_.size(); i++) {
         auto& free_blocks = free_blocks_segregated_by_size_[i];
@@ -117,9 +118,17 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
             // counter avoids an empty list underflowing the start index.
             const size_t j = bottom_up ? n : free_blocks.size() - 1 - n;
             const size_t block_index = free_blocks[j];
+            const DeviceAddr block_start = block_address_[block_index] + offset_bytes_;
+            const auto candidate =
+                find_allocation_address(block_start, block_start + block_size_[block_index], alloc_size, bottom_up);
+            if (!candidate.has_value()) {
+                continue;
+            }
+            const size_t candidate_offset = candidate.value() - block_start;
             if (policy_ == SearchPolicy::BEST) {
                 if (block_size_[block_index] == alloc_size) {
                     target_block_index = block_index;
+                    target_offset = candidate_offset;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                     break;
@@ -127,6 +136,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                 if (block_size_[block_index] >= alloc_size &&
                     (!target_block_index.has_value() || block_size_[block_index] < block_size_[*target_block_index])) {
                     target_block_index = block_index;
+                    target_offset = candidate_offset;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                 }
@@ -134,17 +144,13 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                     break;
                 }
             } else {
-                if (block_size_[block_index] < alloc_size) {
-                    continue;
-                }
-
-                bool address_better =
-                    bottom_up ? block_address_[block_index] < best_address : block_address_[block_index] > best_address;
+                bool address_better = bottom_up ? candidate.value() < best_address : candidate.value() > best_address;
                 if (!target_block_index.has_value() || address_better) {
                     target_block_index = block_index;
+                    target_offset = candidate_offset;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
-                    best_address = block_address_[block_index];
+                    best_address = candidate.value();
                     break;
                 }
             }
@@ -161,11 +167,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(segregated_item_index));
 
     // Allocate the block
-    size_t offset = 0;
-    if (!bottom_up) {
-        offset = block_size_[*target_block_index] - alloc_size;
-    }
-    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, offset);
+    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, target_offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
     if (start_address + offset_bytes_ < address_limit) {
         TT_THROW(
@@ -179,7 +181,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
 
 std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) {
     // Nothing we can do but scan the free list
-    size_t alloc_size = align(std::max(size_bytes, min_allocation_size_));
+    size_t alloc_size = allocation_size(size_bytes);
     std::optional<size_t> target_block_index;
     DeviceAddr start_address = absolute_start_address - offset_bytes_;
     for (size_t i = 0; i < block_address_.size(); i++) {
@@ -336,7 +338,7 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(DeviceAddr size_bytes) const {
-    size_t alloc_size = align(std::max(size_bytes, min_allocation_size_));
+    size_t alloc_size = allocation_size(size_bytes);
     size_t size_segregated_index = get_size_segregated_index(alloc_size);
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 

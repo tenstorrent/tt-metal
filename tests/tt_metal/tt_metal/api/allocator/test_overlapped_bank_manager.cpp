@@ -1278,7 +1278,10 @@ TEST(OverlappedAllocators, CPU_NonzeroAllocOffset) {
     // With dependent allocators, the clamping logic will find an address above address limit
     // With independent allocators, regular allocate API will actually fail for this use case
     // - But in practice, we always allocate top-down so it's not an issue
-    EXPECT_EQ(alloc0_addr2, interleaved_address_limit);
+    const auto default_alignment = get_dram_alignment_from_hal();
+    const auto aligned_address_limit =
+        ((interleaved_address_limit + default_alignment - 1) / default_alignment) * default_alignment;
+    EXPECT_EQ(alloc0_addr2, aligned_address_limit);
 
     const auto alloc0_addr3 = bank_manager.allocate_buffer(
         alloc_size_4K,
@@ -1339,4 +1342,115 @@ TEST(OverlappedAllocators, CPU_NonL1SmallOutOfMemoryHasNoL1SmallHint) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
             ::testing::HasSubstr("Out of Memory: Not enough space to allocate 4096 B DRAM"),
             ::testing::Not(::testing::HasSubstr("l1_small_size")))));
+}
+
+TEST(OverlappedAllocators, CPU_PreserveDefaultAlignmentAfterExplicitReservation) {
+    for (const uint32_t alignment : {32u, 64u}) {
+        for (const bool bottom_up : {false, true}) {
+            for (const auto reservation_allocator : {AllocatorID{0}, AllocatorID{1}}) {
+                SCOPED_TRACE(
+                    ::testing::Message() << alignment << ", " << bottom_up << ", " << reservation_allocator.get());
+                const DeviceAddr base = 4 * alignment;
+                BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+                BankManager manager(
+                    BufferType::L1,
+                    std::unordered_map<uint32_t, int64_t>{{0, 0}},
+                    3 * alignment,
+                    base,
+                    /*alignment_bytes=*/16,
+                    /*dram_alignment_bytes=*/alignment,
+                    base,
+                    false,
+                    deps);
+                const DeviceAddr fixed = base + (bottom_up ? 16 : alignment + 16);
+                manager.mark_allocated(reservation_allocator, fixed, alignment);
+                const auto address = manager.allocate_buffer(
+                    alignment, alignment, bottom_up, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt);
+                EXPECT_EQ(address, base + (bottom_up ? 2 * alignment : 0));
+                EXPECT_EQ(address % alignment, 0u);
+                manager.deallocate_buffer(address);
+                manager.mark_deallocated(reservation_allocator, fixed);
+                EXPECT_EQ(manager.get_statistics().total_free_bytes, 3 * alignment);
+                EXPECT_EQ(manager.get_statistics().largest_free_block_bytes, 3 * alignment);
+            }
+        }
+    }
+}
+
+TEST(OverlappedAllocators, CPU_UseFullReservationSizeAfterSubtractingOccupiedRanges) {
+    for (const uint32_t alignment : {32u, 64u}) {
+        for (const bool bottom_up : {false, true}) {
+            for (const bool additional_range : {false, true}) {
+                for (const DeviceAddr requested : {DeviceAddr{16}, DeviceAddr{alignment + 16}}) {
+                    SCOPED_TRACE(
+                        ::testing::Message()
+                        << alignment << ", " << bottom_up << ", " << additional_range << ", " << requested);
+                    const DeviceAddr base = 4 * alignment;
+                    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+                    BankManager manager(
+                        BufferType::L1,
+                        std::unordered_map<uint32_t, int64_t>{{0, 0}},
+                        4 * alignment,
+                        base,
+                        /*alignment_bytes=*/16,
+                        /*dram_alignment_bytes=*/alignment,
+                        base,
+                        false,
+                        deps);
+                    const std::pair<DeviceAddr, DeviceAddr> occupied{base + alignment / 2, base + 3 * alignment / 2};
+                    std::vector<std::pair<DeviceAddr, DeviceAddr>> additional;
+                    if (additional_range) {
+                        additional.push_back(occupied);
+                    } else {
+                        manager.mark_allocated(AllocatorID{1}, occupied.first, alignment);
+                    }
+                    manager.begin_high_water_mark_tracking();
+                    const auto address = manager.allocate_buffer(
+                        requested,
+                        requested,
+                        bottom_up,
+                        CoreRangeSet(std::vector<CoreRange>{}),
+                        std::nullopt,
+                        AllocatorID{0},
+                        additional);
+                    const DeviceAddr reserved = requested == 16 ? alignment : 2 * alignment;
+                    const auto state = manager.extract_state();
+                    ASSERT_EQ(state.allocated_regions.size(), 1u);
+                    const auto range = state.allocated_regions.front();
+                    EXPECT_EQ(range.first, address);
+                    EXPECT_EQ(range.second - range.first, reserved);
+                    EXPECT_TRUE(range.second <= occupied.first || range.first >= occupied.second);
+                    EXPECT_EQ(address % alignment, 0u);
+                    EXPECT_EQ(address, base + (bottom_up || reserved == 2 * alignment ? 2 : 3) * alignment);
+                    EXPECT_EQ(manager.end_high_water_mark_tracking(), address + reserved);
+                }
+            }
+        }
+    }
+}
+
+TEST(OverlappedAllocators, CPU_RejectWindowSmallerThanFullReservation) {
+    for (const uint32_t alignment : {32u, 64u}) {
+        for (const bool bottom_up : {false, true}) {
+            const DeviceAddr base = 4 * alignment;
+            BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+            BankManager manager(
+                BufferType::L1,
+                std::unordered_map<uint32_t, int64_t>{{0, 0}},
+                2 * alignment,
+                base,
+                /*alignment_bytes=*/16,
+                /*dram_alignment_bytes=*/alignment,
+                base,
+                false,
+                deps);
+            manager.mark_allocated(AllocatorID{1}, base + alignment / 2, alignment);
+            EXPECT_THAT(
+                [&]() {
+                    manager.allocate_buffer(16, 16, bottom_up, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt);
+                },
+                ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("after considering dependencies")));
+            EXPECT_EQ(manager.get_statistics().total_allocated_bytes, 0u);
+        }
+    }
 }
