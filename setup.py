@@ -355,6 +355,7 @@ class CMakeBuild(build_ext):
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
             "api/tt-metalium/memory/buffer/buffer_types.hpp",
+            "api/tt-metalium/buffer_types.hpp",
             "api/tt-metalium/experimental/fabric/fabric_edm_types.hpp",
             "api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
