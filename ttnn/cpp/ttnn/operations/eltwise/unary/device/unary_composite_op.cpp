@@ -255,6 +255,16 @@ Tensor clamp(
         "Either 'min' value or 'max' value can be None. Please provide at least one value");
     Tensor a = input_a;
 
+    if (tt::tt_metal::is_floating_point(input_a.dtype())) {
+        auto to_float = [](auto v) { return std::variant<float, std::int32_t>{static_cast<float>(v)}; };
+        if (min.has_value()) {
+            min = std::visit(to_float, min.value());
+        }
+        if (max.has_value()) {
+            max = std::visit(to_float, max.value());
+        }
+    }
+
     // Check if we have any int32_t scalars (both will be int32_t or null)
     bool has_int32_scalar = (min.has_value() && std::holds_alternative<std::int32_t>(min.value())) ||
                             (max.has_value() && std::holds_alternative<std::int32_t>(max.value()));
@@ -266,10 +276,10 @@ Tensor clamp(
 
     if (has_int32_scalar) {
         // All scalars are int32_t (or null)
-        std::int32_t min_val = min.has_value() ? std::get<std::int32_t>(min.value()) : -16775716;
+        std::int32_t min_val =
+            min.has_value() ? std::get<std::int32_t>(min.value()) : std::numeric_limits<std::int32_t>::min();
         std::int32_t max_val =
-            max.has_value() ? std::get<std::int32_t>(max.value())
-                            : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
+            max.has_value() ? std::get<std::int32_t>(max.value()) : std::numeric_limits<std::int32_t>::max();
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
     }  // All scalars are float (or null)
     float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
