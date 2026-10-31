@@ -1581,6 +1581,35 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-31 19:45: device sampling served on the 8x4: sampled decode 4.1 -> 16.0 tok/s per user, greedy ITL unchanged, draws seed-deterministic
+
+The served A/B at 128 x 128 x 32 users (temperature 1.0 / top-p 0.95 = the eval entries' settings, `vllm bench serve`,
+32 concurrent, the resident chain + prefix caching + the paged op, i.e. today's serving defaults):
+
+| arm | mean TPOT | median TPOT | per user | aggregate | mean TTFT |
+|---|---|---|---|---|---|
+| host sampling (the knob off: full-vocab logits to the host each step) | 245.9 ms | - | 4.1 tok/s | 108.7 tok/s | - |
+| device sampler (`GLM53_DEVICE_SAMPLING=1`), sampled requests | 62.3 ms | 61.1 ms | 16.0 tok/s | 282 tok/s | 6.6 s |
+| control: the sampler in the trace, greedy requests | 61.5 ms | 60.4 ms | 16.3 tok/s | 298 tok/s | 5.9 s |
+
+The control matches the greedy baseline (60.9 ms ITL on 2026-10-30; the sampler's ~1 ms per step is inside the run
+to run noise). The bench measures the rate only, so a client stage (`serve_smoke_glm53_client.py` stage `s`) then
+checked the semantics on one open prompt, 64 tokens: two greedy requests identical, two requests with `seed` 7
+identical (a request's seed is stepped per position on the device, so a seeded request reproduces its draws), seed 7
+and seed 8 different, the sampled text different from the greedy one, two unseeded requests different, every text
+coherent (the greedy continuation about a canyon, the seeded ones about a whispering vale and clicking sandstone, the
+top-k 5 one about tufa towers). Stage `a` (the two 128-token first tokens) passed under the knob as before.
+
+Two traps on the way: (1) the first knob-on arm crashed at its first prefill because the plugin's per-request seed
+list carries `None` for unseeded requests and `row_sampling` did `int(None)` (b8d81a4a067: a missing, short or
+`None` entry reads as the field's default); (2) the runner's SIGINT interrupt path does nothing to a stage: bash
+launches the pytest with `&` from a non-interactive shell, so every descendant inherits SIGINT ignored; a doomed
+stage is dropped with SIGTERM to the smoke bash, whose trap stops the server through its own path.
+
+Default: still opt-in. Flipping it costs greedy users the sampler's ~1 ms per step and needs a new shield image; the
+release's eval entries (all sampled at temperature 1.0) would run 4x faster with it. Pushed with the sampler
+commits; the overlay refresh follows the queued 1 M bench (its frozen tree is the overlay).
+
 ### 2026-10-31 10:05: device sampling for sampled decode rows (built on one chip; the served A/B waits for the mesh)
 
 The release's first eval showed sampled requests (temperature 1.0 / top-p 0.95) decoding at 4-6 tok/s per user

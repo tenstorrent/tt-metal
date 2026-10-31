@@ -58,6 +58,12 @@ all fit with 1.1-2.0 GiB per chip to spare.
 | 256 | Galaxy 8x4 (Blackhole) | 130 844 (user-partitioned cache, 8 slots per chip) | 55-63 s | 5.0 | 19 | 1287 | one run (needle depth 0.56): 32 prompts per row prefilled one after another at 2078-2395 tok/s; decode step 199.0 ms; needle retrieved by all 256 slots, all 256 chains bit-identical; 1.12 GiB free after the prefills |
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1.1 s | 13.6 | - | 27 | one run (multimodal demo, today's defaults): eager vision tower 60 ms + prefill; decode step 73.7 ms; 45 layers bfp4 experts; first token == HF |
 
+Sampled requests (a temperature or top-p; the eval entries run at temperature 1.0 / top-p 0.95) decode through the
+device sampler when the server runs with `GLM53_DEVICE_SAMPLING=1` (opt-in, served A/B 2026-10-31): 62.3 ms mean
+TPOT at 32 users (16.0 tok/s per user, 282 tok/s aggregate) against 245.9 ms (4.1 tok/s per user) through the host
+sampler; greedy requests keep the head's argmax bit-identically (control 61.5 ms vs 60.9 ms); a request's `seed`
+reproduces its draws (the seed is stepped per position on the device), different seeds draw differently.
+
 Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no
 long-context prefill path and a prefill accuracy gap at 128 tokens, so not the default): with one random token
 per user, traced decode step 71.2 ms at 32 users (14.1 tok/s per user, 450 aggregate; hybrid 83.1 ms), 139.2 ms at
