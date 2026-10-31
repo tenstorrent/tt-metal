@@ -580,9 +580,11 @@ std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
         return std::nullopt;
     }
     auto planned = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
-    if (!planned.has_value() ||
-        reshape_codegen::is_demoted(
-            tensor, logical_shape, reshape_codegen::reshape_core_grid(tensor, sub_core_grid).num_cores(), *planned)) {
+    if (!planned.has_value()) {
+        return std::nullopt;
+    }
+    const uint32_t num_cores = reshape_codegen::reshape_core_grid(tensor, sub_core_grid).num_cores();
+    if (reshape_codegen::is_demoted(tensor, logical_shape, mem_config, num_cores, *planned)) {
         return std::nullopt;
     }
     return planned;
@@ -606,6 +608,7 @@ ttnn::Tensor reshape_dispatch(
     const auto [logical_shape, padded_shape] =
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
 
+    // Skips the arch gate like the gather/repeat/untilize forced entries, so a caller can force codegen on any arch.
     if (impl == ReshapeImpl::CODEGEN) {
         const char* violation =
             reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);

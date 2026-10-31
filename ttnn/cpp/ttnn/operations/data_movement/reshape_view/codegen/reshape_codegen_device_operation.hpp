@@ -19,8 +19,10 @@ struct ReshapeCodegenDeviceOperation {
     using tensor_args_t = ReshapeCodegenInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<ReshapeCodegenTileRowsProgramFactory, ReshapeCodegenTileMappedProgramFactory>;
+    using program_factory_t = std::variant<
+        ReshapeCodegenProgramFactory,
+        ReshapeCodegenTileRowsProgramFactory,
+        ReshapeCodegenTileMappedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

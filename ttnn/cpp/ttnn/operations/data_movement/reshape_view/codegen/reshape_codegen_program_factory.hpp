@@ -7,6 +7,7 @@
 #include <optional>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -21,8 +22,8 @@ struct ReshapeCodegenParams {
     ttnn::Shape logical_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
-    // Not an attribute: it follows from the shapes, which are. The plan live L1 sizes it to, and the TILE route, are
-    // keyed by ReshapeCodegenDeviceOperation::compute_program_hash.
+    // Not an attribute: it follows from the shapes, which are. The plan live L1 sizes it to, and the TILE route and
+    // row-major choice, are keyed by ReshapeCodegenDeviceOperation::compute_program_hash.
     ttnn::operations::data_movement::reshape_codegen::LaunchPlan plan;
 
     static constexpr auto attribute_names =
@@ -34,6 +35,13 @@ struct ReshapeCodegenParams {
 
 struct ReshapeCodegenInputs {
     Tensor input;
+};
+
+struct ReshapeCodegenProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ReshapeCodegenParams& operation_attributes,
+        const ReshapeCodegenInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
 // Tile-row permutation TILE program. Its plan table is a device tensor the program reads, so the factory builds the

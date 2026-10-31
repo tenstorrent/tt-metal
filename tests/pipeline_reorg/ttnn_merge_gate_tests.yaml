@@ -24,7 +24,7 @@
 # codegen kernels and check them against a golden (torch for pad); a new op joins by appending its
 # unit-test file. Auto routing over the op's full config matrix is covered by the nightly routing
 # tests under tests/ttnn/nightly.
-# The selection is 160 tests, about 35 s of pytest on a Blackhole p150b with a warm kernel cache.
+# The selection is 185 tests.
 # Hardware only: the simulator would take minutes to cover what hardware covers in seconds.
 - name: "ttnn codegen ops"
   cmd: >-
