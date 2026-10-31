@@ -628,7 +628,9 @@ ttnn::Tensor rms_norm_split_full(
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    bool pack_precise,
+    const std::optional<ttnn::Tensor>& bfp8_twin) {
     const auto cfg = normalize_compute_kernel_config(compute_kernel_config);
     const int64_t width = input_tensor.logical_shape()[-1];
     const auto [c0, c1] = input_window.value_or(std::pair<int64_t, int64_t>{0, width});
@@ -648,8 +650,9 @@ ttnn::Tensor rms_norm_split_full(
     attrs.math_approx_mode = cfg.math_approx_mode;
     attrs.dst_full_sync_en = cfg.dst_full_sync_en;
     attrs.max_grid = max_grid;
+    attrs.pack_precise = pack_precise;
     return ttnn::prim::bringup::rms_norm_split(
-        input_tensor, as_optional(weight), as_optional(partial_stats), attrs, output_tensor);
+        input_tensor, as_optional(weight), as_optional(partial_stats), attrs, output_tensor, bfp8_twin);
 }
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn

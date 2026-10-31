@@ -81,6 +81,8 @@ class TtDistributedRmsNorm:
             assert not gather, "gather norms take FFN_NORM_DTYPE"
             self.out_dtype = dtype
         self.inv_h = 1.0 / float(hidden)
+        # NORM_GEMM_DTYPE=on (P.21): a bfloat8_b output packed in one rounding (fork option pack_precise)
+        self.pack_precise = self.out_dtype == ttnn.bfloat8_b
         # FORK_OUT_BUFFERS=on (P.16): the site whose load-time outputs this norm writes (tt/host_alloc.reserve_forks
         # names it; None = the op allocates)
         self.site = None
@@ -129,17 +131,24 @@ class TtDistributedRmsNorm:
         dealloc(t)
         return rs
 
-    def _fork(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
+    def _fork(self, x: ttnn.Tensor, window=None, out=None, twin=None) -> ttnn.Tensor:
         """NORM_IMPL=on (P.18): the norm through ttnn.bringup.rms_norm (module docstring). ``window`` (split=False
-        only): normalize x's columns [c0, c1) in place of a slice."""
+        only): normalize x's columns [c0, c1) in place of a slice. ``out`` (P.21): the caller's output buffer (the
+        result is ``out`` itself); ``twin`` (P.21, bf16 output): a bfloat8_b buffer the op also writes with
+        typecast(output, bfloat8_b)'s values (fork option bfp8_twin)."""
         kw = dict(epsilon=self.eps, weight=self.weight, compute_kernel_config=self.ckc, memory_config=DRAM)
         if self.out_dtype != x.dtype:
             kw["dtype"] = self.out_dtype
+        if self.pack_precise:  # NORM_GEMM_DTYPE=on (P.21): a bfloat8_b output in one rounding from fp32 DEST
+            kw["pack_precise"] = True
+        if twin is not None:
+            kw["bfp8_twin"] = twin
         rows = x.shape[-2]
         if not self.split:
             if window is not None and tuple(window) != (0, x.shape[-1]):
                 kw["input_window"] = tuple(window)
-            out = self._out(self.site, rows, self.hidden)
+            if out is None:
+                out = self._out(self.site, rows, self.hidden)
             if out is None:
                 return ttnn.bringup.rms_norm(x, **kw, max_grid=max_grid())
             ttnn.bringup.rms_norm(x, output_tensor=out, **kw, max_grid=max_grid())
@@ -157,7 +166,8 @@ class TtDistributedRmsNorm:
             dealloc(part)
         else:
             gathered = part
-        out = self._out(self.site, rows, w)
+        if out is None:
+            out = self._out(self.site, rows, w)
         y = ttnn.bringup.rms_norm(
             x, partial_stats=gathered, stats_width=self.hidden, output_tensor=out, **kw, max_grid=max_grid()
         )
@@ -183,11 +193,12 @@ class TtDistributedRmsNorm:
             w = self._stats_widths[(rows, width)] = host_alloc.norm_stats_width(self.mesh, rows, width)
         return w
 
-    def __call__(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, window=None, out=None, twin=None) -> ttnn.Tensor:
         if self.impl == "on":
             width = (window[1] - window[0]) if window is not None else x.shape[-1]
             assert width * self.tp == self.hidden, (x.shape, window, self.hidden)
-            return self._fork(x, window)
+            return self._fork(x, window, out=out, twin=twin)
+        assert out is None and twin is None, "out / twin need NORM_IMPL=on (the fork)"
         if window is not None:  # off (the P.17 path): the caller's slice, here
             rows = x.shape[-2]
             xs = ttnn.slice(

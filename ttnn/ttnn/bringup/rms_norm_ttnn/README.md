@@ -45,6 +45,8 @@ Realistic (use by default): every option below.
 - `dtype=None` (opt-in, split program): the output's dtype; default the input's.
 - The split program takes TILE interleaved float32 / bfloat16 inputs, a [1, 1, 1, W] TILE weight (float32 / bfloat16), `fp32_dest_acc_en=True`; no bias, residual, program_config or return_residual_sum.
 
+- `pack_precise=False` (opt-in, split program; deepseek_v41_flash_d_p P.21): a bfloat8_b output packed from the fp32 DEST in one rounding (bfp8_pack_precise, = ttnn.typecast(fp32 output, bfloat8_b) bit for bit); default: the packer's default bfp8 pack (two roundings, DS41-137).
+- `bfp8_twin=None` (opt-in, split program; P.21): a preallocated bfloat8_b TILE interleaved tensor of the output's shape the op also writes, = ttnn.typecast(bf16 output, bfloat8_b) bit for bit (SFPU bf16 round, ties away, then a precise bfp8 pack). Needs a bfloat16 output, no stats_out.
 - `output_tensor=` (default None = the op allocates its output, unchanged). Given, the op writes that tensor, which must have exactly the output's spec (shape, dtype, layout, memory config; checked on every call, miss and hit) and must not be the input; default and split programs; not with `inplace`. The result is a tensor of its buffer. (CHANGELOG: output_tensor, deepseek_v41_flash_d_p P.16.)
 
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is the stock `compute_kernel_config` choice).
@@ -62,6 +64,8 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 - Split program in deepseek_v41_flash_d_p (2x2, chunk 53248-55296, plain profile, P.18 NORM_IMPL off -> on): attn_norm 1.83 -> 0.89 ms a chunk, ffn_norm 2.11 -> 1.19, kv 0.81 -> 0.22; programs (4 chips) 6140 -> 4580.
 - Source-op tests run against the fork: 263 tests, 251 passed / 12 skipped, same as `ttnn.rms_norm` (tests/source_baseline.json).
 - Unit suite after the mcast port: 1327 passed / 47 skipped; model cases 12 passed (CHANGELOG.md, "Port to the new multicast helpers").
+
+- pack_precise / bfp8_twin (P.21, 8x4, tests/unit/test_rms_norm_ttnn_twin.py): bit-identical to the typecasts they replace (3 + 3 shapes); the model's per-chunk savings in deepseek_v41_flash_d_p BREADCRUMBS P.21.
 
 ## Limits
 - At fp32 the statistic is TF32-grade: x^2 summed by an FPU reduce, r = y / x on the TF32 grid, bias +2.9e-4, rms 3.7e-4 vs fp64 (models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md DS41-44). Not a substitute for an exact fp32 RMS statistic.
@@ -97,6 +101,7 @@ Tests: `tests/test_rms_norm_ttnn.py` + `tests/cases.py` (model cases), `tests/un
 - hy4_preview_d_p: `tt/q_a.py`, `tt/attention.py` (kv_a_layernorm), `tt/norm.py:TtGatheredRmsNorm`; fp32 in, fp32 ROW_MAJOR weight, HiFi4 + fp32 DEST; O.1 cases.
 - glm53_flash_d_p: `tt/rms_norm.py` (`GLM_NORM_IMPL=native` keeps `ttnn.rms_norm`); O.1 cases.
 - xing40_a4b_d_p: `tt/q_a.py`, `tt/attention.py` (kv_a_layernorm), fp32 ROW_MAJOR weight; O.1 cases.
+- deepseek_v41_flash_d_p P.21: `pack_precise` (attn_norm -> q_a, q_norm -> wq_b, NORM_GEMM_DTYPE), `bfp8_twin` (ffn_norm -> the MoE head's bfp8 x, NORM_INTO_MOE; q_norm -> the indexer's bfp8 q_resid).
 - deepseek_v41_flash_d_p (P.18, NORM_IMPL=on): `tt/norm.py` (attn_norm / ffn_norm / final norm through the split program's stats_out + partial_stats; q_norm / kv_norm with input_window on the fused [wq_a | wkv] output; k_norm with dtype=bf16; the compressor norm through the default program), fp32 TILE weight, HiFi4 + fp32 DEST.
 
 ## History

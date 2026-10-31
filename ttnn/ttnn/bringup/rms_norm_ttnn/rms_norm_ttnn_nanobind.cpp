@@ -147,14 +147,17 @@ RmsNormPyResult rms_norm_py(
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    bool pack_precise,
+    const std::optional<ttnn::Tensor>& bfp8_twin) {
     // CHANGELOG 6: any split option -> the split program (the default program never sees them)
-    if (stats_out || partial_stats.has_value() || stats_width != 0 || input_window.has_value() || dtype.has_value()) {
+    if (stats_out || partial_stats.has_value() || stats_width != 0 || input_window.has_value() || dtype.has_value() ||
+        pack_precise || bfp8_twin.has_value()) {
         if (bias.has_value() || residual_input_tensor.has_value() || program_config.has_value() ||
             return_residual_sum || residual_sum_memory_config.has_value()) {
             throw ValueErrorCpp(
-                "rms_norm_ttnn: stats_out / partial_stats / stats_width / input_window / dtype take no bias, residual, "
-                "program_config or return_residual_sum");
+                "rms_norm_ttnn: stats_out / partial_stats / stats_width / input_window / dtype / pack_precise / "
+                "bfp8_twin take no bias, residual, program_config or return_residual_sum");
         }
         return RmsNormPyResult{
             .alias = nullptr,
@@ -170,7 +173,9 @@ RmsNormPyResult rms_norm_py(
                 input_window,
                 dtype,
                 output_tensor,
-                max_grid),
+                max_grid,
+                pack_precise,
+                bfp8_twin),
             .residual_sum = std::nullopt};
     }
     auto r = rms_norm_full(
@@ -291,6 +296,13 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
                 device's whole compute grid): the op runs on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1)
                 of the grid (a Galaxy's 110-core cap); either program, interleaved inputs (a sharded input keeps its
                 shard grid).
+            pack_precise (bool): opt-in (deepseek_v41_flash_d_p P.21, split program; default False): a bfloat8_b
+                output is packed from the fp32 DEST in one rounding (bfp8_pack_precise, as ttnn.typecast packs)
+                instead of the packer's default two (DS41-137).
+            bfp8_twin (ttnn.Tensor, optional): opt-in (deepseek_v41_flash_d_p P.21, split program; default None):
+                a preallocated bfloat8_b TILE interleaved tensor of the output's shape the op also writes, with
+                ttnn.typecast(output, bfloat8_b)'s values bit for bit (y rounded to bf16 as the output is, then
+                packed in one rounding). Needs dtype=bfloat16 output, no stats_out.
 
         Returns:
             ttnn.Tensor: the normalized tensor (the input tensor itself under ``inplace``); with
@@ -314,7 +326,9 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
         nb::arg("input_window") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("max_grid") = nb::none());
+        nb::arg("max_grid") = nb::none(),
+        nb::arg("pack_precise") = false,
+        nb::arg("bfp8_twin") = nb::none());
 
     // For the parity test: the C++ builder's ProgramDescriptor, without dispatching.
     mod.def(

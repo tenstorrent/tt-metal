@@ -286,3 +286,26 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Measured: 8x4 Galaxy, one 5120-token chunk (rms_norm): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/rms_norm_split_device_operation.cpp, device/rms_norm_split_device_operation.hpp, device/rms_norm_ttnn_device_operation.cpp, device/rms_norm_ttnn_device_operation.hpp, device/rms_norm_ttnn_device_operation_types.hpp, device/rms_norm_ttnn_program_factory.cpp, rms_norm_ttnn.cpp, rms_norm_ttnn.hpp, rms_norm_ttnn_nanobind.cpp
+
+### pack_precise and bfp8_twin: GEMM-input outputs of the split program (deepseek_v41_flash_d_p P.21)
+- What: two opt-in options of the split program (any of them selects it). `pack_precise=True` (default False): the
+  compute config's bfp8_pack_precise, so a bfloat8_b output is packed from the fp32 DEST in one rounding (as
+  ttnn.typecast packs); a kernel define `RMS_SPLIT_PACK_PRECISE` gives the binary its own JIT cache key
+  (ComputeKernel's config hash leaves the flag out, DS41-137). `bfp8_twin=t` (default None): a preallocated bfloat8_b
+  TILE interleaved tensor of the output's shape the op also writes: pass B rounds y to bf16 in DEST on the SFPU (ties
+  away from zero, the packer's bf16 rounding) into the DEST half the gamma tiles used (DEST block halved when a twin is
+  given without gamma), packs it to a bfloat8_b CB (c_8, precise) beside the bf16 output; the writer writes both at
+  the same pages. Needs a bfloat16 output, no stats_out. Defaults: program, hash and kernels as before (the new compile
+  args are 0 / the twin's accessor args empty).
+- Why: DeepSeek-V4.1's norms whose only reader is a bfloat8_b GEMM write it directly (attn_norm -> q_a, q_norm -> wq_b
+  with the softmax scale in its gamma: one rounding fp32 -> bfp8 instead of fp32 -> bf16 -> bfp8), and ffn_norm /
+  q_norm write the MoE head's / the indexer's bfp8 x beside their bf16 output (the typecast it replaces, bit for bit).
+- Tests: `tests/unit/test_rms_norm_ttnn_twin.py` 7 passed on the 8x4 Galaxy (FABRIC_2D, 11 x 10 grid): pack_precise
+  = typecast(fp32 output, bfloat8_b) bit for bit on 3 shapes, the default pack differs (negative control); the twin =
+  typecast(bf16 output, bfloat8_b) bit for bit and the bf16 output unchanged, column-split (partial_stats) and window
+  cases, a program-cache hit with other inputs; 4 refusals. Fork regression suites not run (owner, OV-25: F.1).
+- Cores: unchanged (max_grid; the model passes 11 x 10 on a Galaxy: 110).
+- Needed by: deepseek_v41_flash_d_p P.21 (NORM_INTO_MOE, NORM_GEMM_DTYPE)
+- Files: `device/rms_norm_split_device_operation.{hpp,cpp}`, `kernels/rms_norm_split_compute.cpp`,
+  `kernels/rms_norm_split_writer.cpp`, `rms_norm_ttnn.{hpp,cpp}`, `rms_norm_ttnn_nanobind.cpp`,
+  `tests/unit/test_rms_norm_ttnn_twin.py`

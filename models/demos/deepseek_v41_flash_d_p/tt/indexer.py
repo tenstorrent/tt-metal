@@ -62,7 +62,7 @@ import ttnn
 from . import ccl, cores
 from . import mm_configs as mm
 from .ccl import dealloc
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_input, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_dtype, gemm_input, tp_sum
 from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads, rope_stock
 from .settings import settings
@@ -301,9 +301,14 @@ class TtIndexer:
         return out
 
     def query(self, qr: ttnn.Tensor, start: int) -> ttnn.Tensor:
-        """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16."""
+        """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16. ``qr_twin`` (set by the
+        caller for this call, NORM_GEMM_DTYPE=on, P.21): qr already as wq_b's bfloat8_b input (q_norm's bfp8_twin)."""
+        tw, self.qr_twin = getattr(self, "qr_twin", None), None
         sub = self._sub(qr)
-        qq = gemm_input(sub)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant of q_resid
+        if tw is not None and sub is qr and tuple(tw.shape) == tuple(qr.shape) and tw.dtype == gemm_dtype():
+            qq = tw  # (pinned: the dealloc below leaves it alone)
+        else:
+            qq = gemm_input(sub)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant of q_resid
         if qq is not sub and sub is not qr:
             dealloc(sub)
         qdt = ttnn.bfloat16 if self.stock else ttnn.float32  # ROPE_IMPL=on: the bf16 heads the stock rope reads

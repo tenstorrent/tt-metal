@@ -123,12 +123,23 @@ class TtQa:
     """q_a of one layer. Call with attn_norm [1, 1, S/SP, H/TP] fp32 TILE; returns q_resid [1, 1, S/SP, q_lora_rank]
     fp32 TILE, replicated over TP. Does not consume its input."""
 
-    def __init__(self, mesh, proj: TtAttnInProj, q_norm: torch.Tensor, eps: float):
+    def __init__(
+        self, mesh, proj: TtAttnInProj, q_norm: torch.Tensor, eps: float, gamma_scale: float = 1.0, dtype=None
+    ):
+        """``gamma_scale`` / ``dtype`` (NORM_GEMM_DTYPE=on, P.21; tt/model.py sets them where wq_b is q_resid's only
+        reader): gamma x gamma_scale (the attention's softmax scale, folded in fp32 at load) and q_resid written as
+        ``dtype`` (bfloat8_b in one rounding: wq_b's input as is)."""
         self.mesh, self.proj = mesh, proj
         self.q0, self.q1 = proj.cols["wq_a"]
         assert q_norm.numel() == self.q1 - self.q0, (q_norm.shape, proj.cols)
+        w = q_norm.float() if gamma_scale == 1.0 else q_norm.float() * float(gamma_scale)
         # BF16_ACTIVATIONS=on (P.20): q_resid bf16 (the GPU code's q_norm .to(dtype)), read by wq_b and the indexer
-        self.norm = TtDistributedRmsNorm(mesh, q_norm.float(), eps, split=False, dtype=act_dtype())
+        self.norm = TtDistributedRmsNorm(mesh, w, eps, split=False, dtype=act_dtype() if dtype is None else dtype)
+        # NORM_GEMM_DTYPE=on (P.21, indexer layers): q_norm also writes the indexer's bfloat8_b q_resid (fork option
+        # bfp8_twin = typecast(q_resid, bfloat8_b) bit for bit) into a load-time buffer; ``twin_out`` = it, after
+        # with_proj, for the indexer step
+        self.twin = False
+        self.twin_out = None
 
     def with_proj(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step
@@ -140,13 +151,32 @@ class TtQa:
         if xq is not x:
             dealloc(xq)
         # q_norm on p's wq_a columns (NORM_IMPL=on, P.18: read in place by the fork's input_window; off: a slice)
-        y = self.norm(p, window=(self.q0, self.q1))
+        tw = None
+        if self.twin:  # NORM_GEMM_DTYPE=on (P.21): + the indexer's bfloat8_b q_resid in the same program
+            tw = _twin_buffer(self.mesh, (1, 1, p.shape[-2], self.q1 - self.q0))
+        y = self.norm(p, window=(self.q0, self.q1), twin=tw)
+        self.twin_out = tw
         return y, p
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         y, p = self.with_proj(x)
         dealloc(p)
         return y
+
+
+_TWINS: dict = {}  # (id(mesh), shape) -> (mesh, the pinned bfloat8_b q_resid every indexer layer's q_norm writes)
+
+
+def _twin_buffer(mesh, shape) -> ttnn.Tensor:
+    """NORM_GEMM_DTYPE=on (P.21): the one bfloat8_b q_resid buffer of this shape (allocated once, pinned: written and
+    read within one layer, shared by the indexer layers)."""
+    key = (id(mesh), tuple(int(d) for d in shape))
+    hit = _TWINS.get(key)
+    if hit is None or hit[0] is not mesh:
+        t = ttnn.allocate_tensor_on_device(ttnn.Shape(list(key[1])), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, DRAM)
+        ccl.pin(mesh, t)
+        hit = _TWINS[key] = (mesh, t)
+    return hit[1]
 
 
 def build_q_a(mesh, ck, cfg, layer: int) -> TtQa:
