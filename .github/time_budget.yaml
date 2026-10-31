@@ -293,10 +293,13 @@ runtime:
     wh_n300_civ2: 65
     bh_p150_perf: 50
     bh_p150b_civ2_viommu: 10
+  # Profiler-build runtime perf jobs (budget_type: perf_profiler). Budget is the sum of
+  # the per-SKU timeouts across all such jobs. Jobs: op_to_op (civ2/bh 5), data_movement
+  # (wh_n300_perf/bh 20), tensor_accessor (civ2/bh 5) -> civ2 10, wh_n300_perf 20, bh 30.
   perf_profiler:
-    wh_n300_civ2: 5
+    wh_n300_civ2: 10
     wh_n300_perf: 20
-    bh_p150_perf: 25
+    bh_p150_perf: 30
 
 triage:
   merge_gate:

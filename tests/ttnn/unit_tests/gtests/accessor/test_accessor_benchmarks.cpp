@@ -27,6 +27,10 @@ struct InputBufferParams {
     float bytes_per_element;
     tt::DataFormat data_format;  // Used for setting up CBs
 
+    // When true the buffer is interleaved (no distribution spec); the shard-spec
+    // fields below are ignored except for buffer_type.
+    bool is_interleaved = false;
+
     struct DistributionSpecParams {
         tt::tt_metal::Shape physical_shard_shape;
         tt::tt_metal::CoreRangeSet grid;
@@ -50,11 +54,20 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     if (is_interleaved) {
         input_buffer_distribution_spec = std::nullopt;
     } else {
+        // For sharded DRAM the shards are distributed across DRAM banks, whose logical
+        // grid (bank_id, 0) differs per arch, so derive it from the device rather than
+        // the (worker-core) grid baked into the test params. Only the first DRAM row is
+        // used since higher y coordinates can be NOC-port replicas of the same banks.
+        tt::tt_metal::CoreRangeSet grid = inputs.input_shard_spec.grid;
+        if (inputs.input_shard_spec.buffer_type == tt::tt_metal::BufferType::DRAM) {
+            const auto dram_grid_size = mesh_device->dram_grid_size();
+            grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {dram_grid_size.x - 1, 0}));
+        }
         input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
             inputs.physical_tensor_shape,
             inputs.input_shard_spec.physical_shard_shape,
             inputs.page_shape,
-            inputs.input_shard_spec.grid,
+            grid,
             inputs.input_shard_spec.shard_orientation);
     }
     const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
@@ -167,11 +180,22 @@ void benchmark_all_args_combinations_single_core(
 }
 
 TEST_P(AccessorBenchmarks, GetNocAddr) {
-    benchmark_all_args_combinations_single_core(
-        GetParam(),
-        mesh_device_,
-        "accessor_get_noc_addr_benchmarks",
-        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
+    const auto& params = GetParam();
+    const std::string kernel_path =
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp";
+    if (params.is_interleaved) {
+        // Interleaved layout has no distribution spec; pin the all-static interleaved config.
+        benchmark_args_combinations_single_core(
+            params,
+            mesh_device_,
+            "accessor_get_noc_addr_benchmarks",
+            kernel_path,
+            get_all_static_interleaved_args_config(),
+            /*is_interleaved=*/true);
+    } else {
+        benchmark_all_args_combinations_single_core(
+            params, mesh_device_, "accessor_get_noc_addr_benchmarks", kernel_path);
+    }
 }
 
 TEST_P(AccessorBenchmarks, GetNocAddrPageCoord) {
@@ -236,6 +260,112 @@ INSTANTIATE_TEST_SUITE_P(
     AccessorTests,
     AccessorBenchmarks,
     ::testing::Values(
+        // --- Address-calc coverage across tensor topologies (gated in CI via the profiler
+        //     pipeline; see accessor_postprocess.py). Interleaved L1, plus height / width /
+        //     block sharding each in ROW_MAJOR and COL_MAJOR, so get_noc_addr cost is
+        //     captured for every supported distribution shape and orientation. ---
+        InputBufferParams{
+            .test_name = "interleaved_l1",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .is_interleaved = true,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 320},  // ignored for interleaved
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),        // ignored for interleaved
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        // Height sharded: shard spans the full width, split along height -> 10 shards.
+        InputBufferParams{
+            .test_name = "sharded_height_row_major",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{32, 320},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {4, 1})),  // 10 cores
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "sharded_height_col_major",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{32, 320},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {4, 1})),  // 10 cores
+                    .shard_orientation = ShardOrientation::COL_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        // Width sharded: shard spans the full height, split along width -> 10 shards.
+        InputBufferParams{
+            .test_name = "sharded_width_row_major",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {4, 1})),  // 10 cores
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "sharded_width_col_major",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {4, 1})),  // 10 cores
+                    .shard_orientation = ShardOrientation::COL_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        // Block sharded: shard is partial in both dims -> 4x4 = 16 shards.
+        InputBufferParams{
+            .test_name = "sharded_block_row_major",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),  // 16 cores
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "sharded_block_col_major",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),  // 16 cores
+                    .shard_orientation = ShardOrientation::COL_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
         // Sweep across shape ranks since TensorAccessor calculations scale with rank
         // TODO: Other interesting parameters to try:
         // - Page size: Possible that compiler optimizes division for power of 2 page sizes
