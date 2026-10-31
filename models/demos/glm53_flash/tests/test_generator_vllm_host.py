@@ -40,6 +40,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     greedy_rows,
     max_tokens_all_users,
     prefill_buckets,
+    row_sampling,
 )
 
 VOCAB = 64
@@ -433,10 +434,70 @@ def test_prefill_planner_traced_vs_eager():
     assert PrefillPlanner(g, traced_available=lambda T: False).plan(0, 300).kind == "eager"
 
 
-def test_greedy_rows_admission():
+class _FakeSampler:
+    """``tt/sampler.py``'s surface: records the flat per-slot parameters and seeds the adapter stages."""
+
+    def __init__(self, rows: int, users: int):
+        self.rows, self.users = rows, users
+        self.params = None
+        self.seeds = None
+        self.greedy_calls = 0
+
+    def set_params(self, k, p, inv_temp, greedy):
+        self.params = (list(k), list(p), list(inv_temp), list(greedy))
+
+    def set_seeds(self, seeds):
+        self.seeds = list(seeds)
+
+    def set_greedy(self):
+        self.greedy_calls += 1
+        n = self.rows * self.users
+        self.params = ([32] * n, [1.0] * n, [1.0] * n, [True] * n)
+
+
+def test_sampling_rows_admission_and_staging():
+    """Without the device sampler every sampled row must be greedy (``greedy_rows``); with it the adapter stages
+    the live rows' top-k / top-p / 1/T / greedy flag at their flat slots and seeds stepped by the position, every
+    other slot greedy, and draws a sampled row's first token on the host inside its top-k, deterministically."""
     greedy_rows(SimpleNamespace(temperature=[0.0, 0.7], top_k=[-1, 1]), [0, 1])
     with expect_error(ValueError, "greedy"):
         greedy_rows(SimpleNamespace(temperature=[0.0, 0.7], top_k=[-1, 40]), [0, 1])
+    sp = SimpleNamespace(temperature=[0.0, 0.7, 2.0], top_k=[-1, 1, 40], top_p=[1.0, 0.9, 0.95], seed=[-1, 7, -1])
+    assert row_sampling(sp, 0) == (True, -1, 1.0, 1.0, None)
+    assert row_sampling(sp, 1)[0] is True and row_sampling(sp, 1)[4] == 7
+    g, k, top_p, inv_t, seed = row_sampling(sp, 2)
+    assert (g, k, top_p, seed) == (False, 40, 0.95, None) and abs(inv_t - 0.5) < 1e-6
+    assert row_sampling(SimpleNamespace(), 0) == (True, 1, 1.0, 1.0, None), "missing fields read as greedy"
+    # the staging on the adapter's fakes: 2 rows x 4 users, rows independent -> flat slot = row * 4 + user
+    a, model = _adapter(warm=False, independent=True)
+    a.slots.allocate(0, at=(0, 1))
+    a.slots.allocate(1, at=(1, 2))
+    model.sampler = _FakeSampler(2, 4)
+    sp2 = SimpleNamespace(temperature=[0.0, 0.8], top_k=[1, 20], top_p=[1.0, 0.9], seed=[-1, 100])
+    a._stage_sampling(sp2, [0, 1], torch.tensor([5, 9]))
+    k, p, inv_t, greedy = model.sampler.params
+    assert len(k) == 8 and greedy[1] is True and k[1] == 1, "slot (0, 1): the greedy row's own parameters"
+    assert (k[6], p[6], greedy[6]) == (20, 0.9, False) and abs(inv_t[6] - 1.25) < 1e-6, "slot (1, 2): the sampled row"
+    assert all(greedy[f] for f in range(8) if f not in (1, 6)) and all(k[f] == 32 for f in range(8) if f not in (1, 6))
+    assert model.sampler.seeds[6] == (100 + 9) & 0x7FFFFFFF, "a request's seed is stepped by its position"
+    a._stage_sampling(sp2, [0, 1], torch.tensor([5, 10]))
+    assert model.sampler.seeds[6] == (100 + 10) & 0x7FFFFFFF
+    a._stage_sampling(None, [0, 1], torch.tensor([5, 10]))
+    assert model.sampler.greedy_calls == 1, "no sampling params (the plugin samples on the host): every slot greedy"
+    model.sampler = None
+    with expect_error(ValueError, "greedy"):
+        a._stage_sampling(sp2, [0, 1], torch.tensor([5, 9]))
+    # the first token of a prompt: the device argmax for greedy rows, a seeded host draw inside the top-k otherwise
+    model.sampler = _FakeSampler(2, 4)
+    logits = torch.full((VOCAB,), -20.0)
+    logits[:5] = torch.tensor([5.0, 4.0, 3.0, 2.0, 1.0])
+    sp3 = SimpleNamespace(temperature=[0.0, 1.0], top_k=[1, 3], top_p=[1.0, 1.0], seed=[-1, 11])
+    assert a._first_token(0, 42, logits, 7, sp3) == 42
+    t1, t2 = a._first_token(1, 42, logits, 7, sp3), a._first_token(1, 42, logits, 7, sp3)
+    assert t1 == t2 and t1 in (0, 1, 2), (t1, t2)
+    assert a._first_token(1, 42, None, 7, sp3) == 42, "no logits: the argmax"
+    model.sampler = None
+    assert a._first_token(1, 42, logits, 7, sp3) == 42, "no sampler: the argmax"
 
 
 # ------------------------------------------------------------------------------------- fake model

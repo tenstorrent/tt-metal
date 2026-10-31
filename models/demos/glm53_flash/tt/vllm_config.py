@@ -855,6 +855,23 @@ def greedy_rows(sampling_params, rows: Sequence[int]) -> None:
             )
 
 
+def row_sampling(sampling_params, r: int) -> tuple[bool, int, float, float, int | None]:
+    """Row ``r`` of the plugin's per-row lists -> ``(greedy, top_k, top_p, 1 / T, seed)``: greedy when the
+    temperature is 0 or top_k is 1 (the head's argmax), the seed ``None`` when vLLM gave none (-1). Missing
+    fields read as greedy / no top-k / top-p 1 / no seed."""
+
+    def val(name, default):
+        v = getattr(sampling_params, name, None)
+        return default if v is None or r >= len(v) else v[r]
+
+    t = float(val("temperature", 0.0))
+    k = int(val("top_k", 1))
+    p = float(val("top_p", 1.0))
+    seed = int(val("seed", -1))
+    greedy = t == 0.0 or k == 1
+    return greedy, k, p, (1.0 / t if t > 0.0 else 1.0), (None if seed < 0 else seed)
+
+
 def max_tokens_all_users(max_num_seqs: int, max_model_len: int) -> int:
     """The all-user KV budget vLLM accounts for: every slot owns a full ``max_model_len`` of latent pages."""
     return int(max_num_seqs) * int(max_model_len)

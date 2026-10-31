@@ -31,6 +31,7 @@ from models.demos.glm53_flash.tt.model_head import TtModelHead
 from models.demos.glm53_flash.tt.moe import pad_mask_enabled
 from models.demos.glm53_flash.tt.packed_inputs import UINT32, PackedDecodeLayout
 from models.demos.glm53_flash.tt.resident_decode import RESIDENT_ENV, ResidentDecodeFeedback, resident_decode_enabled
+from models.demos.glm53_flash.tt.sampler import TtSampler, device_sampling_enabled
 from models.demos.glm53_flash.tt.trace_prefill import (
     DEFAULT_LENGTHS,
     DENSE_ROWS,
@@ -237,6 +238,13 @@ class GLM53MeshModel:
         self.embedding = TtEmbedding.from_checkpoint(mesh_device, cfg, snapshot, headers)
         self.head = (
             TtModelHead.from_checkpoint(mesh_device, cfg, snapshot, headers, mesh=self.mesh) if build_head else None
+        )
+        # GLM53_DEVICE_SAMPLING=1: the decode step samples on device (tt/sampler.py: the row's users' top-k / top-p /
+        # temperature from persistent per-user tensors; greedy users keep the head's argmax bit-identically)
+        self.sampler = (
+            TtSampler(mesh_device, users=max_batch, mesh=self.mesh)
+            if self.head is not None and device_sampling_enabled()
+            else None
         )
         logger.info(f"mesh model: embedding + head built in {time.time() - t0:.1f} s")
         self.layers: list[FunctionalDecoder] = []
@@ -445,6 +453,10 @@ class GLM53MeshModel:
         if self.head is None:
             return streams, None, None
         logits, ids = self.head.forward_greedy(streams)
+        if self.sampler is not None:
+            sampled = self.sampler(logits, ids)  # the argmax on greedy users, the seeded draw on the others
+            ttnn.deallocate(ids)
+            ids = sampled
         if self.resident is not None and ids_dev is self.ids_dev and positions is self.positions:
             # resident decode: the next replay embeds these ids at the advanced positions (no host upload)
             self.resident.feed_ids(ids)

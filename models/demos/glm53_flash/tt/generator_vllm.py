@@ -98,6 +98,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import random
 import sys
 import time
 from dataclasses import dataclass
@@ -118,6 +119,7 @@ from models.demos.glm53_flash.tt.mm_inputs import (
     mm_present,
 )
 from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV, resident_decode_enabled
+from models.demos.glm53_flash.tt.sampling_config import MAX_TOP_K, SAMPLING_SEED_ENV, device_sampling_enabled
 from models.demos.glm53_flash.tt.vllm_config import (
     APC_ALLOC_CHECK_ENV,
     APC_ENV,
@@ -156,6 +158,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     mm_payload_missing,
     mm_spans_of_row,
     prefill_buckets,
+    row_sampling,
 )
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
@@ -606,10 +609,13 @@ class GLM53FlashForCausalLM:
         # back and advances the live positions on device, so the plugin's reload-plan chain (reload_inputs=False
         # steps) and vLLM's async scheduling are admitted; off = every decode reloads tokens / positions from the host
         "supports_async_decode": resident_decode_enabled(),
-        # The head's greedy argmax is the only device sampler: greedy rows (and top_k == 1) sample on device,
-        # the plugin routes any other row to host sampling from the returned logits.
+        # Device sampling: the head's greedy argmax for greedy rows (and top_k == 1); with GLM53_DEVICE_SAMPLING=1
+        # (tt/sampler.py) every decode row samples on device under its top-k (<= MAX_TOP_K) / top-p / temperature,
+        # rows without a top-k bound from the top-MAX_TOP_K (the plugin's generic opt-in
+        # ``device_top_k_unbounded_as``); without it the plugin routes any sampled row to host sampling.
         "supports_sample_on_device": True,
-        "max_device_top_k": 1,
+        "max_device_top_k": MAX_TOP_K if device_sampling_enabled() else 1,
+        "device_top_k_unbounded_as": MAX_TOP_K if device_sampling_enabled() else None,
         "supports_device_penalties": False,
         # A prompt split across engine steps resumes through FunctionalDecoder's chunked prefill (``start``).
         "supports_chunked_prefill": True,
@@ -694,6 +700,9 @@ class GLM53FlashForCausalLM:
         self._spec_alloc_baseline: int | None = None
 
         self.slots = SlotTable(geometry)
+        # the device sampler's seeds for unseeded rows (GLM53_SAMPLING_SEED pins the stream for reproducible runs)
+        seed_env = os.environ.get(SAMPLING_SEED_ENV)
+        self._sampling_rng = random.Random(int(seed_env) if seed_env else None)
         self.blocks = LogicalBlockTable(geometry)
         self.prefill_planner = PrefillPlanner(geometry, traced_available=self._has_prefill_trace)
         # per-row prefill ownership (GLM53_VLLM_ROWS_INDEPENDENT): the step's prefill rows become waves (one chunk per
@@ -1659,8 +1668,15 @@ class GLM53FlashForCausalLM:
             raise ValueError(
                 f"prefill rows {B} vs prompt_lens {len(ends)} start_pos {len(starts)} slots {len(empty_slots)}"
             )
-        if sampling_params is not None:
+        sampler = getattr(self.model, "sampler", None)
+        if sampling_params is not None and sampler is None:
             greedy_rows(sampling_params, range(B))
+        # with the device sampler a sampled row's FIRST token is drawn on the host from the last-token logits
+        host_first = (
+            sampler is not None
+            and sampling_params is not None
+            and any(not row_sampling(sampling_params, i)[0] for i in range(B))
+        )
         # The plugin does not say which rows are intermediate chunks (it discards their outputs itself), so every
         # chunk's last token is scored; a slot stays in the ``prefill`` phase until its first decode consumes the
         # token at ``prefilled_to`` (a later chunk must start exactly there).
@@ -1780,7 +1796,7 @@ class GLM53FlashForCausalLM:
             state.position = end
             state.phase = "prefill"
             if wants_tokens:
-                out_tokens[i, 0] = int(first)
+                out_tokens[i, 0] = self._first_token(i, first, last_logits, end, sampling_params)
             else:
                 out_logits[i, 0] = last_logits
 
@@ -1800,11 +1816,11 @@ class GLM53FlashForCausalLM:
                 t0 = time.perf_counter()
                 if mm is None:
                     first, last_logits = self._prefill_one(
-                        ids, state.user, plan, want_logits=not wants_tokens, on_chunk=on_chunk(state)
+                        ids, state.user, plan, want_logits=not wants_tokens or host_first, on_chunk=on_chunk(state)
                     )
                 else:  # no chunk-end snapshots on the multimodal path (a later hit restores a decode snapshot)
                     first, last_logits = self._prefill_one_mm(
-                        mm[1], state.user, plan, mm[0], want_logits=not wants_tokens
+                        mm[1], state.user, plan, mm[0], want_logits=not wants_tokens or host_first
                     )
                 if apc is not None:
                     apc.record_prefill(state.row, state.user, start, ids, spans)
@@ -1832,11 +1848,15 @@ class GLM53FlashForCausalLM:
                     mm = media.get(i)
                     if mm is None:
                         first, last_logits = self._prefill_one(
-                            ids, state.user, step.plan, want_logits=not wants_tokens, on_chunk=on_chunk(state)
+                            ids,
+                            state.user,
+                            step.plan,
+                            want_logits=not wants_tokens or host_first,
+                            on_chunk=on_chunk(state),
                         )
                     else:  # the multimodal eager prefill: the vision features scattered into the chunk's streams
                         first, last_logits = self._prefill_one_mm(
-                            mm[1], state.user, step.plan, mm[0], want_logits=not wants_tokens
+                            mm[1], state.user, step.plan, mm[0], want_logits=not wants_tokens or host_first
                         )
                     record(i, state, end, first, last_logits)
                     logger.info(
@@ -1852,7 +1872,7 @@ class GLM53FlashForCausalLM:
                 for m in call.members:
                     _, _, start, _, ids = by_logical[m.logical]
                     call.ids[m.row] = ids[m.start - start : m.end - start]
-                results = self._prefill_wave(call, want_logits=not wants_tokens)
+                results = self._prefill_wave(call, want_logits=not wants_tokens or host_first)
                 for m in call.members:
                     i, state, _, end, _ = by_logical[m.logical]
                     state.sp_only = False  # the prefix of this request now exists on its own row only
@@ -2179,8 +2199,7 @@ class GLM53FlashForCausalLM:
         if wire > self.slots.n:
             raise ValueError(f"{wire} decode rows exceed the {self.slots.n} logical slots")
         live = [i for i in range(wire) if int(positions[i]) >= 0]
-        if sampling_params is not None:
-            greedy_rows(sampling_params, live)
+        self._stage_sampling(sampling_params, live, positions)
         feed_tokens: dict[int, int] = {}
         feed_positions: dict[int, int] = {}
         rows = DecodeRowMap(wire_rows=wire, read_index=[-1] * wire)
@@ -2218,6 +2237,62 @@ class GLM53FlashForCausalLM:
             )
         return live, feed_tokens, feed_positions, rows, busy
 
+    def _stage_sampling(self, sampling_params, live: list[int], positions) -> None:
+        """The decode step's sampling parameters. Without the device sampler every row must be greedy
+        (``greedy_rows``). With it (GLM53_DEVICE_SAMPLING=1) the live rows' top-k / top-p / 1/T / greedy flag and
+        this step's seeds go into the sampler's persistent tensors at every flat slot the row occupies (row-major
+        over the mesh rows), the other slots greedy; a request's seed is stepped by its position (one draw per
+        token), unseeded rows draw from the adapter's RNG. ``sampling_params`` None (the plugin samples on the
+        host from the returned logits): every slot greedy, the draw is never read."""
+        sampler = getattr(self.model, "sampler", None)
+        if sampler is None:
+            if sampling_params is not None:
+                greedy_rows(sampling_params, live)
+            return
+        n = sampler.rows * sampler.users
+        if n != self.geometry.physical_slots:
+            raise RuntimeError(f"sampler slots {n} vs the geometry's physical slots {self.geometry.physical_slots}")
+        if sampling_params is None:
+            sampler.set_greedy()
+            return
+        k, p, inv_t, greedy = [MAX_TOP_K] * n, [1.0] * n, [1.0] * n, [True] * n
+        seeds = [self._sampling_rng.getrandbits(31) for _ in range(n)]
+        for i in live:
+            g, ki, pi, ti, si = row_sampling(sampling_params, i)
+            seed = None if si is None else (si + int(positions[i])) & 0x7FFFFFFF
+            for f in self.slots.flat_indices(i):
+                k[f], p[f], inv_t[f], greedy[f] = ki, pi, ti, g
+                if seed is not None:
+                    seeds[f] = seed
+        sampler.set_params(k, p, inv_t, greedy)
+        sampler.set_seeds(seeds)
+
+    def _first_token(self, i: int, first: int, last_logits, end: int, sampling_params) -> int:
+        """The first token of a prompt: the device argmax (``first``), or, for a row the device sampler would
+        sample, a host draw from the last-token logits under the row's top-k / top-p / temperature and its seed
+        stepped by the position (the plugin's device-sampling contract covers decode; the prefill's first token is
+        drawn here)."""
+        if getattr(self.model, "sampler", None) is None or sampling_params is None:
+            return int(first)
+        g, k, top_p, inv_t, seed = row_sampling(sampling_params, i)
+        if g or last_logits is None:
+            return int(first)
+        logits = torch.as_tensor(last_logits).float().reshape(-1) * float(inv_t)
+        if k > 0:
+            kth = torch.topk(logits, min(int(k), logits.numel())).values[-1]
+            logits = torch.where(logits < kth, torch.full_like(logits, float("-inf")), logits)
+        probs = torch.softmax(logits, dim=-1)
+        if 0.0 < top_p < 1.0:
+            sp, si = torch.sort(probs, descending=True)
+            keep = torch.cumsum(sp, dim=-1) - sp < top_p  # the smallest set whose mass reaches top_p
+            mask = torch.zeros_like(probs, dtype=torch.bool)
+            mask[si[keep]] = True
+            probs = torch.where(mask, probs, torch.zeros_like(probs))
+            probs = probs / probs.sum()
+        gen = torch.Generator()
+        gen.manual_seed(((seed + int(end)) & 0x7FFFFFFF) if seed is not None else self._sampling_rng.getrandbits(31))
+        return int(torch.multinomial(probs, 1, generator=gen))
+
     def _live_flat(self, live: list[int]) -> list[bool]:
         """One flag per physical user slot: the slots the live logical slots occupy (every replica row)."""
         flat = [False] * self.geometry.physical_slots
@@ -2240,8 +2315,7 @@ class GLM53FlashForCausalLM:
                 f"resident decode step over rows {live} but the last staged step had {self._resident_live}: the decode "
                 "layout changed without reload_inputs (the plugin's reload plan reloads on a layout change)"
             )
-        if sampling_params is not None:
-            greedy_rows(sampling_params, live)
+        self._stage_sampling(sampling_params, live, positions)
         feed_tokens: dict[int, int] = {}
         feed_positions: dict[int, int] = {}
         rows = DecodeRowMap(wire_rows=wire, read_index=[-1] * wire)
