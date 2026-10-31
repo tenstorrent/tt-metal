@@ -2645,3 +2645,42 @@ def test_where_nd_sharded_preallocated_output(device, nd_sharded_inputs):
         output_tensor=out,
     )
     assert torch.equal(ttnn.to_torch(out), torch.where(torch_cond.bool(), torch_true, torch_false))
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda c, a, b, m: ttnn.where(c, a, b, memory_config=m),
+        lambda c, a, b, m: ttnn.where(c, a, 0.5, memory_config=m),
+        lambda c, a, b, m: ttnn.where(c, 0.5, b, memory_config=m),
+        lambda c, a, b, m: ttnn.addcmul(a, c, b, value=0.5, memory_config=m),
+        lambda c, a, b, m: ttnn.lerp(a, b, c, memory_config=m),
+        lambda c, a, b, m: ttnn.lerp(a, b, 0.25, memory_config=m),
+    ],
+    ids=["where_ttt", "where_tts", "where_tst", "addcmul", "lerp", "lerp_scalar"],
+)
+@pytest.mark.parametrize(
+    "in_strategy, out_strategy",
+    [(ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH), (ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT)],
+)
+def test_ternary_output_shard_layout_differs_on_same_grid(device, op, in_strategy, out_strategy):
+    shape = (1, 1, 256, 256)
+    grid = ttnn.CoreGrid(y=1, x=8)
+    in_config = ttnn.create_sharded_memory_config(shape, grid, in_strategy)
+    out_config = ttnn.create_sharded_memory_config(shape, grid, out_strategy)
+    torch_cond = torch.randint(0, 2, shape).bfloat16()
+    torch_a = torch.randn(shape).bfloat16()
+    torch_b = torch.randn(shape).bfloat16()
+
+    def to_device(t):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_config)
+
+    interleaved = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for t in (torch_cond, torch_a, torch_b)
+    ]
+    expected = ttnn.to_torch(op(*interleaved, None))
+    out = op(to_device(torch_cond), to_device(torch_a), to_device(torch_b), out_config)
+
+    assert out.memory_config() == out_config
+    assert torch.equal(ttnn.to_torch(out), expected)
