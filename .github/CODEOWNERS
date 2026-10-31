@@ -684,6 +684,9 @@ tools/triage/ @tenstorrent/metalium-developers-triage
 tools/tt-run-triage.py @tenstorrent/metalium-developers-triage
 tools/tt-triage.py @tenstorrent/metalium-developers-triage
 
+# tt-ember
+tools/tt-ember/ @ncvetkovicTT @pmilenkovicTT
+
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
 docs/realtime_profiler_architecture.md @mo-tenstorrent @akerteszTT @yusufbashiTT
