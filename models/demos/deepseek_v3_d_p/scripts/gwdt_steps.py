@@ -444,8 +444,8 @@ def matmul_step(
 
 
 MATMUL_ITERS = 5000
-# Iterations per window, 8 windows: ~1.75 s per iteration on a Galaxy, so 300 keeps the step near 10 min.
-RUN_TO_RUN_ITERS = 300
+# Iterations per window, 8 windows: ~100 s fixed + ~1.75 s per iteration on a Galaxy, so 50 keeps the step near 3 min.
+RUN_TO_RUN_ITERS = 50
 SWEEP_GRID = "11x10"
 SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
@@ -508,7 +508,7 @@ def matmul_steps() -> list[Step]:
         ),
         # Each iteration is 1000 x (matmul + 5 cos) and one more matmul; only that last matmul is compared.
         matmul_step(
-            "duty-cycle",
+            "duty-cycle-bursty-5",
             ["tests/didt/test_duty_cycle.py::test_duty_cycle[blackhole-duty-5-rep-1000x-all]"],
             ["--didt-workload-iterations=10", "--determinism-check-interval=1", "--timeout", "1800"],
             nd_outputs,

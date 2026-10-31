@@ -178,7 +178,7 @@ def test_write_ack_result():
 MATMUL_KEYS = [
     "matmul:minimal",
     "matmul:ff1",
-    "matmul:duty-cycle",
+    "matmul:duty-cycle-bursty-5",
     "matmul:run-to-run",
     "matmul:core-sweep",
     "matmul:mcast-ack",
@@ -214,7 +214,7 @@ def test_matmul_commands(tmp_path, monkeypatch):
         "'--timeout=0'",
         "matmul:ff1": "pytest -vs -rA 'tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]' "
         "'--didt-workload-iterations=5000' '--determinism-check-interval=25' '--timeout=0'",
-        "matmul:duty-cycle": "pytest -vs -rA 'tests/didt/test_duty_cycle.py::test_duty_cycle"
+        "matmul:duty-cycle-bursty-5": "pytest -vs -rA 'tests/didt/test_duty_cycle.py::test_duty_cycle"
         "[blackhole-duty-5-rep-1000x-all]' '--didt-workload-iterations=10' '--determinism-check-interval=1' "
         "'--timeout' '1800'",
         "matmul:run-to-run": "pytest -vs -rA 'tests/didt/test_matmul_run_to_run_determinism.py"
@@ -223,7 +223,7 @@ def test_matmul_commands(tmp_path, monkeypatch):
         "'-p' 'no:randomly' '--timeout=0'",
         "matmul:mcast-ack": "python tests/didt/test_mm_mcast_write_ack_failure.py",
     }
-    assert seen[cmds["matmul:duty-cycle"]]["TT_MESH_GRAPH_DESC_PATH"] == (
+    assert seen[cmds["matmul:duty-cycle-bursty-5"]]["TT_MESH_GRAPH_DESC_PATH"] == (
         "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
     )
     assert seen[cmds["matmul:core-sweep"]].items() >= {
@@ -231,7 +231,7 @@ def test_matmul_commands(tmp_path, monkeypatch):
         "TT_SWEEP_GRID": "11x10",
         "TT_SWEEP_ITERS": "5000",
     }.items()
-    assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "300"
+    assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "50"
     for key in MATMUL_KEYS[:-1]:
         assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds[key]]
     assert seen[cmds["matmul:mcast-ack"]] == {"TMPDIR": str(tmp_path / "matmul" / "mcast-ack"), "MATMUL_ITERS": "5000"}
@@ -287,20 +287,21 @@ def test_matmul_nd_layout(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     ok = Step("matmul:minimal", "matmul minimal", "matmul", None, True, None)
     ok.state.result = Result(Status.PASS, "1 passed")
-    bad = Step("matmul:duty-cycle", "matmul duty-cycle", "matmul", None, True, None)
+    bad = Step("matmul:duty-cycle-bursty-5", "matmul duty-cycle-bursty-5", "matmul", None, True, None)
     bad.state.result = Result(Status.FAIL, "assert False", ["device 17: 2 non-deterministic outputs"])
     block = Step("block:kimi_k2_7", "block K2.7", "block", "kimi_k2_7", True, None)
     screen = Screen([ok, bad, block], ["hdr"], tmp_path / "status.json", {})
     lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines()]
     m = lines.index("MATMUL ND")
     run, failed, dev = lines[m + 1 : m + 4]
-    assert run.startswith("   minimal ") and failed.startswith("   duty-cycle ") and dev.startswith("     device 17 ")
+    assert run.startswith("   minimal ") and failed.startswith("   duty-cycle-bursty-5 ")
+    assert dev.startswith("     device 17 ")
     assert run.index("PASS") == failed.index("FAIL") == dev.index("FAIL")
     assert dev.endswith("2 non-deterministic outputs")
     assert lines[m + 4 : m + 6] == ["", "MODELS"]
     screen.write_status()
     rows = {s["key"]: s for s in json.loads((tmp_path / "status.json").read_text())["steps"]}
-    assert rows["matmul:duty-cycle"]["details"] == ["device 17: 2 non-deterministic outputs"]
+    assert rows["matmul:duty-cycle-bursty-5"]["details"] == ["device 17: 2 non-deterministic outputs"]
 
 
 def test_fabric_results():
