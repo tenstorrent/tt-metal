@@ -35,17 +35,20 @@ class ShapeKeyedTailA2A(TailA2A):
     """TailA2A whose run() dispatches one prepared program per (y, se, out) shape / dtype / layout / memory config."""
 
     def _expected_patches(self, has_se: bool) -> int:
+        if getattr(self, "local", False):  # (OWN_ROWS, P.23: one program for the mesh; each worker y (+ se), out)
+            return len(self.workers) * (2 + has_se)
         # per chip: each worker reader y (+ se), writer out, z, zrw; each port reader z, zrw; each port sender out
         return sum(len(self.workers) * (4 + has_se) + 3 * len(ch["ports"]) for ch in self.chips.values())
 
     def run(self, y_rm, se, out=None):
+        shape = tuple(self.out_shape())  # ([1, 1, S/SP, H/TP]; local (OWN_ROWS, P.23): [1, 1, S/N, H])
         if out is None:  # HOST_ALLOC=on (P.15): the load-time output (tt/host_alloc.reserve_tail_out), when it fits
             kept = host_alloc.tail_out(self.mesh, self.rows * self.mesh.shape[0])
-            if kept is not None and tuple(kept.shape) == (1, 1, self.rows, self.H // self.G):
+            if kept is not None and tuple(kept.shape) == shape:
                 out = kept
         if out is None:
             out = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, self.rows, self.H // self.G]),
+                ttnn.Shape(list(shape)),
                 ttnn.bfloat16,
                 ttnn.TILE_LAYOUT,
                 self.mesh,
@@ -56,13 +59,8 @@ class ShapeKeyedTailA2A(TailA2A):
         pp = shaped.get(key, False)
         if pp is False:
             self.shape_misses = getattr(self, "shape_misses", 0) + 1
-            io = [y_rm, out, self.z, self.zrw] + ([se] if se is not None else [])
-            md = ttnn.MeshProgramDescriptor()
-            for coord in self.chips:
-                r, c = coord
-                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = self._program(
-                    coord, y_rm, se, out
-                )
+            io = self.io(y_rm, se, out)
+            md = self.descriptor(y_rm, se, out)
             pp = ttnn.bringup.prepare_program(md, io)
             if pp.patch_count != self._expected_patches(se is not None):
                 self.fallbacks = getattr(self, "fallbacks", 0) + 1
@@ -71,7 +69,7 @@ class ShapeKeyedTailA2A(TailA2A):
         if pp is None:
             return TailA2A.run(self, y_rm, se, out)
         # (looked up on ttnn.bringup at each call: the bring-up capture wraps run_prepared, F201)
-        ttnn.bringup.run_prepared(pp, [y_rm, out, self.z, self.zrw] + ([se] if se is not None else []))
+        ttnn.bringup.run_prepared(pp, self.io(y_rm, se, out))
         return out
 
 

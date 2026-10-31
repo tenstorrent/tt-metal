@@ -238,11 +238,14 @@ def build_norm(
     mesh, ck, cfg, layer: int, step: str, gather: bool | None = None, rows: bool = False
 ) -> TtDistributedRmsNorm:
     """gather: None = GATHERED_NORMS; False on ffn_norm: the column split kept (MOE_HEAD=fused gathers x itself), in
-    FFN_NORM_DTYPE. ``rows`` (attn_norm, ATTN_SP32=on, P.10): the input is whole hidden rows (the chip's own rows):
-    split=False, the whole weight replicated, one local norm (no statistics gather)."""
+    FFN_NORM_DTYPE. ``rows`` (attn_norm, ATTN_SP32=on, P.10; ffn_norm, OWN_ROWS=on, P.23): the input is whole hidden
+    rows (the chip's own rows): split=False, the whole weight replicated, one local norm (no statistics gather)."""
     w = ck.weight(f"layers.{layer}.{NORM_WEIGHTS[step]}", torch.float32)
     if rows:
-        assert step not in GATHERED_NORMS, step
+        if step in GATHERED_NORMS:  # OWN_ROWS=on (P.23): ffn_norm on the chip's own whole rows, in FFN_NORM_DTYPE
+            assert not gather, "OWN_ROWS: the MoE block takes the owners' rows (no gather)"
+            dt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
+            return TtDistributedRmsNorm(mesh, w, cfg.eps, split=False, dtype=dt)
         return TtDistributedRmsNorm(mesh, w, cfg.eps, split=False, dtype=act_dtype())
     gathered = step in GATHERED_NORMS
     gather = gathered if gather is None else gather

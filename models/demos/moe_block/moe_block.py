@@ -187,6 +187,11 @@ class MoEOptions:
     # every chip, GLM-5.3-Flash's). The ops head gathers rows instead of width; the fused head (it reads the width
     # split) takes x through a TP all-to-all. The tail is the shared expert's add (its output is the owners' rows)
     residual: Literal["sp_tp", "owners"] = "sp_tp"
+    # the owners residual with the fused head: its TP all-to-all writes the head's own x buffer (persistent_output_buffer:
+    # no copy into it; DeepSeek-V4.1 P.23). False: the all-to-all allocates, the head copies it (as before). The owners
+    # residual's tail "fused" (an explicit choice; "auto" keeps the ops add) is tt/tail_a2a.py's local mode: the
+    # combine's rows tilized + the shared expert's owner rows in one program, no all-to-all
+    owners_a2a_into_head: bool = False
     # x arrives gathered over TP, [1, 1, S/SP, H] a chip (a caller whose norm gathers): no x all-gather in the head; the
     # router's H/TP columns sliced on the chip. Output stays [S/SP, H/TP]. Ops head, "sp_tp" residual only
     x_gathered: bool = False
@@ -542,7 +547,12 @@ class MoEBlock(LightweightModule):
         # head keeps after placing its arena, and after placing it again (the head frees them then) - nothing kept
         # stranded below the arena, where the other programs' circular buffers go; the head built and run once, its
         # arena settled (free L1 right above it filled) and freed.
-        tfits = FusedTail.fits(g, model, self.head_mode) if not owners else "the owners residual (the tail is an add)"
+        if not owners:
+            tfits = FusedTail.fits(g, model, self.head_mode)
+        elif options.tail == "fused" and model.latent_dim is None:  # (TailA2A's local mode: tilize + add, explicit)
+            tfits = FusedTail.fits(g, model, self.head_mode)
+        else:
+            tfits = "the owners residual (the tail is an add; tail 'fused': tail_a2a's local mode)"
         assert options.tail != "fused" or tfits is True, f"the fused tail: {tfits}"
         self.tail = None
         if options.tail == "fused" or (options.tail == "auto" and tfits is True):
@@ -555,6 +565,8 @@ class MoEBlock(LightweightModule):
                 self._tp_topology(),
                 dtypes,
                 prepared=options.tail_prepared,
+                owners=owners,
+                max_grid=options.max_grid,
             )
             if layer is not None and self.tail.a2a is None:  # (a latent model: the layer's latent up / norm)
                 layer.tails[id(self.tail)] = self.tail.w
@@ -691,12 +703,19 @@ class MoEBlock(LightweightModule):
         if self.fused is not None:
             # (one L1 allocation a forward: the exchange's arena, the head's range inside it - the head runs there first)
             eng = self.fused.head.eng
+            into = self.options.residual == "owners" and self.options.owners_a2a_into_head
+            if into:  # (straight into the head's x: no copy; before the arena is taken - its CBs are L1)
+                self._tp_a2a(x, cat_dim=2, split_dim=3, out=self.fused.x)
+                self._mark("x_a2a")
             arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes))
             if self.options.residual == "owners":  # (the fused head reads the width split [S/SP, H/TP])
-                xs = self._tp_a2a(x, cat_dim=2, split_dim=3)
-                self._mark("x_a2a")
-                se, out = self.fused(xs, arena)
-                ttnn.deallocate(xs)
+                if into:
+                    se, out = self.fused(self.fused.x, arena)
+                else:
+                    xs = self._tp_a2a(x, cat_dim=2, split_dim=3)
+                    self._mark("x_a2a")
+                    se, out = self.fused(xs, arena)
+                    ttnn.deallocate(xs)
             else:
                 se, out = self.fused(x, arena, xq_ready=xq_ready)
             self._mark("head")
@@ -917,7 +936,13 @@ class MoEBlock(LightweightModule):
         if self.options.residual == "owners":
             if se is None:
                 return y_own
-            y = ttnn.add(y_own, se)
+            mg = self.options.max_grid  # (MoEOptions.max_grid: the add's cores inside it)
+            kw = {}
+            if mg is not None:
+                kw["sub_core_grids"] = ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mg[0] - 1, mg[1] - 1))}
+                )
+            y = ttnn.add(y_own, se, **kw)
             ttnn.deallocate(y_own)
             self._free_se(se)
             mark("add")
@@ -955,9 +980,11 @@ class MoEBlock(LightweightModule):
     def _tp_topology(self):
         return ttnn.Topology.Ring if self.geometry.tp_wraps else ttnn.Topology.Linear
 
-    def _tp_a2a(self, t, cat_dim, split_dim):
+    def _tp_a2a(self, t, cat_dim, split_dim, out=None):
         """All-to-all over TP: t split into TP blocks along split_dim, block j to chip j; the received blocks
-        concatenated along cat_dim in source order. (all_to_all_async_generic: its in_dim is the concatenation dim.)"""
+        concatenated along cat_dim in source order. (all_to_all_async_generic: its in_dim is the concatenation dim.)
+        out: a buffer of the result's spec it writes (persistent_output_buffer)."""
+        kw = {} if out is None else {"persistent_output_buffer": out}
         return ttnn.experimental.all_to_all_async_generic(
             t,
             in_dim=cat_dim,
@@ -965,6 +992,7 @@ class MoEBlock(LightweightModule):
             cluster_axis=1,
             num_links=self.geometry.links,
             topology=self._tp_topology(),
+            **kw,
         )
 
     def _tp_ag_rows(self, t):
@@ -1408,7 +1436,11 @@ class FusedTail:
         topology,
         dtypes: MoEDtypes = MoEDtypes(),
         prepared: bool = False,
+        owners: bool = False,
+        max_grid=None,
     ):
+        """owners (MoEOptions.residual "owners", no latent): TailA2A's local mode - [S/N, H] out, no all-to-all;
+        max_grid: its workers inside it."""
         from models.demos.moe_block.tt.tail_engine import TailEngine
 
         self.a2a = None
@@ -1416,9 +1448,17 @@ class FusedTail:
             from models.demos.moe_block.tt.tail_a2a import TailA2A
 
             self.a2a = TailA2A(
-                mesh, rows=g.tokens_per_row, H=model.emb_dim, topology=topology, num_links=g.links, prepared=prepared
+                mesh,
+                rows=g.tokens_per_row,
+                H=model.emb_dim,
+                topology=topology,
+                num_links=g.links,
+                prepared=prepared,
+                local=owners,
+                max_grid=max_grid if owners else None,
             )
             return
+        assert not owners, "the owners residual: no latent (FusedTail)"
         H, Hr, tp = model.emb_dim, model.latent_dim, g.tp
         self.eng = TailEngine(
             mesh,

@@ -339,6 +339,27 @@ void kernel_main() {
 """
 
 
+_WORKER_WRITER_LOCAL = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+// local mode (the owners residual): my tiles of every own row tile straight into the output [S/N, H]
+void kernel_main() {
+    constexpr uint32_t W = get_compile_time_arg_val(0);
+    constexpr auto o_args = TensorAccessorArgs<1>();
+    const uint32_t o_addr = get_arg_val<uint32_t>(0), c0 = get_arg_val<uint32_t>(1);
+    const uint32_t RT = get_arg_val<uint32_t>(2), NTH = get_arg_val<uint32_t>(3);
+    const auto o = TensorAccessor(o_args, o_addr, 2048);
+    for (uint32_t r = 0; r < RT; ++r) {
+        cb_wait_front(3, W);
+        const uint32_t l1 = get_read_ptr(3);
+        for (uint32_t t = 0; t < W; ++t) noc_async_write(l1 + t * 2048, o.get_noc_addr(r * NTH + c0 + t), 2048);
+        noc_async_write_barrier();
+        cb_pop_front(3, W);
+    }
+}
+"""
+
+
 class TailSchedule:
     """Who sends what to whom (host; the device program and the protocol model share it): G chips of a TP group at
     positions 0 .. G - 1 (a line, or a ring), L links, a destination block NTB tiles wide, RT own row tiles a chip,
@@ -408,8 +429,12 @@ class TailA2A:
     ttnn.bringup.run_prepared: no hashing, no runtime argument re-applied. Same programs, same arguments, same results
     (deepseek_v41_flash_d_p P.2, TAIL_A2A_PREPARED)."""
 
-    def __init__(self, mesh, *, rows, H, topology, num_links, w_max=8, prepared=False):
+    def __init__(self, mesh, *, rows, H, topology, num_links, w_max=8, prepared=False, local=False, max_grid=None):
+        """local (the owners residual, MoEOptions.residual "owners" with tail "fused"): out = tilize(y) + se on the
+        chip's own rows [1, 1, S/N, H] - the workers only, no all-to-all (no ports, staging, words or fabric). max_grid
+        (local mode; MoEOptions.max_grid): the workers inside that many columns / rows."""
         R, G = tuple(mesh.shape)
+        self.local = bool(local)
         self.prepared = bool(prepared)
         self.misses = 0  # (descriptors built: diagnostic)
         self.mesh, self.G, self.rows, self.H, self.L = mesh, G, rows, H, num_links
@@ -418,6 +443,18 @@ class TailA2A:
         self.RT, self.NTH, self.NTB = self.S // 32, H // 32, H // 32 // G
         self.W = max(d for d in range(1, w_max + 1) if self.NTB % d == 0)
         self.NW = self.NTH // self.W
+        self.page = 2048
+        self.cache = {}
+        if self.local:
+            grid = mesh.compute_with_storage_grid_size()
+            gx, gy = (grid.x, grid.y) if max_grid is None else (min(grid.x, max_grid[0]), min(grid.y, max_grid[1]))
+            free = [(x, y) for y in range(gy) for x in range(gx)]
+            assert len(free) >= self.NW, f"tail_a2a local: {self.NW} workers, {len(free)} cores"
+            self.workers = [ttnn.CoreCoord(x, y) for x, y in free[: self.NW]]
+            self.work_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.workers])
+            self.chips = {(r, c): None for r in range(R) for c in range(G)}
+            self.z = self.zrw = None
+            return
         self.chips, self.ring = fag.plan(mesh, cluster_axis=1, topology=topology, num_links=num_links)
         self.NBK = fag._num_banks(mesh)
         self.page = 2048
@@ -476,7 +513,92 @@ class TailA2A:
         return ties
 
     # ---- the program ----
+    def out_shape(self):
+        """The output's per-chip shape: [1, 1, rows, H / TP] (the width split), or local: [1, 1, S/N, H]."""
+        return [1, 1, self.S, self.H] if self.local else [1, 1, self.rows, self.H // self.G]
+
+    def io(self, y_rm, se, out):
+        """The program's io tensors (prepared dispatch: every address slot is one of them)."""
+        if self.local:
+            return [y_rm, out] + ([se] if se is not None else [])
+        return [y_rm, out, self.z, self.zrw] + ([se] if se is not None else [])
+
+    def _program_local(self, y, se, out):
+        """local mode: the workers' reader / compute (as the all-to-all's) and a writer straight into out."""
+        prog = ttnn.ProgramDescriptor()
+        acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
+        wr_rt, wc_rt, ww_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        sa = int(se.buffer_address()) if se is not None else 0
+        for i, core in enumerate(self.workers):
+            c0 = i * self.W
+            wr_rt[core.x][core.y] = [int(y.buffer_address()), sa, c0, self.RT, self.NTH]
+            wc_rt[core.x][core.y] = [self.RT]
+            ww_rt[core.x][core.y] = [int(out.buffer_address()), c0, self.RT, self.NTH]
+        W, has_se = self.W, int(se is not None)
+        fmt = lambda i, n: ttnn.CBDescriptor(  # noqa: E731
+            total_size=n * self.page,
+            core_ranges=self.work_crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(i, ttnn.bfloat16, self.page)],
+        )
+        prog.cbs = [fmt(CB_RM, _ring_pages(2 * W, [W])), fmt(CB_T, _ring_pages(W, [W]))] + [
+            fmt(CB_SE, _ring_pages(2 * W, [W])),
+            fmt(CB_OUT, _ring_pages(2 * W, [W])),
+        ]
+        st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(  # noqa: E731
+            processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
+        )
+        comp = ttnn.ComputeConfigDescriptor()
+        comp.math_fidelity = ttnn.MathFidelity.HiFi2
+        comp.fp32_dest_acc_en = False
+        comp.math_approx_mode = False
+        prog.kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=_WORKER_READER,
+                source_type=st,
+                core_ranges=self.work_crs,
+                compile_time_args=[W, has_se] + acc(y) + (acc(se) if se is not None else acc(y)),
+                runtime_args=wr_rt,
+                config=dm("RISCV_1", ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=_WORKER_COMPUTE,
+                source_type=st,
+                core_ranges=self.work_crs,
+                compile_time_args=[W, has_se],
+                runtime_args=wc_rt,
+                config=comp,
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=_WORKER_WRITER_LOCAL,
+                source_type=st,
+                core_ranges=self.work_crs,
+                compile_time_args=[W] + acc(out),
+                runtime_args=ww_rt,
+                config=dm("RISCV_0", ttnn.NOC.NOC_1),
+            ),
+        ]
+        return prog
+
+    def descriptor(self, y_rm, se, out):
+        """The mesh's program descriptor: one program a chip (local: one for the whole mesh - the same on every chip)."""
+        md = ttnn.MeshProgramDescriptor()
+        if self.local:
+            R, G = tuple(self.mesh.shape)
+            md[
+                ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, G - 1))
+            ] = self._program_local(y_rm, se, out)
+            return md
+        for coord in self.chips:
+            r, c = coord
+            md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = self._program(
+                coord, y_rm, se, out
+            )
+        return md
+
     def _program(self, coord, y, se, out):
+        if self.local:
+            return self._program_local(y, se, out)
         mesh, ch = self.mesh, self.chips[coord]
         p = self._pos(coord)
         virt = lambda c: mesh.worker_core_from_logical_core(c)  # noqa: E731
@@ -621,26 +743,22 @@ class TailA2A:
         return prog
 
     def run(self, y_rm, se, out=None):
-        """y_rm [1, 1, S/N, H] ROW_MAJOR (DRAM), se [1, 1, S/N, H] TILE or None -> [1, 1, rows, H / TP] TILE."""
+        """y_rm [1, 1, S/N, H] ROW_MAJOR (DRAM), se [1, 1, S/N, H] TILE or None -> [1, 1, rows, H / TP] TILE (local:
+        [1, 1, S/N, H], the chip's own rows)."""
         if out is None:
             out = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, self.rows, self.H // self.G]),
+                ttnn.Shape(self.out_shape()),
                 ttnn.bfloat16,
                 ttnn.TILE_LAYOUT,
                 self.mesh,
                 ttnn.DRAM_MEMORY_CONFIG,
             )
         key = (int(y_rm.buffer_address()), int(se.buffer_address()) if se is not None else 0, int(out.buffer_address()))
-        io = [y_rm, out, self.z, self.zrw] + ([se] if se is not None else [])
+        io = self.io(y_rm, se, out)
         entry = self.cache.get(key)
         if entry is None:
             self.misses += 1
-            md = ttnn.MeshProgramDescriptor()
-            for coord in self.chips:
-                r, c = coord
-                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = self._program(
-                    coord, y_rm, se, out
-                )
+            md = self.descriptor(y_rm, se, out)
             if len(self.cache) >= 16:
                 self.cache.pop(next(iter(self.cache)))
             # (prepared: built for exactly these addresses, so a hit patches nothing)

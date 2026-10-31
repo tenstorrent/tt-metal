@@ -4917,3 +4917,58 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
     launches. P.21's final measure (before this change): wall 254.1, device 190.79, cProfile 269.8, 2042 launches.
   - p512000: wall 253.3 ms, device 219.0 ms (P.21: 270.7 / 231.35).
   - The off side of the same run is the orchestrator's A/B; the P.21 numbers are another run.
+
+## P.23 perf (galaxy 8x4, attempt 1, 2026-10-31): OWN_ROWS, the residual / mHC streams on each chip's own 160 rows (opportunity #1)
+- **What**: setting OWN_ROWS (tt/settings.py, default on; off = the column split, the path before P.23;
+  tt/common.own_rows: needs ATTN_SP32, MHC_FUSED, GLUE_FOLD, MOE_IMPL=block, MOE_HEAD=fused). The block boundary,
+  h_mid and the pending pre are [1, 1, S/(SP TP), 4 x H] / [.., 24] on chip (r, c) = row block r TP + c (the rows
+  sparse_sdpa reads and the MoE block's owner rows; tt/layout.own_rows_to_device / _to_host for the harness).
+  - mHC (tt/mhc.py `rows=`): hc_fn^T whole on every chip (stream-major), the partial row is the whole row: no
+    fabric_all_gather of the [S/SP, 32] rows, mhc_pre_xing without `partials`; mhc_post(stats_weight=) emits the whole
+    row. Removes 2 gathers a layer.
+  - attn_norm: no cols_to_rows all_to_all (the collapse already writes the chip's rows); the attention keeps its rows
+    (TtWindowAttention.keep_rows: no exit all_to_all). Removes 2 a2a a layer.
+  - ffn_norm (tt/norm.py build_norm rows=True for ffn_norm): one local whole-row rms_norm in FFN_NORM_DTYPE; removes the
+    stats-only rms_norm and the stats all_gather (2 a layer). NORM_INTO_MOE does not apply (the norm writes its
+    FORK_OUT_BUFFERS site; the head's a2a writes the head's x).
+  - MoE (models/demos/moe_block, behind options, defaults unchanged): the block's existing `MoEOptions(residual="owners")`
+    (Marko's: the fused head fed through one TP all_to_all [S/N, H] -> [S/SP, H/TP]) plus two new options:
+    `owners_a2a_into_head` (the a2a writes the head's persistent x buffer, persistent_output_buffer, BEFORE the arena
+    is taken: no copy) and tail "fused" with owners = `TailA2A(local=True)` (tt/tail_a2a.py: the workers' tilize + the
+    shared expert's add straight into [S/N, H], no ports / all-to-all, one program for the mesh, workers inside
+    max_grid: 20 cores). The ops tail's add got sub_core_grids from max_grid (rule 18). tt/prepared_tail.py follows
+    TailA2A's `io` / `descriptor` / `out_shape`; tt/host_alloc.reserve_tail_out reserves [S/N, H].
+    Added a layer: the head's a2a + the head's xq typecast (P.21's bfp8 twin had folded it into ffn_norm).
+  - Engram (layers with engram): tt/engram_kv.py own_rows = chip column c holds the BLOCK-major columns
+    [c 5H/TP, (c+1) 5H/TP) of [key 0..3 | value], so ONE a2a (concat columns, split rows) of the unchanged [640, 6400]
+    product lands the chip's own [160, 5 x 5120] in block order (same weight bytes, no replicated wkv); tt/engram_add.py
+    own_rows: whole weight, gates from the whole rows (no exact tp_sum).
+  - Embedding: one cols_to_rows a2a a chunk; final norm local (split=False), to_host concatenates the chips' rows.
+- **Not done (owner's sketch)**: the x_gather3 row-shard variant in the fused head (the head gathers [160, 5120] row
+  shards instead of an a2a to the width split). x_gather3 / se_engine3 / router_stream consume the gather by K shard
+  (XREADY per K step, the engine loads its own K columns from DRAM, the router computes partial logits from the chip's
+  H/TP columns): a row-shard gather changes the engine's pipeline, the watcher protocol and the router's partial-logit
+  exchange together (~5000 lines of fused kernels). Used instead: the owners path's one TP a2a into the head's x (the
+  same bytes as the attention's old exit a2a) + the xq typecast: 2 launches a layer the variant would save.
+- **Precision**: no lowering. Only summation orders change: the mHC mixes / sums of squares and the ffn / attn norm
+  statistics are full-K fp32 sums on one chip instead of TP partials added in mesh order; the engram gate sums likewise.
+  The MoE (head, router, experts, combine) sees the same x bytes as before.
+- **Measured** (`measure --task P.23 --part quick`, rc 0, change on): every err_* within its limit; L00-L32 equal to
+  P.22's on-side to 3 digits, L33-L38 +0.8..1.2 %, L39 0.700 -> 0.758 (limit 1.533; pcc 0.725 -> 0.684): rounding,
+  DS41-188 (L39 moved 0.83 -> 0.72 at P.10, 0.87 -> 0.91 at P.17, 0.85 -> 0.70 at P.21 on rounding-only changes);
+  host_transfers_per_layer 0; chunk_wall_ms 212.9 (P.22 on-side quick: 232.3; spread 94.9).
+  Launches a chunk (count, not profiled): -240 (80 mHC row gathers, 80 attention a2a, 40 stats rms_norm, 40 stats
+  gathers) +80 (40 head a2a, 40 xq typecasts) -2 engram exact TP sums +2 engram a2a +1 embedding a2a: ~-160; the fused
+  tail's a2a work is gone from its program. Device / host ms a chunk at 51200 / 512000: the orchestrator's A/B (the
+  brief: no profiling by the agent).
+- **Tests**: models/demos/moe_block/tests/test_tail_a2a_local.py (local mode vs torch to a bf16 ulp, eager and
+  prepared, with / without se, H 5120 / 4096): 8 passed on the 8x4 (MOE_MESH=8x4 MOE_FABRIC=torus_xy).
+- **Cores**: TailA2A local 20 workers (11 x 10 cap); every other op unchanged or already capped (mhc / norm forks
+  max_grid; a2a CCL workers as before).
+- Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.23`;
+  `MOE_MESH=8x4 MOE_FABRIC=torus_xy scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/moe_block/tests/test_tail_a2a_local.py`.
+- Stock calls touched (F113): stock ttnn.add instead of ttnn.bringup.combine_rf: the MoE block's owners ops tail add
+  (an existing call, now given max_grid's sub_core_grids; DS41 runs the fused local tail instead). The new a2a calls
+  (engram_kv, embedding) are stock ttnn.experimental.all_to_all_async_generic, as tt/common.cols_to_rows (no fork lists it).
+- Gate unit `P.23#test_ladder` (rung last, `gate P.23 --check --unit P.23#test_ladder`): PASS, worst layer pcc 0.6836
+  (L39), final hidden pcc 0.98197 rel 0.1902, top1 0.9971, top5 1.0000.

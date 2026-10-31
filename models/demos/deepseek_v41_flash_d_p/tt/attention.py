@@ -735,6 +735,9 @@ class TtWindowAttention:
         self.sp32 = settings.get("ATTN_SP32_PROJ") == "on" and rope.stock
         if self.sp32:
             self.h_l, self.g_l = self.heads, self.groups
+        # OWN_ROWS=on (P.23, tt/model.py sets it): attn_out stays the chip's own rows [1, 1, S/(SP TP), H] (the
+        # residual's layout then): no exit all_to_all
+        self.keep_rows = False
 
         def wdim(d):  # sp32: every weight replicated
             return None if self.sp32 else d
@@ -1450,6 +1453,8 @@ class TtWindowAttention:
                 yq, self.wo_b, site="attn.wo_b", dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM
             )
             dealloc(yq)
+            if self.keep_rows:  # OWN_ROWS=on (P.23): the residual rests on these rows
+                return z
             out = self._reshard(z, in_dim=2, out_dim=3)  # concat rows (in_dim), split H (out_dim)
             if out is not z:
                 dealloc(z)

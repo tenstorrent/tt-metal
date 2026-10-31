@@ -26,6 +26,17 @@ ATTN_SP32=on (P.10, the default): attn_norm, q_resid and kv are the chip's own r
 sparse_sdpa reads): one all_to_all of attn_in over TP before a local attn_norm (tt/common.cols_to_rows); the
 attention's exit all_to_all (ATTN_SP32_PROJ, P.9) returns to the hidden split.
 
+OWN_ROWS=on (P.23, the default; tt/common.own_rows): the whole residual rests on those rows. Per chip (r, c), rows
+[(r TP + c) S/(SP TP), (r TP + c + 1) S/(SP TP)) with every column (tt/layout.own_rows_to_device):
+
+    block boundary / h_mid         streams [1, 1, S/(SP TP), 4 x H] (stream-major) + the pending pre [.., 24] fp32
+    mHC mixes, attn_in / ffn_in    [1, 1, S/(SP TP), 24] / [.., H]: hc_fn whole on every chip, no TP exchange
+    attn_norm / ffn_norm           local whole-row norms; attn_out the attention's own rows (no exit all_to_all)
+    engram_kv                      [1, 1, S/(SP TP), 5 x H]: one all_to_all of the projection (tt/engram_kv.py)
+    MoE                            MoEOptions residual "owners": x and the output the chip's own rows
+    final norm                     [1, 1, S/(SP TP), H]
+The embedding's [S/SP, H/TP] rows go through one all_to_all over TP a chunk.
+
 What the assembled model shares between steps (no host work per chunk; agent rule 5):
   * q_a and kv: one fused [wq_a | wkv] projection (tt/q_a.TtQa.with_proj -> tt/kv.TtWindowKv.from_proj): one matmul,
     one exchange.
@@ -59,6 +70,7 @@ from .common import (
     attn_sp32,
     bf16_activations,
     cols_to_rows,
+    own_rows,
     set_load_layer,
     stream_dtype,
 )
@@ -70,7 +82,16 @@ from .engram_kv import build_engram_kv
 from .experts import build_experts
 from .indexer import TtCandidateIndexer, TtReindexer, build_indexer, topk_local
 from .kv import TtWindowKv, attn_in_weights, rope_freqs
-from .layout import HC, hidden_split_to_host, row_split_to_device, row_split_to_host, streams_to_device, streams_to_host
+from .layout import (
+    HC,
+    hidden_split_to_host,
+    own_rows_to_device,
+    own_rows_to_host,
+    row_split_to_device,
+    row_split_to_host,
+    streams_to_device,
+    streams_to_host,
+)
 from .mhc import NG, build_hc
 from .norm import TtDistributedRmsNorm, build_norm
 from .q_a import TtAttnInProj, TtQa
@@ -346,9 +367,11 @@ class TtDS41Block:
         self.kv_src, self.idx_src = cfg.kv_source_of(i), cfg.index_source_of(i)
         rope = model.rope(r)
         p = f"layers.{i}."
+        # OWN_ROWS=on (P.23): the residual / mHC streams on the chip's own S/(SP TP) rows, whole hidden
+        self.own = model.own
         # mHC, norms, residuals
-        self.attn_hc = build_hc(mesh, ck, cfg, i, "attn_hc")
-        self.ffn_hc = build_hc(mesh, ck, cfg, i, "ffn_hc")
+        self.attn_hc = build_hc(mesh, ck, cfg, i, "attn_hc", rows=self.own)
+        self.ffn_hc = build_hc(mesh, ck, cfg, i, "ffn_hc", rows=self.own)
         self.collapse = TtHcCollapse(n=cfg.hc)
         self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
         self.fold = ccl.glue_fold()  # GLUE_FOLD=on (P.19)
@@ -376,7 +399,10 @@ class TtDS41Block:
         self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm", rows=self.sp32)
         # (MOE_IMPL=block, MOE_HEAD=fused: the fused head gathers x over TP itself - ffn_norm keeps the column split)
         fused_head = settings.get("MOE_IMPL") == "block" and settings.get("MOE_HEAD") == "fused"
-        self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False if fused_head else None)
+        if self.own:  # OWN_ROWS=on (P.23): a local norm of the chip's own whole rows (the MoE's owner rows)
+            self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False, rows=True)
+        else:
+            self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False if fused_head else None)
         self.attn_res = build_residual(cfg)
         self.ffn_res = build_residual(cfg, step="ffn_residual")
         # attention input: one fused [wq_a | wkv] projection for q_a and kv
@@ -407,6 +433,9 @@ class TtDS41Block:
             self.attention = TtSparseAttention(mesh, cfg, w, rope, model.tables, model.sparse_tables())
         else:
             self.attention = TtWindowAttention(mesh, cfg, w, rope, model.tables)
+        if self.own:  # OWN_ROWS=on (P.23): attn_out stays on the chip's rows (no exit all_to_all)
+            assert self.attention.sp32, "OWN_ROWS needs ATTN_SP32_PROJ=on"
+            self.attention.keep_rows = True
         if qr_bfp8:
             assert self.attention.sp32 and self.attention.stock, "NORM_GEMM_DTYPE: q_resid prescaled needs _q_stock"
             assert self.attention.scale == q_scale, (self.attention.scale, q_scale)
@@ -414,14 +443,16 @@ class TtDS41Block:
         # engram
         self.engram_kv = self.engram_add = None
         if cfg.is_engram(i):
-            self.engram_kv = build_engram_kv(mesh, ck, cfg, i)
-            self.engram_add = build_engram_add(mesh, ck, cfg, i, rows=model.chunk // model.sp)
+            self.engram_kv = build_engram_kv(mesh, ck, cfg, i, own_rows=self.own)
+            self.engram_add = build_engram_add(mesh, ck, cfg, i, rows=model.rows, own_rows=self.own)
         # MoE
         self.moe_block = None
         if settings.get("MOE_IMPL") == "block":  # (tt/MOE_BLOCK.md: one MoEBlock call in the experts step)
             from .moe_block_adapter import build_moe_block_layer
 
-            self.moe_block = build_moe_block_layer(mesh, ck, cfg, i, model.chunk, cache_dir=model.weight_cache)
+            self.moe_block = build_moe_block_layer(
+                mesh, ck, cfg, i, model.chunk, cache_dir=model.weight_cache, own_rows=self.own
+            )
             self.router = self.experts = self.shared = None
         else:
             self.router = build_router(mesh, ck, cfg, i, model.chunk)
@@ -434,6 +465,7 @@ class TtDS41Block:
         # bfloat8_b xq (bfp8_twin) in one program; the fused head reads both in place
         self.norm_into_moe = (
             settings.get("NORM_INTO_MOE") == "on"
+            and not self.own  # (OWN_ROWS: the head's TP all_to_all writes its x; ffn_norm writes its load-time site)
             and self.moe_block is not None
             and fused_head
             and self.ffn_norm.impl == "on"
@@ -476,7 +508,7 @@ class TtDS41Block:
             return self.collapse(x.streams, x.pre)
 
         def attn_norm(ctx, x):
-            if self.sp32:  # ATTN_SP32=on (P.10): [S/SP, H/TP] -> the chip's rows [S/(SP TP), H], a local norm
+            if self.sp32 and not self.own:  # ATTN_SP32=on (P.10): [S/SP, H/TP] -> the chip's rows, a local norm
                 xr = cols_to_rows(self.mesh, x)
                 y = self.attn_norm(xr)
                 if xr is not x:
@@ -656,7 +688,7 @@ class TtDS41Block:
         return {s.name: table[s.name] for s in self.steps}
 
     def __call__(self, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
-        rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS]
+        rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS] * (self.mesh.shape[TP_AXIS] if self.own else 1)
         assert rows == self.model.chunk, f"chunk of {rows} rows; the model was built for {self.model.chunk}"
         end = start + rows if end is None else int(end)
         ctx = Ctx(self.layer, start, rows, state, extra={"end": end})
@@ -729,6 +761,8 @@ class TtDS41Model:
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
+        self.own = own_rows()  # OWN_ROWS (P.23): the streams on each chip's own S/(SP TP) rows, whole hidden
+        self.rows = self.chunk // (self.sp * self.tp if self.own else self.sp)  # the streams' rows a chip
         if bf16_activations():  # P.20: the bf16 paths exist on the fused / folded / stock-rope / fork-norm path only
             off = [k for k in ("MHC_FUSED", "GLUE_FOLD", "ROPE_IMPL", "NORM_IMPL") if settings.get(k) != "on"]
             assert not off, f"BF16_ACTIVATIONS=on needs {off} on"
@@ -773,17 +807,17 @@ class TtDS41Model:
         del emb
         # layer 0's pending pre: one-hot on stream 0 (reference first_block_input), [S/SP, 4] fp32, cloned per chunk
         # (MHC_FUSED=on: [S/SP, 24], the width of the mixes the boundary carries; only columns 0..3 are read)
-        rows = self.chunk // self.sp
+        rows = self.rows
         self.pre_w = NG if self.fused else HC
         pre0 = torch.zeros(1, 1, self.chunk, self.pre_w)
         pre0[..., 0] = 1.0
-        self.pre0 = row_split_to_device(mesh, pre0.reshape(self.chunk, self.pre_w))
+        self.pre0 = self._rows_to_device(pre0.reshape(self.chunk, self.pre_w))
         assert self.pre0.shape[-2] == rows, (self.pre0.shape, rows)
         self.final_collapse = TtHcCollapse(n=cfg.hc)  # MHC_FUSED=on: mhc_pre_xing(coefficients_given=True)
         # BF16_ACTIVATIONS=on (P.20): the final norm writes bf16 (the GPU code's RMSNorm .to(dtype))
         self.final_norm_mod = TtDistributedRmsNorm(
-            mesh, ck.weight("norm.weight", torch.float32), cfg.eps, dtype=act_dtype()
-        )
+            mesh, ck.weight("norm.weight", torch.float32), cfg.eps, split=not self.own, dtype=act_dtype()
+        )  # (OWN_ROWS: the chip's own whole rows, a local norm)
         self.head_w = ck.weight("head.weight", torch.float32) if lm_head else None
         self.blocks = {}
         for i in self.layers:
@@ -805,6 +839,10 @@ class TtDS41Model:
         host_alloc.reserve_sites(self)  # HOST_ALLOC=on (P.15): the in-step gathers' outputs, at load time (DS41-146)
         host_alloc.reserve_forks(self)  # FORK_OUT_BUFFERS=on (P.16): the forks' in-layer outputs, at load time
         self.load_seconds = time.time() - t0
+
+    def _rows_to_device(self, x: torch.Tensor) -> ttnn.Tensor:
+        """Host [S, W] -> the boundary's row layout: own rows (OWN_ROWS) or the row split, fp32 (harness / load)."""
+        return own_rows_to_device(self.mesh, x) if self.own else row_split_to_device(self.mesh, x)
 
     def next_hc(self, i: int):
         """MHC_FUSED=on: the block whose attn_hc reads layer i's output streams as they are (the next layer, loaded
@@ -917,6 +955,13 @@ class TtDS41Model:
         dealloc(dev_ids)
         rows, w = self.chunk // self.sp, self.cfg.dim // self.tp
         e4 = ttnn.reshape(e, [1, 1, rows, w], sub_core_grids=sub_cores(e))
+        if self.own:  # OWN_ROWS=on (P.23): the chip's own rows, whole hidden (one all_to_all over TP a chunk)
+            er = cols_to_rows(self.mesh, e4)
+            if er is not e4:
+                dealloc(e4)  # (a view of e's buffer, K-1: e goes with it)
+                if e.is_allocated():
+                    dealloc(e)
+                e = e4 = er
         if stream_dtype() == ttnn.bfloat16:  # BF16_ACTIVATIONS=on (P.20): the bf16 embedding rows as they are
             streams = ttnn.concat([e4] * HC, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
             dealloc(e4)
@@ -935,7 +980,8 @@ class TtDS41Model:
         return self.blocks[i](h, start, state, end)
 
     def final_norm(self, h: DevH) -> ttnn.Tensor:
-        """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on)."""
+        """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on; OWN_ROWS:
+        [1, 1, S/(SP TP), H], the chip's own rows)."""
         x = self.final_collapse(h.streams, h.pre)
         out = self.final_norm_mod(x)
         dealloc(x)
@@ -949,10 +995,19 @@ class TtDS41Model:
         pre = h[:, HC * hidden :].float()
         if self.pre_w > HC:  # MHC_FUSED=on: the boundary's pre is [S, 24] wide (columns 4.. unread)
             pre = torch.nn.functional.pad(pre, (0, self.pre_w - HC))
+        if self.own:  # OWN_ROWS=on (P.23): the chip's own rows, every column
+            return DevH(
+                own_rows_to_device(self.mesh, h[:, : HC * hidden], stream_dtype()), own_rows_to_device(self.mesh, pre)
+            )
         return DevH(streams_to_device(self.mesh, h, hidden), row_split_to_device(self.mesh, pre))
 
     def to_host(self, h) -> torch.Tensor:
         """DevH -> the reference's packed [S, 4H + 4]; a hidden-split tensor (the final norm) -> [S, H]."""
+        if self.own:  # OWN_ROWS=on (P.23): every tensor is the chips' own rows, concatenated in chip order
+            if isinstance(h, DevH):
+                s = own_rows_to_host(self.mesh, h.streams).float()
+                return torch.cat([s, own_rows_to_host(self.mesh, h.pre, HC).float()], dim=-1)
+            return own_rows_to_host(self.mesh, h).float()
         if isinstance(h, DevH):
             s = streams_to_host(self.mesh, h.streams, self.cfg.dim).float()
             return torch.cat([s, row_split_to_host(self.mesh, h.pre, HC).float()], dim=-1)
