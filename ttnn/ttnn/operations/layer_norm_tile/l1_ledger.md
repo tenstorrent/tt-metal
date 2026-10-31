@@ -69,9 +69,13 @@ to the computing core; TILE gamma/beta are in DRAM. Example shape `(8, 1, 512, 7
 
 Totals for the example: NoC 18 MiB (in + res + out) + 0.33-2.9 MiB affine rows; DRAM 0 (RM gamma) or 2.9 MiB (TILE gamma).
 
-NoC assignment (bytes unchanged, links balanced): input reads on NoC0 (reader RISC); residual reads on NoC1
-(writer RISC) when `R >= RESIDUAL_SPLIT_MIN_TILE_ROWS`, else NoC0 beside the input; output writes on NoC1.
-At the example shape that moves NoC0 from 12 MiB of reads to 6 MiB, measured 59.6 -> 36.4 us device time.
+NoC assignment (bytes unchanged, links balanced):
+- input: NoC0 (reader RISC). Without residual, on cores owning `>= X_NOC_SPLIT_MIN_CORE_ROWS (2)` tile-rows and
+  with gamma/beta in L1, the reader alternates input tiles over NoC0 / NoC1 (DM_DYNAMIC_NOC on both DM kernels).
+  Not with DRAM gamma/beta: dynamic mode alone slows the writer's DRAM affine fetch (+5 us at R=128).
+- residual: NoC1 (writer RISC) when `R >= RESIDUAL_SPLIT_MIN_TILE_ROWS (64)`, else NoC0 beside the input.
+- output: NoC1 (writer RISC).
+At the example shape the residual split moves NoC0 from 12 MiB of reads to 6 MiB: 59.6 -> 36.4 us device time.
 
 > Cheapest-traffic split considered: `tile_rows` across cores (`row_resident`) - delta 0 bytes per tier.
 > Implemented: `tile_rows` across cores. It is also the cheapest-traffic split. The only above-minimum

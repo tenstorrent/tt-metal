@@ -170,6 +170,7 @@ def layer_norm(
         input_tensor,
         has_residual=residual_input_tensor is not None,
         fp32_dest_acc_en=bool(compute_kernel_config.fp32_dest_acc_en),
+        affine_in_l1=all(t.memory_config().buffer_type == ttnn.BufferType.L1 for t in (gamma, beta)),
     )
     if blocking is None:
         raise UnsupportedAxisValue(
