@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -82,6 +83,45 @@ def test_module_imports_without_ttnn():
 
 
 # ----------------------------------------------------------------------------------------- geometry
+def test_snapshot_dir_resolution(tmp_path, monkeypatch):
+    """``default_snapshot_dir``: MODEL_WEIGHTS_DIR (tt-inference-server's flat weights dir) wins when it holds a
+    config.json, else the HF cache's refs/main snapshot; a directory missing shards of its index is refused by
+    name (the shield's config-only shared snapshot, 2026-10-31)."""
+    from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, missing_shards
+
+    def make(d, shards_present):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.json").write_text("{}")
+        (d / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {"weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}
+            )
+        )
+        for f in shards_present:
+            (d / f).write_bytes(b"")
+
+    flat = tmp_path / "weights"
+    make(flat, ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"])
+    hub = tmp_path / "hf" / "hub" / "models--zai-org--GLM-5.3-Flash"
+    snap_a, snap_b = hub / "snapshots" / "aaaa", hub / "snapshots" / "bbbb"
+    make(snap_a, ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"])
+    make(snap_b, ["model-00001-of-00002.safetensors"])  # the config-only / partial snapshot sorts last
+    (hub / "refs").mkdir(parents=True)
+    (hub / "refs" / "main").write_text("aaaa\n")
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(flat))
+    assert default_snapshot_dir() == flat
+    monkeypatch.delenv("MODEL_WEIGHTS_DIR")
+    assert default_snapshot_dir() == snap_a, "refs/main beats the last-sorted snapshot"
+    (hub / "refs" / "main").write_text("bbbb\n")
+    with expect_error(FileNotFoundError, "lacks 1 of its index's shards"):
+        default_snapshot_dir()
+    assert missing_shards(snap_b) == ["model-00002-of-00002.safetensors"]
+    monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(tmp_path / "nowhere"))
+    (hub / "refs" / "main").write_text("aaaa\n")
+    assert default_snapshot_dir() == snap_a, "an absent MODEL_WEIGHTS_DIR falls through to the cache"
+
+
 def test_geometry_columns_and_capacity():
     g = ServingGeometry(rows=8, cols=4, users_per_row=8, max_seq_len=131072)
     assert g.users_per_chip == 2 and g.physical_slots == 64 and g.request_capacity == 8

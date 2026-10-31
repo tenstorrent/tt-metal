@@ -25,12 +25,51 @@ LM_HEAD_KEY = "lm_head.weight"
 FP8_BLOCK = (128, 128)
 
 
+WEIGHTS_DIR_ENV = "MODEL_WEIGHTS_DIR"  # tt-inference-server's flat weights directory inside the container
+
+
+def missing_shards(snapshot: Path) -> list[str]:
+    """The safetensors files the checkpoint's index names that ``snapshot`` lacks (empty = complete; no index =
+    nothing to check)."""
+    index = Path(snapshot) / "model.safetensors.index.json"
+    if not index.exists():
+        return []
+    files = sorted(set(json.loads(index.read_text())["weight_map"].values()))
+    return [f for f in files if not (Path(snapshot) / f).exists()]
+
+
 def default_snapshot_dir() -> Path:
-    hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
-    snaps = sorted((hub / "models--zai-org--GLM-5.3-Flash" / "snapshots").glob("*"))
-    if not snaps:
-        raise FileNotFoundError("GLM-5.3-Flash snapshot not found in the HF cache")
-    return snaps[-1]
+    """The checkpoint directory: ``MODEL_WEIGHTS_DIR`` (tt-inference-server downloads the weights into a flat
+    directory and hands it to the container through that variable; 2026-10-31 the shield's server read the shared
+    HF home's config-only snapshot instead and failed on the first weight), else the HF cache's ``refs/main``
+    snapshot, else the last snapshot directory. A directory missing shards of its index is refused by name."""
+    env = os.environ.get(WEIGHTS_DIR_ENV)
+    if env and (Path(env) / "config.json").exists():
+        d = Path(env)
+    else:
+        hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+        repo = hub / "models--zai-org--GLM-5.3-Flash"
+        ref = repo / "refs" / "main"
+        d = None
+        if ref.exists():
+            cand = repo / "snapshots" / ref.read_text().strip()
+            if (cand / "config.json").exists():
+                d = cand
+        if d is None:
+            snaps = sorted((repo / "snapshots").glob("*"))
+            if not snaps:
+                raise FileNotFoundError(
+                    f"GLM-5.3-Flash snapshot not found: no {WEIGHTS_DIR_ENV} with a config.json and no HF cache "
+                    f"snapshot under {repo}"
+                )
+            d = snaps[-1]
+    missing = missing_shards(d)
+    if missing:
+        raise FileNotFoundError(
+            f"GLM-5.3-Flash checkpoint {d} lacks {len(missing)} of its index's shards "
+            f"(first: {missing[:3]}): an incomplete download or a config-only snapshot"
+        )
+    return d
 
 
 def shard_headers(snapshot: Path) -> dict[str, tuple[str, dict]]:
