@@ -70,16 +70,13 @@ inline __attribute__((always_inline)) void begin_recording()
 template <RecordBehavior Behavior>
 inline __attribute__((always_inline)) void begin_recording(BufferRange range)
 {
-#ifdef ENABLE_LLK_ASSERT
-    // The diagnostic range check ahead of this call leaves a specialized code path on which the
-    // count is a provably invalid constant, which the recording intrinsic rejects at compile
-    // time. Keeping a runtime value opaque removes that path; the register constraint adds no
-    // code. A constant count skips it so the REPLAY stays an immediate instruction.
+    // With LLK_ASSERT enabled, jump threading can specialize the range check's failure path for
+    // count == 0, and the recording intrinsic rejects that constant at compile time. Hiding a
+    // runtime count from the optimizer prevents it; a constant count keeps the immediate REPLAY.
     if (!__builtin_constant_p(range.count))
     {
         asm("" : "+r"(range.count));
     }
-#endif
     lltt::record<exec_while_recording(Behavior)>(range.start, encoded_count(range.count));
 }
 
