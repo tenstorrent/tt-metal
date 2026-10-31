@@ -52,11 +52,17 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.v41 import dspark_blocks
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
-from models.demos.deepseek_v3_d_p.tt.v41.decode import DECODE_ROUTING, DECODE_TAIL, MOE_ROWS, ROWS, SHARED_IN_FFN
-from models.demos.deepseek_v3_d_p.tt.v41.decode import SHARED_IN_FFN_DTYPE
-from models.demos.deepseek_v3_d_p.tt.v41 import dspark_blocks
+from models.demos.deepseek_v3_d_p.tt.v41.decode import (
+    DECODE_ROUTING,
+    DECODE_TAIL,
+    MOE_ROWS,
+    ROWS,
+    SHARED_IN_FFN,
+    SHARED_IN_FFN_DTYPE,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.dspark import TtV41DSpark
 from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import (
     DSPARK_BLOCK_SIZE,
@@ -276,6 +282,10 @@ class TtDSparkDrafter:
         self.out = None  # the last call's output tensor (``read_ranks``)
         self._eager_out = None
         self.last: dict = {}
+        # V41_DECODE_INPUT_TIMING=1 (as the decoders): ``last["items"]`` holds the standalone call's host time per
+        # item (ms): the inputs (``in.*``), the staging (``stage.*``), the call (``run.*``) and the readback
+        self.input_timing = os.environ.get("V41_DECODE_INPUT_TIMING", "0") == "1"
+        self.items: dict = {}
         self.cache_dir = dspark_cache_dir(
             cache_root,
             mesh_device.shape,
@@ -427,6 +437,20 @@ class TtDSparkDrafter:
                 tok = self._shift_ids(ids)  # row 5 a + i + 1 = out[i + 1] of block a
         return ids
 
+    def _tick(self, prefix: str):
+        """A timer as ``TtV41Decoder._tick``: ``tick(name)`` adds the time since the last tick to
+        ``items[prefix.name]`` (ms) under ``V41_DECODE_INPUT_TIMING``; a no-op otherwise."""
+        if not self.input_timing:
+            return lambda name: None
+        last = [time.perf_counter()]
+
+        def tick(name):
+            now = time.perf_counter()
+            self.items[f"{prefix}.{name}"] = round(self.items.get(f"{prefix}.{name}", 0.0) + 1e3 * (now - last[0]), 3)
+            last[0] = now
+
+        return tick
+
     def _replicated(self, host: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT, device=True):
         return ttnn.from_torch(
             host,
@@ -471,9 +495,13 @@ class TtDSparkDrafter:
         assert len(blocks) == 1, f"one block count on every rank: {blocks}"
         (self.blocks,) = blocks
         assert 1 <= self.blocks <= self.users, (self.blocks, self.users)
+        self.items = {}
+        tick = self._tick("in")
         t = dspark_blocks.mesh_inputs(entries_by_rank, self.ring_slots, self.users)
+        tick("blocks")
         rm = ttnn.ROW_MAJOR_LAYOUT
         inputs = {"token": self._per_rank(t["ids"].view(sp, 1, ROWS), ttnn.uint32, rm)}
+        tick("token")
         if main_hidden is None:
             main_hidden = torch.zeros(len(cfg.DSPARK_TARGET_LAYER_IDS) * cfg.EMB_SIZE)
         inputs["tap"] = ttnn.from_torch(
@@ -482,11 +510,13 @@ class TtDSparkDrafter:
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(None, 3)),
         )
+        tick("tap")
         # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile row):
         # ``sel @ tap32`` puts the selected tap row on each writing row (one nonzero term a row: exact); without
         # a device tile the host tap is used (use_tap32 0)
         inputs["sel"] = self._per_rank(t["sel"].view(sp, 1, ROWS, ROWS), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         inputs["use_tap32"] = self._replicated(torch.full((1, 1, 1, 1), 0.0), ttnn.bfloat16, device=False)
+        tick("sel")
         main = cos_sin(cfg, False, t["main_pos"].flatten())
         inputs["rope_main"] = tuple(
             self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.float32, ttnn.TILE_LAYOUT) for r in main
@@ -495,8 +525,10 @@ class TtDSparkDrafter:
         inputs["rope_block"] = tuple(
             self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT) for r in block
         )
+        tick("rope")
         inputs["ring_idx"] = self._per_rank(t["ring_idx"].view(sp, 1, 1, ROWS), ttnn.uint32, rm)
         inputs["index_rows"] = self._per_rank(t["index"].view(sp, 1, ROWS, INDEX_WIDTH), ttnn.uint32, rm)
+        tick("index")
         return inputs
 
     def _per_rank(self, host: torch.Tensor, dtype, layout):
@@ -531,6 +563,7 @@ class TtDSparkDrafter:
             inputs = dict(
                 inputs, use_tap32=self._replicated(torch.full((1, 1, 1, 1), 1.0), ttnn.bfloat16, device=False)
             )
+        tick = self._tick("stage")
         if not self.buffers:
             self.buffers = self.to_device(inputs)
             self.buffers["tap32"] = ttnn.clone(self.buffers["tap"]) if tap32 is None else ttnn.clone(tap32)
@@ -541,10 +574,12 @@ class TtDSparkDrafter:
                         ttnn.copy_host_to_device_tensor(host, dev)
                 else:
                     ttnn.copy_host_to_device_tensor(v, self.buffers[k])
+                tick(k)
         if tap is not None:
             ttnn.copy(tap, self.buffers["tap"])
         if tap32 is not None:
             ttnn.copy(tap32, self.buffers["tap32"])
+        tick("tap32")
 
     def _graph(self):
         """The draft call's graph on the buffers -> the device tensor read after it: the blocks' drafts
@@ -571,9 +606,12 @@ class TtDSparkDrafter:
         """Every rank's blocks' drafts from the call's output (``run_blocks``'s ``out``): rank ``r`` -> block ``a``
         -> its five drafts (the TP chips of a rank hold the same row; the first is read)."""
         assert DSPARK_MARKOV == "device"
+        tick = self._tick("read")
         chips = ttnn.get_device_tensors(out)
         assert len(chips) == self.sp * self.tp, len(chips)
-        return [dspark_blocks.read_drafts(ttnn.to_torch(chips[r * self.tp]), self.blocks) for r in range(self.sp)]
+        ranks = [dspark_blocks.read_drafts(ttnn.to_torch(chips[r * self.tp]), self.blocks) for r in range(self.sp)]
+        tick("ranks")
+        return ranks
 
     def _capture(self):
         controller = SubDeviceTraceController(self.mesh_device)
@@ -625,10 +663,14 @@ class TtDSparkDrafter:
             if mode == "capture":
                 self.captures[blocks] = self._capture()
             controller, out = self.captures[blocks]
+            tick = self._tick("run")
             ttnn.synchronize_device(self.mesh_device)
+            tick("sync")
             t0 = time.time()
             controller.replay(blocking=False)
+            tick("issue")
             ttnn.synchronize_device(self.mesh_device)
+            tick("device")
             t1 = time.time()
             drafts = self._read(out, tokens) if read else None
             self.out = out
@@ -638,6 +680,8 @@ class TtDSparkDrafter:
             "device_s": round(t1 - t0, 4),
             "read_s": round(time.time() - t1, 4),
         }
+        if self.input_timing:
+            self.last["items"] = self.items
         return drafts
 
     @property

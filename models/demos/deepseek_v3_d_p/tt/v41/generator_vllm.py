@@ -775,6 +775,7 @@ class DeepseekV41ForCausalLM:
             full.setdefault(slot, (1, 0.0, 0.0))
         decoder.draft_plain = False
         result = decoder.decode(uniform, full)
+        td = time.time()
         entries: list[list[dict]] = [[] for _ in range(self.sp)]
         where: dict[int, tuple[int, int]] = {}  # slot -> (rank, block index)
         for slot, i in rows.items():
@@ -822,7 +823,10 @@ class DeepseekV41ForCausalLM:
             f"DeepSeek-V4.1-Flash: spec step of {len(blocks)} slots ({[1 + K] * len(uniform)} rows) in "
             f"{t2 - t0:.3f} s {last}; accepted {accepted} stats {self.spec_stats}"
         )
-        logger.debug(f"DeepSeek-V4.1-Flash: draft call of {n} blocks a rank in {t2 - t1:.3f} s {drafter.last}")
+        logger.debug(
+            f"DeepSeek-V4.1-Flash: draft call of {n} blocks a rank in {t2 - t1:.3f} s {drafter.last}; "
+            f"accept {t1 - td:.4f} s"
+        )
         return out
 
     def take_drafts(self) -> dict[int, list[int]]:

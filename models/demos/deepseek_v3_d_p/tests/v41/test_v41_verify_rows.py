@@ -93,6 +93,9 @@ def test_v41_verify_rows(mesh_device, device_params):
     live = int(os.environ.get("V41_VR_LIVE", 1))
     if live > 1:
         fused = False
+    # V41_VR_READ_RANKS=1: the standalone call read as the served round reads it (``run_blocks(read=False)`` then
+    # ``read_ranks``: every rank's blocks)
+    read_ranks = os.environ.get("V41_VR_READ_RANKS", "0") == "1" and not fused
     temperature = float(os.environ.get("V41_VR_TEMP", 0))
     sampling = (
         {"k": int(os.environ.get("V41_VR_TOPK", 0)), "p": float(os.environ.get("V41_VR_TOPP", 1.0)), "t": temperature}
@@ -325,7 +328,11 @@ def test_v41_verify_rows(mesh_device, device_params):
                     inputs = drafter.host_inputs_blocks(draft_entries(tok, frontier, taps))
                     drafter.stage(inputs, tap32=decoder.taps if tap is not None else None)
                 t1 = time.time()
-                by_block = drafter.run_blocks([tok] * len(draft_users))
+                if read_ranks:  # the served round's readback: no read in the call, every rank read after it
+                    drafter.run_blocks([tok] * len(draft_users), read=False)
+                    by_block = drafter.read_ranks(drafter.out)[0]
+                else:
+                    by_block = drafter.run_blocks([tok] * len(draft_users))
                 drafts = by_block[0][:k]
                 if not sampling and any(b[:k] != drafts for b in by_block):
                     logger.warning(f"K={k} the blocks' drafts differ: {by_block}")
@@ -368,6 +375,8 @@ def test_v41_verify_rows(mesh_device, device_params):
             }
             if "items" in decoder.last:  # V41_DECODE_INPUT_TIMING=1: the host inputs' items (ms)
                 entry["verify_items"] = decoder.last["items"]
+            if not fused and "items" in drafter.last:  # the standalone draft call's items (ms)
+                entry["draft_items"] = drafter.last["items"]
             if fused:
                 entry["next_drafts"] = decoder.drafts[0]
             rounds.append(entry)
