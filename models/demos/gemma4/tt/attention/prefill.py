@@ -1033,7 +1033,7 @@ def _prefill_forward_single(
             _own_chunk_slice = ttnn.slice(page_table, [0, _c0], [_rows, _c0 + _cols])
             fill_page_table = _own_chunk_slice
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    xqkv = apply_qkv_projection(hidden_states, weights, prefill=True)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
     # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
@@ -1637,7 +1637,7 @@ def _prefill_forward_single(
         tt_out_l1 = tt_out
         tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
         tt_out_l1.deallocate(True)
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(tt_out, weights, prefill=True)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     return tt_out, kept_kv, sliding_tail_out
@@ -1718,7 +1718,7 @@ def prefill_forward(
     seq_len = hidden_states.shape[-2]
     original_seq_len = seq_len
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    xqkv = apply_qkv_projection(hidden_states, weights, prefill=True)
     ttnn.deallocate(hidden_states)
 
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
@@ -1965,7 +1965,7 @@ def prefill_forward(
         tt_out_l1 = tt_out
         tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
         tt_out_l1.deallocate(True)
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(tt_out, weights, prefill=True)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     tt_out = ttnn.reshape(tt_out, [1, 1, original_seq_len, -1])
