@@ -1,0 +1,39 @@
+2026-10-31 20:16:55.304 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-31 20:16:55.304 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-31 20:16:55.304 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-31 20:16:55.304 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-31 20:16:55.315 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-31 20:16:55.315 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-31 20:16:55.395 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-31 20:16:55.395 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-31 20:16:55.395 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-31 20:16:55.395 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-31 20:16:55.397 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-31 20:16:55.560 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-31 20:16:55.598 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-31 20:16:55.598 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-31 20:16:55.598 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-31 20:16:55.639 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-31 20:16:56.283 | info     |           Metal | Enabling program cache on MeshDevice 0 (mesh_device.cpp:1320)
+SDPA forward benchmark (warmup=2 measure=10, host us per launch between two device syncs)
+
+== mistral24b_tp4_h8kv2d128_s1k: B=1 Hq=8 Hkv=2 S=1024 D=128 mask=causal ==
+this kernel at main's chunking (q=32, k=128, h=1, no cuts): 239.8 us
+config                      device_us   speedup dram_alloc_MiB max_abs_diff      units
+default (picked)                186.0    1.289x           3.0    0.000e+00      0S/0M
+q0 k0 h0 p1 c0                  186.3    1.287x           3.0    0.000e+00      0S/0M
+q128 k128 h1 p0 c0              165.7    1.447x           9.1    4.883e-04    64S/40M
+q128 k256 h1 p0 c0              185.4    1.293x           4.6    9.766e-04    16S/16M
+q256 k256 h1 p0 c0              273.0    0.878x           4.6    9.766e-04      8S/8M
+q128 k128 h2 p0 c0              392.2    0.611x           3.0    0.000e+00      0S/0M
+q128 k256 h2 p0 c0              276.9    0.866x           4.6    9.766e-04      8S/8M
+q128 k256 h1 p2 c0              186.2    1.288x           4.6    9.766e-04    16S/16M
+q128 k256 h1 p4 c0              185.0    1.296x           4.6    9.766e-04    16S/16M
+q256 k256 h1 p4 c0              273.6    0.877x           4.6    9.766e-04      8S/8M
+2026-10-31 20:17:02.403 | info     |    BuildKernels | JIT cache stats: 21/50 hits (42.0%) [21 cached, 16 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-31 20:17:02.403 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-31 20:17:02.415 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-31 20:17:02.415 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-31 20:17:02.597 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-31 20:17:02.597 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-31 20:17:02.598 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

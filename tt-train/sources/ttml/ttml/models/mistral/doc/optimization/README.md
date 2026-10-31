@@ -39,6 +39,7 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 18 | math (kernel boost, partial) | LoRA gradient products: `skinny_contract` op (narrow dB) + ttnn `[r, N]` orientation (dA, wide dB) | 45 | 503.9 | 32.19 % | landed |
 | 19 | math (kernel boost) + config | single-phase fused add + RMSNorm forward (`add_rmsnorm_fw_rows`), 2D w2-forward matmul config | 47 | **495.4** | **32.75 %** | landed |
 | 20 | math (kernel boost) | norm kernels' per-tile math on the FPU | - | - | - | rejected: -16 % only at 2.5x the error (19-bit DEST feedback); exact variant no faster |
+| 21 | math (kernel boost) | SDPA forward from the `sdpa_scheduler` stack (multi-row items, head stacking, cut heavy items) | 47 (attention subset 4) | - | - | rejected: 186 / 166 us vs 149-157 chain-mode at the shard shape; reverted |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
@@ -72,6 +73,7 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - Hard constraints (user, 2026-10-30): HiFi4 + fp32 accumulate (no lower fidelity evaluated); result = full-model TP=4 MFU only; a kernel-level item every iteration; a stage-review pass is a checkpoint, not a stop; one change per commit.
 - Loss match on this path (after 14): 8-layer host loss max |diff| 0.0294 vs torch fp64 (tol 0.10); TP=4 real-weight trajectory as the baseline's (526.1 ms warm).
 - Reviews: round 3 more-work-needed, answered in the follow-up; round 4 five P3 doc / test items fixed; round 5 clean-pass; round 6 (iterations 9-10) items answered, clean-pass on re-check; round 7 (iterations 11-12, `review_round7.md`) two P2 doc / hygiene items answered, re-check pending.
+- 21: the `sdpa_scheduler` forward measured at the shard shape: 186 / 166 us vs 149-157 chain-mode (64 four-row items on 110 cores); reverted. Constraint change 2026-10-31: bf16 intermediates allowed where the PCC holds; the loop continues toward 40 %.
 - State after iteration 20 (`../perf_analysis.md`, "State after iteration 20"): the owned kernels are at their exact-fp32 ceilings (~10 ms/step left in them); the gap to 40 % MFU (~90 ms) is the ttnn base matmuls (63 % of the step at 63-85 % of peak) and the chip clock skew behind the collectives (10 %).
 - Remaining ranking (`../perf_analysis.md`, "Ranked cost table", after iteration 18, ms/step/chip): base matmuls ~206 (w2 forward at 63 % of peak, the rest 76-85 %), collectives 41-79 (transfer at the library optimum, chip skew on top, overlap untried), LoRA adapters ~34, norms ~26, SDPA ~25, layout ~17, SwiGLU ~14, fixed ~8, adds ~3.
 

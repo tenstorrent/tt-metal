@@ -155,6 +155,14 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 21 (rejected): SDPA forward from the `agobeljicTT/sdpa_scheduler` stack (kernel boost checklist)
+
+- Roofline / bytes: `SDPAForward` 140 us per call in the step (0.56 ms per 4 layers per chip) for 8 heads x 528 score tiles = 38 per core: 3.9 us per score tile against ~1.5 us (8 HiFi4 matmul tiles 0.4, exp 0.7, max / sum / rescale / packs 0.4); K/V DRAM traffic 12 MB per call (chain mode) against 67 MB for main's one-row kernel.
+- Structural fix tried: the user's `sdpa_scheduler` stack (PRs #61884 / #62646, same base commit as this branch): `git checkout origin/agobeljicTT/sdpa_scheduler -- metal/ops/sdpa_fw metal/ops/ring_sdpa_fw tests/ops/sdpa_fw_op_test.cpp tests/benchmark/sdpa_fw_benchmark.cpp test_utils/{program_cache,mesh_utils}.hpp`, `sdpa_fw_config.cpp` registered, the benchmark target added with a `mistral24b_tp4_h8kv2d128_s1k` scenario. Relation to this branch: iteration 11's LPT work lists are the stack's longest-first placement; the chain mode (iterations 15-16) is not in the stack; the stack's multi-row items, head stacking and item cuts are not on this branch.
+- Measured standalone before any full-model run (`O/iter21_build_check.log`, `O/iter21_sdpa_benchmark{,2}.log`): shard shape default pick 186 us, best of 21 configs 166, chain-mode 149-157 (`O/iter21_sdpa_baseline.log`, same session); S=2048: 401 vs 444. Outputs within one bf16 ulp (`O/iter21_sdpa_check.log`), harness attention tests 4 passed (`O/iter21_attention_tests.log`).
+- Rejected at this shape: 64 four-row items on 110 cores (46 idle; the cuts recover 20 us), 128 two-row items with cuts 167; the chain kernel's 256 one-row items balance to a row. Reverted with `git checkout HEAD`, rebuilt, bit-exact against the iteration-20 outputs on all six cases (`O/iter21_sdpa_reverted.log`).
+- Lesson: measure a candidate kernel standalone at the exact model shape first (done here; 25 minutes end to end), and a design that wins at S=2048 can lose at S=1024 on item granularity alone.
+
 ### Iteration 20 (rejected): norm kernels' per-tile math on the FPU (kernel boost checklist)
 
 - Roofline / bytes: `add_rmsnorm_fw_rows` 126 us per call in the step for 40 MB (317 GB/s), `rmsnorm_bw_rows` 165 us for 50 MB (303 GB/s); both bandwidth-bound by ~80 % and compute-bound by the rest: one tile per DEST acquire with 5-10 SFPU / unpack / pack steps each (the SFPU runs fp32 exactly; the acquire / commit / wait / release handshake is paid per tile).
@@ -258,6 +266,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 17 | `f07712081ba` | `rmsnorm_bw_rows` op and its dispatch from `rmsnorm_bw_allcore`, iteration-17 evidence |
 | 18 | `2a75ffce1bd` | `skinny_contract` op, `skinny_contract` router in `lora.py` (ttnn `[r, N]` orientation for dA and the wide dB), iteration-18 evidence |
 | 19 | `11f9d923524` | `add_rmsnorm_fw_rows` op (dispatched from `add_rmsnorm_fw_allcore`), 2D program config for the w2 forward matmul (`frozen_linear.py`), review-round-8 answers, iteration-19 evidence |
-| 20 | (this commit) | rejected FPU norm-kernel experiment: evidence and docs only (kernels unchanged) |
+| 20 | `a3d3ec03947` | rejected FPU norm-kernel experiment: evidence and docs only (kernels unchanged) |
+| state | `c219767ba30` | state after iteration 20: where the remaining step time is |
+| 21 | (this commit) | rejected `sdpa_scheduler` forward port: evidence and docs only (kernels unchanged) |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.
