@@ -101,6 +101,14 @@ assert DSPARK_MOE in ("decode", "prefill"), DSPARK_MOE
 # sampler's top-32-per-chip path (bf16 candidates, as the target's own argmax)
 DSPARK_MARKOV = os.environ.get("V41_DSPARK_MARKOV", "device")
 assert DSPARK_MARKOV in ("device", "host"), DSPARK_MARKOV
+# V41_DSPARK_HOST_INPUTS=one (default): the standalone call's per-rank inputs (token, ring index, tap selector,
+# index rows, the two RoPE pairs) travel as one uint32 row-major page per rank, uploaded with one copy and unpacked
+# inside the call's graph (after the step's ``StepPacker`` "one" mode: every mesh ``from_torch``
+# and every copy costs 0.2 to 0.4 ms whatever its size, and the call had nine and ten); split: one host tensor and
+# one copy per input, as before. A host tap (the single-block tests) keeps the split path.
+DSPARK_HOST_INPUTS = os.environ.get("V41_DSPARK_HOST_INPUTS", "one")
+assert DSPARK_HOST_INPUTS in ("one", "split"), DSPARK_HOST_INPUTS
+ONE = "one"  # the packed page's key in ``host_inputs_blocks``'s dict and the buffers
 
 
 class DSparkMoeConfig:
@@ -277,6 +285,8 @@ class TtDSparkDrafter:
         self.trace, self.warmup = trace, warmup
         self.buffers: dict = {}
         self._zero_tap = None  # the host zero tap of the standalone call (built once)
+        self.packed = DSPARK_HOST_INPUTS == "one" and DSPARK_MARKOV == "device"
+        self._staged_use_tap32 = None  # the ``use_tap32`` value the buffer holds (copied when it changes)
         self._tap_is_zero = False  # the ``tap`` buffer holds the zero tap (no copy needed for a zero host tap)
         self.captures: dict[int, tuple] = {}  # the standalone call's capture per block count
         self.eager_counts: dict[int, int] = {}
@@ -516,22 +526,112 @@ class TtDSparkDrafter:
         # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile row):
         # ``sel @ tap32`` puts the selected tap row on each writing row (one nonzero term a row: exact); without
         # a device tile the host tap is used (use_tap32 0)
-        inputs["sel"] = self._per_rank(t["sel"].view(sp, 1, ROWS, ROWS), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         inputs["use_tap32"] = self._use_tap32(False)
-        tick("sel")
         main = cos_sin(cfg, False, t["main_pos"].flatten())
+        block = cos_sin(cfg, False, t["block_pos"].flatten())
+        tick("rope")
+        if self.packed and main_hidden is None:
+            del inputs["token"]
+            inputs[ONE] = self._pack_one(t, main, block)
+            tick("pack")
+            return inputs
+        inputs["sel"] = self._per_rank(t["sel"].view(sp, 1, ROWS, ROWS), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        tick("sel")
         inputs["rope_main"] = tuple(
             self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.float32, ttnn.TILE_LAYOUT) for r in main
         )
-        block = cos_sin(cfg, False, t["block_pos"].flatten())
         inputs["rope_block"] = tuple(
             self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT) for r in block
         )
-        tick("rope")
+        tick("rope_tensors")
         inputs["ring_idx"] = self._per_rank(t["ring_idx"].view(sp, 1, 1, ROWS), ttnn.uint32, rm)
         inputs["index_rows"] = self._per_rank(t["index"].view(sp, 1, ROWS, INDEX_WIDTH), ttnn.uint32, rm)
         tick("index")
         return inputs
+
+    # the packed page's columns (uint32 each): token [ROWS], ring_idx [ROWS], sel [ROWS * ROWS] (bf16 bits << 16),
+    # index [ROWS * INDEX_WIDTH], rope_main cos, sin [ROWS * rope_dim] each (fp32 bits), rope_block cos, sin
+    # [ROWS * rope_dim] each (bf16 bits << 16)
+    def _one_layout(self) -> dict[str, tuple[int, int]]:
+        if not hasattr(self, "_one_cols"):
+            rope = self.config.QK_ROPE_HEAD_DIM
+            widths = [
+                ("token", ROWS),
+                ("ring_idx", ROWS),
+                ("sel", ROWS * ROWS),
+                ("index_rows", ROWS * INDEX_WIDTH),
+                ("main_cos", ROWS * rope),
+                ("main_sin", ROWS * rope),
+                ("block_cos", ROWS * rope),
+                ("block_sin", ROWS * rope),
+            ]
+            cols, start = {}, 0
+            for name, w in widths:
+                cols[name] = (start, start + w)
+                start += w
+            self._one_cols, self._one_width = cols, start
+        return self._one_cols
+
+    @staticmethod
+    def _bf16_bits(t: torch.Tensor) -> torch.Tensor:
+        return t.to(torch.bfloat16).contiguous().view(torch.int16).to(torch.int32) << 16
+
+    def _pack_one(self, t: dict, main: tuple, block: tuple):
+        """The ranks' inputs (``dspark_blocks.mesh_inputs``'s tensors, the RoPE pairs ``[1, 1, sp * ROWS, rope_dim]``
+        fp32) -> the one host page per rank, ``[1, 1, 1, width]`` uint32 on every chip of the rank
+        (``from_host_shards``; the host rows reused)."""
+        sp, tp = self.sp, self.tp
+        cols = self._one_layout()
+        if getattr(self, "_one_host", None) is None:
+            self._one_host = torch.zeros(sp, 1, 1, self._one_width, dtype=torch.int32)
+        host = self._one_host
+        lo, hi = cols["token"]
+        host[:, 0, 0, lo:hi] = t["ids"].view(sp, ROWS)
+        lo, hi = cols["ring_idx"]
+        host[:, 0, 0, lo:hi] = t["ring_idx"].view(sp, ROWS)
+        lo, hi = cols["sel"]
+        host[:, 0, 0, lo:hi] = self._bf16_bits(t["sel"]).view(sp, ROWS * ROWS)
+        lo, hi = cols["index_rows"]
+        host[:, 0, 0, lo:hi] = t["index"].view(sp, ROWS * INDEX_WIDTH)
+        for name, r in zip(("main_cos", "main_sin"), main):
+            lo, hi = cols[name]
+            host[:, 0, 0, lo:hi] = r.contiguous().view(torch.int32).view(sp, -1)
+        for name, r in zip(("block_cos", "block_sin"), block):
+            lo, hi = cols[name]
+            host[:, 0, 0, lo:hi] = self._bf16_bits(r).view(sp, -1)
+        parts = []
+        for r in range(sp):
+            shard = ttnn.Tensor(host[r : r + 1], ttnn.uint32)  # [1, 1, 1, width]: this rank's, on every TP chip
+            parts.extend([shard] * tp)
+        return ttnn.from_host_shards(parts, ttnn.MeshShape(sp, tp))
+
+    def _unpack_one(self, one) -> dict:
+        """The page on device -> the graph's tensors as the split path keys them (a dozen tiny ops inside the
+        capture): the integer rows sliced, ``sel`` and the block RoPE bitcast to fp32, typecast to bf16 (exact: the
+        low half is zero) and tilized, the main RoPE bitcast to fp32 and tilized, the index rows reshaped."""
+        cols = self._one_layout()
+        rope = self.config.QK_ROPE_HEAD_DIM
+
+        def part(name, shape):
+            lo, hi = cols[name]
+            return ttnn.reshape(ttnn.slice(one, [0, 0, 0, lo], [1, 1, 1, hi]), shape)
+
+        out = {
+            "token": part("token", (1, 1, ROWS)),
+            "ring_idx": part("ring_idx", (1, 1, 1, ROWS)),
+            "index_rows": part("index_rows", (1, 1, ROWS, INDEX_WIDTH)),
+        }
+        sel = ttnn.typecast(ttnn.bitcast(part("sel", (1, 1, ROWS, ROWS)), ttnn.float32), ttnn.bfloat16)
+        out["sel"] = ttnn.tilize(sel)
+        out["rope_main"] = tuple(
+            ttnn.to_layout(ttnn.bitcast(part(name, (1, 1, ROWS, rope)), ttnn.float32), ttnn.TILE_LAYOUT)
+            for name in ("main_cos", "main_sin")
+        )
+        out["rope_block"] = tuple(
+            ttnn.tilize(ttnn.typecast(ttnn.bitcast(part(name, (1, 1, ROWS, rope)), ttnn.float32), ttnn.bfloat16))
+            for name in ("block_cos", "block_sin")
+        )
+        return out
 
     def _host_tap(self, main_hidden: torch.Tensor):
         """``tap_rows(main_hidden)`` as the host tensor of the ``tap`` buffer (sharded over TP on its columns)."""
@@ -585,10 +685,15 @@ class TtDSparkDrafter:
             self.buffers = self.to_device(inputs)
             self.buffers["tap32"] = ttnn.clone(self.buffers["tap"]) if tap32 is None else ttnn.clone(tap32)
             self._tap_is_zero = zero
+            self._staged_use_tap32 = inputs["use_tap32"]
         else:
             for k, v in inputs.items():
                 if k == "tap" and zero and self._tap_is_zero:
                     continue  # the buffer already holds the zero tap (0.5 MB a chip, 32 chips, every round)
+                if k == "use_tap32":
+                    if self._staged_use_tap32 is v:
+                        continue  # the buffer holds this constant
+                    self._staged_use_tap32 = v
                 if isinstance(v, tuple):
                     for host, dev in zip(v, self.buffers[k]):
                         ttnn.copy_host_to_device_tensor(host, dev)
@@ -608,7 +713,11 @@ class TtDSparkDrafter:
         """The draft call's graph on the buffers -> the device tensor read after it: the blocks' drafts
         (``DSPARK_MARKOV=device``) or the five logits rows (host loop, one block)."""
         if DSPARK_MARKOV == "device":
-            ids, logits, _ = self.draft_ids(self.buffers, blocks=self.blocks)
+            inputs = self.buffers
+            if ONE in inputs:
+                inputs = dict(inputs)
+                inputs.update(self._unpack_one(inputs[ONE]))
+            ids, logits, _ = self.draft_ids(inputs, blocks=self.blocks)
             ttnn.deallocate(logits)
             return ids
         assert self.blocks == 1, "the host Markov loop takes one block"
