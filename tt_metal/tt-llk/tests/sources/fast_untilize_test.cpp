@@ -13,6 +13,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "counters.h"
 #include "experimental/llk_fast_untilize_common.h"
 #include "llk_defs.h"
@@ -27,8 +28,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr bool FAST_UNTILIZE_SINGLE_UNIT             = FULL_CT_DIM <= ckernel::FAST_UNTILIZE_MAX_UNIT_DIM;
 constexpr std::uint32_t MAX_UNITS_PER_ROW            = (FULL_CT_DIM + ckernel::FAST_UNTILIZE_MAX_UNIT_DIM - 1) / ckernel::FAST_UNTILIZE_MAX_UNIT_DIM;
 constexpr std::uint32_t FAST_UNTILIZE_FIRST_UNIT_DIM = ckernel::fast_untilize_next_unit_dim(FULL_CT_DIM);
-constexpr bool FAST_UNTILIZE_BFP_B_INPUT =
-    UNPACK_A_IN == ckernel::to_underlying(DataFormat::Bfp8_b) || UNPACK_A_IN == ckernel::to_underlying(DataFormat::Bfp4_b);
+// Every compressed block-float input (Bfp8/4/2, A and B exponent variants) has a
+// per-tile exponent section and must take the per-tile unpack path.
+constexpr bool FAST_UNTILIZE_BFP_INPUT = ckernel::IS_BFP_FORMAT(UNPACK_A_IN);
 // Mirror production fast_untilize: test both ambient dest_sync values while
 // running the private fast region with half-sync double buffering.
 constexpr auto FAST_UNTILIZE_INTERNAL_DEST_SYNC = ckernel::FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE;
@@ -57,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
         ckernel::_llk_unpack_fast_untilize_init_<DST_ACCUM_MODE>(
-            formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_BFP_B_INPUT ? 1 : FAST_UNTILIZE_FIRST_UNIT_DIM);
+            formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_BFP_INPUT ? 1 : FAST_UNTILIZE_FIRST_UNIT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -77,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
                 {
-                    if constexpr (FAST_UNTILIZE_BFP_B_INPUT)
+                    if constexpr (FAST_UNTILIZE_BFP_INPUT)
                     {
                         const std::uint32_t address         = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM]);
                         const std::uint32_t tile_stride_16B = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + 1]) - address;
@@ -103,7 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t u = 0; u < units_per_row; u++)
                     {
                         const std::uint32_t unit_dim = unit_dims[u];
-                        if constexpr (FAST_UNTILIZE_BFP_B_INPUT)
+                        if constexpr (FAST_UNTILIZE_BFP_INPUT)
                         {
                             const std::uint32_t address         = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col]);
                             const std::uint32_t tile_stride_16B = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col + 1]) - address;
