@@ -997,6 +997,13 @@ class PerfConfig(TestConfig):
         pre = [n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()]
         by_name = {rt.name: (t, r, rt) for t, r, rt in self.rc_all_configs}
         log = os.environ.get("LLK_RC_LOG")
+        hook = os.environ.get("LLK_RC_HOOK")
+        at_pre = os.environ.get("LLK_RC_HOOK_AT") == "pre"  # run the hook before the prelude instead of after it
+        if hook and at_pre:
+            ns = {}
+            exec(compile(open(hook).read(), hook, "exec"), ns)
+            ns["hook"](TestConfig.TENSIX_LOCATION)
+            hook = None
         for name in pre:
             if name not in by_name:
                 raise ValueError(f"LLK_RC_PRE: {name} not declared by this test ({sorted(by_name)})")
@@ -1004,7 +1011,6 @@ class PerfConfig(TestConfig):
             if log:
                 with open(log, "a") as f:
                     f.write(f"pre {self.test_name} {name} {self.variant_id}\n")
-        hook = os.environ.get("LLK_RC_HOOK")
         if hook:
             ns = {}
             exec(compile(open(hook).read(), hook, "exec"), ns)
