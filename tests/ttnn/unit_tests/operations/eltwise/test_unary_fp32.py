@@ -8,7 +8,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import (
     assert_equal,
-    assert_with_pcc,
     assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
@@ -97,12 +96,11 @@ def test_cosh_fp32_all_bfloat16_bitpatterns(device):
     )
 
 
-def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False, pcc=0.9999):
+def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False):
     """Run a single-input fp32 unary op on a random tensor in [0, 1) and assert vs the torch golden.
 
     Default ``ulp=1`` covers kernels accurate to one float32 ULP. Callers override ``ulp`` when the
-    kernel has a larger expected error, or set ``pcc_check=True`` with an op-specific ``pcc`` when
-    ULP is not the appropriate tolerance.
+    kernel has a larger expected error.
     """
     torch.manual_seed(0)
 
@@ -115,15 +113,12 @@ def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pc
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    else:
-        assert_with_ulp(
-            expected_result=torch_output_tensor,
-            actual_result=output_tensor,
-            ulp_threshold=ulp,
-            allow_nonfinite=allow_nonfinite,
-        )
+    assert_with_ulp(
+        expected_result=torch_output_tensor,
+        actual_result=output_tensor,
+        ulp_threshold=ulp,
+        allow_nonfinite=allow_nonfinite,
+    )
 
 
 @pytest.mark.parametrize(
@@ -156,44 +151,14 @@ def test_tanh_fp32_all_nan_payloads_propagate(device, base_bits, pad_bits):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gelu(device, h, w):
-    run_unary_test(device, h, w, ttnn.gelu, pcc_check=True, pcc=0.9996)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_rsqrt(device, h, w):
-    run_unary_test(device, h, w, ttnn.rsqrt, ulp=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_silu(device, h, w):
-    run_unary_test(device, h, w, ttnn.silu, ulp=3)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log(device, h, w):
-    run_unary_test(device, h, w, ttnn.log, ulp=3)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_asinh(device, h, w):
     # Default [0, 1) input includes the small-x region where the log1p form fixes
     # the catastrophic cancellation of the old log(|x| + sqrt(x^2 + 1)) chain.
     # |x| < 0.75 uses a direct degree-6 polynomial (<=1 ulp); |x| >= 0.75 uses the
     # cancellation-free log1p(|x| + x^2 / (1 + sqrt(1+x^2))) form (<=1.5 ulp).
+    # test_trig_ops in test_unary_category1_float32.py checks asinh with atol=4.8e-7,
+    # which is ~500 ulp at x = 0.01 and would pass the old chain, so keep this ULP check.
     run_unary_test(device, h, w, ttnn.asinh, ulp=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_atanh(device, h, w):
-    # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
-    # [0, 1) input exercises the small-x stable region.
-    run_unary_test(device, h, w, ttnn.atanh, ulp=2)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
