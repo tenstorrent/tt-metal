@@ -89,8 +89,8 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);
 
     // The scratch DFB (legacy c_1) is only needed for a two-step DRAM-aligned read:
-    // when the DRAM source page is not DRAM-aligned, or unconditionally on Blackhole.
-    bool use_scratch = (src_is_dram && (input_cb_page_size % dram_alignment != 0)) || is_blackhole;
+    // when the DRAM source page is not DRAM-aligned, or for DRAM on Blackhole.
+    bool use_scratch = src_is_dram && ((input_cb_page_size % dram_alignment != 0) || is_blackhole);
 
     // ---- Resource names ----
     const KernelSpecName READER{"reader"};
@@ -207,8 +207,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
 
     // Alignment info for the kernel. Loop-invariant (same on every node); legacy computed it identically
     // per core. On Blackhole, always use two-step read for DRAM.
-    uint32_t aligned = (src_is_dram ? (input_cb_page_size % dram_alignment == 0) : 1);
-    aligned = aligned && !is_blackhole;
+    uint32_t aligned = !use_scratch;
 
     KernelRunArgs reader_kra{.kernel = READER};
     KernelRunArgs writer_kra{.kernel = WRITER};
