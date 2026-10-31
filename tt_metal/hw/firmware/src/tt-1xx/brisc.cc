@@ -21,6 +21,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
 #include "hostdev/dev_msgs.h"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
@@ -203,6 +204,129 @@ void set_deassert_addresses() {
 #endif
 }
 
+#if defined(L1_ECC_HALT)
+// Rows 3072-4095 have no SRAM. Any access to them (the scrubber walks all 4096 rows, a NoC read past the end of L1)
+// reads back as false SBEs and DBEs.
+constexpr uint32_t l1_ecc_populated_rows = MEM_L1_SIZE / (l1_ecc_banks * l1_ecc_word_bytes);
+
+// ECC_CTRL's interrupt enables while armed, and the ECC_STATUS view selected after arming and after a false error.
+constexpr uint32_t ecc_ctrl_armed = ECC_CTRL_L1_DBE_IRQ_EN;
+constexpr uint32_t ecc_ctrl_host_view = static_cast<uint32_t>(EccView::L1_COUNTS);
+
+inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
+    *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL) =
+        ecc_ctrl_armed | static_cast<uint32_t>(view);
+    // The view select must land before the ECC_STATUS load.
+    asm volatile("fence" ::: "memory");
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_STATUS);
+}
+
+// Records the ECC state for the host and halts the core until the next device open releases it.
+inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15) {
+    tt_l1_ptr l1_ecc_halt_slot_t* const slot = reinterpret_cast<tt_l1_ptr l1_ecc_halt_slot_t*>(MEM_L1_ECC_HALT_BASE);
+    slot->record.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    slot->record.l1_counts = read_ecc_view(EccView::L1_COUNTS);
+    slot->record.last_l1_error_banks_0_15 = last_l1_error_banks_0_15;
+    slot->record.last_l1_error_banks_16_31 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_16_31);
+    slot->record.program_id = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.host_assigned_id;
+    asm volatile("fence" ::: "memory");
+    // A valid last error here is in a populated row; without one, IRQ 3 came from another source (the watchdog).
+    bool l1_dbe = last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK;
+    slot->record.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
+    WAYPOINT("ECCH");
+    while (true) {
+    }
+}
+
+// Called from l1_ecc_irq_entry on PIC IRQ 3. A false error from an unpopulated row is cleared and returns;
+// anything else halts the core. PIC handlers do not nest, so nothing can change the ECC_CTRL view between a select
+// and its read.
+extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
+    volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    // The valid bit and row cover an error in any of the 32 banks.
+    uint32_t last_l1_error_banks_0_15 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_0_15);
+    if ((last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK) &&
+        (last_l1_error_banks_0_15 & ECC_LAST_ERR_ROW_MASK) >= l1_ecc_populated_rows) {
+        // Without the IRQ clear, mret re-enters the handler. Without the last error clear, a later IRQ 3 from another
+        // source (the watchdog) would find this error still valid and return here forever.
+        *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
+        *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view;
+        return;
+    }
+    halt_on_ecc_error(last_l1_error_banks_0_15);
+}
+
+// IRQ 3 handler. Saves the caller-saved registers around l1_ecc_check.
+// BRISC can skip an mret: a branch predictor (BTB) entry whose hashed PC matches mret's makes the core treat mret
+// as a mispredicted non-branch, so it continues at mret + 4 still inside the handler. The jump there runs mret
+// again; the first attempt removes that BTB entry, so the retry returns.
+__attribute__((naked)) void l1_ecc_irq_entry() {
+    asm volatile(
+        "addi sp, sp, -(16 * 4)\n"
+        "sw ra, 0 * 4(sp)\n"
+        "sw t0, 1 * 4(sp)\n"
+        "sw t1, 2 * 4(sp)\n"
+        "sw t2, 3 * 4(sp)\n"
+        "sw t3, 4 * 4(sp)\n"
+        "sw t4, 5 * 4(sp)\n"
+        "sw t5, 6 * 4(sp)\n"
+        "sw t6, 7 * 4(sp)\n"
+        "sw a0, 8 * 4(sp)\n"
+        "sw a1, 9 * 4(sp)\n"
+        "sw a2, 10 * 4(sp)\n"
+        "sw a3, 11 * 4(sp)\n"
+        "sw a4, 12 * 4(sp)\n"
+        "sw a5, 13 * 4(sp)\n"
+        "sw a6, 14 * 4(sp)\n"
+        "sw a7, 15 * 4(sp)\n"
+        "call l1_ecc_check\n"
+        "lw ra, 0 * 4(sp)\n"
+        "lw t0, 1 * 4(sp)\n"
+        "lw t1, 2 * 4(sp)\n"
+        "lw t2, 3 * 4(sp)\n"
+        "lw t3, 4 * 4(sp)\n"
+        "lw t4, 5 * 4(sp)\n"
+        "lw t5, 6 * 4(sp)\n"
+        "lw t6, 7 * 4(sp)\n"
+        "lw a0, 8 * 4(sp)\n"
+        "lw a1, 9 * 4(sp)\n"
+        "lw a2, 10 * 4(sp)\n"
+        "lw a3, 11 * 4(sp)\n"
+        "lw a4, 12 * 4(sp)\n"
+        "lw a5, 13 * 4(sp)\n"
+        "lw a6, 14 * 4(sp)\n"
+        "lw a7, 15 * 4(sp)\n"
+        "addi sp, sp, 16 * 4\n"
+        "mret_loop: mret\n"
+        "j mret_loop\n");
+}
+#endif
+
+void arm_l1_ecc_halt() {
+#if defined(L1_ECC_HALT)
+    volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    // ECC_CTRL survives RISC soft reset. Nothing else enables its interrupts today (ARC firmware leaves it at 0), so
+    // any enable outside our own means another owner, such as future ARC firmware, and arming is skipped. The clears
+    // are ours too: a reset between the handler's two ECC_CTRL writes leaves them set.
+    if (*ecc_ctrl & ~(ECC_CTRL_VIEW_MASK | ecc_ctrl_armed | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR)) {
+        return;
+    }
+    // Arm in this order: clear stale state, enable the ECC sources, install the handler, and enable BRISC at the
+    // PIC last. Only that last write lets BRISC take IRQ 3, so the handler is always installed first (both PIC
+    // writes land in order), and an ECC error raised before it stays latched until then.
+
+    // Clear the counts, the last error and the IRQ.
+    *ecc_ctrl = ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
+    *ecc_ctrl = 0;
+    *ecc_ctrl = ecc_ctrl_host_view | ecc_ctrl_armed;
+    asm volatile("fence" ::: "memory");
+    RISC_PIC_INT_PCS[pic_num_sw_ints + pic_hw_int_err] = reinterpret_cast<uint32_t>(l1_ecc_irq_entry);
+    // Only BRISC takes IRQ 3. NCRISC needs no masking: it is still in soft reset here, which holds its PIC
+    // enables at 0, and nothing sets them later. Of the IRQ 3 sources, only the L1 DBE is armed.
+    *RISC_PIC_BRISC_HW_INT_EN |= 1u << pic_hw_int_err;
+#endif
+}
+
 void device_setup() {
     instrn_buf[0] = core.instrn_buf_base(0);
     instrn_buf[1] = core.instrn_buf_base(1);
@@ -372,6 +496,7 @@ int main() {
 
     risc_init();
     device_setup();
+    arm_l1_ecc_halt();
     DEVICE_PRINT_INITIALIZE_LOCK();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it

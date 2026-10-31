@@ -99,6 +99,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_DISABLE_L1_ECC_HALT,                       // Disable the Blackhole L1 ECC halt
     TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
@@ -397,10 +398,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
     // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
     // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    // ttsim exits on any access to the ECC registers, so the L1 ECC halt is forced off too.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
         this->runtime_target_device_ == tt::TargetDevice::Emule) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
+        this->disable_l1_ecc_halt = true;
     }
 
     TT_FATAL(
@@ -773,6 +776,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (relaxed ordering enabled)
         // Usage: export TT_METAL_DISABLE_RELAXED_MEM_ORDERING=1
         case EnvVarID::TT_METAL_DISABLE_RELAXED_MEM_ORDERING: this->disable_relaxed_memory_ordering = true; break;
+
+        // TT_METAL_DISABLE_L1_ECC_HALT
+        // Do not halt a Blackhole Tensix BRISC on an L1 ECC error.
+        // Default: false (halt enabled on Blackhole silicon)
+        // Usage: export TT_METAL_DISABLE_L1_ECC_HALT=1
+        case EnvVarID::TT_METAL_DISABLE_L1_ECC_HALT: this->disable_l1_ecc_halt = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_GATHERING
         // Enable data gathering on Blackhole.
