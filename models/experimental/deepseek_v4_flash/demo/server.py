@@ -67,7 +67,9 @@ posted and packed as soon as the previous one's token is back, so with as many u
 stages each stage works on a different user's step. Prompt tokens replayed through decode
 keep up to ``--prefill-chunk`` steps in flight per turn. A turn decoding alone has its next step's
 traces posted one step early, so their dispatch overlaps the step before rather than idling the device
-(``--no-decode-ahead`` turns it off). Outputs are read off the socket
+(``--no-decode-ahead`` turns it off), and the reader thread samples its token and writes that step's packet
+itself the moment the output is off the socket, so the scheduler is off the token-to-packet path
+(``_OutputReader.arm``). Outputs are read off the socket
 by a reader thread, in dispatch order. A traced prefill waits for every step in flight
 to come back and then holds the device for that prompt. One scheduler thread does all
 the dispatch, which is required, not incidental: the trace replays and the paged session
@@ -240,6 +242,10 @@ class _PromptStopped(Exception):
 
 # How often a request waiting on its reply checks that its client is still connected.
 _CLIENT_POLL_SECONDS = 0.5
+# sys.setswitchinterval while serving. A thread waiting for the GIL gets it only once the holder has run this
+# long (default 5 ms), and the output reader takes it back after every socket read and torch op on a token's
+# way to the next packet: an HTTP, console or scheduler thread busy meanwhile would add up to that per token.
+_GIL_SWITCH_SECONDS = 0.0002
 
 
 def _error_parts(exc: Exception) -> tuple[int, str, str]:
@@ -1433,33 +1439,83 @@ class _OutputReader:
     ``tests/decode/test_multi_user_paged_decode_demo.py`` does. :meth:`expect` is called once
     per step, in dispatch order; :attr:`results` yields ``(ticket, logits [1, V])`` in that
     order, or ``(ticket, exception)`` once a read fails, after which it stops; each item also carries the
-    ``time.perf_counter()`` at which the read returned.
+    ``time.perf_counter()`` at which the read returned, and the token :meth:`arm` had it feed (else None) with
+    the time its packet was written.
+
+    :meth:`arm` takes the scheduler off a lone decoding turn's token path: that turn's next step is posted
+    before its token is known (:meth:`_Scheduler._post_ahead`), and whatever the turn does next -- go on, or
+    end -- that step is fed the token sampled from the newest step's output, at its position. So this thread
+    samples it and writes the packet itself, as soon as the output is off the socket, the way
+    ``test_full_model_decode_demo.py`` keeps its whole loop on one thread; the scheduler only does the
+    book-keeping afterwards. The step it fed is expected here under :attr:`PREFED`, whose owner is whoever
+    the scheduler puts at the head of its in-flight order.
     """
 
     _STOP = object()
+    PREFED = object()
 
-    def __init__(self, model):
+    def __init__(self, model, packet_lock):
         self._model = model
-        self._tickets: queue.Queue = queue.Queue()
+        self._packet_lock = packet_lock
+        self._cv = threading.Condition()
+        self._tickets: deque[list] = deque()  # [ticket, (sampler, pos) to feed, or None]
+        self._reading: list | None = None  # the entry whose read is in progress
         self.results: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, name="decode-reader", daemon=True)
         self._thread.start()
 
     def expect(self, ticket) -> None:
-        self._tickets.put(ticket)
+        with self._cv:
+            self._tickets.append([ticket, None])
+            self._cv.notify()
+
+    def arm(self, sampler, pos: int) -> bool:
+        """Have the newest expected step's output feed the step posted at ``pos`` its token (``sampler``, or
+        argmax when None). False if that output is already read, and the scheduler feeds the step itself."""
+        with self._cv:
+            entry = self._tickets[-1] if self._tickets else self._reading
+            if entry is None:
+                return False
+            entry[1] = (sampler, pos)
+            return True
 
     def close(self) -> None:
-        self._tickets.put(self._STOP)
+        self.expect(self._STOP)
         self._thread.join(timeout=5)
 
     def _run(self) -> None:
-        for ticket in iter(self._tickets.get, self._STOP):
+        while True:
+            with self._cv:
+                while not self._tickets:
+                    self._cv.wait()
+                entry = self._reading = self._tickets.popleft()
+            ticket = entry[0]
+            if ticket is self._STOP:
+                return
             try:
                 out = self._model.read_decoded_output().reshape(1, -1).float()
             except BaseException as e:  # noqa: BLE001 - handed to the scheduler, which aborts
-                self.results.put((ticket, e, time.perf_counter()))
+                self.results.put((ticket, e, time.perf_counter(), None, 0.0))
                 return
-            self.results.put((ticket, out, time.perf_counter()))
+            t_read = time.perf_counter()
+            with self._cv:
+                self._reading = None
+                feed = entry[1]
+            if feed is None:
+                self.results.put((ticket, out, t_read, None, 0.0))
+                continue
+            sampler, pos = feed
+            try:
+                token = sampler(out) if sampler is not None else int(out[0].argmax().item())
+                with self._packet_lock:
+                    self._model.write_step_packet(token, pos)
+            except BaseException as e:  # noqa: BLE001 - handed to the scheduler, which aborts
+                self.results.put((ticket, e, t_read, None, 0.0))
+                return
+            t_fed = time.perf_counter()
+            with self._cv:
+                self._tickets.append([self.PREFED, None])
+            self.results.put((ticket, out, t_read, token, t_fed))
 
 
 class _Scheduler:
@@ -1492,6 +1548,8 @@ class _Scheduler:
         self.decode_ahead = decode_ahead
         # The lone decoding turn whose next step's traces are posted ahead of its packet (see _post_ahead).
         self._ahead: _Turn | None = None
+        # (token, when written) of the posted step whose packet the reader already wrote (_OutputReader.arm).
+        self._prefed: tuple[int, float] | None = None
         self._flushing = False  # in _flush_ahead: post nothing more ahead
         self._new: deque[_Turn] = deque()
         self._chores: deque[tuple] = deque()  # (callable, done event, result box)
@@ -1515,6 +1573,7 @@ class _Scheduler:
         self._window_dispatch = 0.0  # host seconds spent seating, posting and packing steps
         self._window_decode_steps = 0  # generated-token steps dispatched
         self._window_ahead = 0  # ... of which _post_ahead had already posted the traces
+        self._window_prefed = 0  # ... of which the output reader had already written the packet
         self._window_gap = 0.0  # host seconds from a turn's output coming back to its next packet
         self.step_rate = 0.0  # steps/s across all users, over the last window
         self._t_started = time.perf_counter()
@@ -1522,7 +1581,7 @@ class _Scheduler:
 
     # -- lifecycle -------------------------------------------------------------- #
     def start(self) -> None:
-        self._reader = _OutputReader(self.engine.model)
+        self._reader = _OutputReader(self.engine.model, self.engine.packet_lock)
         self._thread.start()
 
     def stop(self) -> None:
@@ -1590,7 +1649,7 @@ class _Scheduler:
         except BaseException as e:  # noqa: BLE001 - nobody is left to report this to
             logger.exception(f"decode scheduler died: {e}")
             self._broken = e if isinstance(e, Exception) else RuntimeError(str(e))
-            self._ahead = None  # nothing more is written to a pipeline in an unknown state
+            self._ahead = self._prefed = None  # nothing more is written to a pipeline in an unknown state
             self._drain(RequestError(503, f"decode scheduler died: {e}", "server_error"))
             raise
         finally:
@@ -2006,6 +2065,7 @@ class _Scheduler:
                 f"host dispatch {1e3 * self._window_dispatch / self._window_steps:.1f} ms/step"
                 + (
                     f"; decode steps: {self._window_ahead}/{self._window_decode_steps} posted ahead, "
+                    f"{self._window_prefed} fed by the output reader, "
                     f"token back -> next packet {1e3 * self._window_gap / self._window_decode_steps:.2f} ms"
                     if self._window_decode_steps
                     else ""
@@ -2014,7 +2074,7 @@ class _Scheduler:
         self._window_t0 = time.perf_counter()
         self._window_steps = 0
         self._window_dispatch = 0.0
-        self._window_decode_steps = self._window_ahead = 0
+        self._window_decode_steps = self._window_ahead = self._window_prefed = 0
         self._window_gap = 0.0
 
     def _round_turns(self) -> None:
@@ -2080,7 +2140,10 @@ class _Scheduler:
         """Take every output that has come back, first waiting for the oldest one if ``block``.
 
         Outputs arrive in dispatch order, so each belongs to the turn at the head of
-        :attr:`_inflight`. Raises if a read failed."""
+        :attr:`_inflight`. Raises if a read failed.
+
+        Stops after an output whose reader fed the posted step (:attr:`_prefed`): the next output is that
+        step's, which is in :attr:`_inflight` only once :meth:`_feed` has taken it."""
         results = self._reader.results
         try:
             item = results.get() if block else results.get_nowait()
@@ -2088,17 +2151,24 @@ class _Scheduler:
             return
         while True:
             self._take(*item)
+            if self._prefed is not None:
+                return
             try:
                 item = results.get_nowait()
             except queue.Empty:
                 return
 
-    def _take(self, turn: _Turn | None, out, t_read: float) -> None:
-        """Hand one step's logits ``[1, V]``, read off the socket at ``t_read``, to the turn that dispatched it."""
+    def _take(self, turn: _Turn | None, out, t_read: float, fed: int | None, t_fed: float) -> None:
+        """Hand one step's logits ``[1, V]``, read off the socket at ``t_read``, to the turn that dispatched it.
+        ``fed``: the token the reader sampled from them and fed the posted step at ``t_fed`` (else None)."""
+        if turn is _OutputReader.PREFED and self._inflight:
+            turn = self._inflight[0]
         assert self._inflight and self._inflight[0] is turn, "decode outputs read out of dispatch order"
         self._inflight.popleft()
         if isinstance(out, BaseException):
             raise RuntimeError(f"reading a decode output failed: {out}") from out
+        if fed is not None:
+            self._prefed = (fed, t_fed)
         if turn is None:
             return  # a posted trace fed a dummy packet after a failed dispatch
         turn.t_read = t_read
@@ -2109,9 +2179,11 @@ class _Scheduler:
             )
             turn.t_prefill_out = 0.0
         last_prompt_token = turn.pending.popleft()
+        if fed is not None:
+            turn.next_id = fed  # what _feed_posted feeds the posted step, even for a failed turn
         if turn.error is not None:
             return
-        if turn.phase == _Turn.DECODE or last_prompt_token:
+        if fed is None and (turn.phase == _Turn.DECODE or last_prompt_token):
             turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
         if last_prompt_token:
             self._prompt_done(turn)
@@ -2242,9 +2314,7 @@ class _Scheduler:
             else:
                 engine.post_traced(user, positions)
             for token_id, pos, last_prompt_token in steps:
-                engine.write_traced(token_id, pos)
-                self._reader.expect(turn)
-                self._inflight.append(turn)
+                t_fed = self._feed(turn, token_id, pos)
                 turn.pending.append(last_prompt_token)
                 user.tokens.append(token_id)
                 user.pos += 1
@@ -2255,7 +2325,7 @@ class _Scheduler:
                 self._window_decode_steps += 1
                 self._window_ahead += posted_ahead
                 if turn.t_read:
-                    self._window_gap += time.perf_counter() - turn.t_read
+                    self._window_gap += t_fed - turn.t_read
             # After the packet: the next step's dispatch then runs while the device works on this one.
             self._post_ahead(turn, positions[-1])
         except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
@@ -2263,14 +2333,32 @@ class _Scheduler:
             self._ahead = None
             with contextlib.suppress(Exception):
                 while engine._replay_q:
-                    engine.write_traced(0, engine._replay_q[0])
-                    self._reader.expect(None)
-                    self._inflight.append(None)
+                    self._feed(None, None, engine._replay_q[0])
         finally:
             self._window_dispatch += time.perf_counter() - t0
         if turn.error is None and turn.phase == _Turn.DECODE:
             # Detokenizing re-decodes the whole reply, so it is kept off the path from a token to its packet.
             turn.stream.push(turn.generated)
+
+    def _feed(self, ticket: _Turn | None, token_id: int | None, pos: int) -> float:
+        """Write the packet of the oldest posted step, at ``pos``, and expect its output for ``ticket``; returns
+        when the packet was written. ``token_id`` None feeds a dummy 0.
+
+        If the reader already wrote it (:attr:`_prefed`) only the step is taken off the posted queue: it was
+        fed the token the turn produced last, which is what every caller feeds a posted step."""
+        engine = self.engine
+        if self._prefed is None:
+            engine.write_traced(0 if token_id is None else token_id, pos)
+            self._reader.expect(ticket)
+            t_fed = time.perf_counter()
+        else:
+            (fed, t_fed), self._prefed = self._prefed, None
+            queued = engine._replay_q.popleft()
+            if queued != pos or token_id not in (None, fed):
+                raise RuntimeError(f"step ({token_id}, {pos}) is not the ({fed}, {queued}) the output reader fed")
+            self._window_prefed += 1
+        self._inflight.append(ticket)
+        return t_fed
 
     def _post_ahead(self, turn: _Turn, pos: int) -> None:
         """Post the traces of a lone decoding turn's step after ``pos`` before that step's token is known.
@@ -2308,6 +2396,7 @@ class _Scheduler:
             return
         engine.post_traced(engine.users[turn.slot], [nxt])
         self._ahead = turn
+        self._reader.arm(turn.sampler, nxt)
 
     def _flush_ahead(self) -> None:
         """Let the turn :meth:`_post_ahead` posted a step for take it (or end) without posting another."""
@@ -2336,9 +2425,7 @@ class _Scheduler:
         user = engine.users[turn.slot]
         token = turn.next_id if turn.next_id is not None else engine.eos_id
         if engine._replay_q:
-            engine.write_traced(token, user.pos)
-            self._reader.expect(None)
-            self._inflight.append(None)
+            self._feed(None, token, user.pos)
             user.tokens.append(token)
             user.pos += 1
             self.steps += 1
@@ -2447,7 +2534,7 @@ class _Scheduler:
         """
         logger.error(f"decode output readback failed, abandoning {len(self._active)} turns: {exc}")
         self._broken = exc
-        self._ahead = None  # nothing more is written to a pipeline whose outputs are lost
+        self._ahead = self._prefed = None  # nothing more is written to a pipeline whose outputs are lost
         for turn in list(self._active):
             self._fail(turn, exc)
         self._inflight.clear()
@@ -3478,6 +3565,7 @@ def serve(
             # The scheduler is the only thread that touches the device from here on; the
             # traces it replays were captured by the warmup above, which a pipelined
             # caller cannot do mid-flight.
+            sys.setswitchinterval(_GIL_SWITCH_SECONDS)
             api.start()
             httpd = _ModelHTTPServer((args.host, args.port), handler_cls, api)
             # The live console owns the logger from here on, so it is opened after the

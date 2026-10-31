@@ -26,6 +26,9 @@ replay thread and the DRISC prefetch rings. This file only replaces the parts V4
 * Past ``candidate_topk_blocks * candidate_block_size`` entries the select is two-level (see
   :mod:`.decode.attention`), a variant of its own. The candidate source's blocks and pool count
   cross the edges of its group, and the first consumer on each stage builds that stage's pool.
+* Whether an index source splits its keys over the TP ranks is a variant too: a split select only wins
+  past ~45k keys (~31k for the candidate source), so a step before that runs the unsplit trace even when
+  ``max_seq`` would take the layer past it (:meth:`DeepSeekV41Model._split_layers`).
 
 Prefill (:meth:`DeepSeekV41Model.build_prefill`) builds a
 :class:`~.prefill.model.DeepSeekV41PrefillModel` on the decode stages, sharing the routed experts,
@@ -58,6 +61,8 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 )
 from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     _SELECT_KV_RATE,
+    CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS,
+    KEY_SPLIT_CROSSOVER_KEYS,
     DeepSeekV41LayerCache,
     _rows_on_one_core,
     candidate_buffers,
@@ -408,6 +413,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._candidate_group = None
         self._candidate_layers = set()
         self._pool_builders = set()
+        # Index source -> the first position its traced select splits its keys (see _split_layers).
+        self._split_from: dict[int, int] = {}
         self._csa_entries_copied = False
         self._paged = None
         self._traced_captured = False
@@ -625,11 +632,26 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"two-level select past {cfg.candidate_topk_blocks * cfg.candidate_block_size} entries: "
                 f"source {source}, pool builders {sorted(self._pool_builders)}"
             )
+        # The traced decode picks the split per position (_variant_key); this fixed choice is the indexers'
+        # default, for the steps that do not (the verify block and decode_inputs callers).
         split_layers = key_split_layers(cfg, range(self.num_layers), max_seq) if self.tp_size > 1 else set()
         for layer in self.layers:
             if layer.self_attn.is_index_source:
                 layer.self_attn.indexer.split_keys = layer.layer_idx in split_layers
-        logger.info(f"key-split selects: layers {sorted(split_layers)}")
+        self._split_from = {}
+        if self.tp_size > 1:
+            # Membership only grows with the position and changes only at a variant start.
+            for start in self._variant_starts():
+                for li in key_split_layers(
+                    cfg,
+                    range(self.num_layers),
+                    start + 1,
+                    KEY_SPLIT_CROSSOVER_KEYS,
+                    CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS,
+                ):
+                    self._split_from.setdefault(li, start)
+        split_from = ", ".join(f"layer {li} from pos {p}" for li, p in sorted(self._split_from.items())) or "none"
+        logger.info(f"key-split selects: traced decode {split_from}; fixed (verify) layers {sorted(split_layers)}")
         self.submeshes_io = []
         for stage in self.pipeline_submesh_ids:
             device = self.submeshes[stage]
@@ -852,53 +874,77 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ratio = int(self.config.compress_ratios[self._candidate_group])
         return (pos + 1) // ratio > self.config.candidate_topk_blocks * self.config.candidate_block_size
 
-    def _variant_key(self, pos: int) -> tuple[bool, int, int]:
-        """``(causal, r=2 pool phase, select mode)`` for absolute ``pos``.
+    @property
+    def _causal_variants(self) -> bool:
+        """Whether steps past the window bound SDPA with ``cur_pos``; a one-user step's ``sdpa_lengths``
+        bounds every position the same way."""
+        return self._SDPA_CAUSAL and self._decode_batch > 1
 
-        Causal starts at ``sliding_window - 1`` when the profile asks for it. An r=2 group pools on
-        odd positions (``(pos + 1) % 2 == 0``) and selects once ``pos >= 1``. Ratio 1 pools and
-        selects on every step, so it is not a variant bit. The select mode is 0 before the r=2
-        select, 1 after it and 2 once the select is two-level (:meth:`_two_level`), which V4's
-        code reads as the truthy indexer bit.
-        """
-        causal = self._SDPA_CAUSAL and pos >= self.sliding_window - 1
-        if self._two_level(pos):
-            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), 2)
-        if not self._pool_crs:
-            return (causal, 0, 0)
-        return (causal, int((pos + 1) % 2 == 0), int(pos >= 1))
+    def _split_layers(self, pos: int) -> frozenset[int]:
+        """The index sources whose select at ``pos`` splits its keys over the TP ranks: those past the
+        step crossover (:data:`~.decode.attention.KEY_SPLIT_CROSSOVER_KEYS`), from :attr:`_split_from`."""
+        return frozenset(li for li, start in self._split_from.items() if pos >= start)
 
-    def _reachable_variants(self) -> list[tuple[bool, int, int]]:
-        """The variants a position can ask for. ``(False, 1, 0)`` and ``(True, *, 0)`` never occur: the
-        only non-select step is position 0. Two-level steps are past the sliding window, so causal when
-        the profile is."""
-        if not self._pool_crs:
-            modes = [False, True] if self._SDPA_CAUSAL else [False]
-            variants = [(causal, 0, 0) for causal in modes]
-        else:
-            variants = [(False, 0, 0), (False, 0, 1), (False, 1, 1)]
-            if self._SDPA_CAUSAL:
-                variants += [(True, 0, 1), (True, 1, 1)]
+    def _variant_starts(self) -> list[int]:
+        """The positions below ``max_seq`` from which :meth:`_variant_key` can change other than by the r=2
+        phase: 0, the r=2 select at 1, causal at ``sliding_window - 1``, the two-level select, and where
+        an index source's key count passes a split crossover. Some may change nothing."""
+        cfg = self.config
+        starts = {0, 1, self.sliding_window - 1}
         if self._candidate_group is not None:
-            variants += [(self._SDPA_CAUSAL, phase, 2) for phase in range(len(self._pool_phases))]
-        return variants
+            ratio = int(cfg.compress_ratios[self._candidate_group])
+            starts.add((cfg.candidate_topk_blocks * cfg.candidate_block_size + 1) * ratio - 1)
+        for li in cfg.index_source_layer_ids:
+            if li >= self.num_layers:
+                continue
+            ratio = int(cfg.compress_ratios[li])
+            for keys in (KEY_SPLIT_CROSSOVER_KEYS, CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS):
+                # The first position with more than ``keys`` keys: (pos + 1) // ratio > keys.
+                starts.add((keys + 1) * ratio - 1)
+        return sorted(p for p in starts if p < self._decode_max_seq)
+
+    def _variant_key(self, pos: int) -> tuple[bool, int, tuple[int, frozenset[int]]]:
+        """``(causal, r=2 pool phase, (select mode, split layers))`` for absolute ``pos``.
+
+        Causal starts at ``sliding_window - 1`` when the profile asks for it and the step has several
+        users (:attr:`_causal_variants`). An r=2 group pools on odd positions (``(pos + 1) % 2 == 0``)
+        and selects once ``pos >= 1``. Ratio 1 pools and
+        selects on every step, so it is not a variant bit. The select mode is 0 before the r=2
+        select, 1 after it and 2 once the select is two-level (:meth:`_two_level`). The split layers
+        (:meth:`_split_layers`) are the index sources whose select at ``pos`` splits its keys.
+        """
+        causal = self._causal_variants and pos >= self.sliding_window - 1
+        split = self._split_layers(pos)
+        if self._two_level(pos):
+            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), (2, split))
+        if not self._pool_crs:
+            return (causal, 0, (0, split))
+        return (causal, int((pos + 1) % 2 == 0), (int(pos >= 1), split))
+
+    def _reachable_variants(self) -> list[tuple[bool, int, tuple[int, frozenset[int]]]]:
+        """The variants some position below ``max_seq`` asks for: :meth:`_variant_key` at each of
+        :meth:`_variant_starts` and the position after it, which has the other r=2 phase."""
+        positions = [p for start in self._variant_starts() for p in (start, start + 1) if p < self._decode_max_seq]
+        return list(dict.fromkeys(self._variant_key(p) for p in positions))
 
     @staticmethod
-    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: int = 0) -> tuple:
+    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: tuple = (0, frozenset())) -> tuple:
         """Drop variant bits this submesh's layers do not branch on.
 
-        ``index_sparse`` is the select mode of :meth:`_variant_key`. A sliding-only stage collapses to
-        one trace; a ratio-1 stage keeps only the causal bit, and the two-level bit if it holds the
-        candidate source or a consumer.
+        ``index_sparse`` is the ``(select mode, split layers)`` of :meth:`_variant_key`. A sliding-only stage
+        collapses to one trace; a ratio-1 stage keeps only the causal bit, the two-level bit if it holds the
+        candidate source or a consumer, and the split of its own index sources.
         """
+        mode, split = index_sparse
         return (
             causal and sm["has_compressed"],
             bool(pool_flags.get(2, False)) and sm["has_r2_pool"],
-            bool(index_sparse) and sm["has_r2_select"],
-            index_sparse == 2 and sm["has_candidates"],
+            bool(mode) and sm["has_r2_select"],
+            mode == 2 and sm["has_candidates"],
+            split.intersection(sm["layers"]),
         )
 
-    def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: bool) -> int:
+    def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: tuple) -> int:
         """A position the dry run can execute. Replay reads the real one from the packet.
 
         The phase is not an argument: a pool trace may be compiled at a non-pool position, and
@@ -906,7 +952,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         at or above position 1 so the index is not negative, and a causal dry run stays inside the
         sliding window.
         """
-        if not index_sparse:
+        if not index_sparse[0]:
             packet_pos = 0
         elif not causal:
             packet_pos = 1
@@ -1274,7 +1320,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
 
     def _step_context(self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool) -> dict:
-        """Token, positions, RoPE rows and the per-ratio mask or ``cur_pos`` for one step.
+        """Token, positions, RoPE rows and the SDPA bounds for one step: per-ratio ``sdpa_lengths`` with one
+        user, else the per-ratio mask or ``cur_pos``.
 
         Pool and select tensors are built only for the ratios this variant actually runs, so a
         stage that ignores the r=2 bits has one op sequence across those variants.
@@ -1316,13 +1363,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 win_base_f = ttnn.typecast(
                     ttnn.to_layout(ttnn.reshape(ctx["win_offset"], [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
                 )
-        if sm["has_sliding"]:
-            ctx["sliding_curpos"] = self._device_index(ttnn.clamp(pos_f, max=float(self.sliding_window - 1)))
-        for ratio in sm["ratios"]:
-            if causal:
-                ctx["curpos"][ratio] = self._compressed_curpos(pos_f, ratio)
-            else:
-                ctx["mask"][ratio] = self._compressed_mask(sm["mask_idx"], pos_f, ratio)
+        if b == 1:
+            ctx["sdpa_lengths"] = {
+                ratio: self._sdpa_lengths(pos_f, ratio, ctx["ring_offset"])
+                for ratio in ([0] if sm["has_sliding"] else []) + list(sm["ratios"])
+            }
+        else:
+            if sm["has_sliding"]:
+                ctx["sliding_curpos"] = self._device_index(ttnn.clamp(pos_f, max=float(self.sliding_window - 1)))
+            for ratio in sm["ratios"]:
+                if causal:
+                    ctx["curpos"][ratio] = self._compressed_curpos(pos_f, ratio)
+                else:
+                    ctx["mask"][ratio] = self._compressed_mask(sm["mask_idx"], pos_f, ratio)
         win_rows = self.spec_window_rows
         for ratio in sm["kv_ratios"]:
             if ratio > 1:
@@ -1357,6 +1410,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
         past = ttnn.ge(idx, ttnn.add(window, selected))
         return ttnn.typecast(ttnn.multiply(ttnn.add(ring_hole, past), _MASK_NEG), ttnn.bfloat16)
 
+    def _sdpa_lengths(self, pos_f: ttnn.Tensor, ratio: int, ring_offset: Optional[ttnn.Tensor]) -> ttnn.Tensor:
+        """INT32 ROW_MAJOR ``[1, 1, 1, 2 or 3]``: ``flash_mqa_decode``'s valid ring rows and selected rows, then
+        ``ring_offset`` (the session slot's first ring row) when given."""
+        ring = ttnn.clamp(ttnn.add(pos_f, 1.0), max=float(self.sliding_window))
+        if ratio:
+            selected = ttnn.clamp(self._group_count(pos_f, ratio), max=float(self.config.index_topk))
+        else:
+            selected = ttnn.multiply(pos_f, 0.0)
+        parts = [ttnn.to_layout(ttnn.typecast(t, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT) for t in (ring, selected)]
+        if ring_offset is not None:
+            parts.append(ttnn.reshape(ring_offset, [1, 1, 1, 1]))
+        return ttnn.concat(parts, dim=-1)
+
     def _compressed_curpos(self, pos_f: ttnn.Tensor, ratio: int) -> ttnn.Tensor:
         selected = ttnn.clamp(self._group_count(pos_f, ratio), max=float(self.config.index_topk))
         return self._device_index(ttnn.add(selected, float(self.sliding_window - 1)))
@@ -1382,7 +1448,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return self._device_index(ttnn.subtract(ttnn.multiply(n, float(_SELECT_KV_RATE)), 1.0))
 
     def _attention_inputs(
-        self, attn, ctx: dict, causal: bool, r2_pool: bool, r2_select: bool, two_level: bool = False
+        self,
+        attn,
+        ctx: dict,
+        causal: bool,
+        r2_pool: bool,
+        r2_select: bool,
+        two_level: bool = False,
+        split: frozenset[int] = frozenset(),
     ) -> dict:
         ratio = attn.compress_ratio
         cos, sin, neg_sin = ctx["rope"]["main" if ratio == 0 else "compress"]
@@ -1393,8 +1466,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "sliding_pos": ctx["sliding_pos"],
             "ring_offset": ctx["ring_offset"],
         }
+        lengths = ctx.get("sdpa_lengths")
         if ratio == 0:
-            inputs["sdpa_cur_pos"] = ctx["sliding_curpos"]
+            if lengths is not None:
+                inputs["sdpa_lengths"] = lengths[0]
+            else:
+                inputs["sdpa_cur_pos"] = ctx["sliding_curpos"]
             return inputs
         inputs["page_row"] = ctx["page_row"]
         if attn.is_kv_source:
@@ -1410,12 +1487,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select)):
             inputs["select"] = True
             inputs["index_pos"] = ctx["index_pos"][ratio]
+            inputs["split_keys"] = attn.layer_idx in split
             if attn.layer_idx in self._row_writers and (ratio == 1 or r2_pool):
                 inputs["received_entry"] = ctx["entry"][ratio]
             if two_level and attn.layer_idx in self._candidate_layers:
                 inputs["candidates"] = True
                 inputs["build_pool"] = attn.layer_idx in self._pool_builders
-        if causal:
+        if lengths is not None:
+            inputs["sdpa_lengths"] = lengths[ratio]
+        elif causal:
             inputs["sdpa_cur_pos"] = ctx["curpos"][ratio]
         else:
             inputs["mask"] = ctx["mask"][ratio]
@@ -1442,9 +1522,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return ttnn.typecast(total, ttnn.bfloat16)
 
     def _decode_submesh_static(
-        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: int = 0
+        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: tuple = (0, frozenset())
     ) -> ttnn.Tensor:
-        """One submesh's layers for this variant. ``index_sparse`` is the select mode of
+        """One submesh's layers for this variant. ``index_sparse`` is the ``(select mode, split layers)`` of
         :meth:`_variant_key`.
 
         Entering a stage receives streams, the packet, ``pre_mix`` and the shared KV groups, in
@@ -1454,8 +1534,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         (:meth:`_send_step_row`), then its logits (:meth:`_send_step_logits`).
         """
         r2_pool = bool(pool_flags.get(2, False))
-        r2_select = bool(index_sparse)
-        two_level = index_sparse == 2
+        mode, split = index_sparse
+        r2_select = bool(mode)
+        two_level = mode == 2
         stage = sm["index"]
         ids = self.layer_submesh_ids
         streams = None
@@ -1525,7 +1606,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 pre_mix,
                 sm["scaches"][li],
                 image_mask=ctx["image_mask"],
-                **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level),
+                **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level, split),
             )
             if is_last:
                 hidden = self.norm(self._collapse_streams(streams, pre_mix))

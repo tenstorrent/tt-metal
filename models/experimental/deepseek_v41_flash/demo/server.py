@@ -191,8 +191,9 @@ V41_CHAT_FORMAT = ChatFormat(
 # _render_ids` expands into the image's span of token ids past the vocabulary (see :mod:`..tt.vision`).
 # Every cached ``all_reduce`` program keeps 4 global semaphores (16 B a bank each) in L1_SMALL, and the vision tower
 # compiles one per ViT and aligner bucket on its stage (~1.2 KB), beside decode's and prefill's: 4096 B overflows.
-# Every byte comes out of L1 too, where 16384 leaves the decode fused_experts CBs 3 KB short.
-_VISION_L1_SMALL_SIZE = 8192
+# The prefill's semaphores also land in the holes the released prefetch GCBs leave, so at 8192 their restore finds
+# no contiguous 432 B. Every byte comes out of L1 too, where 12288 leaves the decode fused_experts CBs 256 B short.
+_L1_SMALL_SIZE = 10240
 _PREPARED_IMAGES = 64  # decoded images (their ViT patches, ~11 MB at most each) kept for admission
 # Distinct images per request, across its whole history (a repeated image shares one span). Past the decoded images
 # kept, a request would evict its own before its admission; its rows must also fit --image-rows (ImageBook.rows_of).
@@ -875,7 +876,9 @@ class V41GenerationServer(GenerationServer):
             raise RequestError(
                 400, f"a request may carry at most {_MAX_IMAGES} distinct images (this conversation has {len(keys)})"
             )
-        rows = self.engine.images.rows_of(keys) if keys else 0
+        if not keys:
+            return messages
+        rows = self.engine.images.rows_of(keys)
         if rows > self.engine.images.total_rows:
             raise RequestError(
                 400,
@@ -1069,6 +1072,8 @@ class V41ChatEngine(ChatEngine):
         self.users[0].activate()
         self._replay_q: deque[int] = deque()
         self._packets: queue.Queue = queue.Queue()
+        # The server's output reader also writes a lone turn's posted step (_OutputReader.arm).
+        self.packet_lock = threading.Lock()
         self._packet_error: BaseException | None = None
         self._packet_writer = threading.Thread(target=self._write_packets, name="decode-packets", daemon=True)
         self._packet_writer.start()
@@ -1104,7 +1109,8 @@ class V41ChatEngine(ChatEngine):
     def _write_packets(self) -> None:
         for token_id, pos in iter(self._packets.get, None):
             try:
-                self.model.write_step_packet(token_id, pos)
+                with self.packet_lock:
+                    self.model.write_step_packet(token_id, pos)
             except BaseException as e:  # noqa: BLE001 - surfaced by the next write_traced
                 logger.exception(f"writing the decode packet for pos {pos} failed: {e}")
                 self._packet_error = e
@@ -1241,14 +1247,13 @@ def parse_args(argv: list[str] | None = None):
             action.help = (
                 "bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's GCB config pages "
                 f"when the prefill model is on (must not be 0; default: DEEPSEEK_V4_L1_SMALL_SIZE, else "
-                f"{_VISION_L1_SMALL_SIZE} with --vision, 8192 without)"
+                f"{_L1_SMALL_SIZE})"
             )
     args = p.parse_args(argv)
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
     if args.l1_small_size is None:
-        default = _VISION_L1_SMALL_SIZE if args.vision else 8192
-        args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", default))
+        args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", _L1_SMALL_SIZE))
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
     if args.total_context is None:
