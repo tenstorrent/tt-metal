@@ -129,8 +129,8 @@ constexpr uint32_t kept_count(uint32_t first_page, uint32_t routed) {
 // For a block nothing writes after the signal that made it visible. Dropping volatile lets the compiler keep
 // its values in registers.
 template <typename T>
-inline const T* frozen(volatile tt_l1_ptr T* p) {
-    return reinterpret_cast<const T*>(reinterpret_cast<uint32_t>(p));
+inline const tt_l1_ptr T* frozen(volatile tt_l1_ptr T* p) {
+    return reinterpret_cast<const tt_l1_ptr T*>(reinterpret_cast<uint32_t>(p));
 }
 
 // One RISC's scratch in kBlkRisc. Field order and index_risc_words are one layout; the assert
@@ -199,7 +199,7 @@ inline void wait_all_riscs(uint32_t value) {
 
 // A pick's bucket, or BUCKET_NOT_HERE. The host does not check expert ids, and an id past the sentinel
 // column would load a word from the next scratch block that can look like a valid bucket.
-inline uint32_t bucket_of(const uint32_t* es, uint32_t expert) {
+inline uint32_t bucket_of(const tt_l1_ptr uint32_t* es, uint32_t expert) {
     return expert <= ct.num_routed_experts ? es[expert] : dspf2d::BUCKET_NOT_HERE;
 }
 
@@ -210,10 +210,10 @@ inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t
     for (uint32_t b = 0; b < n; b++) {
         me.cnt[b] = 0u;
     }
-    const uint32_t* es = frozen(c.expert_bucket);
+    const tt_l1_ptr uint32_t* es = frozen(c.expert_bucket);
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
-        const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
+        const tt_l1_ptr uint16_t* idx = reinterpret_cast<const tt_l1_ptr uint16_t*>(idx_addr);
         // Fully unrolled for every top-k the op accepts. The widest body still leaves each RISC that builds this
         // header most of its stack.
 #pragma GCC unroll 16
@@ -246,10 +246,10 @@ inline void place_slice(const Scratch& c, const Risc& me, uint32_t risc) {
 inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1) {
     const uint32_t cap = ct.max_dispatch_buffer_token_size;
     const uint32_t n = num_buckets();
-    const uint32_t* es = frozen(c.expert_bucket);
+    const tt_l1_ptr uint32_t* es = frozen(c.expert_bucket);
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
-        const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
+        const tt_l1_ptr uint16_t* idx = reinterpret_cast<const tt_l1_ptr uint16_t*>(idx_addr);
         // As in count_pass.
 #pragma GCC unroll 16
         for (uint32_t k = 0; k < ct.topk; k++) {

@@ -37,8 +37,9 @@ static_assert(ct.batch <= ct.queue_depth / 2, "the sender must be able to drain 
 
 // One prebuilt header per queue entry. The route is constant, so only the write address changes per
 // token. A single shared header could be rewritten while a previous non-blocking send still reads it.
-volatile PACKET_HEADER_TYPE* entry_hdr(uint32_t entry) {
-    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_queue_addr + entry * sizeof(PACKET_HEADER_TYPE));
+volatile tt_l1_ptr PACKET_HEADER_TYPE* entry_hdr(uint32_t entry) {
+    return reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+        ct.pkt_hdr_queue_addr + entry * sizeof(PACKET_HEADER_TYPE));
 }
 
 volatile tt_l1_ptr dspf2d::FwdMetadata* entry_meta(uint32_t entry) {
@@ -52,7 +53,7 @@ constexpr uint32_t TOKEN_PLUS_META_BYTES = ct.token_size_bytes + dspf2d::METADAT
 // A token and its metadata leave as one fabric packet: a scatter write whose first scatter part is the token
 // and whose second scatter part is the metadata words behind it. The parts land on different pages but use
 // one EDM slot, one header and one credit, like a forward. The route is prebuilt, so only the addresses are written.
-void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_addr, uint64_t meta_addr) {
+void build_token_meta_header(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint64_t payload_addr, uint64_t meta_addr) {
     // Scatter part and payload sizes are 16-bit header fields; the total is the larger.
     static_assert(TOKEN_PLUS_META_BYTES <= 0xFFFFu, "a scatter payload size is a 16-bit field");
     // Only the first scatter part's size is given; the router takes the rest of the payload as the second
@@ -70,7 +71,11 @@ void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_
 // overlaps the wait.
 template <typename FabricSender>
 void send_token_with_inline_meta(
-    FabricSender& fabric, uint64_t payload_addr, uint64_t meta_addr, uint32_t src, volatile PACKET_HEADER_TYPE* hdr) {
+    FabricSender& fabric,
+    uint64_t payload_addr,
+    uint64_t meta_addr,
+    uint32_t src,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr) {
     build_token_meta_header(hdr, payload_addr, meta_addr);
     fabric.wait_for_empty_write_slot();
     fabric.send_payload_without_header_non_blocking_from_address(src, TOKEN_PLUS_META_BYTES);
@@ -80,14 +85,14 @@ void send_token_with_inline_meta(
 void prebuild_routes() {
     for (uint32_t entry = 0; entry < ct.queue_depth; entry++) {
         fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry),
+            (volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry),
             ct.downstream_chip_id,
             ct.downstream_mesh_id);
     }
     // pkt_hdr_signal is used by grant_launch_credit before the send loop, by signal_downstream during it and
     // by drain_fabric after it. Setting the command fields later leaves this route in place.
     fabric_set_unicast_route(
-        reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_signal_addr),
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_signal_addr),
         ct.downstream_chip_id,
         ct.downstream_mesh_id);
 }
@@ -101,7 +106,8 @@ void prebuild_routes() {
 // launch making progress. The only wait before it is for this chip's metadata clear, which waits on nothing.
 template <typename FabricSender>
 void grant_launch_credit(FabricSender& fabric) {
-    volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.credit_noc_x, ct.credit_noc_y, ct.launch_credit_addr), /*val=*/1, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
@@ -132,7 +138,8 @@ uint32_t wait_for_filled(uint32_t sent) {
 // triggers a signal, because the downstream reader waits for it before moving to the next chunk.
 template <typename FabricSender>
 void signal_downstream(FabricSender& fabric, uint32_t count) {
-    volatile PACKET_HEADER_TYPE* hdr_signal = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_signal =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     // downstream_noc_x/y are the downstream stream core's coordinates. A header-only atomic inc. The fused write + inc
     // hangs Blackhole when the payload destination is DRAM, and the fwd_section is in DRAM.
     hdr_signal->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -150,7 +157,7 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t& fwd_since_si
         return cmd;
     }
     const uint32_t entry_base = ct.queue_addr + entry * ct.entry_stride();
-    volatile PACKET_HEADER_TYPE* hdr = entry_hdr(entry);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = entry_hdr(entry);
     if (cmd == dspf2d::CMD_FORWARD || cmd == dspf2d::CMD_FORWARD_END) {
         // One write of the token and its whole fwd_meta into a forwarding page on the next chip.
         const uint32_t payload_bytes = ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES;
@@ -216,7 +223,8 @@ void pump_stream(FabricSender& fabric) {
 // free slot cannot deadlock: the reverse direction uses another eth channel.
 template <typename FabricSender>
 void drain_fabric(FabricSender& fabric) {
-    volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_drain =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     hdr_drain->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.fwd_sem_addr), /*val=*/0, /*flush=*/false});
     for (uint32_t d = 0; d + 1 < fabric.num_buffers_per_channel; d++) {
