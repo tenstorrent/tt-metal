@@ -146,7 +146,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      timeout: 66
+      timeout: 210
   team: scaleout
   budget_type: unit
   arch: wormhole_b0

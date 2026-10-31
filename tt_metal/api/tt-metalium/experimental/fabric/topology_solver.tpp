@@ -1225,7 +1225,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
         connection_validation_mode,
         quiet_mode,
         solver_engine,
-        /*unique_shapes=*/false);
+        /*unique_shapes=*/false,
+        /*conflict_cap=*/0,
+        /*incremental=*/false);  // single solution: solve one-shot (full variable elimination)
     return session.next();
 }
 
@@ -1256,7 +1258,9 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
         connection_validation_mode,
         quiet_mode,
         solver_engine,
-        unique_shapes);
+        unique_shapes,
+        /*conflict_cap=*/0,
+        /*incremental=*/(max_solutions != 1));  // >1 solution needs incremental enumeration; exactly 1 is one-shot
     std::vector<MappingResult<TargetNode, GlobalNode>> results;
     results.reserve(max_solutions);
 
@@ -1336,9 +1340,11 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes,
-    int conflict_cap) :
+    int conflict_cap,
+    bool incremental) :
     quiet_(quiet_mode),
     unique_shapes_(unique_shapes),
+    incremental_(incremental),
     conflict_cap_(conflict_cap),
     snap_target_(target_graph),
     snap_global_(global_graph),
@@ -1366,6 +1372,9 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     if (conflict_cap_ > 0) {
         search_engine_->set_conflict_cap(conflict_cap_);
     }
+    // One-shot (incremental=false) when this session yields a single solution: the SAT backend then runs the
+    // solve non-incrementally (full variable elimination) where sound. No-op for DFS. Must precede start().
+    search_engine_->set_incremental(incremental_);
     if (!search_engine_->start(*graph_data_, *constraint_data_, mode_, unique_shapes_, {}, quiet_)) {
         start_error_ = search_engine_->get_state().error_message.empty()
                            ? "TopologyMappingEnumerationSession: engine start failed"

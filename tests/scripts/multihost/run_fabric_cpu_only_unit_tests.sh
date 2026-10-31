@@ -787,11 +787,13 @@ for mock in "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" "${SC20_REVAB_SU
   # 4x4 40-stage ring: 4x4-split layout + MGD pinning exact (revC/revAB) + pipeline builder.
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_4x4_pipeline_40stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_4X4_PIPELINE}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_8x4_pipeline_20stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
-  # Full SC20 torus: five 32x4 groups wired as a ring (20 hosts).
-  # TODO(https://github.com/tenstorrent/tt-metal/issues/49275): TestPipelineBuilderCheck omitted: the 5-group 32x4 ring fails resolve_graph_layout
-  # ("no valid submesh assignment found") on the subtorus mocks — a distinct pipeline-builder bug worth
-  # investigating. Layout + corner-pin checks still run and pass.
-  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
+  # Full SC20 torus: five 32x4 groups (20 hosts), inter-mesh seams wired ALL_TO_ALL.
+  # TestPipelineBuilderCheck re-enabled (#49275 fixed): the 5-group 32x4 ring previously failed
+  # resolve_graph_layout ("no valid submesh assignment found") because a ring-rotation placement could
+  # leave two of a mesh's four host-rank galaxies with no inter-mesh link (degree-2 twins -> no
+  # Hamiltonian cycle). All-to-all seams give every mesh links on all four galaxies, so the native-ring
+  # pipeline embeds regardless of solver/rotation. Verified passing on revC + revAB under kissat + cadical.
+  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}"
 done
 
 # Inter-mesh channel-rule checks on the SC20 80-mesh ring (round-robin allocator). Relaxed: every requested
@@ -919,24 +921,34 @@ if run_group "bh-ring-stress"; then
 # so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
 # The 96+ stage rings get the longer SC24-style budget (their solves are much bigger).
 RING_STRESS_TIMEOUT=300
-LONG_RING_STRESS_TIMEOUT=600
-# TODO(https://github.com/tenstorrent/tt-metal/issues/51629): the LONG (96/112/128/144-stage) 4x2
-# multimesh rings are DISABLED in this sweep for mapper performance: on these lengths the pipeline
-# builder / general-SAT host-minimization solve does not finish in a CI-compatible budget. Measured:
-# the 112-stage exact-fit solve was still running after ~5.5 min locally on a 64-core host, and the
-# 128-stage ring on the SC36 mock was still solving ~40 min into the cpu_medium CI shard (run
-# 33221850239), blowing the 45-min step timeout -- the 600 s TT_METAL_OPERATION_TIMEOUT does not
-# cover the phase-1 solve. Re-add "96"/"112"/"128"/"144" to the stage lists below once #51629
-# lands. (The standalone SC24 96-stage exact-fit entry further down stays: its solve is ~27 s.)
-# ALSO disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots
-# embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after phase-1
-# setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve fine;
-# the general-SAT host-minimization cost is erratic in the embedded case.
+LONG_RING_STRESS_TIMEOUT=1800
+# RE-ENABLED (#51629): the LONG 96/112/128-stage 4x2 multimesh rings are back in this sweep now that
+# the PSD-tightness conflict cap (topology_sat_scaled_conflict_cap) scales the phase-1 host-minimization
+# budget to the physical tightness of the embedding, so these solves finish deterministically instead
+# of spiralling. Measured on kissat (SC36 aisleD host, ~4000 conflicts/s): 96-exact ~27 s, 112-exact
+# ~49 s, 128-into-144 embed ~895 s -- hence the 1800 s LONG_RING_STRESS_TIMEOUT above (the old 600 s
+# did not cover the 128 phase-1 solve). Each stage rides its matching board: 96->SC24 (96 slots,
+# exact), 112->SC28 (112 slots, exact), 128->SC36 (144 slots, k=32 binding host-cap embed).
+# RE-ENABLED FOR MEASUREMENT: 96/112/128/144 all run here now. The heavy 128-into-144 embed (and 144 exact
+# fill) previously hit the step cap on contended CI (run 39366610312 ran >2h28m on 128 alone and starved the
+# rest). For each heavy stage (>=96) we run a THREE-WAY best-effort measurement on the same board/contention:
+#   new    = kissat, TT_TOPO_SAT_INCREMENTAL=0  (one-shot/non-incremental where sound -- variable elimination runs)
+#   normal = kissat, TT_TOPO_SAT_INCREMENTAL=1  (historical always-incremental baseline)
+#   cadical= cadical engine (always incremental)
+# All three are capped at the SAME 600s (10 min) wall clock and are BEST-EFFORT: a cap-out or solver failure is an
+# expected measurement outcome (a slow engine), logged but NOT counted as a CI failure, so it never fails or
+# aborts the bh-ring-stress group (16/64 and the sweeps below remain the gating tests). TT_TOPO_SAT_LOG_SOLVES=1
+# makes the [sat-solve] line report solve ms. Exact-fit boards first (96->SC24, 112->SC28) so they report before
+# the heavier embeds (128->SC36 144-slot k=32 embed, 144->SC36 full-board fill) which may cap out.
+# Still disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots embedding hung
+# the mapper >40 min on CI (run 33224879320) even though 64-into-144 and 64-into-80 solve fine; a separate
+# z-link issue, not the conflict-cap budget.
+RING_MEASURE_CAP=600  # 10 min wall clock, identical for all three settings
 for entry in \
-    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 96" \
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 112" \
     "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" ; do
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 128 144" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
     # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
@@ -947,7 +959,18 @@ for entry in \
     mgd_var="MGD_BLITZ_${stage}"
     stage_timeout=${RING_STRESS_TIMEOUT}
     if (( stage >= 96 )); then stage_timeout=${LONG_RING_STRESS_TIMEOUT}; fi
-    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+    if (( stage < 96 )); then
+      # 16/64: the real gating stress test (one default run via run_test, counts toward pass/fail).
+      run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+      continue
+    fi
+    # Heavy (>=96): three-way best-effort measurement. Each "spec" is "label:engine_env". Never fails the job.
+    for spec in "new:TT_TOPO_SAT_INCREMENTAL=0" "normal:TT_TOPO_SAT_INCREMENTAL=1" "cadical:TT_TOPO_SAT_ENGINE=cadical"; do
+      m_label="${spec%%:*}"; m_env="${spec#*:}"
+      echo "+ [bh-ring-stress][measure] START stage=${stage} mode=${m_label} cap=${RING_MEASURE_CAP}s mgd=$(basename "${!mgd_var}")" >&2
+      timeout --kill-after=30s "${RING_MEASURE_CAP}" env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} ${m_env} TT_TOPO_SAT_LOG_SOLVES=1 tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder" 2>&1 | grep -aE "sat-solve|\[  PASSED|\[  FAILED|\[       OK ]" || true
+      echo "+ [bh-ring-stress][measure] END   stage=${stage} mode=${m_label}" >&2
+    done
   done
 done
 
