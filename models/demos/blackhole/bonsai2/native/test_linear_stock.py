@@ -108,7 +108,8 @@ def main() -> int:
             back = ttnn.to_torch(eng.w).float().numpy().T  # back to [N, K]
             code_err = int(np.abs(back - codes.astype(np.float32)).max() != 0)
 
-            got = eng(torch.from_numpy(x)).numpy()
+            got = eng(torch.from_numpy(x))
+            got = ttnn.to_torch(got).reshape(tokens, n).float().numpy()
             expected = ref_ternary(codes, scales, group, x)
             c = pcc(got, expected)
             rel = float(np.abs(got - expected).max() / (np.abs(expected).max() + 1e-30))

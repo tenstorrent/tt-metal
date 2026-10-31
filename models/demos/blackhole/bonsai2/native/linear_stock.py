@@ -141,8 +141,14 @@ class TernaryLinearStock:
         """BFP4 codes plus the fp32 scale table, the real streaming cost."""
         return self.n * self.k // 2 + (self.n * self.k // 16) + self.rows * self.n * 4
 
-    def __call__(self, x: torch.Tensor, mem=None) -> torch.Tensor:
-        """``x`` is ``[M, K]`` (M is the token count); returns ``[M, N]`` float32."""
+    def __call__(self, x: torch.Tensor, mem=None):
+        """``x`` is ``[M, K]`` (M is the token count); returns a device tensor ``[M, 1, 1, N]``.
+
+        Returns the ttnn tensor rather than a torch one on purpose: every call site
+        inside the model feeds the next op on device, and a ``to_torch`` here would
+        charge every projection a 200 us host readback it does not need. Read the
+        result back explicitly with ``ttnn.to_torch``.
+        """
         m = x.shape[0]
         if x.shape[-1] != self.k:
             raise ValueError(f"x has K={x.shape[-1]}, weight has K={self.k}")
@@ -166,4 +172,4 @@ class TernaryLinearStock:
         ttnn.deallocate(p)
         y = ttnn.sum(scaled, dim=2, keepdim=True)
         ttnn.deallocate(scaled)
-        return ttnn.to_torch(y).reshape(m, self.n).float()
+        return y

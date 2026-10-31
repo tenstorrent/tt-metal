@@ -85,6 +85,7 @@ def main() -> int:
                         def once():
                             y = eng(xt)
                             ttnn.synchronize_device(device)
+                            ttnn.deallocate(y)
 
                         nb = eng.weight_bytes
                     else:

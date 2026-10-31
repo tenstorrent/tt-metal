@@ -76,8 +76,13 @@ def main() -> int:
             wt_bytes = eng.weight_bytes
 
             # ---- whole call, for the reference number
-            med, _ = timer.best(lambda: (eng(xt), ttnn.synchronize_device(device)))
-            report("whole call", med, wt_bytes, "incl. host")
+            def s_whole():
+                y = eng(xt)
+                ttnn.synchronize_device(device)
+                ttnn.deallocate(y)
+
+            med, _ = timer.best(s_whole)
+            report("whole call", med, wt_bytes, "device tensor out, no readback")
 
             # ---- stage by stage
             mem = ttnn.DRAM_MEMORY_CONFIG
