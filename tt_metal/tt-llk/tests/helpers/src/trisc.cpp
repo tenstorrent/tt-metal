@@ -98,9 +98,9 @@ int main(void)
 
 #if defined(LLK_PROFILER)
     llk_profiler::reset();
-    TIMESTAMP_DATA("RC_MAIN", rc_t_main) // RC experiment: stamp = memset end, data = main entry
+    { TIMESTAMP_DATA("RC_MAIN", rc_t_main) } // RC experiment: stamp = memset end, data = main entry
     llk_profiler::sync_threads();
-    TIMESTAMP_DATA("RC_SYNC", 0) // RC experiment: after the start rendezvous
+    { TIMESTAMP_DATA("RC_SYNC", 0) } // RC experiment: after the start rendezvous
 #endif
 
     {
@@ -112,7 +112,7 @@ int main(void)
 
         ckernel::fence_compiler();
 #if defined(LLK_PROFILER)
-        TIMESTAMP_DATA("RC_RUN_END", 0) // RC experiment: run_kernel returned
+        { TIMESTAMP_DATA("RC_RUN_END", 0) } // RC experiment: run_kernel returned
 #endif
 
         ckernel::tensix_sync();
