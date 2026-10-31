@@ -133,6 +133,29 @@ TEST_F(RouterWiringRulesTest, BoundaryVC1SlotsLiveOnlyWithPassThrough) {
     EXPECT_EQ(boundary.sender_live_mask[1], 0b1111);
 }
 
+TEST_F(RouterWiringRulesTest, CardinalFacingBoundaryVC1SlotsLiveOnlyWithPassThrough) {
+    // A mesh boundary can sit on a compass port. That router is an inter-mesh router to the
+    // kernel exactly like the Z-facing one: VC1 unserviced without pass-through, VC0 crossed over
+    // into the chip's other routers' from-E VC1 slot.
+    auto caps = chip_with_z(std::nullopt);
+    caps.at(RoutingDirection::E) = EdgeCapability::INTERMESH;
+
+    const auto full_mesh = IntermeshVCConfig::full_mesh();
+    const auto seam = router_vc_shape(Topology::Mesh, RoutingDirection::E, caps, ExpressAxis::NONE, &full_mesh);
+    EXPECT_EQ(seam.sender_counts[1], 3);
+    EXPECT_EQ(seam.sender_live_mask[0], 0b1111);  // worker, from-W, from-N, from-S
+    EXPECT_EQ(seam.sender_live_mask[1], 0);
+
+    // The N router on that chip keeps the landing slot: from-E (0) live, from-W (1) dead by
+    // dimension order, from-S (2) live.
+    const auto north = router_vc_shape(Topology::Mesh, RoutingDirection::N, caps, ExpressAxis::NONE, &full_mesh);
+    EXPECT_EQ(north.sender_live_mask[1], 0b101);
+
+    const auto pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
+    const auto seam_pt = router_vc_shape(Topology::Mesh, RoutingDirection::E, caps, ExpressAxis::NONE, &pass_through);
+    EXPECT_EQ(seam_pt.sender_live_mask[1], 0b111);
+}
+
 TEST_F(RouterWiringRulesTest, OneDimensionalRoutersAreFullyLive) {
     const auto linear =
         router_vc_shape(Topology::Linear, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);

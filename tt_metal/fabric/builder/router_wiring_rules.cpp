@@ -355,17 +355,7 @@ RouterVcShape router_vc_shape(
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         shape.sender_live_mask[vc] = static_cast<uint16_t>((1U << shape.sender_counts[vc]) - 1U);
     }
-    if (z_boundary_router) {
-        // The boundary's VC0 slots are its whole fanout. Its VC1 slots are fed only in pass-through
-        // mode: the mesh routers' turn sets emit the boundary target on VC0 alone otherwise, and
-        // the router itself compiles its VC1 sender step out (FABRIC_2D_VC1_SERVICED is set for an
-        // inter-mesh router only with pass-through) -- incoming VC0 traffic crosses over onto the
-        // mesh routers' from-boundary VC1 slots, never through these.
-        const bool enable_mesh_pass_through = vc_config && vc_config->requires_vc1_mesh_pass_through;
-        if (!enable_mesh_pass_through) {
-            shape.sender_live_mask[1] = 0;
-        }
-    } else if (is_2D_topology(topology)) {
+    if (!z_boundary_router && is_2D_topology(topology)) {
         const auto facing_eth = builder::routing_direction_to_eth_direction(facing);
         for (uint32_t vc = 0; vc < 2; ++vc) {
             if (shape.sender_counts[vc] == 0) {
@@ -395,6 +385,16 @@ RouterVcShape router_vc_shape(
             }
             shape.sender_live_mask[vc] = mask;
         }
+    }
+    // An intermesh boundary router has no live VC1 sender without pass-through, whichever
+    // direction its port sits on (the control plane lets a mesh boundary ride any compass letter
+    // or Z). The kernel sets FABRIC_2D_VC1_SERVICED for an inter-mesh router only with
+    // pass-through; otherwise its incoming VC0 traffic crosses over onto the chip's other
+    // routers' from-boundary VC1 slots and its own VC1 sender step is compiled out. The Z-facing
+    // boundary's VC0 is its whole fanout and stays fully live.
+    const bool enable_mesh_pass_through = vc_config && vc_config->requires_vc1_mesh_pass_through;
+    if (edge_capability == EdgeCapability::INTERMESH && !enable_mesh_pass_through) {
+        shape.sender_live_mask[1] = 0;
     }
     return shape;
 }
