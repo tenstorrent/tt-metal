@@ -17,6 +17,7 @@ boxes on the host, as no device tensor can hold a data-dependent count (see ``TT
 
 import ttnn
 
+from models.experimental.bevformer.tt.tt_common import signpost
 from models.experimental.bevformer.tt.tt_fpn import TTFPN
 from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
@@ -24,12 +25,19 @@ from models.experimental.bevformer.tt.tt_perception_transformer import TTPercept
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
+def _to_dram(*tensors):
+    """The detector's returned tensors, in DRAM: a caller may hold them into the next frame, and a
+    buffer left in L1 there can block the backbone's circular buffers."""
+    return tuple(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in tensors)
+
+
 class TTBEVFormer:
     """The detector, pinned to the image shape ``create_bevformer_parameters`` recorded the
     backbone's and FPN's convs for."""
 
-    def __init__(self, params, device):
-        """``params`` from ``model_preprocessing.create_bevformer_parameters``."""
+    def __init__(self, params, device, all_layers=False):
+        """``params`` from ``model_preprocessing.create_bevformer_parameters``; ``all_layers`` as
+        ``TTBEVFormerHead`` takes it, off by default."""
         config = params.config
         assert (
             config.num_cams == params.transformer.config.num_cams
@@ -44,7 +52,7 @@ class TTBEVFormer:
         self.transformer = TTPerceptionTransformer(
             params.transformer, device, bev_h=config.bev_h, bev_w=config.bev_w, spatial_shapes=config.spatial_shapes
         )
-        self.head = TTBEVFormerHead(params.head, device)
+        self.head = TTBEVFormerHead(params.head, device, all_layers=all_layers)
         bev_pos = params.bev_pos
         if self.batch_size > 1:
             bev_pos = ttnn.repeat(bev_pos, ttnn.Shape((self.batch_size, 1, 1)))
@@ -61,21 +69,25 @@ class TTBEVFormer:
     def __call__(self, img, frame, prev_bev=None):
         """``img`` the ``bs * num_cams`` normalized images, ``(1, 1, bs * num_cams * H * W, 3)``
         bfloat16 ROW_MAJOR, sample-major; ``frame`` from :meth:`prepare_frame`; ``prev_bev`` the
-        previous frame's ``(bs, bev_h * bev_w, C)`` BEV or None. Returns the per-layer class logits
-        ``(L, bs, num_query, num_classes)``, boxes ``(L, bs, num_query, code_size)`` and this
-        frame's BEV ``(bs, bev_h * bev_w, C)``; the FPN frees the backbone's features, not
-        ``img``."""
+        previous frame's ``(bs, bev_h * bev_w, C)`` BEV or None. Returns the class logits
+        ``(L, bs, num_query, num_classes)``, boxes ``(L, bs, num_query, code_size)`` in
+        ``TTBEVFormerHead``'s channel order, and this frame's BEV ``(bs, bev_h * bev_w, C)``. L is
+        the number of decoder layers with ``all_layers``, else 1, the last layer. The FPN frees
+        the backbone's features, not ``img``."""
         levels = self.neck(list(self.backbone(img)))
         bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
         cls_scores, bbox_preds = self.head(bev_embed)
-        return cls_scores, bbox_preds, bev_embed
+        return _to_dram(cls_scores, bbox_preds) + (bev_embed,)
 
     def detect(self, cls_scores, bbox_preds):
         """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
         and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask."""
+        signpost(header="TTNN Detect Start")
         scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
         boxes, valid = self.coder.finalize(scores, boxes)
-        return scores, labels, query_index, boxes, valid
+        outputs = _to_dram(scores, labels, query_index, boxes, valid)
+        signpost(header="TTNN Detect End")
+        return outputs
 
     @staticmethod
     def get_bboxes(scores, labels, boxes, valid):

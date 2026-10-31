@@ -157,10 +157,11 @@ INVERSE_SIGMOID_EPS = 1e-5
 
 # --- Box code and coder -------------------------------------------------------------------------
 
-# The box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs. In the box codes, the
-# reg branches' raw output, cx, cy and cz are logit offsets, which the decoder adds to its reference
-# points' logits; in the box predictions, the head's output, they are the refined centers in metres.
-# The other channels are the same in both.
+# The reference's box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs, which the
+# CODE_* slices index. In the box codes, the reg branches' raw output, cx, cy and cz are logit
+# offsets, which the decoder adds to its reference points' logits; in the box predictions, the
+# head's output, they are the refined centers in metres. The other channels are the same in both.
+# The TTNN head's device tensors hold the channels in CENTERS_FIRST order instead (see CODE_ORDER).
 CODE_SIZE = 10
 CODE_XY = slice(0, 2)
 CODE_WL = slice(2, 4)
@@ -179,23 +180,10 @@ CENTERS_FIRST = CODE_CENTERS + [channel for channel in range(CODE_SIZE) if chann
 CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
 
 
-def _box_pred_pieces():
-    """The TTNN head's box predictions, in box code order, as one concat of slices of its refined
-    centers ``"centers"`` (x, y, z) and its centers-first codes ``"codes"``."""
-    pieces = []
-    for channel in range(CODE_SIZE):
-        if channel in CODE_CENTERS:
-            source, index = "centers", CODE_CENTERS.index(channel)
-        else:
-            source, index = "codes", CENTERS_FIRST.index(channel)
-        if pieces and pieces[-1][0] == source and pieces[-1][1].stop == index:
-            pieces[-1] = (source, slice(pieces[-1][1].start, index + 1))
-        else:
-            pieces.append((source, slice(index, index + 1)))
-    return tuple(pieces)
-
-
-BOX_PRED_PIECES = _box_pred_pieces()
+# The TTNN head's box predictions stay in CENTERS_FIRST order, the refined centers in metres in
+# its first channels, which needs no slicing on device; CODE_ORDER takes them to the box code
+# order on the host (tt_head.box_preds_to_torch).
+CODE_ORDER = [CENTERS_FIRST.index(channel) for channel in range(CODE_SIZE)]
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)
@@ -253,10 +241,10 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Bisection steps of the coder's exact top-k (TTNMSFreeCoder.topk), which narrow the k-th logit's
-# bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
-# suffice, the rest is margin.
-CODER_BISECTION_STEPS = 22
+# Rounds of the coder's exact top-k search (TTNMSFreeCoder.topk), each of which splits the k-th
+# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32, a tile row of
+# thresholds: four take it down to one float32 value, the fifth is margin.
+CODER_SEARCH_ROUNDS = 5
 
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and

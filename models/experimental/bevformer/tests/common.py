@@ -85,6 +85,7 @@ from models.experimental.bevformer.tests.fixtures.camera_rigs import (
     build_lidar2img,
     ring_camera_rig,
 )
+from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 # The variant is fixed when model_config is first imported; the log says which one a run tests.
 logger.info(f"BEVFormer variant {VARIANT}")
@@ -717,8 +718,11 @@ def check_head_outputs(expected, actual):
     finite, the centers within ``assert_centers_close``'s bounds, and the logits and the boxes over
     all layers, then the last alone, which the coder reads and where the bfloat16 error has built up
     most. The boxes go channel by channel: a joint PCC would be the centers' alone, as x and y span
-    102.4 m against z's 8 m and the other channels' O(1)."""
-    actual = tuple(ttnn.to_torch(t).float() for t in actual)
+    102.4 m against z's 8 m and the other channels' O(1). A single-layer ``actual``, a head without
+    ``all_layers``, is the last layer's."""
+    actual = (ttnn.to_torch(actual[0]).float(), box_preds_to_torch(actual[1]).float())
+    if actual[0].shape[0] == 1:
+        expected = tuple(t[-1:] for t in expected)
     for name, tensor in zip(("class logits", "box predictions"), actual):
         assert_finite(f"the head {name}", tensor)
     assert_centers_close(expected[1], actual[1])
@@ -771,8 +775,9 @@ def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_t
     where the error carried from the BEV lowers the PCC further.
 
     ``cls_scores`` and ``bbox_preds`` are the reference's last-layer ``(bs, num_query, *)``
-    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, ``tt_topk``
-    ``TTNMSFreeCoder.topk``'s outputs as torch tensors, or ``TTBEVFormer.detect``'s first four with
+    outputs, ``tt_cls_scores`` and ``tt_bbox_preds`` the device's as torch tensors, the boxes in the
+    reference's code order (``box_preds_to_torch``), ``tt_topk`` ``TTNMSFreeCoder.topk``'s outputs
+    as torch tensors, or ``TTBEVFormer.detect``'s first four with
     ``bottom_center``, whose boxes have z at the bottom face. The device's logits differ from the
     reference's slightly, so near-equal scores may rank in a different order and the two top-k
     sets differ at their tail. The scores are compared by their error, not PCC: the top-k's span
@@ -854,10 +859,10 @@ LOW_PRECISION_BOX_CODE_PCC = 0.94
 
 def check_detector_outputs(expected, actual, pcc):
     """The TT detector's class logits, box predictions, BEV and ``TTBEVFormer.detect``'s first four
-    outputs, as torch tensors, against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the
-    BEV, the last layer's logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at
-    ``LOW_PRECISION_BOX_CODE_PCC``), and the detections by ``assert_topk_close``.
-    Logs the box center error."""
+    outputs, as torch tensors, the boxes in the reference's code order (``box_preds_to_torch``),
+    against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the BEV, the last layer's
+    logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at ``LOW_PRECISION_BOX_CODE_PCC``),
+    and the detections by ``assert_topk_close``. Logs the box center error."""
     cls_scores, bbox_preds, bev = expected
     tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk = actual
     for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
