@@ -4,48 +4,93 @@
 
 #include "routed_experts_combine_program_factory.hpp"
 
-#include <tt-metalium/mesh_device.hpp>
-#include <tt_stl/assert.hpp>
+#include <unordered_map>
 
-#include "combine_program.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-tt::tt_metal::WorkloadDescriptor RoutedExpertsCombineFactory::create_workload_descriptor(
-    const RoutedExpertsCombineParams& params,
+namespace routed_experts_combine_factory_detail {
+
+CombineBuffers buffers_of(const RoutedExpertsCombineInputs& t, const ttnn::Tensor& out) {
+    CombineBuffers b;
+    auto set = [&](CombineBuf k, tt::tt_metal::Buffer* p) { b.buf[static_cast<size_t>(k)] = p; };
+    set(CombineBuf::Arena, t.flat.arena.buffer());
+    set(CombineBuf::Plan, t.plan.buffer());
+    set(CombineBuf::Table, t.table.buffer());
+    set(CombineBuf::Out, out.buffer());
+    set(CombineBuf::Bar, t.bar.buffer());
+    set(CombineBuf::Hcache, t.hcache.buffer());
+    set(CombineBuf::Lut, t.lut ? t.lut->buffer() : nullptr);
+    return b;
+}
+
+void set_report(
+    tt::tt_metal::Program& program,
+    const RoutedExpertsCombineFactory::shared_variables_t& sv,
+    const RoutedExpertsCombineParams& p,
+    const CombineBuffers& b) {
+    flat_routed_expert::set_flat_combine_report(
+        program,
+        sv.flat,
+        p.flat_config,
+        flat_routed_expert::FlatCombineReport{
+            .collector = sv.combine.collector,
+            .counts_addr = static_cast<uint32_t>(b[CombineBuf::Arena]->address()) + sv.combine.counts_offset,
+            .l1_args = resolve_l1_args(sv.combine, b)});
+}
+
+}  // namespace routed_experts_combine_factory_detail
+
+RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory::create_mesh_workload(
+    const RoutedExpertsCombineParams& p,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RoutedExpertsCombineInputs& t,
-    ttnn::Tensor& output,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    TT_FATAL(params.plan, "routed_experts_combine: no combine plan (call through the host entry point)");
-    const auto& plan = *params.plan;
+    ttnn::Tensor& output) {
+    using namespace routed_experts_combine_factory_detail;
+    TT_FATAL(p.plan && p.flat_plan, "routed_experts_combine: no plans (call through the host entry point)");
     auto& mesh_device = *t.out.device();
-    const CombineBuffers buffers{
-        .plan = t.plan.buffer(),
-        .table = t.table.buffer(),
-        .out = output.buffer(),
-        .bar = t.bar.buffer(),
-        .hcache = t.hcache.buffer(),
-        .lut = t.lut ? t.lut->buffer() : nullptr};
-    tt::tt_metal::WorkloadDescriptor wd;
+    const auto bufs = buffers_of(t, output);
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
     for (const auto& range : tensor_coords.ranges()) {
         for (const auto& coord : range) {
-            const ChipCoord chip{coord[0], coord[1]};
-            tt::tt_metal::ProgramDescriptor desc;
-            // 1. the arena CB and the injection rings: the first CBs of the program (combine_program.hpp)
-            add_combine_arena_cbs(desc, plan, chip);
-            // 2. SEAM(flat): the flat routed expert's kernels, CBs and runtime args on its cells, from
-            //    flat_routed_expert/device/flat_program.hpp, with its arena CB at index kCbArena (the first CB on its
-            //    cores), its y writers on the L1 hand-off (the HandoffArgs below: per writer the l1_args with its
-            //    index, the collector at counts_offset) and its writers zeroing their words and counting in on the
-            //    gate. With dispatch_in_program, the dispatch phase (sparse_dispatch_2d's reader / sender as functions)
-            //    runs first in the combine's port kernels, and the flat x relays wait for its ready count (x_ready).
-            // 3. the combine
-            const auto handoff = add_combine_program(desc, plan, chip, mesh_device, buffers, params.flat);
-            (void)handoff;  // SEAM(flat): patched into the flat writers' runtime args
-            wd.programs.push_back({ttnn::MeshCoordinateRange(coord, coord), std::move(desc)});
+            tt::tt_metal::Program program;
+            shared_variables_t sv;
+            // the flat routed expert on its cells (the same fragment on every chip), then the combine on the rest
+            sv.flat = flat_routed_expert::add_flat_routed_expert_program(
+                program, mesh_device, p.flat_config, *p.flat_plan, t.flat);
+            TT_FATAL(
+                sv.flat.y_writers.size() == p.flat.writers.size(),
+                "routed_experts_combine: {} y writers in the program, {} planned",
+                sv.flat.y_writers.size(),
+                p.flat.writers.size());
+            sv.combine = add_combine_program(program, *p.plan, ChipCoord{coord[0], coord[1]}, mesh_device, bufs, p.flat);
+            set_report(program, sv, p, bufs);
+            const ttnn::MeshCoordinateRange r(coord, coord);
+            workload.add_program(r, std::move(program));
+            shared.emplace(r, std::move(sv));
         }
     }
-    return wd;
+    return cached_mesh_workload_t{std::move(workload), std::move(shared)};
+}
+
+void RoutedExpertsCombineFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached,
+    const RoutedExpertsCombineParams& p,
+    const RoutedExpertsCombineInputs& t,
+    ttnn::Tensor& output) {
+    using namespace routed_experts_combine_factory_detail;
+    const auto bufs = buffers_of(t, output);
+    for (auto& [range, sv] : cached.shared_variables) {
+        auto& program = cached.workload.get_programs().at(range);
+        flat_routed_expert::override_flat_routed_expert_addresses(program, sv.flat, t.flat);
+        override_combine_addresses(program, sv.combine, bufs);
+        set_report(program, sv, p, bufs);
+    }
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

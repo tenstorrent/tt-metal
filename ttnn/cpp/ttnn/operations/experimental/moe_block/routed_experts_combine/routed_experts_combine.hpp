@@ -8,9 +8,6 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-
-#include <tt-metalium/core_coord.hpp>
 
 #include "device/routed_experts_combine_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -21,16 +18,33 @@ class MoEBlockResources;
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-// plan / table: the fused head's planner outputs (the device plan, the hand-off table). cells: the logical cells the
-// flat plan leaves free; writers: the flat y writers (logical), writer_words_offset: their words, arena-relative.
-// Returns y_own [1, 1, S, Hr] bf16 row-major (persistent: the resources' "routed_experts_combine/out").
+// dispatched: the gathered rows [N S, Hr] bf16 row-major (the dispatch's output); counts / regions / token_index /
+// table / plan: the fused head's planner outputs; global_expert_ids / gate_up_weights / down_weights: the layer's flat
+// expert (prepared for the plan of this config). Returns y_own [1, 1, S, Hr] bf16 row-major (persistent: the
+// resources' "routed_experts_combine/out").
 ttnn::Tensor routed_experts_combine(
-    const ttnn::Tensor& plan,
+    const ttnn::Tensor& dispatched,
+    const ttnn::Tensor& counts,
+    const ttnn::Tensor& regions,
+    const ttnn::Tensor& token_index,
     const ttnn::Tensor& table,
+    const ttnn::Tensor& plan,
+    const ttnn::Tensor& global_expert_ids,
+    const ttnn::Tensor& gate_up_weights,
+    const ttnn::Tensor& down_weights,
     MoEBlockResources& resources,
-    const std::vector<tt::tt_metal::CoreCoord>& cells,
-    const std::vector<tt::tt_metal::CoreCoord>& writers,
-    uint32_t writer_words_offset,
+    uint32_t max_tokens_per_expert,
+    uint32_t activation,
+    bool weights_bf8 = false,
+    const flat_routed_expert::FlatLayoutOptions& layout = {},
     const CombineConfig& combine = {});
+
+// The flat expert's config this op builds (for preparing the layer's weights with its plan).
+flat_routed_expert::FlatRoutedExpertConfig routed_experts_combine_flat_config(
+    MoEBlockResources& resources,
+    uint32_t max_tokens_per_expert,
+    uint32_t activation,
+    bool weights_bf8 = false,
+    const flat_routed_expert::FlatLayoutOptions& layout = {});
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

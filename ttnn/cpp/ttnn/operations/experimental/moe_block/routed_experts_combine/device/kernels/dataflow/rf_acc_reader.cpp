@@ -23,23 +23,22 @@ constexpr uint32_t AP = (A + 3) / 4 * 4;
 constexpr uint32_t NT = get_compile_time_arg_val(7);
 constexpr uint32_t N = get_compile_time_arg_val(8);
 constexpr uint32_t L = get_compile_time_arg_val(9);
-constexpr uint32_t cb_arena = get_compile_time_arg_val(10);
-constexpr uint32_t RET = get_compile_time_arg_val(11), MISC = get_compile_time_arg_val(12),
-                   RINGS = get_compile_time_arg_val(13), LAYO = get_compile_time_arg_val(14);
-constexpr uint32_t P = get_compile_time_arg_val(15), PD = get_compile_time_arg_val(16),
-                   PS = get_compile_time_arg_val(17);
-constexpr uint32_t cb_w = get_compile_time_arg_val(18);
-constexpr uint32_t MTAKEN = get_compile_time_arg_val(19), MRTOT = get_compile_time_arg_val(20);
-constexpr uint32_t ALAND = get_compile_time_arg_val(21);    // (128, or 160 when ports share the core)
-constexpr uint32_t ALBASE = get_compile_time_arg_val(22);   // (101, or 103 when ports share the core)
-constexpr uint32_t LOC_OFF = get_compile_time_arg_val(23);  // the local ring (arena-relative)
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(24);
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(25);
+constexpr uint32_t RET = get_compile_time_arg_val(10), MISC = get_compile_time_arg_val(11),
+                   RINGS = get_compile_time_arg_val(12), LAYO = get_compile_time_arg_val(13);
+constexpr uint32_t P = get_compile_time_arg_val(14), PD = get_compile_time_arg_val(15),
+                   PS = get_compile_time_arg_val(16);
+constexpr uint32_t cb_w = get_compile_time_arg_val(17);
+constexpr uint32_t MTAKEN = get_compile_time_arg_val(18), MRTOT = get_compile_time_arg_val(19);
+constexpr uint32_t ALAND = get_compile_time_arg_val(20);    // (128, or 160 when ports share the core)
+constexpr uint32_t ALBASE = get_compile_time_arg_val(21);   // (101, or 103 when ports share the core)
+constexpr uint32_t LOC_OFF = get_compile_time_arg_val(22);  // the local ring (arena-relative)
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(23);
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(24);
 constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);
 
 void kernel_main() {
     size_t a = 0;
-    const uint32_t area = get_write_ptr(cb_arena);
+    const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint32_t plan = get_arg_val<uint32_t>(a++);
     const uint32_t me = get_arg_val<uint32_t>(a++);
     const uint32_t hc = get_arg_val<uint32_t>(a++);  // this chip's index (its own ring is not there)

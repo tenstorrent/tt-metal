@@ -14,16 +14,15 @@
 #include "combine_zero_gate.hpp"
 
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
-constexpr uint32_t cb_arena = get_compile_time_arg_val(1);
-constexpr uint32_t cb_tab = get_compile_time_arg_val(2);
-constexpr uint32_t MISC = get_compile_time_arg_val(3);
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(4);  // the writers' words (arena-relative, on their cores)
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(5);
+constexpr uint32_t cb_tab = get_compile_time_arg_val(1);
+constexpr uint32_t MISC = get_compile_time_arg_val(2);
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(3);  // the writers' words (arena-relative, on their cores)
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(4);
 constexpr uint32_t GRANT_B = 8;  // grants go out in batches of this many slots (or the rest)
 
 void kernel_main() {
     size_t a = 0;
-    const uint32_t area = get_write_ptr(cb_arena);
+    const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint32_t plan = get_arg_val<uint32_t>(a++);
     const uint32_t bar = get_arg_val<uint32_t>(a++);
     const uint32_t W = get_arg_val<uint32_t>(a++);

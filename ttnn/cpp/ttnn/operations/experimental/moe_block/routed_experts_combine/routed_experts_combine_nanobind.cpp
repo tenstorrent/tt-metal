@@ -65,14 +65,13 @@ void bind_routed_experts_combine(nb::module_& mod) {
         The combine's op-specific configuration (the tuning switches, the tie rule and combine_snap come from
         MoEBlockConfig). n_acc / mode pin the accumulator count and mode the fused head planned; arena_bytes is the
         combine's L1 budget a core (0: the reference exchange's sizing from the largest free L1 block at the first
-        call, less flat_static_bytes and the dispatch's CBs); depth is the landing pool's slots per source chip;
+        call, less the flat program's static CBs and the dispatch's); depth is the landing pool's slots per source chip;
         piece_max the fabric piece bytes (default max(7168, 2 Hr): one piece a row).
     )doc");
     cfg.def(nb::init<>())
         .def_rw("n_acc", &CombineConfig::n_acc)
         .def_rw("mode", &CombineConfig::mode)
         .def_rw("arena_bytes", &CombineConfig::arena_bytes)
-        .def_rw("flat_static_bytes", &CombineConfig::flat_static_bytes)
         .def_rw("depth", &CombineConfig::depth)
         .def_rw("piece_max", &CombineConfig::piece_max)
         .def(nb::self == nb::self);
@@ -86,26 +85,60 @@ void bind_routed_experts_combine(nb::module_& mod) {
         weight x row, snapped to multiples of combine_snap when set: bit-identical in any landing order).
 
         Args:
-            plan: the device plan [1, 1024] uint32 (the fused head's planner).
-            table: the L1 hand-off table [rows_cap / 32, 64] uint32 (the fused head's planner).
-            resources: the block's MoEBlockResources (config, placement, persistent words).
-            cells: the logical cells the flat plan leaves free (the combine's ports and accumulators).
-            writers: the flat expert's y writers (logical), in its program's order.
-            writer_words_offset: their L1 hand-off words, relative to the program's arena.
+            dispatched: the gathered rows [N S, Hr] bf16 row-major (the dispatch's output).
+            counts, regions, token_index, table, plan: the fused head's planner outputs (per-expert counts and first
+                rows, the flat rows' token index, the L1 hand-off table, the combine's per-call plan).
+            global_expert_ids, gate_up_weights, down_weights: the layer's flat expert, laid out for the flat plan of
+                routed_experts_combine_flat_config(resources, ...).
+            resources: the block's MoEBlockResources (config, placement, persistent words, the DRISC senders).
+            max_tokens_per_expert: the flat expert's capacity m.
+            activation: the experts' activation (se3_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
+            weights_bf8: bfp8 expert weights (else bfp4).
+            layout: FlatLayoutOptions.
             combine: CombineConfig.
 
         Returns:
             y_own [1, 1, S, Hr] bf16 row-major (persistent: one buffer for every call).
         )doc",
         &routed_experts_combine,
-        nb::arg("plan").noconvert(),
+        nb::arg("dispatched").noconvert(),
+        nb::arg("counts").noconvert(),
+        nb::arg("regions").noconvert(),
+        nb::arg("token_index").noconvert(),
         nb::arg("table").noconvert(),
+        nb::arg("plan").noconvert(),
+        nb::arg("global_expert_ids").noconvert(),
+        nb::arg("gate_up_weights").noconvert(),
+        nb::arg("down_weights").noconvert(),
         nb::arg("resources"),
         nb::kw_only(),
-        nb::arg("cells"),
-        nb::arg("writers"),
-        nb::arg("writer_words_offset"),
+        nb::arg("max_tokens_per_expert"),
+        nb::arg("activation"),
+        nb::arg("weights_bf8") = false,
+        nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = CombineConfig{});
+
+    mod.def(
+        "routed_experts_combine_flat_plan",
+        [](MoEBlockResources& resources, uint32_t max_tokens_per_expert, uint32_t activation, bool weights_bf8,
+           const flat_routed_expert::FlatLayoutOptions& layout) {
+            const auto cfg =
+                routed_experts_combine_flat_config(resources, max_tokens_per_expert, activation, weights_bf8, layout);
+            nb::dict d;
+            d["hidden"] = cfg.hidden;
+            d["intermediate"] = cfg.intermediate;
+            d["experts_per_chip"] = cfg.experts_per_chip;
+            d["max_tokens"] = cfg.max_tokens;
+            d["cmb_rt"] = cfg.cmb_rt;
+            return d;
+        },
+        nb::arg("resources"),
+        nb::kw_only(),
+        nb::arg("max_tokens_per_expert"),
+        nb::arg("activation"),
+        nb::arg("weights_bf8") = false,
+        nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
+        "The flat expert config routed_experts_combine builds (ensures its resources: plan, words, DRISC senders).");
 
     // ---- host math (no device): parity with the reference, plans and reports
     mod.def(

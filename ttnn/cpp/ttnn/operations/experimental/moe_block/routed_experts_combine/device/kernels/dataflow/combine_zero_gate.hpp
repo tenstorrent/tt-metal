@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The combine's per-call zeroing inside its own program (the arena is a program CB: its L1 holds another op's data
+// The combine's per-call zeroing inside its own program (the arena is allocated per call: its L1 holds another op's data
 // between calls). Every core that owns combine state (a port's sender, an accumulator's reader; the flat expert's y
 // writers for their words) zeroes it at its start and counts in on the chip's gate core (accumulator 0); once every one
 // of them did, the gate releases every combine core of its chip. A kernel that writes into another core's state (an

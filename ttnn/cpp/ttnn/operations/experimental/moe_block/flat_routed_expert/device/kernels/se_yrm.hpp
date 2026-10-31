@@ -45,7 +45,8 @@ struct SeYRmWriter {
     // The column-0 writer also writes each row's 32-byte trailer (header word, gate weight, arrival flags); a table
     // row is (destination | gate weight bf16 << 16, header word). Args at SE_Y_L1:
     // nd, slot stride, table address, words address (grant[32], gbase[32], table page, trailer stages), writer index,
-    // 3 spare, then per destination: noc x, noc y, slot base, slots, landed counter array address.
+    // the combine's zero gate (gate noc x | y << 16, its words' address, the bytes of this core's words to zero; 0: off),
+    // then per destination: noc x, noc y, slot base, slots, landed counter array address.
     static constexpr uint32_t L1_MAXD = 32;
     uint32_t nd = 0, islot = 0, words = 0, widx = 0, tab_tile = 0xFFFFFFFF, tab_base = 0;
     uint32_t dx[L1_MAXD], dy[L1_MAXD], dbase[L1_MAXD], dq[L1_MAXD], dland[L1_MAXD];
@@ -81,6 +82,18 @@ struct SeYRmWriter {
         }
         grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
         gbase = grant + 32;
+        // (routed_experts_combine: the words are in the call's arena - zero them, then count in on the combine's gate,
+        // before any grant can arrive: the gate releases the ports / accumulators that grant only after every writer)
+        if (const uint32_t zb = get_arg_val<uint32_t>(A0 + 7); zb != 0) {
+            const uint32_t gxy = get_arg_val<uint32_t>(A0 + 5), bar = get_arg_val<uint32_t>(A0 + 6);
+            const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+            for (uint32_t o = 0; o < zb; o += MEM_ZEROS_SIZE) {
+                noc_async_read(zeros, words + o, zb - o < MEM_ZEROS_SIZE ? zb - o : MEM_ZEROS_SIZE);
+            }
+            noc_async_read_barrier();
+            noc_semaphore_inc(get_noc_addr(gxy & 0xFFFF, gxy >> 16, bar + 8), 1);  // (bar[2]: combine_zero_gate.hpp)
+            noc_async_atomic_barrier();
+        }
 #endif
     }
 #ifdef SE_Y_L1

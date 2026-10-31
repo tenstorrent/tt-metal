@@ -3,23 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The sparse combine's half of the experts + combine program (sparse_combine_rf.sparse_combine_rf_prepare): its cells
-// (fabric ports, accumulators), kernels, circular buffers and runtime args on one chip's ProgramDescriptor, next to the
-// flat routed expert's.
+// (fabric ports, accumulators), kernels, circular buffers and runtime args on one chip's Program, next to the flat
+// routed expert's (flat_routed_expert/device/flat_program.hpp) on the cells the flat plan leaves free.
 //
-// Arena. The combine's per-core state, landing pools and local rings live in the program's arena CB (kCbArena), which
-// must be the FIRST circular buffer of the program on every core (allocated before any other): it then starts at the
-// same L1 address A0 on every core of every chip, which the multi-hop fabric writes (rows into a home accumulator's
-// landing ring, credits and ring layouts into a port's state) rely on. Its size differs per role (port, accumulator);
-// every address the combine and the flat expert's y writers exchange is an offset from A0. The port's injection ring
-// (kCbInj) is the SECOND CB on the port cores, so it sits at A0 + the port arena's size (HandoffArgs carry that
-// offset). Call add_combine_arena_cbs() first, then the flat expert's builder, then add_combine_program().
+// Arena. The combine's per-core state, landing pools, rings and CBs live in the call's arena: an L1 tensor sharded
+// over the whole worker grid (the flat expert's arena too, on its cells), so at the same address on every core of
+// every chip - the multi-hop fabric writes (rows into a home accumulator's landing ring, credits and ring layouts into
+// a port's state) rely on it. Its first arena_bytes a core are the combine's (the reference's layout, offset for
+// offset), then kWriterWordsRows x 64 B of the flat y writers' words. Every arena address in the runtime args is
+// re-applied on a program-cache hit (CombineHandles::patches), the CBs are rebound to the new arena.
 //
-// Zeroing. The arena is program-scoped: every call starts by zeroing the combine's state on its own cores, ordered by a
-// per-chip gate (kernels/dataflow/combine_zero_gate.hpp) and the senders' cross-chip barrier. The flat expert's y
-// writers take part: each zeroes its words, then counts in on the gate (HandoffArgs::gate_*), before it reads them.
+// Zeroing. The arena is allocated per call: every call starts by zeroing the combine's state on its own cores,
+// ordered by a per-chip gate (kernels/dataflow/combine_zero_gate.hpp) and the senders' cross-chip barrier. The flat
+// y writers take part (se_yrm.hpp SE_Y_L1): each zeroes its words, then counts in on the gate (the report's l1_args 5..7).
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -28,7 +28,8 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
 
 #include "combine_host.hpp"
 #include "ttnn/operations/experimental/moe_block/common/mesh_routing.hpp"
@@ -47,10 +48,8 @@ class MoEBlockResources;
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-// Circular buffer indices on the combine's cores (disjoint from the flat expert's cells; the arena index is shared with
-// the flat expert's arena on its cores).
-inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6,
-                         kCbArena = 7;
+// Circular buffer indices on the combine's cores (disjoint from the flat expert's cells; all bound to the arena).
+inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6;
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cells).
 struct CombinePlanInputs {
@@ -83,12 +82,13 @@ struct CombinePlan {
     uint32_t far = 0, la = 0;
     CombineAutoChoice choice;
 
-    // Arena layout (arena-relative offsets) per role.
-    uint32_t port_arena = 0;  // a port core's arena CB bytes (fused: = acc_arena)
-    uint32_t acc_arena = 0;   // an accumulator core's arena CB bytes
+    // Arena layout (arena-relative offsets; sparse_combine_rf_prepare's placement).
+    uint32_t arena_bytes = 0;  // the combine's bytes a core; the y writers' words follow
+    uint32_t inj_off = 0;      // the port's injection ring (ports apart: RINGS; acc_on_ports: after the local ring)
     uint32_t lut_off = 0, lut_bytes = 0;
+    uint32_t tab_off_port = 0, tab_off_acc = 0;  // CB_TAB on the ports / accumulators
+    uint32_t row_off = 0, meta_off = 0, acc_off = 0, out_off = 0, w_off = 0;
     uint32_t loc_off = 0;  // the accumulators' local ring
-    uint32_t inj_off = 0;  // the port's injection ring (= port_arena: the CB right after the arena)
 
     PortCores port_core;                                             // (chip, dir, link) -> logical core
     std::map<ChipCoord, std::vector<tt::tt_metal::CoreCoord>> accs;  // per chip, accumulator o's logical cell
@@ -107,43 +107,59 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
 // The flat expert's side of the L1 hand-off (from its plan).
 struct FlatHandoff {
     std::vector<tt::tt_metal::CoreCoord> writers;  // the y writers (logical), in the flat program's order
-    uint32_t words_offset = 0;                     // their words (grants, bases, table page, stages), arena-relative
+
+    bool operator==(const FlatHandoff&) const = default;
 };
 
-// The y writers' hand-off args (se_yrm.hpp SE_Y_L1; flat_routed_expert_with_program l1_args), per chip:
-//   [nd, slot stride, table (buffer), words, writer index (filled by the flat builder), 3 spare,
-//    per destination: noc x, noc y, slot base, slots, landed counter array]
-// words, slot base and landed are ARENA-RELATIVE (the writer adds its arena base A0). Then the writers' zero gate.
-struct HandoffArgs {
-    std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> l1_args;
-    tt::tt_metal::CoreCoord collector;  // logical: the flat writers' per-expert counts (cmb_rt)
-    uint32_t counts_offset = 0;         // arena-relative (state CNT)
-    tt::tt_metal::CoreCoord gate;       // virtual: count in at bar + 4 * BAR_ZEROED after zeroing the words
-};
-
+// The buffers the combine's runtime args address (patched on a program-cache hit).
+enum class CombineBuf : uint8_t { Arena, Plan, Table, Out, Bar, Hcache, Lut, Count };
 struct CombineBuffers {
-    tt::tt_metal::Buffer* plan = nullptr;    // the device plan [1, 1024] uint32 (DRAM)
-    tt::tt_metal::Buffer* table = nullptr;   // the hand-off table [rows_cap / 32, 64] uint32 (DRAM)
-    tt::tt_metal::Buffer* out = nullptr;     // y_own [1, 1, S, W] bf16 row-major (DRAM)
-    tt::tt_metal::Buffer* bar = nullptr;     // persistent words, 16 a core, every worker core
-    tt::tt_metal::Buffer* hcache = nullptr;  // the senders' routed headers [8, page] uint32 (DRAM)
-    tt::tt_metal::Buffer* lut = nullptr;     // per-chip roles: the accumulator LUT (DRAM)
+    std::array<tt::tt_metal::Buffer*, static_cast<size_t>(CombineBuf::Count)> buf{};
+    tt::tt_metal::Buffer* operator[](CombineBuf b) const { return buf[static_cast<size_t>(b)]; }
 };
 
-// Step 1 (before any other CB of the program): the arena CB on this chip's combine cores, then the ports' injection
-// rings.
-void add_combine_arena_cbs(tt::tt_metal::ProgramDescriptor& desc, const CombinePlan& plan, ChipCoord chip);
+// A runtime-arg value: a literal, or a buffer's address plus an offset (re-applied on a hit).
+struct CombineArg {
+    uint32_t value = 0;
+    std::optional<CombineBuf> buf;
+};
 
-// Step 2 (after the flat expert's builder): the combine's other CBs, kernels and runtime args on this chip.
-HandoffArgs add_combine_program(
-    tt::tt_metal::ProgramDescriptor& desc,
+struct CombinePatch {
+    tt::tt_metal::KernelHandle kernel;
+    tt::tt_metal::CoreCoord core;
+    uint32_t index;
+    CombineBuf buf;
+    uint32_t offset;
+};
+
+// What add_combine_program leaves for the caller (keep it with the cached program).
+struct CombineHandles {
+    std::vector<CombinePatch> patches;
+    std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
+    // The y writers' report (flat_program.hpp FlatCombineReport): the collector (virtual), its counts (arena offset),
+    // and the L1 hand-off args (se_yrm.hpp SE_Y_L1): [nd, slot stride, table, words, writer index, gate x | y << 16,
+    // bar, words bytes to zero; per destination: noc x, noc y, slot base, slots, landed counter array].
+    tt::tt_metal::CoreCoord collector;
+    uint32_t counts_offset = 0;
+    std::vector<CombineArg> l1_args;
+};
+
+// The combine's kernels, CBs and runtime args on chip `chip` of `program` (the flat expert's go on its own cells).
+CombineHandles add_combine_program(
+    tt::tt_metal::Program& program,
     const CombinePlan& plan,
     ChipCoord chip,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& buffers,
     const FlatHandoff& flat);
 
-// The sender's DRAM header cache page bytes (N x NH routed headers + a 64 B key) and the LUT bytes.
+// Re-applies the buffers' addresses (a program-cache hit).
+void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers);
+
+// The writers' l1_args with the buffers' current addresses.
+std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& buffers);
+
+// The sender's DRAM header cache page bytes (N x NH routed headers + a 64 B key).
 inline uint32_t hcache_page_bytes(uint32_t N) { return N * kNumHeaders * kHeaderStride + 64; }
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

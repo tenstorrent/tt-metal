@@ -8,6 +8,7 @@
 #include <set>
 
 #include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -20,13 +21,9 @@ namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 namespace combine_program_detail {
 
 using tt::tt_metal::Buffer;
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
-using tt::tt_metal::KernelDescriptor;
-using RtArgs = std::vector<std::variant<uint32_t, Buffer*>>;
 
 constexpr const char* kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/moe_block/routed_experts_combine/device/kernels/";
@@ -58,32 +55,60 @@ std::vector<CoreCoord> port_cells_of(const PortCores& pc, ChipCoord ch) {
     return v;
 }
 
-CBDescriptor cb(uint8_t index, const CoreRangeSet& cores, uint32_t total, tt::DataFormat fmt, uint32_t page) {
-    CBDescriptor d;
-    d.total_size = total;
-    d.core_ranges = cores;
-    d.format_descriptors.push_back(CBFormatDescriptor{.buffer_index = index, .data_format = fmt, .page_size = page});
-    return d;
+uint32_t addr_of(const CombineBuffers& b, CombineBuf which) {
+    const Buffer* buf = b[which];
+    TT_FATAL(buf != nullptr, "routed_experts_combine: buffer {} not given", static_cast<int>(which));
+    return static_cast<uint32_t>(buf->address());
 }
 
-KernelDescriptor dm_kernel(
+// A kernel's runtime args under construction: literals and buffer addresses (recorded for the cache-hit patches).
+struct Args {
+    std::vector<CombineArg> v;
+    void lit(uint32_t x) { v.push_back({x, std::nullopt}); }
+    void buf(CombineBuf b, uint32_t off = 0) { v.push_back({off, b}); }
+    void lits(const std::vector<uint32_t>& xs) {
+        for (const uint32_t x : xs) {
+            lit(x);
+        }
+    }
+};
+
+void set_args(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle k,
+    const CoreCoord& core,
+    const Args& a,
+    const CombineBuffers& bufs,
+    CombineHandles& h) {
+    std::vector<uint32_t> vals(a.v.size());
+    for (uint32_t i = 0; i < a.v.size(); ++i) {
+        const auto& x = a.v[i];
+        vals[i] = x.buf ? addr_of(bufs, *x.buf) + x.value : x.value;
+        if (x.buf) {
+            h.patches.push_back({k, core, i, *x.buf, x.value});
+        }
+    }
+    tt::tt_metal::SetRuntimeArgs(program, k, core, vals);
+}
+
+tt::tt_metal::KernelHandle dm_kernel(
+    tt::tt_metal::Program& program,
     const std::string& file,
     const CoreRangeSet& cores,
     std::vector<uint32_t> ct,
     bool riscv0,
-    KernelDescriptor::Defines defines = {}) {
-    KernelDescriptor k;
-    k.kernel_source = std::string(kKernelDir) + file;
-    k.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    k.core_ranges = cores;
-    k.compile_time_args = std::move(ct);
-    k.defines = std::move(defines);
+    std::map<std::string, std::string> defines = {}) {
     // dedicated NoCs, fixed per RISC: RISCV_0 on NoC1, RISCV_1 on NoC0
-    k.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor =
-            riscv0 ? tt::tt_metal::DataMovementProcessor::RISCV_0 : tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = riscv0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
-    return k;
+    return tt::tt_metal::CreateKernel(
+        program,
+        std::string(kKernelDir) + file,
+        cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor =
+                riscv0 ? tt::tt_metal::DataMovementProcessor::RISCV_0 : tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = riscv0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0,
+            .compile_args = std::move(ct),
+            .defines = std::move(defines)});
 }
 
 }  // namespace combine_program_detail
@@ -254,7 +279,6 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->la = std::min<uint32_t>(plan->tuning.la, 64);
     plan->far = plan->tuning.la > 1 ? plan->tuning.far : 0;
     const uint32_t acc_area = plan->st.RINGS + plan->PSL * SLOT;
-    plan->loc_off = align64(acc_area);
     uint32_t QP = QP0, QL = 0;
     if (plan->fused) {  // (local ring up to 16 slots, then the injection ring up to QP, from what is left)
         const int64_t a_end = align64(acc_area) + acc_cbs;
@@ -268,11 +292,42 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     }
     plan->QP = QP;
     plan->QL = QL;
-    plan->acc_arena = plan->loc_off + QL * ISLOT;
-    plan->lut_off = align64(plan->st.RINGS);
+    // the placement (sparse_combine_rf_prepare.build): ports apart - the injection ring at RINGS, the LUT after it,
+    // then CB_TAB; accumulators - CB_TAB and their CBs after the landing pool, then the local ring (acc_on_ports: then
+    // the injection ring)
+    plan->arena_bytes = in.arena_bytes;
     plan->lut_bytes = plan->perchip ? align64(2 * N * A) : 0;
-    plan->port_arena = plan->fused ? plan->acc_arena : plan->lut_off + plan->lut_bytes;
-    plan->inj_off = plan->port_arena;
+    const uint32_t port_area = plan->st.RINGS + QP * ISLOT;
+    plan->lut_off = align64(port_area);
+    plan->tab_off_port = align64(plan->lut_off + plan->lut_bytes);
+    uint32_t e = align64(acc_area);
+    auto take = [&](uint32_t bytes) {
+        const uint32_t o = e;
+        e = align64(e + bytes);
+        return o;
+    };
+    const uint32_t NT = plan->pc.NT;
+    plan->tab_off_acc = take(kTabCbBytes);
+    plan->row_off = take(2 * NT * kTile);
+    plan->meta_off = take(2 * 32);
+    plan->acc_off = take(plan->MAXT * NT * 4096);
+    plan->out_off = take(2 * NT * kTile);
+    plan->w_off = take(2 * kTile);
+    plan->loc_off = e;
+    TT_FATAL(
+        std::max(e, plan->fused ? 0u : plan->tab_off_port + kTabCbBytes) <= in.arena_bytes,
+        "routed_experts_combine: needs {} KB a core, the arena has {} KB",
+        std::max(e, plan->tab_off_port + kTabCbBytes) >> 10,
+        in.arena_bytes >> 10);
+    if (plan->fused) {
+        plan->inj_off = plan->loc_off + QL * ISLOT;
+        TT_FATAL(plan->inj_off + QP * ISLOT <= in.arena_bytes, "acc_on_ports: no room for the injection ring");
+    } else {
+        QL = std::min<uint32_t>(16, (in.arena_bytes - plan->loc_off) / ISLOT);
+        TT_FATAL(QL >= 2, "routed_experts_combine: no room for the accumulators' local ring");
+        plan->QL = QL;
+        plan->inj_off = plan->st.RINGS;
+    }
 
     // device-derived
     const auto& topo = mesh.topo;
@@ -299,45 +354,20 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     return plan;
 }
 
-void add_combine_arena_cbs(tt::tt_metal::ProgramDescriptor& desc, const CombinePlan& plan, ChipCoord ch) {
-    using namespace combine_program_detail;
-    std::vector<CoreCoord> pcells;
-    for (const auto& [k, c] : plan.port_core) {
-        if (k.chip == ch &&
-            std::none_of(pcells.begin(), pcells.end(), [&](const CoreCoord& x) { return same_cell(x, c); })) {
-            pcells.push_back(c);
-        }
-    }
-    const auto& accs = plan.accs.at(ch);
-    std::vector<CoreCoord> only_ports, only_accs;
-    for (const auto& c : pcells) {
-        if (std::none_of(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_cell(x, c); })) {
-            only_ports.push_back(c);
-        }
-    }
-    // (arena CBs: per role on disjoint cells, each the first CB of its cores -> the same base A0 everywhere)
-    if (!only_ports.empty()) {
-        desc.cbs.push_back(
-            cb(kCbArena, cores_of(only_ports), plan.port_arena, tt::DataFormat::UInt32, plan.port_arena));
-    }
-    desc.cbs.push_back(cb(kCbArena, cores_of(accs), plan.acc_arena, tt::DataFormat::UInt32, plan.acc_arena));
-    // (the injection ring right after the arena: A0 + inj_off on every port core - the y writers address it)
-    desc.cbs.push_back(cb(kCbInj, cores_of(pcells), plan.QP * plan.pc.slot, tt::DataFormat::UInt32, plan.pc.slot));
-}
-
-HandoffArgs add_combine_program(
-    tt::tt_metal::ProgramDescriptor& desc,
+CombineHandles add_combine_program(
+    tt::tt_metal::Program& program,
     const CombinePlan& plan,
     ChipCoord ch,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const CombineBuffers& buf,
+    const CombineBuffers& bufs,
     const FlatHandoff& flat) {
     using namespace combine_program_detail;
     const auto& topo = plan.topo;
     const uint32_t N = topo.num_chips(), L = plan.L, A = plan.A;
     const auto& st = plan.st;
     const auto& pc = plan.pc;
-    const uint32_t SLOT = pc.slot, ISLOT = pc.slot;
+    const uint32_t SLOT = pc.slot, ISLOT = pc.slot, NT = pc.NT;
+    const uint32_t words_off = plan.arena_bytes;  // (the y writers' words, past the combine's bytes)
     TT_FATAL(flat.writers.size() <= 32, "routed_experts_combine: {} y writers > 32", flat.writers.size());
     auto virt = [&](const CoreCoord& c) { return mesh_device.worker_core_from_logical_core(c); };
     auto idx = [&](ChipCoord c) { return topo.index(c); };
@@ -345,6 +375,7 @@ HandoffArgs add_combine_program(
     auto node = [&](ChipCoord c) {
         return mesh_device.get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(c.r, c.c));
     };
+    CombineHandles h;
 
     // this chip's ports: (direction, link) order = port ids (port_luts numbering)
     std::vector<ChipPort> my;
@@ -365,33 +396,47 @@ HandoffArgs add_combine_program(
     }
     const auto& accs = plan.accs.at(ch);
     const auto pset = cores_of(pcells), aset = cores_of(accs);
+    auto is_acc = [&](const CoreCoord& c) {
+        return std::any_of(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_cell(x, c); });
+    };
     auto is_port = [&](const CoreCoord& c) {
         return std::any_of(pcells.begin(), pcells.end(), [&](const CoreCoord& x) { return same_cell(x, c); });
     };
 
-    // circular buffers (the arena and the injection rings: add_combine_arena_cbs); CB_TAB on both kinds
-    const uint32_t NT = pc.NT;
-    {
-        std::vector<CoreCoord> tab = accs;
+    // circular buffers, all in the arena at the reference's offsets
+    const Buffer& arena = *bufs[CombineBuf::Arena];
+    auto arena_cb = [&](uint8_t i, const CoreRangeSet& cores, uint32_t off, uint32_t total, tt::DataFormat fmt,
+                        uint32_t page) {
+        TT_FATAL(off + total <= plan.arena_bytes, "routed_experts_combine: CB {} at {} + {} B past the arena", i, off, total);
+        tt::tt_metal::CircularBufferConfig c(total, {{i, fmt}});
+        c.set_page_size(i, page);
+        c.set_globally_allocated_address(arena);
+        c.set_address_offset(off);
+        h.arena_cbs.emplace_back(tt::tt_metal::CreateCircularBuffer(program, cores, c), off);
+    };
+    arena_cb(kCbInj, pset, plan.inj_off, plan.QP * ISLOT, tt::DataFormat::UInt32, ISLOT);
+    if (!plan.fused) {
+        std::vector<CoreCoord> only_ports;
         for (const auto& c : pcells) {
-            if (!std::any_of(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_cell(x, c); })) {
-                tab.push_back(c);
+            if (!is_acc(c)) {
+                only_ports.push_back(c);
             }
         }
-        desc.cbs.push_back(cb(kCbTab, cores_of(tab), kTabCbBytes, tt::DataFormat::UInt32, kTabCbBytes));
+        arena_cb(kCbTab, cores_of(only_ports), plan.tab_off_port, kTabCbBytes, tt::DataFormat::UInt32, kTabCbBytes);
     }
-    desc.cbs.push_back(cb(kCbRow, aset, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile));
-    desc.cbs.push_back(cb(kCbMeta, aset, 2 * 32, tt::DataFormat::UInt32, 32));
-    desc.cbs.push_back(cb(kCbAcc, aset, plan.MAXT * NT * 4096, tt::DataFormat::Float32, 4096));
-    desc.cbs.push_back(cb(kCbOut, aset, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile));
-    desc.cbs.push_back(cb(kCbW, aset, 2 * kTile, tt::DataFormat::Float16_b, kTile));
+    arena_cb(kCbTab, aset, plan.tab_off_acc, kTabCbBytes, tt::DataFormat::UInt32, kTabCbBytes);
+    arena_cb(kCbRow, aset, plan.row_off, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile);
+    arena_cb(kCbMeta, aset, plan.meta_off, 2 * 32, tt::DataFormat::UInt32, 32);
+    arena_cb(kCbAcc, aset, plan.acc_off, plan.MAXT * NT * 4096, tt::DataFormat::Float32, 4096);
+    arena_cb(kCbOut, aset, plan.out_off, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile);
+    arena_cb(kCbW, aset, plan.w_off, 2 * kTile, tt::DataFormat::Float16_b, kTile);
 
     // the zero gate: accumulator 0 releases every combine core once the zeroing kernels counted in (ports' senders
     // unless they share an accumulator's core, the accumulators' readers, the flat expert's y writers)
     const auto gate = virt(accs.at(0));
     std::vector<CoreCoord> comb = accs;
     for (const auto& c : pcells) {
-        if (!std::any_of(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_cell(x, c); })) {
+        if (!is_acc(c)) {
             comb.push_back(c);
         }
     }
@@ -409,144 +454,95 @@ HandoffArgs add_combine_program(
     const uint32_t s_slot = s_riscv0 ? 0 : 1, r_slot = 1 - s_slot;  // (bar call-count slots per RISC)
 
     std::vector<uint32_t> o_ct;
-    tt::tt_metal::TensorAccessorArgs(*buf.out).append_to(o_ct);
+    tt::tt_metal::TensorAccessorArgs(*bufs[CombineBuf::Out]).append_to(o_ct);
 
     // port readers (ports apart only: fused ports run the hand-off on the sender)
     if (!plan.fused) {
-        auto k = dm_kernel(
-            "dataflow/rf_port_reader.cpp",
-            pset,
-            {kCbInj, kCbArena, kCbTab, st.MISC, flat.words_offset, r_slot},
-            r_riscv0);
-        for (const auto& p : my) {
-            const uint32_t pid = &p - my.data();
-            RtArgs a{buf.plan, buf.bar, W, pid, plan.QP};
-            for (const uint32_t v : wxy) {
-                a.emplace_back(v);
-            }
-            k.emplace_runtime_args(p.core, a);
+        const auto k = dm_kernel(
+            program, "dataflow/rf_port_reader.cpp", pset, {kCbInj, kCbTab, st.MISC, words_off, r_slot}, r_riscv0);
+        for (uint32_t pid = 0; pid < n_pid; ++pid) {
+            Args a;
+            a.buf(CombineBuf::Arena);
+            a.buf(CombineBuf::Plan);
+            a.buf(CombineBuf::Bar);
+            a.lits({W, pid, plan.QP});
+            a.lits(wxy);
+            set_args(program, k, my[pid].core, a, bufs, h);
         }
-        desc.kernels.push_back(std::move(k));
     }
 
     // port senders
     {
         std::vector<uint32_t> ct = {
-            kCbInj,
-            pc.row_bytes,
-            SLOT,
-            plan.PSL,
-            A,
-            N,
-            L,
-            ISLOT,
-            kCbArena,
-            st.CRED,
-            st.USED,
-            st.RET,
-            st.MISC,
-            st.HDRS,
-            st.RINGS,
-            st.LAYR,
-            st.LAYO,
-            st.U0,
-            plan.cred.cred_thr,
-            plan.cred.cred_idle,
-            plan.cred.cred_age,
-            plan.far,
-            pc.NP,
-            pc.PD,
-            pc.PS,
-            kNumHeaders,
-            kHeaderStride,
-            plan.la,
-            1u /*BAR*/,
-            plan.tuning.gbgate ? 1u : 0u,
-            kMiscRtot,
-            kMiscRdone,
-            s_slot,
-            plan.fused ? 0u : 1u /*ZERO*/,
-            flat.words_offset,
-            plan.lut_off,
-            plan.lut_bytes};
-        KernelDescriptor::Defines defs;
+            kCbInj, pc.row_bytes, SLOT, plan.PSL, A, N, L, ISLOT,
+            st.CRED, st.USED, st.RET, st.MISC, st.HDRS, st.RINGS, st.LAYR, st.LAYO, st.U0,
+            plan.cred.cred_thr, plan.cred.cred_idle, plan.cred.cred_age, plan.far,
+            pc.NP, pc.PD, pc.PS, kNumHeaders, kHeaderStride, plan.la,
+            1u /*BAR*/, plan.tuning.gbgate ? 1u : 0u, kMiscRtot, kMiscRdone, s_slot,
+            plan.fused ? 0u : 1u /*ZERO*/, words_off, plan.lut_off, plan.lut_bytes};
+        std::map<std::string, std::string> defs;
         if (plan.fused) {
-            defs.emplace_back("REC_FUSED", "1");
+            defs["REC_FUSED"] = "1";
             ct.push_back(kCbOut);
             ct.push_back(NT);
             ct.insert(ct.end(), o_ct.begin(), o_ct.end());
         }
         if (plan.perchip) {
-            defs.emplace_back("REC_ACC_LUT", "1");
+            defs["REC_ACC_LUT"] = "1";
         }
-        auto k = dm_kernel("dataflow/rf_port_sender.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
+        const auto k = dm_kernel(program, "dataflow/rf_port_sender.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
         std::vector<uint32_t> acc_xy;
         for (const auto& c : accs) {
             const auto v = virt(c);
             acc_xy.push_back(v.x);
             acc_xy.push_back(v.y);
         }
-        for (const auto& p : my) {
-            const uint32_t pid = &p - my.data();
-            RtArgs a{
-                static_cast<uint32_t>(plan.mesh_id),
-                idx(ch),
-                p.li,
-                buf.bar,
-                static_cast<uint32_t>(gate.x),
-                static_cast<uint32_t>(gate.y),
-                buf.plan,
-                pid};
-            for (uint32_t i = 0; i < N; ++i) {
-                a.emplace_back(plan.chip_ids[i]);
-            }
+        for (uint32_t pid = 0; pid < n_pid; ++pid) {
+            const auto& p = my[pid];
+            Args a;
+            a.buf(CombineBuf::Arena);
+            a.lits({plan.mesh_id, idx(ch), p.li});
+            a.buf(CombineBuf::Bar);
+            a.lits({static_cast<uint32_t>(gate.x), static_cast<uint32_t>(gate.y)});
+            a.buf(CombineBuf::Plan);
+            a.lit(pid);
+            a.lits(plan.chip_ids);
             if (plan.perchip) {
-                a.emplace_back(buf.lut);
+                a.buf(CombineBuf::Lut);
             } else {
-                for (const uint32_t v : acc_xy) {
-                    a.emplace_back(v);
-                }
+                a.lits(acc_xy);
             }
             for (uint32_t i = 0; i < N; ++i) {  // per source chip: the port on it that feeds me on my link
                 const auto s = topo.coord(i);
                 if (s != ch && fh(ch, s) == p.dir) {
                     const auto v = virt(plan.port_core.at(PortKey{s, fh(s, ch), p.li}));
-                    a.emplace_back(static_cast<uint32_t>(v.x));
-                    a.emplace_back(static_cast<uint32_t>(v.y));
+                    a.lits({static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)});
                 } else {
-                    a.emplace_back(0u);
-                    a.emplace_back(0u);
+                    a.lits({0u, 0u});
                 }
             }
             if (plan.far) {  // (hops to each home chip)
                 for (uint32_t i = 0; i < N; ++i) {
-                    a.emplace_back(static_cast<uint32_t>(route(ch, topo.coord(i), topo, plan.tie).size()));
+                    a.lit(static_cast<uint32_t>(route(ch, topo.coord(i), topo, plan.tie).size()));
                 }
             }
-            a.emplace_back(buf.hcache);
-            a.emplace_back(static_cast<uint32_t>(p.dir) * 2 + p.li);
+            a.buf(CombineBuf::Hcache);
+            a.lit(static_cast<uint32_t>(p.dir) * 2 + p.li);
             {
                 std::vector<uint32_t> fab;
                 const auto& mp = *plan.mesh.chips.at(ch)[static_cast<size_t>(p.dir)];
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    node(ch), node(mp.peer), mp.links.at(p.li), desc, p.core, fab);
-                for (const uint32_t v : fab) {
-                    a.emplace_back(v);
-                }
+                    node(ch), node(mp.peer), mp.links.at(p.li), program, p.core, fab);
+                a.lits(fab);
             }
             if (plan.fused) {  // (the hand-off receiver's args, then the accumulator writer's)
                 const auto ai = static_cast<uint32_t>(
                     std::find_if(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_cell(x, p.core); }) -
                     accs.begin());
-                a.emplace_back(W);
-                a.emplace_back(pid);
-                a.emplace_back(plan.QP);
-                a.emplace_back(buf.out);
-                a.emplace_back(ai < plan.S ? (plan.S - ai + A - 1) / A : 0u);
-                a.emplace_back(ai);
-                for (const uint32_t v : wxy) {
-                    a.emplace_back(v);
-                }
+                a.lits({W, pid, plan.QP});
+                a.buf(CombineBuf::Out);
+                a.lits({ai < plan.S ? (plan.S - ai + A - 1) / A : 0u, ai});
+                a.lits(wxy);
             }
             {  // barrier: the port facing each other chip increments every port core there
                 std::vector<uint32_t> bt;
@@ -566,62 +562,35 @@ HandoffArgs add_combine_program(
                         }
                     }
                 }
-                a.emplace_back(static_cast<uint32_t>(bt.size() / 3));
-                for (const uint32_t v : bt) {
-                    a.emplace_back(v);
-                }
+                a.lit(static_cast<uint32_t>(bt.size() / 3));
+                a.lits(bt);
             }
-            k.emplace_runtime_args(p.core, a);
+            set_args(program, k, p.core, a, bufs, h);
         }
-        desc.kernels.push_back(std::move(k));
     }
 
     // accumulators: reader, compute, writer
     {
-        auto rd = dm_kernel(
+        const auto rd = dm_kernel(
+            program,
             "dataflow/rf_acc_reader.cpp",
             aset,
-            {kCbRow,
-             kCbMeta,
-             kCbTab,
-             pc.row_bytes,
-             SLOT,
-             plan.PSL,
-             A,
-             NT,
-             N,
-             L,
-             kCbArena,
-             st.RET,
-             st.MISC,
-             st.RINGS,
-             st.LAYO,
-             pc.NP,
-             pc.PD,
-             pc.PS,
-             kCbW,
-             kMiscTaken,
-             kMiscRtot,
-             plan.fused ? 160u : 128u,
-             plan.fused ? 103u : 101u,
-             plan.loc_off,
-             flat.words_offset,
-             r_slot},
+            {kCbRow, kCbMeta, kCbTab, pc.row_bytes, SLOT, plan.PSL, A, NT, N, L, st.RET, st.MISC, st.RINGS, st.LAYO,
+             pc.NP, pc.PD, pc.PS, kCbW, kMiscTaken, kMiscRtot, plan.fused ? 160u : 128u, plan.fused ? 103u : 101u,
+             plan.loc_off, words_off, r_slot},
             r_riscv0);
-        KernelDescriptor cp;
-        cp.kernel_source = std::string(kKernelDir) + "compute/rf_acc_compute.cpp";
-        cp.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        cp.core_ranges = aset;
-        cp.compile_time_args = {kCbRow, kCbMeta, kCbAcc, kCbOut, NT, plan.MAXT, kCbW, plan.snap_bits};
-        {
-            tt::tt_metal::ComputeConfigDescriptor cc;
-            cc.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
-            cc.fp32_dest_acc_en = true;
-            // (the fp32 sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way)
-            cc.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-            cc.unpack_to_dest_mode[kCbAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            cp.config = cc;
-        }
+        // (the fp32 sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way)
+        std::vector<tt::tt_metal::UnpackToDestMode> u2d(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        u2d[kCbAcc] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        const auto cp = tt::tt_metal::CreateKernel(
+            program,
+            std::string(kKernelDir) + "compute/rf_acc_compute.cpp",
+            aset,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = u2d,
+                .compile_args = {kCbRow, kCbMeta, kCbAcc, kCbOut, NT, plan.MAXT, kCbW, plan.snap_bits}});
         std::vector<CoreCoord> aw_cells;
         for (const auto& c : accs) {
             if (!plan.fused || !is_port(c)) {
@@ -630,74 +599,99 @@ HandoffArgs add_combine_program(
         }
         std::vector<uint32_t> aw_ct = {kCbOut, pc.row_bytes, NT, A};
         aw_ct.insert(aw_ct.end(), o_ct.begin(), o_ct.end());
-        auto aw = dm_kernel("dataflow/rf_acc_writer.cpp", cores_of(aw_cells), std::move(aw_ct), s_riscv0);
+        std::optional<tt::tt_metal::KernelHandle> aw;
+        if (!aw_cells.empty()) {
+            aw = dm_kernel(program, "dataflow/rf_acc_writer.cpp", cores_of(aw_cells), std::move(aw_ct), s_riscv0);
+        }
         for (uint32_t i = 0; i < A; ++i) {
             const auto& core = accs[i];
             const uint32_t n_tok = i < plan.S ? (plan.S - i + A - 1) / A : 0;
-            RtArgs a{buf.plan, i, idx(ch), buf.bar, static_cast<uint32_t>(gate.x), static_cast<uint32_t>(gate.y)};
+            Args a;
+            a.buf(CombineBuf::Arena);
+            a.buf(CombineBuf::Plan);
+            a.lits({i, idx(ch)});
+            a.buf(CombineBuf::Bar);
+            a.lits({static_cast<uint32_t>(gate.x), static_cast<uint32_t>(gate.y)});
             for (uint32_t kk = 0; kk < N; ++kk) {  // per source chip: the port returning its credits
                 const auto s = topo.coord(kk);
                 if (s != ch) {  // (every source: its ring's layout goes out through that port even with no rows)
                     const auto v = virt(plan.port_core.at(PortKey{ch, fh(ch, s), link_of(i, kk, idx(ch), L)}));
-                    a.emplace_back(static_cast<uint32_t>(v.x));
-                    a.emplace_back(static_cast<uint32_t>(v.y));
+                    a.lits({static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)});
                 } else {
-                    a.emplace_back(0u);
-                    a.emplace_back(0u);
+                    a.lits({0u, 0u});
                 }
             }
-            a.emplace_back(i == 0 ? 1u : 0u);  // (the gate)
-            a.emplace_back(nz);
-            a.emplace_back(i == 0 ? static_cast<uint32_t>(comb.size()) : 0u);
+            a.lits({i == 0 ? 1u : 0u, nz, i == 0 ? static_cast<uint32_t>(comb.size()) : 0u});  // (the gate)
             if (i == 0) {
                 for (const auto& c : comb) {
                     const auto v = virt(c);
-                    a.emplace_back(static_cast<uint32_t>(v.x));
-                    a.emplace_back(static_cast<uint32_t>(v.y));
+                    a.lits({static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)});
                 }
             }
-            a.emplace_back(plan.QL);
-            a.emplace_back(W);
-            a.emplace_back(n_pid + i);
-            for (const uint32_t v : wxy) {
-                a.emplace_back(v);
-            }
-            rd.emplace_runtime_args(core, a);
-            cp.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{n_tok});
+            a.lits({plan.QL, W, n_pid + i});
+            a.lits(wxy);
+            set_args(program, rd, core, a, bufs, h);
+            tt::tt_metal::SetRuntimeArgs(program, cp, core, {n_tok});
             if (!plan.fused || !is_port(core)) {
-                aw.emplace_runtime_args(core, RtArgs{buf.out, n_tok, i});
+                Args w;
+                w.buf(CombineBuf::Out);
+                w.lits({n_tok, i});
+                set_args(program, *aw, core, w, bufs, h);
             }
-        }
-        desc.kernels.push_back(std::move(rd));
-        desc.kernels.push_back(std::move(cp));
-        if (!aw_cells.empty()) {
-            desc.kernels.push_back(std::move(aw));
         }
     }
 
-    // the y writers' hand-off args
-    HandoffArgs h;
-    h.collector = accs.at(0);
+    // the y writers' report: the collector's counts and the L1 hand-off (destinations: ports, then accumulators)
+    h.collector = gate;
     h.counts_offset = st.CNT;
-    h.gate = gate;
     auto& la = h.l1_args;
-    la = {n_pid + A, ISLOT, buf.table, flat.words_offset, 0u, 0u, 0u, 0u};
+    auto lit = [&](uint32_t x) { la.push_back({x, std::nullopt}); };
+    auto at = [&](CombineBuf b, uint32_t off) { la.push_back({off, b}); };
+    lit(n_pid + A);
+    lit(ISLOT);
+    at(CombineBuf::Table, 0);
+    at(CombineBuf::Arena, words_off);
+    lit(0);  // (the writer index: per writer)
+    lit(static_cast<uint32_t>(gate.x) | static_cast<uint32_t>(gate.y) << 16);
+    at(CombineBuf::Bar, 0);
+    lit(kWriterWordsRows * 64);  // (words to zero, then count in on the gate)
     for (const auto& p : my) {
         const auto v = virt(p.core);
-        la.insert(
-            la.end(), {static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), plan.inj_off, plan.QP, st.MISC + 512});
+        lit(v.x);
+        lit(v.y);
+        at(CombineBuf::Arena, plan.inj_off);
+        lit(plan.QP);
+        at(CombineBuf::Arena, st.MISC + 512);
     }
     for (const auto& c : accs) {
         const auto v = virt(c);
-        la.insert(
-            la.end(),
-            {static_cast<uint32_t>(v.x),
-             static_cast<uint32_t>(v.y),
-             plan.loc_off,
-             plan.QL,
-             st.MISC + (plan.fused ? 640u : 512u)});
+        lit(v.x);
+        lit(v.y);
+        at(CombineBuf::Arena, plan.loc_off);
+        lit(plan.QL);
+        at(CombineBuf::Arena, st.MISC + (plan.fused ? 640u : 512u));
     }
     return h;
+}
+
+void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs) {
+    using namespace combine_program_detail;
+    for (const auto& p : h.patches) {
+        tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index] = addr_of(bufs, p.buf) + p.offset;
+    }
+    for (const auto& [cb, off] : h.arena_cbs) {
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb, *bufs[CombineBuf::Arena], off);
+    }
+}
+
+std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& bufs) {
+    using namespace combine_program_detail;
+    std::vector<uint32_t> v(h.l1_args.size());
+    for (size_t i = 0; i < v.size(); ++i) {
+        const auto& x = h.l1_args[i];
+        v[i] = x.buf ? addr_of(bufs, *x.buf) + x.value : x.value;
+    }
+    return v;
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

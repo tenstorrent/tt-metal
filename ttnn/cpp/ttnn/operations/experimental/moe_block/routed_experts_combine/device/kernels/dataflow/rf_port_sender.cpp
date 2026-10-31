@@ -25,44 +25,43 @@ constexpr uint32_t AP = (A + 3) / 4 * 4;  // credit words per home (16-byte alig
 constexpr uint32_t N = get_compile_time_arg_val(5);
 constexpr uint32_t L = get_compile_time_arg_val(6);
 constexpr uint32_t ISLOT = get_compile_time_arg_val(7);
-constexpr uint32_t cb_arena = get_compile_time_arg_val(8);
-constexpr uint32_t CRED = get_compile_time_arg_val(9), USED = get_compile_time_arg_val(10),
-                   RET = get_compile_time_arg_val(11), MISC = get_compile_time_arg_val(12),
-                   HDRS = get_compile_time_arg_val(13), RINGS = get_compile_time_arg_val(14),
-                   LAYR = get_compile_time_arg_val(15), LAYO = get_compile_time_arg_val(16),
-                   U0 = get_compile_time_arg_val(17);
-constexpr uint32_t CRED_THR = get_compile_time_arg_val(18);  // rows consumed from a source before its credits go back
-constexpr uint32_t CRED_IDLE = get_compile_time_arg_val(19),
-                   CRED_AGE = get_compile_time_arg_val(20);  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
-constexpr uint32_t FAR = get_compile_time_arg_val(21);       // (look-ahead: rows going >= FAR hops first)
-constexpr uint32_t P = get_compile_time_arg_val(22), PD = get_compile_time_arg_val(23),
-                   PS = get_compile_time_arg_val(24);                   // pieces per row, bytes per piece, piece stride
+constexpr uint32_t CRED = get_compile_time_arg_val(8), USED = get_compile_time_arg_val(9),
+                   RET = get_compile_time_arg_val(10), MISC = get_compile_time_arg_val(11),
+                   HDRS = get_compile_time_arg_val(12), RINGS = get_compile_time_arg_val(13),
+                   LAYR = get_compile_time_arg_val(14), LAYO = get_compile_time_arg_val(15),
+                   U0 = get_compile_time_arg_val(16);
+constexpr uint32_t CRED_THR = get_compile_time_arg_val(17);  // rows consumed from a source before its credits go back
+constexpr uint32_t CRED_IDLE = get_compile_time_arg_val(18),
+                   CRED_AGE = get_compile_time_arg_val(19);  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
+constexpr uint32_t FAR = get_compile_time_arg_val(20);       // (look-ahead: rows going >= FAR hops first)
+constexpr uint32_t P = get_compile_time_arg_val(21), PD = get_compile_time_arg_val(22),
+                   PS = get_compile_time_arg_val(23);                   // pieces per row, bytes per piece, piece stride
 constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);  // the last piece's trailer
-constexpr uint32_t NH = get_compile_time_arg_val(25);  // rotating row headers: flush (and pop the sent pages) every NH
-constexpr uint32_t HSZ = get_compile_time_arg_val(26);
+constexpr uint32_t NH = get_compile_time_arg_val(24);  // rotating row headers: flush (and pop the sent pages) every NH
+constexpr uint32_t HSZ = get_compile_time_arg_val(25);
 static_assert(sizeof(PACKET_HEADER_TYPE) <= HSZ, "header stride");
 constexpr uint32_t HW = sizeof(PACKET_HEADER_TYPE) / 4;
-constexpr uint32_t LA = get_compile_time_arg_val(27);  // look-ahead: rows past a blocked one the sender may send
+constexpr uint32_t LA = get_compile_time_arg_val(26);  // look-ahead: rows past a blocked one the sender may send
 // barrier: every port core counts one atomic increment from every other chip in a persistent word (bar[0], cumulative;
 // bar[1] its calls) and sends nothing remote before all N - 1 of this call are in; each chip's port facing a chip
 // increments that chip's ports. A chip's ports increment only after its zeroing (combine_zero_gate.hpp).
-constexpr uint32_t BAR = get_compile_time_arg_val(28);
-constexpr uint32_t GBGATE = get_compile_time_arg_val(29);
-constexpr uint32_t MRTOT = get_compile_time_arg_val(30), MRDONE = get_compile_time_arg_val(31);
-constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(32);
-constexpr uint32_t ZERO = get_compile_time_arg_val(33);  // 1: this kernel zeroes the core's state [0, RINGS)
-constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(34);
-constexpr uint32_t LUT_OFF = get_compile_time_arg_val(35);
-constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(36);
+constexpr uint32_t BAR = get_compile_time_arg_val(27);
+constexpr uint32_t GBGATE = get_compile_time_arg_val(28);
+constexpr uint32_t MRTOT = get_compile_time_arg_val(29), MRDONE = get_compile_time_arg_val(30);
+constexpr uint32_t BAR_SLOT = get_compile_time_arg_val(31);
+constexpr uint32_t ZERO = get_compile_time_arg_val(32);  // 1: this kernel zeroes the core's state [0, RINGS)
+constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(33);
+constexpr uint32_t LUT_OFF = get_compile_time_arg_val(34);
+constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(35);
 #ifdef REC_FUSED
-constexpr uint32_t cb_out = get_compile_time_arg_val(37);
-constexpr uint32_t NT_ = get_compile_time_arg_val(38);
-constexpr auto o_args = TensorAccessorArgs<39>();
+constexpr uint32_t cb_out = get_compile_time_arg_val(36);
+constexpr uint32_t NT_ = get_compile_time_arg_val(37);
+constexpr auto o_args = TensorAccessorArgs<38>();
 #endif
 
 void kernel_main() {
     size_t a = 0;
-    const uint32_t area = get_write_ptr(cb_arena);
+    const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t me = get_arg_val<uint32_t>(a++), lnk = get_arg_val<uint32_t>(a++);
     const uint32_t bar_addr = get_arg_val<uint32_t>(a++);
@@ -483,7 +482,7 @@ void kernel_main() {
     noc_async_write_barrier();
 #endif
     // drain: every row this port injected is consumed (its credit snapshot landed), so nothing of this call reaches
-    // this core after the program ends (the arena is a program CB: its L1 is another op's after this)
+    // this core after the program ends (the arena is per call: its L1 is another op's after this)
     for (bool open_ = true; open_;) {
         invalidate_l1_cache();
         open_ = false;
