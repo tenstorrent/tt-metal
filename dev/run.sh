@@ -36,6 +36,7 @@
 #   ./dev/run.sh collect    # totals (above) + k512: traced 256- vs 512-key pieces at 10 / 15 s
 #   ./dev/run.sh final      # the configuration to release: bench (traced op times), totals5/10/15 (whole-op compute
 #                           # per thread and stage), stack5/10/15 (watcher stack margin), smoke, check, prod
+#   ./dev/run.sh accuracy   # accuracy floor at 5 / 10 / 15 s: sparse vs block-sparse ref, dense vs exact ref
 #   ./dev/run.sh stack      # watcher stack usage of the compute / dataflow kernels at 5 / 10 / 15 s (stack5 ...)
 #   ./dev/run.sh passes     # traced op time at the factory's Q pass count and at one more pass, 5 / 10 / 15 s
 #
@@ -86,7 +87,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered totals collect k512 final stack stack5 stack10 stack10_nopairs stack15 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered totals collect k512 final accuracy stack stack5 stack10 stack10_nopairs stack15 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -139,6 +140,9 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 [ "$ONLY" = perf_all ] && run perf_all 10800 pytest "$PERF" -s
 # structures: test_mask_structures alone. family: test_mask_family_perf (dense + gather baselines, then every
 # structure x density at k 256, pooled); the per-case records go to the results.jsonl the log names.
+# accuracy: the sparse op vs its block-sparse reference and the dense op vs an exact reference on the same inputs, with
+# per-Q-block pcc and the max-error location (dev/accuracy_case.py): bf16 floor or kernel bug at 10 / 15 s.
+[ "$ONLY" = accuracy ] && run accuracy 3600 pytest dev/accuracy_case.py -s
 # k512: traced 256- vs 512-key pieces at 10 / 15 s on the perf test's random d=0.2 mask (stderr in the log).
 [ "$ONLY" = k512 ] && run k512 1800 pytest "$PERF" -s -k "(10s or 15s) and (k256 or k512) and d0.2 and not kept"
 [ "$ONLY" = passes ] && run passes 3600 pytest dev/passes_case.py -s
