@@ -330,6 +330,8 @@ def test_generic_spec_op_compute_copy(device, input_dtype, output_dtype, unpack_
 def test_generic_spec_op_compute_copy_rvv(device):
     if not (is_quasar() or is_blackhole()):
         pytest.skip("RVV options exist only on Quasar (Unpack) and Blackhole (Pack)")
+    if not hasattr(ttnn.ComputeHardwareConfig, "Compute12XConfig"):
+        pytest.skip("this tt-metal predates the RVV compute options")
     compute_hw = ttnn.ComputeHardwareConfig(enable_unpack_rvv=is_quasar(), enable_pack_rvv=is_blackhole())
 
     result, expected = run_compute_copy(device, ttnn.bfloat16, ttnn.bfloat16, compute_hw)
@@ -875,3 +877,13 @@ def test_generic_spec_op_rejects_uint32_scratchpad_on_quasar(device, expect_erro
     )
     with expect_error(RuntimeError, "has data format 'UInt32' which is not supported on architecture quasar"):
         run_on_one_core(device, [kernel], scratchpads=[pad])
+
+
+def test_generic_spec_op_old_names_are_deprecated_aliases():
+    # This file builds its specs with the pre-#63251 names, which stay as aliases of the ttnn.experimental ones.
+    assert ttnn.ProgramSpec is ttnn.experimental.ProgramSpec
+    assert ttnn.DataflowBufferSpec is ttnn.experimental.DataflowBufferSpec
+    with pytest.warns(DeprecationWarning, match="use data_format_metadata= and tile_format_metadata="):
+        ttnn.DataflowBufferSpec(unique_id="d", entry_size=64, num_entries=1, data_format=ttnn.bfloat16)
+    with pytest.warns(DeprecationWarning, match="create_reader_datamovement_config"):
+        ttnn.DataMovementHardwareConfig.reader()

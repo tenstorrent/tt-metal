@@ -480,6 +480,12 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
+# The Metal 2.0 ProgramSpec surface of ttnn.experimental (ProgramSpec, ProgramRunArgs, generic_op, ...).
+if "ttnn.experimental" in sys.modules:
+    import ttnn._program_spec
+
+    ttnn._program_spec.install(sys.modules["ttnn.experimental"])
+
 # ttnn.operations registers its submodules under bare names, so importing ttnn.operations.unary here
 # would execute unary.py a second time and let its goldens override later registrations.
 from ttnn._ttnn.operations.unary import SigmoidMode, GeluVariant
