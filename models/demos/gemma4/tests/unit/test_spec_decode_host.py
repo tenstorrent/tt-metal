@@ -1726,10 +1726,14 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     # argmax (their outputs are op outputs like any other), so the assembly of the record's outputs is the real one
     spec._shared_kv = object()
     spec.assistant = SimpleNamespace(
-        step=lambda tok, h, kv, d_ptl, d_pu, d_pi, gather_logits=True: (
+        step=lambda tok, h, kv, d_ptl, d_pu, d_pi, gather_logits=True, rope_prepared=None: (
             op(torch.zeros(1, 1, tok.host.shape[-1], vocab), fake.bfloat16),
             op(h.host.clone(), fake.bfloat16),
-        )
+        ),
+        # the record body gathers the drafter's RoPE rows once per replay (``prepare_rope``) and frees them after
+        # the K steps (``release_rope``): host no-ops here, the device test asserts the hoisted and per-layer forms agree
+        prepare_rope=lambda pos: {},
+        release_rope=lambda prepared: None,
     )
     spec.target.ttnn_packed_verify_forward = lambda x, **kw: (
         op(torch.zeros(1, 1, x.host.shape[-1], vocab), fake.bfloat16),
