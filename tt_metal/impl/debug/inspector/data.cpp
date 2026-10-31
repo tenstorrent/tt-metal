@@ -725,6 +725,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
 
     // Dispatch data / testing
     RT(dispatch_data_collection_enabled);
+    RT(host_transfer_stats_enabled);
     RT(test_mode_enabled);
 
     // DispatchCoreConfig

@@ -8,14 +8,18 @@
 
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 
+#include "tt_metal/impl/dispatch/host_transfer_stats.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
 
 #include <tt_stl/assert.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <functional>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
@@ -64,7 +68,48 @@ protected:
 
     tt::TargetDevice get_target_device_type() const;
 
+    // Host transfer stats (TT_METAL_HOST_TRANSFER_STATS). Each transfer API call is one transfer.
+    // Open and close the transfer of one API call while stats are on, for queues whose transfers finish after the
+    // call returns. Only the fast dispatch queue overrides them, so callers pass fast dispatch categories. Called with
+    // lock_api_function_() held, so the transfers of one queue never overlap. end_transfer_stats is called after the
+    // transfer's commands are issued and before a blocking call waits for them.
+    virtual void begin_transfer_stats(HostTransferCategory /*category*/) {}
+    virtual void end_transfer_stats(HostTransferCategory /*category*/, uint64_t /*bytes*/) {}
+    // Adds one shard's bytes to the transfer open on this queue. Shard writes and reads call it once they are past
+    // the checks that skip the transfer.
+    void count_transfer_bytes(uint64_t bytes) {
+        if (host_transfer_stats_->enabled()) {
+            transfer_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+        }
+    }
+    // Bytes a shard write copies from host: with a core filter, only the pages bound for cores in it.
+    static uint64_t host_bytes_written(
+        Buffer& shard_view, uint64_t region_size, const tt::tt_metal::CoreRangeSet* logical_core_filter);
+
+    // Covers the transfer of one API call while stats are on: begin_transfer_stats on construction and
+    // end_transfer_stats with the counted bytes, plus `bytes`, on close() or destruction.
+    class ScopedTransferStats {
+    public:
+        ScopedTransferStats(MeshCommandQueueBase& cq, HostTransferCategory category, uint64_t bytes = 0);
+        ~ScopedTransferStats();
+        void close();
+
+        ScopedTransferStats(const ScopedTransferStats&) = delete;
+        ScopedTransferStats& operator=(const ScopedTransferStats&) = delete;
+        ScopedTransferStats(ScopedTransferStats&&) = delete;
+        ScopedTransferStats& operator=(ScopedTransferStats&&) = delete;
+
+    private:
+        MeshCommandQueueBase* cq_ = nullptr;
+        HostTransferCategory category_;
+        uint64_t bytes_;
+    };
+
+    HostTransferStats* host_transfer_stats_;
+
 private:
+    std::atomic<uint64_t> transfer_bytes_{0};
+
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
@@ -100,10 +145,24 @@ public:
         MeshDevice* mesh_device,
         uint32_t id,
         std::shared_ptr<ThreadPool> dispatch_thread_pool,
-        std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-        MeshCommandQueue(mesh_device, id),
-        dispatch_thread_pool_(std::move(dispatch_thread_pool)),
-        lock_api_function_(std::move(lock_api_function)) {}
+        std::function<std::lock_guard<std::mutex>()> lock_api_function);
+
+    // While one is alive, buffer writes made on this thread count as kernel binary uploads in host transfer stats.
+    class ScopedProgramBinaryUpload {
+    public:
+        ScopedProgramBinaryUpload() : previous_(std::exchange(active_, true)) {}
+        ~ScopedProgramBinaryUpload() { active_ = previous_; }
+        static bool active() { return active_; }
+
+        ScopedProgramBinaryUpload(const ScopedProgramBinaryUpload&) = delete;
+        ScopedProgramBinaryUpload& operator=(const ScopedProgramBinaryUpload&) = delete;
+        ScopedProgramBinaryUpload(ScopedProgramBinaryUpload&&) = delete;
+        ScopedProgramBinaryUpload& operator=(ScopedProgramBinaryUpload&&) = delete;
+
+    private:
+        inline static thread_local bool active_ = false;
+        bool previous_;
+    };
 
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,

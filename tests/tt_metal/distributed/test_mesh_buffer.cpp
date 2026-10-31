@@ -60,6 +60,7 @@
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
@@ -1945,6 +1946,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
     mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/false);
     EXPECT_TRUE(pinned_shared->lock_may_block());
 
@@ -1952,6 +1954,14 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     ReadShard(mesh_device_->mesh_command_queue(), dst, buf, coord);
     ASSERT_EQ(dst.size(), expected.size());
     EXPECT_EQ(dst, expected);
+
+    // The pinned write's interval closes once the device has read the host memory, not when the command is issued.
+    Finish(mesh_device_->mesh_command_queue());
+    if (tt::tt_metal::test::buffer_transfers_recorded()) {
+        const auto writes = transfer_stats.totals(tt::tt_metal::test::buffer_write_category());
+        EXPECT_EQ(writes.bytes, buf_size);
+        EXPECT_GT(writes.busy, HostTransferStats::Clock::duration::zero());
+    }
 }
 
 TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) {
@@ -1984,8 +1994,19 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [newest]() { return HostBuffer(newest); });
-    tt::tt_metal::experimental::core_subset_write::enqueue_write(
-        mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
+    {
+        tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+        tt::tt_metal::experimental::core_subset_write::enqueue_write(
+            mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
+        Finish(mesh_device_->mesh_command_queue());
+        if (tt::tt_metal::test::buffer_transfers_recorded()) {
+            // Only the filtered core's pages count as written.
+            const auto& pages_per_core = test_config.num_pages_per_core;
+            EXPECT_EQ(
+                transfer_stats.totals(tt::tt_metal::test::buffer_write_category()).bytes,
+                pages_per_core.height() * pages_per_core.width() * test_config.page_size());
+        }
+    }
 
     std::vector<uint32_t> dst_vec;
     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
@@ -2035,6 +2056,119 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
     ReadShard(mesh_device_->mesh_command_queue(), out_b, buf_default, coord);
     EXPECT_EQ(out_a, out_b);
     EXPECT_EQ(out_a, src_vec);
+}
+
+TEST_F(MeshBufferTestSuite, HostTransferStatsCountShardWritesAndReads) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Buffer transfers are not recorded on this target";
+    }
+    const uint32_t buf_size = 64 * 1024;
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buf =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = buf_size}, per_device_buffer_config, mesh_device_.get());
+    const MeshCoordinate coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    if (!mesh_device_->impl().is_local(coord)) {
+        GTEST_SKIP() << "The first shard is not on this host";
+    }
+    std::vector<uint32_t> src(buf_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), 0);
+
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    WriteShard(mesh_device_->mesh_command_queue(), buf, src, coord, /*blocking=*/false);
+    std::vector<uint32_t> dst;
+    ReadShard(mesh_device_->mesh_command_queue(), dst, buf, coord);
+    EXPECT_EQ(dst, src);
+    Finish(mesh_device_->mesh_command_queue());
+
+    const auto writes = transfer_stats.totals(tt::tt_metal::test::buffer_write_category());
+    EXPECT_EQ(writes.bytes, buf_size);
+    EXPECT_EQ(writes.transfers, 1u);
+    EXPECT_GT(writes.busy, HostTransferStats::Clock::duration::zero());
+    const auto reads = transfer_stats.totals(tt::tt_metal::test::buffer_read_category());
+    EXPECT_EQ(reads.bytes, buf_size);
+    EXPECT_EQ(reads.transfers, 1u);
+    EXPECT_GT(reads.busy, HostTransferStats::Clock::duration::zero());
+}
+
+TEST_F(MeshBufferTestSuite, HostTransferStatsCountReplicatedMeshBufferWrite) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Buffer transfers are not recorded on this target";
+    }
+    const uint32_t buf_size = 32 * 1024;
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buf =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = buf_size}, per_device_buffer_config, mesh_device_.get());
+    std::vector<uint32_t> src(buf_size / sizeof(uint32_t), 7);
+    uint64_t num_local_devices = 0;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        num_local_devices += mesh_device_->impl().is_local(coord) ? 1 : 0;
+    }
+
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), buf, src, /*blocking=*/true);
+    Finish(mesh_device_->mesh_command_queue());
+
+    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_write_category()).bytes, buf_size * num_local_devices);
+}
+
+TEST_F(MeshBufferTestSuite, HostTransferStatsCountShardedMeshBufferWriteAndRead) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Buffer transfers are not recorded on this target";
+    }
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (!mesh_device_->impl().is_local(coord)) {
+            GTEST_SKIP() << "Expected byte counts assume every shard is on this host";
+        }
+    }
+    const uint32_t shard_w = 1024;
+    const Shape2D global_buffer_shape{mesh_device_->num_rows(), shard_w * mesh_device_->num_cols()};
+    const uint32_t global_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+    const DeviceLocalBufferConfig per_device_config{
+        .page_size = shard_w * sizeof(uint32_t), .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ShardedBufferConfig sharded_config{
+        .global_size = global_size,
+        .global_buffer_shape = global_buffer_shape,
+        .shard_shape = {1, shard_w},
+        .shard_orientation = ShardOrientation::ROW_MAJOR,
+    };
+    auto buf = MeshBuffer::create(sharded_config, per_device_config, mesh_device_.get());
+    std::vector<uint32_t> src(global_buffer_shape.height() * global_buffer_shape.width());
+    std::iota(src.begin(), src.end(), 0);
+
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), buf, src);
+    std::vector<uint32_t> dst;
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, buf);
+    EXPECT_EQ(dst, src);
+    Finish(mesh_device_->mesh_command_queue());
+
+    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_write_category()).bytes, global_size);
+    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_read_category()).bytes, global_size);
+}
+
+TEST_F(MeshBufferTestSuite, HostTransferStatsRecordNothingWhileOff) {
+    const uint32_t buf_size = 8 * 1024;
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buf =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = buf_size}, per_device_buffer_config, mesh_device_.get());
+    const MeshCoordinate coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    std::vector<uint32_t> src(buf_size / sizeof(uint32_t), 3);
+
+    auto& stats = MetalContext::instance().host_transfer_stats();
+    const bool was_enabled = stats.enabled();
+    stats.reset();
+    stats.set_enabled(false);
+    WriteShard(mesh_device_->mesh_command_queue(), buf, src, coord, /*blocking=*/true);
+    std::vector<uint32_t> dst;
+    ReadShard(mesh_device_->mesh_command_queue(), dst, buf, coord);
+    Finish(mesh_device_->mesh_command_queue());
+    stats.set_enabled(was_enabled);
+
+    EXPECT_EQ(dst, src);
+    EXPECT_TRUE(stats.summary_rows().empty());
 }
 
 // On a single host all coords are local, so this test exercises the SD sharded buffer
@@ -2090,6 +2224,76 @@ TEST_F(SDMeshBufferFixture, ShardedBufferWriteReadRoundtrip) {
     EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, mesh_buffer);
 
     EXPECT_EQ(dst, src);
+}
+
+TEST_F(SDMeshBufferFixture, HostTransferStatsCountWritesAndReads) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Buffer transfers are not recorded on this target";
+    }
+    const uint32_t shard_w = 1024;
+    const Shape2D global_buffer_shape{mesh_device_->num_rows(), shard_w * mesh_device_->num_cols()};
+    const uint32_t global_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+    const DeviceLocalBufferConfig per_device_config{
+        .page_size = shard_w * sizeof(uint32_t), .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ShardedBufferConfig sharded_config{
+        .global_size = global_size,
+        .global_buffer_shape = global_buffer_shape,
+        .shard_shape = {1, shard_w},
+        .shard_orientation = ShardOrientation::ROW_MAJOR,
+    };
+    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_config, mesh_device_.get());
+    std::vector<uint32_t> src(global_buffer_shape.height() * global_buffer_shape.width());
+    std::iota(src.begin(), src.end(), 0);
+
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src);
+    std::vector<uint32_t> dst;
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, mesh_buffer);
+    EXPECT_EQ(dst, src);
+
+    // Slow dispatch transfers are done when the call returns, and each shard is one transfer.
+    const auto writes = transfer_stats.totals(HostTransferCategory::BufferWriteSlowDispatch);
+    EXPECT_EQ(writes.bytes, global_size);
+    EXPECT_EQ(writes.transfers, mesh_device_->num_devices());
+    EXPECT_GT(writes.busy, HostTransferStats::Clock::duration::zero());
+    const auto reads = transfer_stats.totals(HostTransferCategory::BufferReadSlowDispatch);
+    EXPECT_EQ(reads.bytes, global_size);
+    EXPECT_EQ(reads.transfers, mesh_device_->num_devices());
+    EXPECT_GT(reads.busy, HostTransferStats::Clock::duration::zero());
+}
+
+TEST_F(SDMeshBufferFixture, HostTransferStatsCountOnlyCoreFilteredPages) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Buffer transfers are not recorded on this target";
+    }
+    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {2, 2},
+        .num_cores = {core_grid_size.x, core_grid_size.y},
+        .page_shape = {1, 1024},
+        .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
+        .bottom_up = false};
+    const uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    auto buf =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = buf_size}, per_device_buffer_config, mesh_device_.get());
+    const MeshCoordinate coord(0, 0);
+    std::vector<uint32_t> src(buf_size / sizeof(uint32_t), 0x55555555u);
+    DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed_host_buffer.emplace_shard(coord, [src]() { return HostBuffer(src); });
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+    tt::tt_metal::experimental::core_subset_write::enqueue_write(
+        mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
+
+    const auto& pages_per_core = test_config.num_pages_per_core;
+    EXPECT_EQ(
+        transfer_stats.totals(HostTransferCategory::BufferWriteSlowDispatch).bytes,
+        pages_per_core.height() * pages_per_core.width() * test_config.page_size());
 }
 
 }  // namespace

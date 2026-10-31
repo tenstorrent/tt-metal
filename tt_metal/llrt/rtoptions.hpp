@@ -300,6 +300,8 @@ class RunTimeOptions {
 
     bool enable_dispatch_data_collection = false;
 
+    bool enable_host_transfer_stats = false;
+
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
@@ -823,6 +825,9 @@ public:
 
     bool get_dispatch_data_collection_enabled() const { return enable_dispatch_data_collection; }
     void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+
+    bool get_host_transfer_stats_enabled() const { return enable_host_transfer_stats; }
+    void set_host_transfer_stats_enabled(bool enable) { enable_host_transfer_stats = enable; }
 
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 

@@ -27,6 +27,7 @@
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
@@ -1119,6 +1120,7 @@ void RiscFirmwareInitializer::initialize_firmware(
     ZoneScoped;
 
     const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+    auto* transfer_stats = &descriptor_->metal_context().host_transfer_stats();
 
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
@@ -1213,6 +1215,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_multicast_write_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1280,6 +1284,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1339,6 +1345,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1392,6 +1400,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                             static_cast<HalProcessorClassType>(processor_class),
                             dm_id,
                             fw_size);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,

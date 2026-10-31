@@ -9,6 +9,8 @@
 #include <mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <optional>
+#include <tt-logger/tt-logger.hpp>
+#include <utility>
 
 #include "buffer.hpp"
 #include "mesh_coord.hpp"
@@ -24,6 +26,71 @@
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed {
+
+MeshCommandQueueBase::MeshCommandQueueBase(
+    MeshDevice* mesh_device,
+    uint32_t id,
+    std::shared_ptr<ThreadPool> dispatch_thread_pool,
+    std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+    MeshCommandQueue(mesh_device, id),
+    dispatch_thread_pool_(std::move(dispatch_thread_pool)),
+    lock_api_function_(std::move(lock_api_function)),
+    host_transfer_stats_(&MetalContext::instance(mesh_device->impl().get_context_id()).host_transfer_stats()) {}
+
+MeshCommandQueueBase::ScopedTransferStats::ScopedTransferStats(
+    MeshCommandQueueBase& cq, HostTransferCategory category, uint64_t bytes) :
+    category_(
+        category == HostTransferCategory::BufferWriteFastDispatch && ScopedProgramBinaryUpload::active()
+            ? HostTransferCategory::ProgramBinariesFastDispatch
+            : category),
+    bytes_(bytes) {
+    if (!cq.host_transfer_stats_->enabled()) {
+        return;
+    }
+    cq_ = &cq;
+    cq_->transfer_bytes_.store(0, std::memory_order_relaxed);
+    cq_->begin_transfer_stats(category_);
+}
+
+MeshCommandQueueBase::ScopedTransferStats::~ScopedTransferStats() {
+    try {
+        close();
+    } catch (const std::exception& e) {
+        log_warning(tt::LogMetal, "Failed to record a host transfer for TT_METAL_HOST_TRANSFER_STATS: {}", e.what());
+    }
+}
+
+void MeshCommandQueueBase::ScopedTransferStats::close() {
+    if (cq_ == nullptr) {
+        return;
+    }
+    auto* cq = std::exchange(cq_, nullptr);
+    cq->end_transfer_stats(category_, bytes_ + cq->transfer_bytes_.exchange(0, std::memory_order_relaxed));
+}
+
+uint64_t MeshCommandQueueBase::host_bytes_written(
+    Buffer& shard_view, uint64_t region_size, const tt::tt_metal::CoreRangeSet* logical_core_filter) {
+    if (logical_core_filter == nullptr) {
+        return region_size;
+    }
+    // Filtered writes are sharded only; an interleaved one writes nothing or fails.
+    if (!is_sharded(shard_view.buffer_layout())) {
+        return 0;
+    }
+    const auto& mapping = *shard_view.get_buffer_page_mapping();
+    uint64_t pages = 0;
+    for (uint32_t core_id = 0; core_id < mapping.all_cores.size(); ++core_id) {
+        if (!logical_core_filter->contains(mapping.all_cores[core_id])) {
+            continue;
+        }
+        for (const auto& core_mapping : mapping.core_page_mappings[core_id]) {
+            for (const auto& host_range : core_mapping.host_ranges) {
+                pages += host_range.num_pages;
+            }
+        }
+    }
+    return pages * shard_view.page_size();
+}
 
 tt::TargetDevice MeshCommandQueueBase::get_target_device_type() const {
     return tt::tt_metal::MetalContext::instance(this->device()->impl().get_context_id())
@@ -188,6 +255,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
+    ScopedTransferStats transfer_stats(*this, HostTransferCategory::BufferWriteFastDispatch);
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
@@ -206,6 +274,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     } else {
         this->write_sharded_buffer(buffer, host_data);
     }
+    transfer_stats.close();
 
     if (blocking) {
         this->finish_nolock();
@@ -227,6 +296,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
         blocking, "Non-Blocking reads are not supported through {}. Use enqueue_read_shards_instead.", __FUNCTION__);
     if (buffer->global_layout() == MeshBufferLayout::SHARDED) {
         auto lock = lock_api_function_();
+        ScopedTransferStats transfer_stats(*this, HostTransferCategory::BufferReadFastDispatch);
         this->read_sharded_buffer(*buffer, host_data);
     } else {
         std::vector<ShardDataTransfer> shard_data_transfers = {
@@ -249,6 +319,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
+    ScopedTransferStats transfer_stats(*this, HostTransferCategory::BufferWriteFastDispatch);
 
     // Track if any transfer actually used pinned memory
     std::atomic<bool> any_pinned_used = false;
@@ -284,6 +355,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     if (any_pinned_used.load(std::memory_order_relaxed)) {
         this->invalidate_prefetcher_cache_after_pinned_write();
     }
+    transfer_stats.close();
 
     if (blocking) {
         this->finish_nolock();
@@ -345,6 +417,7 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     std::vector<MemoryPin> memory_pins) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
+    ScopedTransferStats transfer_stats(*this, HostTransferCategory::BufferReadFastDispatch);
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     bool has_pinned_memory = false;
     for (const auto& shard_data_transfer : shard_data_transfers) {
@@ -360,7 +433,11 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
                 num_txns_per_device);
         }
     }
-    this->submit_memcpy_request(num_txns_per_device, blocking, std::move(memory_pins));
+    this->submit_memcpy_request(num_txns_per_device, /*blocking=*/false, std::move(memory_pins));
+    transfer_stats.close();
+    if (blocking) {
+        this->finish_nolock();
+    }
 
     if (!blocking && has_pinned_memory) {
         auto event = this->enqueue_record_event_to_host_nolock();

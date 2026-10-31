@@ -17,6 +17,7 @@
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -446,6 +447,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&MetalContext::instance(mesh_device->impl().get_context_id()).host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -507,6 +509,7 @@ H2DSocketImpl::H2DSocketImpl(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&MetalContext::instance(mesh_device->impl().get_context_id()).host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {
@@ -571,6 +574,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
+    transfer_stats_(&MetalContext::instance(mesh_device.impl().get_context_id()).host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, recv_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw
@@ -807,6 +811,12 @@ bool H2DSocketImpl::acked_past(uint32_t watermark) {
     return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
 }
 
+void H2DSocketImpl::count_staged_bytes(uint32_t num_bytes) {
+    if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+        transfer_stats_->add_bytes(HostTransferCategory::SocketPull, num_bytes);
+    }
+}
+
 void H2DSocketImpl::push_bytes(uint32_t num_bytes) {
     if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
@@ -910,11 +920,13 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -941,11 +953,13 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
 
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -978,9 +992,11 @@ uint32_t H2DSocketImpl::try_stage(const uint8_t* const* pages, uint32_t num_page
         if (h2d_mode_ == H2DMode::HOST_PUSH) {
             stage_buffer_.resize(num_bytes);
             gather(stage_buffer_.data());
+            ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
             pcie_writer(stage_buffer_.data(), num_bytes, aligned_data_buf_start_ + write_ptr_);
         } else {
             gather(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_);
+            this->count_staged_bytes(num_bytes);
         }
         this->push_bytes(num_bytes);
         staged += run;

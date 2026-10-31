@@ -51,6 +51,7 @@
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
+#include "dispatch/host_transfer_stats.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_core_manager.hpp>
@@ -348,6 +349,8 @@ void MetalContext::teardown() {
         data_collector_->DumpData();
         data_collector_.reset();
     }
+    host_transfer_stats_->log_summary();
+    host_transfer_stats_->reset();
 
     if (dprint_server_) {
         if (!get_cluster().is_mock_or_emulated()) {
@@ -527,6 +530,7 @@ MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_e
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
     service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);
+    host_transfer_stats_ = std::make_unique<HostTransferStats>(rtoptions().get_host_transfer_stats_enabled());
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
