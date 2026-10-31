@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The MoE block's typed configuration. Every switch the Python block read from the environment (SPC_*, PERSIST_L1,
-// TT_FABRIC_TIE_PARITY) is a field here with today's production default; ops never read the environment.
+// The MoE block's typed configuration. Every switch the Python block read from the environment (SPC_*, PERSIST_L1) is
+// a field here with today's production default; ops never read the environment. (The fabric's torus tie rule is not
+// a switch: main splits ties by the source's parity, the reference's default; mesh_routing.hpp routes by it.)
 // Reference: models/demos/moe_block/moe_block.py (MoEModel, RouterConfig, ExpertActivation, MoEDtypes, MoEOptions)
 // and ttnn/ttnn/bringup/combine_rf/sparse_combine_rf.py (CombineTuning) on mstaletovic/moe-trim.
 
@@ -19,14 +20,6 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::moe_block {
-
-// The first hop of a torus tie (a destination exactly half a ring away): the tie rule the planners route by, which
-// must match the fabric's routing tables (sparse_combine_l1.tie_mode). Values are the reference's tie_mode codes.
-enum class FabricTieRule : uint8_t {
-    NorthEast = 0,     // every tie Y- (row - 1) / X+ (column + 1): main's routing tables
-    SourceParity = 2,  // a tie by the parity of the source's position on that axis (odd: Y+ / X-); needs the fabric
-                       // tie-break branch (TT_FABRIC_TIE_PARITY), not on main
-};
 
 // Where a fabric port core sits relative to its link's Ethernet core (SPC_PLACE).
 enum class PortPlacement : uint8_t {
@@ -47,14 +40,14 @@ enum class ResidualLayout : uint8_t {
 // The combine's tuning switches (sparse_combine_rf.CombineTuning, SPC_* names), today's defaults. All structural
 // (compile-time args / RISC assignment / placement), so all hashed.
 struct CombineTuning {
-    uint32_t snoc = 1;       // SPC_SNOC: 1 the sender on NoC1 (RISCV_0); 0 the sender on NoC0 (RISCV_1)
-    uint32_t la = 0;         // SPC_LA: look-ahead past a row whose ring is full (0 / 1: strict queue order; max 64)
-    uint32_t far = 0;        // SPC_FAR: within the look-ahead window, rows going >= far hops first (only with la > 1)
-    bool credauto = false;   // SPC_CREDAUTO: credits only at the end when every pool holds its call
-    uint32_t credthr = 8;    // SPC_CREDTHR: credit return threshold
-    uint32_t credidle = 0;   // SPC_CREDIDLE: idle credit sends wait for this many rows (0: the combine's choice)
-    uint32_t credage = 0;    // SPC_CREDAGE: ... or for the oldest to be this many cycles old (used with credidle)
-    bool gbgate = false;     // SPC_GBGATE: busy-pass credit scan only when the total pending reaches credthr
+    uint32_t snoc = 1;      // SPC_SNOC: 1 the sender on NoC1 (RISCV_0); 0 the sender on NoC0 (RISCV_1)
+    uint32_t la = 0;        // SPC_LA: look-ahead past a row whose ring is full (0 / 1: strict queue order; max 64)
+    uint32_t far = 0;       // SPC_FAR: within the look-ahead window, rows going >= far hops first (only with la > 1)
+    bool credauto = false;  // SPC_CREDAUTO: credits only at the end when every pool holds its call
+    uint32_t credthr = 8;   // SPC_CREDTHR: credit return threshold
+    uint32_t credidle = 0;  // SPC_CREDIDLE: idle credit sends wait for this many rows (0: the combine's choice)
+    uint32_t credage = 0;   // SPC_CREDAGE: ... or for the oldest to be this many cycles old (used with credidle)
+    bool gbgate = false;    // SPC_GBGATE: busy-pass credit scan only when the total pending reaches credthr
     PortPlacement place = PortPlacement::Noc1;  // SPC_PLACE
 
     bool operator==(const CombineTuning&) const = default;
@@ -133,7 +126,6 @@ struct MoEBlockConfig {
     bool zigzag = false;        // the residual's sequence order
 
     // Machine-side switches (env reads in the reference)
-    FabricTieRule tie_rule = FabricTieRule::NorthEast;  // main's tables; SourceParity needs the tie-break branch
     bool persist_l1_small = false;  // PERSIST_L1=small: persistent words + packed semaphores in L1_SMALL
     CombineTuning combine_tuning;
 

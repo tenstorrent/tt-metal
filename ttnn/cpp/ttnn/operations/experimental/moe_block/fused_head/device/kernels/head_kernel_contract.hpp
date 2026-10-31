@@ -215,7 +215,7 @@ enum RouterCommonArg : uint32_t {
 //   NCRISC and BRISC with the routing exchange (router_stream._ra_src): RA_PLAN, the routing defines (above) and
 //     ra::plan's RAP_* (RoutingStream.kernel_subs: RAP_S, RAP_K, RAP_EPC, RAP_R, RAP_C, RAP_ME, RAP_A, RAP_L,
 //     RAP_P (nps[coord]), RAP_TPP 32, RAP_M, RAP_HBP, RAP_BB, RAP_BBP, RAP_PCAP, RAP_NPORT, RAP_ROWS_CAP,
-//     RAP_ENT_CAP, RAP_WX, RAP_WY, RAP_YT (tie mode: FabricTieRule), RAP_DCACHE 1, RAP_PROBE_NOSTORE 0, RAP_CT0 -
+//     RAP_ENT_CAP, RAP_WX, RAP_WY, RAP_DCACHE 1 (RAP_YT is gone: ties always by parity), RAP_PROBE_NOSTORE 0, RAP_CT0 -
 //     NCRISC len(ct + x, w, b, ix accessors), BRISC len(ct + out accessor)).
 // Runtime args (RouterStream.pieces): NCRISC [x, w, b, ix addrs] + [bb RB + j % RB for bb < G] + [G - 1, arr[0]]
 // + _arrival_order(p) + tail [words, best, out (arena offsets + base), scale bits] + [sv] + (routing) _ra_args2;

@@ -43,10 +43,9 @@ void def_kwargs_init(nb::class_<T>& cls) {
             nb::object proxy = nb::cast(&value, nb::rv_policy::reference);
             for (auto [k, v] : kwargs) {
                 if (!nb::hasattr(proxy, k)) {
-                    throw nb::attribute_error(
-                        (std::string(nb::type_name(proxy.type()).c_str()) + " has no field '" +
-                         nb::cast<std::string>(k) + "'")
-                            .c_str());
+                    throw nb::attribute_error((std::string(nb::type_name(proxy.type()).c_str()) + " has no field '" +
+                                               nb::cast<std::string>(k) + "'")
+                                                  .c_str());
                 }
                 nb::setattr(proxy, k, v);
             }
@@ -110,7 +109,6 @@ nb::dict ports_dict(const PortCores& ports) {
 }
 
 void bind_config(nb::module_& mod) {
-    export_enum<FabricTieRule>(mod, "FabricTieRule");
     export_enum<PortPlacement>(mod, "PortPlacement");
     export_enum<ExpertActivationKind>(mod, "ExpertActivationKind");
     export_enum<RouterScoreFunc>(mod, "RouterScoreFunc");
@@ -183,7 +181,7 @@ void bind_config(nb::module_& mod) {
 
     nb::class_<MoEBlockConfig> cfg(mod, "MoEBlockConfig", R"doc(
         The MoE block's options (MoEOptions) and the switches the reference read from the environment.
-        Defaults are today's production defaults except tie_rule (NorthEast: main's fabric tables).
+        Defaults are today's production defaults.
     )doc");
     def_kwargs_init(cfg);
     cfg.def_rw("experts_during_dispatch", &MoEBlockConfig::experts_during_dispatch)
@@ -195,7 +193,6 @@ void bind_config(nb::module_& mod) {
         .def_rw("num_links", &MoEBlockConfig::num_links)
         .def_rw("chunk_tokens", &MoEBlockConfig::chunk_tokens)
         .def_rw("zigzag", &MoEBlockConfig::zigzag)
-        .def_rw("tie_rule", &MoEBlockConfig::tie_rule)
         .def_rw("persist_l1_small", &MoEBlockConfig::persist_l1_small)
         .def_rw("combine_tuning", &MoEBlockConfig::combine_tuning)
         .def_prop_ro("handoff_bytes", &MoEBlockConfig::handoff_bytes)
@@ -212,9 +209,9 @@ void bind_routing(nb::module_& mod) {
     };
     mod.def(
         "route",
-        [topo](Chip src, Chip home, uint32_t R, uint32_t C, bool wrap_x, bool wrap_y, FabricTieRule tie) {
+        [topo](Chip src, Chip home, uint32_t R, uint32_t C, bool wrap_x, bool wrap_y) {
             nb::list out;
-            for (const auto& h : route(chip_of(src), chip_of(home), topo(R, C, wrap_x, wrap_y), tie)) {
+            for (const auto& h : route(chip_of(src), chip_of(home), topo(R, C, wrap_x, wrap_y))) {
                 out.append(nb::make_tuple(chip_tuple(h.chip), nb::str(dir_name(h.dir).data())));
             }
             return out;
@@ -225,13 +222,12 @@ void bind_routing(nb::module_& mod) {
         nb::arg("C"),
         nb::arg("wrap_x"),
         nb::arg("wrap_y"),
-        nb::arg("tie") = FabricTieRule::NorthEast,
-        "[((r, c), dir)] hops from src to home: Y first, then X; ring ties by `tie` (sparse_combine_l1.route).");
+        "[((r, c), dir)] hops from src to home: Y first, then X; a ring tie by the source's parity, as main's fabric "
+        "(sparse_combine_l1.route, tie_mode 2).");
     mod.def(
         "first_hop",
-        [topo](Chip src, Chip dst, uint32_t R, uint32_t C, bool wrap_x, bool wrap_y, FabricTieRule tie)
-            -> std::optional<std::string> {
-            const auto d = first_hop(chip_of(src), chip_of(dst), topo(R, C, wrap_x, wrap_y), tie);
+        [topo](Chip src, Chip dst, uint32_t R, uint32_t C, bool wrap_x, bool wrap_y) -> std::optional<std::string> {
+            const auto d = first_hop(chip_of(src), chip_of(dst), topo(R, C, wrap_x, wrap_y));
             return d ? std::optional<std::string>(dir_name(*d)) : std::nullopt;
         },
         nb::arg("src"),
@@ -240,12 +236,11 @@ void bind_routing(nb::module_& mod) {
         nb::arg("C"),
         nb::arg("wrap_x"),
         nb::arg("wrap_y"),
-        nb::arg("tie") = FabricTieRule::NorthEast,
         "The first hop's direction ('X+', 'X-', 'Y+', 'Y-'), None for src == dst.");
     mod.def(
         "first_hop_idx",
-        [topo](uint32_t src, uint32_t dst, uint32_t R, uint32_t C, bool wrap_x, bool wrap_y, FabricTieRule tie) {
-            return first_hop_idx(src, dst, topo(R, C, wrap_x, wrap_y), tie);
+        [topo](uint32_t src, uint32_t dst, uint32_t R, uint32_t C, bool wrap_x, bool wrap_y) {
+            return first_hop_idx(src, dst, topo(R, C, wrap_x, wrap_y));
         },
         nb::arg("src"),
         nb::arg("dst"),
@@ -253,7 +248,6 @@ void bind_routing(nb::module_& mod) {
         nb::arg("C"),
         nb::arg("wrap_x"),
         nb::arg("wrap_y"),
-        nb::arg("tie") = FabricTieRule::NorthEast,
         "DIRS index (0 X+, 1 X-, 2 Y+, 3 Y-) of the first hop between linear chip indices.");
     mod.def("link_of", &link_of, nb::arg("acc"), nb::arg("src"), nb::arg("home"), nb::arg("L"));
     mod.def("hbit", &hbit, nb::arg("t"), nb::arg("k"));

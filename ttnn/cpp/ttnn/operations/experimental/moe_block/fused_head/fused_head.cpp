@@ -248,7 +248,6 @@ const FusedHeadSetup& setup_fused_head(
         pc.route_scale = dims.router.route_scale;
         pc.sqrtsoftplus = dims.router.score_func == RouterScoreFunc::SqrtSoftplus;
         pc.ordered = cfg.deterministic;
-        pc.tie_rule = cfg.tie_rule;
         pc.handoff_bytes = cfg.handoff_bytes();
         pc.l1_free = l1;
         setup.model = make_head_model(mesh, pc, resources.port_luts());

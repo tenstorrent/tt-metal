@@ -4,7 +4,7 @@
 """Reference outputs of the fused head (models/demos/moe_block/moe_block.py FusedHead on mstaletovic/moe-trim) for the
 C++ op's bit-exact device test. Run by the lead on a Galaxy in the reference tree's environment (it opens the mesh):
 
-    cd /data/mstaletovic/tt-metal-trimb && TT_FABRIC_TIE_PARITY=0 python <this tree>/tests/ttnn/unit_tests/operations/experimental/moe_block/\
+    cd /data/mstaletovic/tt-metal-trimb && MOE_BLOCK_REFS=<refs root> python <this tree>/tests/ttnn/unit_tests/operations/experimental/moe_block/\
 fused_head/dump_ref_fused_head.py [--mesh 8x4] [--fabric FABRIC_2D_TORUS_XY] [--models glm53,k3] [--chunk 5120]
 
 Each case (op "fused_head", case "<model>-<R>x<C>-c<chunk>-uniform-s<seed>"): the head built as MoEBlock builds it

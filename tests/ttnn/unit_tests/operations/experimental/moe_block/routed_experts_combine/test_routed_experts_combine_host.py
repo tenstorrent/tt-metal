@@ -172,13 +172,11 @@ def _routing(N, S, K, E, seed, skew):
 
 
 @pytest.mark.parametrize("token_major", (False, True))
-@pytest.mark.parametrize("tie", (0, 2))
-def test_plan_reference(ref, monkeypatch, token_major, tie):
+def test_plan_reference(ref, monkeypatch, token_major):
     import torch
 
-    monkeypatch.setenv("TT_FABRIC_TIE_PARITY", "1" if tie == 2 else "0")
+    monkeypatch.setenv("TT_FABRIC_TIE_PARITY", "1")  # (the reference's default: ties by the source's parity, as main)
     cp = ref.combine_plan
-    tie_rule = mb.FabricTieRule.SourceParity if tie == 2 else mb.FabricTieRule.NorthEast
     for (R, C), wrap, S, K, A, skew in itertools.product(
         ((1, 4), (2, 4), (4, 4), (8, 4)), ((False, False), (True, True)), (32, 64), (4, 8), (5, 16), (0, 1.2)
     ):
@@ -198,7 +196,7 @@ def test_plan_reference(ref, monkeypatch, token_major, tie):
             )
             got = mb.combine_plan_reference(
                 ids, wb, me, R, C, S, K, EPC, E, A, 2, P, list(lut), rows_cap,
-                wrap_x=wrap[0], wrap_y=wrap[1], token_major=token_major, tie=tie_rule,
+                wrap_x=wrap[0], wrap_y=wrap[1], token_major=token_major,
             )  # fmt: skip
             for k in ("counts", "regions", "token_index", "table", "plan"):
                 assert got[k] == exp[k], (R, C, wrap, S, K, A, skew, me, k)

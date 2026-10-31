@@ -2166,7 +2166,6 @@ void ChipProgram::routing_defines(KernelDescriptor& k) const {
 void ChipProgram::planner_defines(KernelDescriptor& k, uint32_t ct0) const {
     define(k, "RA_PLAN");
     routing_defines(k);
-    const uint32_t yt = h.cfg.tie_rule == FabricTieRule::SourceParity ? 2 : 0;
     for (const auto& [n, v] : std::vector<std::pair<std::string, int64_t>>{
              {"RAP_S", h.S},
              {"RAP_K", h.K},
@@ -2188,7 +2187,6 @@ void ChipProgram::planner_defines(KernelDescriptor& k, uint32_t ct0) const {
              {"RAP_ENT_CAP", h.inst_cap},
              {"RAP_WX", int64_t(h.ring)},
              {"RAP_WY", int64_t(h.wrap_y)},
-             {"RAP_YT", yt},
              {"RAP_DCACHE", 1},
              {"RAP_PROBE_NOSTORE", 0},
              {"RAP_CT0", ct0}}) {

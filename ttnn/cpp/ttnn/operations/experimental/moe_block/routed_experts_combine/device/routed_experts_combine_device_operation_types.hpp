@@ -20,7 +20,7 @@
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-// The combine's op-specific configuration (the MoE block's CombineTuning / tie rule / snap come from MoEBlockConfig).
+// The combine's op-specific configuration (the MoE block's CombineTuning / snap come from MoEBlockConfig).
 struct CombineConfig {
     std::optional<uint32_t> n_acc;      // the accumulator count the fused head planned (pins combine_auto's A)
     std::optional<CombineMode> mode;    // ... and its mode

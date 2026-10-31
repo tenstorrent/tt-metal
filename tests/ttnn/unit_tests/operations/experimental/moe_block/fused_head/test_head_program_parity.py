@@ -13,7 +13,8 @@ compile-time args, the runtime args of every core and the common args (addresses
 at: the reference's dump marks which arguments are addresses), the defines the host sets; the CBs (index, size, page,
 cores, arena offset). Expected differences, checked as such: the addresses the reference baked into defines are common runtime args (one more common arg on the engine and router
 kernels); the fabric connections' arguments are main's (compared up to their start); the kernel_lib multicast and
-fabric semaphores take other ids; the routing planner's tie split is the config's rule (NorthEast: YT 0)."""
+fabric semaphores take other ids; the routing planner has no RAP_YT define (its tie split is always the source's
+parity, the reference's YT 2)."""
 
 import gzip
 import json
@@ -226,6 +227,8 @@ def test_head_program_parity(mesh, case):
                 ref_defs.setdefault(n, v.split("//")[0].strip())
             subs = meta["subs"][f"{r},{c}"]
             sub = subs[0] if "router_ncrisc" in fname else (subs[1] if "router_brisc" in fname else None)
+            if sub is not None and int(sub.get("YT", 2)) != 2:
+                errors.append(f"{where}: the reference planned with YT {sub['YT']} (dump it on the parity tie rule)")
             for n, v in k.defines:
                 if n.startswith("RAP_") and sub is not None and str(sub[n[4:]]) != v:
                     errors.append(f"{where}: define {n} = {v}, the reference's substitution {sub[n[4:]]}")
@@ -235,8 +238,6 @@ def test_head_program_parity(mesh, case):
                     or n in ("RT_ENG_ON", "SE_GROW_OWN_CR", "SE_GROW_OWN_RT")
                     or n.startswith(("RAP_", "RW_"))
                 ):
-                    continue
-                if n == "RAP_YT":
                     continue
                 if n not in ref_defs:
                     errors.append(f"{where}: define {n} not in the reference")

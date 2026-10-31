@@ -75,7 +75,6 @@ struct CombinePlan {
     MeshTopology topo;
     MeshPlan mesh;  // ports: peers and fabric link ids
     uint32_t L = 0;
-    FabricTieRule tie = FabricTieRule::NorthEast;
     CombineTuning tuning;
     uint32_t snap_bits = 0;
     uint32_t S = 0, W = 0;

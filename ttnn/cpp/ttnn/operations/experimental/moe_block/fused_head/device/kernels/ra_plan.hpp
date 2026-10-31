@@ -36,19 +36,19 @@ static_assert(S <= 2048 && EPC <= 64, "an entry: token (11 bits) | expert (6 bit
 constexpr auto rt_args = TensorAccessorArgs<RAP_CT0>();
 constexpr auto sl_args = TensorAccessorArgs<rt_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t WX = RAP_WX, WY = RAP_WY;  // torus axes (rings: the shorter way, ties as the fabric: YT)
-constexpr uint32_t YT = RAP_YT;  // (sparse_combine_l1.tie_mode: 2 the fabric's parity tie rule, 0 ties Y- / X+)
+// torus axes (rings: the shorter way; a tie as the fabric: by the source's parity - sparse_combine_l1.tie_mode 2)
+constexpr uint32_t WX = RAP_WX, WY = RAP_WY;
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {  // DIRS index: 0 X+, 1 X-, 2 Y+, 3 Y-; Y first, then X
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
-        if constexpr (WY) {  // (YT 2: the fabric's tie rule - an odd source row goes Y+; 0: Y-)
+        if constexpr (WY) {  // (a tie: an odd source row goes Y+, an even one Y-)
             const uint32_t f2 = 2 * ((dr + R - sr) % R);
-            return f2 < R || (f2 == R && (YT == 2 && (sr & 1))) ? 2 : 3;
+            return f2 < R || (f2 == R && (sr & 1)) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
     if constexpr (WX) {
-        return 2 * ((dc + C - sc) % C) < C || (2 * ((dc + C - sc) % C) == C && !(YT == 2 && (sc & 1))) ? 0 : 1;
+        return 2 * ((dc + C - sc) % C) < C || (2 * ((dc + C - sc) % C) == C && !(sc & 1)) ? 0 : 1;
     }
     return dc > sc ? 0 : 1;
 }

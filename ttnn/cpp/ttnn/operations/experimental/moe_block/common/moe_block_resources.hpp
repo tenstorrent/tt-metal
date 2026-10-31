@@ -66,7 +66,7 @@ namespace ttnn::operations::experimental::moe_block {
 
 class MoEBlockResources {
 public:
-    // Throws if config.tie_rule disagrees with how the fabric routes a torus tie.
+    // Throws if the fabric routes a torus tie other than by the source's parity (mesh_routing.hpp route).
     static std::shared_ptr<MoEBlockResources> create(
         tt::tt_metal::distributed::MeshDevice& mesh_device,
         const MoEModelDims& dims,
@@ -115,7 +115,8 @@ public:
     const Tensor& persistent_words(const std::string& name, const CoreRangeSet& cores, uint32_t words);
     // A global semaphore on `cores` (persistent_buffer_type()), created at initial_value. Pass its address as a
     // hash-excluded attribute and patch it in override_runtime_arguments.
-    const GlobalSemaphore& global_semaphore(const std::string& name, const CoreRangeSet& cores, uint32_t initial_value = 0);
+    const GlobalSemaphore& global_semaphore(
+        const std::string& name, const CoreRangeSet& cores, uint32_t initial_value = 0);
     // A 16 B semaphore word on every worker core: a GlobalSemaphore address, or with persist_l1_small a slot of one
     // packed L1_SMALL pool (persist_l1.PackedSemaphore; zero-initialised). Same address on every core and chip; patch
     // it in override_runtime_arguments like a global semaphore's.

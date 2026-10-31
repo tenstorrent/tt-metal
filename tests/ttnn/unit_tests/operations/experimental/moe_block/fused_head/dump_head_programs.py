@@ -5,11 +5,11 @@
 built on the mock Galaxy (no device, no execution), as JSON: for test_head_program_parity.py, which builds the C++ op's
 programs on the same mock and compares them field by field. Run in the reference tree's environment:
 
-    P=/data/mstaletovic/tt-metal-trimb; cd $P && TT_FABRIC_TIE_PARITY=0 TT_METAL_MOCK_CLUSTER_DESC_PATH=$P/tt_metal/third_party/umd/tests/\
+    P=/data/mstaletovic/tt-metal-trimb; cd $P && TT_METAL_MOCK_CLUSTER_DESC_PATH=$P/tt_metal/third_party/umd/tests/\
 cluster_descriptor_examples/blackhole_galaxy.yaml TT_METAL_HOME=$P LD_LIBRARY_PATH=$P/build_Release/lib \
     PYTHONPATH=<pyroot>:$P python <this file> --models glm53 --chunk 5120 [--out dir]
 
-(TT_FABRIC_TIE_PARITY=0: the reference's fabric and planners on main's tie rule, NorthEast, as the C++ op.)
+(The reference's default fabric tie rule - ties by the source's parity - is main's and the C++ op's.)
 
 What is saved, per case (model, mesh 8 x 4 torus, chunk, accumulators): the plan (head_plan's layout), every chip's
 kernels (source kind, the defines the host put in front of the source, core ranges, compile-time args, runtime args per

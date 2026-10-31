@@ -124,7 +124,6 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->topo = mesh.topo;
     plan->mesh = mesh;
     plan->L = mesh.num_links;
-    plan->tie = cfg.tie_rule;
     plan->tuning = cfg.combine_tuning;
     plan->snap_bits = cfg.snap_bits();
     plan->S = in.S;
@@ -379,7 +378,7 @@ CombineHandles add_combine_program(
     TT_FATAL(flat.writers.size() <= 32, "routed_experts_combine: {} y writers > 32", flat.writers.size());
     auto virt = [&](const CoreCoord& c) { return mesh_device.worker_core_from_logical_core(c); };
     auto idx = [&](ChipCoord c) { return topo.index(c); };
-    auto fh = [&](ChipCoord s, ChipCoord d) { return *first_hop(s, d, topo, plan.tie); };
+    auto fh = [&](ChipCoord s, ChipCoord d) { return *first_hop(s, d, topo); };
     auto node = [&](ChipCoord c) {
         return mesh_device.get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(c.r, c.c));
     };
@@ -666,7 +665,7 @@ CombineHandles add_combine_program(
             }
             if (plan.far) {  // (hops to each home chip)
                 for (uint32_t i = 0; i < N; ++i) {
-                    a.lit(static_cast<uint32_t>(route(ch, topo.coord(i), topo, plan.tie).size()));
+                    a.lit(static_cast<uint32_t>(route(ch, topo.coord(i), topo).size()));
                 }
             }
             a.buf(CombineBuf::Hcache);

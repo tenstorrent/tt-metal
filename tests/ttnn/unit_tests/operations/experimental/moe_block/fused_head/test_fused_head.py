@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """ttnn.experimental.moe_block.fused_head on device, bit-exact against the reference's outputs (dump_ref_fused_head.py,
-models/demos/moe_block FusedHead on mstaletovic/moe-trim, saved with TT_FABRIC_TIE_PARITY=0: main's fabric tie rule),
+models/demos/moe_block FusedHead on mstaletovic/moe-trim, on the reference's default fabric tie rule: parity, as main's),
 and its host cost a call. A Galaxy (the cases' mesh); skipped without one or without the saved cases
 ($MOE_BLOCK_REFS/fused_head/<case>/):
 

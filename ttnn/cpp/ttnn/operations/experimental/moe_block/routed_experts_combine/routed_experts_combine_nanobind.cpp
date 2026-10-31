@@ -62,7 +62,7 @@ void bind_routed_experts_combine(nb::module_& mod) {
     export_enum<CombineMode>(mod, "CombineMode");
 
     nb::class_<CombineConfig> cfg(mod, "CombineConfig", R"doc(
-        The combine's op-specific configuration (the tuning switches, the tie rule and combine_snap come from
+        The combine's op-specific configuration (the tuning switches and combine_snap come from
         MoEBlockConfig). n_acc / mode pin the accumulator count and mode the fused head planned; arena_bytes is the
         combine's L1 budget a core (0: the reference exchange's sizing from the largest free L1 block at the first
         call, less the flat program's static CBs and the dispatch's); depth is the landing pool's slots per source chip;
@@ -313,10 +313,9 @@ void bind_routed_experts_combine(nb::module_& mod) {
            uint32_t rows_cap,
            bool wrap_x,
            bool wrap_y,
-           bool token_major,
-           FabricTieRule tie) {
+           bool token_major) {
             const auto t = plan_reference(
-                ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, wrap_x, wrap_y, token_major, tie);
+                ids, wbits, me, R, C, S, K, EPC, NG, A, L, P, lut, rows_cap, wrap_x, wrap_y, token_major);
             nb::dict d;
             d["counts"] = t.counts;
             d["regions"] = t.regions;
@@ -343,7 +342,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("wrap_x") = false,
         nb::arg("wrap_y") = false,
         nb::arg("token_major") = false,
-        nb::arg("tie") = FabricTieRule::NorthEast,
         "combine_plan.plan_reference (ids / wbits flattened [N, S, K]): the planner's tables for chip me.");
 }
 

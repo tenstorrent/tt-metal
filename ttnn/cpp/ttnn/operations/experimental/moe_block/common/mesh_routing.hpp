@@ -64,13 +64,14 @@ struct MeshTopology {
     bool operator==(const MeshTopology&) const = default;
 };
 
-// [(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: the shorter way, ties by `tie`).
-// sparse_combine_l1.route (its `link` argument is unused there).
-std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo, FabricTieRule tie);
+// [(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: the shorter way). A ring tie (half
+// a ring away) goes as the fabric's routing tables send it: by the parity of the source's position on that axis, even
+// Y- / X+, odd Y+ / X- (sparse_combine_l1.route, tie_mode 2; its `link` argument is unused there).
+std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo);
 // sparse_combine_rf.first_hop: the first hop's direction, nullopt for src == dst.
-std::optional<Dir> first_hop(ChipCoord src, ChipCoord dst, const MeshTopology& topo, FabricTieRule tie);
+std::optional<Dir> first_hop(ChipCoord src, ChipCoord dst, const MeshTopology& topo);
 // combine_plan.first_hop_idx / routing_a2a _FIRST_HOP on linear chip indices (src != dst): the DIRS index.
-uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo, FabricTieRule tie);
+uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo);
 // combine_plan.link_of: the link of every row from chip src to accumulator acc of chip home.
 inline uint32_t link_of(uint32_t acc, uint32_t src, uint32_t home, uint32_t L) { return (acc + src + home) % L; }
 

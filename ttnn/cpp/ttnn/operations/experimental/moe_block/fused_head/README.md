@@ -38,8 +38,9 @@ Differences from the reference, none in what the kernels compute or in their NoC
 - the addresses the reference baked into defines (SE_EW, RT_ENG, RT_MSYNC, RT_PWORD, RT_PART) are common runtime args;
 - fabric connections are main's (`append_fabric_connection_rt_args`); the kernel_lib multicast families use main's
   `Mcast::attach`; their semaphore ids differ from the reference's;
-- the routing planner's torus tie split (RAP_YT) and the gather's ring ties follow `MoEBlockConfig.tie_rule` and main's
-  fabric (NorthEast); the reference's references for the tests are dumped with `TT_FABRIC_TIE_PARITY=0` to match.
+- the routing planner splits torus ties by the source's parity (the reference's RAP_YT 2, now the only rule: no
+  RAP_YT define) and the gather's ring ties follow the fabric, as main's routing tables (parity since #63501); the
+  references for the tests are dumped with the reference tree's default (parity).
 
 ## Host plan
 

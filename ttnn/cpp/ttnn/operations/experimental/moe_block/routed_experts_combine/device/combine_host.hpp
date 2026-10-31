@@ -180,7 +180,6 @@ PlanTables plan_reference(
     uint32_t rows_cap,
     bool wrap_x,
     bool wrap_y,
-    bool token_major,
-    FabricTieRule tie);
+    bool token_major);
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

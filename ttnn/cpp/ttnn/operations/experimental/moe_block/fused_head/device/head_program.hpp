@@ -18,8 +18,8 @@
 //  * every address argument is recorded with its source and offset (HeadPatches): a cache hit rewrites only the
 //    arguments of sources whose address moved;
 //  * addresses the reference baked into defines are common runtime args (kernels/head_kernel_contract.hpp);
-//  * the fabric connections are main's (append_fabric_connection_rt_args); the routing planner's torus tie split is
-//    the config's tie rule (main's fabric: NorthEast).
+//  * the fabric connections are main's (append_fabric_connection_rt_args); the routing planner splits torus ties by
+//    the source's parity, as main's fabric (the reference's default, tie_mode 2).
 
 #pragma once
 
@@ -66,10 +66,9 @@ struct HeadProgramConfig {
     tt::tt_metal::MathFidelity fidelity = tt::tt_metal::MathFidelity::HiFi2;
     tt::tt_metal::DataType w_dtype = tt::tt_metal::DataType::BFLOAT8_B;
     float route_scale = 1.0f;
-    bool sqrtsoftplus = false;  // router score sqrt(softplus); else sigmoid
-    bool ordered = true;        // MoEBlockConfig.deterministic
-    uint32_t rows_cap = 0;      // the plan's row capacity (0: the worst case)
-    FabricTieRule tie_rule = FabricTieRule::NorthEast;
+    bool sqrtsoftplus = false;              // router score sqrt(softplus); else sigmoid
+    bool ordered = true;                    // MoEBlockConfig.deterministic
+    uint32_t rows_cap = 0;                  // the plan's row capacity (0: the worst case)
     uint32_t handoff_bytes = 16;            // MoEBlockConfig.handoff_bytes()
     int64_t l1_free = kL1Free - kL1Margin;  // the free L1 the plan assumed (the engine sizes its arena under its cap)
 

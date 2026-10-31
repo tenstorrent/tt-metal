@@ -52,6 +52,32 @@ RW_SUBS = {
 }
 
 
+# The planner's torus tie rule: main's fabric splits ties by the source's parity (the reference's tie_mode 2), the only
+# rule the port has - the reference's YT switch is folded in (no RAP_YT define).
+PARITY_ONLY = [
+    (
+        "constexpr uint32_t WX = RAP_WX, WY = RAP_WY;  // torus axes (rings: the shorter way, ties as the fabric: YT)\n"
+        "constexpr uint32_t YT = RAP_YT;  // (sparse_combine_l1.tie_mode: 2 the fabric's parity tie rule, 0 ties Y- / X+)",
+        "// torus axes (rings: the shorter way; a tie as the fabric: by the source's parity - sparse_combine_l1.tie_mode 2)\n"
+        "constexpr uint32_t WX = RAP_WX, WY = RAP_WY;",
+    ),
+    (
+        "// (YT 2: the fabric's tie rule - an odd source row goes Y+; 0: Y-)",
+        "// (a tie: an odd source row goes Y+, an even one Y-)",
+    ),
+    ("(f2 == R && (YT == 2 && (sr & 1)))", "(f2 == R && (sr & 1))"),
+    ("!(YT == 2 && (sc & 1))", "!(sc & 1)"),
+]
+
+
+def parity_only(plan):
+    for a, b in PARITY_ONLY:
+        assert a in plan, a
+        plan = plan.replace(a, b)
+    assert "YT" not in plan
+    return plan
+
+
 def inc(name):
     return f'#include "{KDIR}/{name}"\n'
 
@@ -68,6 +94,7 @@ def sources():
     for k, v in sent.items():
         plan = re.sub(rf"\b{v}\b", f"RAP_{k}", plan)
     assert not re.search(r"\b98765\d{4}\b", plan)
+    plan = parity_only(plan)
 
     route = prep_stream._ROUTE_FN
     for a, b in RW_SUBS.items():

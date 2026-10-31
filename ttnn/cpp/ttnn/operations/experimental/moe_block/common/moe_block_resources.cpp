@@ -21,10 +21,12 @@ constexpr uint32_t SEM_BYTES = 16;  // a semaphore a 16 B word (the NoC's write 
 constexpr uint32_t SEM_SLOTS = 48;  // packed pool slots (persist_l1.SEM_SLOTS)
 
 bool torus_x_of(tt::tt_fabric::FabricConfig cfg) {
-    return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X || cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+    return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+           cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 bool torus_y_of(tt::tt_fabric::FabricConfig cfg) {
-    return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y || cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+    return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+           cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
 uint8_t dir_mask(const std::vector<Dir>& dirs) {
@@ -49,12 +51,11 @@ MeshPlan restrict_dirs(const MeshPlan& plan, uint8_t mask) {
     return out;
 }
 
-// The planners route a torus tie (a destination half a ring away) by `tie`; the fabric's routing tables must send it
-// the same way, or a planned link carries rows it was not sized for. Checked on each wrapped even ring, from a source
-// of each parity (the rules differ by parity), by comparing the fabric's first hop toward the tie with its first hop
-// toward the neighbour the rule picks.
-void check_tie_rule(
-    const tt::tt_metal::distributed::MeshDevice& mesh_device, const MeshTopology& topo, FabricTieRule tie) {
+// The planners route a torus tie (a destination half a ring away) by the source's parity (mesh_routing.hpp route); the
+// fabric's routing tables must send it the same way, or a planned link carries rows it was not sized for (a fabric
+// older than main's parity split does not). Checked on each wrapped even ring, from a source of each parity, by
+// comparing the fabric's first hop toward the tie with its first hop toward the neighbour the rule picks.
+void check_fabric_ties(const tt::tt_metal::distributed::MeshDevice& mesh_device, const MeshTopology& topo) {
     const auto node = [&](ChipCoord c) {
         return mesh_device.get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(c.r, c.c));
     };
@@ -66,7 +67,7 @@ void check_tie_rule(
         for (uint32_t pos = 0; pos < 2; ++pos) {
             const ChipCoord src = x_axis ? ChipCoord{0, pos} : ChipCoord{pos, 0};
             const ChipCoord dst = x_axis ? ChipCoord{0, pos + n / 2} : ChipCoord{pos + n / 2, 0};
-            const auto want = first_hop(src, dst, topo, tie);
+            const auto want = first_hop(src, dst, topo);
             TT_FATAL(want.has_value(), "moe_block: no first hop for a tie");
             const auto peer = topo.neighbor(src, *want);
             TT_FATAL(peer.has_value(), "moe_block: no neighbour {} of a tie's source", dir_name(*want));
@@ -77,10 +78,8 @@ void check_tie_rule(
             }
             TT_FATAL(
                 *fabric_dir == *rule_dir,
-                "moe_block: config.tie_rule = {} disagrees with the fabric: a tie from chip ({}, {}) to ({}, {}) goes "
-                "{} by the rule but the other way on the fabric. Main's routing tables need FabricTieRule::NorthEast; "
-                "SourceParity needs the fabric's tie-break branch.",
-                tie == FabricTieRule::NorthEast ? "NorthEast" : "SourceParity",
+                "moe_block: the fabric routes a torus tie from chip ({}, {}) to ({}, {}) the other way than {} (the "
+                "source-parity tie rule the planners use): the fabric's routing tables predate main's parity split",
                 src.r,
                 src.c,
                 dst.r,
@@ -120,7 +119,7 @@ MoEBlockResources::MoEBlockResources(
         "moe_block: {} experts don't divide over {} chips",
         dims_.num_experts,
         plan_.topo.num_chips());
-    resources_detail::check_tie_rule(mesh_device, plan_.topo, config_.tie_rule);
+    resources_detail::check_fabric_ties(mesh_device, plan_.topo);
     luts_ = moe_block::port_luts(plan_);
     plan_key_ = ttsl::hash::hash_objects_with_default_seed(
         config_,
@@ -176,8 +175,7 @@ const PortCores& MoEBlockResources::ports(
     return it->second;
 }
 
-const Tensor& MoEBlockResources::persistent_tensor(
-    const std::string& name, const tt::tt_metal::TensorSpec& spec) {
+const Tensor& MoEBlockResources::persistent_tensor(const std::string& name, const tt::tt_metal::TensorSpec& spec) {
     check_alive();
     if (auto it = tensors_.find(name); it != tensors_.end()) {
         TT_FATAL(tensor_specs_.at(name) == spec, "moe_block: persistent tensor '{}' requested with another spec", name);
@@ -211,8 +209,8 @@ const GlobalSemaphore& MoEBlockResources::global_semaphore(
         return it->second;
     }
     check_not_frozen(name);
-    auto sem = ttnn::global_semaphore::create_global_semaphore(
-        mesh_device_, cores, initial_value, persistent_buffer_type());
+    auto sem =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device_, cores, initial_value, persistent_buffer_type());
     return semaphores_.emplace(name, std::move(sem)).first->second;
 }
 
@@ -295,8 +293,6 @@ void MoEBlockResources::check_not_frozen(const std::string& name) const {
     TT_FATAL(!frozen_, "moe_block: resources are frozen; '{}' was not created before freeze()", name);
 }
 
-void MoEBlockResources::check_alive() const {
-    TT_FATAL(mesh_device_ != nullptr, "moe_block: resources were released");
-}
+void MoEBlockResources::check_alive() const { TT_FATAL(mesh_device_ != nullptr, "moe_block: resources were released"); }
 
 }  // namespace ttnn::operations::experimental::moe_block

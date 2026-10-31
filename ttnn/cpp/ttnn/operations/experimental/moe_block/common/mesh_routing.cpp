@@ -67,7 +67,7 @@ std::optional<ChipCoord> MeshTopology::neighbor(ChipCoord ch, Dir d) const {
     return ChipCoord{static_cast<uint32_t>(r2), ch.c};
 }
 
-std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo, FabricTieRule tie) {
+std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo) {
     // step(n, a, b, wrap, tie_plus) -> (sign, hops)
     auto step = [](int64_t n, int64_t a, int64_t b, bool wrap, bool tie_plus) -> std::pair<int, int64_t> {
         if (wrap) {
@@ -77,15 +77,14 @@ std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo, 
         }
         return {b > a ? 1 : -1, b > a ? b - a : a - b};
     };
-    const bool parity = tie == FabricTieRule::SourceParity;
     std::vector<Hop> hops;
     uint32_t r = src.r, c = src.c;
-    auto [sy, ky] = step(topo.R, r, home.r, topo.wrap_y, parity && r % 2 == 1);
+    auto [sy, ky] = step(topo.R, r, home.r, topo.wrap_y, r % 2 == 1);
     for (int64_t i = 0; i < ky; ++i) {
         hops.push_back({{r, c}, sy > 0 ? Dir::YPlus : Dir::YMinus});
         r = static_cast<uint32_t>(routing_detail::pmod(static_cast<int64_t>(r) + sy, topo.R));
     }
-    auto [sx, kx] = step(topo.C, c, home.c, topo.wrap_x, !(parity && c % 2 == 1));
+    auto [sx, kx] = step(topo.C, c, home.c, topo.wrap_x, c % 2 == 0);
     for (int64_t i = 0; i < kx; ++i) {
         hops.push_back({{r, c}, sx > 0 ? Dir::XPlus : Dir::XMinus});
         c = static_cast<uint32_t>(routing_detail::pmod(static_cast<int64_t>(c) + sx, topo.C));
@@ -93,28 +92,27 @@ std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo, 
     return hops;
 }
 
-std::optional<Dir> first_hop(ChipCoord src, ChipCoord dst, const MeshTopology& topo, FabricTieRule tie) {
-    const auto hops = route(src, dst, topo, tie);
+std::optional<Dir> first_hop(ChipCoord src, ChipCoord dst, const MeshTopology& topo) {
+    const auto hops = route(src, dst, topo);
     if (hops.empty()) {
         return std::nullopt;
     }
     return hops.front().dir;
 }
 
-uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo, FabricTieRule tie) {
+uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo) {
     const int64_t R = topo.R, C = topo.C;
     const int64_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
-    const bool parity = tie == FabricTieRule::SourceParity;
     if (sr != dr) {
         if (topo.wrap_y) {
             const int64_t f2 = 2 * routing_detail::pmod(dr - sr, R);
-            return (f2 < R || (f2 == R && parity && (sr % 2))) ? 2 : 3;
+            return (f2 < R || (f2 == R && (sr % 2))) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
     if (topo.wrap_x) {
         const int64_t g2 = 2 * routing_detail::pmod(dc - sc, C);
-        return (g2 < C || (g2 == C && !(parity && (sc % 2)))) ? 0 : 1;
+        return (g2 < C || (g2 == C && !(sc % 2))) ? 0 : 1;
     }
     return dc > sc ? 0 : 1;
 }

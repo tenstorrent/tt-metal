@@ -27,7 +27,6 @@ mb = ttnn.experimental.moe_block
 REF_TREE = Path(os.environ.get("MOE_BLOCK_REF_TREE", "/data/mstaletovic/tt-metal-trimb"))
 MESHES = [(1, 1), (1, 2), (1, 4), (2, 2), (2, 4), (4, 2), (3, 5), (4, 4), (8, 4), (4, 8)]
 WRAPS = list(itertools.product((False, True), repeat=2))
-TIES = (0, 2)
 
 
 @pytest.fixture(scope="module")
@@ -59,36 +58,30 @@ def ref():
         del ttnn.bringup
 
 
-def tie_rule(t):
-    return mb.FabricTieRule.SourceParity if t == 2 else mb.FabricTieRule.NorthEast
-
-
 def chips(R, C):
     return [(r, c) for r in range(R) for c in range(C)]
 
 
 def test_route_and_first_hop(ref):
-    for (R, C), (wx, wy), t in itertools.product(MESHES, WRAPS, TIES):
+    # (the port's only tie rule: the source's parity, the reference's tie_mode 2 and main's fabric)
+    for (R, C), (wx, wy) in itertools.product(MESHES, WRAPS):
         for src, home in itertools.product(chips(R, C), repeat=2):
-            exp = ref.sparse_combine_l1.route(src, home, R, C, wx, wy, 0, t)
-            got = mb.route(src, home, R, C, wx, wy, tie_rule(t))
-            assert [(tuple(ch), d) for ch, d in got] == exp, (R, C, wx, wy, t, src, home)
-            assert mb.first_hop(src, home, R, C, wx, wy, tie_rule(t)) == ref.sparse_combine_rf.first_hop(
-                src, home, R, C, wx, wy, t
-            )
+            exp = ref.sparse_combine_l1.route(src, home, R, C, wx, wy, 0, 2)
+            got = mb.route(src, home, R, C, wx, wy)
+            assert [(tuple(ch), d) for ch, d in got] == exp, (R, C, wx, wy, src, home)
+            assert mb.first_hop(src, home, R, C, wx, wy) == ref.sparse_combine_rf.first_hop(src, home, R, C, wx, wy, 2)
 
 
 def test_first_hop_idx(ref, monkeypatch):
-    for t in TIES:
-        monkeypatch.setenv("TT_FABRIC_TIE_PARITY", "1" if t == 2 else "0")
-        assert ref.sparse_combine_l1.tie_mode() == t
-        for (R, C), (wx, wy) in itertools.product(MESHES, WRAPS):
-            N = R * C
-            for s, d in itertools.product(range(N), repeat=2):
-                if s == d:
-                    continue
-                exp = ref.combine_plan.first_hop_idx(s, d, C, R, (wx, wy))
-                assert mb.first_hop_idx(s, d, R, C, wx, wy, tie_rule(t)) == exp, (R, C, wx, wy, t, s, d)
+    monkeypatch.setenv("TT_FABRIC_TIE_PARITY", "1")
+    assert ref.sparse_combine_l1.tie_mode() == 2
+    for (R, C), (wx, wy) in itertools.product(MESHES, WRAPS):
+        N = R * C
+        for s, d in itertools.product(range(N), repeat=2):
+            if s == d:
+                continue
+            exp = ref.combine_plan.first_hop_idx(s, d, C, R, (wx, wy))
+            assert mb.first_hop_idx(s, d, R, C, wx, wy) == exp, (R, C, wx, wy, s, d)
 
 
 def test_link_of_hbit_route_words(ref):
@@ -161,7 +154,10 @@ def test_mesh_plan_and_port_luts(ref, monkeypatch):
 def test_snap_bits(ref):
     for q in (None, 2.0**-20, 2.0**-14, 2.0**-10, 0.5, 1.0, 4.0):
         assert mb.snap_bits(q) == ref.sparse_combine_rf._snap_bits(q), q
-    assert mb.MoEBlockConfig(combine_snap=2.0**-14).snap_bits == struct.unpack("<I", struct.pack("<f", 1.5 * 2.0**9))[0]
+    assert (
+        mb.MoEBlockConfig(combine_snap=2.0**-14).snap_bits
+        == struct.unpack("<I", struct.pack("<f", 1.5 * 2.0**9))[0]
+    )
     with pytest.raises(Exception):
         mb.snap_bits(0.3)
 
@@ -169,11 +165,15 @@ def test_snap_bits(ref):
 def test_config_defaults(ref):
     py = ref.sparse_combine_rf.CombineTuning()
     cpp = mb.CombineTuning()
-    assert (cpp.credthr, cpp.credidle, cpp.credage, cpp.credauto) == (int(py.credthr), py.credidle, py.credage, py.credauto)
+    assert (cpp.credthr, cpp.credidle, cpp.credage, cpp.credauto) == (
+        int(py.credthr),
+        py.credidle,
+        py.credage,
+        py.credauto,
+    )
     assert (cpp.far, cpp.la, cpp.gbgate, cpp.snoc) == (py.far, py.la, py.gbgate, int(py.snoc))
     assert cpp.place == mb.PortPlacement.Noc1
     cfg = mb.MoEBlockConfig()
-    assert cfg.tie_rule == mb.FabricTieRule.NorthEast  # (main's tables; the reference defaults to parity)
     assert (cfg.experts_during_dispatch, cfg.deterministic, cfg.combine_snap) == (False, True, None)
     assert (cfg.head_dram_fallback, cfg.router_split, cfg.residual) == (True, False, mb.ResidualLayout.SpTp)
     assert (cfg.num_links, cfg.persist_l1_small, cfg.handoff_bytes) == (2, False, 16)

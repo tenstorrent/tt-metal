@@ -255,8 +255,7 @@ PlanTables plan_reference(
     uint32_t rows_cap,
     bool wrap_x,
     bool wrap_y,
-    bool token_major,
-    FabricTieRule tie) {
+    bool token_major) {
     const uint32_t N = R * C;
     TT_FATAL(ids.size() == static_cast<size_t>(N) * S * K && wbits.size() == ids.size(), "plan_reference: [N, S, K]");
     const auto topo = MeshTopology{R, C, wrap_x, wrap_y};
@@ -285,7 +284,7 @@ PlanTables plan_reference(
     out.plan[kPlanOver] = off > rows_cap ? 1 : 0;
     auto at = [&](uint32_t o, uint32_t t, uint32_t k) { return (static_cast<size_t>(o) * S + t) * K + k; };
     auto visit = [&](uint32_t o, uint32_t t) {
-        const uint32_t dh = o == me ? 0 : first_hop_idx(me, o, topo, tie);
+        const uint32_t dh = o == me ? 0 : first_hop_idx(me, o, topo);
         for (uint32_t k = 0; k < K; ++k) {
             const uint32_t g = ids[at(o, t, k)], wb = wbits[at(o, t, k)];
             const uint32_t src = g / EPC;
@@ -311,7 +310,7 @@ PlanTables plan_reference(
                     out.plan[kPlanNloc + t % A] += 1;
                 } else {
                     out.plan[kPlanWant + (t % A) * 32 + src] += 1;
-                    out.plan[kPlanNret + lut[first_hop_idx(me, src, topo, tie) * 2 + l]] += 1;
+                    out.plan[kPlanNret + lut[first_hop_idx(me, src, topo) * 2 + l]] += 1;
                 }
             }
         }
