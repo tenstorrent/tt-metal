@@ -77,10 +77,14 @@ def _golden_function(
     program_config=None,
     activation=None,
     dtype=None,
+    in0_column_offset=None,
     **kwargs,
 ):
     import torch
 
+    if in0_column_offset is not None:
+        k = input_tensor_b.shape[-1] if transpose_b else input_tensor_b.shape[-2]
+        input_tensor_a = input_tensor_a[..., in0_column_offset : in0_column_offset + k]
     if transpose_a:
         input_tensor_a = input_tensor_a.transpose(-1, -2)
     if transpose_b:
