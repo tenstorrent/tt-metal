@@ -1789,49 +1789,22 @@ std::vector<Tensor> prod_bw(
     }
 
     // all_dimensions = False
-    Tensor updated_grad = prod_result;
     auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
-    if (prod_result.logical_shape() != grad.padded_shape()) {
-        if (*dim == 3 || *dim == -1) {
-            ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 3, 1, 2};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<std::uint32_t> end_index = {
-                grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
-            after_permute_dims = {0, 2, 3, 1};
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.storage_type() != StorageType::DEVICE) {
-                Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
-                pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
-                updated_grad = pad_updated_grad.to_device(input.device());
-            }
-        } else if (*dim == 2 || *dim == -2) {
-            ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 1, 3};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
-            ttsl::SmallVector<std::uint32_t> end_index = {
-                grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.layout() == Layout::ROW_MAJOR) {
-                updated_grad =
-                    ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
-            }
-        }
+    Tensor reduced_grad = grad;
+    const int reduced_dim = (*dim == 3 || *dim == -1) ? 3 : (*dim == 2 || *dim == -2) ? 2 : -1;
+    if (reduced_dim >= 0 && grad.logical_shape()[reduced_dim] != 1) {
+        const auto& g = grad.logical_shape();
+        ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> end_index = {g[0], g[1], g[2], g[3]};
+        end_index[reduced_dim] = 1;
+        reduced_grad = ttnn::slice(grad, start_index, end_index, step, std::nullopt);
     }
-    Tensor temp = ttnn::multiply(
-        prod_result,
-        (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
-        std::nullopt,
-        output_memory_config);
+    Tensor temp = ttnn::multiply(prod_result, reduced_grad, std::nullopt, output_memory_config);
     if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
     if (*dim == 3 || *dim == -1) {
-        Tensor grad_result =
-            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
+        grad_tensor.emplace_back(ttnn::multiply(per_element, temp, std::nullopt, output_memory_config));
         return grad_tensor;
     }
     if (*dim == 2 || *dim == -2) {
