@@ -83,7 +83,7 @@ def main():
     groups, buffers = vllm_kv_layout(cfg)
     MiMoV2ForCausalLM._layer_groups = groups
     MiMoV2ForCausalLM.prefill_token_budget = a.budget
-    max_seq_len = a.ctx + 8192
+    max_seq_len = -(-(a.ctx + 8192) // 128) * 128  # whole blocks of the pair-split global group
 
     global_span = 2 * BLOCK_SIZE if pair else BLOCK_SIZE
     global_blocks = -(-max_seq_len // global_span)
