@@ -182,7 +182,8 @@ def main():
         kv = model.allocate_kv_cache_per_layer(specs)
         model.warmup_model_prefill(kv)
         model.warmup_model_decode(kv, enable_trace=False)
-        model.warmup_model_decode(kv, enable_trace=True)
+        if not EAGER:  # VSB_EAGER: no decode trace, every plain step runs eagerly
+            model.warmup_model_decode(kv, enable_trace=True)
         say(f"built and warmed up in {time.time() - t0:.0f} s, {num_blocks} blocks")
 
         texts = prompts(path, a.ctx, users)
