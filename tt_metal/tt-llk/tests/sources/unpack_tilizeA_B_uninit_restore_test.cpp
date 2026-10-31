@@ -44,10 +44,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces),
         ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces));
 
-    _llk_unpack_tilizeA_B_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, num_faces, face_r_dim);
+    // Tiny tiles are face_r_dim x 32 (2 faces).
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces);
+    _llk_unpack_tilizeA_B_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, tensor_shape);
 
     // Teardown under test. No reconfig follows it.
-    _llk_unpack_tilizeA_B_uninit_wrapper_(formats.unpack_A_dst, num_faces, face_r_dim);
+    _llk_unpack_tilizeA_B_uninit_wrapper_(formats.unpack_A_dst, tensor_shape);
 
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */,

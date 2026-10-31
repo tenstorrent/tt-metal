@@ -75,8 +75,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t g1_tile_size  = g1_face_r_dim * FACE_C_DIM * g1_num_faces;
 
     // ---- Run 0: real tilize "polluter" (output discarded) ----
-    const std::uint32_t g0_block_ct  = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
-    const std::uint32_t g0_tilize_nf = g0_num_faces;
+    const std::uint32_t g0_block_ct = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
+    // G0 is 32x32 (4 faces) or a tiny face_r_dim x 32 tile (2 faces).
+    const ckernel::TensorShape g0_tensor_shape = ckernel::make_tensor_shape_from_legacy(g0_face_r_dim, g0_num_faces);
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[0].unpack_A_src,
@@ -85,17 +86,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[0].unpack_B_dst,
         ckernel::make_tensor_shape_from_legacy(g0_face_r_dim, g0_num_faces),
         ckernel::make_tensor_shape_from_legacy(g0_face_r_dim, g0_num_faces));
-    _llk_unpack_tilize_init_wrapper_(
-        formats_array[0].unpack_A_src, formats_array[0].unpack_A_dst, 1 /* ct_dim */, g0_face_r_dim, false /* narrow_tile */, g0_tilize_nf);
+    _llk_unpack_tilize_init_wrapper_(formats_array[0].unpack_A_src, formats_array[0].unpack_A_dst, 1 /* ct_dim */, g0_tensor_shape);
     _llk_unpack_tilize_wrapper_(
-        L1_ADDRESS(params.buffer_A[0]),
-        0 /* tile_index */,
-        formats_array[0].unpack_A_src,
-        formats_array[0].unpack_A_dst,
-        g0_block_ct,
-        g0_face_r_dim,
-        g0_tilize_nf,
-        false /* narrow_tile */);
+        L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index */, formats_array[0].unpack_A_src, formats_array[0].unpack_A_dst, g0_block_ct, g0_tensor_shape);
 
     // Wait until the run-0 packer has drained before touching unpacker state.
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
@@ -106,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // Tear down the tilize-mutated SrcA baseline at the G0 geometry. The reconfig below rewrites
         // every register read back afterwards, so the uninit's own restore is not observed here.
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[0].unpack_A_dst, g0_num_faces, g0_face_r_dim);
+        _llk_unpack_tilize_uninit_wrapper_(formats_array[0].unpack_A_dst, g0_tensor_shape);
         // The FACE_ROW_MAJOR reconfig re-commits the canonical SrcA Y/Z-stride AND
         // retargets the geometry to G1 (Tile_x_dim_cntx0 from g1_face_r_dim, descriptor
         // Z-dim from g1_num_faces). Same format both runs, so this is purely the

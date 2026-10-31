@@ -36,9 +36,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
     const std::uint32_t num_faces = params.num_faces;
+    // A narrow tile is one face wide: 32x16 (2x1 faces) or 16x16 (one face). The legacy helper would make 2 faces 1x2.
+    const ckernel::TensorShape tensor_shape = params.NARROW_TILE
+                                                  ? ckernel::make_tensor_shape(FACE_R_DIM, ckernel::MAX_FACE_C_DIM, num_faces, 1 /* num_faces_c_dim */)
+                                                  : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
 
     // Initialize tilize unpacker
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE, num_faces);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, tensor_shape);
 
     std::uint32_t read_offset = 0;
 
@@ -50,12 +54,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         std::uint32_t tile_row_addr = L1_ADDRESS(params.buffer_A[read_offset]);
         for (std::uint32_t col = 0; col < params.BLOCK_CT_DIM; ++col)
         {
-            _llk_unpack_tilize_wrapper_(
-                tile_row_addr, col, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, FACE_R_DIM, num_faces, params.NARROW_TILE);
+            _llk_unpack_tilize_wrapper_(tile_row_addr, col, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, tensor_shape);
         }
         read_offset += params.BLOCK_CT_DIM;
     }
-    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tensor_shape);
 }
 
 #endif
@@ -75,9 +78,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // A narrow tile is 32x16: 2 faces stacked vertically (2x1 grid), which the legacy helper would make 1x2.
+    // A narrow tile is one face wide: 32x16 (2x1 faces) or 16x16 (one face). The legacy helper would make 2 faces 1x2.
     const ckernel::TensorShape tensor_shape = params.NARROW_TILE
-                                                  ? ckernel::make_tensor_shape(FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, 1 /* num_faces_c_dim */)
+                                                  ? ckernel::make_tensor_shape(FACE_R_DIM, MAX_FACE_C_DIM, params.num_faces, 1 /* num_faces_c_dim */)
                                                   : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     // Copy srca to dest with tilize flag
     _llk_math_eltwise_unary_datacopy_init_wrapper_<

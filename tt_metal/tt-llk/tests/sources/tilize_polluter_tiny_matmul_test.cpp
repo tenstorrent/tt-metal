@@ -57,7 +57,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 0: regular tilize "polluter" (output discarded to scratch) ----
     int run                              = 0;
     const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
-    const std::uint32_t pol_tilize_nf    = POLLUTER_NUM_FACES;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[run].unpack_A_src,
@@ -66,8 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_dst,
         ckernel::make_tensor_shape_from_legacy(POLLUTER_FACE_R_DIM, POLLUTER_NUM_FACES),
         ckernel::make_tensor_shape_from_legacy(POLLUTER_FACE_R_DIM, POLLUTER_NUM_FACES));
-    _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, POLLUTER_FACE_R_DIM, false /* narrow_tile */, pol_tilize_nf);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, ckernel::DEFAULT_TENSOR_SHAPE);
     // Read the regular operand B buffer (full 32x32 tile) as raw row-major input.
     _llk_unpack_tilize_wrapper_(
         L1_ADDRESS(params.buffer_B[0]),
@@ -75,9 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_A_src,
         formats_array[run].unpack_A_dst,
         pol_block_ct_dim,
-        POLLUTER_FACE_R_DIM,
-        pol_tilize_nf,
-        false /* narrow_tile */);
+        ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Wait until the run-0 packer has drained before touching unpacker state.
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
@@ -86,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (DO_RESTORE)
     {
         // Restore the canonical SrcA baseline mutated by the regular tilize.
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[1].unpack_A_dst, POLLUTER_NUM_FACES, POLLUTER_FACE_R_DIM);
+        _llk_unpack_tilize_uninit_wrapper_(formats_array[1].unpack_A_dst, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 
     // ---- Run 1: TINY matmul on independent pre-tilized operands (verbatim) ----
