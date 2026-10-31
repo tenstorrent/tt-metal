@@ -917,3 +917,30 @@ def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error)
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
         )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [64, 128, 192, 256, 512], ids=lambda q: f"q{q}")
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=lambda k: f"k{k}")
+@pytest.mark.parametrize("nh, nkv", [(32, 8), (8, 8)], ids=["gqa", "mha"])
+def test_sdpa_lofi_fp16_dest_q_chunks(device, nh, nkv, k_chunk_size, q_chunk_size, dtype):
+    """LoFi with a 16-bit DEST at Q chunks of three or more P.V row groups used to hang the device (#61772)."""
+    s, d = 1024, 128
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, n, s, d) for n in (nh, nkv, nkv))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8), q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    tq, tk, tv = (ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq, tk, tv, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        q, k.repeat_interleave(nh // nkv, 1), v.repeat_interleave(nh // nkv, 1)
+    )
+    # LoFi with a 16-bit DEST lands near 0.998 at 128-wide K chunks (more fp16 rescales); a hang never returns.
+    passing, pcc = comp_pcc(expected, ttnn.to_torch(out).float(), 0.995)
+    assert passing, pcc

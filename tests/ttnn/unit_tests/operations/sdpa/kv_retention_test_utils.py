@@ -12,18 +12,9 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tt_py_test_utils_common.utility_functions import is_wormhole_b0
-
-
-def skip_if_wormhole_lofi_hang(q_chunk):
-    # LoFi with fp16 dest hangs Wormhole SDPA unless q_chunk is 1, 2 or 4 tiles (also on main):
-    # https://github.com/tenstorrent/tt-metal/issues/61772
-    if is_wormhole_b0() and q_chunk // 32 not in (1, 2, 4):
-        pytest.skip(f"q_chunk {q_chunk} with LoFi + fp16 dest hangs on Wormhole, see #61772")
 
 
 def run_sdpa(device, q, k, v, grid, q_chunk, k_chunk, concat=False, memory_config=None, is_causal=False, **kwargs):
-    skip_if_wormhole_lofi_hang(q_chunk)
     tq, tk, tv = (
         ttnn.from_torch(t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
         for t in (q, k, v)

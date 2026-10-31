@@ -13,7 +13,6 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.unit_tests.operations.sdpa.kv_retention_test_utils import skip_if_wormhole_lofi_hang
 
 
 def _skip_if_too_big(device, grid):
@@ -23,7 +22,6 @@ def _skip_if_too_big(device, grid):
 
 
 def _sdpa(device, q, k, v, grid, q_chunk, k_chunk, **kwargs):
-    skip_if_wormhole_lofi_hang(q_chunk)
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid), q_chunk_size=q_chunk, k_chunk_size=k_chunk
     )
