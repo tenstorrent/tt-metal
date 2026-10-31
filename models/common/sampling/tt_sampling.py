@@ -1091,7 +1091,7 @@ class TTSampling(LightweightModule):
             x = self._apply_grammar_bitmask(x)
 
         if self._force_argmax_sampling:
-            logger.info("Forcing argmax sampling")
+            logger.debug("Forcing argmax sampling")
             # Logprobs consume the vocabulary shards before argmax's gather/slice,
             # masked below. Keep token selection identical when reporting toggles.
             logits_for_log_probs = x
