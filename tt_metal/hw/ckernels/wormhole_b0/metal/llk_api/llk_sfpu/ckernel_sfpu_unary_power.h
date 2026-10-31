@@ -393,7 +393,17 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
     }
 }
 
-inline void power_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void power_init() {
+#if !(defined(MM_THROTTLE) && MM_THROTTLE > 0)
+    // calculate_unary_power_iterative's paired store walks dest through physical addr_mod slot 6, advancing
+    // by the two rows the pair just wrote (one sfpi row is two dest counter steps), so the row loop needs no
+    // separate increment. Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to
+    // physical slot 6. A throttled matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 itself, so there the
+    // kernel increments dest explicitly and this init leaves the slot alone.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+#endif
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 /**
  * @brief Compute power operation
@@ -410,32 +420,77 @@ inline void calculate_unary_power(const uint32_t exponent) {
 }
 
 /**
+ * @brief Raises two adjacent rows to the power (exp_minus_one + 1) by binary exponentiation
+ *
+ * Each row runs the same multiply sequence as a single-row walk; pairing them shares the walk's
+ * branches and lets each row's multiply cover the other's MUL latency, so no NOPs are needed.
+ * The last squaring is skipped since its result is never used. Advances dst_reg by two rows: the second
+ * store does it through ADDR_MOD_6 as programmed by @ref power_init (an explicit increment under MM_THROTTLE).
+ *
+ * @param exp_minus_one Exponent minus one (the first factor is the base itself)
+ */
+sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const uint32_t exp_minus_one) {
+    sfpi::vFloat in0 = sfpi::dst_reg[0];
+    sfpi::vFloat in1 = sfpi::dst_reg[1];
+    sfpi::vFloat result0 = in0;
+    sfpi::vFloat result1 = in1;
+    for (uint32_t exp = exp_minus_one; exp > 0;) {
+        if (exp & 1) {
+            result0 *= in0;
+            result1 *= in1;
+        }
+        exp >>= 1;
+        if (exp == 0) {
+            break;
+        }
+        in0 *= in0;
+        in1 *= in1;
+    }
+    sfpi::dst_reg[0] = result0;
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+    sfpi::dst_reg[1] = result1;
+    sfpi::dst_reg += 2;
+#else
+    sfpi::dst_reg[1].mode(ADDR_MOD_2) = result1;
+#endif
+}
+
+/**
  * @brief Compute power operation using iterative approach
  *
+ * @tparam APPROXIMATION_MODE Unused; the result is exact repeated multiplication in both modes.
+ * @tparam ITERATIONS Number of Dest rows to process; must be even, since rows are processed in pairs.
  * @param exponent Non-negative integer exponent value
+ * @note Call @ref power_init after any other SFPU init that writes ADDR_MOD_6; the row pairs advance Dest
+ *       through it.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_power_iterative(const uint32_t exponent) {
-    // iterative approach for positive integer exponents
+    static_assert(ITERATIONS % 2 == 0, "rows are processed in pairs");
+    // x^0 == 1 for every input
+    if (exponent == 0) {
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        if (exponent == 0) {
+        for (int d = 0; d < ITERATIONS; d++) {
             sfpi::dst_reg[0] = 1.0f;
-        } else {
-            sfpi::vFloat result = in;
-            uint32_t exp = exponent - 1;
-
-            while (exp > 0) {
-                if (exp & 1) {
-                    result *= in;
-                }
-                in *= in;
-                exp >>= 1;
-            }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
         }
-        sfpi::dst_reg++;
+        return;
+    }
+    // Iterative approach for positive integer exponents
+    const uint32_t exp_minus_one = exponent - 1;
+    if (__builtin_constant_p(exponent) || exponent == 1) {
+        // A constant exponent folds the walk to straight-line multiplies, and x^1 has no walk at all, so
+        // unrolling lets the compiler replay-roll the rows.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            _sfpu_unary_power_iterative_two_rows_(exp_minus_one);
+        }
+    } else {
+        // Runtime exponent: keep the row loop rolled so the bit walk is emitted once, not per row.
+#pragma GCC unroll 1
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            _sfpu_unary_power_iterative_two_rows_(exp_minus_one);
+        }
     }
 }
 
