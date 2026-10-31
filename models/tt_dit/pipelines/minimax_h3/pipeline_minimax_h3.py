@@ -1199,7 +1199,7 @@ class MiniMaxH3Pipeline:
                 input_ids = torch.nn.functional.pad(input_ids, (0, target - seq_len))
                 type_ids = torch.nn.functional.pad(type_ids, (0, target - seq_len))
                 seq_len = target
-        elif self.sp_factor > 1 and seq_len % sp_alignment:
+        elif seq_len % sp_alignment:
             seq_len = ((seq_len + sp_alignment - 1) // sp_alignment) * sp_alignment
             input_ids = torch.nn.functional.pad(input_ids, (0, seq_len - true_seq_len))
             type_ids = torch.nn.functional.pad(type_ids, (0, seq_len - true_seq_len))
