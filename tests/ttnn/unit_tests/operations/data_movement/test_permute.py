@@ -200,6 +200,32 @@ def test_permute_pad_value(device, pad_value):
     assert_equal(torch_output, tt_output)
 
 
+@pytest.mark.parametrize(
+    "shape, perm",
+    [
+        ((1, 5, 64, 32), (0, 2, 1, 3)),  # HC transpose
+        ((5, 3, 32, 64), (2, 1, 0, 3)),  # tile-row invariant permute
+        ((2, 11, 33, 17), (3, 2, 1, 0)),  # generic tiled permute
+    ],
+)
+@pytest.mark.parametrize("pad_value", [5.0, -7.0])
+def test_permute_int32_pad_value(device, shape, perm, pad_value):
+    torch.manual_seed(2005)
+    torch_input = random_torch_tensor(ttnn.int32, shape)
+    torch_output = torch.permute(torch_input, perm)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    tt_output = ttnn.permute(tt_input, perm, pad_value=pad_value)
+    padded_output = tt_output.cpu().to_torch_with_padded_shape()
+
+    height, width = torch_output.shape[-2:]
+    assert_equal(torch_output, padded_output[..., :height, :width])
+    padding_mask = torch.ones(padded_output.shape, dtype=torch.bool)
+    padding_mask[..., :height, :width] = False
+    assert padding_mask.any()
+    assert torch.all(padded_output[padding_mask] == int(pad_value))
+
+
 def generate_permutations(N):
     """
     Generator function that yields all permutations of tuples with values 0 to N-1.
