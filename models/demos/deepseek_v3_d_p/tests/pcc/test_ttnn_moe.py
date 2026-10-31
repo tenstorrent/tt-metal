@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SITU,
 )
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
@@ -110,6 +111,11 @@ _HASH_VOCAB_SIZE = 1024
 _HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
 
 
+# run_model's default for routed_expert_hybrid_token_threshold: take the variant's own. A sentinel, because
+# None is a real setting (no hybrid split, the single-op dispatch).
+_VARIANT_THRESHOLD = object()
+
+
 def run_model(
     variant,
     config,
@@ -146,6 +152,7 @@ def run_model(
     moe_transport="direct",
     combine_fwd_reduction=None,
     sp_axis=0,
+    routed_expert_hybrid_token_threshold=_VARIANT_THRESHOLD,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -547,8 +554,10 @@ def run_model(
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
         # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
-        routed_expert_hybrid_token_threshold=getattr(
-            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        routed_expert_hybrid_token_threshold=(
+            getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
+            if routed_expert_hybrid_token_threshold is _VARIANT_THRESHOLD
+            else routed_expert_hybrid_token_threshold
         ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
@@ -1005,21 +1014,24 @@ def _fabric2d_torus_xy_8x4(model_cfg):
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
         "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
     ),
-    [
-        # fmt: off
+    with_sp4_depth(
+        [
+            # fmt: off
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
-        # fmt: on
-    ],
+            # fmt: on
+        ]
+    ),
 )
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 1),
             torus_y_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",
         ),
@@ -1027,6 +1039,7 @@ def _fabric2d_torus_xy_8x4(model_cfg):
             (4, 2),
             fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
@@ -1034,6 +1047,7 @@ def _fabric2d_torus_xy_8x4(model_cfg):
             (2, 4),
             fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
@@ -1041,8 +1055,27 @@ def _fabric2d_torus_xy_8x4(model_cfg):
             (8, 4),
             torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # SP on mesh axis 1: Galaxy with SP=4 on axis 1 and TP=8 on axis 0, then one 4x4 prefill stage (a
+        # Galaxy tray half, run_4x4_stage_tests.sh) with SP=4 on the axis-1 ring and TP=4 on the axis-0 line.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1066,6 +1099,7 @@ def test_glm_moe(
     run_pcc_check,
     is_balanced,
     num_links,
+    sp_axis,
     gate_fallback_mode,
     request,
     padded_percent,
@@ -1090,6 +1124,10 @@ def test_glm_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
+        sp_axis=sp_axis,
+        # The variant is DSv3 only for its CPU reference; the routed experts split as the GLM model's do,
+        # so moe_fused_swiglu runs (DeepSeekV3Config carries no threshold: single-op dispatch).
+        routed_expert_hybrid_token_threshold=GLM53Config.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD,
     )
 
 
@@ -1285,12 +1323,14 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
         "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
     ),
-    [
-        # fmt: off
+    with_sp4_depth(
+        [
+            # fmt: off
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-perf"),
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-pcc"),
-        # fmt: on
-    ],
+            # fmt: on
+        ]
+    ),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, sp_axis",

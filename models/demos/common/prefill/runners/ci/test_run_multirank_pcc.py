@@ -50,6 +50,8 @@ def shell_command():
 if name == "sleep":
     time.sleep(0.02)
 elif name == "setsid":
+    # A process group of its own, so the harness's group kill reaches the stub ranks.
+    os.setsid()
     os.execvp(args[0], args)
 elif name == "timeout":
     # Only `timeout N tail --pid=P -f /dev/null` (wait for the runner) is used; BSD tail has no --pid.
@@ -79,6 +81,9 @@ elif name.startswith("mpirun"):
     sys.exit(subprocess.call(args[index:], env=os.environ))
 elif args and args[0].endswith("ttrun.py"):
     record("runner_launch")
+    mpi_args = args[args.index("--mpi-args") + 1].split() if "--mpi-args" in args else []
+    if "--output-filename" in mpi_args:
+        os.environ["TEST_RUNNER_LOGS"] = mpi_args[mpi_args.index("--output-filename") + 1]
     # Explicit bindings do not produce discovery artifacts in real tt-run.
     if "--rank-binding" not in args:
         rankfile = Path.cwd() / "generated/ttrun/test/rankfile"
@@ -111,7 +116,24 @@ elif args and args[0].endswith("gen_pipeline_binding.py"):
         out.write_text("rank_bindings: []\n")
 elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
     record("runner")
-    Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
+    crash = os.environ.get("TEST_RUNNER_CRASH")
+    if crash != "bringup":
+        Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
+    if crash:
+        # Rank 1's device times out: it leaves a traceback and an Inspector dump, then hangs in
+        # teardown, as in run 40947298596. Only the watchdog's kill ends it. Mid-request, as there,
+        # it waits for the producer first so the test does not race the producer's launch.
+        deadline = time.monotonic() + 15
+        while crash == "request" and not (root / "producer_started").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("Traceback (most recent call last):\nRuntimeError: TIMEOUT: device timeout\n")
+        inspector = Path(os.environ["TT_METAL_HOME"]) / "generated" / "inspector"
+        inspector.mkdir(parents=True, exist_ok=True)
+        (inspector / "dispatch.yaml").write_text("stub inspector dump\n")
+        while True:
+            time.sleep(0.05)
     deadline = time.monotonic() + 15
     while not (root / "producer_done").exists():
         if time.monotonic() > deadline:
@@ -120,6 +142,13 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
     sys.exit(int(os.environ.get("TEST_RUNNER_RC", "0")))
 elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     record("producer")
+    if os.environ.get("TEST_RUNNER_CRASH"):
+        # Blocked on layer completions that never come; exits only when its launcher is killed.
+        (root / "producer_started").touch()
+        parent = os.getppid()
+        while os.getppid() == parent:
+            time.sleep(0.05)
+        sys.exit(143)
     verdict_dir = Path(os.environ["PREFILL_PCC_SUMMARY_DIR"])
     verdict_dir.mkdir(parents=True, exist_ok=True)
     mode = os.environ.get("TEST_VERDICT", "pass")
@@ -166,7 +195,16 @@ else:
 
 class MultirankPccHarnessTests(unittest.TestCase):
     def run_harness(
-        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+        self,
+        model,
+        *,
+        verdict="pass",
+        runner_rc=0,
+        missing_cache=False,
+        hosts=None,
+        config=None,
+        extra_env=None,
+        args=(),
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -207,6 +245,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (cache / "mistral_small_4_bh_8dev/8x1").mkdir(parents=True)
             (cache / "kimi_k3_bh_16dev/4x4_sp1").mkdir(parents=True)
             (cache / "kimi_k3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
+            (cache / "glm_5_3_bh_16dev/4x4_sp1").mkdir(parents=True)
+            (cache / "glm_5_3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
         golden = root / "golden"
         (golden / "kv_cache").mkdir(parents=True)
         for layer in range(36):
@@ -245,6 +285,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         command = ["bash", str(harness), model]
         if config is not None:
             command.append(config)
+        command.extend(args)
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
         records = [json.loads(path.read_text()) for path in (root / "records").glob("*.json")]
         return result, records
@@ -458,6 +499,37 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("interleaved hosts across ranks", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] == "producer"])
 
+    def run_with_a_rank_crash(self, when):
+        summaries = tempfile.TemporaryDirectory()
+        self.addCleanup(summaries.cleanup)
+        result, records = self.run_harness(
+            "kimi_k3",
+            config="sc4_4x4",
+            hosts=self.SC4_HOSTS,
+            extra_env={"TEST_RUNNER_CRASH": when, "PREFILL_SUMMARIES": summaries.name},
+        )
+        output = result.stdout + result.stderr
+        # The bring-up path exits with the killed runner's status, the request path with 1.
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("a rank crashed: ", output)
+        evidence = Path(summaries.name) / "pcc" / "kimi_k3"
+        self.assertIn("rank.1/stderr", (evidence / "rank_crashed").read_text())
+        self.assertTrue((evidence / "ranklogs" / "runner" / "1" / "rank.1" / "stderr").is_file())
+        self.assertEqual(
+            [path.name for path in (evidence / "inspector").glob("*/dispatch.yaml")], ["dispatch.yaml"], output
+        )
+        return output, records
+
+    def test_a_rank_crash_mid_request_stops_the_producer_and_keeps_the_evidence(self):
+        output, records = self.run_with_a_rank_crash("request")
+        self.assertIn("stopped after a rank crashed", output)
+        self.one_record(records, "producer")
+
+    def test_a_rank_crash_during_bringup_fails_before_the_producer(self):
+        output, records = self.run_with_a_rank_crash("bringup")
+        self.assertIn("runner exited before publishing the KV table", output)
+        self.assertFalse([record for record in records if record["kind"] == "producer"])
+
     def test_kimi_k3_4x4_needs_four_hosts(self):
         result, records = self.run_harness("kimi_k3", config="sc4_4x4", hosts=self.SC4_HOSTS[:2])
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -470,7 +542,38 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("no 4x4 weight cache", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
-    def test_only_kimi_k3_has_the_4x4_leg(self):
+    def test_glm53_4x4_binds_by_discovery_from_its_own_cache(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_4x4_sp1_mgd.textproto"))
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "8")
+        runner = self.one_record(records, "runner")["env"]
+        self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
+        self.assertEqual(runner["PREFILL_MAX_SEQ_LEN"], "1049600")
+        self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_SP"], "4")
+        self.assertEqual(producer["PREFILL_TP"], "4")
+        self.assertEqual((runner["PREFILL_CHUNK_SIZE"], producer["PREFILL_CHUNK_SIZE"]), ("2560", "2560"))
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 2560))
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
+        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_glm53_4x4_has_no_mtp_variant(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, args=["--variant", "mtp_kv_share"])
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("glm53/sc4_4x4 has no mtp_kv_share variant", result.stderr)
+        self.assertFalse(records)
+
+    def test_only_kimi_k3_and_glm53_have_the_4x4_leg(self):
         result, records = self.run_harness("kimi27", config="sc4_4x4")
         self.assertEqual(result.returncode, 2)
         self.assertIn("kimi27 does not support config 'sc4_4x4'", result.stderr)
