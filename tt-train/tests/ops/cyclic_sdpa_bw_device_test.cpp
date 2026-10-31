@@ -3769,9 +3769,17 @@ constexpr const char* kDramReaderPath =
 constexpr const char* kDramWriterPath =
     "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
     "cyclic_sdpa_bw_dram_writer.cpp";
+constexpr const char* kNullReaderPath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
+    "cyclic_sdpa_bw_null_reader.cpp";
+constexpr const char* kNullWriterPath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
+    "cyclic_sdpa_bw_null_writer.cpp";
 
 struct TransportConfig {
     bool dram = false;        // Algorithm 1 (row packets through DRAM, chip-wide barrier) instead of the relay
+    bool null = false;        // no transport at all: the compute kernel fed from its own buffers (compute time alone)
+    bool directional_noc = false;  // relay only: each packet on the NoC that routes towards its receiver
     bool compute = true;      // the arithmetic; false keeps only the protocol
     bool stat_work = true;    // the writer RISC's soft-float statistics
     uint32_t dram_skip = 0;   // relay only: 1 skips the reloads and their spills, 2 everything after t = 0
@@ -3780,7 +3788,10 @@ struct TransportConfig {
 };
 
 std::string transport_name(const TransportConfig& cfg) {
-    std::string s = cfg.dram ? "DRAM" : "relay";
+    std::string s = cfg.null ? "none" : (cfg.dram ? "DRAM" : "relay");
+    if (cfg.directional_noc) {
+        s += " (directional NoC)";
+    }
     s += cfg.compute ? ", compute" : ", movement only";
     if (!cfg.stat_work) {
         s += ", no stat work";
@@ -3928,13 +3939,16 @@ Gradients run_transport(
         if (cfg.dram_skip != 0) {
             dataflow_defines["DRAM_SKIP"] = std::to_string(cfg.dram_skip);
         }
+        if (cfg.directional_noc) {
+            dataflow_defines["DIRECTIONAL_NOC"] = "1";
+        }
     } else if (!cfg.stat_reads) {
         dataflow_defines["NO_STAT_READS"] = "1";
     }
     std::map<std::string, std::string> compute_defines;
     compute_defines["L_SEED_SCALE_BITS"] = dataflow_defines["L_SEED_SCALE_BITS"];
     compute_defines["COLUMN_RESIDENT"] = "1";
-    if (!cfg.dram) {
+    if (!cfg.dram && !cfg.null) {
         compute_defines["RELEASE_TOKEN"] = "1";
     }
     if (!cfg.compute) {
@@ -3943,7 +3957,24 @@ Gradients run_transport(
 
     KernelHandle reader = 0;
     KernelHandle writer = 0;
-    if (!cfg.dram) {
+    const auto noc_mode = cfg.directional_noc ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
+    if (cfg.null) {
+        const std::vector<uint32_t> null_args = {C, qWt, vWt, Bt};
+        reader = CreateKernel(
+            program, kNullReaderPath, region,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = null_args,
+                .defines = dataflow_defines});
+        writer = CreateKernel(
+            program, kNullWriterPath, region,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = null_args,
+                .defines = dataflow_defines});
+    } else if (!cfg.dram) {
         std::vector<uint32_t> reader_args = {
             C, qWt, vWt, release_sem, ready_imm0_sem, ready_imm1_sem, ready_dq0_sem,
             ready_dq1_sem, credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem,
@@ -3956,6 +3987,7 @@ Gradients run_transport(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::RISCV_1_default,
+                .noc_mode = noc_mode,
                 .compile_args = reader_args,
                 .defines = dataflow_defines});
         std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem, Bt};
@@ -3969,6 +4001,7 @@ Gradients run_transport(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
+                .noc_mode = noc_mode,
                 .compile_args = writer_args,
                 .defines = dataflow_defines});
     } else {
@@ -4033,7 +4066,10 @@ Gradients run_transport(
                 c, g, query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
                 grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
                 grad_query.buffer()->address(), grad_key.buffer()->address(), grad_value.buffer()->address()};
-            if (!cfg.dram) {
+            if (cfg.null) {
+                SetRuntimeArgs(program, reader, core, {c, slice_count});
+                SetRuntimeArgs(program, writer, core, {c, slice_count});
+            } else if (!cfg.dram) {
                 const auto neighbors = snake_neighbors(C, c);
                 const auto prev = noc_of_core(neighbors.prev != kNoCore ? neighbors.prev : c);
                 const auto next = noc_of_core(neighbors.next != kNoCore ? neighbors.next : c);
@@ -4115,6 +4151,23 @@ void check_dram_variant(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t B
 TEST(CyclicSdpaBwTransportTest, Algorithm1MatchesTheRelay) {
     check_dram_variant(4, 2, 2, 1, 64);
 }
+// The directional-NoC relay is the relay with a different wire per hop: the
+// same gradients to the bit.
+TEST(CyclicSdpaBwTransportTest, DirectionalNocMatchesTheRelay) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid.x < 4 || grid.y < 4) {
+        GTEST_SKIP() << "needs a 4x4 region";
+    }
+    const auto ref = make_reference(2u * 16u * 2u * kTile, 64);
+    const auto relay = run_transport(16, ref, 4, 4, 2, 1, TransportConfig{});
+    TransportConfig dir;
+    dir.directional_noc = true;
+    const auto directional = run_transport(16, ref, 4, 4, 2, 1, dir);
+    expect_identical(relay.dQ, directional.dQ, "dQ, directional NoC against the relay");
+    expect_identical(relay.dK, directional.dK, "dK, directional NoC against the relay");
+    expect_identical(relay.dV, directional.dV, "dV, directional NoC against the relay");
+    expect_close(directional.dQ, ref.dQ, 2.5e-2F, "dQ");
+}
 TEST(CyclicSdpaBwTransportTest, Algorithm1MatchesTheRelayTallBlocks) {
     check_dram_variant(4, 2, 2, 4, 64);
 }
@@ -4130,14 +4183,17 @@ TEST(CyclicSdpaBwTransportTest, MovementOnlyVariantsComplete) {
         GTEST_SKIP() << "needs a 4x2 region";
     }
     const auto ref = make_reference_inputs_only(2u * 8u * 2u * kTile, 64);
-    for (const bool dram : {false, true}) {
+    for (const uint32_t transport : {0u, 1u, 2u, 3u}) {  // relay, relay on the directional NoCs, DRAM, none
+        const bool dram = transport == 2u;
         for (const uint32_t skip : {0u, 1u, 2u}) {
-            if (dram && skip != 0u) {
+            if (transport >= 2u && skip != 0u) {
                 continue;
             }
             for (const bool stat_work : {true, false}) {
                 TransportConfig cfg;
                 cfg.dram = dram;
+                cfg.null = transport == 3u;
+                cfg.directional_noc = transport == 1u;
                 cfg.compute = false;
                 cfg.stat_work = stat_work;
                 cfg.dram_skip = skip;
@@ -4205,6 +4261,19 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
         variants.emplace_back("relay-move-nostat-noreload", c);
         c.dram_skip = 2;
         variants.emplace_back("relay-move-nostat-nodram", c);
+        c = TransportConfig{};
+        c.directional_noc = true;
+        variants.emplace_back("relay-dir-full", c);
+        c.compute = false;
+        c.stat_work = false;
+        variants.emplace_back("relay-dir-move-nostat", c);
+        c.dram_skip = 2;
+        variants.emplace_back("relay-dir-move-nostat-nodram", c);
+        c = TransportConfig{};
+        c.null = true;
+        variants.emplace_back("none-full", c);
+        c.stat_work = false;
+        variants.emplace_back("none-full-nostat", c);
         c = TransportConfig{};
         c.dram = true;
         c.compute = false;

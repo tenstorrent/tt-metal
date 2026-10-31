@@ -128,6 +128,17 @@
 #ifndef DRAM_SKIP
 #define DRAM_SKIP 0
 #endif
+
+// DIRECTIONAL_NOC: send each packet over the NoC that routes towards its
+// receiver. Each of the two NoCs is a unidirectional torus -- NoC 0 travels
+// in +x then +y, NoC 1 in -x then -y -- so on one NoC a write to the
+// neighbour on the wrong side goes the long way round the row or column
+// ring and shares those links with every other such write. The kernel must
+// then run in dynamic NoC mode (the host sets it). Off: everything on the
+// kernel's own NoC, as the op has it.
+#ifndef DIRECTIONAL_NOC
+#define DIRECTIONAL_NOC 0
+#endif
 // Whether a DRAM access happens: never skipped in the op; at level 1 only
 // the reloads are skipped; at level 2 everything after timestep 0.
 constexpr bool dram_access(bool reload, uint32_t t) {
@@ -359,6 +370,19 @@ void kernel_main() {
         }
     };
 
+    // The NoC a write to core (x, y) -- NoC 0 coordinates -- should take: the
+    // one whose direction of travel reaches it in a hop (see DIRECTIONAL_NOC).
+    // A neighbour at a larger x or y is a NoC 0 hop; at a smaller one a NoC 1 hop.
+    const auto noc_towards = [&](uint32_t x, uint32_t y) -> uint8_t {
+#if DIRECTIONAL_NOC
+        return (x > my_x[0] || y > my_y[0]) ? 0u : 1u;
+#else
+        (void)x;
+        (void)y;
+        return noc_index;
+#endif
+    };
+
     // A slot release grants permission to whoever produces for it next. Seen
     // from that producer, this core is its snake successor when it is this
     // core's predecessor, and the other way round.
@@ -371,7 +395,8 @@ void kernel_main() {
         uint32_t y = 0;
         noc_xy_of(p, x, y);
         const uint32_t sem_id = (p == neighbors.prev) ? credit_next_sem_id : credit_prev_sem_id;
-        noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(sem_id)), 1u);
+        const uint8_t noc = noc_towards(x, y);
+        noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(sem_id), noc), 1u, noc);
     };
 
     const auto await_credit = [&](uint32_t r) {
@@ -625,8 +650,10 @@ void kernel_main() {
         const uint32_t dst_grad_query = base_grad_query + dst * stride_grad_query;
         uint32_t receiver_x = 0;
         uint32_t receiver_y = 0;
+        uint8_t receiver_noc = noc_index;
         if (receiver != kNoCore && receiver != my_core) {
             noc_xy_of(receiver, receiver_x, receiver_y);
+            receiver_noc = noc_towards(receiver_x, receiver_y);
         }
 
         {
@@ -644,19 +671,21 @@ void kernel_main() {
             noc_semaphore_set(ready_imm_sem[dst], u + 1u);
         } else if (receiver != kNoCore) {
             await_credit(receiver);
-            noc_async_write(qs, get_noc_addr(receiver_x, receiver_y, dst_query), stride_query);
+            noc_async_write(qs, get_noc_addr(receiver_x, receiver_y, dst_query, receiver_noc), stride_query, receiver_noc);
             noc_async_write(
-                os, get_noc_addr(receiver_x, receiver_y, dst_grad_output), stride_grad_output);
-            noc_async_write(src_block, get_noc_addr(receiver_x, receiver_y, dst_block), stride_block);
+                os, get_noc_addr(receiver_x, receiver_y, dst_grad_output, receiver_noc), stride_grad_output, receiver_noc);
+            noc_async_write(
+                src_block, get_noc_addr(receiver_x, receiver_y, dst_block, receiver_noc), stride_block, receiver_noc);
             // Payload complete before readiness, as the contract requires.
-            noc_async_write_barrier();
+            noc_async_write_barrier(receiver_noc);
             // An inline write carries the value in the command itself, so
             // there is no 4-byte source word in L1 to keep alive and no
             // trailing write barrier to wait for the ack of. The payload
             // barrier above is what orders payload before readiness; this
             // write is fire-and-forget, and the consumer polls for it.
             noc_inline_dw_write(
-                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst])), u + 1u);
+                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst]), receiver_noc), u + 1u, 0xF,
+                receiver_noc);
         }
         }
 
@@ -757,15 +786,17 @@ void kernel_main() {
             noc_semaphore_set(ready_dq_sem[dst], u + 1u);
         } else if (receiver != kNoCore) {
             noc_async_write(
-                dq_out, get_noc_addr(receiver_x, receiver_y, dst_grad_query), stride_grad_query);
-            noc_async_write_barrier();
+                dq_out, get_noc_addr(receiver_x, receiver_y, dst_grad_query, receiver_noc), stride_grad_query,
+                receiver_noc);
+            noc_async_write_barrier(receiver_noc);
             // An inline write carries the value in the command itself, so
             // there is no 4-byte source word in L1 to keep alive and no
             // trailing write barrier to wait for the ack of. The payload
             // barrier above is what orders payload before readiness; this
             // write is fire-and-forget, and the consumer polls for it.
             noc_inline_dw_write(
-                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_dq_sem_id[dst])), u + 1u);
+                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_dq_sem_id[dst]), receiver_noc), u + 1u, 0xF,
+                receiver_noc);
         } else {
             // Streak end: spill dQ_i and complete the write, so the reload at
             // the next streak start observes it. (An inter-streak spill is a
@@ -819,6 +850,13 @@ void kernel_main() {
     // Drain what is still in flight before the kernel ends: the readiness and
     // endpoint writes are issued without waiting for their acks, and a
     // kernel must not finish with outstanding NoC transactions.
+#if DIRECTIONAL_NOC
+    noc_async_write_barrier(0);
+    noc_async_write_barrier(1);
+    noc_async_atomic_barrier(0);
+    noc_async_atomic_barrier(1);
+#else
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#endif
 }
