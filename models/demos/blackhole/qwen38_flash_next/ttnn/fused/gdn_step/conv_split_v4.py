@@ -33,7 +33,7 @@ from .. import program as fp
 from . import conv_split_v as v
 from .conv_split import CONV_ROWS, CONV_TILES, SEM_QK, SEM_V
 
-ROWTRIM_ENV = "QWEN38_GDN_ROWTRIM"  # "1" (default), "0" off, "2" opt-in; see rowtrim_defines
+ROWTRIM_ENV = "QWEN38_GDN_ROWTRIM"  # "2" (default), "1", "0" off; see rowtrim_defines
 ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); the default kernels run 8 (rows 0..31)
 SEM_X, SEM_NORM, SEM_GATE = 2, 3, 4
 NORM_Y, GATE_Y = 4, 5
@@ -43,21 +43,44 @@ CB_QROW, CB_KROW, CB_BETA, CB_DECAY = 15, 16, 18, 19
 def rowtrim_defines(level: str | None = None) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Kernel defines ``(head compute, norm compute)`` of ``QWEN38_GDN_ROWTRIM`` (split 4 only, so rows = 1: row 0 is the
     only live row).  "0": none, the kernels run today's SFPU ops (VectorMode::RC, 8 iterations).
-    "1" (default): the head cores' SFPU ops whose rows 4.. only feed row-local consumers (o scale, the o rms norm's add / sqrt /
+    "1": the head cores' SFPU ops whose rows 4.. only feed row-local consumers (o scale, the o rms norm's add / sqrt /
     recip, the z sigmoid, the gate multiply) run ``ROWTRIM_ITERATIONS`` iterations per face (VectorMode::R).
-    "2" (opt-in, NOT the default): also the ops whose rows 4.. reach the state only through the mask's exactly zero rows (``k^T delta_b``): the
+    "2" (default): also the ops whose rows 4.. reach the state only through the mask's exactly zero rows (``k^T delta_b``): the
     head cores' ``v - v_read`` and ``* beta``, and the l2 norm cores' add / sqrt / recip.  decay_state (all state rows
-    live), the gate cores and every FPU op are never changed.  Level 2 is not the default because it is bit-identical only
-    while the dead rows hold finite values (inf or NaN times the mask's 0 is NaN), and dead rows can hold leftover L1 data;
-    level 1 holds for any dead-row value."""
+    live), the gate cores and every FPU op are never changed.  Level 2 is bit-identical to level 0 only while the dead rows are not random bits (a random bf16 pattern in the
+    ring, taps or projection breaks it: tests/test_gdn_step_rowtrim_device.py, the ``rand`` case).  The dead rows of the
+    model's inputs are zero: the ring and the taps are zero allocated, and the projection (the streamed matmul writes row 0
+    only) is the pinned zero padded tensor of ``program.pinned_output`` (``QWEN38_ZERO_DEAD_ROWS=1``, the default);
+    with ``QWEN38_ZERO_DEAD_ROWS=0`` the projection's dead rows are stale bytes and level 2 is not guaranteed."""
 
-    level = os.environ.get(ROWTRIM_ENV, "1") if level is None else level
+    level = os.environ.get(ROWTRIM_ENV, "2") if level is None else level
     if level not in ("0", "1", "2"):
         raise ValueError(f"{ROWTRIM_ENV} must be 0, 1 or 2, got {level!r}")
     iters = str(ROWTRIM_ITERATIONS)
     head = [("QWEN38_GDN_ROWTRIM_ITERS", iters)] if level != "0" else []
     masked = [("QWEN38_GDN_ROWTRIM_MASKED_ITERS", iters)] if level == "2" else []
     return [*head, *masked], masked
+
+
+_WARNED = False
+
+
+def effective_level(projected, level: str | None = None) -> str:
+    """The level the step builds with: level 2 only when ``projected`` is a pinned zero padded tensor
+    (``program.is_pinned``, which needs ``QWEN38_ZERO_DEAD_ROWS`` on); any other projection (stock linear, mm_stream off,
+    rows > 1, zeroing off) builds with level 1, with one warning if level 2 was asked for by the environment.  The result
+    is a compile define, so the program cache sees it."""
+
+    global _WARNED
+    level = os.environ.get(ROWTRIM_ENV, "2") if level is None else level
+    if level == "2" and not (fp.zero_dead_rows_enabled() and fp.is_pinned(projected)):
+        if ROWTRIM_ENV in os.environ and not _WARNED:
+            from loguru import logger
+
+            logger.warning(f"{ROWTRIM_ENV}=2 needs a pinned zero padded projection; building level 1")
+            _WARNED = True
+        return "1"
+    return level
 
 
 def active() -> bool:
@@ -121,7 +144,7 @@ def run_vb4(m, projected, older, newest, taps, constants, norm, recurrent, out):
         reader_cta.extend(fp.accessor_args(tensor))
     writer_cta = [rows, HEADS, vt, vb, *fp.accessor_args(recurrent), *fp.accessor_args(out)]
     defines = [("INP_FLOAT32", "1")]
-    head_trim, norm_trim = rowtrim_defines()
+    head_trim, norm_trim = rowtrim_defines(effective_level(projected))
 
     # head CB table: split 2's, with the CBs the helper cores share declared over the cores that share them
     shared = {

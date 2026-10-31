@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""No-device contract of QWEN38_GDN_ROWTRIM (gdn_step split 4): default level 1 (level 2 opt-in, 0 off), level 1 / 2 defines, kernels default to today's ops."""
+"""No-device contract of QWEN38_GDN_ROWTRIM (gdn_step split 4): default level 2 (1 and 0 off), level 1 / 2 defines, kernels default to today's ops."""
 
 from pathlib import Path
 
@@ -11,9 +11,9 @@ KERNELS = Path(v4.__file__).parent / "kernels"
 LOCAL, MASKED = "QWEN38_GDN_ROWTRIM_ITERS", "QWEN38_GDN_ROWTRIM_MASKED_ITERS"
 
 
-def test_default_is_level_one_and_zero_is_off(monkeypatch):
+def test_default_is_level_two_and_zero_is_off(monkeypatch):
     monkeypatch.delenv(v4.ROWTRIM_ENV, raising=False)
-    assert v4.rowtrim_defines() == ([(LOCAL, "2")], [])  # level 2 needs finite dead rows: opt-in only
+    assert v4.rowtrim_defines() == v4.rowtrim_defines("2")
     monkeypatch.setenv(v4.ROWTRIM_ENV, "0")
     assert v4.rowtrim_defines() == ([], [])
     assert v4.rowtrim_defines("0") == ([], [])
@@ -30,6 +30,8 @@ def test_level_two_adds_the_masked_ops_and_the_norm_cores():
 def test_environment_selects_the_level(monkeypatch):
     monkeypatch.setenv(v4.ROWTRIM_ENV, "1")
     assert v4.rowtrim_defines() == ([(LOCAL, "2")], [])
+    monkeypatch.setenv(v4.ROWTRIM_ENV, "2")
+    assert v4.rowtrim_defines() == ([(LOCAL, "2"), (MASKED, "2")], [(MASKED, "2")])
 
 
 def test_unknown_level_is_refused(expect_error):
@@ -68,3 +70,24 @@ def test_split_four_program_passes_the_defines_to_head_and_norm_compute_only():
     text = Path(v4.__file__).read_text()
     assert "defines=[*defines, *head_trim]" in text and "defines=[*defines, *norm_trim]" in text
     assert text.count("_trim]") == 2
+
+
+def test_level_two_builds_only_for_a_pinned_projection(monkeypatch):
+    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
+
+    plain, pinned = object(), object()
+    fp.mark_pinned(pinned)
+    monkeypatch.delenv(v4.ROWTRIM_ENV, raising=False)
+    monkeypatch.delenv(fp.ZERO_DEAD_ROWS_ENV, raising=False)
+    assert v4.effective_level(pinned) == "2"
+    assert v4.effective_level(plain) == "1"  # unpinned: level 1, the define the program cache sees
+    assert v4.rowtrim_defines(v4.effective_level(plain)) == v4.rowtrim_defines("1")
+    monkeypatch.setenv(v4.ROWTRIM_ENV, "2")
+    assert v4.effective_level(plain) == "1"
+    monkeypatch.setenv(v4.ROWTRIM_ENV, "1")
+    assert v4.effective_level(pinned) == "1"
+    monkeypatch.setenv(v4.ROWTRIM_ENV, "0")
+    assert v4.effective_level(plain) == "0"
+    monkeypatch.delenv(v4.ROWTRIM_ENV)
+    monkeypatch.setenv(fp.ZERO_DEAD_ROWS_ENV, "0")
+    assert v4.effective_level(pinned) == "1"  # zeroing off: pinned or not, no level 2
