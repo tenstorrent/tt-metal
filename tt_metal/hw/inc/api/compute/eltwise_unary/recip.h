@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#ifndef ARCH_QUASAR
+#include "sfpu_mode.h"
+#endif
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -77,4 +80,52 @@ ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
         idst,
         vector_mode));
 }
+
+#ifndef ARCH_QUASAR
+// clang-format off
+/**
+ * Performs element-wise 1/x with the instruction sequence selected by *MODE*. Must follow *recip_tile_init* with the
+ * same *MODE* and *dest_acc*. The DST register buffer must be in acquired state via *acquire_dst* call. This call is
+ * blocking and is only available on the compute engine.
+ *
+ * | MODE                          | Blackhole                                           | Wormhole                              |
+ * |-------------------------------|-----------------------------------------------------|---------------------------------------|
+ * | SfpuMode::PreciseRelaxed      | SFPARECIP + Newton pipeline (bf16: 3c, fp32: 5c/row) | 2 Newton steps (bf16: 1 + rounding)   |
+ * | SfpuMode::ApproximateRelaxed  | SFPARECIP alone, 7-bit, 1 cycle per row              | 1 Newton step                         |
+ * | SfpuMode::PreciseStrict       | SFPARECIP + 2 Newton steps in sfpi, NaN-guarded      | as PreciseRelaxed, NaN-guarded        |
+ * | SfpuMode::ApproximateStrict   | SFPARECIP alone in sfpi, NaN-guarded                 | as ApproximateRelaxed, NaN-guarded    |
+ *
+ * All modes: +-0 -> +-inf, +-inf -> +-0, |x| >= 2^126 -> +-0. Strict adds NaN -> NaN; Relaxed returns 0 for NaN,
+ * so its inputs must not contain NaN. The legacy *recip_tile* runs the Relaxed sequence its approximation selects.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type              | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|-------------------|-------------------------------------------------------|----------|
+ * | MODE            | Instruction sequence to run (template argument)                            | SfpuMode          | Any SfpuMode value                                    | True     |
+ * | dest_acc        | Dest register width (template argument)                                    | ReciprocalDestAcc | Must match the kernel's DST_ACCUM_MODE                | False    |
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t          | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode     | Which faces of the tile to process                                         | VectorMode        | VectorMode::RC (default), R or C                      | False    |
+ */
+// clang-format on
+template <
+    SfpuMode MODE,
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16>
+ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_reciprocal, (MODE, is_fp32_dest_acc_en), idst, vector_mode));
+}
+
+/**
+ * Please refer to documentation for any_init. *MODE* and *dest_acc* must match the paired *recip_tile* call.
+ */
+template <
+    SfpuMode MODE,
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16>
+ALWI void recip_tile_init() {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (MODE, is_fp32_dest_acc_en)));
+}
+#endif
 }  // namespace ckernel

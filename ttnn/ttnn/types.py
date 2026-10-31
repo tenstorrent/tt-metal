@@ -43,6 +43,7 @@ ShardDistributionStrategy = ttnn._ttnn.tensor.ShardDistributionStrategy
 # TODO: MemoryConfig = ttnn._ttnn.types.MemoryConfig
 MemoryConfig = ttnn._ttnn.tensor.MemoryConfig
 MathFidelity = ttnn._ttnn.tensor.MathFidelity
+SfpuMode = ttnn._ttnn.tensor.SfpuMode
 DRAM_MEMORY_CONFIG = ttnn._ttnn.types.DRAM_MEMORY_CONFIG
 L1_MEMORY_CONFIG = ttnn._ttnn.types.L1_MEMORY_CONFIG
 L1_BLOCK_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.BLOCK_SHARDED, BufferType.L1)

@@ -35,6 +35,7 @@ from .llk_params import (
     SdpaFwOp,
     SdpaOp,
     SfpuImpl,
+    SfpuMode,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -458,6 +459,22 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
+
+
+@dataclass
+class SFPU_MODE_OVERRIDE(TemplateParameter):
+    """SfpuMode for an op with a mode-typed kernel API (softsign, exp2, reciprocal).
+
+    A macro rather than a constexpr for the same reason as :class:`SFPU_SHIFT_AMOUNT`:
+    sfpu_operations.h selects on ``#ifdef``, and every other unary test keeps the legacy
+    APPROX_MODE-driven call. Named *_OVERRIDE so it cannot collide with a kernel-wide
+    ``SFPU_MODE`` constant.
+    """
+
+    sfpu_mode: SfpuMode = SfpuMode.PreciseStrict
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_MODE_OVERRIDE {self.sfpu_mode.cpp_enum_value}"
 
 
 @dataclass

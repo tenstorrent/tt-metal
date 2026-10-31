@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "ckernel.h"
 #ifndef ARCH_QUASAR
+#include "sfpu_mode.h"
 #include "ckernel_globals.h"
 #include "ckernel_debug.h"
 #endif
@@ -642,6 +643,46 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
 }
+
+#ifndef ARCH_QUASAR
+// clang-format off
+/**
+ * Performs element-wise 2^x with the instruction sequence selected by *MODE*. Must follow *exp2_tile_init* with
+ * the same *MODE*. The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * | MODE                         | fp32 Dest                              | bf16 Dest                          |
+ * |------------------------------|----------------------------------------|------------------------------------|
+ * | SfpuMode::PreciseStrict      | degree-6 polynomial (~2 ulp), guarded  | exp_21f, clamped (as exp2_tile)    |
+ * | SfpuMode::ApproximateStrict  | degree-4 polynomial (~2.9e-6), guarded | as PreciseStrict                   |
+ * | SfpuMode::PreciseRelaxed     | degree-6 polynomial, no guards         | exp_21f, no clamp                  |
+ * | SfpuMode::ApproximateRelaxed | degree-4 polynomial, no guards         | as PreciseRelaxed                  |
+ *
+ * Strict: NaN -> NaN, x >= 128 or +inf -> +inf, x < -126 or -inf -> 0. Relaxed: inputs must satisfy
+ * -126 <= x < 128; other results are unspecified. The non-templated *exp2_tile* runs PreciseStrict.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | MODE            | Instruction sequence to run (template argument)                            | SfpuMode | Any SfpuMode value                                    | True     |
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+template <SfpuMode MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void exp2_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_exp2, (MODE, is_fp32_dest_acc_en), idst, VectorMode::RC));
+}
+
+/**
+ * Please refer to documentation for any_init. *MODE* must match the paired *exp2_tile* call.
+ */
+template <SfpuMode MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void exp2_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (MODE, is_fp32_dest_acc_en)));
+}
+#endif
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off

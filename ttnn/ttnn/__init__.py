@@ -257,6 +257,7 @@ from ttnn.types import (
     is_mx_dtype,
     float32,
     MathFidelity,
+    SfpuMode,
     MemoryConfig,
     BufferType,
     TensorMemoryLayout,

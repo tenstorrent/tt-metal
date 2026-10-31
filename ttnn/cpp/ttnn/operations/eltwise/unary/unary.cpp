@@ -187,6 +187,29 @@ DEFINE_UNARY_OP(erfc, ERFC)
 
 #undef DEFINE_UNARY_OP
 
+// params[0] carries the mode; unary_op_utils lowers it to <op>_tile<ckernel::SfpuMode::X>.
+#define DEFINE_UNARY_OP_WITH_SFPU_MODE(op_name, OP_TYPE)                           \
+    Tensor op_name(                                                                \
+        const Tensor& input_tensor,                                                \
+        tt::tt_metal::SfpuMode sfpu_mode,                                          \
+        const std::optional<MemoryConfig>& memory_config,                          \
+        const std::optional<Tensor>& optional_output_tensor,                       \
+        const std::optional<CoreRangeSet>& sub_core_grids) {                       \
+        using namespace operations::unary;                                         \
+        return operations::unary::detail::unary_impl(                              \
+            input_tensor,                                                          \
+            {UnaryWithParam{UnaryOpType::OP_TYPE, static_cast<float>(sfpu_mode)}}, \
+            memory_config,                                                         \
+            optional_output_tensor,                                                \
+            sub_core_grids);                                                       \
+    }
+
+DEFINE_UNARY_OP_WITH_SFPU_MODE(softsign, SOFTSIGN)
+DEFINE_UNARY_OP_WITH_SFPU_MODE(exp2, EXP2)
+DEFINE_UNARY_OP_WITH_SFPU_MODE(reciprocal, RECIP)
+
+#undef DEFINE_UNARY_OP_WITH_SFPU_MODE
+
 #define DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(op_name, OP_TYPE)                           \
     Tensor op_name(                                                                                \
         const Tensor& input_tensor,                                                                \
