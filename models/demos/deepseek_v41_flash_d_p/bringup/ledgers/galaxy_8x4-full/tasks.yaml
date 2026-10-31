@@ -2087,6 +2087,66 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 260
+- id: P.25
+  title: 'MM_RETUNE_CAP: every matmul re-swept within the 110-core cap, on the 8x4 mesh'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.24
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  brief:
+    details: 'OWNER 2026-10-31: FIX.15 capped every op at 110 Tensix cores (agent rule 18; device +3.4 ms a chunk) and
+      P.21-P.24 changed several matmul inputs (dtypes, layouts, own rows): re-tune. Capture every dense matmul call at
+      the shipped settings (test_matmul_sweep.py -k capture, DS41_ENGRAM_TABLE=resident) and sweep every distinct call
+      (P23_MIN_MS=0) with every candidate held to at most MAX_WORKER_CORES (110) cores and the L1 the model leaves.
+      Agent rule 19: the sweep runs inside 8x4 MESH runs (scripts/run_safe_pytest.sh without --device, one process at a
+      time; long runs as background jobs you wait for), never on single cards. Put the winners in a new MATMUL_CONFIG
+      value galaxy110 (today''s galaxy stays as it is); the same acceptance per candidate as P.19 (deterministic,
+      bit-identical to auto or within its last bf16 rounding, error vs float64 not worse). Report per call: cores and
+      ms a call before / after, calls a chunk. Do not profile the model (the orchestrator measures galaxy vs galaxy110
+      at 51200 and 512000). No fork regression suites.'
+  ab:
+    env:
+      MATMUL_CONFIG: galaxy
+      ENGRAM_TABLE: resident
+    change:
+      MATMUL_CONFIG: galaxy110
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+- id: K.1R
+  title: 'Re-check: serving contract and Paris through tt-d-gen on todays code (K.1s gate)'
+  step: check
+  device: true
+  deps:
+  - P.25
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
