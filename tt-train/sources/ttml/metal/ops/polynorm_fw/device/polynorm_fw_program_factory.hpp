@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "metal/ttnn_all_includes.hpp"
 #include "polynorm_fw_device_operation_types.hpp"
 
@@ -11,30 +14,20 @@ namespace ttml::metal::ops::polynorm3_fw::device {
 
 // Program factory for PolyNorm3 forward (reader/compute/writer kernels + runtime args).
 struct PolyNorm3ForwardProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
-        tt::tt_metal::KernelHandle compute_kernel_group_1_id{};
-        tt::tt_metal::KernelHandle compute_kernel_group_2_id{};
-        tt::tt_metal::CoreRangeSet core_group_1;
-        tt::tt_metal::CoreRangeSet core_group_2;
-        uint32_t num_cores{};
-        uint32_t num_cores_y{};
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    // Build and cache kernels/circular buffers for a given input shape/layout.
-    static cached_program_t create(
+    // Describe kernels/circular buffers/runtime args for a given input shape/layout.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const PolyNorm3FWAttributes& operation_attributes,
         const PolyNorm3FWTensorArgs& tensor_args,
         PolyNorm3FWTensorReturn& tensor_return_value);
 
+    // The only thing a cache hit runs: rewrites the buffer addresses on every core. Every other runtime arg follows
+    // from the program hash.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const PolyNorm3FWAttributes& operation_attributes,
         const PolyNorm3FWTensorArgs& tensor_args,
-        PolyNorm3FWTensorReturn& tensor_return_value);
+        PolyNorm3FWTensorReturn& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

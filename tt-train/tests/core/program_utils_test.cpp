@@ -145,3 +145,51 @@ TEST(ProgramUtilsCoreWalk, ForEachCoreVisitsTheSameOrderWithEitherSignature) {
     // 7 cores over 3 rows: columns 0 and 1 full, column 2 holds only row 0.
     EXPECT_EQ(cores_only.back(), (CoreCoord{2, 0}));
 }
+
+// compute_work_split is what descriptor factories' override_runtime_arguments() use instead of split_work_to_cores on
+// every cache hit, so it must reproduce split_work_to_cores exactly: same core count, same group-1 prefix, same units
+// per group, and therefore the same per-core units and start offsets along the walk. Sweep the Wormhole (8x8) and
+// Blackhole (11x10, 13x10) worker grids plus odd shapes, across unit counts below, at and well above the core count.
+TEST(ProgramUtilsCoreWalk, ComputeWorkSplitMatchesSplitWorkToCores) {
+    const std::vector<CoreCoord> grids = {{8, 8}, {11, 10}, {13, 10}, {1, 1}, {3, 4}, {7, 9}, {1, 12}, {12, 1}};
+    for (const auto& grid : grids) {
+        const uint32_t max_cores = static_cast<uint32_t>(grid.x * grid.y);
+        for (uint32_t units = 0; units <= 3U * max_cores + 7U; ++units) {
+            auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
+                tt::tt_metal::split_work_to_cores(grid, units);
+            const auto split = ttml::metal::compute_work_split(grid, units);
+            ASSERT_EQ(split.num_cores, num_cores) << "grid " << grid.str() << " units " << units;
+            if (units == 0U) {
+                continue;
+            }
+            ASSERT_EQ(split.num_group_1_cores, group_1.num_cores()) << "grid " << grid.str() << " units " << units;
+            ASSERT_EQ(split.num_cores - split.num_group_1_cores, group_2.num_cores())
+                << "grid " << grid.str() << " units " << units;
+            ASSERT_EQ(split.units_per_core_group_1, units_1) << "grid " << grid.str() << " units " << units;
+            ASSERT_EQ(split.units_per_core_group_2, units_2) << "grid " << grid.str() << " units " << units;
+            ASSERT_EQ(split.has_group_2(), !group_2.ranges().empty()) << "grid " << grid.str() << " units " << units;
+            EXPECT_NO_THROW(ttml::metal::check_work_split(split, num_cores, group_1, group_2, units_1, units_2));
+
+            // Walking the WorkSplit must visit exactly what the CoreRangeSet-driven walk visits.
+            const auto expected = collect(num_cores, static_cast<uint32_t>(grid.y), group_1, group_2, units_1, units_2);
+            std::vector<CoreWork> seen;
+            for_each_core_with_work(split, [&](const CoreWork& work) { seen.push_back(work); });
+            ASSERT_EQ(seen.size(), expected.size()) << "grid " << grid.str() << " units " << units;
+            for (size_t i = 0; i < seen.size(); ++i) {
+                EXPECT_EQ(seen[i].core, expected[i].core);
+                EXPECT_EQ(seen[i].index, expected[i].index);
+                EXPECT_EQ(seen[i].num_units, expected[i].num_units);
+                EXPECT_EQ(seen[i].start, expected[i].start);
+                EXPECT_EQ(seen[i].in_group_1, expected[i].in_group_1);
+            }
+        }
+    }
+}
+
+TEST(ProgramUtilsCoreWalk, CheckWorkSplitRejectsAMismatch) {
+    const CoreCoord grid{8, 8};
+    auto [num_cores, all_cores, group_1, group_2, units_1, units_2] = tt::tt_metal::split_work_to_cores(grid, 70U);
+    auto split = ttml::metal::compute_work_split(grid, 70U);
+    ++split.num_group_1_cores;
+    EXPECT_ANY_THROW(ttml::metal::check_work_split(split, num_cores, group_1, group_2, units_1, units_2));
+}

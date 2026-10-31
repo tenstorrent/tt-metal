@@ -4,7 +4,6 @@
 
 #include "rmsnorm_fw_device_operation.hpp"
 
-#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "metal/ops/common/rmsnorm_common.hpp"
 #include "rmsnorm_fw_program_factory.hpp"
@@ -103,17 +102,11 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    // 0 is the ungated mode, which differs from gated mode with a single head.
-    const uint32_t num_heads =
-        tensor_args.gate.has_value() ? get_num_heads_of_head_merged(input_tensor, tensor_args.gate.value()) : 0U;
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape, num_heads);
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_fw::device

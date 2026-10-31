@@ -24,10 +24,8 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
 
     // The reader walks one row-major target page per batch-channel slice of the input
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
-    // inner dim, while the program cache is keyed on the input shape alone. Pinning both the
-    // target's page width and its page count to the input keeps every page index the reader
-    // can form inside the target allocation, and keeps a cached program valid for the target
-    // tensor it runs with.
+    // inner dim. Pinning both the target's page width and its page count to the input keeps
+    // every page index the reader can form inside the target allocation.
     const auto& target_shape = target_tensor.logical_shape();
     TT_FATAL(
         target_shape[-1] == input_tensor.logical_shape()[-2],
@@ -77,12 +75,11 @@ CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardD
     return output_tensor;
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
+    return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::cross_entropy_bw::device

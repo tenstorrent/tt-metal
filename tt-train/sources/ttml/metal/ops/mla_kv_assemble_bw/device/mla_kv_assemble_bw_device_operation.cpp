@@ -102,22 +102,11 @@ MLAKVAssembleBwDeviceOperation::tensor_return_value_t MLAKVAssembleBwDeviceOpera
     return {ttnn::create_device_tensor(specs[0], device), ttnn::create_device_tensor(specs[1], device)};
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor). It is custom only to skip the
+// canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t MLAKVAssembleBwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
-    // compile-time args, so a placement change must not reuse a cached program.
-    return tt::tt_metal::operation::hash_operation<MLAKVAssembleBwDeviceOperation>(
-        args,
-        tensor_args.dK.dtype(),
-        tensor_args.dK.logical_shape(),
-        tensor_args.dV.logical_shape(),
-        tensor_args.dK.memory_config(),
-        tensor_args.dV.memory_config());
-}
-
-MLAKVAssembleBwDeviceOperation::program_factory_t MLAKVAssembleBwDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return MLAKVAssembleBwProgramFactory{};
+    return tt::tt_metal::operation::hash_operation<MLAKVAssembleBwDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::mla_kv_assemble_bw::device
