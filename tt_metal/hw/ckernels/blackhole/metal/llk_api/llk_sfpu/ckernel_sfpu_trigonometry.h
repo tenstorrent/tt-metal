@@ -1010,6 +1010,20 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
     return a;
 }
 
+bool bf16_dest_acosh();
+template <int ITERATIONS>
+void calculate_acosh_bf16();
+void init_acosh_bf16();
+// Whether BF16 DEST runs the generated acosh kernel as one call over the whole tile.
+inline constexpr bool acosh_bf16_whole_tile = true;
+// Sets up the generated BF16 acosh kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void acosh_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_acosh_bf16();
+    }
+}
+
 // acosh(x) = log(x + sqrt(x^2 - 1)), reformulated through log1p to remove the
 // absorption error at x -> 1+ and the x^2 overflow at large x. Three regions:
 //   x < 1            -> NaN
@@ -1022,6 +1036,12 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
 // that makes the classic form return +inf for x >= ~1.84e19.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_acosh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_acosh()) {
+            calculate_acosh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
     constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
@@ -1206,3 +1226,5 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_acosh_bf16.h"
