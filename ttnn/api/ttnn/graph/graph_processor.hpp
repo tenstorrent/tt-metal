@@ -201,7 +201,7 @@ private:
 
     node_id add_tensor(const Tensor& t);
     node_id add_buffer(const tt::tt_metal::Buffer* buffer);
-    // Adds the node of the allocation that `mesh_buffer` owns. `mesh_buffer` must own one.
+    // Adds the node of the lockstep allocation that `mesh_buffer` owns. `mesh_buffer` must own one.
     node_id add_buffer(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer);
     node_id add_buffer(
         std::size_t unique_id,
