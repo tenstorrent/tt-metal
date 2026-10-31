@@ -1344,10 +1344,15 @@ class TOP32_RM(TemplateParameter):
                       be pre-sorted into descending runs of 32.
     ``via_wrappers``  route every SFPU call through the Metal wrapper layer
                       (``experimental/llk_sfpu/llk_math_deepseek_top32_rm.h``) instead of
-                      calling the ``ckernel::sfpu::`` primitives directly. The wrappers are
-                      thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_`` call --
-                      so this is the same computation through one more layer, and the only thing
-                      in the tree that calls those 7 entry points at all.
+                      calling the ``ckernel::sfpu::`` primitives directly. The SFPU wrappers
+                      are thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_``
+                      call -- so on the SFPU side this is the same computation through one more
+                      layer, and the only thing in the tree that calls those 7 entry points at
+                      all. In the plain mode the unpack goes through
+                      ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
+                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
+                      from their primitives-path namesakes) and the per-chunk L1 offset, so
+                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
     """
 
     row_elements: int = 64

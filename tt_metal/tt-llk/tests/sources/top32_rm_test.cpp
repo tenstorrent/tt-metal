@@ -127,6 +127,13 @@ static constexpr bool PRE_SORTED_MODE = (TOP32_MODE == 1);
 
 static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the pre-sorted mode needs at least one whole 1024-element chunk");
 
+// Through the Metal wrappers the unpack branch is the wrapper's choice (Int32 src to Dest, the
+// rest through SrcA) while the math thread branches on unpack_to_dest; they agree only when it
+// is false, so make the other case a build error rather than a hang.
+static_assert(
+    !(TOP32_VIA_WRAPPERS && !PRE_SORTED_MODE && unpack_to_dest),
+    "via_wrappers mode 0 sends non-Int32 formats through SrcA; build it with unpack_to_dest=false");
+
 #ifdef LLK_TRISC_UNPACK
 
 // The experimental top32_rm LLK headers carry unused parameters that predate this test:
@@ -142,12 +149,61 @@ static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the 
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
+#if TOP32_VIA_WRAPPERS
+// The Metal unpack wrapper (experimental/llk_unpack_A_top32_rm_api.h) picks the branch from the
+// src format (Float32 goes through SrcA, narrowed to the Dest width) and computes each chunk's L1
+// offset from the operand's formats, read through the per-kernel Metal tables. The harness has no
+// CBs, so the tables are defined here: operand 0 is the values row, operand 1 the indices.
+#include "internal/circular_buffer_interface.h"
+
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_src_format[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_dst_format[NUM_CIRCULAR_BUFFERS];
+// Read by llk_operands.h accessors the top32 wrapper does not call; defined so the header compiles.
+std::uint8_t unpack_tile_num_faces[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_partial_face[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_tile_face_r_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_narrow_tile[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_tile_r_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_tile_c_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_num_faces_r_dim[NUM_CIRCULAR_BUFFERS];
+std::uint8_t unpack_num_faces_c_dim[NUM_CIRCULAR_BUFFERS];
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
+#pragma GCC diagnostic pop
+
+static constexpr std::uint32_t VALUES_OPERAND  = 0;
+static constexpr std::uint32_t INDICES_OPERAND = 1;
+
+inline void bind_operand(std::uint32_t operand, std::uint32_t buffer_address, std::uint32_t src_format, std::uint32_t dst_format)
+{
+    // The wrapper takes the unpack-to-dest branch exactly for an Int32 src; the math thread was built
+    // for unpack_to_dest. They have to be the same answer, or unpack and math wait on different events.
+    LLK_ASSERT(
+        ((src_format & 0xf) == to_underlying(DataFormat::Int32)) == unpack_to_dest,
+        "src format picks a different unpack branch than the math thread was built for");
+    unpack_src_format[operand] = src_format;
+    unpack_dst_format[operand] = dst_format;
+    // Metal keeps CB pointers in 16-byte words; the wrapper applies the same -1 that L1_ADDRESS does.
+    get_local_cb_interface(operand).fifo_rd_ptr = buffer_address >> CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
+}
+
+// One operand of one chunk through the Metal wrapper: branch, L1 offset and dummy valid are its.
+inline void unpack_chunk(std::uint32_t operand, std::uint32_t chunk, std::uint32_t num_faces)
+{
+    llk_unpack_A_top32_rm_init(operand);
+    llk_unpack_A_top32_rm(operand, chunk, num_faces);
+}
+#endif
+
 // One operand of one chunk. Re-initialising per call mirrors the consumer, which has to
 // because it reconfigures srcA between the value and index operands.
 //
-// Two branches, picked exactly as llk_unpack_A_top32_rm_api.h picks them (there on the src
-// format being Int32, here on the harness's unpack_to_dest, which is the same question asked
-// of the whole variant):
+// Two branches. The wrapper keys on the src format being Int32 and sends Float32 through SrcA;
+// here unpack_to_dest = is_32bit sends Float32 to Dest as well, so the two agree only for Int32:
 //
 //   16-bit  the unpacker does the within-face 16x16 transpose itself and clears SrcA to
 //           -infinity first, so unfed faces lose every comparison.
@@ -209,6 +265,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t values_base  = L1_ADDRESS(params.buffer_A[0]);
     const std::uint32_t indices_base = L1_ADDRESS(params.buffer_B[0]);
 
+#if TOP32_VIA_WRAPPERS
+    if constexpr (!PRE_SORTED_MODE)
+    {
+        bind_operand(VALUES_OPERAND, params.buffer_A[0], src_format, dst_format);
+        bind_operand(INDICES_OPERAND, params.buffer_B[0], src_format, dst_format);
+    }
+#endif
+
     // Mode 0 walks the whole row; mode 1 only the remainder after its whole tiles, which is
     // how top32_rm_dev_compute_v2.cpp finishes a row that is not a multiple of 1024. Both use
     // the same per-chunk pair, which branches on unpack_to_dest -- see unpack_chunk.
@@ -219,6 +283,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t chunk     = first / ELEMENTS_PER_CHUNK;
         const std::uint32_t num_faces = chunk_num_faces(first);
 
+#if TOP32_VIA_WRAPPERS
+        // Mode 0 only: mode 1 holds Float32 in Dest (unpack-to-dest above, math built for it),
+        // where the Metal wrapper would send Float32 through SrcA.
+        if constexpr (!PRE_SORTED_MODE)
+        {
+            unpack_chunk(VALUES_OPERAND, chunk, num_faces);
+            unpack_chunk(INDICES_OPERAND, chunk, num_faces);
+            continue;
+        }
+#endif
         unpack_chunk(values_base, chunk, num_faces, src_format, dst_format);
         unpack_chunk(indices_base, chunk, num_faces, src_format, dst_format);
     }
