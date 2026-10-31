@@ -2479,3 +2479,13 @@ accept / reject recorded, not yet committed or reverted: decided_picks) before p
 Selftest test_perf_ab.py::test_a_decided_pick_is_applied_before_a_queued_fix_is_placed (fails without the fix).
 Also (no code): agents' rule 19 and the skill: no single-card device job on a Galaxy whose mesh a run depends on (a hung
 one gets a single-card reset that breaks the mesh), and no reset by any back door (dirty files, provoked runs).
+
+## F236: timed profile runs take the consecutive-chunk path (model hook steady_state; DeepSeek-V4.1, owner 2026-10-31)
+
+Every warm-wall, cProfile and profiled run repeats the same chunk, so a model whose state has a fast path for a chunk
+that follows a whole previous chunk paid the slow path in every measurement (DS41: the window carry rebuilt, 120 ops,
+1.2 ms device / 16 ms host a chunk, that consecutive serving chunks skip). testing/profile.py: timed_reload() calls
+model.steady_state(start) (when the device model has it) before every timed run; accurate_reload() calls
+steady_state(None) before the quick per-layer accuracy run and the counting run, so their values still come from the
+golden prefix on the normal path. A model without the hook is unchanged. Selftest test_e2e_runtime.py::
+test_timed_runs_take_the_steady_state_path_and_accuracy_runs_the_normal_one. DS41's hook: FIX.16.
