@@ -31,10 +31,8 @@ def main() -> int:
         print(f"bank->worker cores  {len(all_cores)}: {[(c.x, c.y) for c in all_cores]}")
         core_grid = device.compute_with_storage_grid_size()
         print(f"total compute cores {core_grid.x * core_grid.y}")
-        lo, hi = device.allocator().get_memory_info("DRAM")
-        print(f"DRAM free/total     {(hi - lo) / 1e9:.1f} / {hi / 1e9:.1f} GB")
-        lo, hi = device.allocator().get_memory_info("L1")
-        print(f"L1 free/total       {(hi - lo) / 1e3:.0f} / {hi / 1e3:.0f} kB (per core)")
+        # Memory figures need a per-chip device handle; MeshDevice has no
+        # allocator(), and they are not needed to answer "is this chip healthy".
     finally:
         ttnn.close_device(device)
     return 0
