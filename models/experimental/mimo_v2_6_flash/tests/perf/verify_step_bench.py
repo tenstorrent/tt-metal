@@ -43,10 +43,11 @@ CORPUS = "ttnn/cpp/ttnn/operations/**/*.[hc]pp"
 PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 
-PERF_JSON = os.environ.get("VSB_PERF_JSON")
-TOKENS = int(
-    os.environ.get("VSB_TOKENS", "0")
-)  # print each request's first committed tokens  # with PROFILING: each read's per-program device times, one chip
+PERF_JSON = os.environ.get("VSB_PERF_JSON")  # with PROFILING: each read's per-program device times, one chip
+# VSB_TOKENS: print each request's first committed tokens; VSB_DUP: request i takes prompt i % VSB_DUP (rows computed
+# alike must commit the same tokens).
+TOKENS = int(os.environ.get("VSB_TOKENS", "0"))
+DUP = int(os.environ.get("VSB_DUP", "0"))
 _perf = []
 
 
@@ -182,6 +183,8 @@ def main():
         say(f"built and warmed up in {time.time() - t0:.0f} s, {num_blocks} blocks")
 
         texts = prompts(path, a.ctx, users)
+        if DUP:
+            texts = [texts[i % DUP] for i in range(users)]
         last = []
         t0 = time.time()
         for u in range(users):
@@ -226,6 +229,7 @@ def main():
                         read_profiler(model, keep=s >= a.warm)
                     for r in range(n):
                         tok[r], pos[r] = int(logits[r, 0].argmax()), pos[r] + 1
+                        committed_log[r].append(tok[r])
                     per_step_tokens.append(1.0)
                 mode = "plain"
             else:
