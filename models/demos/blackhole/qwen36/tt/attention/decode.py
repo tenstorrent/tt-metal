@@ -41,6 +41,7 @@ def decode_forward(
         use_optimized_concat=True,
         memory_config=mc,
         norm_weights_pre_offset=True,
+        fused_qkv_weight=getattr(weights, "fused_qkv", None),
         cur_pos_tensor=position_tensor,
         page_table=page_table,
         paged_kv_cache_key=paged_kv_cache_key,
