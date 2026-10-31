@@ -36,15 +36,16 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(std::uint32_t value) {
     // heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise.
     //
-    // Raw SFPU body, 7 instructions per row. The sfpi form (copysgn + add, then an
+    // Raw SFPU body, 8 instructions per row. The sfpi form (copysgn + add, then an
     // sfpi::abs(v) == 0 arm) costs 11: SFPABS + SFPSETCC for the zero test, two SFPMOVs to
     // merge the arms, and a RISC loop. Here the row is three stores: an unpredicated store of
-    // `value` to every lane; then 1.0 to the lanes SFPLZ with NOSGN|CC_NE0 enables, those with
-    // (bits & 0x7fffffff) != 0 -- the same |v| != 0 test as before, so -0.0 keeps `value`; then
-    // 0.0 to those of them that SFPSETCC LT0 leaves enabled, the ones whose sign bit is set
-    // (SFPSETCC only writes the flags of enabled lanes). Both forms dispatch on the sign bit
-    // rather than a float compare, so NaN lands where it did: a NaN with a clear sign bit is
-    // 1.0, with a set one 0.0. Device coverage of those classes, bit-exact: test_vif_equiv_sweep.py's
+    // `value` to every lane; then 1.0 to the lanes SFPABS + SFPSETCC NE0 enables, those with
+    // |v| != 0, so -0.0 keeps `value`; then 0.0 to those of them that SFPSETCC LT0 leaves
+    // enabled, the ones whose sign bit is set (SFPSETCC only writes the flags of enabled lanes).
+    // SFPLZ with NOSGN|CC_NE0 would make the same test in one slot, but ttsim does not model
+    // NOSGN and aborts on it. Both forms dispatch on the sign bit rather than a float compare,
+    // so NaN lands where it did: a NaN with a clear sign bit is 1.0, with a set one 0.0. Device
+    // coverage of those classes, bit-exact: test_vif_equiv_sweep.py's
     // test_equiv_float_nonfinite (+-inf, NaN) and test_equiv_signed_zero (-0.0, +0.0).
     _sfpu_load_imm32_(p_sfpu::LREG4, value);
 
@@ -54,7 +55,8 @@ inline void calculate_heaviside(std::uint32_t value) {
         // every lane: value
         TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 /*dest_reg_addr*/);
         // enable |v| != 0
-        TTI_SFPLZ(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+        TTI_SFPABS(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPABS_MOD1_FLOAT);
+        TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LREG1, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_NE0);
         //   -> 1.0
         TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 /*dest_reg_addr*/);
         //   narrow to sign bit set
