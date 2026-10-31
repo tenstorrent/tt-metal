@@ -64,9 +64,11 @@ void kernel_main() {
 
     for (std::uint32_t row = start_row; row < start_row + num_rows_to_process; ++row) {
         std::uint32_t input_start_column = 0;
-        std::uint32_t input_end_column = input_start_column + elements_per_input_subblock - 1;
+        std::uint32_t input_end_column =
+            u32_min(input_start_column + elements_per_input_subblock - 1, elements_per_tensor_row - 1);
         std::uint32_t output_start_column = 0;
-        std::uint32_t output_end_column = output_start_column + elements_per_output_subblock - 1;
+        std::uint32_t output_end_column =
+            u32_min(output_start_column + elements_per_output_subblock - 1, elements_per_tensor_row - 1);
         while (input_start_column < elements_per_tensor_row) {
             if (input_start_column >= output_start_column) {  // We need to read in a new input subblock
                 std::uint32_t input_page_id =
