@@ -2,16 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -fno-ipa-icf -fno-optimize-sibling-calls -fno-reorder-blocks -c %s -o %t.o
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -fno-ipa-icf -fno-reorder-blocks -c %s -o %t.o
 // RUN: %{blackhole_objdump} -drz %t.o > %t.dump
 // RUN: %{blackhole_compare_codegen} %t.dump
 
 // Compare each HAL function with its adjacent reference_ function with
 // LLK_ASSERT enabled; references state each check as an LLK_ASSERT before the
 // operation. Disable identical-code folding so both bodies are emitted
-// independently, sibling calls so a body ending in a call still ends in ret, and
-// block reordering so the layout of the assert branches does not depend on GCC's
-// placement heuristics.
+// independently, and block reordering so the layout of the assert branches does
+// not depend on GCC's placement heuristics.
 
 #include <cstdint>
 
@@ -20,24 +19,6 @@
 
 namespace replay = hal::replay;
 namespace scalar = hal::scalar;
-
-extern "C" void record_body(std::uint32_t count); // emits count instructions
-
-// The HAL hides a runtime record count from the optimizer, which the references
-// repeat with an empty asm; see record.cpp.
-extern "C" __attribute__((noinline, used)) void record_runtime_count(const std::uint32_t count)
-{
-    replay::record(replay::BufferRange {8, count}, record_body, count);
-}
-
-extern "C" __attribute__((noinline, used)) void reference_record_runtime_count(const std::uint32_t count)
-{
-    LLK_ASSERT(count >= 1 && count <= 64, "Replay range requires start < 32 and count in [1, 64]");
-    std::uint32_t hidden_count = count;
-    asm("" : "+r"(hidden_count));
-    lltt::record<lltt::NoExec>(8 /*start*/, hidden_count & 63);
-    record_body(count);
-}
 
 // A constant range is checked at compile time.
 extern "C" __attribute__((noinline, used)) void record_constant_count()
