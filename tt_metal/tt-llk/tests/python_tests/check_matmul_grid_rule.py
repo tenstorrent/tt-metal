@@ -97,9 +97,11 @@ def check_pack() -> int:
     return bad or len(cpp) != len(py)
 
 
-def check_main_table() -> int:
-    """The main form table: every python row is a C++ cell and the two tables have the same size (the cells reach formats and throttles beyond the grid sweep)."""
-    from helpers.matmul_prod_keys import _GRID_MAIN_ROWS
+def check_cell_table(label: str, rows_name: str, func: str, table: str) -> int:
+    """A cell table (python rows against the C++ table and its lookup function): every python row is a C++ cell and the two tables have the same size."""
+    import helpers.matmul_prod_keys as pk
+
+    rows = getattr(pk, rows_name)
 
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "llk_defs.h").write_text(STUB)
@@ -107,17 +109,17 @@ def check_main_table() -> int:
         body = ",\n".join(
             "{MathFidelity::%s,%s,%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%s,%d}"
             % (fi, "true" if h else "false", "true" if a else "false", NAME[i1], NAME[i0], NAME[o], rt, ct, kt, th, "true" if l1 else "false", nb)
-            for fi, h, a, i1, i0, o, rt, ct, kt, th, l1, nb in _GRID_MAIN_ROWS
+            for fi, h, a, i1, i0, o, rt, ct, kt, th, l1, nb in rows
         )
         (Path(d) / "t.cpp").write_text(
             '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h,a;DataFormat i1,i0,o;int rt,ct,kt,th;bool l1;int nb;};\n'
-            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar(matmul_grid_main_form(r.f,r.h,r.a,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.th,r.l1,r.nb)?'1':'0');printf(\" %zu\",sizeof(matmul_grid_main_cells)/sizeof(matmul_grid_main_cells[0]));}}\n"
+            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar({func}(r.f,r.h,r.a,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.th,r.l1,r.nb)?'1':'0');printf(\" %zu\",sizeof({table})/sizeof({table}[0]));}}\n"
         )
         subprocess.run(["g++", "-std=c++20", "-O1", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
         out = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
     flags, size = out.split()
-    bad = flags.count("0") + (int(size) != len(_GRID_MAIN_ROWS)) + (len(set(_GRID_MAIN_ROWS)) != len(_GRID_MAIN_ROWS))
-    print(f"main form table: {len(_GRID_MAIN_ROWS)} python cells, {size} C++ cells, {bad} differ")
+    bad = flags.count("0") + (int(size) != len(rows)) + (len(set(rows)) != len(rows))
+    print(f"{label}: {len(rows)} python cells, {size} C++ cells, {bad} differ")
     return bad
 
 
@@ -143,7 +145,7 @@ def main() -> int:
         py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0") + ("1" if grid_main_flip_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
     print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::3].count('1')} python {py[0::3].count('1')}; separate post: C++ {cpp[1::3].count('1')} python {py[1::3].count('1')}; main flip: C++ {cpp[2::3].count('1')} python {py[2::3].count('1')}; {bad} differ")
-    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_main_table() else 0
+    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") else 0
 
 
 if __name__ == "__main__":

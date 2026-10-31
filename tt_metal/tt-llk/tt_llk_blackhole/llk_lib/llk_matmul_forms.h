@@ -1117,6 +1117,15 @@ constexpr bool matmul_end_fold_off(const MathFidelity fidelity, const bool half_
     return false;
 }
 
+// matmul_half_end_fold for a block whose shape is known: the cells of matmul_end_fold_off_cells skip the fold.
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0, DataFormat in1, std::uint32_t rt_dim, std::uint32_t ct_dim,
+          std::uint32_t kt_dim>
+constexpr bool matmul_half_end_fold_block()
+{
+    return matmul_half_end_fold<math_fidelity, dst_sync, fp32_dest, kt_per_section, out_format, in0, in1>() &&
+           !matmul_end_fold_off(math_fidelity, dst_sync == DstSync::SyncHalf, fp32_dest, in1, in0, out_format, rt_dim, ct_dim, kt_dim);
+}
+
 // Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write (the fused post and the skipped base write read slower).
 inline constexpr matmul_grid_main_cell matmul_main_flip_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 8, 0, false, 1},

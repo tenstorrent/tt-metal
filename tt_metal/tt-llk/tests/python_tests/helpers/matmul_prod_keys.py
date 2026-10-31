@@ -634,6 +634,28 @@ def grid_unfused_post_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct,
     return key in _UNFUSED_POST
 
 
+# Half sync single K tile blocks of Float32 output from Bfp8 operands where the half sync end fold reads slower than main's separate phase end
+# (fidelity, half sync, accumulate, in1, in0, output, rt, ct, k steps, throttle, packer L1 accumulate, inner blocks)
+_END_FOLD_OFF_ROWS = (
+    ('HiFi3', True, False, 'B8x', 'B8x', 'F32', 1, 8, 1, 0, False, 1),
+    ('HiFi3', True, False, 'B8x', 'B8x', 'F32', 3, 1, 1, 0, False, 1),
+    ('HiFi3', True, False, 'B8x', 'B8x', 'F32', 8, 1, 1, 0, False, 1),
+    ('HiFi3', True, False, 'B8x', 'F16', 'F32', 1, 8, 1, 0, False, 1),
+    ('HiFi4', True, False, 'B8x', 'B8x', 'F32', 1, 8, 1, 0, False, 1),
+    ('HiFi4', True, False, 'B8x', 'B8x', 'F32', 8, 1, 1, 0, False, 1),
+    ('HiFi4', True, False, 'B8x', 'F16', 'F32', 1, 8, 1, 0, False, 1),
+)
+_END_FOLD_OFF = frozenset(_END_FOLD_OFF_ROWS)
+
+
+def end_fold_off_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:
+    try:
+        key = (fidelity.name, half_sync, fp32_acc, _SHORT[in1], _SHORT[in0], _SHORT[out], rt, ct, kb, throttle, bool(l1_acc), nb)
+    except KeyError:
+        return False
+    return key in _END_FOLD_OFF
+
+
 # Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write
 _MAIN_FLIP_ROWS = (
     ('LoFi', True, False, 'F32', 'B4', 'B4', 1, 7, 8, 0, False, 1),
