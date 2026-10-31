@@ -9,8 +9,8 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     const auto participants = grid({0, 0}, {1, 0});
     auto mcast = make_mcast(device_, {{participants, {{0, 0}}}});
     Program program;
-    program.impl().add_semaphore(participants, 0, 7, tt::CoreType::WORKER);
-    program.impl().add_semaphore(participants, 2, 9, tt::CoreType::WORKER);
+    program.impl().builder().add_semaphore(participants, 0, 7, tt::CoreType::WORKER);
+    program.impl().builder().add_semaphore(participants, 2, 9, tt::CoreType::WORKER);
     const auto ct = attach_unplaced(mcast, program, {71});
     const auto rt = attach_on_core(mcast, program, {0, 0}, {73});
     EXPECT_EQ(emitted_semaphore(ct, wire::DATA_READY, 1), 1u);
@@ -51,7 +51,7 @@ TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedProgra
     auto mcast = make_mcast(device_, {{participants, {{0, 0}}}});
     Program full;
     for (uint32_t id = 0; id < NUM_SEMAPHORES; ++id) {
-        full.impl().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
+        full.impl().builder().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
     }
     EXPECT_ANY_THROW(attach_unplaced(mcast, full));
     EXPECT_EQ(full.impl().semaphores().size(), NUM_SEMAPHORES);

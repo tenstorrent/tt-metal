@@ -66,7 +66,7 @@ template <typename McastType>
 void seed_semaphores(McastType& mcast, tt::tt_metal::Program& program, const std::vector<uint32_t>& existing) {
     if constexpr (requires { mcast.participating_cores(); }) {
         for (auto id : existing) {
-            program.impl().add_semaphore(mcast.participating_cores(), id, 0, tt::CoreType::WORKER);
+            program.impl().builder().add_semaphore(mcast.participating_cores(), id, 0, tt::CoreType::WORKER);
         }
     } else {
         TT_FATAL(existing.empty(), "Argument allocation fixtures must provide explicit placement");

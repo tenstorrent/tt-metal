@@ -105,6 +105,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/trace_allocation_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_allocation_support.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/program_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/slow_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
