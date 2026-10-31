@@ -16,6 +16,7 @@ from .. import program as fp
 NAME = "mm_stream2"
 FLAG = "QWEN38_MM_STREAM2"
 OPTIMAL_FLAG = "QWEN38_MM2_OPTIMAL"
+PLEKV_FLAG = "QWEN38_MM2_PLEKV"  # default "1": the PLE key+value merged linear (edge_trim ple_kv) through this program
 # (K, N) shapes whose readers sit on the DRAM banks' optimal NOC0 workers when QWEN38_MM2_OPTIMAL is "1" (the default)
 OPTIMAL_SHAPES = frozenset({(2560, 2304)})  # the QSA merged projection
 MAX_PACKET_BYTES = 16384
@@ -25,6 +26,10 @@ _WORKERS: dict = {}
 def enabled() -> bool:
     # default on: bitwise to the stock DRAM-sharded program; e2e A/B on the 1x8 line 16.28/16.54 -> 15.76/15.75 ms/token
     return os.environ.get(FLAG, "1") == "1"
+
+
+def plekv_enabled() -> bool:
+    return os.environ.get(PLEKV_FLAG, "1") == "1"
 
 
 def optimal_enabled() -> bool:
@@ -511,6 +516,7 @@ SHAPES = {
     (2560, 512): (1, 10, "rect"),
     (2560, 352): (1, 16, "rect"),
     (768, 2560): (2, 8, "rect"),  # the GDN / QSA out-projection (test table out_proj)
+    (2560, 1600): (2, 10, "row"),  # the PLE key+value merged weight (bf16; edge_trim ple_kv, QWEN38_MM2_PLEKV)
 }
 CALLS: dict = {}
 STOCK_CALLS: dict = {}

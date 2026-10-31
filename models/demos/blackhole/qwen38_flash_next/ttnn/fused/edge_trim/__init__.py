@@ -106,9 +106,12 @@ def ple_kv(module, full_embedding):
 
     import ttnn
 
+    from ..mm_stream2 import linear as mm2_linear, plekv_enabled
+
     weight, act_config, program_config, key_width = _KV[id(module)]
     activation = ttnn.to_memory_config(full_embedding, act_config)
-    out = ttnn.linear(
+    # QWEN38_MM2_PLEKV (default on): the mm_stream2 program, bitwise to the stock one (44.7 -> 24-30 us)
+    out = (mm2_linear if plekv_enabled() else ttnn.linear)(
         activation,
         weight,
         dtype=ttnn.bfloat16,
