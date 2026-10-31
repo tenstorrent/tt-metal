@@ -1693,8 +1693,57 @@ class Model:
         self.apc.set_signature((tuple(self.layer_ids), self.pool.ring_rows, str(self.kv_dtype), self.Up, PGM.MODE))
         return self.apc
 
+    def enable_apc_paged(self, free_fn=None, chunk=None):
+        """Device-resident block-paged prefix cache (``DSV41_APC_PAGED=1``, tt/apc_paged_model.py): replaces the pool's page allocators by the block index. Needs the single chunk trace, chunk 512 and
+        one prefill slot per user; otherwise it stays off (log line) and the host snapshot tier is the only cache. -> the ``PagedApc`` or None.
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged_model as APM
+
+        if not APM.enabled():
+            return None
+        chunk = int(chunk or os.environ.get("DSV41_VLLM_CHUNK", "512"))
+        try:
+            pa = APM.PagedApc(self, chunk, log=self.log)
+        except RuntimeError as e:
+            self.log(f"APC paged OFF: {e}")
+            return None
+        pa.free_fn = free_fn
+        pa.set_signature(
+            (
+                tuple(self.layer_ids),
+                self.pool.ring_rows,
+                str(self.kv_dtype),
+                self.Up,
+                PGM.MODE,
+                chunk,
+                pa.zone,
+                "paged",
+            )
+        )
+        pa.install()
+        self.apc_paged = pa
+        self.log(
+            f"APC paged ON: {self.rows} rows x {self.U} users, pages/row {pa.idx.caps['pages']}, halo A/B {pa.sizes['halo_a']}/{pa.sizes['halo_b']} slots, {pa.sizes['key']} key blocks, zone {pa.zone}"
+        )
+        return pa
+
+    def _pre_capture(self):
+        """everything that must exist before a chunk-trace capture: the key hand-off buffers / programs and the paged-APC stores (see ``capture_dyn``)"""
+        if os.environ.get("DSV41_PRECAPTURE_WARM", "1") == "1":
+            self.warm_key_export()
+        self.apc_paged_build()
+
+    def apc_paged_build(self):
+        """allocate + warm the paged-APC stores (once; before the first trace capture, after the prefill context exists)"""
+        pa = self.__dict__.get("apc_paged")
+        if pa is not None:
+            pa.build()
+
     def reset_prefix_cache(self):
         """vLLM's reset_prefix_cache (the plugin forwards it) / a weight reload: drop every snapshot."""
+        if self.__dict__.get("apc_paged") is not None:
+            self.apc_paged.reset()
+            self.log("paged prefix cache reset")
         if getattr(self, "apc", None) is not None:
             self.apc.clear()
             self.log("prefix cache reset")
@@ -1744,7 +1793,9 @@ class Model:
                 return b
         return buckets[-1]
 
-    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None):
+    def prefill_interleaved(
+        self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None, rids=None
+    ):
         """See ``_prefill_interleaved_one``. With several captured S_pad contexts (``warm_serving(extra_spads=...)``) the users of the call are split by the context their carried state lives in
         (``pf_bucket_of``): a new prompt takes the smallest context that holds it when its first call is certainly the whole prompt, otherwise the largest; a continuation stays in its context, a
         prompt that outgrows it is recomputed from position 0 in a larger one (always correct). Each group is one ``_prefill_interleaved_one`` call on its context.
@@ -1752,7 +1803,7 @@ class Model:
         pm = self.prefill_model
         buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
         if len(buckets) <= 1 or self.Up != self.U:
-            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final, totals)
+            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final, totals, rids)
         C = int(chunk)
         of = self.__dict__.setdefault("pf_bucket_of", {})
         resume = self.__dict__.setdefault("pf_resume", {})
@@ -1786,7 +1837,7 @@ class Model:
                 if getattr(self, "apc", None) is not None:
                     self.apc.store.tag = k
                 vg = None if not vis else {b: v for b, v in vis.items() if b in {g[0] for g in grp}}
-                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None, final, totals))
+                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None, final, totals, rids))
                 for g in grp:
                     of[g[0]] = k
                 tms.append((k, [g[0] for g in grp], dict(self.timing)))
@@ -1802,9 +1853,10 @@ class Model:
         return res
 
     def _prefill_interleaved_one(
-        self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None
+        self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None, rids=None
     ):
-        """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
+        """``rids`` {user: request id} (``DSV41_APC_PAGED``): names the request of a user (a start > 0 with an id that is not bound is a prefix hit of the paged cache).
+        Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
 
         ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
         that user ended at (``self.pf_resume[b]``: only valid while the user's carried state is intact, i.e. the previous end was a multiple of ``chunk``).
@@ -1826,6 +1878,23 @@ class Model:
         items = [(int(b), torch.as_tensor(t).long(), int(st), int(e)) for b, t, st, e in items]
         ends = {b: e for b, _, _, e in items}
         assert len(ends) == len(items), "duplicate users in one prefill call"
+        pa = self.__dict__.get("apc_paged")
+        hits, tots = {}, {}
+        if pa is not None:
+            fin_ = None if final is None else {int(b) for b, f in final.items() if f}
+            for b, _, _, e in items:
+                tot = None if totals is None else totals.get(b)
+                if tot is None and fin_ is not None and b in fin_:
+                    tot = e
+                if tot is not None:
+                    tots[b] = int(tot)
+            # prefix hits of the paged cache: start > 0 with a request id whose reservation the scheduler made (binds the reserved user, adopts the shared pages; a lost reservation -> start 0)
+            pa.sync_zone()
+            items, hits = pa.prepare_hits(items, rids, tots, rep=pa.zone < (1 << 40), vis=vis)
+            for b, _, st, _ in items:
+                if b in hits:
+                    resume[b] = st
+                    self.drop_key_exports([b])
         for k, (b, t, st, e) in enumerate(items):
             assert 0 < e <= self.max_ctx - 1 and 0 <= st < e and t.numel() >= e, (b, st, e, t.numel())
             if st > 0 and (resume.get(b) != st or self.__dict__.get("pf_slot_of", {}).get(b) is None and general):
@@ -1860,8 +1929,8 @@ class Model:
             pm.dyn is None or pm.dyn.C != C or pm.dyn.S_pad != S_pad or pm.dyn_trace is None
         ):
             self.flush_key_exports(why="trace re-capture")  # (the key FIFOs of the finished prompts are re-allocated)
-        if os.environ.get("DSV41_PRECAPTURE_WARM", "1") == "1":
-            pm.pre_capture_hook = self.warm_key_export  # (warm_serving does the same by hand)
+        if os.environ.get("DSV41_PRECAPTURE_WARM", "1") == "1" or pa is not None:
+            pm.pre_capture_hook = self._pre_capture  # (warm_serving does the same by hand)
         if pm.capture_dyn(
             C, S_pad
         ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM
@@ -1880,14 +1949,27 @@ class Model:
         if not lazy_kx:
             self.flush_key_exports(why="eager mode")
         async_win = lazy_kx and os.environ.get("DSV41_PF_ASYNC_SERVER", "1") == "1"
+        for b in hits:
+            resume[b] = hits[b].hit_tokens  # (the capture above clears it)
         for b, t, st, e in items:
             if st == 0:
                 self.drop_key_exports([b])  # (a new prompt of the user: the keys of the previous one are never read)
                 self.pool.release(b)
+                if pa is not None:
+                    pa.bind_new(b, None if not rids else rids.get(b), tots.get(b, e), nocommit=bool(vis and b in vis))
                 self.pool.admit(b, e + 1)
             else:
                 self.pool.grow(b, e + 1)
         self.pool.sync_page_table()
+        if hits:
+            pa.build()  # (a no-op: built before the capture)
+            t_pr = pa.restore(
+                hits
+            )  # key_load + halo restore, device local, enqueued before the first replay of the hit
+            pa.engram_history(hits, items)
+            self.log(
+                f"APC paged: hit users {sorted(hits)} resume at {[hits[b].hit_tokens for b in sorted(hits)]}, restore enqueued in {1e3 * t_pr:.1f} ms"
+            )
         if self.host_rows is not None:
             cap = self.hasher.st.cache.shape[1]
             assert -(-max_end // C) * C <= cap, f"Engram history capacity {cap} < padded prompt {-(-max_end // C) * C}"
@@ -1955,14 +2037,22 @@ class Model:
                 img_cont = (
                     apc is not None and bool(vis) and apc.images_enabled()
                 )  # (image users: a continuation piece may also restore a deeper snapshot, DSV41_APC_IMAGES=1)
-                cand = [it for it in wave if it[2] == 0 or (img_cont and it[0] in vis)]
+                cand = [
+                    it
+                    for it in wave
+                    if (it[2] == 0 or (img_cont and it[0] in vis)) and not (pa is not None and pa.owns(it[0]))
+                ]  # (a text request the paged cache owns neither restores from nor feeds the host tier: DSV41_APC_PAGED_HOST)
                 if apc is not None and cand:
                     t_apc += apc.finish_pending()  # (a lookup must see every snapshot taken so far)
                     if (
                         apc.grid is not None
                     ):  # M0': tip / divergence boundaries of each new prompt (total length: plugin prefill_total, or the end of a row that ends here)
                         for b_, t_, st_, e_ in wave:
-                            if st_ == 0 and (not (vis and b_ in vis) or apc.images_enabled()):
+                            if (
+                                st_ == 0
+                                and (not (vis and b_ in vis) or apc.images_enabled())
+                                and not (pa is not None and pa.owns(b_))
+                            ):  # (a request the paged cache owns neither plans host-tier points nor registers its chain as seen)
                                 tot_ = None if totals is None else totals.get(b_)
                                 apc.new_prompt(
                                     b_,
@@ -2100,11 +2190,19 @@ class Model:
                         else:
                             resume[b] = s_end
                     if (
+                        pa is not None
+                    ):  # paged prefix cache: keys + halos of the chunk blocks that just ended (saves queued behind this window's trace)
+                        pa.commit([(it[0], it[1], s0_of(it, k) + C, it[3]) for it in part if s0_of(it, k) + C <= it[3]])
+                    if (
                         apc is not None
                     ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
                         for it in part:
                             b, t, st, e = it
-                            if s0_of(it, k) + C <= e and (not (vis and b in vis) or apc.images_enabled()):
+                            if (
+                                s0_of(it, k) + C <= e
+                                and (not (vis and b in vis) or apc.images_enabled())
+                                and not (pa is not None and pa.owns(b))
+                            ):
                                 t_apc0 = time.perf_counter()
                                 full_ = not rep or zone.get(b, 0) == 0
                                 vs_ = vis.get(b) if vis else None
@@ -2349,6 +2447,10 @@ class Model:
         for b, _, _, _ in items:
             res[b] = self._res[b] if (fin_users is None or b in fin_users) else self._res.get(b, (0, None))
             self.tap_n[b] = ends[b]
+        if pa is not None:
+            pa.calls = getattr(pa, "calls", 0) + 1
+            if hits or pa.calls % int(os.environ.get("DSV41_APC_PAGED_LOG_EVERY", "10")) == 0:
+                self.log(pa.line())
         self.timing = dict(
             pm.timing,
             total=time.perf_counter() - t_start,
@@ -2780,6 +2882,10 @@ class Model:
             b.compile(tok, pos, phys)
             self.buckets_x[name] = (b, tok, pos, phys)
         ttnn.synchronize_device(self.md)
+        if compiled and self.__dict__.get("apc_paged") is not None:
+            self.log_dram("before the paged-APC stores")
+            self.apc_paged_build()  # (persistent stores: allocated after every prefill table exists, before the first capture)
+            self.log_dram("after the paged-APC stores")
         if compiled and os.environ.get("DSV41_WARM_APC", "1") == "1":
             self.warm_apc()  # (compile-before-capture: the snapshot / restore programs must not first compile while a trace is live)
         gc.collect()

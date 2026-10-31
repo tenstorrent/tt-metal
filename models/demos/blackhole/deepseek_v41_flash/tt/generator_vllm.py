@@ -101,6 +101,13 @@ def _apc_on():
     return True
 
 
+def _apc_paged_on():
+    """``DSV41_APC_PAGED=1`` (default off): the device-resident block-paged prefix cache (tt/apc_paged_model.py) on top of ``_apc_on()``. Read at import time. The model may still refuse it at build
+    (``enable_apc_paged``: needs the single chunk trace, chunk 512, one prefill slot per user): the capability then stays ``model`` with no hook, i.e. hit 0 and the host snapshot tier.
+    """
+    return _apc_on() and os.environ.get("DSV41_APC_PAGED", "0") == "1"
+
+
 def _apc_needs_bf16_pool_but_fp8():
     """read mode + fp8 pool (DSV41_PF_PAGED_FP8=1 with DSV41_POOL_DTYPE=fp8): ``read_pool_latents`` (tt/prefix_cache.py) asserts a bf16 pool at the first snapshot, so APC must be off."""
     return (
@@ -157,6 +164,10 @@ def _chunked_prefill_capabilities():
         caps["prefix_cache_hit_policy"] = os.environ.get(
             "DSV41_APC_POLICY", "all" if os.environ.get("DSV41_APC_GRID", "0") not in ("", "0") else "pow2"
         )  # (APC M0': the model snapshots tip / divergence points of the 512 grid, the scheduler may round hits to any multiple of 512)
+        if _apc_paged_on():
+            caps[
+                "prefix_cache_hit_policy"
+            ] = "model"  # the scheduler asks the model's block index (vllm_tt_plugin.prefix_hooks)
     return caps
 
 
@@ -306,6 +317,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             max_seq_len = -(-int(max_seq_len) // chunk) * chunk
         U = B // VS.MESH_ROWS
         page_params = default_page_params(max_seq_len, U)
+        if _apc_paged_on():  # the idle pages of the users live outside the block index (tt/apc_paged_model.py)
+            from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged_model as _apm
+
+            page_params["page_max_num_blocks_per_dp"] += _apm.extra_pool_pages(U)
         paged = PagedAttentionConfig(
             block_size=page_params["page_block_size"], max_num_blocks=page_params["page_max_num_blocks_per_dp"]
         )
@@ -714,6 +729,21 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 logger.info(
                     f"DSV4.1 prefix caching ON: snapshot policy {apc.policy}, host budget {apc.store.budget / 2**30:.1f} GiB"
                 )
+        self.paged = None
+        if _apc_paged_on() and hasattr(self.m, "enable_apc_paged"):
+            self.paged = self.m.enable_apc_paged(free_fn=self._free_users_of_row)
+            if self.paged is not None:
+                try:
+                    from vllm_tt_plugin import prefix_hooks as _ph
+
+                    _ph.set_prefix_hook(self.paged.hook)
+                    logger.info(
+                        "DSV4.1 paged prefix cache ON: the scheduler asks the model's block index (prefix_cache_hit_policy=model)"
+                    )
+                except ImportError:
+                    logger.warning(
+                        "DSV4.1 paged prefix cache: the plugin has no prefix_hooks module: no hits (commits only)"
+                    )
         self.inprog = VS.PrefillTracker()  # users prefilled in chunks and not decoding yet (interleave mode)
         # DSV41_PREFILL_ROW_AWARE=1 (default off; only effective with few prefill slots per mesh row, DSV41_PREFILL_UP < users per row): place a new prompt only into a mesh row without an
         # in-progress prompt, bind the continuations of a call before claiming users for its new prompts (the plugin shifts state slots when the first finisher starts decoding), and tell the
@@ -796,6 +826,19 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         self._compact_wait = 0
         self.compact_moves = 0
 
+    def _free_users_of_row(self, row):
+        """model users of mesh row ``row`` that no request occupies (scheduler thread, via the paged index: a user it reserves for a hit)"""
+        U = self.U
+        for _ in range(3):
+            try:
+                live = set(self.slots.live)
+                break
+            except RuntimeError:  # (the model thread changed the set while it was copied)
+                continue
+        else:
+            return []
+        return [p for p in range(row * U, (row + 1) * U) if p not in live]
+
     def init_vision(self, hf_config):
         """Image input (DSV41_VISION=1): the device vision tower on the model's mesh / CCL (built BEFORE the warm-up captures any trace: its weights are persistent tensors) and the per-request
         image state. ``DSV41Vision.warmup`` compiles the tower's programs for every padded image length."""
@@ -810,6 +853,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             self.m.apc.image_token_id = (
                 va.image_token_id
             )  # prompts with image placeholder tokens never use / feed the prefix cache (the key would have to cover the pixels)
+        if self.paged is not None:
+            self.paged.image_token_id = (
+                va.image_token_id
+            )  # image prompts never take part in the paged cache (host snapshot path)
         t0 = time.perf_counter()
         # The tower uses the MODEL's CCL manager. A second ``CCLManager`` created now (after the model's persistent L1 buffers) puts its global semaphores in the middle of L1 (1.51 MB; the
         # model's sit right under the L1_SMALL region at 1.556 MB) where they get overwritten: its all-reduces return corrupted data (the replicas of a mesh row differ, errors up to 14), so the
@@ -919,6 +966,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 mm=mm,
                 prefill_final=kwargs.get("prefill_final"),
                 prefill_total=kwargs.get("prefill_total"),
+                request_ids=kwargs.get("request_ids"),
             )
         if any(self._mm_row(mm, i)[0] is not None for i in range(N)):
             raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1)")
@@ -1095,6 +1143,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         mm=None,
         prefill_final=None,
         prefill_total=None,
+        request_ids=None,
     ):
         """Prefill of the new requests / prompt chunks while other requests keep decoding (``Model.prefill_interleaved``): tokens [N, >= max end] (every prompt from
         position 0), ``ends`` the end position of this chunk of every row (= the prompt length for a whole prompt), ``start_pos`` the start (0 for a new request).
@@ -1123,6 +1172,12 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         for p_ in self.inprog.users:
             load[p_ // U if U else 0] = load.get(p_ // U if U else 0, 0) + 1
         rowaware = self.row_aware and balanced
+        hit_rows = (
+            set()
+        )  # rows that start on a user reserved for a prefix hit of the paged cache (NEW requests that begin at start > 0)
+        avoid = (
+            self.paged.idx.reserved_all() if self.paged is not None else ()
+        )  # users reserved for hits of OTHER requests: a new prompt must not claim them
         if rowaware:
             for i in range(N):
                 if not 0 <= starts[i] < ends[i]:
@@ -1135,7 +1190,21 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if not 0 <= st < e:
                 raise ValueError(f"chunk [{st}, {e}) of row {i} is empty or reversed")
             p = None
-            if st > 0:
+            rid_i = request_ids[i] if request_ids is not None and i < len(request_ids) else None
+            if st > 0 and self.paged is not None and rid_i is not None:
+                # a prefix hit of the paged cache: the scheduler reserved a free user on the row that holds the blocks; this request must run on THAT user
+                plan = self.paged.idx.reservation(rid_i)
+                if (
+                    plan is not None
+                    and plan.hit_tokens == st
+                    and plan.user not in self.slots.live
+                    and plan.user not in phys
+                ):
+                    p = plan.user
+                    self.slots.bind(slot, p)
+                    self.slots.live.add(p)
+                    hit_rows.add(i)
+            if st > 0 and p is None:
                 p = self.inprog.find(
                     st, toks[i, :st], exclude=phys
                 )  # (prompts with the same prefix have the same carried state: each continuation takes a distinct one)
@@ -1153,10 +1222,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if p is None:
                 if self.bucketing and U:
                     p = self.slots.claim_packed(
-                        slot, load, U
+                        slot, load, U, avoid
                     )  # lowest in-row index: the live set stays inside the smallest decode bucket
                 else:
-                    p = self.slots.claim_balanced(slot, load, U) if balanced else self.slots.claim([slot])[0]
+                    p = (
+                        self.slots.claim_balanced(slot, load, U, avoid)
+                        if balanced
+                        else self.slots.claim([slot], avoid)[0]
+                    )
             items.append((p, toks[i], st, e))
             phys.append(p)
         if len(set(phys)) != N:
@@ -1190,9 +1263,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         sampled = [] if samp is None else [i for i in range(N) if not VS.row_is_greedy(samp[0][i], samp[1][i])]
         if samp is not None:
             for i, p in enumerate(phys):  # per-request seed: its own generator, advanced by every draw of this request
-                if samp[3][i] is not None and eff[i] == 0:
+                if samp[3][i] is not None and (eff[i] == 0 or i in hit_rows):
                     self.gens[p] = torch.Generator().manual_seed(int(samp[3][i]))
-                elif eff[i] == 0:
+                elif eff[i] == 0 or i in hit_rows:
                     self.gens.pop(p, None)
         want_logits = (not device_sampling) or bool(
             sampled
@@ -1219,6 +1292,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     f"DSV4.1 prefill (interleave): images in users {sorted(vis)} ({sum(len(v.spans) for v in vis.values())} spans)"
                 )
         run = [it for i, it in enumerate(items) if i not in skipped]
+        rid_map = None
+        if self.paged is not None and request_ids is not None and len(request_ids) == N:
+            rid_map = {phys[i]: request_ids[i] for i in range(N) if i not in skipped}
         final_map = None
         if (
             prefill_final is not None and len(prefill_final) == N
@@ -1239,6 +1315,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 vis=vis or None,
                 **({} if final_map is None else {"final": final_map}),
                 **({} if total_map is None else {"totals": total_map}),
+                **({} if rid_map is None else {"rids": rid_map}),
             )
             if run
             else {}
@@ -1261,7 +1338,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 self.spec_has[
                     p
                 ] = False  # the drafter is seeded when the plugin asks for the first drafts of this request (propose_draft_tokens)
-                if eff[i] == 0:
+                if eff[i] == 0 or i in hit_rows:
                     self.spec_ok[p] = True
                 if ends[i] > self.spec_isl_max:
                     self.spec_ok[p] = False  # ISL beyond the speculative range: this request decodes plain

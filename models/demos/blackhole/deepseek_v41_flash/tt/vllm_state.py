@@ -103,13 +103,25 @@ class SlotTable:
     def physical(self, logical: int) -> int:
         return self.phys[logical]
 
-    def claim(self, logical_slots) -> list[int]:
+    def dodge(self, logical: int, avoid) -> None:
+        """``logical`` is about to get a NEW request: when its model user is one the paged prefix cache reserved for a hit (``avoid``), swap it with a free logical slot whose user is not (free
+        logical slots hold no state: the swap is invisible to the plugin). No such slot: unchanged."""
+        if not avoid or self.phys[logical] not in avoid:
+            return
+        for j in range(self.n_logical):
+            if j != logical and self.phys[j] not in self.live and self.phys[j] not in avoid:
+                self.phys[logical], self.phys[j] = self.phys[j], self.phys[logical]
+                return
+
+    def claim(self, logical_slots, avoid=()) -> list[int]:
         """Prefill: the physical slots of the (free) logical slots the plugin assigned to new requests. A slot that is still occupied is a re-prefill of the same
         request (preemption / restart) and is claimed again."""
         out = []
         for s in logical_slots:
             if not 0 <= int(s) < self.n_logical:
                 raise ValueError(f"empty slot {s} outside 0..{self.n_logical - 1}")
+            if avoid and self.phys[int(s)] not in self.live:
+                self.dodge(int(s), avoid)
             out.append(self.phys[int(s)])
         if len(set(out)) != len(out):
             raise ValueError(f"duplicate prefill slots {list(logical_slots)}")
@@ -126,14 +138,19 @@ class SlotTable:
         j = self.phys.index(phys)
         self.phys[j], self.phys[logical] = cur, phys
 
-    def claim_balanced(self, logical: int, load: dict, users_per_row: int) -> int:
+    def claim_balanced(self, logical: int, load: dict, users_per_row: int, avoid=()) -> int:
         """Prefill of a NEW request into logical slot ``logical`` with few prefill slots per mesh row (``DSV41_PREFILL_UP``): swap its model user with that of the free
         logical slot whose mesh row has the fewest users in prefill (``load`` {mesh row: users in prefill}; counted and updated here), so that concurrent prompts spread
         over the mesh rows. Free logical slots hold no state, so the swap is invisible to the plugin. Returns the physical user.
         """
         if not 0 <= logical < self.n_logical:
             raise ValueError(f"empty slot {logical} outside 0..{self.n_logical - 1}")
-        free = [j for j in range(self.n_logical) if j == logical or self.phys[j] not in self.live]
+        self.dodge(logical, avoid)
+        free = [
+            j
+            for j in range(self.n_logical)
+            if j == logical or (self.phys[j] not in self.live and self.phys[j] not in avoid)
+        ]
         best = min(free, key=lambda j: (load.get(self.phys[j] // users_per_row, 0), j != logical, j))
         if best != logical:
             self.phys[logical], self.phys[best] = self.phys[best], self.phys[logical]
@@ -142,7 +159,7 @@ class SlotTable:
         load[p // users_per_row] = load.get(p // users_per_row, 0) + 1
         return p
 
-    def claim_rowaware(self, logical: int, busy_rows, users_per_row: int):
+    def claim_rowaware(self, logical: int, busy_rows, users_per_row: int, avoid=()):
         """Prefill of a NEW request with few prefill slots per mesh row (DSV41_PREFILL_ROW_AWARE=1): a free model user of a mesh row WITHOUT an in-progress prompt (``busy_rows``), the row
         with the fewest live users first (decoders spread over the rows, so that every row keeps a free user for the next prompt), then the lowest in-row index, then the user the logical slot
         already maps to. Only free users are candidates: the logical slot's own user is no exception (a continuation of the same prefill call may still be bound to it). The swap is invisible
@@ -154,7 +171,10 @@ class SlotTable:
         live_row = {}
         for q in self.live:
             live_row[q // U] = live_row.get(q // U, 0) + 1
-        free = [j for j in range(self.n_logical) if self.phys[j] not in self.live]
+        self.dodge(logical, avoid)
+        free = [j for j in range(self.n_logical) if self.phys[j] not in self.live and self.phys[j] not in avoid] or [
+            j for j in range(self.n_logical) if self.phys[j] not in self.live
+        ]
         if (
             not free
         ):  # (cannot happen while the plugin keeps to max_num_seqs): the legacy answer, the user of the logical slot
@@ -177,7 +197,7 @@ class SlotTable:
         self.live.add(p)
         return p, (p // U) not in busy_rows
 
-    def claim_packed(self, logical: int, load: dict, users_per_row: int) -> int:
+    def claim_packed(self, logical: int, load: dict, users_per_row: int, avoid=()) -> int:
         """Prefill of a NEW request with decode buckets: like ``claim_balanced`` (concurrent prompts spread over the mesh rows: ``load`` {mesh row: users in prefill}) but among the rows
         of equal prefill load the free model user with the LOWEST in-row index u is taken (then the row with the fewest live users), so that the live set stays inside the smallest
         decode bucket (a step runs the users u < U' of every row). Free logical slots hold no state: the swap is invisible to the plugin.
@@ -188,7 +208,12 @@ class SlotTable:
         live_row = {}
         for q in self.live:
             live_row[q // U] = live_row.get(q // U, 0) + 1
-        free = [j for j in range(self.n_logical) if j == logical or self.phys[j] not in self.live]
+        self.dodge(logical, avoid)
+        free = [
+            j
+            for j in range(self.n_logical)
+            if j == logical or (self.phys[j] not in self.live and self.phys[j] not in avoid)
+        ]
         best = min(
             free,
             key=lambda j: (
