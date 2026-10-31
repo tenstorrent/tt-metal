@@ -212,7 +212,8 @@ output tensor) inside the traced decode step, feed the sampled id into the resid
 the host path for logprobs / penalties / min_p; raise `max_device_top_k` to the module's limit so the plugin routes
 sampled rows to the device. Validate: a short sampled A/B (128 x 128 at 32 users, temperature 1.0 / top-p 0.95) against
 the greedy ITL, then the eval entries' runtime.
-Routing caveat (2026-10-31 08:35): the plugin sends a batch to the host when any sampled row has no top-k bound
+Status 2026-10-31 10:05: BUILT on one chip (`tt/sampler.py`, the decode-step hook, the adapter staging, the plugin
+opt-in; local commits), the served A/B pending the mesh. Routing caveat (2026-10-31 08:35): the plugin sends a batch to the host when any sampled row has no top-k bound
 (vLLM's default) or one above `max_device_top_k`, and the reference models declare 32, so a model-side sampler alone
 serves only requests that set 1 <= top_k <= 32. The common chat request (temperature + top-p, no top-k) and the eval
 entries need a generic plugin opt-in (a capability such as `device_top_k_unbounded_as: 32`: sample from the device's

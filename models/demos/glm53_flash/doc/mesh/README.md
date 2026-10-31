@@ -1581,6 +1581,25 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-31 10:05: device sampling for sampled decode rows (built on one chip; the served A/B waits for the mesh)
+
+The release's first eval showed sampled requests (temperature 1.0 / top-p 0.95) decoding at 4-6 tok/s per user
+against 16-17 greedy: the adapter's only device sampler was the head's argmax (`max_device_top_k` 1), so every
+sampled row returned the full `[B, 1, 154880]` fp32 logits to the host each step for the plugin's host sampler,
+outside the resident chain. Built (local commits 569d227ecf3 + 9fc2ed68033, plugin a7fc5f0): `tt/sampler.py`, a
+model-local sampler on the head's complete-vocab logits (`ttnn.topk` 64 candidates per user, two tiles; a one-tile
+row hangs the chip, which cost chip 0 at 08:58; `ttnn.manual_seed` + `ttnn.sampling` with per-user top-k / top-p /
+1/T tensors sharded over the mesh rows; a blend on the greedy mask keeps greedy users at the head's argmax
+bit-identically), in the decode step behind `GLM53_DEVICE_SAMPLING=1`; the adapter stages every live row's
+parameters and seeds (a request's seed stepped by its position, the adapter's RNG otherwise, `GLM53_SAMPLING_SEED`
+pins it) before each step, declares `max_device_top_k` 32 and the generic `device_top_k_unbounded_as` opt-in the
+plugin now honours (rows without a top-k bound, the common chat request, sample from the top-32 under their top-p
+instead of going to the host), and draws a sampled request's first token on the host from the prefill's last-token
+logits. One chip, real head weights, B = 8 (`test_head_sampler`): all-greedy == argmax, draws inside their top-k,
+seeded reproducibility, hot rows vary; 1.1 ms per eager step (the vendor's `ttnn.sampling` unit tests pass on this
+build at widths 64 / 256). Host suites: adapter 23, serving 13, plugin 135. Pending: the served A/B at
+128 x 128 x 32 sampled (knob on vs off) against the greedy ITL, then the push and the overlay refresh.
+
 ### 2026-10-31 07:14: the capstone: 32 resident users at 1 M, all prefilling at once (needle1m_32_r6)
 
 `needle1m_32_r6` (32 x 1 038 673-token needle prompts submitted together, `max-num-batched-tokens 524288` so the
