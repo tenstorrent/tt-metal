@@ -51,11 +51,9 @@ constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 // The courier's header is its own, not the drain's: a credit can be posted from inside the send loop's wait,
 // where the drain header may already hold a bump the EDM has not taken yet.
 constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0200;
-constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
 static_assert(PKT_HDR_DRAIN_OFF < PKT_HDR_CREDIT_OFF, "credit header overlaps the drain packet header");
-static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
-static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
+static_assert(PKT_HDR_CREDIT_OFF < PROD_BUF_OFF, "token ring overlaps the credit packet header");
 
 // Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
 // is not left to fabric to do. Op manages it. Multihop data movement is broken down to single hops.
@@ -138,7 +136,6 @@ L1Layout compute_l1_layout(
     l.collector_counts = base;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
-    l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per packet of each ring slot, past the ring itself. A slot is the token plus its
     // metadata tail.

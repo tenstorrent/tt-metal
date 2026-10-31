@@ -321,16 +321,16 @@ uint32_t pump_stream(FabricSender& fabric) {
 // further free slot forces credits_returned >= sent: every payload packet has reached the destination chip.
 // It does NOT prove the destination DRAM write retired — the far eRISC may ack on write issue.
 //
-// The fillers are header-only atomic incs of value ZERO aimed at a drain sink on the peer chip: real fabric
-// packets (there is no NOP send type) that change nothing. Their own completion is never awaited. Reaching a
-// free slot cannot deadlock, since the reverse direction is a different eth channel.
+// The fillers are header-only atomic incs of value ZERO: real fabric packets (there is no NOP send type) that
+// change nothing. Their own completion is never awaited, so one can land after the peer's program has exited;
+// they target the downstream reader's `final_arrived`, a semaphore that outlives every launch and is only ever
+// changed by NoC atomics, rather than L1 the next op on that core may own. Reaching a free slot cannot
+// deadlock, since the reverse direction is a different eth channel.
 template <typename FabricSender>
 void drain_fabric(FabricSender& fabric) {
     volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
-    // Any legal L1 address on the chip across our cable will do; the downstream worker we already address for
-    // semaphore bumps sits on exactly that chip.
     hdr_drain->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.drain_sink_addr), /*val=*/0, /*flush=*/false});
+        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.final_sem_addr), /*val=*/0, /*flush=*/false});
     fabric_set_unicast_route(
         (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_drain, ct.peer_chip_id, ct.peer_mesh_id);
     for (uint32_t d = 0; d + 1 < fabric.num_buffers_per_channel; d++) {
