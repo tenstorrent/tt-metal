@@ -65,7 +65,11 @@ struct LayerNormCbFootprint {
 };
 
 constexpr bool uses_centred_values_buffer(
-    bool rms_norm, bool fuse_pre_add, bool large_tensor, bool compact_fp32_finalizer) {
+    bool rms_norm, bool fuse_pre_add, bool large_tensor, bool use_welford, bool compact_fp32_finalizer) {
+    // layernorm_large_tensor.cpp normalises x - E[x] in DEST, so only the other compute kernels stage it in XMM.
+    if (large_tensor && !use_welford) {
+        return false;
+    }
     return !compact_fp32_finalizer && (!rms_norm || fuse_pre_add || large_tensor);
 }
 
@@ -295,10 +299,10 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             .residual_input =
                 residual.has_value() ? static_cast<std::uint64_t>(plan.residual_tiles) * residual_tile_size : 0,
             .output = static_cast<std::uint64_t>(plan.output_tiles) * output_tile_size,
-            .centred_values =
-                uses_centred_values_buffer(rms_norm, residual.has_value(), plan.large_tensor, compact_finalizer)
-                    ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
-                    : 0,
+            .centred_values = uses_centred_values_buffer(
+                                  rms_norm, residual.has_value(), plan.large_tensor, sfpu_statistics, compact_finalizer)
+                                  ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
+                                  : 0,
             .squared_values =
                 sfpu_statistics ? 0 : static_cast<std::uint64_t>(plan.squared_tiles) * intermediate_tile_size,
             .gamma = gamma.has_value() ? static_cast<std::uint64_t>(plan.gamma_tiles) * gamma_tile_size : 0,
@@ -699,7 +703,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     add_dfb(EX2, im2_t, single_tile_size, interm_data_format);
 
     // x - E[x].
-    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, compact_fp32_finalizer)) {
+    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, use_welford, compact_fp32_finalizer)) {
         add_dfb(XMM, im0_t, single_tile_size, interm_data_format);
     }
 
@@ -1140,7 +1144,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (b && !rms_norm) {
         bind_self_loop(compute, X, "x");
     }
-    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, compact_fp32_finalizer)) {
+    if (uses_centred_values_buffer(rms_norm, fuse_pre_add, large_tensor_needed, use_welford, compact_fp32_finalizer)) {
         bind_self_loop(compute, XMM, "xmm");
     }
     if (uses_reciprocal_lut) {
