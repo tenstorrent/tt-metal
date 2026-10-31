@@ -151,3 +151,33 @@ def hidden_split_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
     holds columns [c H/TP, (c+1) H/TP)) -> host [S, H]."""
     full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
     return full.reshape(-1, full.shape[-1])
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# OWN_ROWS (P.23): chip (r, c) holds rows [(r TP + c) S/(SP TP), (r TP + c + 1) S/(SP TP)) with every column (the rows
+# sparse_sdpa reads, the MoE block's owner rows). Streams stay stream-major: column j H + k = stream j's hidden column k.
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def own_rows_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
+    """Host [S, W] -> device [1, 1, S/(SP TP), W] per chip (chip (r, c): row block r TP + c), TILE, DRAM."""
+    sp, tp = tuple(mesh.shape)
+    s, w = x.shape
+    assert s % (sp * tp) == 0, f"{s} rows do not split over {sp} x {tp} chips"
+    host = x.float().reshape(sp, tp, s // (sp * tp), w).contiguous()
+    return from_torch(
+        host,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_mapper(mesh, (0, 1)),
+    )
+
+
+def own_rows_to_host(mesh, t: ttnn.Tensor, width: int | None = None) -> torch.Tensor:
+    """Device [.., S/(SP TP), W] per chip (row block r TP + c on chip (r, c)) -> host [S, W] (``width`` trims)."""
+    parts = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]  # (row-major chip order: r TP + c)
+    w = t.shape[-1]
+    out = torch.cat([p.reshape(-1, p.shape[-1])[:, :w] for p in parts], dim=0)
+    return out if width is None else out[:, :width]

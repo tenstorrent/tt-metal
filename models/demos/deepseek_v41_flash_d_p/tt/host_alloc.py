@@ -78,11 +78,12 @@ def reserve_sites(model) -> None:
         return
     rows = model.chunk // sp  # the chip's rows of the chunk (S/SP)
     f32, bf16, tile = ttnn.float32, ttnn.bfloat16, ttnn.TILE_LAYOUT
-    # mHC row exchange (MHC_FUSED=on, GLUE_FOLD=on): the chips' fp32 partial rows [1, 1, S/SP, 32] gathered on dim 1
-    ccl.reserve(mesh, "mhc.row", [1, tp, rows, 32], f32, tile)
-    # the column-split norms' partial sums of squares [1, 1, S/SP, 32 B] gathered on dim 3
-    w = norm_stats_width(mesh, rows, cfg.dim // tp)
-    ccl.reserve(mesh, "norm.stats", [1, 1, rows, w * tp], f32, tile)
+    if not getattr(model, "own", False):  # (OWN_ROWS, P.23: no mHC row exchange, no split norm in the layers)
+        # mHC row exchange (MHC_FUSED=on, GLUE_FOLD=on): the chips' fp32 partial rows [1, 1, S/SP, 32] gathered on dim 1
+        ccl.reserve(mesh, "mhc.row", [1, tp, rows, 32], f32, tile)
+        # the column-split norms' partial sums of squares [1, 1, S/SP, 32 B] gathered on dim 3
+        w = norm_stats_width(mesh, rows, cfg.dim // tp)
+        ccl.reserve(mesh, "norm.stats", [1, 1, rows, w * tp], f32, tile)
     # the attention's window kv rows (ATTN_SP32=on: the chip's own S/(SP TP) rows) gathered over TP to the SP row's W
     ccl.reserve(mesh, "attn.kv_tp", [1, 1, rows, 512], bf16, tile)
     _reserve_attention(model)
@@ -147,8 +148,9 @@ def mm_out(mesh, site: str, x, w, dtype):
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-def reserve_tail_out(mesh, chunk: int, hidden: int) -> None:
-    """Load time (TtMoEBlockLayer): the fused tail's output [1, 1, S/SP, H/TP] bf16 TILE, one for every layer."""
+def reserve_tail_out(mesh, chunk: int, hidden: int, own_rows: bool = False) -> None:
+    """Load time (TtMoEBlockLayer): the fused tail's output [1, 1, S/SP, H/TP] bf16 TILE (OWN_ROWS, P.23: the local
+    tail's [1, 1, S/(SP TP), H]), one for every layer."""
     if not on() or settings.get("PREPARED_ALL") != "on":
         return
     key = (id(mesh), int(chunk))
@@ -156,8 +158,9 @@ def reserve_tail_out(mesh, chunk: int, hidden: int) -> None:
     if hit is not None and hit[0] is mesh:
         return
     sp, tp = tuple(mesh.shape)
+    shape = [1, 1, chunk // (sp * tp), hidden] if own_rows else [1, 1, chunk // sp, hidden // tp]
     t = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, chunk // sp, hidden // tp]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
     ccl.pin(mesh, t)
     _TAIL_OUT[key] = (mesh, t)
@@ -295,6 +298,8 @@ def reserve_forks(model) -> None:
     rows = model.chunk // sp  # S/SP: the streams' rows
     hid = cfg.dim // tp  # H/TP: a stream's columns on a chip
     q = model.tables.geo.q_rows  # S/(SP TP): the chip's own rows (ATTN_SP32)
+    if getattr(model, "own", False):  # OWN_ROWS (P.23): the streams on the chip's own rows, whole hidden
+        rows, hid = model.rows, cfg.dim
     f32, bf16 = ttnn.float32, ttnn.bfloat16
     for blk in model.blocks.values():
         # mHC (MHC_FUSED=on): attn_hc's hc lives to ffn_collapse, both collapses' y to their norm; ffn_hc's hc is the
@@ -318,7 +323,7 @@ def reserve_forks(model) -> None:
         prow = q if blk.q_a.proj.full_rows else rows
         _name_norm(mesh, blk.q_a.norm, "fork.q_norm", prow)
         _name_norm(mesh, blk.kv.norm, "fork.kv_norm", prow)
-        _name_norm(mesh, blk.ffn_norm, "fork.ffn_norm", rows)
+        _name_norm(mesh, blk.ffn_norm, "fork.ffn_norm", rows)  # (OWN_ROWS: the own rows, whole hidden)
         # RoPE: kv (the window rows; to_layout / gathered copies are what the cache keeps), q and the output's inverse
         att = getattr(blk, "attention", None)
         if blk.kv.stock:

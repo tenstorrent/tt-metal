@@ -37,8 +37,13 @@ class TtEngramKv:
     """engram_kv of one layer. Call with the engram rows [1, 1, S/SP, K] (bf16, fp32 or bfloat8_b TILE); returns
     [1, 1, S/SP, 5 x H/TP] fp32 TILE. Does not consume its input."""
 
-    def __init__(self, mesh, wkv: torch.Tensor, hidden: int):
+    def __init__(self, mesh, wkv: torch.Tensor, hidden: int, own_rows: bool = False):
         n, k = wkv.shape  # [5H, K] (nn.Linear layout)
+        # OWN_ROWS=on (P.23): chip column c holds the block-major columns [c 5H/TP, (c+1) 5H/TP) of [key 0..3 | value]
+        # (no chip-major permutation), so ONE all_to_all over TP (concat columns, split rows) of the [S/SP, 5H/TP]
+        # product lands the chip's own rows [S/(SP TP), 5 x H] in block order: the weights' bytes and the matmul as
+        # before, no replicated wkv
+        self.own_rows = bool(own_rows)
         tp = mesh.shape[TP_AXIS]
         assert n == BLOCKS * hidden, (wkv.shape, hidden)
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
@@ -48,7 +53,8 @@ class TtEngramKv:
         self.ckc = compute_config(mesh)
         w_t = wkv.float().t().contiguous()  # [K, 5H], block order
         assert torch.equal(w_t.bfloat16().float(), w_t), "fp8 weights must be bf16-exact"
-        w_t = streams_cols_to_chip_major(w_t, hidden, tp, BLOCKS)  # [K, tp x 5 x H/TP]: chip column c's block
+        if not self.own_rows:
+            w_t = streams_cols_to_chip_major(w_t, hidden, tp, BLOCKS)  # [K, tp x 5 x H/TP]: chip column c's block
         dims = (None, 3) if TP_AXIS == 1 else (3, None)
         w_t = w_t.reshape(1, 1, k, BLOCKS * hidden).contiguous()
         self.weight = from_torch(
@@ -69,11 +75,17 @@ class TtEngramKv:
         )
         if xq is not rows:
             dealloc(xq)
+        if self.own_rows and self.mesh.shape[TP_AXIS] > 1:  # OWN_ROWS=on (P.23): -> [1, 1, S/(SP TP), 5 x H]
+            own = ttnn.experimental.all_to_all_async_generic(
+                out, in_dim=3, out_dim=2, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
+            )
+            dealloc(out)
+            return own
         return out
 
 
-def build_engram_kv(mesh, ck, cfg, layer: int) -> TtEngramKv:
-    """Layer ``layer``'s engram projection (fp8 wkv dequantized at load)."""
+def build_engram_kv(mesh, ck, cfg, layer: int, own_rows: bool = False) -> TtEngramKv:
+    """Layer ``layer``'s engram projection (fp8 wkv dequantized at load). ``own_rows``: OWN_ROWS (P.23)."""
     assert cfg.is_engram(layer), f"layer {layer} has no engram"
     wkv = ck.weight(f"layers.{layer}.engram.wkv.weight", torch.float32)
-    return TtEngramKv(mesh, wkv, cfg.dim)
+    return TtEngramKv(mesh, wkv, cfg.dim, own_rows=own_rows)

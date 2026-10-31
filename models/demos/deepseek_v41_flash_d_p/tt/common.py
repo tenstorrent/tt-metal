@@ -70,6 +70,16 @@ def attn_sp32() -> bool:
     return all(settings.get(k) == "on" for k in need)
 
 
+def own_rows() -> bool:
+    """Setting OWN_ROWS (P.23): the residual / mHC streams on each chip's own S/(SP TP) rows with the whole hidden
+    [1, 1, S/(SP TP), 4 x H]. Built on ATTN_SP32 (the attention on those rows), MHC_FUSED and GLUE_FOLD (the fused mHC
+    programs) and the block MoE with its fused head (MoEOptions residual 'owners'); off whenever one of them is off."""
+    if settings.get("OWN_ROWS") != "on" or not attn_sp32():
+        return False
+    need = (("MHC_FUSED", "on"), ("GLUE_FOLD", "on"), ("MOE_IMPL", "block"), ("MOE_HEAD", "fused"))
+    return all(settings.get(k) == v for k, v in need)
+
+
 def cols_to_rows(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
     """ATTN_SP32=on (P.10): a hidden-split [1, 1, S/SP, H/TP] -> the chip's own rows with whole hidden rows
     [1, 1, S/(SP TP), H] (mesh column c: rows [c S/(SP TP), (c+1) S/(SP TP)) of its SP block, the rows sparse_sdpa
