@@ -164,6 +164,44 @@ writes (the row-sharded slot machinery of section 1 #3 and #7), one row gather o
 Sequenced after the capstone (32 resident x 1 M) and the release; measured on the lone 1 M needle (TTFT vs 505 s)
 and the "8, then 1 late" shape.
 
+##### 2.5.1.1 What tt-metal #62997 actually provides (survey 2026-10-31 19:15, read-only; branch `ipotkonjak/sparse-kv-push-glm`, open)
+
+Two experimental ttnn ops. `sparse_push_plan(indices, num_devices, stripe_chunk, max_rows, page_bytes, chunk_start)`
+builds, on every chip, a bitmap of the selected cache rows (the dedup / union is on device: scatter into per-core
+bitmaps, OR-reduce, rank per owner) and rewrites the indices to compact-buffer slots; the model all-gathers the 32
+tables itself. `sparse_kv_push(cache, output, table, ..., ready_semaphore, data_valid_semaphore, part, num_links)`
+then has every chip push, through the fabric (2D torus, 2 links, per direction one mux core + 2 sender cores, point
+to point unicast NoC writes, no multicast), the rows IT owns to every requester's compact row-major buffer, and the
+attention op reads that buffer instead of the cache. Both are trace-safe (program hash without addresses /
+semaphores / batch index). Measured in the PR (DeepSeek-V3 sparse MLA prefill, the same 8x4 Galaxy, 2 links,
+traced): plan 123-130 us, table gather 80 us, push 361-1717 us per layer (0.6-5.3 % of the 1 M rows survive the
+dedup, median 25 K rows = 25 MB at 1 KiB rows), attention 0.93-1.0 ms; 1020 K prefill chunk 815 -> 621 ms, TTFT
+126 -> 110 s (that model's whole 1 M prefill: 4.6x faster than our 505 s, a gap to profile on its own: section 3 step 4).
+
+Constraints that shape a GLM53 use:
+
+| the op needs | GLM53 today | consequence |
+|---|---|---|
+| the cache ROW_MAJOR, one row per page (<= the fabric payload, 6144 B in the GLM router config), sharded on its row dim over ALL mesh chips in row-major mesh order: global block `b` lives on chip `b % 32` (block-cyclic, `stripe_chunk` <= 512 rows) | paged bf16 TILE `[max_blocks, 1, 32, 512]`, replicated per chip of the owner row (`tt/dsa.py`) | a second, row-major, 32-way striped latent cache for the prompt being prefilled (1 KiB rows fit the payload), or a per-chunk RM staging copy |
+| every one of the 32 chips in every push (requesters = all chips; the done fence counts `(N-1) x links x 2 + senders`) | SP = one prompt over the mesh (fits); waves = 8 prompts per step (does not: one push would couple the rows) | the push belongs to the SP path only; the "owner row pushes to 7 rows" of 2.5.1 becomes "every chip pushes its stripe to 31" |
+| `FABRIC_2D_TORUS_XY` with 4 distinct neighbours per chip, mesh >= 3 x 3 | torus is the 8x4 default (`tt/mesh.py`); the (2,4) block runs 1D/2D fabric | no block-level test of the push; mesh only |
+| a C++ device op built on `FabricMuxConfig` / `fabric_mux_connection_*` / `tt_fabric_mux.cpp` | `custom_ops/` are Python `generic_op` program descriptors; the nanobind fabric surface has no mux config | not portable into `custom_ops/`; usable only as upstream ttnn once #62997 merges (no code outside the model folder) |
+
+Decode is the open question of this route: with the prompt striped 32 ways, every decode step would need its own
+plan + gather + push per DSA layer (~0.3-0.5 ms each: +4-7 ms on the 55 ms step for the DSA layers alone, more if
+the selection is wider than the PR's), so the striped cache must be consolidated into the owner row's paged TILE
+cache once per chunk (the chunk's new rows: 16 MiB per DSA layer per 16 K chunk, a layout conversion plus a
+row-axis gather, well under the chunk's 7 s), and decode stays exactly today's path. That consolidation is also
+what keeps the 32 x 1 M cell: the striped copy lives only while the prompt prefills (1/32 of the prompt per chip)
+and the owner row holds the only full copy afterwards.
+
+Route, in order, after #62997 merges (track it; nothing to port before then): (1) profile the 1 M SP chunk op by
+op against the PR's 621 ms / 5120-token chunk (section 3 step 4); (2) the striped RM cache + per-chunk consolidation on the lone
+1 M needle with the upstream ops, SP compute unchanged (measure against 505 s and the DRAM headroom: the 7 replicas
+return); (3) only then the owner-row attention over the compact buffer in `custom_ops/paged_sparse_sdpa` (a
+"compact source" reader mode). Not pursued: re-implementing the fabric push in `generic_op` (no mux surface), or a
+wave-path push (the fence couples the rows).
+
 ### 2.6 (d) Mixing prefill rows with decode rows
 
 Every op is dispatched to the whole mesh (one command stream per mesh; a captured trace replays on every chip), so a
@@ -230,6 +268,14 @@ Tests, in order:
    32 distinct prompts at 1 M (4 waves of 8 at W = 2 K: TTFT per wave, needles 32/32, users within a row agree when
    prefilled by the same path, rows agree modulo near-ties); then the vLLM server at `--max-num-seqs 32
    --max-model-len 1048576` with the 128/128/32 and 100/100/32 benchmarks (TTFT + decode tok/s from one run).
+
+4. (next device slot, before any push work) the 1 M SP chunk profiled op by op: one 16 K chunk at the 1 M position
+   under the device profiler (one DSA layer and one KDA layer isolated, then the whole chunk), split into indexer
+   scoring, top-k, the sparse latent gather, attention, the KV all-gather across rows, KDA, MoE and the CCLs.
+   Reference point: DeepSeek-V3's sparse MLA prefill on the same Galaxy runs a 5120-token chunk at 1020 K in 621 ms
+   (#62997), 4.6x our per-token rate at 1 M (16 K in ~7.4 s); the profile decides whether the replicated-cache
+   all-gather or the attention over the replicated prefix is the term to attack first, and the push of 2.5.1.1
+   only matters if it is the former.
 
 Risks:
 
