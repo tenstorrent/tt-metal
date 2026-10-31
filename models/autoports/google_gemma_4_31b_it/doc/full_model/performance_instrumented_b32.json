@@ -1,0 +1,59 @@
+{
+  "scope": "full60layers",
+  "source": "autoregressive",
+  "input_tokens": 4096,
+  "generated_tokens": 128,
+  "batch_size": 32,
+  "concurrent_requests": 32,
+  "ttft_ms": 20665.885214984883,
+  "decode_tps": 23.197422176355015,
+  "decode_ms": 43.10823816532915,
+  "timing": "host end-to-end; first token includes request reset, prefill and traced sampling; decode includes traced model, sampling and caller token readback",
+  "samples": [
+    {
+      "ttft_ms": 20653.753490012605,
+      "decode_tps": 23.197422176355015,
+      "decode_ms": 43.10823816532915,
+      "total_seconds": 26.128499737009406,
+      "counters": {
+        "model_replays": 127,
+        "sample_replays": 128,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 128,
+        "captures": 0
+      }
+    },
+    {
+      "ttft_ms": 20669.77873502765,
+      "decode_tps": 23.18847032570889,
+      "decode_ms": 43.124879992248005,
+      "total_seconds": 26.146638494043145,
+      "counters": {
+        "model_replays": 127,
+        "sample_replays": 128,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 128,
+        "captures": 0
+      }
+    },
+    {
+      "ttft_ms": 20665.885214984883,
+      "decode_tps": 23.212102117989215,
+      "decode_ms": 43.080975385896096,
+      "total_seconds": 26.137169088993687,
+      "counters": {
+        "model_replays": 127,
+        "sample_replays": 128,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 128,
+        "captures": 0
+      }
+    }
+  ]
+}

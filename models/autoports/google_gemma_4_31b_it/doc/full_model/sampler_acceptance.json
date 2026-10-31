@@ -1,0 +1,99 @@
+{
+  "scope": "synthetic sampler and persistent token storage only",
+  "records": 96,
+  "batches": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "all_semantically_greedy": true,
+  "lowest_index_mismatches": [
+    {
+      "batch": 1,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 1,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 32,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 0
+    },
+    {
+      "batch": 32,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 0
+    },
+    {
+      "batch": 32,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 32,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 8,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 0
+    },
+    {
+      "batch": 8,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 0
+    },
+    {
+      "batch": 8,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 8,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 16,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 0
+    },
+    {
+      "batch": 16,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 0
+    },
+    {
+      "batch": 16,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    },
+    {
+      "batch": 16,
+      "mode": "split_greedy",
+      "case": "many_ties",
+      "shift": 101
+    }
+  ],
+  "allocation_tracking": true,
+  "includes_program_cache_allocations": true
+}

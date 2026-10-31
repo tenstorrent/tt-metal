@@ -1,0 +1,54 @@
+{
+  "basis": "Selected stage05 layer device profiles, 50 sliding plus 10 full layers; nominal arithmetic stack reference, not a strict lower bound across different profiling regimes. Clean full-model token-out timing is host end-to-end and unprofiled. Negative differences do not imply negative wrapper overhead.",
+  "rows": [
+    {
+      "batch": 1,
+      "sliding_layer_us": 475.2245136122647,
+      "full_layer_us": 527.8178151055796,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 29.03940383166903,
+      "full_model_token_out_ms": 29.22667410246676,
+      "full_model_source": "performance_b1.json"
+    },
+    {
+      "batch": 32,
+      "sliding_layer_us": 674.8565124183365,
+      "full_layer_us": 985.6259806469436,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 43.599085427386264,
+      "full_model_token_out_ms": 43.13648603150738,
+      "full_model_source": "performance_b32.json"
+    },
+    {
+      "batch": 16,
+      "sliding_layer_us": 561.567810144126,
+      "full_layer_us": 742.3873482827249,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 35.50226399003355,
+      "full_model_token_out_ms": 34.325766661772725,
+      "full_model_source": "performance_b16.json"
+    },
+    {
+      "batch": 8,
+      "sliding_layer_us": 519.6260342831646,
+      "full_layer_us": 620.933143360821,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 32.190633147766434,
+      "full_model_token_out_ms": 30.95192998449692,
+      "full_model_source": "performance_b8.json"
+    }
+  ],
+  "source": "optimized_multichip_measurements in doc/agentic_serving.json; each source row links exact per-layer profile"
+}

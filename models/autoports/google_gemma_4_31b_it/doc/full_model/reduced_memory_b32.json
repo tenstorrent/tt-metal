@@ -1,0 +1,192 @@
+{
+  "scope": "reduced real-weight layers0/5 only; NOT full-stack memory measurement",
+  "mesh": [
+    1,
+    4
+  ],
+  "layer_indices": [
+    0,
+    5
+  ],
+  "batch": 32,
+  "context": 262144,
+  "pool_tokens": 1048576,
+  "detailed_pages": false,
+  "cache_shapes": [
+    [
+      [
+        2048,
+        4,
+        32,
+        256
+      ],
+      [
+        2048,
+        4,
+        32,
+        256
+      ]
+    ],
+    [
+      [
+        32768,
+        1,
+        32,
+        512
+      ],
+      [
+        32768,
+        1,
+        32,
+        512
+      ]
+    ]
+  ],
+  "cache_dtypes": [
+    [
+      "DataType.BFLOAT8_B",
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      "DataType.BFLOAT8_B",
+      "DataType.BFLOAT8_B"
+    ]
+  ],
+  "phases": [
+    {
+      "phase": "prefill1024_all_logits",
+      "temperature": "cold",
+      "before": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 417856768,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825660800
+      },
+      "after": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418047232,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825470336
+      },
+      "allocator_device_ids": [
+        "0"
+      ],
+      "event_counts": {
+        "buffer_allocate": 179,
+        "buffer_deallocate": 116
+      },
+      "event_delta_per_bank": 190464,
+      "observed_delta_per_bank": 190464,
+      "reconciliation_bytes_per_bank": 0,
+      "reconciled": true,
+      "peak_event_counter": 2752,
+      "num_banks": 8,
+      "peak_dram_bytes_per_device": 3768788992,
+      "incremental_peak_dram_bytes_per_device": 425934848,
+      "missing_reasons": []
+    },
+    {
+      "phase": "prefill1024_all_logits",
+      "temperature": "warm",
+      "before": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418047232,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825470336
+      },
+      "after": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418047232,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825470336
+      },
+      "allocator_device_ids": [
+        "0"
+      ],
+      "event_counts": {
+        "buffer_allocate": 116,
+        "buffer_deallocate": 116
+      },
+      "event_delta_per_bank": 0,
+      "observed_delta_per_bank": 0,
+      "reconciliation_bytes_per_bank": 0,
+      "reconciled": true,
+      "peak_event_counter": 2267,
+      "num_banks": 8,
+      "peak_dram_bytes_per_device": 3769051136,
+      "incremental_peak_dram_bytes_per_device": 424673280,
+      "missing_reasons": []
+    },
+    {
+      "phase": "decode_sampling_setup",
+      "temperature": "cold",
+      "before": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418047232,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825470336
+      },
+      "after": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418350336,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825197952
+      },
+      "allocator_device_ids": [
+        "0"
+      ],
+      "event_counts": {
+        "buffer_allocate": 154,
+        "buffer_deallocate": 57
+      },
+      "event_delta_per_bank": 303104,
+      "observed_delta_per_bank": 303104,
+      "reconciliation_bytes_per_bank": 0,
+      "reconciled": true,
+      "peak_event_counter": 2891,
+      "num_banks": 8,
+      "peak_dram_bytes_per_device": 3362121728,
+      "incremental_peak_dram_bytes_per_device": 17743872,
+      "missing_reasons": []
+    },
+    {
+      "phase": "decode_sampling_setup",
+      "temperature": "warm",
+      "before": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418350336,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825197952
+      },
+      "after": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 418350336,
+        "total_bytes_per_bank": 4255564160,
+        "largest_contiguous_bytes_free_per_bank": 3825197952
+      },
+      "allocator_device_ids": [
+        "0"
+      ],
+      "event_counts": {
+        "buffer_allocate": 57,
+        "buffer_deallocate": 57
+      },
+      "event_delta_per_bank": 0,
+      "observed_delta_per_bank": 0,
+      "reconciliation_bytes_per_bank": 0,
+      "reconciled": true,
+      "peak_event_counter": 2321,
+      "num_banks": 8,
+      "peak_dram_bytes_per_device": 3362875392,
+      "incremental_peak_dram_bytes_per_device": 16072704,
+      "missing_reasons": []
+    }
+  ],
+  "basis": "NORMAL graph allocate/deallocate max_size_per_bank x allocator num_banks; reconciled to get_memory_view",
+  "notes": [
+    "Mesh allocator represents mirrored per-device reservations; no chip-specific occupancy is inferred.",
+    "Cold includes new persistent program allocations; warm isolates warmed operation lifetime.",
+    "Peak is allocated capacity, not largest contiguous free region or a full-stack fit guarantee.",
+    "Trace region is configured but no model/sampling trace is captured; measure full-stack persistent baseline separately."
+  ]
+}

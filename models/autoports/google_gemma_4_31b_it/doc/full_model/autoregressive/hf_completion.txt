@@ -1,0 +1,4 @@
+To find the total time the walk takes, we first need to determine the walking speed $s$ and the time $t$ spent in the coffee shop.
+
+Let $s$ be the walking speed in km/h and $t$ be the time spent in the coffee shop in minutes. The distance of the walk is $d = 9$ km.
+The time spent walking is $\frac{d}{s}$. The total time is the walking time plus the coffee shop time.

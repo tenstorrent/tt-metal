@@ -1,0 +1,148 @@
+{
+  "scope": "full60layers",
+  "batch": 1,
+  "memory": {
+    "empty": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 0,
+      "largest_contiguous_bytes_free_per_bank": 4255564160
+    },
+    "construction_stages": {
+      "before_model": 0,
+      "terminal_ccl": 0,
+      "decoder_stack": 4711204864,
+      "embedding": 5415847936,
+      "lm_head": 5790189568,
+      "final_norm": 5790533632,
+      "rope_tables": 6595840000
+    },
+    "constructed": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1212065344,
+      "largest_contiguous_bytes_free_per_bank": 3040668544
+    },
+    "inventory": {
+      "decoder_weights": 4411965440,
+      "decoder_state": 299059200,
+      "embedding": 704643072,
+      "lm_head": 374341632,
+      "final_norm": 344064,
+      "rope": 805306368,
+      "kv_cache": 3074949120,
+      "page_tables": 15728640,
+      "sampler": 53248,
+      "prepared_prefill": 1397248,
+      "generator_state": 8390144,
+      "sum_owned_dram_bytes": 9696178176,
+      "allocator_bytes": 9696522752,
+      "unattributed_allocator_bytes": 344576
+    },
+    "prepared": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1217097280,
+      "largest_contiguous_bytes_free_per_bank": 3035638656
+    },
+    "after_workloads": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1217097280,
+      "largest_contiguous_bytes_free_per_bank": 3035638656
+    }
+  },
+  "accuracy": {
+    "prefill": [
+      {
+        "top1": 0.94,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 94,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "decode": [
+      {
+        "top1": 0.93,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 93,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 2.73852337396238,
+        "e2e_t/s/u": 36.51602938678212,
+        "ttft_ms": 94.56185298040509,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 2.643915723019745,
+        "decode_t/s/u": 37.444461310940454
+      }
+    ]
+  },
+  "host_sampling_compatibility_equal": true,
+  "repeated_equal": true,
+  "equal_across_slots": true,
+  "mixed_repeat_equal": true,
+  "outputs": [
+    [
+      2021,
+      1586,
+      506,
+      2558,
+      990,
+      573,
+      506,
+      3727
+    ]
+  ],
+  "mixed_outputs": [
+    [
+      1638,
+      1852,
+      1852,
+      1852
+    ]
+  ],
+  "pool_tokens": 262144,
+  "max_individual_context": 262144,
+  "long_context": [
+    {
+      "prompt_tokens": 262143,
+      "generated_tokens": 1,
+      "output": [
+        236795
+      ]
+    },
+    {
+      "prompt_tokens": 262144,
+      "generated_tokens": 0,
+      "output": [
+        35769
+      ]
+    }
+  ],
+  "last_input_position_decode": {
+    "position": 262143,
+    "output": [
+      35769
+    ],
+    "positions_after": [
+      262144
+    ],
+    "scope": "Low-level last legal input-position probe; not an extra public-generation capacity claim"
+  },
+  "counters": {
+    "model_replays": 642,
+    "sample_replays": 648,
+    "token_refreshes": 108,
+    "position_refreshes": 13,
+    "page_refreshes": 300,
+    "readbacks": 656,
+    "captures": 2
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "prefill": [
+    {
+      "top1": 0.94,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 94,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  ],
+  "decode": [
+    {
+      "top1": 0.93,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 93,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 2.73852337396238,
+      "e2e_t/s/u": 36.51602938678212,
+      "ttft_ms": 94.56185298040509,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 2.643915723019745,
+      "decode_t/s/u": 37.444461310940454
+    }
+  ]
+}

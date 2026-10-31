@@ -1,0 +1,21 @@
+{
+  "base_commit": "bdb236e49bdd887c9719e7a13b35af8bdc659964",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "files": {
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "c09242f883ebff67e4b698c6fe1c14dde72f77a1bf5a284a667194c1b0e923fe",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "8e10176b9e00faee0ac3722df4acd1095d55cdb57e6aa36eddb14741ae944bb8",
+    "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "7d3f4d7c71ff30f3dcac67ba8d1b47737f80e46f06efd235a4cdf6bfe43a5372",
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5f214129e788376ba3d43f773b49a39a6f30c593fec8d00637f8afcfcdbbef79"
+  },
+  "runtime_validation_hashes": {
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "bb23bd9d9f36e7535d1a13140421a0c9d0e4a488a78ab842e6f49460f08a62c6",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "89323b9863f2b77df8694bdccf66c9bbf9f07a9a5217e5e6e119d845de523a76",
+    "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "542f8b6f0d11577cd26b3604d0e641cc2fdbada323c9b494f1ecc3f1e1cf2f44",
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bec80bec9cef3c40a6408468b70c56399974e6d57430335a6bbcba5094d49dbd",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5f214129e788376ba3d43f773b49a39a6f30c593fec8d00637f8afcfcdbbef79"
+  },
+  "post_validation_changes": "Repository pre-commit import sorting and whitespace only. Non-import module AST is identical for every changed Python file; host admission/import check repeated after formatting. Runtime hashes retained separately."
+}

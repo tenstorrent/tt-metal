@@ -1,0 +1,39 @@
+{
+  "construction_stages": {
+    "before_model": 0,
+    "terminal_ccl": 0,
+    "decoder_stack": 4711204864,
+    "embedding": 5415847936,
+    "lm_head": 5790189568,
+    "final_norm": 5790533632,
+    "rope_tables": 6595840000
+  },
+  "constructed": {
+    "num_banks": 8,
+    "total_bytes_per_bank": 4255564160,
+    "total_bytes_allocated_per_bank": 3150954112,
+    "largest_contiguous_bytes_free_per_bank": 1097405312
+  },
+  "inventory": {
+    "decoder_weights": 4411965440,
+    "decoder_state": 299059200,
+    "embedding": 704643072,
+    "lm_head": 374341632,
+    "final_norm": 344064,
+    "rope": 805306368,
+    "kv_cache": 18538823680,
+    "page_tables": 62914560,
+    "sampler": 53248,
+    "prepared_prefill": 1397248,
+    "generator_state": 8390656,
+    "sum_owned_dram_bytes": 25207239168,
+    "allocator_bytes": 25207632896,
+    "unattributed_allocator_bytes": 393728
+  },
+  "prepared": {
+    "num_banks": 8,
+    "total_bytes_per_bank": 4255564160,
+    "total_bytes_allocated_per_bank": 3156006528,
+    "largest_contiguous_bytes_free_per_bank": 1092383616
+  }
+}

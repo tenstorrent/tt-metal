@@ -1,0 +1,32 @@
+{
+  "scope": "all60layers",
+  "execution": "eager smoke only",
+  "memory": {
+    "empty": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 0,
+      "largest_contiguous_bytes_free_per_bank": 4255564160
+    },
+    "weights_rope_ccl": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 824480000,
+      "largest_contiguous_bytes_free_per_bank": 3414782848
+    },
+    "with_full_context_cache": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1210814720,
+      "largest_contiguous_bytes_free_per_bank": 3043046272
+    },
+    "after_prefill": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4255564160,
+      "total_bytes_allocated_per_bank": 1214209536,
+      "largest_contiguous_bytes_free_per_bank": 3035798400
+    }
+  },
+  "last_token": 2021,
+  "prompt_length": 161
+}

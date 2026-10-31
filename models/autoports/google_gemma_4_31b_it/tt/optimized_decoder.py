@@ -556,18 +556,44 @@ class OptimizedDecoder(LightweightModule):
         return self._sequence_view(combined, length)
 
     def prefill_chunk_forward(
-        self, x, *, cos, sin, kv_cache, page_table, chunk_page_table, chunk_start, valid_tokens, batch_idx_tensor=None
+        self,
+        x,
+        *,
+        cos,
+        sin,
+        kv_cache,
+        page_table,
+        chunk_page_table,
+        chunk_start,
+        valid_tokens,
+        batch_idx_tensor=None,
+        attention_page_table=None,
+        chunk_start_idx_tensor=None,
     ):
         """x [B,1,S,H]; RoPE [B,1,S,D]; returns [B,1,valid_tokens,H].
 
         S is the padded physical length; 0 < valid_tokens <= S. Each request
         owns distinct cache pages. Resume retains all prefix pages and starts at
         a page boundary. The final partial page is private to this request.
+
+        A prepared attention_page_table bypasses request-dependent table slices.
+        For sliding attention it maps the preceding window plus the current
+        chunk, rebased at max(0, chunk_start - sliding_window). The optional
+        device INT32 [1] chunk_start_idx_tensor must contain that view's offset
+        (min(chunk_start, sliding_window), or chunk_start for full attention).
+        Callers refresh both persistent inputs before execution; chunk_start
+        remains the matching host value for admission and kernel geometry.
         """
         if not 0 < valid_tokens <= x.shape[2] or chunk_start % kv_cache[0].shape[2]:
             raise ValueError("Invalid logical length or non-page-aligned chunk start")
         if chunk_start + valid_tokens > self.config.max_position_embeddings:
             raise ValueError("Context exceeds pinned HF contract")
+        if chunk_start_idx_tensor is not None and attention_page_table is None:
+            raise ValueError("Tensor-offset prefill requires a prepared attention page table")
+        if attention_page_table is not None:
+            attention_start = min(chunk_start, self.sliding_window) if self.sliding_window else chunk_start
+            if attention_start + x.shape[2] > attention_page_table.shape[-1] * kv_cache[0].shape[2]:
+                raise ValueError("Prepared attention page table does not cover the physical chunk")
         # Bound live interleaved L1 tensors by total physical token rows.
         # Own the residual buffer before in-place operations; callers retain x.
         self.prefill_l1 = x.shape[0] * x.padded_shape[2] <= 1024
@@ -585,12 +611,18 @@ class OptimizedDecoder(LightweightModule):
                 vb = ttnn.slice(v, (b, 0, 0, 0), (b + 1, self.nkv, x.shape[2], self.head_dim))
                 ttnn.experimental.paged_fill_cache(kv_cache[0], kb, chunk_page_table, batch_idx=b)
                 ttnn.experimental.paged_fill_cache(kv_cache[1], vb, chunk_page_table, batch_idx=b)
-        attention_page_table, attention_start = self._prefill_attention_view(x, kv_cache, page_table, chunk_start)
+        if attention_page_table is None:
+            attention_page_table, attention_start = self._prefill_attention_view(x, kv_cache, page_table, chunk_start)
+        attention_offset = (
+            {"chunk_start_idx": attention_start}
+            if chunk_start_idx_tensor is None
+            else {"chunk_start_idx_tensor": chunk_start_idx_tensor}
+        )
         a = ttnn.transformer.chunked_scaled_dot_product_attention(
             q,
             *kv_cache,
             attention_page_table,
-            chunk_start_idx=attention_start,
+            **attention_offset,
             scale=1.0,
             sliding_window_size=self.sliding_window,
             program_config=ttnn.SDPAProgramConfig(

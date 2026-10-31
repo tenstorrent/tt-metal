@@ -1,0 +1,15 @@
+{
+  "scope": "reduced real layers0,5, true terminal/sampler",
+  "status": "pass",
+  "watcher_seconds": 10,
+  "disabled_features": [
+    "ETH"
+  ],
+  "exception_on_fallback": true,
+  "allocation_tracking": true,
+  "program_cache_allocations_included": true,
+  "dump_count": 14,
+  "log": "models/autoports/google_gemma_4_31b_it/doc/full_model/watcher.log",
+  "watcher_dump": "bringup/artifacts/full_model_watcher/generated/watcher/watcher.log",
+  "limitation": "Inherited Ethernet instrumentation exceeds ACTIVE_ETH configuration buffer by2640 bytes; worker checks enabled, Ethernet traffic still executes."
+}

@@ -1,0 +1,9 @@
+{
+  "scope": "full60layers",
+  "batch": 32,
+  "prompt_tokens": 161,
+  "generated_tokens": 4,
+  "comparison": "bitwise equality of full vocabulary logits after traced decode",
+  "repeated_equal": true,
+  "equal_across_all_slots": true
+}

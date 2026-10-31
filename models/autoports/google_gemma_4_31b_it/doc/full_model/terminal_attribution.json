@@ -1,0 +1,187 @@
+{
+  "scope": "Reduced real layers 0 and 5 only; not full-model device latency",
+  "batch": 1,
+  "mesh": [
+    1,
+    4
+  ],
+  "source": "models/autoports/google_gemma_4_31b_it/doc/full_model/tracy_reduced/reports/2026_10_31_03_45_33/ops_perf_results_2026_10_31_03_45_33.csv",
+  "basis": "Raw CSV row windows between signposts (trace host metadata retains capture timestamps). Per-device max FW end minus min FW start across every op, including all gaps; maximum of four device windows. Frequency from FW cycles/duration is 1.35 cycles/ns.",
+  "windows": {
+    "TERMINAL": {
+      "devices": [
+        {
+          "device": 0,
+          "ops": 5,
+          "cycles_per_ns": 1.3499996993956134,
+          "whole_window_us": 1251.5684268347848,
+          "kernel_sum_us": 1249.927
+        },
+        {
+          "device": 1,
+          "ops": 5,
+          "cycles_per_ns": 1.3500046481360974,
+          "whole_window_us": 1255.1956782812285,
+          "kernel_sum_us": 1253.527
+        },
+        {
+          "device": 2,
+          "ops": 5,
+          "cycles_per_ns": 1.3499998179289048,
+          "whole_window_us": 1185.3468265314036,
+          "kernel_sum_us": 1183.924
+        },
+        {
+          "device": 3,
+          "ops": 5,
+          "cycles_per_ns": 1.3500052281203165,
+          "whole_window_us": 1195.4412963622751,
+          "kernel_sum_us": 1194.086
+        }
+      ],
+      "max_device_window_us": 1255.1956782812285,
+      "host_signpost_us": 1638.462
+    },
+    "DECODE": {
+      "devices": [
+        {
+          "device": 0,
+          "ops": 142,
+          "cycles_per_ns": 1.350002267581107,
+          "whole_window_us": 3001.274218049842,
+          "kernel_sum_us": 2847.585
+        },
+        {
+          "device": 1,
+          "ops": 142,
+          "cycles_per_ns": 1.350008077258034,
+          "whole_window_us": 2994.9331919643064,
+          "kernel_sum_us": 2836.7
+        },
+        {
+          "device": 2,
+          "ops": 142,
+          "cycles_per_ns": 1.35,
+          "whole_window_us": 2998.371111111111,
+          "kernel_sum_us": 2843.858
+        },
+        {
+          "device": 3,
+          "ops": 142,
+          "cycles_per_ns": 1.349993671018101,
+          "whole_window_us": 2987.344375443317,
+          "kernel_sum_us": 2833.624
+        }
+      ],
+      "max_device_window_us": 3001.274218049842,
+      "host_signpost_us": 4925.425
+    },
+    "MODEL_ONLY": {
+      "devices": [
+        {
+          "device": 0,
+          "ops": 113,
+          "cycles_per_ns": 1.3499976838984622,
+          "whole_window_us": 2456.52569597255,
+          "kernel_sum_us": 2360.39
+        },
+        {
+          "device": 1,
+          "ops": 113,
+          "cycles_per_ns": 1.35,
+          "whole_window_us": 2462.8303703703705,
+          "kernel_sum_us": 2363.315
+        },
+        {
+          "device": 2,
+          "ops": 113,
+          "cycles_per_ns": 1.3500041677085939,
+          "whole_window_us": 2403.4985058656457,
+          "kernel_sum_us": 2307.526
+        },
+        {
+          "device": 3,
+          "ops": 113,
+          "cycles_per_ns": 1.3500006276912262,
+          "whole_window_us": 2398.577403284451,
+          "kernel_sum_us": 2302.956
+        }
+      ],
+      "max_device_window_us": 2462.8303703703705,
+      "host_signpost_us": 4275.277
+    },
+    "SAMPLER_ONLY": {
+      "devices": [
+        {
+          "device": 0,
+          "ops": 29,
+          "cycles_per_ns": 1.3500006724316473,
+          "whole_window_us": 519.469370883226,
+          "kernel_sum_us": 468.481
+        },
+        {
+          "device": 1,
+          "ops": 29,
+          "cycles_per_ns": 1.3500005221550382,
+          "whole_window_us": 515.9886893140047,
+          "kernel_sum_us": 463.968
+        },
+        {
+          "device": 2,
+          "ops": 29,
+          "cycles_per_ns": 1.3500059973611611,
+          "whole_window_us": 515.4088214127055,
+          "kernel_sum_us": 464.442
+        },
+        {
+          "device": 3,
+          "ops": 29,
+          "cycles_per_ns": 1.3499986066795782,
+          "whole_window_us": 512.9212701212448,
+          "kernel_sum_us": 461.72
+        }
+      ],
+      "max_device_window_us": 519.469370883226,
+      "host_signpost_us": 1519.705
+    },
+    "PREFILL": {
+      "devices": [
+        {
+          "device": 0,
+          "ops": 447,
+          "cycles_per_ns": 1.35,
+          "whole_window_us": 1532236.3822222222,
+          "kernel_sum_us": 25233.856
+        },
+        {
+          "device": 1,
+          "ops": 447,
+          "cycles_per_ns": 1.35000041598376,
+          "whole_window_us": 1532366.2352300235,
+          "kernel_sum_us": 25306.522
+        },
+        {
+          "device": 2,
+          "ops": 447,
+          "cycles_per_ns": 1.3499998124270811,
+          "whole_window_us": 1532501.1884857195,
+          "kernel_sum_us": 25400.621
+        },
+        {
+          "device": 3,
+          "ops": 447,
+          "cycles_per_ns": 1.34999951302654,
+          "whole_window_us": 1532306.3223648234,
+          "kernel_sum_us": 25331.79
+        }
+      ],
+      "max_device_window_us": 1532501.1884857195,
+      "host_signpost_us": 1534963.085
+    }
+  },
+  "notes": [
+    "PREFILL includes intentional profiler drains after chunks; its whole window is diagnostic, not clean prefill latency.",
+    "Standalone scopes use blocking replay for attribution; DECODE combines model and sampling traces plus caller readback.",
+    "tt-perf-report op sums and merged gaps differ from whole-window duration; no roofline derived from matmul subtotal."
+  ]
+}

@@ -1,0 +1,5 @@
+To find the total time for the walk, we need to determine the values of $s$ (the speed) and $t$ (the time spent in the coffee shop).
+
+Let $T_1$ be the total time for the first scenario, $T_2$ for the second, and $T_3$ for the third.
+The distance of the walk is $d = 9$ km.
+The time spent walking is $\frac{d}{v}$, and

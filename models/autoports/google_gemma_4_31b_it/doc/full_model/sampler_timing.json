@@ -1,0 +1,86 @@
+{
+  "scope": "synthetic sampler, host-wall only",
+  "cpu_reference_running": true,
+  "results": [
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 1,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.48280667988365167,
+      "host_wall_ms_per_replay_with_token_readback": 5.268670625355298,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 1
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 1,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.898278546581423,
+      "host_wall_ms_per_replay_with_token_readback": 5.13719109358135,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 32,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.5017324219807051,
+      "host_wall_ms_per_replay_with_token_readback": 4.522823710885859,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 32,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.8753108749697276,
+      "host_wall_ms_per_replay_with_token_readback": 4.999066382879391,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 8,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.5310785782057792,
+      "host_wall_ms_per_replay_with_token_readback": 5.110472195610782,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 8,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.778162460799649,
+      "host_wall_ms_per_replay_with_token_readback": 5.171409163722274,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 16,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.545434530977218,
+      "host_wall_ms_per_replay_with_token_readback": 4.251911273513542,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 16,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.884808179715037,
+      "host_wall_ms_per_replay_with_token_readback": 5.0073702345798665,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    }
+  ]
+}
