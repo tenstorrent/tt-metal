@@ -51,7 +51,11 @@ def block_graph() -> list[Step]:
 @contextlib.contextmanager
 def hooked_dispatch():
     """ttnn's fast runtime (FastOperation) skips the pre-operation hooks that count device ops; the standard runtime
-    runs the same device ops and calls them."""
+    runs the same device ops and calls them. Only while a hook is registered (the bring-up's device-op count): serving
+    and the full-model tests keep the fast runtime, whose host dispatch is several times cheaper."""
+    if not (ttnn.decorators.PRE_OPERATION_HOOKS or ttnn.decorators.POST_OPERATION_HOOKS):
+        yield
+        return
     fast = ttnn.CONFIG.enable_fast_runtime_mode
     ttnn.CONFIG.enable_fast_runtime_mode = False
     try:
