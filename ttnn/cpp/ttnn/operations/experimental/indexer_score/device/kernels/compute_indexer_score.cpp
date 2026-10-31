@@ -481,7 +481,7 @@ void kernel_main() {
     constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
     constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
     // Banded schedule: this core owns a (group-phase x band) rectangle. groups stream in num_groups phases
-    // (group = row_group0 + p*group_stride); each walks num_bands k-bands (band = band0 + j). One cell ==
+    // (group = row_group0 + p*group_stride); each walks num_bands k-bands (band = band0 + j*band_stride). One cell ==
     // one QC x KC work unit.
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     constexpr uint32_t group_stride = schedule_group_rows;
@@ -493,6 +493,7 @@ void kernel_main() {
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
+    const uint32_t band_stride = schedule.band_stride;
     constexpr uint32_t max_bands = schedule_max_bands;
     // Valid KV length in tiles: caps each cell's valid cols (mask suffix grows over the tail). Full when
     // unset (dense path unchanged). Hash-excluded.
@@ -560,7 +561,7 @@ void kernel_main() {
                 shard_span.set(group, physical_start, k_len_tiles / shard_physical_sp);
                 k_tiles_in_unit = shard_span.k_tiles();
             } else {
-                span.set(group, band0 + band);
+                span.set(group, band0 + band * band_stride);
                 k_tiles_in_unit = span.k_tiles();
             }
             if constexpr (stream_heads) {

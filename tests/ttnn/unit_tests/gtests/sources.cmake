@@ -6,6 +6,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
+    indexer_score/test_indexer_schedule.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp

@@ -231,6 +231,7 @@ void kernel_main() {
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
+    const uint32_t band_stride = schedule.band_stride;
     // The common valid length caps columns written per cell (full when unset).
     uint32_t kv_len_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::KvLength);
     // Per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
@@ -297,7 +298,7 @@ void kernel_main() {
                 k_tile0 = physical_start;
                 valid_w = shard_span.k_tiles();
             } else {
-                span.set(group, band0 + band);
+                span.set(group, band0 + band * band_stride);
                 k_tile0 = span.k_tile_start();
                 valid_w = span.k_tiles();
             }
