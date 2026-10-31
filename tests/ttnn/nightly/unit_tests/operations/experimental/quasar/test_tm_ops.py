@@ -573,6 +573,16 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
             _qsr_prim_fold(t, sh, sw)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32, ttnn.uint8])
+def test_quasar_fold_rejects_unsupported_row_major_dtype(device, dtype, expect_error):
+    # Row-major fold copies raw bytes into an output declared as BFLOAT16 for these dtypes.
+    t = ttnn.from_torch(
+        torch.zeros((1, 16, 16, 32), dtype=torch.int32), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, r"row-major output dtype \(.*\) must match the input dtype"):
+        _qsr_prim_fold(t, 2, 2)
+
+
 def test_quasar_to_layout_host_tensor_same_layout_with_memory_config():
     # Host tensors have no memory config; a requested one must not be compared against it.
     x = torch.rand(1, 1, 4, 8, dtype=torch.bfloat16)

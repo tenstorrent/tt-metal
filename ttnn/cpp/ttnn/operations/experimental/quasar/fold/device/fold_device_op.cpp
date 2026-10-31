@@ -28,6 +28,13 @@ void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, ui
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.is_allocated(), "Fold: Expect input tensor to be allocated on a device buffer.");
+    // Row-major fold copies raw bytes, so its output must be declared with the input's dtype.
+    const auto dtype = input_tensor.dtype();
+    TT_FATAL(
+        input_tensor.layout() != Layout::ROW_MAJOR || fold_output_dtype(dtype) == dtype,
+        "Fold: row-major output dtype ({}) must match the input dtype ({}).",
+        fold_output_dtype(dtype),
+        dtype);
     // Guard before any modulo/div on stride; both sharded and unsharded branches SIGFPE on zero stride.
     TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h ({}) and stride_w ({}) must be > 0.", stride_h, stride_w);
     if (is_sharded) {
