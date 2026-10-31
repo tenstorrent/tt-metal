@@ -22,6 +22,11 @@ same experts (rows 0 / 2 and 1 / 3 equal), and a masked user (its row is zero, a
 must be bit-identical on the 8 chips of the row (the fixed-order chip sum). Last, the fabric variant runs every step
 again with no host read in between, so the chips drift up to a gather phase apart and both gather buffers are in
 use, and must reproduce the per-step results bit for bit.
+
+A user's decode output must not depend on the other users of the step (the DP replicas of the full model, and a
+verify against a plain decode of the same token, rely on it): the deduplicated stream sums each user's experts by
+ascending expert id, not in the order the step's users listed them. Every golden step runs again with its users
+rotated through the rows, mixed with another step's users, and its last user alone, each row bit for bit its own.
 """
 
 import pytest
@@ -189,3 +194,33 @@ def test_moe_decode_vs_prefill(mesh_device, users):
         for t in (x_tt, r_tt, m_tt):
             t.deallocate(True)
     logger.info(f"{len(steps)} fabric decodes back to back: bit-identical to the per-step runs on every chip")
+
+    # Batch invariance: each golden step's users rotated through the rows, mixed with the next step's, and alone.
+    def decode(rows, live):
+        """The standalone decode output rows 0..USERS-1 of a step with ``rows`` and the users ``live`` unmasked."""
+        x = torch.zeros(TILE, cfg.hidden_size)
+        x[:USERS] = rows
+        m = torch.zeros(TILE, 1)
+        m[live, 0] = 1.0
+        x_tt, m_tt = to_device(plan, x), to_device(plan, m)
+        result = read(plan, moe.forward_decode(x_tt, m_tt))[:USERS]
+        x_tt.deallocate(True)
+        m_tt.deallocate(True)
+        return result
+
+    every, last = list(range(USERS)), USERS - 1
+    batches = [inputs[step * USERS : (step + 1) * USERS] for step in range(STEPS)]
+    outs = [decode(rows, every) for rows in batches]
+    even = (torch.arange(USERS) % 2 == 0)[:, None]
+    for step, (rows, out) in enumerate(zip(batches, outs)):
+        for shift in range(1, USERS):
+            rolled = decode(rows.roll(shift, 0), every)
+            for u in every:
+                assert torch.equal(rolled[(u + shift) % USERS], out[u]), f"step {step}: user {u} in row {u + shift}"
+        nxt = (step + 1) % STEPS
+        mixed = decode(torch.where(even, rows, batches[nxt]), every)
+        for u in every:
+            assert torch.equal(mixed[u], (out if u % 2 == 0 else outs[nxt])[u]), f"step {step}: user {u} mixed"
+        alone = decode(rows, [last])
+        assert torch.equal(alone[last], out[last]) and torch.count_nonzero(alone[:last]) == 0, f"step {step} alone"
+    logger.info(f"{STEPS * (USERS + 1)} batch variants: every user's row bit-identical to its own step's")

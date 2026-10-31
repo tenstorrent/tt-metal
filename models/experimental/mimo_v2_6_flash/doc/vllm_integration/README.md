@@ -605,8 +605,9 @@ vllm serve ... --max-num-seqs 8 \
   host plan's.
 - **8-slot verify** (`MIMO_SPEC_SLOTS=8`, `reference/spec_decode.py`; 4 by default, MTP's): a pass of up to 8 slots,
   so up to 7 drafts. The decode kernels serve 8 rows: the MoE streams load each expert the slots selected once
-  (`MIMO_MOE_DEDUP=1`, the default; the gate|up and down streams take the distinct experts in user order, with
-  per-row routing weights), the 8-row compact qkv / o streams and row reductions, SwaDecodeQkv (one launch writes
+  (`MIMO_MOE_DEDUP=1`, the default; the gate|up stream takes the distinct experts in user order, with per-row
+  routing weights, and the down stream sums each row's experts by ascending expert id, so a row's output does not
+  depend on the other rows), the 8-row compact qkv / o streams and row reductions, SwaDecodeQkv (one launch writes
   every slot's K / V), GreedyHead, and the DeviceSampler / VerifySampler up to 8 users (launch 8 sequences per lane).
   A verify with more slots than the device sampler's users accepts greedy requests only (`GreedyVerify`,
   `kernels/greedy_verify.cpp`) and raises on a sampled one.
