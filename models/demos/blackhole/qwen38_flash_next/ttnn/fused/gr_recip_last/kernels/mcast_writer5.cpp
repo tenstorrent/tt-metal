@@ -107,6 +107,22 @@ FORCE_INLINE void recip_phase(const ExtraArgs& extra_args, uint32_t rt) {
     constexpr bool from_far_corner = noc_index != 0;
     {
         FUSED_ZONE("fz_gr2_w_recip_mc");
+#ifdef QWEN38_FRONT_RECIP_ROWS
+        // only column 0 of rows 0..ROWS-1 is read (face 0, 64 B per row): ROWS * 64 B per tile
+        for (uint32_t t = 0; t < NUM_TILES; ++t) {
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(src_addr + t * tile_bytes),
+                mcast,
+                QWEN38_FRONT_RECIP_ROWS * 64,
+                num_dests,
+                {},
+                {.noc_x_start = from_far_corner ? x1 : x0,
+                 .noc_y_start = from_far_corner ? y1 : y0,
+                 .noc_x_end = from_far_corner ? x0 : x1,
+                 .noc_y_end = from_far_corner ? y0 : y1,
+                 .addr = dst_addr + t * tile_bytes});
+        }
+#else
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(src_addr),
             mcast,
@@ -118,6 +134,7 @@ FORCE_INLINE void recip_phase(const ExtraArgs& extra_args, uint32_t rt) {
              .noc_x_end = from_far_corner ? x0 : x1,
              .noc_y_end = from_far_corner ? y0 : y1,
              .addr = dst_addr});
+#endif
         noc.async_write_barrier();
     }
     {

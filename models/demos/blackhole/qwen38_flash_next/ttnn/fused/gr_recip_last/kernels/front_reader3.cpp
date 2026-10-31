@@ -122,6 +122,28 @@ void kernel_main() {
             if constexpr (NUM_CONSTS > 0) {
                 make_const<get_compile_time_arg_val(6), get_compile_time_arg_val(7)>(get_arg_val<uint32_t>(const_rt));
             }
+#ifndef QWEN38_FRONT_CONST_LATE
+            if constexpr (NUM_CONSTS > 1) {
+                make_const<get_compile_time_arg_val(8), get_compile_time_arg_val(9)>(
+                    get_arg_val<uint32_t>(const_rt + 1));
+            }
+            if constexpr (NUM_CONSTS > 2) {
+                make_const<get_compile_time_arg_val(10), get_compile_time_arg_val(11)>(
+                    get_arg_val<uint32_t>(const_rt + 2));
+            }
+#endif
+        }
+        {
+            FUSED_ZONE("fz_gr_rd_barrier");
+            noc_async_read_barrier();
+        }
+        DataflowBuffer(get_compile_time_arg_val(1)).push_back(get_arg_val<uint32_t>(2));
+        DataflowBuffer(get_compile_time_arg_val(2)).push_back(get_arg_val<uint32_t>(STREAM_RT_ARGS + 2));
+#ifdef QWEN38_FRONT_CONST_LATE
+        {
+            // the scaler (CB 2) and eps (CB 3) tiles are first needed at the recip, after the stats exchange
+            FUSED_ZONE("fz_gr_rd_consts_late");
+            constexpr uint32_t const_rt = NUM_STREAMS * STREAM_RT_ARGS;
             if constexpr (NUM_CONSTS > 1) {
                 make_const<get_compile_time_arg_val(8), get_compile_time_arg_val(9)>(
                     get_arg_val<uint32_t>(const_rt + 1));
@@ -131,9 +153,7 @@ void kernel_main() {
                     get_arg_val<uint32_t>(const_rt + 2));
             }
         }
-        noc_async_read_barrier();
-        DataflowBuffer(get_compile_time_arg_val(1)).push_back(get_arg_val<uint32_t>(2));
-        DataflowBuffer(get_compile_time_arg_val(2)).push_back(get_arg_val<uint32_t>(STREAM_RT_ARGS + 2));
+#endif
         if constexpr (NUM_STREAMS > 2) {
             gate(2);
             FUSED_ZONE("fz_gr2_rd_stats");

@@ -72,6 +72,20 @@ def rowtrim_defines(rows: int) -> list[tuple[str, str]]:
     return []
 
 
+LATE_ENV = "QWEN38_FRONT_CONST_LATE"  # default "1": the reader builds the scaler and eps tiles after the data push
+RECIP_CHUNK_ENV = "QWEN38_FRONT_RECIP_CHUNK"  # default "1": the recip multicast carries only rows * 64 B of face 0
+
+
+def late_defines() -> list[tuple[str, str]]:
+    return [("QWEN38_FRONT_CONST_LATE", "1")] if os.environ.get(LATE_ENV, "1") == "1" else []
+
+
+def recip_chunk_defines(rows: int) -> list[tuple[str, str]]:
+    if os.environ.get(RECIP_CHUNK_ENV, "1") == "1" and 1 <= rows <= MAX_ROWS:
+        return [("QWEN38_FRONT_RECIP_ROWS", str(rows))]
+    return []
+
+
 def fits(rows: int) -> bool:
     """Whether the packed stats (2 of 4 tiles per link) and partials (6 of 12) of ``rows`` valid rows are one fabric packet each."""
 
@@ -140,7 +154,7 @@ def prepare(mesh) -> None:
                 _persistent(mesh, slot_b, cores)
 
 
-def _front_reader(cores, streams, consts, runtime, gate, extra, extra_rt):
+def _front_reader(cores, streams, consts, runtime, gate, extra, extra_rt, defines=()):
     """gr_read._reader with front_reader3.cpp: ``extra`` compile args after the four accessor sets, ``extra_rt(b)`` runtime
     args after each core's constants (b = the branch the core serves)."""
 
@@ -160,6 +174,7 @@ def _front_reader(cores, streams, consts, runtime, gate, extra, extra_rt):
             (core, [a for args in stream_args for a in args] + list(bits) + extra_rt(b))
             for b, (core, (stream_args, bits)) in enumerate(runtime)
         ],
+        defines=defines,
     )
 
 
@@ -374,6 +389,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             gate=(2, gr_fold.FRONT_STATS_READY, links + 1),
             extra=stats_extra,
             extra_rt=lambda b: [rank, *noc[(transports[b % links].x, transports[b % links].y)], b // links],
+            defines=late_defines(),
         )
 
     compute = fp.compute_kernel(
@@ -431,6 +447,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             + accessors
             + [rows_mode_slot, chunk_a, 512, TP_SIZE],
             runtime,
+            defines=recip_chunk_defines(rows),
         )
         # the workers' writer: the partial tile's two row chunks into the transport core's staging buffer (the scratch CB), the
         # scratch semaphore, then the device's own page PARTIAL_TILES * rank + w
