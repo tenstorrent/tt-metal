@@ -49,11 +49,54 @@ constexpr bool llk_math_matmul_tile_mop() {
 }
 
 // The half_end_fold argument for a kernel's math fidelity, k steps per DEST section, operand and output formats (see matmul_half_end_fold);
-// kernels that pass no formats keep the end op.
-template <bool row_mop, MathFidelity math_fidelity, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
+// kernels that pass no formats keep the end op. block_rt, block_ct and block_kt (optional keys of the caller, 0 keep today's code) name the block,
+// for the cells where the fold reads slower (matmul_end_fold_off_cells).
+template <
+    bool row_mop,
+    MathFidelity math_fidelity,
+    std::uint32_t kt_per_section,
+    DataFormat out_format,
+    DataFormat in0 = DataFormat::Invalid,
+    DataFormat in1 = DataFormat::Invalid,
+    std::uint32_t block_rt = 0,
+    std::uint32_t block_ct = 0,
+    std::uint32_t block_kt = 0>
 constexpr bool llk_math_matmul_half_end_fold() {
-    return llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>() &&
-           matmul_half_end_fold<math_fidelity, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format, in0, in1>();
+    if constexpr (block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid && in1 != DataFormat::Invalid) {
+        return llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>() &&
+               matmul_half_end_fold_block<math_fidelity, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format, in0, in1, block_rt, block_ct, block_kt>();
+    } else {
+        return llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>() &&
+               matmul_half_end_fold<math_fidelity, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format, in0, in1>();
+    }
+}
+
+// The forms key of a kernel's matmul block: 0, main's form, where the block (block_rt, block_ct, block_kt: optional keys of the caller) is one of the cells
+// llk_matmul_forms.h keeps on main's form (the lookup the tt-llk harness runs); the caller's k steps per DEST section otherwise.
+template <std::uint32_t kt_per_section, std::uint32_t block_rt, std::uint32_t block_ct, std::uint32_t block_kt, DataFormat in0, DataFormat in1, DataFormat out_format, int throttle_level>
+constexpr std::uint32_t llk_matmul_form_key() {
+    if constexpr (block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid && in1 != DataFormat::Invalid) {
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        return matmul_form_k<
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncHalf ? 0 : 1,
+            DST_ACCUM_MODE,
+            kt_per_section,
+            block_kt,
+            in0,
+            in1,
+            out_format,
+            block_ct,
+            block_rt,
+            throttle_level,
+            l1_acc>();
+    } else {
+        return kt_per_section;
+    }
 }
 
 template <

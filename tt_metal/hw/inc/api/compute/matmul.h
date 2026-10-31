@@ -284,7 +284,10 @@ template <
     DataFormat in1_format = DataFormat::Invalid,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    std::uint32_t stream_z = 0>
+    std::uint32_t stream_z = 0,
+    std::uint32_t block_rt = 0,
+    std::uint32_t block_ct = 0,
+    std::uint32_t block_kt = 0>
 ALWI void matmul_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -293,6 +296,11 @@ ALWI void matmul_block_init(
     std::uint32_t rt_dim = 1,
     std::uint32_t kt_dim = 1,
     std::uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
+#else
+    constexpr std::uint32_t kt_key = kt_per_section;
+#endif
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
@@ -302,11 +310,11 @@ ALWI void matmul_block_init(
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
           row_mop,
-          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+          llk_math_matmul_tile_mop<row_mop, kt_key, out_format>(),
           in1_order,
           reuse_dir,
           row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_per_section, out_format, in0_format, in1_format>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -358,7 +366,10 @@ template <
     DataFormat in1_format = DataFormat::Invalid,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    std::uint32_t stream_z = 0>
+    std::uint32_t stream_z = 0,
+    std::uint32_t block_rt = 0,
+    std::uint32_t block_ct = 0,
+    std::uint32_t block_kt = 0>
 ALWI void matmul_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -370,16 +381,21 @@ ALWI void matmul_block(
     std::uint32_t rt_dim,
     std::uint32_t kt_dim,
     std::uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
+#else
+    constexpr std::uint32_t kt_key = kt_per_section;
+#endif
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_per_section, out_format, reuse_dir, stream_z>(
+    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_key, out_format, reuse_dir, stream_z>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
           row_mop,
-          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+          llk_math_matmul_tile_mop<row_mop, kt_key, out_format>(),
           in1_order,
           false,
           in0_format,
@@ -387,7 +403,7 @@ ALWI void matmul_block(
           out_format,
           reuse_dir,
           row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_per_section, out_format, in0_format, in1_format>()>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
@@ -419,7 +435,10 @@ template <
     DataFormat in1_format = DataFormat::Invalid,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    std::uint32_t stream_z = 0>
+    std::uint32_t stream_z = 0,
+    std::uint32_t block_rt = 0,
+    std::uint32_t block_ct = 0,
+    std::uint32_t block_kt = 0>
 ALWI void matmul_block_k(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -434,6 +453,11 @@ ALWI void matmul_block_k(
     std::uint32_t in1_k_stride,
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
+    constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
+#else
+    constexpr std::uint32_t kt_key = kt_per_section;
+#endif
+#ifdef ARCH_BLACKHOLE
     static_assert(!unpack_auto_ttsync, "matmul_block_k: Auto TTSync rows are not supported");
     static_assert(reuse_dir == 0, "matmul_block_k: a forced reuse direction is not supported");
     LLK_SAN_FUNCTION();
@@ -442,7 +466,7 @@ ALWI void matmul_block_k(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, num_k, in1_k_stride)));
     MATH((matmul_block_math_dynamic_throttle<
         row_mop,
-        llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+        llk_math_matmul_tile_mop<row_mop, kt_key, out_format>(),
         in1_order,
         true,
         in0_format,
@@ -450,11 +474,11 @@ ALWI void matmul_block_k(
         out_format,
         0,
         row_end_fold,
-        llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_per_section, out_format, in0_format, in1_format>()>(
+        llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(
         in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, num_k)));
 #else
     for (std::uint32_t k = 0; k < num_k; k++) {
-        matmul_block<row_mop, unpack_auto_ttsync, kt_per_section, out_format, in1_order, in0_format, in1_format>(
+        matmul_block<row_mop, unpack_auto_ttsync, kt_per_section, out_format, in1_order, in0_format, in1_format, 0, false, 0, block_rt, block_ct, block_kt>(
             in0_cb_id,
             in1_cb_id,
             in0_tile_index + k,
