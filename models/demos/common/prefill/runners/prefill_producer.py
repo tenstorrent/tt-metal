@@ -728,15 +728,46 @@ def _has_index_config(table) -> bool:
     return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
 
 
+def _read_chunks(table, device_map, config_id, layer, slot_id, positions) -> list:
+    """Raw bytes of the chunk at each position of one layer, from a single batched read."""
+    locs = [table.lookup(layer, pos, slot_id, config_id) for pos in positions]
+    unique_ids = {}
+    for loc in locs:
+        if loc.device_group_index not in unique_ids:
+            unique_ids[loc.device_group_index] = _resolve_unique_id(
+                table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+            )
+    sizes = [loc.size_bytes for loc in locs]
+    blob = memoryview(
+        ttnn.experimental.disaggregation.read_dram_umd_batch(
+            [unique_ids[loc.device_group_index] for loc in locs], [loc.noc_addr for loc in locs], sizes
+        )
+    )
+    chunks, offset = [], 0
+    for size in sizes:
+        chunks.append(blob[offset : offset + size])
+        offset += size
+    return chunks
+
+
+def _prefetched(items, load):
+    """Yield (item, load(item)) with the next item's load already running. The batched DRAM read
+    releases the GIL, so one layer's read overlaps the previous layer's decode and PCC."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(load, items[0]) if items else None
+        for i, item in enumerate(items):
+            loaded = pending.result()
+            pending = pool.submit(load, items[i + 1]) if i + 1 < len(items) else None
+            yield item, loaded
+
+
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
-    rows = []
-    for pos in range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-        loc = table.lookup(layer, pos, slot_id, config_id)
-        unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
-        raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-        rows.append(decode(raw, head_dim))
+    positions = range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+    rows = [decode(raw, head_dim) for raw in _read_chunks(table, device_map, config_id, layer, slot_id, positions)]
     return torch.cat(rows, dim=0)[: read_len - start]
 
 
@@ -1212,6 +1243,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     checked = 0
     unreferenced = []
     missing_golden = []
+    local_layers = []
     for layer in range(NUM_LAYERS):
         # A hybrid attention stack writes a KV slab on only some layers, so the table publishes rows
         # for only those. Decide from the MODEL, not from what is on disk: a shared or dense-variant
@@ -1228,15 +1260,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
             continue
+        local_layers.append(layer)
 
-        decoded_rows = []
-        for pos in range(first_pos, read_end, tokens_per_block):
-            loc = table.lookup(layer, pos, slot_id)
-            unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
-            raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-            decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
-        device_kv = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
+    def read_kvpe(layer):
+        return _read_kv_slice(
+            table, device_map, 0, layer, slot_id, read_end, HEAD_DIM, _decode_kv_chunk, start=first_pos
+        )[skip_rows : skip_rows + cmp_len]
 
+    logger.info(f"[producer] slot {slot_id} KV check: torch threads={torch.get_num_threads()}")
+    for layer, device_kv in _prefetched(local_layers, read_kvpe):
         # A single PCC scalar per half per layer cannot separate a static per-column error from one
         # that accumulates per token, which is the question the depth curve actually poses. The
         # tensor is already in host memory here, so dumping it costs no device time. bfloat16 is
@@ -1343,23 +1375,21 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         min_index = 1.0
         checked_index = 0
         mtp_index_pcc = None
+        local_index_rows = []
         for layer, golden_dir in index_rows:
             loc0 = table.lookup(layer, 0, slot_id, 1)
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
             except KeyError:
                 continue
+            local_index_rows.append((layer, golden_dir))
 
-            decoded_rows = []
-            for pos in range(first_pos, read_end, tokens_per_block):
-                loc = table.lookup(layer, pos, slot_id, 1)
-                unique_id = _resolve_unique_id(
-                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
-                )
-                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-                decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
-            dev_ik = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
+        def read_index(row):
+            return _read_kv_slice(
+                table, device_map, 1, row[0], slot_id, read_end, index_head_dim, _decode_kv_chunk, start=first_pos
+            )[skip_rows : skip_rows + cmp_len]
 
+        for (layer, golden_dir), dev_ik in _prefetched(local_index_rows, read_index):
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
                 golden_dir,

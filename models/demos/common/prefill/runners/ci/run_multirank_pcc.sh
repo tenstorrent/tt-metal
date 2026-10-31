@@ -448,6 +448,7 @@ set +e
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
+    export OMP_NUM_THREADS=\$(nproc); \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \

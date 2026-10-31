@@ -20,10 +20,12 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -135,6 +137,66 @@ std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32
     umd_read_cluster()->read_from_device(
         buf.data(), chip_id, info.core, static_cast<uint64_t>(local) + info.address_offset, size_bytes);
     return buf;
+}
+
+std::vector<uint8_t> read_dram_umd_batch(
+    const std::vector<uint64_t>& unique_ids,
+    const std::vector<uint64_t>& noc_addrs,
+    const std::vector<uint32_t>& sizes_bytes) {
+    const size_t n = unique_ids.size();
+    TT_FATAL(
+        noc_addrs.size() == n && sizes_bytes.size() == n,
+        "read_dram_umd_batch: {} unique_ids, {} noc_addrs, {} sizes",
+        n,
+        noc_addrs.size(),
+        sizes_bytes.size());
+    std::vector<size_t> offsets(n + 1, 0);
+    for (size_t i = 0; i < n; ++i) {
+        offsets[i + 1] = offsets[i] + sizes_bytes[i];
+    }
+    std::vector<uint8_t> out(offsets[n]);
+
+    // UMD serializes MMIO reads per chip (one write-combined TLB window each), so a chip's reads run
+    // back to back and only distinct chips overlap: one thread per chip.
+    std::unordered_map<tt::ChipId, std::vector<size_t>> by_chip;
+    for (size_t i = 0; i < n; ++i) {
+        by_chip[umd_chip_for_unique_id(unique_ids[i])].push_back(i);
+    }
+    auto read_chip = [&](tt::ChipId chip_id, const std::vector<size_t>& indices) {
+        const auto& views = umd_dram_views_for(chip_id);
+        for (size_t i : indices) {
+            const uint32_t view = addr_channel(noc_addrs[i]);
+            TT_FATAL(view < views.size(), "read_dram_umd_batch: dram view {} out of range ({} views)", view, views.size());
+            const auto& info = views[view];
+            umd_read_cluster()->read_from_device(
+                out.data() + offsets[i],
+                chip_id,
+                info.core,
+                static_cast<uint64_t>(addr_local(noc_addrs[i])) + info.address_offset,
+                sizes_bytes[i]);
+        }
+    };
+    std::vector<std::thread> threads;
+    threads.reserve(by_chip.size());
+    std::vector<std::exception_ptr> errors(by_chip.size());
+    for (const auto& entry : by_chip) {
+        threads.emplace_back([&, &entry = entry, t = threads.size()] {
+            try {
+                read_chip(entry.first, entry.second);
+            } catch (...) {
+                errors[t] = std::current_exception();
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    for (const auto& error : errors) {
+        if (error) {
+            std::rethrow_exception(error);
+        }
+    }
+    return out;
 }
 
 }  // namespace tt::tt_metal::internal::disaggregation
