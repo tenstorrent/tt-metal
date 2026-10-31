@@ -25,7 +25,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/math.hpp>
-#include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"

@@ -8,7 +8,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>

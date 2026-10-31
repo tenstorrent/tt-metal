@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <tt_stl/span.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <utility>
 #include <vector>
 
