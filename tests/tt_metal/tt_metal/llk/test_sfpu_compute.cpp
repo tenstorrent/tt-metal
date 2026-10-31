@@ -89,6 +89,8 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
      {{"SFPU_OP_CHAIN_0",
        "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ "
        "0x41A00000u);"}}},
+    {"logsigmoid",
+     {{"SFPU_OP_LOGSIGMOID_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "logsigmoid_tile_init(); logsigmoid_tile(0);"}}},
     {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
@@ -349,11 +351,6 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_REMAINDER_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "remainder_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "remainder_binary_tile(0, 1, 0);"}}},
-    // RHS carries exp(-x), computed on the host.
-    {"logsigmoid",
-     {{"SFPU_OP_LOGSIGMOID_INCLUDE", "1"},
-      {"SFPU_OP_INIT_0", "logsigmoid_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "logsigmoid_tile(0, 1, 0);"}}},
     // torch defaults: rtol 1e-5, atol 1e-8
     {"isclose",
      {{"SFPU_OP_BINARY_ISCLOSE_INCLUDE", "1"},
@@ -898,6 +895,9 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "softplus") {
         return (input > 20.0f) ? input : std::log1p(std::exp(input));
     }
+    if (op_name == "logsigmoid") {
+        return static_cast<float>(std::min(d, 0.0) - std::log1p(std::exp(-std::fabs(d))));
+    }
     if (op_name == "clamp") {
         return std::clamp(input, -1.0f, 1.0f);
     }
@@ -1171,9 +1171,6 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf
     }
     if (op_name == "remainder_binary") {
         return bfloat16(static_cast<float>(a - b * std::floor(a / b)));
-    }
-    if (op_name == "logsigmoid") {
-        return bfloat16(static_cast<float>(-std::log1p(std::exp(-a))));
     }
     if (op_name == "isclose") {
         return bfloat16(std::fabs(a - b) <= 1e-8 + 1e-5 * std::fabs(b) ? 1.0f : 0.0f);
@@ -1465,6 +1462,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "softplus") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 30.0f, numel, seed);
     }
+    if (op_name == "logsigmoid") {
+        return uniform(-6.0f, 6.0f);
+    }
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
@@ -1527,10 +1527,6 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto rhs = map_lhs(
             uniform(-4.0f, 4.0f, seed + 1), [](float f) { return std::copysign(std::max(std::fabs(f), 0.5f), f); });
         return {uniform(-8.0f, 8.0f, seed), rhs};
-    }
-    if (op_name == "logsigmoid") {
-        auto lhs = uniform(-6.0f, 6.0f, seed);
-        return {lhs, map_lhs(lhs, [](float f) { return std::exp(-f); })};
     }
     if (op_name == "isclose") {
         // Half the lanes equal, half one bf16 step or more apart.
@@ -3372,6 +3368,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
         std::make_tuple(4, "softplus"),
+        std::make_tuple(1, "logsigmoid"),
+        std::make_tuple(4, "logsigmoid"),
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
@@ -3644,6 +3642,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
         std::make_tuple(4, "softplus"),
+        std::make_tuple(1, "logsigmoid"),
+        std::make_tuple(4, "logsigmoid"),
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
@@ -3933,7 +3933,6 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "power_binary"),
         std::make_tuple(1, "fmod_binary"),
         std::make_tuple(1, "remainder_binary"),
-        std::make_tuple(1, "logsigmoid"),
         std::make_tuple(1, "isclose"),
         std::make_tuple(1, "clamped_silu_glu"),
         std::make_tuple(1, "situ_glu"),

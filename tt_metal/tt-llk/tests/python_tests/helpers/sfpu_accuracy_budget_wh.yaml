@@ -1066,6 +1066,18 @@ LogicalNot:
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0}
+Logsigmoid:
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 12, nonfinite: 4, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-65504: -65504 -> -inf; x=-65472: -65472 -> -inf)'}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 98304}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 Lrelu:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -1751,15 +1763,6 @@ SfpuLerp:
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 3072}
-SfpuLogsigmoid:
-- {output: Float16_b, measured: 2, note: 'max 2 ULP, 3 variants / 81920 lanes'}
-- {output: Float32, measured: 131072, note: 'max 131072 ULP, 3 variants / 81920 lanes'}
-- {input: Float16_b, output: Float16_b, dest: 'No', measured: 2}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 2}
-- {input: Float16_b, output: Float32, dest: 'No', measured: 131072}
-- {input: Float16_b, output: Float32, dest: 'Yes', measured: 121436}
-- {input: Float32, output: Float16_b, dest: 'Yes', measured: 2}
-- {input: Float32, output: Float32, dest: 'Yes', measured: 89026}
 SfpuMask:
 - {output: Float16_b, measured: 0, note: '0 ULP, 3 variants / 6144 lanes'}
 - {output: Float32, measured: 0, note: '0 ULP, 3 variants / 6144 lanes'}

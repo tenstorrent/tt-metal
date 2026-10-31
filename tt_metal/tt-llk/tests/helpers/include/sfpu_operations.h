@@ -626,6 +626,10 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::logsigmoid)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(logsigmoid_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
 #ifdef ARCH_WORMHOLE
@@ -1037,6 +1041,10 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::log1p)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log1p, (APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::logsigmoid)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logsigmoid, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
@@ -1890,12 +1898,6 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // copy_dest_value_init is empty. The baseline addrmod setup is enough.
         SFPU_BINARY_INIT(add1);
     }
-    else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
-    {
-        // logsigmoid_tile_init: baseline addrmod setup plus logsigmoid_init, which loads the
-        // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
-        SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
-    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -2354,21 +2356,6 @@ void call_binary_sfpu_operation(
             vector_mode,
             ISCLOSE_RTOL_BITS,
             ISCLOSE_ATOL_BITS);
-    }
-    else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
-    {
-        // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
-        // kernel is expected to supply exp(-x) as the second operand; the test bakes
-        // it into the paired stimuli). Init: baseline add1 addrmod + logsigmoid_init.
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_logsigmoid,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-            dst_index_in0,
-            dst_index_in1,
-            dst_index_out,
-            vector_mode);
     }
     // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
     else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)

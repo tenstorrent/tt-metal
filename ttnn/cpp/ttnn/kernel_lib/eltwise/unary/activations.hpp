@@ -33,11 +33,9 @@ struct TanhDerivative;
 template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
 struct GeluDerivative;
 
-// Binary-in-DEST.
-template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct Logsigmoid;
-
 // More unary activations.
+template <Dst Slot = Dst::D0>
+struct Logsigmoid;
 template <Dst Slot = Dst::D0>
 struct Hardsigmoid;
 template <Dst Slot = Dst::D0>

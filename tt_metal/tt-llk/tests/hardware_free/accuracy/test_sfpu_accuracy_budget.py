@@ -878,13 +878,32 @@ def test_every_exact_op_is_driven_by_a_gate():
     assert not unreached, sorted(op.name for op in unreached)
 
 
+#: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why,
+#: per architecture's table. A cell listed here is a decision, with its reason, not a gap.
+_UNRESOLVED_SWEPT_CELLS: dict = {
+    ChipArchitecture.WORMHOLE: {
+        # #54080: Logsigmoid was swept on the ttsim Wormhole model, which cannot unpack a
+        # Float32 input, and budgets do not transfer from Blackhole. These cells resolve
+        # to tolerance until a Wormhole board sweeps them.
+        (MathOperation.Logsigmoid, DataFormat.Float32, out, approx, dest): (
+            "Float32 input unreachable on the ttsim Wormhole model"
+        )
+        for out in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
+        for approx in (ApproximationMode.Yes, ApproximationMode.No)
+        for dest in (DestAccumulation.Yes, DestAccumulation.No)
+    },
+}
+
+
 def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
     """The sweep gates a ULP row and the headroom report judges a tolerance row; a
-    swept cell resolving to `TOLERANCE_CONTRACT` is measured and judged by nothing. A
-    swept cell of an exact op must resolve to a step budget outright: the emitter
-    demoting one is a real deviation on an op that should be exact."""
+    swept cell resolving to `TOLERANCE_CONTRACT` is measured and judged by nothing,
+    unless `_UNRESOLVED_SWEPT_CELLS` lists it with why. A swept cell of an exact op must
+    resolve to a step budget outright: the emitter demoting one is a real deviation on
+    an op that should be exact."""
     exact = set(_swept_exact_ops())
-    unresolved, demoted = [], []
+    listed = _UNRESOLVED_SWEPT_CELLS.get(MEASURED_ARCH, {})
+    unresolved, demoted, resolved = [], [], []
     for op in enrolled_ops():
         if op not in sfpu_unary_ops():
             continue
@@ -897,13 +916,21 @@ def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
                 dest_acc=dest,
                 arch=MEASURED_ARCH,
             )
+            key = (op, in_fmt, out_fmt, approx, dest)
             cell = f"{op.name} {in_fmt.name}->{out_fmt.name} {approx.name} {dest.name}"
             if contract is TOLERANCE_CONTRACT:
-                unresolved.append(cell)
+                if key not in listed:
+                    unresolved.append(cell)
+            elif key in listed:
+                resolved.append(cell)
             elif op in exact and contract.metric is not Metric.ULP:
                 demoted.append(cell)
-    assert not unresolved, "swept cells no row of the op covers: " + ", ".join(
-        unresolved
+    assert not unresolved, (
+        "swept cells no row of the op covers: give them a row, or list them in "
+        "_UNRESOLVED_SWEPT_CELLS with why: " + ", ".join(unresolved)
+    )
+    assert not resolved, "listed as unresolved but a row covers them now: " + ", ".join(
+        resolved
     )
     assert not demoted, "exact-op cells off the step budget: " + ", ".join(demoted)
 
@@ -1141,6 +1168,20 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 # Acknowledgements that hold on one architecture's table only, read beside the ones
 # above for the session's MEASURED_ARCH.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {
+    ChipArchitecture.WORMHOLE: {
+        (
+            MathOperation.Logsigmoid,
+            DataFormat.Float16,
+            DataFormat.Float16,
+            None,
+            DestAccumulation.No,
+        ): (
+            "the kernel rounds its result to bfloat16 before the store on a 16-bit Dest, so "
+            "the four top-of-fp16 inputs (-65504 down to -65408, where logsigmoid(x) = x) "
+            "round to -65536 and pack to -inf; the rest of the cell reads up to 12 fp16 "
+            "steps, that rounding on top of the bfloat16-level residual (#58607's class)"
+        ),
+    },
     ChipArchitecture.BLACKHOLE: {
         (
             MathOperation.Reciprocal,
@@ -1212,6 +1253,15 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
 # `approx`; and Polygamma also parks five cells on its pole at 0 (see its
 # acknowledgement).
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
+    ChipArchitecture.WORMHOLE: {
+        (
+            MathOperation.Logsigmoid,
+            DataFormat.Float16,
+            DataFormat.Float16,
+            None,
+            DestAccumulation.No,
+        ): 1,
+    },
     ChipArchitecture.BLACKHOLE: {
         (
             MathOperation.Exp,

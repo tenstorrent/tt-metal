@@ -102,6 +102,7 @@ class MathOperation(Enum):
     # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
     LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
+    Logsigmoid = OpSpec("logsigmoid", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
@@ -313,7 +314,6 @@ class MathOperation(Enum):
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
-    SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
     SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)

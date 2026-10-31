@@ -170,6 +170,9 @@ _OP_DOMAIN_REGISTRY: dict[
     MathOperation.Log: _lu(1e-4, 1e3),
     MathOperation.LogWithBase: _lu(1e-4, 1e3),
     MathOperation.Log1p: _u(-0.99, 10.0),  # defined for x > -1
+    # logsigmoid: all reals; [-30, 30] reaches the linear tail on one side and the
+    # small-residual tail on the other.
+    MathOperation.Logsigmoid: _u(-30.0, 30.0),
     MathOperation.Neg: _u(-10.0, 10.0),
     MathOperation.Reciprocal: _reciprocal_spec,
     # relu_max clamps above at its threshold with a strict compare, and relu_min below at
@@ -941,6 +944,7 @@ SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         MathOperation.LessThanEqualZero,
         MathOperation.LessThanZero,
         MathOperation.Log1p,
+        MathOperation.Logsigmoid,  # NaN -> NaN, -inf -> -inf, +inf -> 0
         MathOperation.Lrelu,
         MathOperation.Mish,
         MathOperation.Neg,
@@ -1146,7 +1150,7 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
 # The binary ops that diverge at a special, each waiting on a decision: compositions
 # through a reciprocal, log or exp (an LLK decision, not an ISA one); SfpuMask's
 # SFPSETCC on a possibly-NaN operand, and SfpuMaskPosinf's, the same zero test;
-# SfpuLogsigmoid, which reads B only on one branch; SfpuCopyDest, a bit copy.
+# SfpuCopyDest, a bit copy.
 _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
     {
         MathOperation.SfpuElwdiv,
@@ -1159,7 +1163,6 @@ _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
         MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuMask,
         MathOperation.SfpuMaskPosinf,
-        MathOperation.SfpuLogsigmoid,
         MathOperation.SfpuCopyDest,
     }
 )
