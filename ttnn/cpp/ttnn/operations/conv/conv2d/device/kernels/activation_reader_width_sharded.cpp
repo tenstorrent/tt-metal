@@ -70,8 +70,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("activation_mcast_ct_offset"),
         get_named_compile_time_arg_val("activation_mcast_rt_offset")>
         act_mcast_args;
-    constexpr uint32_t config_dram_addr_index = operation_ct_args_end;
-    constexpr uint32_t config_page_size_index = config_dram_addr_index + 1;
+    constexpr uint32_t config_page_size_index = operation_ct_args_end;
     constexpr uint32_t config_tensor_args_index = config_page_size_index + 1;
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
@@ -104,11 +103,8 @@ void kernel_main() {
     auto act_send_pipe = act_mcast_args.optional_sender(noc);
     auto act_recv_pipe = act_mcast_args.optional_receiver(noc);
 
-    load_config_tensor_if_in_dram<
-        config_dram_addr_index,
-        config_page_size_index,
-        config_tensor_args_index,
-        cb_reader_indices>(noc, reader_indices_dfb, 0);
+    load_config_tensor_if_in_dram<config_page_size_index, config_tensor_args_index, cb_reader_indices>(
+        noc, reader_indices_dfb, 0);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());
