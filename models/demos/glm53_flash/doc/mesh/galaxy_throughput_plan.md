@@ -212,6 +212,15 @@ output tensor) inside the traced decode step, feed the sampled id into the resid
 the host path for logprobs / penalties / min_p; raise `max_device_top_k` to the module's limit so the plugin routes
 sampled rows to the device. Validate: a short sampled A/B (128 x 128 at 32 users, temperature 1.0 / top-p 0.95) against
 the greedy ITL, then the eval entries' runtime.
+Routing caveat (2026-10-31 08:35): the plugin sends a batch to the host when any sampled row has no top-k bound
+(vLLM's default) or one above `max_device_top_k`, and the reference models declare 32, so a model-side sampler alone
+serves only requests that set 1 <= top_k <= 32. The common chat request (temperature + top-p, no top-k) and the eval
+entries need a generic plugin opt-in (a capability such as `device_top_k_unbounded_as: 32`: sample from the device's
+top-32 under top-p, the approximation `tt_sampling` already applies by clamping k) routed through the plugin PR branch.
+Model side for GLM53: the head's logits are the complete vocab on every chip (the TP column blocks are all-gathered),
+so the sampler is model-local: `ttnn.topk(32)` per user, `ttnn.sampling` over the 32 candidates with per-user k / p /
+1/T tensors and `ttnn.manual_seed`, a `where` on the greedy mask keeping greedy rows bit-identical to today's argmax,
+captured as a second decode trace (the plain greedy trace unchanged) that the adapter picks when a row samples.
 
 | item | change | where | status |
 |---|---|---|---|
