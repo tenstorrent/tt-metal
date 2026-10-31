@@ -95,8 +95,7 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
         actual_start,
         sequence_parallel_axis,
         actual_end,
-        /*tail=*/false,
-        /*init=*/true,
+        /*packed_head=*/false,
         sequence_parallel_size);
 }
 
