@@ -1139,6 +1139,12 @@ inline void calculate_asinh() {
     }
 }
 
+bool bf16_dest_atanh();
+template <int ITERATIONS>
+void calculate_atanh_bf16();
+// Whether BF16 DEST runs the generated atanh kernel as one call over the whole tile.
+inline constexpr bool atanh_bf16_whole_tile = true;
+
 // atanh(x) = 0.5 * log((1 + x) / (1 - x)), reformulated as
 // 0.5 * log1p(2 * x / (1 - x)) to remove the cancellation at x -> 0 and the
 // (1 + x)/(1 - x) ratio that loses precision there.
@@ -1149,6 +1155,12 @@ inline void calculate_asinh() {
 // boundary, handled separately), and the sign is restored at the end.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atanh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_atanh()) {
+            calculate_atanh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
@@ -1197,12 +1209,19 @@ void init_inverse_hyperbolic() {
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
+void init_atanh_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_atanh() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // atanh routes through calculate_log1p_fp32; the reciprocal it uses is the
     // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_atanh_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_atanh_bf16.h"
