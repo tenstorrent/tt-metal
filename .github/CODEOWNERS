@@ -203,7 +203,7 @@ tt_metal/impl/experimental/offline_compile/ @ruizhangTT @tenstorrent/metalium-ru
 tt_metal/impl/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/impl/experimental/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt
-tt_metal/impl/graph/ @ayerofieiev-tt @akerteszTT @dgomezTT
+tt_metal/impl/graph/ @ayerofieiev-tt @akerteszTT @FConstantinos
 tt_metal/impl/host_api/ @abhullar-tt @jbaumanTT @akerteszTT @kstevensTT
 tt_metal/impl/host_api/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT
 tt_metal/impl/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal impl (moved from experimental in #48638)
