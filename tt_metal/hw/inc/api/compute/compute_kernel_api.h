@@ -838,7 +838,9 @@ ALWI void sfpu_reduce_init() {
  * | chunk           | The index of the intra-kernel "chunk" of data for large kernel accumulation | uint32_t   | 0 to UINT_MAX                                         | False    |
  * | num_rows        | The number of rows to use for the MaxPool operation                         | uint32_t   | <= 32, but note either 9 or 32 rows will be reduced   | False    |
  * | layout          | The data layout of the data in DST                                          | DataLayout | TILE or ROW_MAJOR                                     | False    |
- * | accumulate      | Whether to accumulate results for large kernels                             | bool       | true, false                                           | False    |
+ * | accumulate      | Whether to accumulate results for large kernels (32-row path only); the     | bool       | true, false (true needs num_rows > 9, ROW_MAJOR)      | False    |
+ * |                 | running max/index live in DST tiles idst + 1 / idst_idx + 1, which must be  |            |                                                       |          |
+ * |                 | free and must not overlap idst / idst_idx                                   |            |                                                       |          |
  * | ITERATIONS      | The number of iterations to perform (unused)                                | int        | 1 to 8                                                | False    |
  */
 // clang-format on
