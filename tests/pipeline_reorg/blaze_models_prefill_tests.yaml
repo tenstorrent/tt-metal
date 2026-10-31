@@ -2265,6 +2265,7 @@
       export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
@@ -2273,7 +2274,7 @@
       exit $rc
     '
   test_type: ring_joint_sdpa_perf
-  test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, ccl, determinism]
+  test_tags: [kimi_k2_7, kimi_k3, gemma4, sdpa, mla, ccl, determinism]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
