@@ -94,8 +94,9 @@ def test_same_image_at_another_position_does_not_hit(monkeypatch):
     assert c.lookup(0, t2, 4000, vs=vseq(t2, [(700, 100)], ["aa" * 20])) is None
 
 
-def test_boundary_rule_no_snapshot_inside_an_image_span(monkeypatch):
+def test_strict_boundary_rule_no_snapshot_inside_an_image_span(monkeypatch):
     monkeypatch.setenv("DSV41_APC_IMAGES", "1")
+    monkeypatch.setenv("DSV41_APC_IMAGES_STRICT", "1")
     c = cache()
     t = prompt(spans=((400, 300),))  # image 400..700 crosses 512
     vs = vseq(t, [(400, 300)], ["cc" * 20])
@@ -104,10 +105,23 @@ def test_boundary_rule_no_snapshot_inside_an_image_span(monkeypatch):
     )
     assert c._keyed(t, 512, vs, 512) is None  # no snapshot at 512
     assert c._keyed(t, 1024, vs, 1024) is not None
-    # a lookup of this prompt only finds the boundary after the span, and only when it was stored
     put(c, c._keyed(t, 1024, vs, 1024), t, 1024)
     assert c.lookup(0, t, 1100, vs=vs) is None  # 1100 - 128 = 972 < 1024: the hit position stays <= end - 128
     assert c.lookup(0, t, 1200, vs=vs).s == 1024
+
+
+def test_snapshot_inside_an_image_span_is_keyed_by_the_image(monkeypatch):
+    monkeypatch.setenv("DSV41_APC_IMAGES", "1")
+    c = cache()
+    t = prompt(spans=((400, 300),))  # image 400..700 crosses 512
+    vsA, vsB = vseq(t, [(400, 300)], ["cc" * 20]), vseq(t, [(400, 300)], ["dd" * 20])
+    kt = c._keyed(t, 512, vsA, 512)
+    assert kt is not None and not bool((kt == IMG).any())  # the part of the image before 512 is covered by its identity
+    put(c, kt, t, 512)
+    assert (
+        c.lookup(0, t, 700, vs=vsA).s == 512
+    )  # same image: hit inside the image (the rest of its rows come from the vision seq)
+    assert c.lookup(0, t, 700, vs=vsB) is None  # other image: no hit
 
 
 def test_unexplained_placeholders_are_never_cached(monkeypatch):

@@ -705,13 +705,15 @@ def key_tokens(tokens, spans, image_token_id):
     t = torch.as_tensor(tokens).long().reshape(-1).clone()
     covered = 0
     for st, n, k in spans or []:
-        if st + n > t.numel():
-            continue  # (a span not fully inside the tokens given: it is not part of any key below)
+        if st >= t.numel():
+            continue  # (a span that starts at or after the end of the tokens given is not part of any key below)
         v = -1 - int.from_bytes(
             hashlib.sha256(bytes.fromhex(k) if len(k) % 2 == 0 else k.encode()).digest()[:7], "little"
         )
-        t[st : st + n] = v
-        covered += n
+        t[
+            st : st + n
+        ] = v  # (a span that crosses the end: its first part: the image identity is in the key, the position in the chain)
+        covered += min(n, t.numel() - st)
     ok = int((t == image_token_id).sum()) == 0 if image_token_id is not None else True
     return t, ok
 
@@ -855,6 +857,15 @@ class PrefixCache:
 
         return os.environ.get("DSV41_APC_IMAGES", "0") == "1"
 
+    @staticmethod
+    def strict_boundaries():
+        """``DSV41_APC_IMAGES_STRICT=1``: no snapshot inside an image span (default 0: a state in the middle of an image is a function of the tokens and the image like any other; without it a
+        prompt of many adjacent images has almost no usable boundary, the 512-token chunk grid falls inside an image nearly everywhere).
+        """
+        import os
+
+        return os.environ.get("DSV41_APC_IMAGES_STRICT", "0") == "1"
+
     def _keyed(self, tokens, n, vs, B=None):
         """-> the tokens [:n] to KEY with (text prompts: ``tokens`` itself), or None when this prompt must not use the cache here (image prompt with the switch off, no image keys, an image
         span crossing ``B`` (snapshot position) or placeholders no span explains)."""
@@ -863,7 +874,7 @@ class PrefixCache:
         if not self.images_enabled():
             return None
         spans = image_spans(vs)
-        if spans is None or (B is not None and straddles(spans, B)):
+        if spans is None or (B is not None and self.strict_boundaries() and straddles(spans, B)):
             return None
         kt, ok = key_tokens(torch.as_tensor(tokens).reshape(-1)[:n], spans, self.image_token_id)
         return kt if ok else None
