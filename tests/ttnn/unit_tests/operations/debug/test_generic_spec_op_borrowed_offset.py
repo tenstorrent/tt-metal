@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.generic_op with DataflowBufferSpecs borrowed from one L1 "arena" tensor at byte offsets.
+"""ttnn.experimental.generic_op with DataflowBufferSpecs borrowed from one L1 "arena" tensor at byte offsets.
 
 This is how blaze lays out its planned circular buffers in an arena tensor: each buffer is borrowed from the tensor at
-DFBAdvancedOptions.borrowed_offset. The kernels move rows of DRAM tensors through the buffers as FIFOs on one core.
+DFBAdvancedOptions.borrowed_offset. The tests use the ttnn.experimental names (those of #63251). The kernels move rows of DRAM tensors through the buffers as FIFOs on one core.
 The consumer writes each entry out through a LocalTensorAccessor of the arena rather than through the buffer, from
 where the spec placed it, so the output is right only if the buffer really sits at its offset.
 """
@@ -13,6 +13,8 @@ where the spec placed it, so the output is right only if the buffer really sits 
 import pytest
 import torch
 import ttnn
+
+E = ttnn.experimental
 
 CORE = ttnn.CoreCoord(0, 0)
 GRID = ttnn.CoreRangeSet({ttnn.CoreRange(CORE, CORE)})
@@ -189,62 +191,59 @@ def make_io(device, seed):
     return torch_a, torch_b, tensors
 
 
-def borrowed_dfb(unique_id, offset):
-    return ttnn.DataflowBufferSpec(
+def borrowed_dfb(unique_id, offset, alias_with=()):
+    return E.DataflowBufferSpec(
         unique_id=unique_id,
         entry_size=ENTRY_BYTES,
         num_entries=2,
         borrowed_from="arena",
-        advanced_options=ttnn.DFBAdvancedOptions(borrowed_offset=offset),
+        advanced_options=E.DFBAdvancedOptions(borrowed_offset=offset, alias_with=list(alias_with)),
     )
 
 
-def binding(name, endpoint_type):
-    return ttnn.DFBBinding(dfb_spec_name=name, accessor_name=name, endpoint_type=endpoint_type)
-
-
 def tensor_bindings(*names):
-    return [ttnn.TensorBinding(tensor_parameter_name=name, accessor_name=name) for name in names]
+    return [E.TensorBinding(tensor_parameter_name=name, accessor_name=name) for name in names]
 
 
-def make_program(tensors, *, offset_a, offset_b, phases, dfb_b=None):
-    producer, consumer = ttnn.DFBEndpointType.PRODUCER, ttnn.DFBEndpointType.CONSUMER
+def make_program(tensors, *, offset_a, offset_b, phases, dfb_a=None, dfb_b=None):
     semaphore_bindings = []
     semaphores = []
     if phases:
-        semaphores = [ttnn.SemaphoreSpec(unique_id="a_done", target_nodes=CORE)]
-        semaphore_bindings = [ttnn.SemaphoreBinding(semaphore_spec_name="a_done", accessor_name="a_done")]
-    return ttnn.ProgramSpec(
+        semaphores = [E.SemaphoreSpec(unique_id="a_done", target_nodes=CORE)]
+        semaphore_bindings = [E.SemaphoreBinding(semaphore_spec_name="a_done", accessor_name="a_done")]
+    return E.ProgramSpec(
         name="borrowed_offset",
         kernels=[
-            ttnn.KernelSpec(
+            E.KernelSpec(
                 unique_id="reader",
-                source_code=READ_TWO_PHASES_SOURCE if phases else READ_TWO_SOURCE,
-                hw_config=ttnn.DataMovementHardwareConfig.reader(),
-                dfb_bindings=[binding("a", producer), binding("b", producer)],
+                source=E.KernelSpec.SourceCode(code=READ_TWO_PHASES_SOURCE if phases else READ_TWO_SOURCE),
+                hw_config=E.create_reader_datamovement_config(),
+                dfb_bindings=[E.producer_of("a", "a"), E.producer_of("b", "b")],
                 semaphore_bindings=semaphore_bindings,
                 tensor_bindings=tensor_bindings("in_a", "in_b"),
                 compile_time_args={"num_rows": NUM_ROWS},
             ),
-            ttnn.KernelSpec(
+            E.KernelSpec(
                 unique_id="writer",
-                source_code=WRITE_TWO_PHASES_FROM_ARENA_SOURCE if phases else WRITE_TWO_FROM_ARENA_SOURCE,
-                hw_config=ttnn.DataMovementHardwareConfig.writer(),
-                dfb_bindings=[binding("a", consumer), binding("b", consumer)],
+                source=E.KernelSpec.SourceCode(
+                    code=WRITE_TWO_PHASES_FROM_ARENA_SOURCE if phases else WRITE_TWO_FROM_ARENA_SOURCE
+                ),
+                hw_config=E.create_writer_datamovement_config(),
+                dfb_bindings=[E.consumer_of("a", "a"), E.consumer_of("b", "b")],
                 semaphore_bindings=semaphore_bindings,
                 tensor_bindings=tensor_bindings("arena", "out_a", "out_b"),
                 compile_time_args={"num_rows": NUM_ROWS, "offset_a": offset_a, "offset_b": offset_b},
             ),
         ],
-        dataflow_buffers=[borrowed_dfb("a", offset_a), dfb_b or borrowed_dfb("b", offset_b)],
+        dataflow_buffers=[dfb_a or borrowed_dfb("a", offset_a), dfb_b or borrowed_dfb("b", offset_b)],
         semaphores=semaphores,
-        tensor_parameters=[ttnn.TensorParameter(unique_id=name, spec=tensor.spec) for name, tensor in tensors.items()],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=["reader", "writer"], target_nodes=GRID)],
+        tensor_parameters=[E.TensorParameter(unique_id=name, spec=tensor.spec) for name, tensor in tensors.items()],
+        work_units=[E.WorkUnitSpec(name="main", kernels=["reader", "writer"], target_nodes=GRID)],
     )
 
 
 def run(device, tensors, spec):
-    ttnn.generic_op(list(tensors.values()), spec, ttnn.ProgramSpecRunArgs(tensor_args=tensors))
+    E.generic_op(list(tensors.values()), spec, E.ProgramRunArgs(tensor_args=tensors))
 
 
 @pytest.mark.parametrize(
@@ -284,20 +283,35 @@ def test_generic_spec_op_rejects_bad_borrowed_offset(device, expect_error, offse
 
 def test_generic_spec_op_rejects_borrowed_offset_without_borrowed_from(device, expect_error):
     _, _, tensors = make_io(device, 0)
-    not_borrowed = ttnn.DataflowBufferSpec(
+    not_borrowed = E.DataflowBufferSpec(
         unique_id="b",
         entry_size=ENTRY_BYTES,
         num_entries=2,
-        advanced_options=ttnn.DFBAdvancedOptions(borrowed_offset=1024),
+        advanced_options=E.DFBAdvancedOptions(borrowed_offset=1024),
     )
     spec = make_program(tensors, offset_a=0, offset_b=1024, phases=False, dfb_b=not_borrowed)
     with expect_error(RuntimeError, "sets borrowed_offset = 1024 but does not set borrowed_from"):
         run(device, tensors, spec)
 
 
+def test_generic_spec_op_rejects_aliases_with_different_borrowed_offsets(device, expect_error):
+    # Aliases share one address, so a and b may not sit at different offsets of the tensor they both borrow.
+    _, _, tensors = make_io(device, 0)
+    spec = make_program(
+        tensors,
+        offset_a=0,
+        offset_b=4 * 1024,
+        phases=False,
+        dfb_a=borrowed_dfb("a", 0, alias_with=["b"]),
+        dfb_b=borrowed_dfb("b", 4 * 1024, alias_with=["a"]),
+    )
+    with expect_error(RuntimeError, "have different borrowed_offset"):
+        run(device, tensors, spec)
+
+
 def test_dfb_advanced_options_round_trip():
-    dfb = ttnn.DataflowBufferSpec(
-        unique_id="d", entry_size=64, num_entries=1, advanced_options=ttnn.DFBAdvancedOptions(borrowed_offset=128)
+    dfb = E.DataflowBufferSpec(
+        unique_id="d", entry_size=64, num_entries=1, advanced_options=E.DFBAdvancedOptions(borrowed_offset=128)
     )
     assert dfb.advanced_options.borrowed_offset == 128
-    assert ttnn.DataflowBufferSpec(unique_id="d", entry_size=64, num_entries=1).advanced_options.borrowed_offset == 0
+    assert E.DataflowBufferSpec(unique_id="d", entry_size=64, num_entries=1).advanced_options.borrowed_offset == 0
