@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
+// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
 
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
+// Semaphore selectors are one bit per semaphore: S<n> is bit n.
 
 #include <cstdint>
 
@@ -31,12 +35,13 @@ extern "C" __attribute__((noinline, used)) void init_post_get_selectors()
     sync::semaphore::get<sync::Semaphore::S7>();
 }
 
-// CHECK-LABEL: <init_post_get_selectors>:
-// CHECK-NEXT: ttseminit 2,1,18
-// CHECK-NEXT: ttseminit 15,0,255
-// CHECK-NEXT: ttsempost 1
-// CHECK-NEXT: ttsemget 128
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_init_post_get_selectors()
+{
+    TTI_SEMINIT(2 /*max_value*/, 1 /*init_value*/, 0x12 /*sem_sel*/);
+    TTI_SEMINIT(15 /*max_value*/, 0 /*init_value*/, 0xff /*sem_sel*/);
+    TTI_SEMPOST(0x01 /*sem_sel*/);
+    TTI_SEMGET(0x80 /*sem_sel*/);
+}
 
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
@@ -45,11 +50,12 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
     TTI_INSN(sync::semaphore::get_operation<sync::Semaphore::S2>());
 }
 
-// CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttseminit 4,3,32
-// CHECK-NEXT: ttsempost 192
-// CHECK-NEXT: ttsemget 4
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_issue_encoded_operations()
+{
+    TTI_SEMINIT(4 /*max_value*/, 3 /*init_value*/, 0x20 /*sem_sel*/);
+    TTI_SEMPOST(0xc0 /*sem_sel*/);
+    TTI_SEMGET(0x04 /*sem_sel*/);
+}
 
 extern "C" __attribute__((noinline, used)) void post_get_tensix_index()
 {
@@ -57,71 +63,47 @@ extern "C" __attribute__((noinline, used)) void post_get_tensix_index()
     sync::semaphore::get<sync::Access::Tensix, sync::Semaphore::S7>();
 }
 
-// CHECK-LABEL: <post_get_tensix_index>:
-// CHECK-NEXT: ttsempost 2
-// CHECK-NEXT: ttsemget 128
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_post_get_tensix_index()
+{
+    TTI_SEMPOST(0x02 /*sem_sel*/);
+    TTI_SEMGET(0x80 /*sem_sel*/);
+}
+
+// Runtime forms push the encoded word through the instruction buffer. The SEMINIT
+// references add the maximum value (bits 23:20) separately, which avoids an
+// incidental reassociation difference from the HAL body.
 
 extern "C" __attribute__((noinline, used)) void init_runtime(const sync::Semaphore semaphore, const std::uint32_t initial, const std::uint32_t maximum)
 {
     sync::semaphore::init(semaphore, initial, maximum);
 }
 
-// CHECK-LABEL: <init_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa3000
-// CHECK-NEXT: slli a2,a2,0x14
-// CHECK-NEXT: add a2,a2,[[R0]]
-// CHECK-NEXT: slli a1,a1,0x10
-// CHECK-NEXT: li [[R0]],4
-// CHECK-NEXT: sll a0,[[R0]],a0
-// CHECK-NEXT: add a2,a2,a1
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a2,a2,a0
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a2,0([[R0]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_init_runtime(
+    const sync::Semaphore semaphore, const std::uint32_t initial, const std::uint32_t maximum)
+{
+    const std::uint32_t selector = 1u << hal::to_underlying(semaphore);
+    TT_INSN(TT_OP_SEMINIT(0 /*max_value*/, initial, selector) + (maximum << 20));
+}
 
 extern "C" __attribute__((noinline, used)) void post_runtime(const sync::Semaphore semaphore)
 {
     sync::semaphore::post(semaphore);
 }
 
-// CHECK-LABEL: <post_runtime>:
-// CHECK-NEXT: li [[R0:a[0-7]]],4
-// CHECK-NEXT: sll [[R0]],[[R0]],a0
-// CHECK-NEXT: lui [[R1:a[0-7]]],0xa4000
-// CHECK-NEXT: lui [[R2:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add [[R0]],[[R0]],[[R1]]
-// CHECK-NEXT: mv [[R2]],[[R2]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw [[R0]],0([[R2]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_post_runtime(const sync::Semaphore semaphore)
+{
+    TT_SEMPOST(1u << hal::to_underlying(semaphore));
+}
 
 extern "C" __attribute__((noinline, used)) void get_runtime(const sync::Semaphore semaphore)
 {
     sync::semaphore::get(semaphore);
 }
 
-// CHECK-LABEL: <get_runtime>:
-// CHECK-NEXT: li [[R0:a[0-7]]],4
-// CHECK-NEXT: sll [[R0]],[[R0]],a0
-// CHECK-NEXT: lui [[R1:a[0-7]]],0xa5000
-// CHECK-NEXT: lui [[R2:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add [[R0]],[[R0]],[[R1]]
-// CHECK-NEXT: mv [[R2]],[[R2]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw [[R0]],0([[R2]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_get_runtime(const sync::Semaphore semaphore)
+{
+    TT_SEMGET(1u << hal::to_underlying(semaphore));
+}
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_init_runtime(
     const sync::Semaphore semaphore, const std::uint32_t initial, const std::uint32_t maximum)
@@ -129,13 +111,9 @@ extern "C" __attribute__((noinline, used)) std::uint32_t encode_init_runtime(
     return sync::semaphore::init_operation(semaphore, initial, maximum);
 }
 
-// CHECK-LABEL: <encode_init_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa3000
-// CHECK-NEXT: slli a2,a2,0x14
-// CHECK-NEXT: slli a1,a1,0x10
-// CHECK-NEXT: add a2,a2,[[R0]]
-// CHECK-NEXT: li [[R0]],4
-// CHECK-NEXT: add a2,a2,a1
-// CHECK-NEXT: sll a0,[[R0]],a0
-// CHECK-NEXT: add a0,a2,a0
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_init_runtime(
+    const sync::Semaphore semaphore, const std::uint32_t initial, const std::uint32_t maximum)
+{
+    const std::uint32_t selector = 1u << hal::to_underlying(semaphore);
+    return TT_OP_SEMINIT(0 /*max_value*/, initial, selector) + (maximum << 20);
+}
