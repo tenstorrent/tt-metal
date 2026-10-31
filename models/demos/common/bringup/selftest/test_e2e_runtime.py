@@ -131,3 +131,31 @@ def test_a_profile_at_a_position_records_timing_with_its_suffix_and_the_host_pro
     assert m[f"chunk_wall_ms{p}"] > 0 and m[f"host_cprofile_ms{p}"] > 0 and f"host_launch_calls{p}" in m
     assert "chunk_wall_ms" not in m and not any(k.startswith("pcc_") for k in m), sorted(m)
     assert list(M.results_dir().glob(f"*_host{p}.pstats")) and list(M.results_dir().glob(f"*_host{p}.json"))
+
+
+def test_timed_runs_take_the_steady_state_path_and_accuracy_runs_the_normal_one(
+    gspec, noise, monkeypatch
+):  # noqa: F811
+    """F236 (DeepSeek-V4.1, owner 2026-10-31): every timed run repeats the same chunk, so a model whose carry between
+    chunks has a fast path for consecutive chunks paid a rebuild in every measurement (~11 ms host a chunk); the
+    profile calls model.steady_state(start) before each timed run and steady_state(None) before an accuracy run."""
+    from models.demos.common.bringup.selftest import fixture_model
+    from models.demos.common.bringup.testing import profile
+
+    calls = []
+    monkeypatch.setattr(fixture_model.FakeDeviceModel, "steady_state", lambda self, at: calls.append(at), raising=False)
+    s = gspec()
+    noise(1e-3)
+    monkeypatch.setenv("BRINGUP_PROFILE_WALL", "1")
+    monkeypatch.setenv("BRINGUP_QUICK", "1")
+    monkeypatch.delenv("BRINGUP_POS", raising=False)
+    monkeypatch.delenv("TT_METAL_DEVICE_PROFILER", raising=False)
+    monkeypatch.setattr(profile, "WALL_RUNS", 2)
+    monkeypatch.setattr(profile, "WALL_WARM", 1)
+    monkeypatch.setattr(profile.accuracy_guard, "check", lambda s: None)
+    profile.run_profile(s, None)
+    timed = [c for c in calls if c is not None]
+    assert len(timed) >= 3 and len(set(timed)) == 1, calls  # warm-up + timed runs, all at the chunk's start
+    assert calls[-1] is None, calls  # the quick accuracy run takes the normal path
+    m = got()
+    assert all(m[f"err_layer_L{i:02d}"] <= m[f"err_layer_L{i:02d}_limit"] for i in range(3))

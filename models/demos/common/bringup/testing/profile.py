@@ -440,6 +440,23 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     load_prefix()
     # Fixed-size state (spec state.fixed) advances on every run of the chunk: reload the prefix before each run.
     reload = load_prefix if s.state_fixed else (lambda: None)
+    steady = getattr(model, "steady_state", None)
+
+    def timed_reload():
+        """F236: before a TIMED run, the model may put its state on the path a chunk that follows a whole previous
+        chunk takes (``steady_state(start)``; DeepSeek-V4.1: the window carry comes from the previous chunk's tail
+        instead of a rebuild), since every timed run repeats the same chunk. Timing only: never before an accuracy
+        run, whose values must come from the golden prefix."""
+        reload()
+        if steady is not None:
+            steady(start)
+
+    def accurate_reload():
+        """F236: before an accuracy run: the normal path again (``steady_state(None)``), the golden prefix as is."""
+        reload()
+        if steady is not None:
+            steady(None)
+
     tokens = g.tokens()[start:]
     starts = {i for k, i in enumerate(layers) if k == 0 or layers[k - 1] != i - 1}
 
@@ -491,7 +508,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         walls, gaps = [], []
 
         def one_run():
-            reload()
+            timed_reload()
             gap[0] = 0.0
             t0 = time.time()
             run()
@@ -544,7 +561,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         if (
             os.environ.get("BRINGUP_QUICK") == "1" and pos is None
         ):  # F122: the quick A/B also checks every layer against the golden
-            reload()
+            accurate_reload()
             pcc = run(count=True, per_layer=True)
             drift, failed = (
                 E.load(g.dir, rung_name),
@@ -560,7 +577,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             print(f"PROFILE quick: worst layer rel {pcc[worst][1]:.5f} (L{worst:02d}, PCC {pcc[worst][0]:.5f})")
             print("".join(f"FAIL {f}\n" for f in failed) or "PROFILE quick: every layer and state within its limit")
         return {"wall_ms": med, "wall_runs_ms": walls}
-    reload()
+    timed_reload()
     cpu_bridge.STATS.reset()
     gap[0] = 0.0
     n0 = cache_entries(mesh)
@@ -570,7 +587,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     record_warm(mesh, n0, "plain")
     cpu_bridge.record(metrics)
     bridged = {"steps": cpu_bridge.STATS.step_names, "ms": round(cpu_bridge.STATS.ms, 1)}
-    reload()
+    accurate_reload()
     run(count=True)  # warm, apart from the timed run: host round-trips inside the forward pass (agent rule 5)
     metrics.record("host_transfers_per_layer", max(host))
     # The full-target prefill takes minutes; it is for a final number, not for every perf iteration (spec perf.full_prefill
@@ -579,7 +596,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     full = full_prefill(s, model, state, layers, rung, g.tokens()) if want_full else None
 
     ops, timeline = None, None
-    reload()
+    timed_reload()
     if backend == "rt":  # F155: one run, no syncs: sections, and with op mode the op rows and the timeline
         ops_on = want_ops(s, rt=True)
         gap[0] = 0.0
@@ -615,7 +632,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             sel = op_layers(s, layers)
             print(f"op profile on layers {sel} (of {len(layers)})")
             metrics.record("op_layers", len(sel))
-            reload()
+            timed_reload()
             ops, timeline = op_profile(mesh, lambda: run(only=sel))
     if ops is not None:
         metrics.record("op_rows", sum(len(v) for v in ops.values()))
