@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
+#include <limits>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -16,6 +17,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -68,6 +70,11 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+// x_indexed: the in0 sender's slice of x_row_index for its rows of the current chunk (per_core_M tile-rows of
+// UINT32 x-row ids), read once per chunk and reused by every gate/up K-block.
+constexpr uint32_t CB_X_ROW_IDX = tt::CBIndex::c_20;
+// output_row_major with zero_output_row: one output row of zeros (writer-only), the source of the zero-row write.
+constexpr uint32_t CB_ZERO_ROW = tt::CBIndex::c_21;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -121,6 +128,11 @@ void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fus
         visit_weight_buffers(t.gate_biases, fn);
         visit_weight_buffers(t.up_biases, fn);
         visit_weight_buffers(t.down_biases, fn);
+    }
+    if (t.x_row_index.has_value()) {
+        auto* idx_buffer = t.x_row_index->buffer();
+        TT_FATAL(idx_buffer != nullptr, "x_row_index buffer must be allocated on device");
+        fn(idx_buffer);
     }
 }
 
@@ -363,8 +375,32 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Sized here, ahead of the L1 fitter, because cb_footprint_bytes must budget the ring that is
     // actually allocated: the ragged row-sized ring is ceil(per_core_N_d / d_out_subblock_w) times
     // the exact-grid one (22 tiles vs 16 on the 11-column grid).
+    //
+    // ROW_MAJOR output: the compute kernel packs a whole output tile-row untilized per push (its
+    // subblocks side by side), so the ring holds whole rows, and the row must be whole subblocks.
+    TT_FATAL(
+        !op.output_row_major || d_subblocks_exact,
+        "unified_routed_expert_ffn: a ROW_MAJOR output needs per_core_N_d ({}) to be a multiple of the down subblock "
+        "width ({})",
+        per_core_N_d,
+        d_out_subblock_w);
     const uint32_t cb_out_tiles =
-        d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d) * cb_out_stage_count;
+        op.output_row_major
+            ? per_core_N_d * cb_out_stage_count
+            : d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d) * cb_out_stage_count;
+    // ROW_MAJOR output rows, in bytes (bf16), and the writer's zero-row source.
+    const uint32_t rm_out_row_bytes = N_down_tiles_full * TILE * 2;
+    const bool has_zero_row = op.output_row_major && op.zero_output_row != std::numeric_limits<uint32_t>::max();
+    if (op.output_row_major) {
+        // Each core's row segment starts at its first column (per_core_N_d * 64 B steps) and every
+        // page at a DRAM-aligned address; a segment start off the DRAM alignment would be misaddressed.
+        const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+        TT_FATAL(
+            (per_core_N_d * TILE * 2) % dram_align == 0 && rm_out_row_bytes % dram_align == 0,
+            "unified_routed_expert_ffn: ROW_MAJOR output row segments ({} B) must be {}-B aligned",
+            per_core_N_d * TILE * 2,
+            dram_align);
+    }
 
     // -------------------------- data formats / tile sizes -----------------
     const tt::DataFormat x_df = tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype());
@@ -431,6 +467,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
         // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
         total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
+        if (has_zero_row) {
+            total += rm_out_row_bytes;  // cb_zero_row
+        }
+        if (op.x_indexed) {
+            total += static_cast<uint64_t>(M) * TILE * sizeof(uint32_t);  // cb_x_row_idx
+        }
         return total;
     };
 
@@ -446,7 +488,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         l1_device->l1_size_per_core(),
         l1_reserved,
         L1_SCRATCH_MARGIN);
-    const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
+    // op.l1_end (nonzero): the caller's resident L1 buffers start there, so the CBs end below it.
+    const uint64_t l1_end = op.l1_end != 0 ? std::min<uint64_t>(op.l1_end, l1_device->l1_size_per_core())
+                                           : static_cast<uint64_t>(l1_device->l1_size_per_core());
+    TT_FATAL(
+        l1_end > l1_reserved + L1_SCRATCH_MARGIN,
+        "unified_routed_expert_ffn: l1_end ({}) leaves no L1 above the reserved base ({}) + margin ({})",
+        l1_end,
+        l1_reserved,
+        L1_SCRATCH_MARGIN);
+    const uint64_t l1_budget = l1_end - l1_reserved - L1_SCRATCH_MARGIN;
 
     // Fit (per_core_M, in0_block_w_gu) to the real L1 budget. Candidate widths are
     // divisors of K_gate_tiles no wider than the request, largest first; candidate
@@ -863,6 +914,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         make_cb(CB_UP_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
         make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/per_core_N_d, bias_tile_size);
     }
+    if (has_zero_row) {
+        make_cb(CB_ZERO_ROW, tt::DataFormat::Float16_b, /*tiles=*/1, rm_out_row_bytes);
+    }
+    if (op.x_indexed) {
+        make_cb(
+            CB_X_ROW_IDX,
+            tt::DataFormat::UInt32,
+            /*tiles=*/1,
+            per_core_M * TILE * static_cast<uint32_t>(sizeof(uint32_t)));
+    }
 
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
@@ -928,6 +989,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // kernels' read coalescing only — both layouts run the same code path.
         gu_shard_w,  // 34
         d_shard_w,   // 35
+        // x_indexed: x row of buffer row r = x_row_index[r] (row-major x only); its scratch CB.
+        static_cast<uint32_t>(op.x_indexed),  // 36
+        CB_X_ROW_IDX,                         // 37
+        // x_indexed: x's row count; an index at or past it is not read (a bad index must not read past x).
+        op.x_indexed ? x_buffer->num_pages() : 0,  // 38
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -955,6 +1021,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
+    }
+    // x_row_index accessor: last in the reader's accessor stream (after the optional bias block).
+    if (op.x_indexed) {
+        tt::tt_metal::TensorAccessorArgs(t.x_row_index->buffer()).append_to(reader_ct_args);
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -1020,6 +1090,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // is ragged (see the program factory). The drain must not wait on tiles the compute
         // kernel never packs.
         d_out_subblock_w_tail,  // 32
+        // ROW_MAJOR output and its zero row (UINT32_MAX: none).
+        static_cast<uint32_t>(op.output_row_major),  // 33
+        op.zero_output_row,                          // 34
+        CB_ZERO_ROW,                                 // 35
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -1146,6 +1220,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // activation and down bias after the down matmul. Validation restricts this to
         // the activations that have that branch.
         compute_defines.emplace_back("FUSE_BIAS", "1");
+    }
+    if (op.output_row_major) {
+        // The down phase packs cb_out untilized, one output tile-row per push.
+        compute_defines.emplace_back("OUT_ROW_MAJOR", "1");
     }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
