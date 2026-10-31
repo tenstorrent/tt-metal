@@ -185,6 +185,7 @@ Tensor pre_gather_transform_tensor(
  *
  * @note This function modifies the output_tensor parameter in-place during transformations
  * @note The function ensures the final tensor shape matches original_lshape through assertion checking
+ * @note Rank-1 results are reshaped straight to the logical shape; squeeze_from_4D cannot drop a tile-padded height.
  */
 Tensor post_gather_transform_tensor(
     const Tensor& index_tensor,
@@ -195,7 +196,9 @@ Tensor post_gather_transform_tensor(
     const auto& input_shape = index_tensor.logical_shape();
     const auto orig_rank = input_shape.rank();
 
-    if (orig_rank <= 4) {
+    if (orig_rank == 1) {
+        output_tensor = ttnn::reshape(output_tensor, input_shape);
+    } else if (orig_rank <= 4) {
         // For tensors of rank 4 and below: first transform back to original representation,
         // then transpose since we have the same shapes as dim referred to at the beginning
         output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);

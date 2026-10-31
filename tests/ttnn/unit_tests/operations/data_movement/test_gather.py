@@ -67,6 +67,7 @@ def test_gather_general(input_shape, index_shape, dim, device):
         ([64, 128, 256], [64, 128, 128], -1),
         ([1, 2048, 1, 64], [1, 2048, 1, 32], -1),
         ([1, 1, 1, 1], [1, 1, 1, 1], -1),
+        ([64], [32], 0),
     ],
 )
 def test_gather_preallocated_output(input_shape, index_shape, dim, device):
@@ -88,6 +89,33 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
     assert ttnn_output.shape == index.shape
 
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim",
+    [
+        ([64], [32], 0),
+        ([64], [32], -1),
+        ([128], [64], 0),
+        ([1000], [500], 0),
+    ],
+)
+def test_gather_rank1(input_shape, index_shape, dim, device):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    input = torch.randn(input_shape, dtype=torch_dtype)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+
+    torch_gather = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(

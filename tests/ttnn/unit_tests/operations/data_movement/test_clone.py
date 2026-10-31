@@ -375,6 +375,19 @@ def test_clone_sharded_tilized_non_rectangular_grid(device):
     )
 
 
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_clone_rejects_non_default_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.clone(tensor, dtype=ttnn.bfloat8_b)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
