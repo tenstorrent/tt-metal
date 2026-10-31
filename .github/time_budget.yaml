@@ -404,10 +404,10 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 206
-    wh_n150: 122
+    wh_n150: 130  # Qwen3-TTS 1.7B frame trace tests (PR #61888)
     wh_n300: 30
     wh_galaxy_perf: 85
-    bh_p150: 43
+    bh_p150: 51  # Qwen3-TTS 1.7B frame trace tests (PR #61888)
     bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
