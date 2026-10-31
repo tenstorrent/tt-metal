@@ -17,17 +17,11 @@ Tensor moreh_mean_backward(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto output_grad_rank = output_grad.logical_shape().rank();
-    auto input_grad_rank = output_grad_rank;
-    if (!keepdim) {
-        if (!dim.has_value()) {
-            // do nothing
-        } else if (std::holds_alternative<int64_t>(dim.value())) {
-            input_grad_rank += 1;
-        } else {
-            auto dims = std::get<ttsl::SmallVector<int64_t>>(dim.value());
-            input_grad_rank += dims.size();
-        }
+    auto input_grad_rank = output_grad.logical_shape().rank();
+    if (input_grad.has_value()) {
+        input_grad_rank = input_grad->logical_shape().rank();
+    } else if (input_grad_shape.has_value()) {
+        input_grad_rank = input_grad_shape->rank();
     }
     ttsl::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input_grad_rank);
     return ttnn::prim::moreh_mean_backward(

@@ -297,3 +297,33 @@ def test_moreh_mean_backward_callback(input_shape_dim, device):
 def test_moreh_mean_backward_create_input_grad(input_shape_dim, keepdim, create_input_grad, device):
     torch.manual_seed(2024)
     run_moreh_mean_backward(input_shape_dim, device, keepdim=keepdim, create_input_grad=create_input_grad)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [3, 4, 5, TILE_HEIGHT * 3 - 15, TILE_WIDTH * 4 - 10],
+        [4, 5, TILE_HEIGHT * 2 - 7, TILE_WIDTH * 3 - 3],
+    ],
+)
+@pytest.mark.parametrize("create_input_grad", [True, False])
+def test_moreh_mean_backward_all_dims_no_keepdim(input_shape, create_input_grad, device):
+    torch.manual_seed(2024)
+    torch_input = torch.rand(input_shape, dtype=torch.float32, requires_grad=True)
+    torch_output = torch.mean(torch_input)
+    torch_output_grad = torch.rand([], dtype=torch.float32)
+    torch_output.backward(torch_output_grad)
+
+    ttnn_output_grad = create_ttnn_tilized_tensor(torch_output_grad.reshape(1, 1), device, ttnn.bfloat16)
+    if create_input_grad:
+        ttnn_input_grad = ttnn.operations.moreh.mean_backward(
+            ttnn_output_grad, dim=None, keepdim=False, input_grad_shape=tuple(input_shape)
+        )
+    else:
+        ttnn_input_grad = create_ttnn_tilized_tensor(torch.empty(input_shape), device, ttnn.bfloat16)
+        ttnn.operations.moreh.mean_backward(ttnn_output_grad, dim=None, keepdim=False, input_grad=ttnn_input_grad)
+    input_grad = ttnn.to_torch(ttnn_input_grad).float()
+
+    # The expected gradient is ~1e-6 per element, so compare relatively: a scaler built from the
+    # output_grad rank is off by orders of magnitude yet still inside an absolute tolerance.
+    assert torch.allclose(torch_input.grad, input_grad, rtol=0.02, atol=0.0)
