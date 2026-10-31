@@ -34,7 +34,8 @@ public:
         const BufferShardingArgs& sharding_args,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
-        bool owns_data);
+        bool owns_data,
+        std::optional<size_t> unique_id = std::nullopt);
 
     static std::shared_ptr<Buffer> create(
         IDevice* device,
@@ -53,6 +54,17 @@ public:
         const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    // Creates a device's buffer of a per-core MeshBuffer. All of them take the MeshBuffer's `unique_id`, so the
+    // allocator and graph tracking see one allocation identified like the MeshBuffer.
+    static std::shared_ptr<Buffer> create_for_mesh_buffer(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args,
+        std::optional<bool> bottom_up,
+        std::optional<SubDeviceId> sub_device_id,
+        size_t unique_id);
 
     std::shared_ptr<Buffer> view(Buffer& self, const BufferRegion& region);
 
@@ -108,6 +120,19 @@ public:
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
+    // Draws a new ID for a Buffer or for the allocation of a MeshBuffer.
+    static size_t allocate_unique_id() { return next_unique_id.fetch_add(1); }
+
+private:
+    static std::shared_ptr<Buffer> create_owning(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args,
+        std::optional<bool> bottom_up,
+        std::optional<SubDeviceId> sub_device_id,
+        std::optional<size_t> unique_id);
 };
 
 }  // namespace tt::tt_metal
