@@ -1,15 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <tt_stl/strong_type.hpp>
-#include <cstdint>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/mesh_trace_id.hpp> moved to <tt-metalium/vocabulary/mesh_trace_id.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-namespace tt::tt_metal::distributed {
-
-// Identifier for a mesh trace.
-using MeshTraceId = ttsl::StrongType<uint32_t, struct MeshTraceIdTag>;
-
-}  // namespace tt::tt_metal::distributed
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>  // IWYU pragma: export
