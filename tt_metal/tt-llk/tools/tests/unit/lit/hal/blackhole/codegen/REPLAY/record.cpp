@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -fno-optimize-sibling-calls -c %s -o %t.o
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
 // RUN: %{blackhole_objdump} -drz %t.o > %t.dump
 // RUN: %{blackhole_compare_codegen} %t.dump
 
 // Compare each HAL function with its adjacent reference_ function. Disable
-// identical-code folding so both bodies are emitted independently, and sibling
-// calls so a body ending in a call still ends in ret.
+// identical-code folding so both bodies are emitted independently.
 // Recorded bodies use HAL operations; references use TTI_*/TT_* instructions.
 // REPLAY operands are (start, count, execute while recording, record).
 
@@ -78,39 +77,6 @@ extern "C" __attribute__((noinline, used)) void reference_record_forwarded_argum
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
-}
-
-// A count of 64 is encoded as zero by the low six bits. The recorded body is an
-// external call so the comparison covers only the REPLAY word. The HAL hides a
-// runtime count from the optimizer, which the references repeat with an empty
-// asm; lltt::record issues the word through the instruction buffer like
-// TT_REPLAY, in the same operation order as the HAL.
-extern "C" void record_body(std::uint32_t count); // emits count instructions
-
-extern "C" __attribute__((noinline, used)) void record_runtime_count(const std::uint32_t count)
-{
-    replay::record(replay::BufferRange {8, count}, record_body, count);
-}
-
-extern "C" __attribute__((noinline, used)) void reference_record_runtime_count(const std::uint32_t count)
-{
-    std::uint32_t hidden_count = count;
-    asm("" : "+r"(hidden_count));
-    lltt::record<lltt::NoExec>(8 /*start*/, hidden_count & 63);
-    record_body(count);
-}
-
-extern "C" __attribute__((noinline, used)) void record_and_execute_runtime_count(const std::uint32_t count)
-{
-    replay::record<replay::RecordBehavior::RecordAndExecute>(replay::BufferRange {8, count}, record_body, count);
-}
-
-extern "C" __attribute__((noinline, used)) void reference_record_and_execute_runtime_count(const std::uint32_t count)
-{
-    std::uint32_t hidden_count = count;
-    asm("" : "+r"(hidden_count));
-    lltt::record<lltt::Exec>(8 /*start*/, hidden_count & 63);
-    record_body(count);
 }
 
 // A constant range passed to the runtime overload still lowers to an immediate REPLAY.

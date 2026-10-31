@@ -8,20 +8,20 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/if-clear-six-ops.cpp 2>&1 | FileCheck %s --check-prefix=IF_CLEAR_SHAPE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/b-without-skip-b.cpp 2>&1 | FileCheck %s --check-prefix=B_PAIR
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/skip-b-without-b.cpp 2>&1 | FileCheck %s --check-prefix=B_PAIR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly-second-end.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-outer-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-inner-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-empty-inner.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly.cpp 2>&1 | FileCheck %s --check-prefix=ANOMALY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly-second-end.cpp 2>&1 | FileCheck %s --check-prefix=ANOMALY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-outer-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=COUNT_WIDTH
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-inner-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=COUNT_WIDTH
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-empty-inner.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_EMPTY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/patch-not-last-op.cpp 2>&1 | FileCheck %s --check-prefix=PATCH_FIELD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/update-empty.cpp 2>&1 | FileCheck %s --check-prefix=UPDATE_EMPTY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/update-duplicate.cpp 2>&1 | FileCheck %s --check-prefix=UPDATE_UNIQUE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runner-count-zero.cpp 2>&1 | FileCheck %s --check-prefix=RUNNER_COUNT
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runner-count-too-large.cpp 2>&1 | FileCheck %s --check-prefix=RUNNER_COUNT
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runner-runtime-mask-count-too-large.cpp 2>&1 | FileCheck %s --check-prefix=RUNNER_COUNT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-count-zero.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-long-count.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-wide-mask.cpp 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-count-zero.cpp 2>&1 | FileCheck %s --check-prefix=OPERATION_COUNT
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-long-count.cpp 2>&1 | FileCheck %s --check-prefix=OPERATION_MASK_HIGH
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-wide-mask.cpp 2>&1 | FileCheck %s --check-prefix=OPERATION_MASK_HIGH
 // clang-format on
 
 // IF_CLEAR_SHAPE: error: static assertion failed: Template 0 MOP if_clear takes {a0}, {a0, b}, {a0, a1, a2, a3} or {a0, a1, a2, a3, b}
@@ -31,9 +31,23 @@
 // UPDATE_UNIQUE: error: static assertion failed: Template 1 MOP update takes each word at most once
 // RUNNER_COUNT: error: static assertion failed: MOP encoded count must fit in 7 bits
 
-// Checks evaluated in a constexpr configuration trap instead of reporting their message.
-// CONSTANT: error: {{.*}}not a constant expression
-// CONSTANT: __builtin_trap
+// Checks evaluated in a constexpr configuration trap instead of reporting their
+// message; the expansion notes name the public call and the check that failed.
+// ANOMALY: in 'constexpr' expansion of 'hal::mop::loop(
+// ANOMALY: in 'constexpr' expansion of '{{.*}}check<assert_no_count_anomaly>
+// ANOMALY: error: '__builtin_trap()' is not a constant expression
+// COUNT_WIDTH: in 'constexpr' expansion of 'hal::mop::loop(
+// COUNT_WIDTH: in 'constexpr' expansion of '{{.*}}check<assert_valid_count>
+// COUNT_WIDTH: error: '__builtin_trap()' is not a constant expression
+// PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}::patch<7>
+// PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}check<assert_patch_reachable>
+// PATCH_EMPTY: error: '__builtin_trap()' is not a constant expression
+// OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}Runner<hal::mop::MopTemplate::Template0>::operation()
+// OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}check<assert_valid_run_count>
+// OPERATION_COUNT: error: '__builtin_trap()' is not a constant expression
+// OPERATION_MASK_HIGH: in 'constexpr' expansion of '{{.*}}Runner<hal::mop::MopTemplate::Template0>::operation()
+// OPERATION_MASK_HIGH: in 'constexpr' expansion of '{{.*}}check<assert_mask_high_unused>
+// OPERATION_MASK_HIGH: error: '__builtin_trap()' is not a constant expression
 
 //--- configs.h
 #pragma once

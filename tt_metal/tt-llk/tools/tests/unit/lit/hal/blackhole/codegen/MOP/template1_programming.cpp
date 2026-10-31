@@ -95,6 +95,86 @@ extern "C" __attribute__((noinline, used)) void reference_program_alternate()
     mop_cfg[8] = OP_ALTERNATE;
 }
 
+extern "C" __attribute__((noinline, used)) void program_end()
+{
+    mop::program(mop::loop(2, mop::loop(3, OP_BODY), OP_END));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_end()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 2;
+    mop_cfg[1] = 3;
+    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
+}
+
+extern "C" __attribute__((noinline, used)) void program_two_ends()
+{
+    mop::program(mop::loop(2, mop::loop(3, OP_BODY), OP_END, OP_SECOND_END));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_two_ends()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 2;
+    mop_cfg[1] = 3;
+    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = OP_SECOND_END;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
+}
+
+extern "C" __attribute__((noinline, used)) void program_start_end()
+{
+    mop::program(mop::loop(2, OP_START, mop::loop(3, OP_BODY), OP_END));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_start_end()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 2;
+    mop_cfg[1] = 3;
+    mop_cfg[2] = OP_START;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
+}
+
+// A last_outer patch leaves last_inner repeating the body op.
+extern "C" __attribute__((noinline, used)) void program_patch_last_outer()
+{
+    mop::program(mop::loop(2, mop::loop(3, OP_BODY)).patch(mop::last_outer, OP_LAST_OUTER));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_patch_last_outer()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 2;
+    mop_cfg[1] = 3;
+    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[3] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_LAST_OUTER;
+    mop_cfg[8] = OP_BODY;
+}
+
 extern "C" __attribute__((noinline, used)) void program_empty_inner()
 {
     mop::program(mop::loop(3, OP_START, mop::loop(0, OP_BODY), OP_END));
