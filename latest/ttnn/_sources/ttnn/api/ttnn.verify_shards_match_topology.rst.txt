@@ -1,8 +1,0 @@
-﻿ttnn.verify\_shards\_match\_topology
-====================================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.verify_shards_match_topology:
-
-.. autooperation:: ttnn.verify_shards_match_topology

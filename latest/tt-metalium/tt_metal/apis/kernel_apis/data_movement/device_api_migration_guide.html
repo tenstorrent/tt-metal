@@ -320,13 +320,7 @@
 <li><p><a class="reference internal" href="#nocoptvals-struct"><span class="std std-ref">NocOptVals Struct</span></a></p></li>
 <li><p><a class="reference internal" href="#circular-buffer-operations"><span class="std std-ref">Circular Buffer Operations</span></a></p></li>
 <li><p><a class="reference internal" href="#semaphore-operations"><span class="std std-ref">Semaphore Operations</span></a></p></li>
-<li>
-<p><a class="reference internal" href="#memory-access"><span class="std std-ref">Memory Access</span></a></p>
-<ul>
-<li><p><a class="reference internal" href="#local-to-local-copies-noc-loopback"><span class="std std-ref">Local-to-Local Copies (NoC Loopback)</span></a></p></li>
-<li><p><a class="reference internal" href="#addressing-a-tensor-by-bank"><span class="std std-ref">Addressing a Tensor by Bank</span></a></p></li>
-</ul>
-</li>
+<li><p><a class="reference internal" href="#memory-access"><span class="std std-ref">Memory Access</span></a></p></li>
 <li><p><a class="reference internal" href="#zeroing-memory"><span class="std std-ref">Zeroing Memory</span></a></p></li>
 </ul>
 </li>
@@ -399,9 +393,9 @@
 <span class="n">mem</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w">              </span><span class="c1">// Array-style access</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="n">mem</span><span class="p">;</span><span class="w">             </span><span class="c1">// Dereference</span>
 <span class="n">mem</span><span class="o">++</span><span class="p">;</span><span class="w">                       </span><span class="c1">// Pointer arithmetic</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">.</span><span class="n">get_address</span><span class="p">();</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code> (like <code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code>) does not expose its raw address; see <a class="reference internal" href="#raw-addresses"><span class="std std-ref">Raw Addresses</span></a>.</p>
 </section>
 <section id="semaphore">
 <h3>
@@ -424,9 +418,7 @@
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">UnicastEndpoint</span></code> - For unicast NoC addresses</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">MulticastEndpoint</span></code> - For multicast NoC addresses</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">PageView(accessor)</span></code> / <code class="docutils literal notranslate"><span class="pre">ShardView(accessor)</span></code> - For a tensor by page id / shard id</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">BankView(accessor)</span></code> - For a tensor by allocator bank: <code class="docutils literal notranslate"><span class="pre">{.bank_id,</span> <span class="pre">.offset_bytes}</span></code>; see <a class="reference internal" href="#addressing-a-tensor-by-bank"><span class="std std-ref">Addressing a Tensor by Bank</span></a></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">AllocatorBank&lt;AllocatorBankType&gt;</span></code> - Legacy raw bank addressing (<code class="docutils literal notranslate"><span class="pre">{.bank_id,</span> <span class="pre">.addr}</span></code> with an absolute bank address), for buffers not bound as a tensor. Prefer <code class="docutils literal notranslate"><span class="pre">BankView</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AllocatorBank&lt;AllocatorBankType&gt;</span></code> - For DRAM/L1 bank addressing</p></li>
 </ul>
 </section>
 </section>
@@ -886,82 +878,12 @@
 <span class="c1">// Navigate through memory</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">mid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset</span><span class="p">;</span><span class="w">           </span><span class="c1">// Offset by elements</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">diff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mid</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">mem</span><span class="p">;</span><span class="w">             </span><span class="c1">// Difference in elements</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mid</span><span class="p">.</span><span class="n">get_address</span><span class="p">();</span><span class="w">     </span><span class="c1">// Get raw address</span>
 
 <span class="c1">// Iteration</span>
 <span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mem</span><span class="p">;</span><span class="w"> </span><span class="n">ptr</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">end</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">ptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="o">*</span><span class="n">ptr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span>
 <span class="p">}</span>
-</pre></div>
-</div>
-</section>
-<section id="raw-addresses">
-<h4>Raw Addresses<a class="headerlink" href="#raw-addresses" title="Permalink to this heading"></a>
-</h4>
-<p><code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code> have no raw-address getter. Instead of extracting the address:</p>
-<ul class="simple">
-<li><p><strong>Element access:</strong> <code class="docutils literal notranslate"><span class="pre">mem[i]</span></code>, <code class="docutils literal notranslate"><span class="pre">*mem</span></code>, <code class="docutils literal notranslate"><span class="pre">mem-&gt;field</span></code>. Use <code class="docutils literal notranslate"><span class="pre">&amp;mem[i]</span></code> where an API needs a <code class="docutils literal notranslate"><span class="pre">T*</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">__atomic_*</span></code> builtins).</p></li>
-<li><p><strong>Pointer arithmetic:</strong> <code class="docutils literal notranslate"><span class="pre">pad.local_mem()</span></code> returns the region as a <code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code>, so <code class="docutils literal notranslate"><span class="pre">pad.local_mem()</span> <span class="pre">+</span> <span class="pre">i</span></code> points at element <code class="docutils literal notranslate"><span class="pre">i</span></code>.</p></li>
-<li><p><strong>NoC transfers:</strong> pass the handle itself as either endpoint, with <code class="docutils literal notranslate"><span class="pre">{.offset_bytes</span> <span class="pre">=</span> <span class="pre">off}</span></code> (bytes). See <a class="reference internal" href="#local-to-local-copies-noc-loopback"><span class="std std-ref">Local-to-Local Copies</span></a> for copies within this core.</p></li>
-</ul>
-</section>
-<section id="local-to-local-copies-noc-loopback">
-<h4>Local-to-Local Copies (NoC Loopback)<a class="headerlink" href="#local-to-local-copies-noc-loopback" title="Permalink to this heading"></a>
-</h4>
-<p>To copy between two buffers in this core’s L1 using the NoC, pass the local handles (<code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code>) directly as both endpoints. Do <strong>not</strong> build a loopback <code class="docutils literal notranslate"><span class="pre">UnicastEndpoint</span></code> from this core’s own coordinates (<code class="docutils literal notranslate"><span class="pre">{.noc_x</span> <span class="pre">=</span> <span class="pre">my_x[...],</span> <span class="pre">.noc_y</span> <span class="pre">=</span> <span class="pre">my_y[...],</span> <span class="pre">.addr</span> <span class="pre">=</span> <span class="pre">...}</span></code>): that needs the raw address, and the handle already says it is local.</p>
-<p>A local handle means “this core’s L1” in either position:</p>
-<ul class="simple">
-<li><p><strong>Local side</strong> (write source / read destination): the handle’s L1 address.</p></li>
-<li><p><strong>NoC side</strong> (read source / write destination): the same region addressed through the NoC from this core, i.e. a loopback.</p></li>
-</ul>
-<p>A <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code> / <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code> can be the local side of such a copy, but not the NoC side.</p>
-<p><strong>Legacy API</strong> (loopback read out of a scratchpad into a CB):</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">pad_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...;</span>
-<span class="n">noc_async_read</span><span class="p">(</span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">my_x</span><span class="p">[</span><span class="n">noc_index</span><span class="p">],</span><span class="w"> </span><span class="n">my_y</span><span class="p">[</span><span class="n">noc_index</span><span class="p">],</span><span class="w"> </span><span class="n">pad_addr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">off</span><span class="p">),</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_id</span><span class="p">),</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">);</span>
-</pre></div>
-</div>
-<p><strong>Avoid</strong> (Device 2.0 API, but hand-built loopback endpoint):</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span><span class="n">UnicastEndpoint</span><span class="p">{},</span><span class="w"> </span><span class="n">dfb</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span>
-<span class="w">               </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_x</span><span class="p">[</span><span class="n">noc</span><span class="p">.</span><span class="n">get_noc_id</span><span class="p">()],</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_y</span><span class="p">[</span><span class="n">noc</span><span class="p">.</span><span class="n">get_noc_id</span><span class="p">()],</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pad_addr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">off</span><span class="p">},</span><span class="w"> </span><span class="p">{});</span>
-</pre></div>
-</div>
-<p><strong>New API:</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">Scratchpad</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">pad</span><span class="p">(</span><span class="n">scratch</span><span class="o">::</span><span class="n">my_pad</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span><span class="n">pad</span><span class="p">,</span><span class="w"> </span><span class="n">dfb</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">off</span><span class="p">},</span><span class="w"> </span><span class="p">{});</span><span class="w">          </span><span class="c1">// pad -&gt; DFB entry</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="p">(</span><span class="n">dfb</span><span class="p">,</span><span class="w"> </span><span class="n">pad</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">off</span><span class="p">});</span><span class="w">         </span><span class="c1">// DFB entry -&gt; pad</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span><span class="n">pad</span><span class="p">,</span><span class="w"> </span><span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">dst_addr</span><span class="p">),</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{});</span><span class="w"> </span><span class="c1">// pad -&gt; any local region</span>
-</pre></div>
-</div>
-</section>
-<section id="addressing-a-tensor-by-bank">
-<h4>Addressing a Tensor by Bank<a class="headerlink" href="#addressing-a-tensor-by-bank" title="Permalink to this heading"></a>
-</h4>
-<p>When a kernel already works in allocator banks (for example the host hands it a bank id and an offset per transfer, as
-DRAM-sharded matmul and reshard do), address the tensor with <code class="docutils literal notranslate"><span class="pre">BankView</span></code>. Pass the bank id and the byte offset <strong>into the
-tensor</strong> in that bank. The bank’s location (an L1 bank’s worker core, or a DRAM bank and its per-bank offset) comes from
-the bank tables, and the tensor’s memory type selects L1 vs DRAM. The kernel never handles the tensor’s base address
-or DRAM coordinates. <code class="docutils literal notranslate"><span class="pre">BankView</span></code> can only be the NoC side of a transfer, and it works with the stateful
-<code class="docutils literal notranslate"><span class="pre">set_async_read_state</span></code> / <code class="docutils literal notranslate"><span class="pre">async_read_with_state</span></code> calls.</p>
-<p><strong>Legacy API:</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...;</span><span class="w">  </span><span class="c1">// tensor base address</span>
-<span class="kt">uint64_t</span><span class="w"> </span><span class="n">src</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr_from_bank_id</span><span class="o">&lt;</span><span class="nb">true</span><span class="o">&gt;</span><span class="p">(</span><span class="n">bank_id</span><span class="p">,</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset</span><span class="p">);</span>
-<span class="n">noc_async_read</span><span class="p">(</span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">l1_dst_addr</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">);</span>
-</pre></div>
-</div>
-<p><strong>Avoid</strong> (Device 2.0 API, but a raw bank address):</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">AllocatorBank</span><span class="o">&lt;</span><span class="n">AllocatorBankType</span><span class="o">::</span><span class="n">DRAM</span><span class="o">&gt;</span><span class="w"> </span><span class="n">bank</span><span class="p">;</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span><span class="n">bank</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">bank_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bank_id</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset</span><span class="p">},</span><span class="w"> </span><span class="p">{});</span>
-</pre></div>
-</div>
-<p><strong>New API:</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">tensor</span><span class="o">::</span><span class="n">in1</span><span class="p">);</span>
-<span class="k">const</span><span class="w"> </span><span class="n">BankView</span><span class="w"> </span><span class="nf">in1_bank</span><span class="p">(</span><span class="n">in1</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read</span><span class="p">(</span><span class="n">in1_bank</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">bank_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bank_id</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">offset</span><span class="p">},</span><span class="w"> </span><span class="p">{});</span>
 </pre></div>
 </div>
 </section>
@@ -1011,12 +933,16 @@ or DRAM coordinates. <code class="docutils literal notranslate"><span class="pre
 <td><p><code class="docutils literal notranslate"><span class="pre">get_write_ptr()</span></code></p></td>
 </tr>
 <tr class="row-odd">
-<td><p><code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code> / <code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code></p></td>
-<td><p>start of the local region</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">get_base_address()</span></code></p></td>
 </tr>
 <tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">get_bank_base_address()</span></code></p></td>
+</tr>
+<tr class="row-odd">
 <td><p><code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code></p></td>
-<td><p>where the handle points</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">get_address()</span></code></p></td>
 </tr>
 </tbody>
 </table>

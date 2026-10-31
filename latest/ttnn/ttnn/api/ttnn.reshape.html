@@ -406,7 +406,6 @@
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: CoreRangeSet, optional
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">skip_padding_fill</span></code>: If False, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is applied to tile padding lanes. If True, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is ignored and tile padding is left as-is. Default is False. Note: this option is silently ignored for <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> outputs because the BF8 typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">skip_padding_fill</span></code>: bool</p>
-<p>Note: <code class="docutils literal notranslate"><span class="pre">UINT16</span></code> TILE input is supported only on the codegen path: input and output interleaved in DRAM or L1, with tiles padded only in the last two dims, and only when one of its TILE programs fits L1; otherwise the call fails. <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code> is ignored on that path.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
