@@ -181,6 +181,23 @@ def snap_index_words(rel_rows, slots, words=8, end_word=0x7FFFFFFF):
     return rec, conv
 
 
+def snap_tile_index_words(rel_rows, slots, tile=32):
+    """QWEN36_PREFILL_SNAP_TILE twin of snap_index_words' conv words: 4 * slots row indices into the untilized last tile
+    rows of a replay's 128-row blocks (gdn/tp.py snap_rows_from_tile: block i's rows 96..127 become rows 32i..32i+31).
+    A snapshot at row offset r (ALIGN-aligned, as the planner places every in-replay point) gathers rows r-3..r-1 =
+    rows 29..31 of block r/128 - 1's last tile row into rows 3k..3k+2; unused entries read row 0."""
+    rel_rows = [int(r) for r in rel_rows]
+    assert len(rel_rows) <= slots, f"{len(rel_rows)} in-replay snapshots exceed the {slots} slots"
+    assert all(r >= ALIGN and r % ALIGN == 0 for r in rel_rows), f"tile gather needs {ALIGN}-aligned rows: {rel_rows}"
+    assert rel_rows == sorted(set(rel_rows)), rel_rows
+    conv = []
+    for r in rel_rows:
+        base = (r // ALIGN - 1) * tile
+        conv += [base + tile - 3, base + tile - 2, base + tile - 1]
+    conv += [0] * (4 * slots - len(conv))
+    return conv
+
+
 def plan_cost(a, b, points, one_segment, big=BIG, chunk=CHUNK, masked_choice=None, table=None):
     """Modelled seconds of a prefill call [a, b) with GDN save points `points` (a < p < b): one_segment=True runs it as
     one segment (in-replay snapshots), False splits it at every point (today's planner). masked_choice(n, start) -> the

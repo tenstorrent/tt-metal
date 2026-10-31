@@ -293,6 +293,27 @@ def prefill_intrace_snap_min_rows():
     buffers are allocated."""
     return int(os.environ.get("QWEN36_PREFILL_INTRACE_SNAP_MIN_ROWS", "0") or 0)
 
+
+_PREFILL_SNAP_TILE = None
+
+
+def prefill_snap_tile_enabled():
+    """QWEN36_PREFILL_SNAP_TILE (default "0"; r67 stack). With QWEN36_PREFILL_GDN_GLUE and QWEN36_PREFILL_INTRACE_SNAP
+    both on, a traced prefill body that takes in-replay snapshots needs the snapshot conv rows (the three conv-input
+    rows before each staged position). "0": they are gathered from the ROW_MAJOR conv input, so such a body keeps the
+    untilize + row-major conv (the merge guard in TPGatedDeltaNet.forward_prefill: GDN_GLUE's conv cut is lost on
+    every snapshot-carrying body, about 261 of 332 us per GDN layer at 8K rows). "1": the glue conv stays and the rows
+    are gathered from the TILE input instead: in-replay snapshot rows sit on 128-row boundaries (prefill_plan.ALIGN),
+    so rows r-3..r-1 are rows 29..31 of the last tile row of 128-row block r/128 - 1; every block's last tile row is
+    sliced (a quarter of the rows, conv columns only), untilized and embedding-gathered (gdn/tp.py
+    snap_rows_from_tile). The same bf16 values, so outputs and snapshots are unchanged. Needs both flags above; no-op
+    otherwise. Read once (the traces capture whichever body is active at warm-up)."""
+    global _PREFILL_SNAP_TILE
+    if _PREFILL_SNAP_TILE is None:
+        _PREFILL_SNAP_TILE = os.environ.get("QWEN36_PREFILL_SNAP_TILE", "0") == "1"
+    return _PREFILL_SNAP_TILE
+
+
 _PREFILL_MASKED_BIG = None
 
 

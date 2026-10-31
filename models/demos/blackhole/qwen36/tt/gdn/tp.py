@@ -315,7 +315,45 @@ def kda_conv_prefill(
     return q, k, v, new_state
 
 
-def kda_conv_prefill_tile(qkv, T, history, taps, widths, actual_start, conv_sel=None):
+SNAP_TILE_BLOCK = 128  # prefill_plan.ALIGN: every in-replay snapshot row offset is a multiple of it
+
+
+def snap_tile_gather_ok(snap, T):
+    """(r67) Whether a prefill body of T rows handed `snap` (QWEN36_PREFILL_INTRACE_SNAP) can keep the
+    QWEN36_PREFILL_GDN_GLUE TILE conv: no snapshot ops, or QWEN36_PREFILL_SNAP_TILE staged the TILE-input gather's rows
+    ("conv_idx_tile") and T is a whole number of 128-row blocks. Otherwise the snapshot rows come from the row-major
+    conv input (TPGatedDeltaNet.forward_prefill's merge guard)."""
+    return snap is None or (snap.get("conv_idx_tile") is not None and T % SNAP_TILE_BLOCK == 0)
+
+
+def snap_rows_from_tile(qkv, T, C, snap_rows_tile, snap_out):
+    """QWEN36_PREFILL_SNAP_TILE: kda_conv_prefill's in-replay snapshot gather, from the TILE conv input.
+
+    qkv: [1, T, >= C] bf16 TILE (T a multiple of 128), conv channels in columns [0, C). A snapshot at row offset r (a
+    multiple of 128, prefill_plan.ALIGN) needs rows r-3..r-1, i.e. rows 29..31 of the last tile row (rows 96..127) of
+    128-row block r/128 - 1. Every block's last tile row is sliced out of a metadata view [T/128, 128, W] (tile-aligned:
+    T/4 rows of the conv columns), untilized, and the rows named by snap_rows_tile ([1, R] uint32, see
+    prefill_plan.snap_tile_index_words) are embedding-gathered into snap_out ([1, R, C] bf16 ROW_MAJOR), exactly as
+    kda_conv_prefill gathers them from its full row-major copy: pure data movement of the same bf16 values."""
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    t = ttnn.TILE_SIZE
+    nb = T // SNAP_TILE_BLOCK
+    assert nb * SNAP_TILE_BLOCK == T, f"snap_rows_from_tile: T={T} is not a multiple of {SNAP_TILE_BLOCK}"
+    blocks = ttnn.reshape(qkv, (nb, SNAP_TILE_BLOCK, qkv.shape[-1]))  # tile-aligned split of the rows: a view of qkv
+    last = ttnn.slice(blocks, (0, SNAP_TILE_BLOCK - t, 0), (nb, SNAP_TILE_BLOCK, C), memory_config=_dram)
+    last_rm = ttnn.to_layout(last, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+    ttnn.deallocate(last)
+    rows = ttnn.embedding(
+        snap_rows_tile, ttnn.reshape(last_rm, (nb * t, C)), layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram
+    )
+    ttnn.copy(rows, snap_out)
+    ttnn.deallocate(rows)
+    ttnn.deallocate(last_rm)
+
+
+def kda_conv_prefill_tile(
+    qkv, T, history, taps, widths, actual_start, conv_sel=None, snap_rows_tile=None, snap_out=None
+):
     """QWEN36_PREFILL_GDN_GLUE: kda_conv_prefill on the projection's TILE output, read in place.
 
     qkv: [1, T, >= C] bf16 TILE (T a multiple of 32) whose conv channels are columns [0, C), C = sum(widths): the q|k|v
@@ -323,7 +361,10 @@ def kda_conv_prefill_tile(qkv, T, history, taps, widths, actual_start, conv_sel=
     walks the padded tile rows), so the untilized ROW_MAJOR copy kda_conv_prefill makes, which the op tilizes right back,
     is skipped. new_state is cut from qkv's last tile row (one 32-row untilize instead of T rows), or selected by conv_sel
     exactly as kda_conv_prefill does. Same q / k / v / new_state values as kda_conv_prefill on qkv[..., :C]; qkv is not
-    freed (the caller owns it). history, taps, widths, actual_start, conv_sel: as kda_conv_prefill."""
+    freed (the caller owns it). history, taps, widths, actual_start, conv_sel: as kda_conv_prefill.
+    snap_rows_tile / snap_out (QWEN36_PREFILL_SNAP_TILE with QWEN36_PREFILL_INTRACE_SNAP; both or neither): the
+    in-replay snapshot conv rows, gathered from the TILE input (snap_rows_from_tile) into the same snap_out rows
+    kda_conv_prefill's snap_rows gather fills."""
     C = sum(widths)
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
     assert qkv.shape[1] == T and T % ttnn.TILE_SIZE == 0, f"kda_conv_prefill_tile: T={T}, qkv {qkv.shape}"
@@ -344,6 +385,8 @@ def kda_conv_prefill_tile(qkv, T, history, taps, widths, actual_start, conv_sel=
     )
     if hist is not history:
         ttnn.deallocate(hist)
+    if snap_rows_tile is not None:
+        snap_rows_from_tile(qkv, T, C, snap_rows_tile, snap_out)
     if conv_sel is not None:
         assert conv_sel.shape[1] == n_hist and conv_sel.shape[-1] == T, (conv_sel.shape, n_hist, T)
         # kda_conv_prefill's exact one-hot row selection, from the same TILE projection values
@@ -2174,13 +2217,16 @@ class TPGatedDeltaNet:
             dtype=ttnn.bfloat16,
         )
 
-    def _kda_conv_prefill_tile(self, qkv, T, conv_state, conv_sel=None):
-        """QWEN36_PREFILL_GDN_GLUE: _kda_conv_prefill through kda_conv_prefill_tile (the TILE projection read in place)."""
+    def _kda_conv_prefill_tile(self, qkv, T, conv_state, conv_sel=None, snap=None):
+        """QWEN36_PREFILL_GDN_GLUE: _kda_conv_prefill through kda_conv_prefill_tile (the TILE projection read in place).
+        snap: as _kda_conv_prefill, but only with QWEN36_PREFILL_SNAP_TILE (its "conv_idx_tile" rows; the caller checks
+        snap_tile_gather_ok): the snapshot conv rows are gathered from the TILE input into _snap_conv_rm."""
         self._ensure_kda_consts()
         history = conv_state if conv_state is not None else self._kda_zero_history
         kd, vd = self.key_dim_tp, self.value_dim_tp
+        snap_kw = {} if snap is None else dict(snap_rows_tile=snap["conv_idx_tile"], snap_out=self._snap_conv_rm)
         return kda_conv_prefill_tile(
-            qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start, conv_sel=conv_sel
+            qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start, conv_sel=conv_sel, **snap_kw
         )
 
     def _prefill_glue_plan(self, T, valid_len, prefill_masks):
@@ -2318,10 +2364,10 @@ class TPGatedDeltaNet:
         # QWEN36_PREFILL_GDN_GLUE: the KDA conv reads the TILE projection directly (no untilize / re-tilize round
         # trip); a DRAM-resident qkvzab (the big chunk) is read in place, so its q/k/v slice copy goes too.
         glue_conv, keep = self._prefill_glue_plan(T, valid_len, prefill_masks)
-        if snap is not None:
-            # merge guard (prefill-r6 GDN glue x tail-planner in-replay snapshots): the snapshot conv rows are gathered
-            # from the ROW_MAJOR conv input, so a snapshot-carrying body keeps the untilize + row-major conv (and no
-            # keep_qkvzab, which hands the whole qkvzab to the conv)
+        if glue_conv and not snap_tile_gather_ok(snap, T):
+            # (r67 merge guard, prefill-r6 GDN glue x tail-planner in-replay snapshots) the snapshot conv rows are
+            # gathered from the ROW_MAJOR conv input: a snapshot-carrying body keeps the untilize + row-major conv, and
+            # no keep_qkvzab either (that hands the whole qkvzab to the conv). QWEN36_PREFILL_SNAP_TILE lifts this.
             glue_conv, keep = False, False
         # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _qkv_mc = ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_rows_ok(T) else None

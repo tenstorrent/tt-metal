@@ -33,6 +33,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     prefill_intrace_snap_enabled,
     prefill_intrace_snap_min_rows,
     prefill_masked_big_enabled,
+    prefill_snap_tile_enabled,
     rope_row_index,
     spec_hostfix_enabled,
     spec_hostset_enabled,
@@ -4743,8 +4744,9 @@ class Qwen36Model:
         """QWEN36_PREFILL_INTRACE_SNAP: allocate the in-replay snapshot buffers with the B=1 scratch (before any trace
         capture; host writes): per GDN layer alloc_snapshot_buffers, plus the two index tensors every traced prefill
         body reads, rec_idx [1, 8] uint32 (the chunk op's snapshot_index page: all "end of list" = no snapshot) and
-        conv_idx [1, 4 * GDN_SNAP_SLOTS] uint32 (the conv-row gather). No-op when off, single device, or a GDN layer
-        lacks the KDA conv (the traced FIR conv has no row-major input to gather from)."""
+        conv_idx [1, 4 * GDN_SNAP_SLOTS] uint32 (the conv-row gather), plus conv_idx_tile (same shape, the TILE-input
+        gather's rows, prefill_plan.snap_tile_index_words) under QWEN36_PREFILL_SNAP_TILE. No-op when off, single
+        device, or a GDN layer lacks the KDA conv (the traced FIR conv has no row-major input to gather from)."""
         if self._gdn_snap is not None or not prefill_intrace_snap_enabled() or self.num_devices <= 1:
             return
         if not self._short_trace_masks_supported():
@@ -4769,6 +4771,11 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 layer.attention.alloc_snapshot_buffers(GDN_SNAP_SLOTS, len(conv))
         self._gdn_snap = {"rec_idx": _idx(rec), "conv_idx": _idx(conv)}
+        # (r67) QWEN36_PREFILL_SNAP_TILE: the TILE-input snapshot gather's rows (GDN_GLUE bodies keep the glue conv)
+        if prefill_snap_tile_enabled():
+            from models.demos.blackhole.qwen36.tt.prefill_plan import snap_tile_index_words
+
+            self._gdn_snap["conv_idx_tile"] = _idx(snap_tile_index_words([], GDN_SNAP_SLOTS))
         self._snap_staged = ()
         self._snap_min_rows = prefill_intrace_snap_min_rows()
         logger.info(
@@ -4814,7 +4821,12 @@ class Qwen36Model:
         rec, conv = snap_index_words(rel_rows, GDN_SNAP_SLOTS)
         rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
         refs = []
-        for words, dev in ((rec, self._gdn_snap["rec_idx"]), (conv, self._gdn_snap["conv_idx"])):
+        staged = [(rec, self._gdn_snap["rec_idx"]), (conv, self._gdn_snap["conv_idx"])]
+        if "conv_idx_tile" in self._gdn_snap:  # (r67) QWEN36_PREFILL_SNAP_TILE
+            from models.demos.blackhole.qwen36.tt.prefill_plan import snap_tile_index_words
+
+            staged.append((snap_tile_index_words(rel_rows, GDN_SNAP_SLOTS), self._gdn_snap["conv_idx_tile"]))
+        for words, dev in staged:
             h = ttnn.from_torch(
                 torch.tensor([words], dtype=torch.int32),
                 dtype=ttnn.uint32,
