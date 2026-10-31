@@ -11,7 +11,8 @@ length of 64 in two chunks of 32 keys, with online softmax across the chunks:
     l' = alpha l + rowsum P;  O' = alpha O + P v_c;  out = O / l
 
 q holds 32 query rows (a decode token's query is one of them; the others are other tokens of the same head), already
-scaled by 1 / sqrt(d) on the host, and k comes in transposed. Each step uses matmul_tiles, reduce (MAX and SUM over
+scaled by 1 / sqrt(d) on the host, and k comes in transposed. The GQA test puts four query heads that share one K / V in
+four rows of q and adds a position mask (MASKED: an additive mask tile per chunk, added to S with add_binary_tile). Each step uses matmul_tiles, reduce (MAX and SUM over
 rows), sub_tiles_bcast_cols, exp_tile, binary_max_tile, the SFPU binary ops, recip_tile and mul_tiles_bcast_cols. The
 running m, l and O and the intermediates live in compute self-loop DFBs. On Quasar every pack to a different DFB is
 preceded by pack_init, and the final m, which nothing reads, is popped after dummy_unpack.
@@ -59,6 +60,10 @@ void kernel_main() {
     load(kt, TensorAccessor(tensor::kt), dt * chunks);
     load(v, TensorAccessor(tensor::v), chunks * dt);
     load(ones, TensorAccessor(tensor::ones), 1);
+#ifdef MASKED
+    DataflowBuffer mask(dfb::mask);
+    load(mask, TensorAccessor(tensor::mask), chunks);
+#endif
     const auto result = TensorAccessor(tensor::result);
     out.wait_front(dt);
     for (uint32_t t = 0; t < dt; ++t) {
@@ -110,6 +115,10 @@ void kernel_main() {
     kt.wait_front(dt * chunks);
     v.wait_front(chunks * dt);
     ones.wait_front(1);
+#ifdef MASKED
+    DataflowBuffer mask(dfb::mask);  // additive: 0 for keys at or before the position, -inf after it
+    mask.wait_front(chunks);
+#endif
 
     for (uint32_t c = 0; c < chunks; ++c) {
         // S = q @ kT[:, c]
@@ -118,6 +127,12 @@ void kernel_main() {
         for (uint32_t k = 0; k < dt; ++k) {
             matmul_tiles(dfb::q, dfb::kt, k, k * chunks + c, 0);
         }
+#ifdef MASKED
+        copy_init(dfb::mask);
+        copy_tile(dfb::mask, c, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+#endif
         tile_regs_commit();
         tile_regs_wait();
         PACK_ONE(0, s, dfb::s);
@@ -259,17 +274,15 @@ void kernel_main() {
     kt.pop_front(dt * chunks);
     v.pop_front(chunks * dt);
     ones.pop_front(1);
+#ifdef MASKED
+    mask.pop_front(chunks);
+#endif
 }
 """
 
 
-def test_generic_spec_op_flash_recompose(device):
-    torch.manual_seed(0)
-    torch_q = (torch.randn(32, D) / D**0.5).bfloat16()
-    torch_k = torch.randn(SEQ, D).bfloat16()
-    torch_v = torch.randn(SEQ, D).bfloat16()
-    scores = torch_q.float() @ torch_k.float().T
-    expected = torch.softmax(scores, dim=-1) @ torch_v.float()
+def run_flash(device, torch_q, torch_k, torch_v, torch_mask=None):
+    """Returns the [32, D] attention output for the 32 query rows of torch_q."""
 
     def tile_tensor(t):
         return ttnn.from_torch(t.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -279,9 +292,14 @@ def test_generic_spec_op_flash_recompose(device):
         "kt": tile_tensor(torch_k.T.contiguous()),
         "v": tile_tensor(torch_v),
         "ones": tile_tensor(torch.ones(32, 32)),
-        "result": tile_tensor(torch.zeros(32, D)),
     }
     inputs = {"q": DT, "kt": DT * CHUNKS, "v": CHUNKS * DT, "ones": 1}
+    defines = {}
+    if torch_mask is not None:
+        tensors["mask"] = tile_tensor(torch_mask)
+        inputs["mask"] = CHUNKS
+        defines["MASKED"] = "1"
+    tensors["result"] = tile_tensor(torch.zeros(32, D))
     loops = {"s": 1, "p": 1, "m": 2, "l": 2, "o": 2 * DT, "alpha": 1}
 
     def dfb(name, num_entries):
@@ -290,6 +308,7 @@ def test_generic_spec_op_flash_recompose(device):
         )
 
     args = {"dt": DT, "chunks": CHUNKS}
+    options = E.KernelSpec.CompilerOptions(defines=defines)
     spec = E.ProgramSpec(
         name="flash_recompose",
         kernels=[
@@ -297,6 +316,7 @@ def test_generic_spec_op_flash_recompose(device):
                 unique_id="dm",
                 source=E.KernelSpec.SourceCode(code=DM_SOURCE),
                 hw_config=E.create_reader_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+                compiler_options=options,
                 dfb_bindings=[E.producer_of(n, n) for n in inputs] + [E.consumer_of("out", "out")],
                 tensor_bindings=[E.TensorBinding(tensor_parameter_name=t, accessor_name=t) for t in tensors],
                 compile_time_args=args,
@@ -305,6 +325,7 @@ def test_generic_spec_op_flash_recompose(device):
                 unique_id="compute",
                 source=E.KernelSpec.SourceCode(code=COMPUTE_SOURCE),
                 hw_config=E.ComputeHardwareConfig(),
+                compiler_options=options,
                 dfb_bindings=[E.consumer_of(n, n) for n in inputs]
                 + [E.producer_of(n, n) for n in loops]
                 + [E.consumer_of(n, n) for n in loops]
@@ -317,5 +338,36 @@ def test_generic_spec_op_flash_recompose(device):
         work_units=[E.WorkUnitSpec(kernels=["dm", "compute"], target_nodes=CORE)],
     )
     E.generic_op(list(tensors.values()), spec, E.ProgramRunArgs(tensor_args=tensors))
+    return ttnn.to_torch(tensors["result"]).float()
 
-    assert_with_pcc(expected, ttnn.to_torch(tensors["result"]).float(), 0.99)
+
+def test_generic_spec_op_flash_recompose(device):
+    torch.manual_seed(0)
+    torch_q = (torch.randn(32, D) / D**0.5).bfloat16()
+    torch_k = torch.randn(SEQ, D).bfloat16()
+    torch_v = torch.randn(SEQ, D).bfloat16()
+    expected = torch.softmax(torch_q.float() @ torch_k.float().T, dim=-1) @ torch_v.float()
+
+    assert_with_pcc(expected, run_flash(device, torch_q, torch_k, torch_v), 0.99)
+
+
+def test_generic_spec_op_flash_recompose_gqa_masked(device):
+    """Decode GQA 4:1: four query heads share one K / V, so they are four rows of q (the other rows are padding), and
+    keys after the token's position are masked out with an additive -inf mask."""
+    heads = 4
+    position = 40  # keys 0..40 are visible; the second chunk is partly masked
+    torch.manual_seed(1)
+    torch_q = torch.zeros(32, D)
+    torch_q[:heads] = torch.randn(heads, D) / D**0.5
+    torch_q = torch_q.bfloat16()
+    torch_k = torch.randn(SEQ, D).bfloat16()
+    torch_v = torch.randn(SEQ, D).bfloat16()
+    key_mask = torch.zeros(SEQ)
+    key_mask[position + 1 :] = float("-inf")
+    scores = torch_q[:heads].float() @ torch_k.float().T + key_mask
+    expected = torch.softmax(scores, dim=-1) @ torch_v.float()
+
+    # One [32, 32] mask tile per chunk, laid out as a [32, SEQ] tensor: every row masks the same keys.
+    torch_mask = key_mask.expand(32, SEQ).contiguous()
+    result = run_flash(device, torch_q, torch_k, torch_v, torch_mask)
+    assert_with_pcc(expected, result[:heads], 0.99)
