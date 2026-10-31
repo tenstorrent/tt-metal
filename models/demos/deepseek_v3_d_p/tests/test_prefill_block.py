@@ -628,6 +628,11 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     return mla_weights, attn_norm_w, ffn_norm_w, None, ffn_weights
 
 
+# Rows per chip that other chunk sizes give: 2,048-token chunks on 8x4 (2,560 would be 80 rows per TP rank, which
+# the indexer refuses) and 2,560-token chunks on 2x4.
+_OTHER_ROWS_PER_CHIP = (256, 1280)
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
@@ -656,9 +661,11 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     ],
     indirect=["mesh_device", "device_params"],
 )
-# Each mesh runs the sequence that gives it the production per-chip shape (640 rows per SP row); the other
-# combinations are skipped in the test body.
-@pytest.mark.parametrize("seq_len", [5120, 1280], ids=["seq5120", "seq1280"])
+# Each mesh runs the sequence that gives it the production per-chip shape (640 rows per SP row), plus the
+# per-chip shapes other chunk sizes give (_OTHER_ROWS_PER_CHIP). The other combinations are skipped in the test body.
+@pytest.mark.parametrize(
+    "seq_len", [5120, 1280, 2048, 2560, 10240], ids=["seq5120", "seq1280", "seq2048", "seq2560", "seq10240"]
+)
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
@@ -678,7 +685,7 @@ def test_glm_prefill_block(
     """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
     sp_factor = mesh_device.shape[0]
     rows_per_chip = seq_len // sp_factor
-    if rows_per_chip != PREFILL_CHUNK_TOKENS_PER_CHIP:
+    if rows_per_chip != PREFILL_CHUNK_TOKENS_PER_CHIP and rows_per_chip not in _OTHER_ROWS_PER_CHIP:
         pytest.skip(f"seq_len {seq_len} on SP={sp_factor} is {rows_per_chip} rows/chip, not a shape under test")
     # Resolve the checkpoint only if it is already on this host: the model_path fixture downloads it
     # otherwise, and the random-weight path below needs nothing.
