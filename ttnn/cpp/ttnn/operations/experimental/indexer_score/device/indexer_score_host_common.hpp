@@ -114,7 +114,12 @@ inline bool rotation_exact_sp_geometry(const operation_attributes_t& args) {
 // (row, col) and rotates over mesh_rows slabs of mesh_cols * chunk_local. 1 everywhere else. The metadata
 // path folds this into the reader's geometry split, so host and device regroup identically.
 inline uint32_t query_geometry_split(const operation_attributes_t& args) {
-    return (args.has_fused_ring() && args.fused_ring->full_mesh) ? args.fused_ring->mesh_cols : 1u;
+    if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
+        return 1u;
+    }
+    // The TP windows run along the inner mesh axis of the tensor-rank order: columns when row-major,
+    // rows when column-major (SP on mesh axis 1).
+    return args.fused_ring->column_major ? args.fused_ring->mesh_rows : args.fused_ring->mesh_cols;
 }
 
 struct QueryGeometryRanks {
@@ -169,7 +174,8 @@ inline uint32_t device_index_for(
 }
 
 // The fused full-mesh ring communicates in snake order while K ownership and causal geometry stay in
-// canonical row-major order. Axis mode keeps the historical identity mapping.
+// canonical row-major order (column-major when full_mesh_outer_axis is 1). Axis mode keeps the historical identity
+// mapping.
 inline uint32_t transport_rank_for(
     const operation_attributes_t& args, const ttnn::MeshCoordinate& coord, const Tensor& q) {
     if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
@@ -184,8 +190,11 @@ inline uint32_t transport_to_tensor_rank(const operation_attributes_t& args, uin
     if (!args.has_fused_ring() || !args.fused_ring->full_mesh) {
         return transport_rank;
     }
-    return ttnn::ccl::snake_ring::row_major_index(
-        transport_rank, args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
+    const auto& fused = *args.fused_ring;
+    return fused.column_major ? ttnn::ccl::snake_ring::column_major_index(
+                                    transport_rank, fused.mesh_rows, fused.mesh_cols, fused.snake_orientation)
+                              : ttnn::ccl::snake_ring::row_major_index(
+                                    transport_rank, fused.mesh_rows, fused.mesh_cols, fused.snake_orientation);
 }
 
 // The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()
