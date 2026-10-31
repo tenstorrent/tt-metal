@@ -121,7 +121,7 @@ void kernel_main() {
     static_assert(G >= 1 && (G * GS == S || (G == 4 && GS == 4 && S == 8)) && D + 1 == GS);
     static_assert(G * out_words <= accept_words);
     static_assert(S <= B && B * 4 <= 1024 && mtp_rows == 7 && chain_row < verify_rows && G <= mtp_rows);
-    static_assert(SR >= 1 && S % SR == 0 && GS % SR == 0);
+    static_assert(SR >= GS && S % SR == 0);  // a group's consecutive slots land in different serial rows
     // The history's slots follow the G chain blocks (in the upload's next row once the blocks fill this one).
     static_assert(chain_relay == 3 + GS && G * cgw <= B && ctrl_drafts + D <= group_words);
     static_assert(G * group_words <= ctrl_words && 3 + 2 * GS <= B && 2 * S <= B && B <= table_rows);
