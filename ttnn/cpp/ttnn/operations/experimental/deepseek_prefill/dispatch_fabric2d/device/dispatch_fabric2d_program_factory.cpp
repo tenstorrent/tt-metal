@@ -33,14 +33,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-// The parts of L1 that have to sit at the same address on every chip, because a sender on one chip writes
-// them on another. The signal header needs one fabric packet header (checked in compute_l1_layout) and the
-// drain sink one word; the gaps are slack.
+// The signal header needs one fabric packet header (checked in compute_l1_layout); the gap is slack.
 constexpr uint32_t PKT_HDR_SIGNAL_OFF = 0x0000;
-constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t QUEUE_OFF = 0x1000;
-static_assert(PKT_HDR_SIGNAL_OFF < DRAIN_SINK_OFF, "drain sink overlaps the signal packet header");
-static_assert(DRAIN_SINK_OFF < QUEUE_OFF, "drain sink overlaps the token queue");
+static_assert(PKT_HDR_SIGNAL_OFF < QUEUE_OFF, "the signal packet header overlaps the token queue");
 
 uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
     return static_cast<uint32_t>(args.device->shape()[static_cast<int32_t>(args.axis)]);
@@ -80,20 +76,21 @@ dspf2d::ScratchGeometry scratch_geometry(const DispatchFabric2dParams& args, uin
         .num_forward = forward_descriptors_per_stream(extent)};
 }
 
+// The stream cores' region runs from the base of the allocator's L1 space, where circular buffers go, so it
+// must end below every L1 allocation on the chip: `l1_floor` is the lowest one.
 L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ScratchGeometry& g, uint32_t sem_floor) {
+    ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ScratchGeometry& g, uint32_t l1_floor) {
     const uint32_t scratch_bytes = dspf2d::scratch_bytes(g);
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
     l.pkt_hdr_signal = base + PKT_HDR_SIGNAL_OFF;
-    l.drain_sink = base + DRAIN_SINK_OFF;
     l.queue = base + QUEUE_OFF;
     l.pkt_hdr_queue = l.queue + dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
     const uint32_t hdr_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     TT_FATAL(
-        PKT_HDR_SIGNAL_OFF + hdr_bytes <= DRAIN_SINK_OFF,
-        "dispatch_fabric2d: a {} B fabric packet header overlaps the drain sink",
+        PKT_HDR_SIGNAL_OFF + hdr_bytes <= QUEUE_OFF,
+        "dispatch_fabric2d: a {} B fabric packet header overlaps the token queue",
         hdr_bytes);
     // One header per entry, the same stride the sender indexes the pool with.
     const uint32_t hdr_queue_bytes = dspf2d::QUEUE_DEPTH * hdr_bytes;
@@ -102,13 +99,13 @@ L1Layout compute_l1_layout(
     l.scratch = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
     const uint32_t end = l.scratch + scratch_bytes;
     TT_FATAL(
-        end <= sem_floor,
-        "dispatch_fabric2d: the L1 layout needs {} B, ending at 0x{:x}, but the global semaphores start at 0x{:x}. "
+        end <= l1_floor,
+        "dispatch_fabric2d: the L1 layout needs {} B, ending at 0x{:x}, but L1 allocations start at 0x{:x}. "
         "The token queue is {} B of it at a {} B token page; the scratch is {} B and grows with "
         "seq_len_per_chip={}, num_routed_experts={}, extent={}, experts_per_chip={} and topk={}.",
         end - base,
         end,
-        sem_floor,
+        l1_floor,
         dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE),
         token_bytes,
         scratch_bytes,
@@ -194,6 +191,14 @@ OwnedBuffer allocate_buffer(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t
 }
 
 }  // namespace
+
+void validate_l1_region(const DispatchFabric2dParams& args, uint32_t token_bytes) {
+    const auto lowest = args.device->lowest_occupied_compute_l1_address();
+    if (lowest.has_value()) {
+        compute_l1_layout(
+            args.device, token_bytes, scratch_geometry(args, ring_extent_of(args)), static_cast<uint32_t>(*lowest));
+    }
+}
 
 tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload_descriptor(
     const DispatchFabric2dParams& args,

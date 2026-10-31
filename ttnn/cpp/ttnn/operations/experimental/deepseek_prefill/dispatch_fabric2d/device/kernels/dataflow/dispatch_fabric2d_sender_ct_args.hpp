@@ -24,7 +24,6 @@ struct SenderCtArgs {
         kQueueAddr,
         kPktHdrQueueAddr,
         kPktHdrSignalAddr,
-        kDrainSinkAddr,
         kBatch,
         kFilledAddr,
         kFreedAddr,
@@ -50,7 +49,6 @@ struct SenderCtArgs {
     uint32_t queue_addr;
     uint32_t pkt_hdr_queue_addr;
     uint32_t pkt_hdr_signal_addr;  // signal_downstream's header, reused by drain_fabric
-    uint32_t drain_sink_addr;
     uint32_t batch;
     uint32_t filled_addr;
     uint32_t freed_addr;
@@ -87,7 +85,6 @@ struct SenderCtArgs {
         queue_addr(l1.queue),
         pkt_hdr_queue_addr(l1.pkt_hdr_queue),
         pkt_hdr_signal_addr(l1.pkt_hdr_signal),
-        drain_sink_addr(l1.drain_sink),
         batch(BATCH),
         filled_addr(plan.queue_filled_addr),
         freed_addr(plan.queue_freed_addr),
@@ -113,7 +110,6 @@ struct SenderCtArgs {
         w[kQueueAddr] = queue_addr;
         w[kPktHdrQueueAddr] = pkt_hdr_queue_addr;
         w[kPktHdrSignalAddr] = pkt_hdr_signal_addr;
-        w[kDrainSinkAddr] = drain_sink_addr;
         w[kBatch] = batch;
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
@@ -148,7 +144,6 @@ struct SenderCtArgs {
         queue_addr(get_compile_time_arg_val(kQueueAddr)),
         pkt_hdr_queue_addr(get_compile_time_arg_val(kPktHdrQueueAddr)),
         pkt_hdr_signal_addr(get_compile_time_arg_val(kPktHdrSignalAddr)),
-        drain_sink_addr(get_compile_time_arg_val(kDrainSinkAddr)),
         batch(get_compile_time_arg_val(kBatch)),
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),

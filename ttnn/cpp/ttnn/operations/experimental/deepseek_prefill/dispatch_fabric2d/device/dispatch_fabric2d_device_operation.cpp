@@ -4,7 +4,9 @@
 
 #include "dispatch_fabric2d_device_operation.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -212,6 +214,13 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_experts_per_tok {} is above {}, the largest top-k this op is validated at",
         args.num_experts_per_tok,
         MAX_EXPERTS_PER_TOK);
+
+    const auto payload_spec = compute_output_specs(args, tensor_args)[0];
+    validate_l1_region(
+        args,
+        tt::round_up(
+            static_cast<uint32_t>(payload_spec.compute_page_size_bytes()),
+            args.device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM)));
 }
 
 void DispatchFabric2dDeviceOperation::validate_on_program_cache_hit(

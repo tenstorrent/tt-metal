@@ -28,4 +28,9 @@ struct DispatchFabric2dProgramFactory {
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
+// The stream cores use a fixed L1 region that the allocator does not own, so every launch, cached or not,
+// checks that no L1 allocation made since has reached down into it. `token_bytes` is the output payload's
+// aligned page size.
+void validate_l1_region(const DispatchFabric2dParams& args, uint32_t token_bytes);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

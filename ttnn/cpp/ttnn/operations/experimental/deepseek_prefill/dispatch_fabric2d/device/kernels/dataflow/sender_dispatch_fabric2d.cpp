@@ -210,14 +210,15 @@ void pump_stream(FabricSender& fabric) {
 // therefore means every payload packet has reached the destination chip. It does not prove the
 // destination DRAM write has finished: the far eRISC may acknowledge when it issues the write.
 //
-// The filler packets are header-only atomic incs of 0 to a drain sink on the downstream chip, because the
-// fabric has no no-op packet. Waiting for a free slot cannot deadlock: the reverse direction uses
-// another eth channel.
+// The filler packets are header-only atomic incs of 0, because the fabric has no no-op packet. They target
+// the downstream stream core's fwd_arrived, which the allocator owns for as long as this program is cached, so
+// a filler that lands after that chip has moved on to other work touches no one else's memory. Waiting for a
+// free slot cannot deadlock: the reverse direction uses another eth channel.
 template <typename FabricSender>
 void drain_fabric(FabricSender& fabric) {
     volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     hdr_drain->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.drain_sink_addr), /*val=*/0, /*flush=*/false});
+        get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.fwd_sem_addr), /*val=*/0, /*flush=*/false});
     for (uint32_t d = 0; d + 1 < fabric.num_buffers_per_channel; d++) {
         fabric.wait_for_empty_write_slot();
         fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_drain, sizeof(PACKET_HEADER_TYPE));

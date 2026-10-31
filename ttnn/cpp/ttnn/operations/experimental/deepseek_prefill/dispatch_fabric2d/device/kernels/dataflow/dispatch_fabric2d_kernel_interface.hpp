@@ -27,7 +27,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 struct L1Layout {
     uint32_t pkt_hdr_signal;
-    uint32_t drain_sink;
     uint32_t queue;          // queue_depth tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_queue;  // one prebuilt packet header per entry
     // The reader's scratch: its copy of the routing tables and its routing index. No other chip
