@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-31 00:45: the wave path serves 8 x 1 M (direct_r5): 8/8 needles, a flat allocator, 69 min for all eight
+
+`needle1m_8_direct_r5` (8 x 1 038 673-token needle prompts, 8 in flight, waves of 8 forced by `GLM53_VLLM_SP_FIRST=0`,
+the paged sparse attention `GLM53_PAGED_SPARSE=1`, overlay 3a331f2a3f9 with the wave's transient release): 8/8
+needles retrieved, TTFT 4153-4183 s for all eight (69 min: every row advances its own prompt 2048 tokens per 8-s
+step, 2.0 K tok/s aggregate = the sequence-parallel rate that serves one prompt in 505 s), 508 wave steps from 8.06 s
+at 16 K to 8.38 s at 1 M (the whole-prefix cost is +4 %), the DRAM allocator flat end to end (3776 / 234 / 215 MiB
+per bank, programs 1502, ~230 MiB per bank to spare; r4 grew 0.34 MiB per bank per wave and OOMed at 555 K), no
+cross-talk. The wave path at 1 M is closed: the 1 GiB whole-prefix copy is gone (the paged op reads the latent cache
+in place, bit-identical to the stock op) and the wave step releases its post-capture transients. Next: the capstone
+(32 resident x 1 M, four waves of 8 interleaved) after `release_r2` and the 45-layer taps gate; then the per-step
+transient memo A/B (7326e2e4b35) and the lone-prompt follow-up (SP compute with the owner-row cache through the
+selected-row push of tt-metal #62997, `row_ownership.md` s.2.5).
+
 ### 2026-10-30 22:55: the paged op cleared the copy walls; the wave path's real leak was the unreleased transient constants
 
 `needle1m_8_direct_r4` (8 x 1 M through waves of 8, `GLM53_PAGED_SPARSE=1`): the paged sparse attention passed every
