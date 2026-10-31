@@ -118,6 +118,37 @@ int main(void)
 #endif
 }
 
+#if defined(ARCH_WORMHOLE) && !defined(COVERAGE)
+// On Wormhole the math and pack TRISCs share one L1 port. Its round-robin arbiter keeps its last grant across
+// kernels (a TRISC soft reset does not clear it), and an L1_TO_L1 kernel settles into one of two access rhythms
+// depending on that grant. So the perf numbers of a kernel depended on which TRISC made the last L1 access in the
+// kernel that ran before it. Here the math TRISC always makes that access: after main it waits for the pack TRISC's
+// completion mailbox (its last L1 store), waits until the pack TRISC runs its end loop from the icache, and then
+// loads one L1 word. The packer is idle by then (tensix_sync in main).
+// This code is in its own section, placed after all other code (sections.ld), and _start jumps to it with an
+// instruction of the same size as the old end loop. So no other code moves, and the kernel timing does not change.
+extern "C" [[noreturn]] __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_profile_instrument_function)) void kernel_end_tail()
+{
+#if defined(LLK_TRISC_MATH)
+    constexpr std::uint32_t PACK_MAILBOX_INDEX = 2;
+    constexpr std::uint64_t SETTLE_CYCLES      = 4096;
+
+    mailbox_t pack_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start) + PACK_MAILBOX_INDEX;
+    while (ckernel::load_blocking(pack_mailbox) != ckernel::KERNEL_COMPLETE)
+    {
+    }
+    const std::uint64_t settle_start = ckernel::read_wall_clock();
+    while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
+    {
+    }
+    (void)ckernel::load_blocking(pack_mailbox);
+#endif
+    for (;;)
+    {
+    }
+}
+#endif
+
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
 {
     do_crt0();
@@ -128,7 +159,11 @@ extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrume
     gcov_dump();
 #endif
 
+#if defined(ARCH_WORMHOLE) && !defined(COVERAGE)
+    kernel_end_tail();
+#else
     for (;;)
     {
     } // Loop forever
+#endif
 }
