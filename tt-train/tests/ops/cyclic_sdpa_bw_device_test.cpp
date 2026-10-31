@@ -3754,3 +3754,491 @@ TEST(CyclicSdpaFwProfileTest, DISABLED_ProfileTheForward) {
     tt::tt_metal::distributed::Finish(device->mesh_command_queue());
     ttml::autograd::ctx().close_device();
 }
+
+// ------------------------------------------------------- transport experiments
+// The paper's chapter 4: what the relay costs in data movement alone, against
+// the same schedule with every row packet through DRAM (Algorithm 1 of the
+// draft), both with the arithmetic compiled out (NO_COMPUTE in the compute
+// kernel; see there) and with it. One compute kernel, one buffer layout, one
+// schedule; the dataflow kernels are what differs.
+namespace {
+
+constexpr const char* kDramReaderPath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
+    "cyclic_sdpa_bw_dram_reader.cpp";
+constexpr const char* kDramWriterPath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
+    "cyclic_sdpa_bw_dram_writer.cpp";
+
+struct TransportConfig {
+    bool dram = false;        // Algorithm 1 (row packets through DRAM, chip-wide barrier) instead of the relay
+    bool compute = true;      // the arithmetic; false keeps only the protocol
+    bool stat_work = true;    // the writer RISC's soft-float statistics
+    uint32_t dram_skip = 0;   // relay only: 1 skips the reloads and their spills, 2 everything after t = 0
+    bool stat_reads = true;   // DRAM variant only: whether L and D are read at all
+    uint32_t repeats = 1;     // the slice run this many times inside one launch
+};
+
+std::string transport_name(const TransportConfig& cfg) {
+    std::string s = cfg.dram ? "DRAM" : "relay";
+    s += cfg.compute ? ", compute" : ", movement only";
+    if (!cfg.stat_work) {
+        s += ", no stat work";
+    }
+    if (cfg.dram_skip == 1) {
+        s += ", no reloads";
+    } else if (cfg.dram_skip == 2) {
+        s += ", nothing after t=0";
+    }
+    if (!cfg.stat_reads) {
+        s += ", no stat reads";
+    }
+    return s;
+}
+
+// The relay's program (run_relay above) with the transport, the arithmetic
+// and the DRAM traffic each a knob. `groups` schedules side by side, one
+// slice each, every group's slice run `cfg.repeats` times in the launch.
+Gradients run_transport(
+    uint32_t C,
+    const Reference& ref,
+    uint32_t grid_w,
+    uint32_t grid_h,
+    uint32_t Bt,
+    uint32_t groups,
+    const TransportConfig& cfg,
+    double* seconds = nullptr,
+    bool read_back = true) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const uint32_t qWt = ref.d / kTile;
+    const uint32_t block_size = get_block_size(qWt, 4U);
+    const uint32_t vWt = ref.d / kTile;
+    const uint32_t rowT = Bt * qWt;
+    const uint32_t valT = Bt * vWt;
+    const uint32_t scoreT = Bt * Bt;
+
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, groups), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, groups), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, groups), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, groups), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.lse_tile, groups), device);
+    const auto u_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.u_tile, groups), device);
+    const xt::xarray<float> zeros = xt::zeros<float>({1u, groups, ref.N, ref.d});
+    const auto grad_query = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    const auto grad_key = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    const auto grad_value = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+
+    auto program = CreateProgram();
+    const auto dev_grid = device->compute_with_storage_grid_size();
+    const uint32_t groups_x = std::max(1u, static_cast<uint32_t>(dev_grid.x) / grid_w);
+    std::vector<CoreCoord> group_origin;
+    std::vector<CoreRange> group_range;
+    for (uint32_t g = 0; g < groups; ++g) {
+        const CoreCoord o{(g % groups_x) * grid_w, (g / groups_x) * grid_h};
+        TT_FATAL(
+            o.x + grid_w <= dev_grid.x && o.y + grid_h <= dev_grid.y,
+            "group at ({}, {}) of {}x{} runs off a {}x{} grid", o.x, o.y, grid_w, grid_h, dev_grid.x, dev_grid.y);
+        group_origin.push_back(o);
+        group_range.emplace_back(o, CoreCoord{o.x + grid_w - 1, o.y + grid_h - 1});
+    }
+    const auto region = CoreRangeSet(group_range);
+
+    const uint32_t bf16_tile = 2 * kTile * kTile;
+    const uint32_t fp32_tile = 4 * kTile * kTile;
+    const auto make_cb = [&](uint32_t index, uint32_t tiles, tt::DataFormat format) {
+        const uint32_t page = (format == tt::DataFormat::Float32) ? fp32_tile : bf16_tile;
+        CreateCircularBuffer(
+            program, region, CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
+    };
+    // The relay's buffers, exactly (see run_relay).
+    make_cb(tt::CBIndex::c_0, 2 * rowT, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_3, 2 * valT, tt::DataFormat::Float16_b);
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2 * Bt * 512, {{tt::CBIndex::c_4, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_4, 512));
+    make_cb(tt::CBIndex::c_5, 4 * Bt, tt::DataFormat::Float32);
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(
+            2 * rowT * fp32_tile,
+            {{tt::CBIndex::c_15, tt::DataFormat::Float32}, {tt::CBIndex::c_17, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_15, fp32_tile)
+            .set_page_size(tt::CBIndex::c_17, fp32_tile));
+    make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_6, 2, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2 * 64, {{tt::CBIndex::c_31, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_31, 64));
+    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(
+            rowT * fp32_tile, {{tt::CBIndex::c_18, tt::DataFormat::Float32}, {tt::CBIndex::c_20, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_18, fp32_tile)
+            .set_page_size(tt::CBIndex::c_20, fp32_tile));
+    make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(
+            valT * fp32_tile, {{tt::CBIndex::c_21, tt::DataFormat::Float32}, {tt::CBIndex::c_23, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_21, fp32_tile)
+            .set_page_size(tt::CBIndex::c_23, fp32_tile));
+    make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_7, 2, tt::DataFormat::Float32);
+
+    const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
+    const uint32_t release_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_imm0_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_imm1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_dq0_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_dq1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t credit_prev_sem = CreateSemaphore(program, region, 0);
+    const uint32_t credit_next_sem = CreateSemaphore(program, region, 0);
+    const uint32_t credit_self_sem = CreateSemaphore(program, region, 0);
+    const uint32_t endpoint1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t endpoint2_sem = CreateSemaphore(program, region, 0);
+
+    std::map<std::string, std::string> dataflow_defines;
+    {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
+        dataflow_defines["L_SEED_SCALE_BITS"] = buf;
+    }
+    if (!cfg.stat_work) {
+        dataflow_defines["NO_STAT_WORK"] = "1";
+    }
+    if (!cfg.dram) {
+        dataflow_defines["ENDPOINT_SYNC"] = "1";
+        if (cfg.dram_skip != 0) {
+            dataflow_defines["DRAM_SKIP"] = std::to_string(cfg.dram_skip);
+        }
+    } else if (!cfg.stat_reads) {
+        dataflow_defines["NO_STAT_READS"] = "1";
+    }
+    std::map<std::string, std::string> compute_defines;
+    compute_defines["L_SEED_SCALE_BITS"] = dataflow_defines["L_SEED_SCALE_BITS"];
+    compute_defines["COLUMN_RESIDENT"] = "1";
+    if (!cfg.dram) {
+        compute_defines["RELEASE_TOKEN"] = "1";
+    }
+    if (!cfg.compute) {
+        compute_defines["NO_COMPUTE"] = "1";
+    }
+
+    KernelHandle reader = 0;
+    KernelHandle writer = 0;
+    if (!cfg.dram) {
+        std::vector<uint32_t> reader_args = {
+            C, qWt, vWt, release_sem, ready_imm0_sem, ready_imm1_sem, ready_dq0_sem,
+            ready_dq1_sem, credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem,
+            endpoint2_sem, Bt};
+        for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query, &grad_key, &grad_value}) {
+            tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
+        }
+        reader = CreateKernel(
+            program, kRelayReaderPath, region,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_args,
+                .defines = dataflow_defines});
+        std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem, Bt};
+        for (const auto* t : {&grad_key, &grad_value}) {
+            tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
+        }
+        writer_args.push_back(ready_imm0_sem);
+        writer_args.push_back(ready_imm1_sem);
+        writer = CreateKernel(
+            program, kRelayWriterPath, region,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_args,
+                .defines = dataflow_defines});
+    } else {
+        std::vector<uint32_t> reader_args = {C, qWt, vWt, release_sem, Bt};
+        for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query, &grad_key, &grad_value}) {
+            tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
+        }
+        reader = CreateKernel(
+            program, kDramReaderPath, region,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_args,
+                .defines = dataflow_defines});
+        std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem, Bt};
+        for (const auto* t : {&grad_key, &grad_value}) {
+            tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
+        }
+        writer = CreateKernel(
+            program, kDramWriterPath, region,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_args,
+                .defines = dataflow_defines});
+    }
+
+    const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(ref.d)));
+    const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
+    const uint32_t exp_bias = std::bit_cast<uint32_t>(127.0F - 0.5F * std::log2(static_cast<float>(ref.d)));
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
+    std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;
+    const auto compute = CreateKernel(
+        program, kComputePath, region,
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .unpack_to_dest_mode = unpack_mode,
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler, exp_bias},
+            .defines = compute_defines});
+
+    const uint32_t slice_count = cfg.repeats;
+    const uint32_t slice_stride = cfg.repeats > 1u ? 0u : 1u;
+    for (uint32_t g = 0; g < groups; ++g) {
+        const auto origin = group_origin[g];
+        const auto logical_of = [&](uint32_t core) {
+            const auto xy = placement_of(C, grid_w, core);
+            return CoreCoord{origin.x + xy.x, origin.y + xy.y};
+        };
+        const auto noc_of_core = [&](uint32_t core) { return device->worker_core_from_logical_core(logical_of(core)); };
+        const auto coordinator = noc_of_core(1);
+        const auto mcast_start = device->worker_core_from_logical_core(origin);
+        const auto mcast_end =
+            device->worker_core_from_logical_core(CoreCoord{origin.x + grid_w - 1, origin.y + grid_h - 1});
+        for (uint32_t c = 1; c <= C; ++c) {
+            const auto core = logical_of(c);
+            std::vector<uint32_t> rt = {
+                c, g, query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
+                grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
+                grad_query.buffer()->address(), grad_key.buffer()->address(), grad_value.buffer()->address()};
+            if (!cfg.dram) {
+                const auto neighbors = snake_neighbors(C, c);
+                const auto prev = noc_of_core(neighbors.prev != kNoCore ? neighbors.prev : c);
+                const auto next = noc_of_core(neighbors.next != kNoCore ? neighbors.next : c);
+                for (const uint32_t v : {static_cast<uint32_t>(prev.x), static_cast<uint32_t>(prev.y),
+                                         static_cast<uint32_t>(next.x), static_cast<uint32_t>(next.y)}) {
+                    rt.push_back(v);
+                }
+                for (uint32_t r = 1; r <= C; ++r) {
+                    const auto rc = noc_of_core(r);
+                    rt.push_back(static_cast<uint32_t>(rc.x));
+                    rt.push_back(static_cast<uint32_t>(rc.y));
+                }
+                rt.push_back(slice_count);
+                rt.push_back(slice_stride);
+                for (const uint32_t v : {1u, 1u, groups, groups, groups, groups, 1u, 0u, 0u}) {
+                    rt.push_back(v);
+                }
+                SetRuntimeArgs(program, reader, core, rt);
+                SetRuntimeArgs(
+                    program, writer, core,
+                    {c, g, grad_key.buffer()->address(), grad_value.buffer()->address(),
+                     static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
+                     static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
+                     static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
+                     c == 1u ? 1u : 0u, slice_count, slice_stride, 1u, 1u, groups, groups, groups, groups, 1u, 0u, 0u});
+            } else {
+                rt.push_back(slice_count);
+                rt.push_back(slice_stride);
+                SetRuntimeArgs(program, reader, core, rt);
+                SetRuntimeArgs(
+                    program, writer, core,
+                    {c, g, grad_key.buffer()->address(), grad_value.buffer()->address(),
+                     static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
+                     static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
+                     static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
+                     c == 1u ? 1u : 0u, slice_count, slice_stride});
+            }
+            SetRuntimeArgs(program, compute, core, {c, slice_count});
+        }
+    }
+
+    auto workload = tt_dist::MeshWorkload();
+    workload.add_program(tt_dist::MeshCoordinateRange(device->shape()), std::move(program));
+    tt_dist::EnqueueMeshWorkload(device->mesh_command_queue(), workload, /*blocking=*/true);
+    if (seconds != nullptr) {
+        *seconds = median_enqueue_seconds(device->mesh_command_queue(), workload, 5);
+    }
+    Gradients out;
+    if (read_back) {
+        out.dQ = ttml::core::to_xtensor(grad_query);
+        out.dK = ttml::core::to_xtensor(grad_key);
+        out.dV = ttml::core::to_xtensor(grad_value);
+    }
+    return out;
+}
+
+void check_dram_variant(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt, uint32_t d) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid_w > grid.x || grid_h > grid.y) {
+        GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
+    }
+    const auto ref = make_reference(2u * C * Bt * kTile, d);
+    const auto relay = run_transport(C, ref, grid_w, grid_h, Bt, 1, TransportConfig{});
+    TransportConfig dram;
+    dram.dram = true;
+    const auto algorithm1 = run_transport(C, ref, grid_w, grid_h, Bt, 1, dram);
+    // Same compute kernel, same order of every accumulation: the two agree to
+    // the bit, so a timing difference between them is the transport's.
+    expect_identical(relay.dQ, algorithm1.dQ, "dQ, Algorithm 1 against the relay");
+    expect_identical(relay.dK, algorithm1.dK, "dK, Algorithm 1 against the relay");
+    expect_identical(relay.dV, algorithm1.dV, "dV, Algorithm 1 against the relay");
+    expect_close(algorithm1.dQ, ref.dQ, 2.5e-2F, "dQ");
+    expect_close(algorithm1.dK, ref.dK, 2.5e-2F, "dK");
+    expect_close(algorithm1.dV, ref.dV, 2.5e-2F, "dV");
+}
+
+}  // namespace
+
+TEST(CyclicSdpaBwTransportTest, Algorithm1MatchesTheRelay) {
+    check_dram_variant(4, 2, 2, 1, 64);
+}
+TEST(CyclicSdpaBwTransportTest, Algorithm1MatchesTheRelayTallBlocks) {
+    check_dram_variant(4, 2, 2, 4, 64);
+}
+TEST(CyclicSdpaBwTransportTest, Algorithm1MatchesTheRelayWiderHead) {
+    check_dram_variant(8, 4, 2, 2, 128);
+}
+
+// Every movement-only variant runs to completion at a small shape, with
+// repeats, so a hang in the protocol shows here and not in a benchmark.
+TEST(CyclicSdpaBwTransportTest, MovementOnlyVariantsComplete) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid.x < 4 || grid.y < 2) {
+        GTEST_SKIP() << "needs a 4x2 region";
+    }
+    const auto ref = make_reference_inputs_only(2u * 8u * 2u * kTile, 64);
+    for (const bool dram : {false, true}) {
+        for (const uint32_t skip : {0u, 1u, 2u}) {
+            if (dram && skip != 0u) {
+                continue;
+            }
+            for (const bool stat_work : {true, false}) {
+                TransportConfig cfg;
+                cfg.dram = dram;
+                cfg.compute = false;
+                cfg.stat_work = stat_work;
+                cfg.dram_skip = skip;
+                cfg.repeats = 3;
+                double seconds = 0.0;
+                run_transport(8, ref, 4, 2, 2, 2, cfg, &seconds, /* read_back */ false);
+                std::cout << "  " << transport_name(cfg) << " x3: " << seconds * 1e6 << " us\n";
+            }
+        }
+    }
+}
+
+// The measurement. Each variant at each shape, once as one pass and once as
+// `TRANSPORT_REPEATS` passes of the same slice inside one launch, so that the
+// per-pass time (the difference over the extra passes) carries no launch
+// overhead. TRANSPORT_SHAPES="C:w:h:Bt:d:groups,..." overrides the shapes.
+TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
+    struct Shape {
+        uint32_t C, w, h, Bt, d, groups;
+    };
+    std::vector<Shape> shapes = {
+        Shape{110, 11, 10, 1, 64, 1},  // 7040 rows
+        Shape{110, 11, 10, 2, 64, 1},  // 14080 rows
+        Shape{110, 11, 10, 4, 64, 1},  // 28160 rows
+        Shape{110, 11, 10, 4, 128, 1},
+        Shape{22, 11, 2, 4, 64, 5},    // the 5632-row chunk shapes, five heads side by side
+        Shape{22, 11, 2, 4, 128, 5},
+        Shape{16, 4, 4, 4, 64, 1},     // the 4096-row ring-step chunk
+    };
+    if (const char* env = std::getenv("TRANSPORT_SHAPES"); env != nullptr && *env != '\0') {
+        shapes.clear();
+        std::stringstream ss(env);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            Shape sh{};
+            if (std::sscanf(item.c_str(), "%u:%u:%u:%u:%u:%u", &sh.C, &sh.w, &sh.h, &sh.Bt, &sh.d, &sh.groups) == 6) {
+                shapes.push_back(sh);
+            }
+        }
+    }
+    uint32_t repeats = 3;
+    if (const char* env = std::getenv("TRANSPORT_REPEATS"); env != nullptr && *env != '\0') {
+        repeats = static_cast<uint32_t>(std::atoi(env));
+    }
+    // TRANSPORT_VARIANTS: a comma-separated subset of the names below.
+    std::string only;
+    if (const char* env = std::getenv("TRANSPORT_VARIANTS"); env != nullptr) {
+        only = env;
+    }
+    const auto wanted = [&](const std::string& key) {
+        return only.empty() || only.find(key) != std::string::npos;
+    };
+    std::vector<std::pair<std::string, TransportConfig>> variants;
+    {
+        TransportConfig c;
+        variants.emplace_back("relay-full", c);
+        c.dram = true;
+        variants.emplace_back("dram-full", c);
+        c = TransportConfig{};
+        c.compute = false;
+        variants.emplace_back("relay-move", c);
+        c.stat_work = false;
+        variants.emplace_back("relay-move-nostat", c);
+        c.dram_skip = 1;
+        variants.emplace_back("relay-move-nostat-noreload", c);
+        c.dram_skip = 2;
+        variants.emplace_back("relay-move-nostat-nodram", c);
+        c = TransportConfig{};
+        c.dram = true;
+        c.compute = false;
+        variants.emplace_back("dram-move", c);
+        c.stat_work = false;
+        variants.emplace_back("dram-move-nostat", c);
+        c.stat_reads = false;
+        variants.emplace_back("dram-move-nostat-nostatreads", c);
+    }
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    std::printf("transport bench: median of 5 enqueues; per pass = (x%u - x1) / %u\n", repeats, repeats - 1u);
+    std::printf("%-6s %-3s %-4s %-7s %-32s %12s %12s %12s\n", "C", "Bt", "d", "groups", "variant", "x1 us", "xR us", "per pass us");
+    for (const auto s : shapes) {
+        if (s.w > grid.x || s.h > grid.y) {
+            continue;
+        }
+        const uint32_t N = 2u * s.C * s.Bt * kTile;
+        const auto ref = make_reference_inputs_only(N, s.d);
+        for (const auto& [name, base] : variants) {
+            if (!wanted(name)) {
+                continue;
+            }
+            TransportConfig cfg = base;
+            cfg.repeats = 1;
+            double once = 0.0;
+            run_transport(s.C, ref, s.w, s.h, s.Bt, s.groups, cfg, &once, /* read_back */ false);
+            cfg.repeats = repeats;
+            double many = 0.0;
+            run_transport(s.C, ref, s.w, s.h, s.Bt, s.groups, cfg, &many, /* read_back */ false);
+            const double per_pass = (many - once) / static_cast<double>(repeats - 1u);
+            std::printf(
+                "%-6u %-3u %-4u %-7u %-32s %12.1f %12.1f %12.1f\n", s.C, s.Bt, s.d, s.groups, name.c_str(), once * 1e6,
+                many * 1e6, per_pass * 1e6);
+            std::fflush(stdout);
+        }
+    }
+}

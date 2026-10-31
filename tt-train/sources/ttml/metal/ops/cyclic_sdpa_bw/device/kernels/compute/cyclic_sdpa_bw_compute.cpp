@@ -138,6 +138,19 @@
 #define DENSE_MODE 0
 #endif
 
+// NO_COMPUTE: a measurement mode that keeps every wait, reserve, push and pop
+// this kernel makes on a buffer it shares with the dataflow kernels, in the
+// same order, and removes every arithmetic pass; what is left of a launch is
+// the time its data takes to move. One single-tile copy stays wherever the
+// relay's timing depends on this kernel having *received* something before
+// the dataflow side may send it on (the dQ seed before the updated dQ, the
+// column seeds before the handover): only an instruction that reads a source
+// register orders the unpack thread's waits before the pack thread's pushes.
+// See no_compute_main below.
+#ifndef NO_COMPUTE
+#define NO_COMPUTE 0
+#endif
+
 #if DENSE_MODE
 constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
 #else
@@ -699,11 +712,112 @@ void transpose_key_block() {
 #define DeviceZoneScopedN(name)
 #endif
 
+#if NO_COMPUTE
+static_assert(COLUMN_RESIDENT == 1, "NO_COMPUTE follows the column-resident protocol only");
+
+namespace {
+// One tile from cb into DST and out of the registers again: the smallest
+// operation that orders the pack thread's later pushes behind the unpack
+// thread's wait on cb. Nothing is packed.
+void touch_one_tile(const uint32_t cb) {
+    reconfig_data_format_srca(cb);
+    copy_init(cb);
+    tile_regs_acquire();
+    copy_tile(cb, 0, /* register idx */ 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
+}
+}  // namespace
+
+// The protocol of kernel_main with the arithmetic removed. Buffers internal
+// to this kernel (K^T, P^T, dS^T, the column accumulators) are not touched.
+void no_compute_main(const uint32_t my_core, const uint32_t slice_count) {
+    using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
+    constexpr CyclicSchedule sched(kCores, kMaskMode);
+    constexpr uint32_t kTimesteps = sched.num_timesteps();
+    const auto owned = sched.owned_columns(my_core);
+    bool visited[2] = {false, false};
+    bool column_seeded = false;
+
+    compute_kernel_hw_startup(cb_query, cb_key, cb_attention_weights);
+    cb_wait_front(cb_attn_mask, 2);
+    cb_wait_front(cb_ones_column, onetile);
+
+    for (uint32_t s = 0; s < slice_count; ++s) {
+        visited[0] = false;
+        visited[1] = false;
+        for (uint32_t t = 0; t < kTimesteps; ++t) {
+            const auto pair = sched.pair(my_core, t);
+            const uint32_t g = s * kTimesteps + t;
+            const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != pair.j);
+            const bool column_ends = (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
+            const uint32_t owned_slot = (pair.j == owned.first) ? 0u : 1u;
+            if (column_changed && g > 0u) {
+                cb_pop_front(cb_key, Bt * qWt);
+                cb_pop_front(cb_value, Bt * vWt);
+            }
+            if (column_changed) {
+                cb_wait_front(cb_key, Bt * qWt);  // transpose_key_block's wait
+                column_seeded = visited[owned_slot] || SEED_COLUMN_GRADIENTS;
+                visited[owned_slot] = true;
+            }
+            // WAIT-PACKET
+            cb_wait_front(cb_query, Bt * qWt);
+            cb_wait_front(cb_key, Bt * qWt);
+            cb_wait_front(cb_value, Bt * vWt);
+            cb_wait_front(cb_grad_output, Bt * vWt);
+            cb_wait_front(cb_neg_lse_row, Bt);
+            cb_wait_front(cb_neg_u_row, Bt);
+            cb_wait_front(cb_neg_lse_rem, Bt);
+            cb_wait_front(cb_neg_u_rem, Bt);
+            // UPDATE-DQ: the seed in, the "updated" packet out, in place.
+            cb_wait_front(cb_grad_query_seed, Bt * qWt);
+            cb_reserve_back(cb_grad_query_out, Bt * qWt);
+            touch_one_tile(cb_grad_query_seed);
+            cb_push_back(cb_grad_query_out, Bt * qWt);
+            cb_pop_front(cb_grad_query_seed, Bt * qWt);
+            // HANDOVER of the column gradients at the interval's end.
+            if (column_ends) {
+                if (column_seeded) {
+                    cb_wait_front(cb_grad_value_seed, Bt * vWt);
+                    cb_wait_front(cb_grad_key_seed, Bt * qWt);
+                    touch_one_tile(cb_grad_key_seed);
+                }
+                cb_reserve_back(cb_grad_value_out, Bt * vWt);
+                cb_push_back(cb_grad_value_out, Bt * vWt);
+                cb_reserve_back(cb_grad_key_out, Bt * qWt);
+                cb_push_back(cb_grad_key_out, Bt * qWt);
+                if (column_seeded) {
+                    cb_pop_front(cb_grad_value_seed, Bt * vWt);
+                    cb_pop_front(cb_grad_key_seed, Bt * qWt);
+                }
+            }
+            // T-POPS
+            cb_pop_front(cb_query, Bt * qWt);
+            cb_pop_front(cb_grad_output, Bt * vWt);
+            cb_pop_front(cb_neg_lse_row, Bt);
+            cb_pop_front(cb_neg_u_row, Bt);
+            cb_pop_front(cb_neg_lse_rem, Bt);
+            cb_pop_front(cb_neg_u_rem, Bt);
+#if RELEASE_TOKEN
+            cb_reserve_back(cb_slot_release, 1);
+            cb_push_back(cb_slot_release, 1);
+#endif
+        }
+    }
+}
+#endif  // NO_COMPUTE
+
 void kernel_main() {
     const uint32_t my_core = get_arg_val<uint32_t>(0);
     // Slices this group runs in sequence; see the relay reader. This kernel
     // touches no DRAM, so it needs only the count, not which slices.
     const uint32_t slice_count = get_arg_val<uint32_t>(1);
+#if NO_COMPUTE
+    no_compute_main(my_core, slice_count);
+    return;
+#endif
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     using ttml::metal::ops::cyclic_sdpa_bw::kNoCore;

@@ -45,6 +45,21 @@
 #define DENSE_MODE 0
 #endif
 
+// Measurement knobs, both off in the op. NO_STAT_WORK skips the RISC's
+// soft-float work on the statistics (the block at a streak start, its
+// expansion every timestep) and keeps every handshake, so the compute kernel
+// (in its NO_COMPUTE mode) is fed tiles whose contents nothing reads.
+// DRAM_SKIP removes DRAM traffic from the relay: 1 skips the write-backs that
+// a later visit of the column would reload (the reader skips the matching
+// reloads), 2 skips every write-back. The semaphores and progress words that
+// certify a write-back are still set, so nothing waits forever.
+#ifndef NO_STAT_WORK
+#define NO_STAT_WORK 0
+#endif
+#ifndef DRAM_SKIP
+#define DRAM_SKIP 0
+#endif
+
 #if DENSE_MODE
 constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
 #else
@@ -224,6 +239,7 @@ void kernel_main() {
                 }
                 invalidate_l1_cache();
                 DeviceZoneScopedN("STAT-GATHER");
+#if !NO_STAT_WORK
                 for (uint32_t k = 0; k < Bt; ++k) {
                     cyclic_dataflow::gather_statistic_block(
                         base_lse + slot * stride_interm + k * interm_bytes,
@@ -232,6 +248,7 @@ void kernel_main() {
                         L_SEED_SHIFT_BITS,
                         L_SEED_SCALE_BITS);
                 }
+#endif
                 cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
                 cb_reserve_back(cyclic_dataflow::kStatsDoneCb, 1);
                 cb_push_back(cyclic_dataflow::kStatsDoneCb, 1);
@@ -253,11 +270,13 @@ void kernel_main() {
             const uint32_t urow = get_write_ptr(cb_u_row);
             const uint32_t lrem = get_write_ptr(cb_lse_rem);
             const uint32_t urem = get_write_ptr(cb_u_rem);
+#if !NO_STAT_WORK
             for (uint32_t k = 0; k < Bt; ++k) {
                 cyclic_dataflow::expand_statistic_block(
                     block + k * cyclic_dataflow::kStatBlockBytes, lrow + k * interm_bytes, urow + k * interm_bytes,
                     lrem + k * rem_bytes, urem + k * rem_bytes);
             }
+#endif
             cb_push_back(cb_lse_row, Bt);
             cb_push_back(cb_u_row, Bt);
             cb_push_back(cb_lse_rem, Bt);
@@ -273,8 +292,24 @@ void kernel_main() {
         const bool column_ends =
             (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
         if (column_ends) {
-            write_tiles_by_row(cb_grad_value, grad_value, val_base + (pair.j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
-            write_tiles_by_row(cb_grad_key, grad_key, row_base + (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+            // DRAM_SKIP 1: a write-back that a later interval of this column
+            // would reload is skipped (the reader skips that reload); the
+            // column's final write-back stays. DRAM_SKIP 2: none at all. The
+            // compute kernel's handover is consumed either way.
+            bool revisited = false;
+            for (uint32_t u = t + 1u; u < kTimesteps; ++u) {
+                revisited |= (sched.pair(my_core, u).j == pair.j);
+            }
+            const bool write_back = (DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !revisited);
+            if (write_back) {
+                write_tiles_by_row(cb_grad_value, grad_value, val_base + (pair.j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
+                write_tiles_by_row(cb_grad_key, grad_key, row_base + (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+            } else {
+                cb_wait_front(cb_grad_value, val_tiles);
+                cb_pop_front(cb_grad_value, val_tiles);
+                cb_wait_front(cb_grad_key, row_tiles);
+                cb_pop_front(cb_grad_key, row_tiles);
+            }
         }
 
 #if ENDPOINT_SYNC

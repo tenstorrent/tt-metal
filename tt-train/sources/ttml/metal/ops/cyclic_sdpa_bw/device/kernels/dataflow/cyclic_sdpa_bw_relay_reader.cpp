@@ -118,6 +118,22 @@
 #define DENSE_MODE 0
 #endif
 
+// DRAM_SKIP: a measurement knob, off in the op, that removes DRAM traffic
+// from the relay and leaves everything else -- every forward, credit,
+// readiness tag, endpoint wait and handshake -- as it is. Level 1 skips the
+// reloads: a row packet's load at a later streak start, the spill that
+// precedes it, and the column state and gradients of a column's later
+// interval. Level 2 skips every DRAM read and write after timestep 0. The
+// slot then simply holds what it held, which no measurement reads.
+#ifndef DRAM_SKIP
+#define DRAM_SKIP 0
+#endif
+// Whether a DRAM access happens: never skipped in the op; at level 1 only
+// the reloads are skipped; at level 2 everything after timestep 0.
+constexpr bool dram_access(bool reload, uint32_t t) {
+    return (DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !reload) || (DRAM_SKIP == 2 && t == 0u);
+}
+
 #if DENSE_MODE
 constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
 #else
@@ -449,10 +465,20 @@ void kernel_main() {
         // popped the previous column, which is the paper's rule that all
         // operations using that storage complete before it is reused.
         const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != j);
+        // Whether this interval revisits a column that was resident before:
+        // its state is then a reload (DRAM_SKIP).
+        const bool column_revisit = column_changed && visited[(j == owned_column[0]) ? 0u : 1u];
         if (column_changed) {
             DeviceZoneScopedN("LOAD-COL");
-            read_tiles_by_row(cb_key, key, col_row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
-            read_tiles_by_row(cb_value, value, col_val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+            if (dram_access(column_revisit, t)) {
+                read_tiles_by_row(cb_key, key, col_row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
+                read_tiles_by_row(cb_value, value, col_val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+            } else {
+                cb_reserve_back(cb_key, row_tiles);
+                cb_push_back(cb_key, row_tiles);
+                cb_reserve_back(cb_value, val_tiles);
+                cb_push_back(cb_value, val_tiles);
+            }
         }
 
         // Accumulated column gradients are needed only where an interval
@@ -478,11 +504,18 @@ void kernel_main() {
 #endif
                 WAYPOINT("COLD");
                 DeviceZoneScopedN("LOAD-COL-SEEDS");
-                read_tiles_by_row(
-                    cb_grad_key_seed, grad_key, col_row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
-                read_tiles_by_row(
-                    cb_grad_value_seed, grad_value, col_val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes,
-                    val_tiles);
+                if (dram_access(column_revisit, t)) {
+                    read_tiles_by_row(
+                        cb_grad_key_seed, grad_key, col_row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+                    read_tiles_by_row(
+                        cb_grad_value_seed, grad_value, col_val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes,
+                        val_tiles);
+                } else {
+                    cb_reserve_back(cb_grad_key_seed, row_tiles);
+                    cb_push_back(cb_grad_key_seed, row_tiles);
+                    cb_reserve_back(cb_grad_value_seed, val_tiles);
+                    cb_push_back(cb_grad_value_seed, val_tiles);
+                }
             }
             visited[owned_slot] = true;
         }
@@ -548,7 +581,7 @@ void kernel_main() {
             }
 #endif
             DeviceZoneScopedN("LOAD-IMM-DRAM");
-            if (!prefetched) {
+            if (!prefetched && dram_access(sched.is_later_streak_start(i, t), t)) {
                 for (uint32_t k = 0; k < row_tiles; ++k) {
                     noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
                 }
@@ -643,6 +676,8 @@ void kernel_main() {
             const uint32_t nos = base_grad_output + nslot * stride_grad_output;
             const uint32_t nls = base_lse + nslot * stride_interm;
             const uint32_t nds = base_u_scalar + nslot * stride_interm;
+            const bool next_reload = sched.is_later_streak_start(ni, t + 1u);
+            if (dram_access(next_reload, t + 1u)) {
             for (uint32_t k = 0; k < row_tiles; ++k) {
                 noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, query, nqs + k * tile_bytes);
             }
@@ -652,6 +687,7 @@ void kernel_main() {
             for (uint32_t k = 0; k < Bt; ++k) {
                 noc_async_read_page(stat_base + (ni - 1u) * Bt + k, lse, nls + k * interm_bytes);
                 noc_async_read_page(stat_base + (ni - 1u) * Bt + k, u_scalar, nds + k * interm_bytes);
+            }
             }
             // Complete the reads now and hand L and D to the writer, which
             // has the rest of this timestep to make the statistic tiles.
@@ -676,8 +712,10 @@ void kernel_main() {
             if (sched.dense() && !sched.is_later_streak_start(ni, t + 1u)) {
                 DeviceZoneScopedN("PREFETCH-DQ");
                 const uint32_t ngs = base_grad_query + nslot * stride_grad_query;
+                if (dram_access(next_reload, t + 1u)) {
                 for (uint32_t k = 0; k < row_tiles; ++k) {
                     noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, grad_query, ngs + k * grad_bytes);
+                }
                 }
                 prefetched_dq_next = true;
             }
@@ -694,7 +732,7 @@ void kernel_main() {
             WAYPOINT("DQRD");
         } else {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
-            if (!prefetched_dq) {
+            if (!prefetched_dq && dram_access(sched.is_later_streak_start(i, t), t)) {
                 for (uint32_t k = 0; k < row_tiles; ++k) {
                     noc_async_read_page(row_base + (i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
                 }
@@ -730,11 +768,14 @@ void kernel_main() {
                 get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_dq_sem_id[dst])), u + 1u);
         } else {
             // Streak end: spill dQ_i and complete the write, so the reload at
-            // the next streak start observes it.
-            for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_write_page(row_base + (i - 1u) * row_tiles + k, grad_query, dq_out + k * grad_bytes);
+            // the next streak start observes it. (An inter-streak spill is a
+            // reload's other half for DRAM_SKIP.)
+            if (dram_access(sched.has_later_active(i, t), t)) {
+                for (uint32_t k = 0; k < row_tiles; ++k) {
+                    noc_async_write_page(row_base + (i - 1u) * row_tiles + k, grad_query, dq_out + k * grad_bytes);
+                }
+                noc_async_write_barrier();
             }
-            noc_async_write_barrier();
 #if ENDPOINT_SYNC
             // An inter-streak spill certifies itself for the later streak's
             // reload. By the endpoint spill property this core is 1 or 2, and
