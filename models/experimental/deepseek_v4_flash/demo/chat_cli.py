@@ -357,6 +357,9 @@ class ChatEngine:
     """
 
     chat_format: ChatFormat = V4_CHAT_FORMAT
+    # Held around every packet write. Here they are all on the caller's thread; an engine that writes them
+    # from a thread of its own too (the V4.1 server's) replaces it with a lock.
+    packet_lock = contextlib.nullcontext()
 
     def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
         from transformers import AutoTokenizer

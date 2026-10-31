@@ -25,9 +25,10 @@ A compressed layer attends ``[its ring | the selected rows]``. The selected rows
 gathered by ``fused_lightning_select_kv`` into a buffer every layer of the group shares,
 so in each step the layers have to run in order. Compressed layers decode one user.
 
-SDPA reads a tiled ``[ring | selected]`` buffer the group shares (``sel_tile``). Its selected
-rows are refreshed only by a select; every compressed layer then copies its own tiled ring
-over rows ``[0, window)``.
+The selected rows sit in a tiled ``[ring | selected]`` buffer the group shares (``sel_tile``),
+refreshed only by a select. A single-row step's SDPA (``flash_mqa_decode``) reads the layer's ring
+(its session's slot of it) and ``sel_tile``'s selected rows as two segments; a multi-row step first
+copies the ring over rows ``[0, window)``.
 
 ``decode`` with ``S > 1`` steps ``S`` consecutive positions of one session at once (DSpark's
 parallel verify, ``DSPARK_PARALLEL_VERIFY.md``), equal to ``S`` single-row ``decode`` steps.
@@ -94,12 +95,23 @@ DECODE_LAYOUTS = {
 }
 # ``fused_lightning_select_kv`` scores ``(cur_pos + 1) // 4`` keys whatever the ratio.
 _SELECT_KV_RATE = 4
+# ``flash_mqa_decode``: more S-blocks or 128-row chunks measured no faster; HiFi2 matches HiFi4's PCC.
+_FLASH_MQA_K_CHUNK = 64
+_FLASH_MQA_S_BLOCKS = 8
+_FLASH_MQA_COMPUTE = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=False,
+)
 # A key-split select (``num_parts`` select, ``all_gather``, ``merge_select_kv``) has a fixed cost of
-# its own and loses below ~45k keys (~31k for the candidate source). The split is fixed per layer, so
-# a layer splits only when its maximum key count is past where the split wins averaged over a run
-# from position 0.
+# its own and loses below ~45k keys (~31k for the candidate source): the step crossovers. A caller that
+# fixes the split per layer (``DeepSeekV41Indexer.split_keys``) splits only when its maximum key count is
+# past where the split wins averaged over a run from position 0; the traced decode picks it per position.
 KEY_SPLIT_MIN_KEYS = 80 * 1024
 CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS = 48 * 1024
+KEY_SPLIT_CROSSOVER_KEYS = 45 * 1024
+CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS = 31 * 1024
 
 
 def _rope_tail(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor) -> ttnn.Tensor:
@@ -133,7 +145,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
     best candidate blocks); ``all_gather`` and ``merge_select_kv`` then give every rank the unsplit
     selection. The projections, caches and the merged rows stay replicated. ``split_keys`` turns the
     split off (every rank then scores every key); set it before compiling, e.g. from
-    :func:`key_split_layers`.
+    :func:`key_split_layers`. :meth:`select_kv`'s ``split_keys`` overrides it for one call.
     """
 
     def __init__(self, config, layer_idx: int, weights: dict, device, rot, cache, weight_dtype, tp_size: int = 1):
@@ -199,8 +211,10 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         candidates: bool = False,
         build_pool: bool = False,
         page_row: ttnn.Tensor | None = None,
+        split_keys: bool | None = None,
     ) -> ttnn.Tensor:
-        """V4's :meth:`~DeepSeekV4Indexer.select_kv`, two-level when ``candidates`` is set.
+        """V4's :meth:`~DeepSeekV4Indexer.select_kv`, two-level when ``candidates`` is set, key-split over the
+        ranks when ``split_keys`` (default :attr:`split_keys`).
 
         ``tokens`` / ``q_a`` may hold ``T`` rows of one session (``decode`` with ``S == T``): ``cos_row`` /
         ``sin_row`` are then ROW_MAJOR ``[1, 1, T, Rd]``, ``compress_pos`` ``[T]``, and ``new_row`` /
@@ -220,8 +234,10 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         ``new_row`` therefore needs ``page_row``, also with one session.
         """
         rows = _packed_users(tokens)
+        split = self.split_keys if split_keys is None else split_keys
+        assert not split or self.tp_size > 1, "a key split needs TP ranks to split over"
         assert not candidates or self.is_candidate_source or self.uses_candidates
-        assert rows == 1 or not (candidates or self.split_keys), "a multi-row select is one-level and unsplit"
+        assert rows == 1 or not (candidates or split), "a multi-row select is one-level and unsplit"
         q = self.q_b_proj(_decode_activation(self.q_b_proj, q_a))
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
         w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
@@ -244,7 +260,6 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         key_cache, page_table = scache.idx_key_cache, scache.idx_page_table
         if page_row is not None:
             extra["page_table_row_tensor"] = page_row
-        split = self.split_keys
         # Under a split the merge writes the selected rows and the candidate blocks.
         candidate_outputs = {}
         if candidates and self.is_candidate_source:
@@ -667,12 +682,30 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv, q_a
 
-    def _sdpa(self, q, kv, mask, sdpa_cur_pos, memory_config):
+    def _sdpa(self, q, kv, mask, sdpa_cur_pos, memory_config, sdpa_lengths=None, selected_kv=None):
         """SDPA-decode of ``q`` ``[1, B, H_local, Dh]`` over K == V ``kv`` ``[B or 1, 1, Skv, Dh]``.
 
-        Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[B or 1, 1, 1, Skv]``)
-        bounds the KV axis.
+        Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[B or 1, 1, 1, Skv]``) /
+        ``sdpa_lengths`` bounds the KV axis. ``sdpa_lengths`` (INT32 ``[..., 2 or 3]``, ``B == 1``) attends
+        ``[0]`` ring rows of ``kv`` from row ``[2]`` (0 when absent: a session slot's ring in a shared
+        ``kv``) and the first ``[1]`` selected rows, rows ``window ..`` of ``selected_kv``, with
+        ``flash_mqa_decode``.
         """
+        if sdpa_lengths is not None:
+            return ttnn.experimental.deepseek.flash_mqa_decode(
+                q,
+                kv,
+                sdpa_lengths,
+                selected_kv=selected_kv,
+                selected_row_offset=self.window if selected_kv is not None else 0,
+                ring_rows=self.window,
+                attention_sink=self.sdpa_sinks_tt,
+                scale=self.scaling,
+                k_chunk_size=_FLASH_MQA_K_CHUNK,
+                num_s_blocks=_FLASH_MQA_S_BLOCKS,
+                memory_config=memory_config,
+                compute_kernel_config=_FLASH_MQA_COMPUTE,
+            )
         sdpa_kwargs = dict(
             attention_sink=self.sdpa_sinks_tt,
             scale=self.scaling,
@@ -694,14 +727,14 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             q, kv, kv, is_causal=False, attn_mask=mask, **sdpa_kwargs
         )
 
-    def _attend(self, q, kv, mask, cos, neg_sin, sdpa_cur_pos=None):
+    def _attend(self, q, kv, mask, cos, neg_sin, sdpa_cur_pos=None, sdpa_lengths=None, selected_kv=None):
         """SDPA-decode of packed ``q`` ``[1, 1, B, H_local*Dh]`` over the dense K == V ``kv``, output RoPE,
         then o_a and o_b.
 
         ``B`` is the users, or one session's ``B`` rows (``kv`` ``[B, 1, Skv, Dh]``, row ``j``'s keys at batch
-        ``j``). Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[1 or B, 1, 1, Skv]``)
-        bounds the KV axis. ``cos`` / ``neg_sin`` are :meth:`decode`'s. Returns the block's output on packed
-        rows, ``[1, 1, B, D]``.
+        ``j``). Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[1 or B, 1, 1, Skv]``) /
+        ``sdpa_lengths`` (``B == 1``, with ``selected_kv``, see :meth:`_sdpa`) bounds the KV axis. ``cos`` /
+        ``neg_sin`` are :meth:`decode`'s. Returns the block's output on packed rows, ``[1, 1, B, D]``.
         """
         h, dh = self.local_num_heads, self.head_dim
         batch = _packed_users(q)
@@ -722,7 +755,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         if gathered is not q:
             ttnn.deallocate(q)
         q = ttnn.experimental.view(gathered, [1, batch, h, dh])
-        attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem)
+        attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem, sdpa_lengths=sdpa_lengths, selected_kv=selected_kv)
         # One row per core with its heads side by side, so a per-row RoPE table row covers all of them.
         attn = ttnn.experimental.view(attn, [1, 1, batch, h * dh])
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim, head_dim=dh)
@@ -917,6 +950,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         sliding_pos: ttnn.Tensor,
         sdpa_cur_pos: ttnn.Tensor | None = None,
         mask: ttnn.Tensor | None = None,
+        sdpa_lengths: ttnn.Tensor | None = None,
         cos_win: ttnn.Tensor | None = None,
         sin_win: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
@@ -928,6 +962,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         win_prev: ttnn.Tensor | None = None,
         candidates: bool = False,
         build_pool: bool = False,
+        split_keys: bool | None = None,
         page_row: ttnn.Tensor | None = None,
         ring_offset: ttnn.Tensor | None = None,
         win_offset: ttnn.Tensor | None = None,
@@ -948,14 +983,17 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         The arguments are what :meth:`decode_inputs` builds for a position (``rows=S`` for ``S > 1``,
         where ``pool_rows`` replaces ``pool``). ``pool`` closes a compressor group (``cos_win`` /
         ``sin_win`` its RoPE row, ``entry`` its index); ``select`` re-selects the top-k rows. Exactly
-        one of ``sdpa_cur_pos`` / ``mask`` bounds the KV axis. ``received_entry`` (an index source on a stage without its kv
+        one of ``sdpa_cur_pos`` / ``mask`` / ``sdpa_lengths`` (one row of one user: INT32 ``[..., 2]``,
+        the valid ring rows and selected rows, then with several sessions ``ring_offset``) bounds the KV
+        axis. ``received_entry`` (an index source on a stage without its kv
         source, on a step the source pooled) writes the rows in ``scache.new_kv_row`` /
         ``new_key_row`` at that index before selecting. ``win_prev`` (speculative decode, whose ratio > 1
         windows are deeper than the ratio, see :class:`DeepSeekV41LayerCache`) is the bf16 one-hot
         ``[1, 1, 1, rows]`` of the window slot of position ``pos - 1``, which ``win_slot`` (``pos % rows``)
         no longer implies; a kv source needs it whenever its first row closes a group.
         ``candidates`` makes the select two-level and ``build_pool`` has a consumer build the pool
-        first (see :meth:`DeepSeekV41Indexer.select_kv`).
+        first; ``split_keys`` splits its keys over the ranks, ``None`` as the indexer is set (see
+        :meth:`DeepSeekV41Indexer.select_kv`).
 
         ``page_row`` (INT32 ROW_MAJOR ``[1]``) is the session's slot, its row of every ``idx_page_table``
         (0 with one session). Several sessions (see :class:`DeepSeekV41LayerCache`): ``ring_offset`` /
@@ -964,6 +1002,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         session's logical row.
         """
         b, s, _, d = hidden.shape
+        assert (
+            sdpa_lengths is None or ring_offset is None or sdpa_lengths.shape[-1] >= 3
+        ), "with several sessions sdpa_lengths carries the ring's first row"
         if s > 1:
             assert b == 1, f"S > 1 steps the rows of one session, got B == {b}"
             assert s <= self.window, f"{s} rows would overwrite each other's ring slots"
@@ -987,10 +1028,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             _update_cache_at(scache.kv, kv, sliding_pos)
             ttnn.deallocate(kv)
             ring = scache.kv
-            if ring_offset is not None:
+            if ring_offset is not None and sdpa_lengths is None:
                 ring = scache.ring_view
                 ttnn.fill_cache(ring, scache.kv, 0, input_row_offset_tensor=ring_offset, num_input_rows=ring.shape[2])
-            out = self._attend(q, ring, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+            out = self._attend(q, ring, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, sdpa_lengths=sdpa_lengths)
             return ttnn.reshape(out, [b, s, 1, d])
         assert b == 1, "fused_lightning_select_kv decodes one user"
         if s > 1:
@@ -1044,6 +1085,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 candidates=candidates,
                 build_pool=build_pool,
                 page_row=page_row,
+                split_keys=split_keys,
             )
             if latent is not None:
                 ttnn.deallocate(row)
@@ -1065,6 +1107,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ttnn.deallocate(kv)
             out = self._attend(q, sel, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
             return ttnn.reshape(out, [b, s, 1, d])
+        if sdpa_lengths is not None:
+            out = self._attend(q, scache.kv, None, cos, neg_sin, sdpa_lengths=sdpa_lengths, selected_kv=scache.sel_tile)
+            return ttnn.reshape(out, [b, s, 1, d])
         if ring_offset is None:
             ttnn.fill_cache(scache.sel_tile, scache.kv, 0)
         else:
@@ -1081,7 +1126,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         argument has one entry per row: ``sliding_pos`` / ``win_slot`` / ``index_pos`` / ``sdpa_cur_pos``
         ``[T]``, ``mask`` ``[T, 1, 1, Skv]``, and ``cos_win`` / ``sin_win`` ``[1, 1, n, Rd]`` / ``entry`` ``[n]``
         for the ``n`` groups the rows close. ``cos`` / ``sin`` / ``neg_sin`` are TILE ``[1, 1, 1, Rd]`` for one
-        row and ROW_MAJOR ``[1, 1, T, Rd]`` (one row per position) otherwise. ``rows > 1`` also gives
+        row and ROW_MAJOR ``[1, 1, T, Rd]`` (one row per position) otherwise. One row bounds SDPA with
+        ``sdpa_lengths`` ``[1, 2]`` instead of ``sdpa_cur_pos`` / ``mask``. ``rows > 1`` also gives
         ``ring_rows`` (:meth:`_write_causal_rows`) and ``pool_rows``, the rows that close a group.
         """
         device, window, r = self.device, self.window, self.compress_ratio
@@ -1111,10 +1157,14 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             kw["ring_rows"] = int32_rows(
                 [(pos + i) % window if i <= j else -1 for j in range(rows) for i in range(rows)]
             )
-        if r == 0:
+        counts = [(p + 1) // r for p in positions] if r else [0] * rows
+        selected = [min(n, self.index_topk) for n in counts]
+        if not multi:
+            kw["sdpa_lengths"] = int32_rows([[min(pos + 1, window), selected[0]]])
+        elif r == 0:
             kw["sdpa_cur_pos"] = int32_rows([min(p, window - 1) for p in positions])
+        if r == 0:
             return kw
-        counts = [(p + 1) // r for p in positions]
         if self.is_kv_source:
             closing = tuple(j for j, p in enumerate(positions) if (p + 1) % r == 0)
             if multi:
@@ -1140,7 +1190,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 assert not multi, "the two-level select decodes one row at a time"
                 kw["candidates"] = True
                 kw["build_pool"] = indexer.uses_candidates
-        selected = [min(n, self.index_topk) for n in counts]
+        if not multi:
+            return kw
         if pos >= window - 1:
             kw["sdpa_cur_pos"] = int32_rows([window + s - 1 for s in selected])
         else:
@@ -1193,10 +1244,19 @@ def uses_candidate_pool(config, max_seq: int) -> bool:
     return max_seq // ratio > config.candidate_topk_blocks * config.candidate_block_size
 
 
-def key_split_layers(config, layers, max_seq: int) -> set[int]:
-    """The index sources in ``layers`` that score more than :data:`KEY_SPLIT_MIN_KEYS` keys
-    (:data:`CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS` for the candidate source) within ``max_seq`` tokens.
-    A candidate consumer scores at most the candidate pool."""
+def key_split_layers(
+    config,
+    layers,
+    max_seq: int,
+    min_keys: int = KEY_SPLIT_MIN_KEYS,
+    candidate_source_min_keys: int = CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS,
+) -> set[int]:
+    """The index sources in ``layers`` that score more than ``min_keys`` keys
+    (``candidate_source_min_keys`` for the candidate source) within ``max_seq`` tokens.
+    A candidate consumer scores at most the candidate pool.
+
+    With the ``*_CROSSOVER_KEYS`` thresholds and ``max_seq = pos + 1`` these are the layers whose
+    select at ``pos`` is faster split."""
     source = config.candidate_source_layer_id
     pool_size = config.candidate_topk_blocks * config.candidate_block_size
     split = set()
@@ -1206,11 +1266,7 @@ def key_split_layers(config, layers, max_seq: int) -> set[int]:
         max_keys = max_seq // config.compress_ratios[li]
         if 0 <= source < li:
             max_keys = min(max_keys, pool_size)
-        threshold = (
-            CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS
-            if li == source and uses_candidate_pool(config, max_seq)
-            else KEY_SPLIT_MIN_KEYS
-        )
+        threshold = candidate_source_min_keys if li == source and uses_candidate_pool(config, max_seq) else min_keys
         if max_keys > threshold:
             split.add(li)
     return split
