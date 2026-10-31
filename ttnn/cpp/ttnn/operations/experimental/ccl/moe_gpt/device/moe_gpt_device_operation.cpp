@@ -21,7 +21,13 @@ void MoEGPTDeviceOperation::validate_on_program_cache_hit(
 }
 
 void MoEGPTDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        args.output_width_shard_dim > 0 && args.output_height_shard_dim > 0,
+        "output_width_shard_dim and output_height_shard_dim must be > 0, got {} and {}",
+        args.output_width_shard_dim,
+        args.output_height_shard_dim);
+
     // --- w0_w1 weight tensor validation ---
     // Expected logical shape: (num_cores, L, E, groups_per_core, K, 4*TILE_SIZE)
     const auto& w0_w1_shape = tensor_args.w0_w1_tensor.logical_shape();

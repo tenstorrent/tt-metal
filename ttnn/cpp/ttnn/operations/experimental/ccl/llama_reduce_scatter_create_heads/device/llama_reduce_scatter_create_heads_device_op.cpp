@@ -26,6 +26,7 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_mis
         "ring_devices must be 4 or 2, got {}",
         attributes.ring_devices);
     TT_FATAL(attributes.cross_device_semaphore.has_value(), "Cross device semaphore is not present");
+    TT_FATAL(attributes.num_links > 0, "num_links must be greater than 0");
 
     TT_FATAL(input_tensor.shard_spec().has_value(), "input_tensor must have a shard spec");
     TT_FATAL(

@@ -732,3 +732,61 @@ def test_distributed_group_norm_program_cache_hit(
         for i, (torch_input, tt_out) in enumerate(zip(torch_inputs, outputs)):
             logger.info(f"launch {i} vs torch:")
             assert_quality(torch_model(torch_input), tt_out, pcc=0.999_300)
+
+
+def _full_grid_semaphores(device):
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    return [ttnn.create_global_semaphore(device, cores, 0)]
+
+
+def _tile(device, shape):
+    return ttnn.from_torch(torch.randn(shape).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+
+
+@pytest.mark.parametrize(
+    "channels, num_groups, message",
+    [(64, 0, "num_groups must be >= 1"), (16, 1, r"C \(16\) must be divisible by TILE_WIDTH")],
+    ids=["zero_groups", "channels_not_tile_aligned"],
+)
+def test_dit_fused_distributed_groupnorm_rejects_zero_virtual_cols(device, expect_error, channels, num_groups, message):
+    x = _tile(device, (1, 1, 32, channels))
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.dit_fused_distributed_groupnorm(
+            x,
+            num_groups=num_groups,
+            cluster_axis=1,
+            mesh_device=device,
+            multi_device_global_semaphore=_full_grid_semaphores(device),
+            topology=ttnn.Topology.Linear,
+        )
+
+
+# With more than one virtual column the factory wraps the gamma/beta and mask tile offsets modulo their tile counts.
+@pytest.mark.parametrize(
+    "mask_shape, weight_shape, message",
+    [
+        ((0, 2, 32, 32), None, "input_mask must be non-empty"),
+        ((1, 2, 32, 32), (1, 1, 0, 32), "Weight must be non-empty"),
+    ],
+    ids=["empty_mask", "empty_weight"],
+)
+def test_dit_fused_distributed_groupnorm_rejects_empty_mask_and_affine(
+    device, expect_error, mask_shape, weight_shape, message
+):
+    x = _tile(device, (1, 1, 32, 64))
+    mask = _tile(device, mask_shape)
+    weight = None
+    if weight_shape is not None:
+        weight = ttnn.from_torch(torch.ones(weight_shape).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.dit_fused_distributed_groupnorm(
+            x,
+            num_groups=2,
+            cluster_axis=1,
+            mesh_device=device,
+            multi_device_global_semaphore=_full_grid_semaphores(device),
+            topology=ttnn.Topology.Linear,
+            input_mask=mask,
+            weight=weight,
+        )

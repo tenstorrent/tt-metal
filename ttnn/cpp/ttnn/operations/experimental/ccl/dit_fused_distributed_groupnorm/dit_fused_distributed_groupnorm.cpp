@@ -92,6 +92,13 @@ namespace ttnn::experimental::prim {
 
 DitFusedDistributedGroupnormSizing gn_make_sizing(
     uint32_t num_groups, uint32_t ring_size, uint32_t channels, uint32_t grid_x) {
+    // compute_output_specs reaches this before validate, and compute_num_virtual_cols returns 0 for either case.
+    TT_FATAL(num_groups >= 1, "num_groups must be >= 1");
+    TT_FATAL(
+        channels % tt::constants::TILE_WIDTH == 0,
+        "C ({}) must be divisible by TILE_WIDTH ({})",
+        channels,
+        tt::constants::TILE_WIDTH);
     DitFusedDistributedGroupnormSizing s;
     s.num_groups = num_groups;
     s.is_local = (ring_size <= 1);

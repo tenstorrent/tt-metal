@@ -317,6 +317,9 @@ DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& logical = input.logical_shape();
+    // Runs before validate: the head split and compute_sizing divide by these.
+    TT_FATAL(args.num_heads_per_device >= 1, "num_heads_per_device must be >= 1");
+    TT_FATAL(input.padded_shape()[-1] > 0, "Input width must be greater than 0, got shape {}", input.padded_shape());
 
     std::vector<tt::tt_metal::TensorSpec> specs;
     specs.reserve(2);

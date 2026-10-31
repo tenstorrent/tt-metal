@@ -41,6 +41,14 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
             tensor_args.stats->dtype(),
             fp32_dest_acc_en,
             expected_stats_dtype);
+        const auto& stats_shard_spec = tensor_args.stats->memory_config().shard_spec();
+        TT_FATAL(stats_shard_spec.has_value(), "fused_rms_minimal: stats tensor must be sharded");
+        TT_FATAL(
+            stats_shard_spec->shape[0] * stats_shard_spec->shape[1] >= tt::constants::TILE_HW,
+            "fused_rms_minimal: stats shard {}x{} must hold at least one {}-element tile",
+            stats_shard_spec->shape[0],
+            stats_shard_spec->shape[1],
+            tt::constants::TILE_HW);
     }
 
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");

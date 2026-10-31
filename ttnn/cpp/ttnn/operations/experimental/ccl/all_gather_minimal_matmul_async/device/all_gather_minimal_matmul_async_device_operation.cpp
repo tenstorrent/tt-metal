@@ -178,6 +178,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     const int32_t chunks = attributes.chunks;
     const int32_t dim = attributes.dim;
     TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
+    TT_FATAL(attributes.num_workers_per_link > 0, "num_workers_per_link must be greater than 0");
     TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
 
     const auto& explicit_chunk_sizes = attributes.chunk_sizes;
@@ -387,6 +388,7 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     }
 
     // Per-chunk widths: explicit when given, else the uniform N/chunks split.
+    TT_FATAL(attributes.chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", attributes.chunks);
     const auto chunk_sizes = resolve_chunk_sizes(attributes, N);
     for (const uint32_t chunk_width : chunk_sizes) {
         ttnn::Shape output_shape(in0_input_tensor_shape);

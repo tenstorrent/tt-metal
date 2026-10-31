@@ -288,6 +288,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;
         const uint32_t gx = grid.x;
         const uint32_t gy = grid.y;
+        TT_FATAL(gy > 0, "compute_with_storage_grid_size must be non-zero in both dimensions, got ({}, {})", gx, gy);
         const uint32_t Mt = mm_output_shape[-2] / tt::constants::TILE_HEIGHT;
         const uint32_t Nt = mm_output_shape[-1] / tt::constants::TILE_WIDTH;
         const uint32_t Mt_per_core = (Mt + gy - 1) / gy;
