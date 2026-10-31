@@ -436,4 +436,23 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_asymptotic_exp.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_asymptotic_factor.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_action_coordinate.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_finalize.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_prepare.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_symmetric_constant.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_encoded_domain_finalize.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_polynomial_dual_tile.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_raw_class_policy.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_target_special_policy.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_asymptotic_exp.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_asymptotic_factor.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_action_coordinate.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_finalize.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_prepare.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_domain_symmetric_constant.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_polynomial_dual_tile.inc
+    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfc_bw_bf16_target_special_policy.inc
+    inc/api/compute/erfc_bw.h
 )
