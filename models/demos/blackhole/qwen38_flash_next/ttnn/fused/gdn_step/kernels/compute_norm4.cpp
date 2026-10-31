@@ -31,6 +31,7 @@
 #include "../../kernels/source_reciprocal.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "../../kernels/zones.h"
+#include "rowtrim4.h"
 
 using namespace ckernel;
 
@@ -116,10 +117,10 @@ ALWI void l2_norm(uint32_t base, uint32_t out_cb) {
         tile_regs_acquire();
         copy_tile(CB_STAT, 0, 0);
         if (step == 0) {
-            add_unary_tile(0, EPS_1E6);
+            rowtrim::add_unary<rowtrim::MASKED>(0, EPS_1E6);
         } else {
-            sqrt_tile(0);
-            qwen38_recip_tile(0);
+            rowtrim::sqrt<rowtrim::MASKED>(0);
+            rowtrim::recip<rowtrim::MASKED>(0);
         }
         tile_regs_commit();
         tile_regs_wait();

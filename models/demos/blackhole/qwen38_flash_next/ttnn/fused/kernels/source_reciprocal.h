@@ -105,8 +105,14 @@ inline void qwen38_reciprocal_init() {
 
 namespace ckernel {
 ALWI void qwen38_recip_tile_init() { MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::qwen38_reciprocal_init, (APPROX))); }
-ALWI void qwen38_recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+ALWI void qwen38_recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, int iterations = 8) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, qwen38_calculate_reciprocal, (APPROX, 8, DST_ACCUM_MODE), idst, vector_mode, 8));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        qwen38_calculate_reciprocal,
+        (APPROX, 8, DST_ACCUM_MODE),
+        idst,
+        vector_mode,
+        iterations));
 }
 }  // namespace ckernel

@@ -33,9 +33,31 @@ from .. import program as fp
 from . import conv_split_v as v
 from .conv_split import CONV_ROWS, CONV_TILES, SEM_QK, SEM_V
 
+ROWTRIM_ENV = "QWEN38_GDN_ROWTRIM"  # "1" (default), "0" off, "2" opt-in; see rowtrim_defines
+ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); the default kernels run 8 (rows 0..31)
 SEM_X, SEM_NORM, SEM_GATE = 2, 3, 4
 NORM_Y, GATE_Y = 4, 5
 CB_QROW, CB_KROW, CB_BETA, CB_DECAY = 15, 16, 18, 19
+
+
+def rowtrim_defines(level: str | None = None) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Kernel defines ``(head compute, norm compute)`` of ``QWEN38_GDN_ROWTRIM`` (split 4 only, so rows = 1: row 0 is the
+    only live row).  "0": none, the kernels run today's SFPU ops (VectorMode::RC, 8 iterations).
+    "1" (default): the head cores' SFPU ops whose rows 4.. only feed row-local consumers (o scale, the o rms norm's add / sqrt /
+    recip, the z sigmoid, the gate multiply) run ``ROWTRIM_ITERATIONS`` iterations per face (VectorMode::R).
+    "2" (opt-in, NOT the default): also the ops whose rows 4.. reach the state only through the mask's exactly zero rows (``k^T delta_b``): the
+    head cores' ``v - v_read`` and ``* beta``, and the l2 norm cores' add / sqrt / recip.  decay_state (all state rows
+    live), the gate cores and every FPU op are never changed.  Level 2 is not the default because it is bit-identical only
+    while the dead rows hold finite values (inf or NaN times the mask's 0 is NaN), and dead rows can hold leftover L1 data;
+    level 1 holds for any dead-row value."""
+
+    level = os.environ.get(ROWTRIM_ENV, "1") if level is None else level
+    if level not in ("0", "1", "2"):
+        raise ValueError(f"{ROWTRIM_ENV} must be 0, 1 or 2, got {level!r}")
+    iters = str(ROWTRIM_ITERATIONS)
+    head = [("QWEN38_GDN_ROWTRIM_ITERS", iters)] if level != "0" else []
+    masked = [("QWEN38_GDN_ROWTRIM_MASKED_ITERS", iters)] if level == "2" else []
+    return [*head, *masked], masked
 
 
 def active() -> bool:
@@ -99,6 +121,7 @@ def run_vb4(m, projected, older, newest, taps, constants, norm, recurrent, out):
         reader_cta.extend(fp.accessor_args(tensor))
     writer_cta = [rows, HEADS, vt, vb, *fp.accessor_args(recurrent), *fp.accessor_args(out)]
     defines = [("INP_FLOAT32", "1")]
+    head_trim, norm_trim = rowtrim_defines()
 
     # head CB table: split 2's, with the CBs the helper cores share declared over the cores that share them
     shared = {
@@ -175,7 +198,7 @@ def run_vb4(m, projected, older, newest, taps, constants, norm, recurrent, out):
         head_set,
         [vt],
         [(core(cores_of[i]), [1, i[2]]) for i in items],
-        defines=defines,
+        defines=[*defines, *head_trim],
         **compute_kwargs,
     )
 
@@ -203,7 +226,12 @@ def run_vb4(m, projected, older, newest, taps, constants, norm, recurrent, out):
         defines=defines,
     )
     norm_compute = fp.compute_kernel(
-        fp.kernel_source(m.NAME, "compute_norm4.cpp"), norm_set, [vt], [], defines=defines, **compute_kwargs
+        fp.kernel_source(m.NAME, "compute_norm4.cpp"),
+        norm_set,
+        [vt],
+        [],
+        defines=[*defines, *norm_trim],
+        **compute_kwargs,
     )
 
     # gate cores: core (h, 5) for value head h

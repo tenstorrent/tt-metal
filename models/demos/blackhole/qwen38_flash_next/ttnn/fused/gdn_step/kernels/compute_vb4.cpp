@@ -30,6 +30,7 @@
 #include "../../kernels/source_reciprocal.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "../../kernels/zones.h"
+#include "rowtrim4.h"
 
 using namespace ckernel;
 
@@ -134,7 +135,7 @@ ALWI void recurrence_rest() {
         copy_init(CB_VREAD);
         copy_tile(CB_VREAD, j, 1);
         sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0);
+        rowtrim::sub_binary<rowtrim::MASKED>(0, 1, 0);
         reconfig_data_format_srca(CB_MASK);
         copy_init(CB_MASK);
         copy_tile(CB_MASK, 0, 1);
@@ -143,7 +144,7 @@ ALWI void recurrence_rest() {
         reconfig_data_format_srca(CB_BETA);
         copy_init(CB_BETA);
         copy_tile(CB_BETA, 0, 1);
-        mul_binary_tile(0, 1, 0);
+        rowtrim::mul_binary<rowtrim::MASKED>(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, CB_DELTAB);
@@ -214,7 +215,7 @@ ALWI void recurrence_rest() {
     }
     binop_with_scalar_tile_init();
     for (uint32_t j = 0; j < VT; ++j) {
-        mul_unary_tile(j, QK_SCALE);
+        rowtrim::mul_unary<rowtrim::LOCAL>(j, QK_SCALE);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -261,9 +262,9 @@ ALWI void gated_norm(uint32_t s) {
     for (uint32_t j = 0; j < HT; ++j) {
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(CB_SQO, CB_SCALER, j, 1, 0);
     }
-    add_unary_tile(0, EPS_1E6);
-    sqrt_tile(0);
-    qwen38_recip_tile(0);
+    rowtrim::add_unary<rowtrim::LOCAL>(0, EPS_1E6);
+    rowtrim::sqrt<rowtrim::LOCAL>(0);
+    rowtrim::recip<rowtrim::LOCAL>(0);
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(CB_RS, 1);
@@ -314,7 +315,7 @@ ALWI void gated_norm(uint32_t s) {
     for (uint32_t j = 0; j < VT; ++j) {
         tile_regs_acquire();
         copy_tile(CB_Z, j, 0);
-        sigmoid_tile<VectorMode::RC, false>(0);
+        rowtrim::sigmoid<rowtrim::LOCAL>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, CB_SIG);
@@ -336,7 +337,7 @@ ALWI void gated_norm(uint32_t s) {
         reconfig_data_format_srca(CB_SIG);
         copy_init(CB_SIG);
         copy_tile(CB_SIG, j, 1);
-        mul_binary_tile(0, 1, 0);
+        rowtrim::mul_binary<rowtrim::LOCAL>(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, CB_OUTG);
