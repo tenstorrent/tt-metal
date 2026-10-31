@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "update_padded_kv_cache_device_operation.hpp"
+#include "kernels/paged_kv_table.hpp"
+#include "paged_kv_table_validation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
 
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -90,6 +93,35 @@ constexpr uint32_t kMetaCbIndex = 1;
 // would race the writer's own metadata reads.
 constexpr uint32_t kReaderMetaCbIndex = 2;
 constexpr uint32_t kMetadataBytes = 16;
+// L1 table windows of the request's page-table row (paged cache only).
+constexpr uint32_t kPagedKvTableCbIndex = 4;
+
+namespace paged_kv = ttnn::operations::experimental::paged_kv;
+
+// Structural checks of a paged write, on both the cache-miss and cache-hit paths. The page size is the pool's seq dim.
+void validate_paged(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& cache = tensor_args.cache;
+    paged_kv::validate_paged_kv_table(*tensor_args.paged_kv_table, cache);
+    paged_kv::validate_page_pool(cache);
+    TT_FATAL(
+        !tensor_args.rope.has_value() && !tensor_args.scales.has_value(),
+        "a paged cache supports the plain copy path only (no rope / scales)");
+    // Page ownership is defined over the SP coordinates of one cluster axis (paged_kv_table.hpp); neither the
+    // TP-deduped nor the complete-mesh placement maps onto it.
+    TT_FATAL(!args.tp_axis.has_value(), "a paged cache does not support tp_axis");
+    TT_FATAL(args.cluster_axis.has_value(), "a paged cache requires an explicit cluster_axis");
+    // A page must not straddle chips: block-cyclic placement keeps each chip's chunk_local run contiguous. With an
+    // input row window, the window is the chunk.
+    const uint32_t page_size = cache.padded_shape()[-2];
+    const uint32_t chunk_local = written_input_rows(args, tensor_args.input.padded_shape()[-2]);
+    TT_FATAL(
+        chunk_local % page_size == 0,
+        "per-chip chunk ({}) must be a whole number of {}-token pages",
+        chunk_local,
+        page_size);
+}
 
 // The window offset is not hashed, so its bounds are checked on every call, before anything divides by the
 // window's rows.
@@ -154,6 +186,10 @@ void validate_runtime_args(
         "layer_idx {} out of range for num_layers {}",
         args.layer_idx,
         args.num_layers);
+    const bool paged = tensor_args.paged_kv_table.has_value();
+    if (paged) {
+        validate_paged(args, tensor_args);
+    }
     // The cache is sharded across a 2D mesh; the kernel derives sp_factor from the mesh extent.
     const auto& cache = tensor_args.cache;
     // Checked here rather than only in the miss validator because device() is dereferenced on the next
@@ -358,12 +394,14 @@ void validate_runtime_args(
             "kv_actual_global ({}) must be tile-aligned (a multiple of {})",
             args.kv_actual_global,
             TILE_HEIGHT);
-        const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
+        // Paged: slot_idx selects a page-table row and the row's pages bound what one request can hold.
+        const uint32_t num_slots = paged ? paged_kv::paged_kv_table_rows(*tensor_args.paged_kv_table)
+                                         : cache.padded_shape()[0] / args.num_layers;
         TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
 
         // This chunk is written at a per-chip offset derived from kv_actual_global; what must fit the
-        // global cache capacity (sp_factor*tp_factor slabs of cache_seq tokens each) is what the write
-        // stores: the whole padded slab without a clamp, only the real tokens (rounded up to 32) with
+        // global cache capacity (the row's pages when paged, else sp_factor*tp_factor slabs of cache_seq tokens) is
+        // what the write stores: the whole padded slab without a clamp, only the real tokens (rounded up to 32) with
         // one. sp_factor = mesh extent along cluster_axis, or the whole mesh when it is nullopt.
         // tp_factor is 1 unless the cache is TP-deduped (TP is rejected in complete-mesh mode, so the
         // two never stack).
@@ -385,7 +423,9 @@ void validate_runtime_args(
         // chunk_global uses PHYSICAL sp: TP chips share the same input rows (they are replicated), they
         // do not add tokens. But the cache is sharded across sp*tp, so its global capacity multiplies both.
         const uint32_t chunk_global_tokens = sp_factor * input_seq;
-        const uint32_t global_cache_capacity = sp_factor * tp_factor * cache.padded_shape()[-2];
+        const uint32_t global_cache_capacity =
+            paged ? paged_kv::paged_kv_table_width(*tensor_args.paged_kv_table) * cache.padded_shape()[-2]
+                  : sp_factor * tp_factor * cache.padded_shape()[-2];
         if (args.valid_global.has_value()) {
             const uint32_t valid_global = args.valid_global.value();
             TT_FATAL(
@@ -484,8 +524,9 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
         "input seq in tiles ({}) must be divisible by tp_factor ({}) so each chip writes whole tiles",
         input_seq / TILE_HEIGHT,
         tp_factor);
+    // A paged cache entry is one page, which divides the chunk instead (validate_paged).
     TT_FATAL(
-        cache_seq % written_seq == 0,
+        tensor_args.paged_kv_table.has_value() || cache_seq % written_seq == 0,
         "cache seq ({}) must be a multiple of the per-chip written chunk ({} = input_seq {} / tp {})",
         cache_seq,
         written_seq,
@@ -561,6 +602,12 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         tensor_args.rope.has_value() ? tensor_args.rope->layout() : Layout::ROW_MAJOR,
         tensor_args.scales.has_value(),
         tensor_args.scales.has_value() ? tensor_args.scales->memory_config() : MemoryConfig{},
+        // The table accessor compiles in its memory config and its row stride, and common arg [14] holds the row
+        // width, which a cache hit does not patch: the width is structural; the row is a runtime value. The page
+        // size is the cache's seq dim, hashed below.
+        tensor_args.paged_kv_table.has_value(),
+        tensor_args.paged_kv_table.has_value() ? tensor_args.paged_kv_table->memory_config() : MemoryConfig{},
+        tensor_args.paged_kv_table.has_value() ? paged_kv::paged_kv_table_width(*tensor_args.paged_kv_table) : 0u,
         cache.dtype(),
         cache.layout(),
         input.dtype(),
@@ -593,6 +640,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     auto* device = input.device();
     const bool has_metadata = tensor_args.slot_idx.has_value();
     const bool has_valid = tensor_args.valid_global.has_value() || args.valid_global.has_value();
+    const bool paged = tensor_args.paged_kv_table.has_value();
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
@@ -749,6 +797,26 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         }
     }
 
+    // Two table windows of the page-table row, plus one DRAM alignment unit so the kernel can align them for DRAM
+    // reads.
+    const uint32_t rows_per_kv_page = paged ? cache_shape[-2] / writer_tile_height : 1;
+    if (paged) {
+        const uint32_t align_bytes = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t table_cb_bytes =
+            2 * paged_kv::table_window_capacity(chunk_local_t, rows_per_kv_page, align_bytes / sizeof(uint32_t)) *
+                sizeof(uint32_t) +
+            align_bytes;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = table_cb_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = kPagedKvTableCbIndex,
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = table_cb_bytes,
+            }}},
+        });
+    }
+
     // Reader compile args: row height, metadata flag/CB, BF16 untilize flag, two tile widths,
     // scaled packing flag, tiled RoPE input CB.
     // Accessors follow for input, optional RoPE/scales, and optional kv_actual_global metadata.
@@ -782,12 +850,13 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // Writer kernel descriptor. Compile args (uniform leading layout so the kernel offsets are fixed):
     // [0]=kSrcCbIndex, [1]=has_metadata, [2]=kMetaCbIndex (placeholder 0 on scalar path),
     // [3]=writer_tile_height, [4]=has_valid, [5]=BF16 untilize, [6]=block_pages, [7]=scaled packing,
-    // [8]=tiled RoPE output CB, [9..]=cache accessor, then (metadata path only) ONE metadata accessor
-    // (the slot_idx and kv_actual_global tensors share an identical 1-element uint32 replicated-DRAM
-    // layout, so the same TensorAccessorArgs serves both reads). writer_tile_height divides kv tokens
-    // into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR). On the metadata path the writer
-    // reads slot_idx then kv_actual_global (each element [0]) via this accessor against the two raw
-    // addresses in common args 8/9; on the scalar path it reads them directly from common args 8/9.
+    // [8]=tiled RoPE output CB, [9]=paged, [10]=page-table CB, [11..]=cache accessor, then (metadata path only)
+    // ONE metadata accessor (the slot_idx and kv_actual_global tensors share an identical 1-element uint32
+    // replicated-DRAM layout, so the same TensorAccessorArgs serves both reads), then (paged only) the
+    // page-table accessor. writer_tile_height divides kv tokens into the page-row unit (TILE_HEIGHT for TILE,
+    // 1 for ROW_MAJOR). On the metadata path the writer reads slot_idx then kv_actual_global (each element [0])
+    // via this accessor against the two raw addresses in common args 8/9; on the scalar path it reads them
+    // directly from common args 8/9.
     KernelDescriptor::CompileTimeArgs writer_compile_args = {
         has_rope ? kUntilizedCbIndex : kSrcCbIndex,
         static_cast<uint32_t>(has_metadata),
@@ -797,11 +866,16 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         static_cast<uint32_t>(has_rope),
         block_tiles,
         static_cast<uint32_t>(has_scaled),
-        tiled_rope ? kUntilizedCbIndex : 0u};
+        tiled_rope ? kUntilizedCbIndex : 0u,
+        static_cast<uint32_t>(paged),
+        paged ? kPagedKvTableCbIndex : 0u};
     TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
     if (has_metadata) {
         // One accessor reused for both 1-element tensors (identical layout).
         TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer_compile_args);
+    }
+    if (paged) {
+        TensorAccessorArgs(tensor_args.paged_kv_table->buffer()).append_to(writer_compile_args);
     }
 
     KernelDescriptor writer_kernel;
@@ -817,7 +891,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // per-call values that override_runtime_arguments patches on cache hits (the buffer-binding fast
     // path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
-    // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
+    // For a contiguous cache the kernel composes batch_idx = slot_idx*num_layers + layer_idx.
     if (has_metadata) {
         const uint32_t slot_idx_addr = tensor_args.slot_idx->buffer()->address();
         const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->buffer()->address();
@@ -889,6 +963,14 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         reader_kernel.emplace_common_runtime_args({tensor_args.scales->buffer()});
     }
     writer_kernel.emplace_common_runtime_args({dst_buffer});
+    if (paged) {
+        // [12] table binding, [13] page-rows per KV page, [14] row width in KV pages, [15] pool KV pages.
+        writer_kernel.emplace_common_runtime_args({tensor_args.paged_kv_table->buffer()});
+        writer_kernel.emplace_common_runtime_args(
+            {rows_per_kv_page,
+             paged_kv::paged_kv_table_width(*tensor_args.paged_kv_table),
+             static_cast<uint32_t>(cache_shape[0] / args.num_layers)});
+    }
     const uint32_t g1_numcores = core_group_1.num_cores();
 
     const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
@@ -1010,7 +1092,8 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
-    std::optional<uint32_t> input_rows) {
+    std::optional<uint32_t> input_rows,
+    const std::optional<ttnn::Tensor>& paged_kv_table) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -1032,6 +1115,7 @@ ttnn::Tensor update_padded_kv_cache(
         .valid_global = valid_global_tensor,
         .rope = rope,
         .scales = scales,
+        .paged_kv_table = paged_kv_table,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
