@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -721,6 +722,65 @@ TEST(MetalContextIntegrationTest, MockCreateProgramCompileOnForeignMeshFails) {
 
     Program program = CreateProgram(*mesh_a);
     CreateKernelFromString(program, "void kernel_main() {}", CoreRange({0, 0}, {0, 0}), DataMovementConfig{});
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
+}
+
+namespace {
+
+// One-kernel descriptor. Uses an explicit DataMovementConfigDescriptor: a ReaderConfigDescriptor or
+// WriterConfigDescriptor goes through ReaderDataMovementConfig / WriterDataMovementConfig, which still
+// query the default context.
+ProgramDescriptor MakeNoOpProgramDescriptor() {
+    KernelDescriptor kd;
+    kd.kernel_source = "void kernel_main() {}";
+    kd.source_type = KernelDescriptor::SourceType::SOURCE_CODE;
+    kd.core_ranges = CoreRangeSet{CoreRange{CoreCoord{0, 0}}};
+    kd.config = DataMovementConfigDescriptor{};
+
+    ProgramDescriptor desc;
+    desc.kernels.push_back(std::move(kd));
+    return desc;
+}
+
+}  // namespace
+
+// Program(MeshDevice&, ProgramDescriptor) binds the program and its kernels to the mesh device's context,
+// never touching the default (silicon) context, and the program can be enqueued on that mesh.
+TEST(MetalContextIntegrationTest, MockProgramFromDescriptorBindsToMeshDeviceContext) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_device =
+        distributed::MeshDevice::open_mesh_device(mock_env, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+    ASSERT_NE(context_id, DEFAULT_CONTEXT_ID);
+
+    {
+        Program program(*mesh_device, MakeNoOpProgramDescriptor());
+        EXPECT_EQ(program.impl().get_context_id(), context_id);
+        EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+        ASSERT_EQ(program.impl().num_kernels(), 1u);
+        EXPECT_EQ(program.impl().get_kernel(0)->get_context_id(), context_id);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        EXPECT_NO_THROW(
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+    }
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+// A descriptor program bound to one env's mesh must not compile on a mesh from a different MetalEnv.
+TEST(MetalContextIntegrationTest, MockProgramFromDescriptorCompileOnForeignMeshFails) {
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_a =
+        distributed::MeshDevice::open_mesh_device(env_a, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b =
+        distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    Program program(*mesh_a, MakeNoOpProgramDescriptor());
+    EXPECT_EQ(program.impl().get_context_id(), mesh_a->impl().get_context_id());
     EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 

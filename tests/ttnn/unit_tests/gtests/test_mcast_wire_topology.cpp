@@ -717,7 +717,7 @@ TEST_F(McastHostFixture, McastSerializationAndRouting) {
             }
             auto mcast = make_mcast(device_, groups, cfg);
             auto bound_mcast = mcast;
-            tt::tt_metal::Program program;
+            tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
             bind_for_inspection(bound_mcast, program, {});
             ASSERT_EQ(emitted_metadata(compile_args(mcast)).mcast.rectangle_capacity, 3u);
             EXPECT_EQ(allocated_semaphores(mcast).size(), 2u);
@@ -870,7 +870,7 @@ TEST_F(McastHostFixture, ChainMcastUsesOneCompileTimeTransportForEveryGeometry) 
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::SUCCESSOR_X], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::INCLUDES_SENDER], 1u);
     auto bound_mcast = mcast;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     bind_for_inspection(bound_mcast, program, {});
     for (auto core : std::vector<CoreCoord>{{0, 0}, {1, 0}, {0, 2}, {2, 2}, {6, 0}, {7, 7}}) {
         const auto rt = runtime_args(mcast, core);

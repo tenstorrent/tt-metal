@@ -109,7 +109,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     }
 
     uint32_t ring_index = device_index;
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     // Section for fusion signaler initialization
     auto tensor_slicer =

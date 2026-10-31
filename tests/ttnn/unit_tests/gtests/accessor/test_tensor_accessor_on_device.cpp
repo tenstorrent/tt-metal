@@ -66,7 +66,7 @@ static void test_single_core_reshard(
         GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord grid = {0, 0};
     const auto data_format = datatype_to_dataformat_converter(params.dtype);
@@ -159,7 +159,7 @@ static void test_multi_core_copy(
     auto output_buffer = output_tensor.buffer();
     auto aligned_page_size = input_buffer->aligned_page_size();
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
     auto core_groups = input_buffer->buffer_distribution_spec().value().core_groups();
     auto cores_with_data = corerange_to_cores(
         core_groups.cores_with_data, std::nullopt, params.input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
@@ -231,7 +231,7 @@ static void test_multi_core_interleaved_copy(
         GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
     const auto data_format = datatype_to_dataformat_converter(params.dtype);
 
     // Create circular buffer for each core
@@ -337,7 +337,7 @@ static void test_single_core_copy(
         GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord grid = {0, 0};
     const auto data_format = datatype_to_dataformat_converter(params.dtype);
@@ -429,7 +429,7 @@ static void test_single_core_copy_abstract_wrapper(
         GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord grid = {0, 0};
     const auto data_format = datatype_to_dataformat_converter(params.dtype);
@@ -504,7 +504,7 @@ static void test_single_core_copy_num_contiguous_pages(
         ASSERT_NE(input_buffer->page_size(), aligned_page_size) << "Test needs a page size that is not aligned";
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord grid = {0, 0};
     const auto data_format = datatype_to_dataformat_converter(params.dtype);

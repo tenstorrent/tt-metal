@@ -21,7 +21,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const ttnn::prim::qsr::SparseMatmulParams& operation_attributes,
     const ttnn::prim::qsr::SparseMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program{}; /* Create a program */
+    tt::tt_metal::Program program =
+        tt::tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device()); /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     using namespace tt;
     using namespace operations::experimental::quasar::matmul::utilities;

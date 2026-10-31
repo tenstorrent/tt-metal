@@ -25,7 +25,7 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     auto* output_buffer = output.buffer();
     const uint32_t rows = args.latent.logical_volume() / packed::LATENT_WIDTH;
 
-    Program program;
+    Program program = CreateProgram(*args.latent.device());
     const auto grid = args.latent.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, group_1, group_2, rows_group_1, rows_group_2] = split_work_to_cores(grid, rows);
     auto cores = corerange_to_cores(all_cores, num_cores, true);

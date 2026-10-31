@@ -57,7 +57,7 @@ protected:
             .blaze_named_args = {.named_compile_time_args = std::move(blaze_args)},
             .config = DataMovementConfigDescriptor{},
         };
-        Program program(ProgramDescriptor{.kernels = {kernel_descriptor}});
+        Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel_descriptor}});
         const auto kernel = program.impl().get_kernel(0);
         program.impl().compile(device);
 
@@ -148,7 +148,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, MixedDataMovementKernelCompiles) 
             },
         .config = DataMovementConfigDescriptor{},
     };
-    Program program(ProgramDescriptor{.kernels = {kernel}});
+    Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}});
     program.impl().compile(devices_.at(0).get());
 }
 
@@ -174,7 +174,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
         .defines = {{"WRITE_ADDRESS", "0"}},
         .config = ComputeConfigDescriptor{},
     };
-    Program program(ProgramDescriptor{.kernels = {data_movement, compute}});
+    Program program(*devices_.at(0), ProgramDescriptor{.kernels = {data_movement, compute}});
     program.impl().compile(devices_.at(0).get());
 }
 
@@ -208,7 +208,7 @@ void kernel_main() {}
         .named_compile_time_args = {{"value", 42}},
         .config = ComputeConfigDescriptor{},
     };
-    Program program(ProgramDescriptor{.kernels = {kernel}});
+    Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}});
     program.impl().compile(devices_.at(0).get());
 }
 
@@ -220,7 +220,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyConflictingValuesFail) {
         .named_compile_time_args = {{"legacy_value", 1}, {"legacy_value", 2}},
         .config = DataMovementConfigDescriptor{},
     };
-    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+    EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, BlazeDuplicateNamesFail) {
@@ -231,9 +231,9 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, BlazeDuplicateNamesFail) {
         .blaze_named_args = {.named_compile_time_args = {{"typed.value", 1}, {"typed.value", 1}}},
         .config = DataMovementConfigDescriptor{},
     };
-    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+    EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
     kernel.blaze_named_args.named_compile_time_args = {{"typed.value", 1}, {"typed.value", 2}};
-    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+    EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
@@ -245,7 +245,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
         .blaze_named_args = {.named_compile_time_args = {{"typed.value", 1}}},
         .config = DataMovementConfigDescriptor{},
     };
-    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+    EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDuplicateBuilds) {
@@ -262,12 +262,12 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDu
     auto* device = devices_.at(0).get();
 
     // Build once to put the binary on disk. Same source and args on different cores share one build.
-    Program warm(descriptor);
+    Program warm(*devices_.at(0), descriptor);
     warm.impl().compile(device, false);
     EXPECT_EQ(warm.impl().get_kernel(0)->get_full_kernel_name(), warm.impl().get_kernel(1)->get_full_kernel_name());
 
     // The kernel uses no CBs, so its build options need nothing beyond the kernel's own.
-    Program program(descriptor);
+    Program program(*devices_.at(0), descriptor);
     const auto& build_env =
         BuildEnvManager::get_instance(device->impl().get_context_id()).get_device_build_env(device->build_id());
     JitBuildOptions build_options(build_env.build_env);
@@ -316,7 +316,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, SameProgramDuplicateDoesNotRetryF
     ProgramDescriptor descriptor{.kernels = {kernel}};
     kernel.core_ranges = CoreRange(CoreCoord{1, 0});
     descriptor.kernels.push_back(kernel);
-    Program program(descriptor);
+    Program program(*devices_.at(0), descriptor);
     JitBuildCache::inst().clear();
     auto compiled = std::async(std::launch::async, [&] { program.impl().compile(devices_.at(0).get(), false); });
 
@@ -373,7 +373,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, PlacementFailureDoesNotStartBuild
         ProgramDescriptor descriptor{.kernels = {kernel}};
         kernel.core_ranges = CoreRange(invalid_first ? valid_core : invalid_core);
         descriptor.kernels.push_back(kernel);
-        Program program(descriptor);
+        Program program(*devices_.at(0), descriptor);
         EXPECT_THROW(program.impl().compile(device, false), std::runtime_error);
         EXPECT_TRUE(program.impl().get_kernel(0)->get_full_kernel_name().empty());
         EXPECT_TRUE(program.impl().get_kernel(1)->get_full_kernel_name().empty());

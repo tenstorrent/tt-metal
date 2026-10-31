@@ -720,7 +720,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     (void)tensor_return_value;  // output IS the pre-allocated tensor_args.halo_buffer
     auto* mesh_device = tensor_args.input_tensor.device();
 
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
 
     // Padded-output fused mode: mux worker/mux core ranges
     CoreRangeSet occ_hw_workers, occ_hmux, occ_w_workers, occ_wmux;
