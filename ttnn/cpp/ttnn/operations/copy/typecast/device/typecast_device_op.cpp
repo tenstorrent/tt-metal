@@ -96,6 +96,27 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.is_allocated(),
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
+    // The output spec takes the default 32x32 tile, and the program writes one 32x32 tile per input page, so a
+    // smaller input or output tile writes past the output allocation.
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Typecast supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input_tensor, "the input tensor");
+    if (preallocated_output_tensor.has_value()) {
+        validate_tile_shape(*preallocated_output_tensor, "the output tensor");
+    }
+
     // Quasar: UInt32/UInt16 are not supported DFB formats (is_supported_quasar, tt_backend_api_types.cpp), and
     // the generic Quasar typecast LLK path has no uint32/uint16 store mode. Remapping the output DFB to the
     // byte-size-equal RawUInt32/RawUInt16 lets the program build but the SFPU->pack conversion produces WRONG

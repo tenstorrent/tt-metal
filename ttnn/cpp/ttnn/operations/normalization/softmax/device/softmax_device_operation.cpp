@@ -178,6 +178,16 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensors_args.input_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((tensors_args.input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
+    // The output spec takes the default 32x32 tile, but the program counts tiles with the input's tile and writes
+    // each one as a 32x32 tile, so a smaller input tile writes past the output allocation.
+    const auto tile_shape = tensors_args.input_tensor.tensor_spec().tile().get_tile_shape();
+    TT_FATAL(
+        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+        "Softmax supports only {}x{} tiles, but the input tensor has a {}x{} tile",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile_shape[0],
+        tile_shape[1]);
     TT_FATAL(
         tensors_args.input_tensor.dtype() == DataType::FLOAT32 ||
             tensors_args.input_tensor.dtype() == DataType::BFLOAT16 ||
