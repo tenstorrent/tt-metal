@@ -17,6 +17,7 @@ boxes on the host, as no device tensor can hold a data-dependent count (see ``TT
 
 import ttnn
 
+from models.experimental.bevformer.tt.tt_common import signpost
 from models.experimental.bevformer.tt.tt_fpn import TTFPN
 from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
@@ -81,9 +82,12 @@ class TTBEVFormer:
     def detect(self, cls_scores, bbox_preds):
         """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
         and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask."""
+        signpost(header="TTNN Detect Start")
         scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
         boxes, valid = self.coder.finalize(scores, boxes)
-        return _to_dram(scores, labels, query_index, boxes, valid)
+        outputs = _to_dram(scores, labels, query_index, boxes, valid)
+        signpost(header="TTNN Detect End")
+        return outputs
 
     @staticmethod
     def get_bboxes(scores, labels, boxes, valid):
