@@ -7,6 +7,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <internal/mesh_device.hpp>
@@ -101,7 +102,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
-    TT_FATAL(input_tensor.is_allocated(), "Operands to all_to_all_async must be allocated in buffers on device");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
 
     auto* mesh_device = input_tensor.device();
     const uint32_t num_links =
@@ -140,7 +141,18 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
         "AllToAllAsync: input tensor dimension {} must be divisible by num_devices {}",
         input_shape[operation_attributes.out_dim],
         operation_attributes.num_devices);
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Unsupported input layout {}.", input_tensor.layout());
+    // A row-major input is tilized on the way (concatenating along the rows dim, splitting an outer dim) and the
+    // output is tiled.
+    const bool tilize_input = input_tensor.layout() == Layout::ROW_MAJOR;
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE ||
+            (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
+             input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0 &&
+             input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0 &&
+             input_tensor.buffer()->buffer_type() == BufferType::DRAM),
+        "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM).",
+        input_tensor.layout(),
+        rank - 2);
 
     // recreate output shape to cover optional output buffer
     auto output_shape = input_tensor.logical_shape();
@@ -228,10 +240,14 @@ AllToAllAsyncGenericDeviceOperation::spec_return_value_t AllToAllAsyncGenericDev
     auto shape = input_tensor.logical_shape();
     shape[operation_attributes.in_dim] *= operation_attributes.num_devices;
     shape[operation_attributes.out_dim] /= operation_attributes.num_devices;
+    // The output is tiled; a row-major input is tilized on the way.
     return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
+            input_tensor.dtype(),
+            input_tensor.layout() == Layout::ROW_MAJOR ? tt::tt_metal::PageConfig(Layout::TILE)
+                                                       : input_tensor.tensor_spec().page_config(),
+            operation_attributes.output_mem_config));
 }
 
 AllToAllAsyncGenericDeviceOperation::tensor_return_value_t AllToAllAsyncGenericDeviceOperation::create_output_tensors(
