@@ -164,6 +164,16 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     const auto& indices_tensor = tensor_args.indices;
     const auto& preallocated_outputs = tensor_args.preallocated_outputs;
 
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto& tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "TopK TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    }
     // Tensor shape validation
     const auto input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());

@@ -35,6 +35,16 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.is_allocated(), "Operands to reduce need to be allocated in buffers on device!");
+    if (tensor_args.layout() == Layout::TILE) {
+        const auto& tile = tensor_args.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "Reduce TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    }
     // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(

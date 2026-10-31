@@ -26,6 +26,16 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
         "Can only work with bfloat16/float32 or int32/uint32 tensors");
+    if (input_tensor_a.layout() == Layout::TILE) {
+        const auto& tile = input_tensor_a.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "Reshape TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    }
 }
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(

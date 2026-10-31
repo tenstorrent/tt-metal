@@ -381,6 +381,16 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to transpose need to be allocated in buffers on device!");
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto& tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "Transpose TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    }
     TT_FATAL(
         !(dim != TransposeOpDim::HC && pad_value != 0.0f),
         "Non-zero padding {} is not supported for any transpose other than HC.",

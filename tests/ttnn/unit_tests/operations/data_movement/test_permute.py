@@ -821,3 +821,27 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert_with_pcc(ref2, out2, 0.9999)
 
     assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda t: ttnn.transpose(t, -2, -1),
+        lambda t: ttnn.transpose(t, 0, 1),
+        lambda t: ttnn.permute(t, (0, 1, 3, 2)),
+        lambda t: ttnn.concat([t, t], dim=-1),
+        lambda t: ttnn.reshape(t, (1, 1, 32, 128)),
+    ],
+    ids=["transpose_hw", "transpose_nc", "permute", "concat", "reshape"],
+)
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (8, 32)])
+def test_data_movement_reject_off_default_tile(device, op, tile_shape, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn((2, 1, 32, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "TILE input requires tile shape 32x32"):
+        op(input_tensor)
