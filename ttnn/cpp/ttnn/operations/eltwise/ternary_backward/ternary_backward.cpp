@@ -50,34 +50,32 @@ std::vector<Tensor> addcdiv_bw(
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
-    // tensor2 is inverted once and reused for both gradients. The second gradient used to
-    // form tensor2^2 and invert that, which loses the answer at both ends of the range --
-    // infinity below |tensor2| = 1.0842e-19, zero above 2^63 (see the note in rdiv_bw).
-    // Sharing the reciprocal is also one op cheaper than squaring and inverting.
+
     Tensor recip_tensor2 = ttnn::reciprocal(tensor2, output_mem_config);
-    Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, value, std::nullopt, output_mem_config), recip_tensor2, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(ttnn::where(
-        ttnn::eqz(tensor2, output_mem_config),
-        ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
-        grad_a,
-        output_mem_config));
-    Tensor tmp = ttnn::multiply(
-        ttnn::multiply(ttnn::neg(grad, output_mem_config), value, std::nullopt, output_mem_config),
-        tensor1,
-        std::nullopt,
+    Tensor num_a = ttnn::multiply(grad, value, std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(num_a, recip_tensor2, std::nullopt, output_mem_config);
+
+    Tensor pole_mask = ttnn::eqz(tensor2, output_mem_config);
+    Tensor pole_val_a = ttnn::where(
+        ttnn::eqz(num_a, output_mem_config),
+        t_nan,
+        ttnn::multiply(ttnn::sign(num_a, output_mem_config), t_inf, std::nullopt, output_mem_config),
         output_mem_config);
-    Tensor grad_b = ttnn::multiply(
-        ttnn::multiply(tmp, recip_tensor2, std::nullopt, output_mem_config),
-        recip_tensor2,
-        std::nullopt,
-        output_mem_config);
+    grad_tensor.emplace_back(ttnn::where(pole_mask, pole_val_a, grad_a, output_mem_config));
+
+    // Re-associate grad_b = -grad_a * (tensor1 * recip_tensor2) to eliminate intermediate numerator overflow
+    // and save 2 dispatches.
+    Tensor t1_recip2 = ttnn::multiply(tensor1, recip_tensor2, std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_a, output_mem_config), t1_recip2, std::nullopt, output_mem_config);
     recip_tensor2.deallocate();
-    grad_tensor.emplace_back(ttnn::where(
-        ttnn::eqz(tensor2, output_mem_config),
-        ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, -t_inf, output_mem_config),
-        grad_b,
-        output_mem_config));
+
+    Tensor num_b = ttnn::multiply(ttnn::neg(num_a, output_mem_config), tensor1, std::nullopt, output_mem_config);
+    Tensor pole_val_b = ttnn::where(
+        ttnn::eqz(num_b, output_mem_config),
+        t_nan,
+        ttnn::multiply(ttnn::sign(num_b, output_mem_config), t_inf, std::nullopt, output_mem_config),
+        output_mem_config);
+    grad_tensor.emplace_back(ttnn::where(pole_mask, pole_val_b, grad_b, output_mem_config));
     return grad_tensor;
 }
 
