@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_up1 as PU1
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PGM
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PSG
 from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
@@ -1801,7 +1802,13 @@ class Model:
         prompt that outgrows it is recomputed from position 0 in a larger one (always correct). Each group is one ``_prefill_interleaved_one`` call on its context.
         """
         pm = self.prefill_model
+        if self.__dict__.get("_up1") is not None and self._up1_pick(items, chunk, final, vis):
+            return self._prefill_up1(items, chunk, want_logits, vis, final, totals, rids)
         buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
+        if PSG.enabled() or self.__dict__.get("_up1") is not None:
+            buckets = (
+                []
+            )  # (the single chunk trace serves every width; the one-slot context is a different kind of context)
         if len(buckets) <= 1 or self.Up != self.U:
             return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final, totals, rids)
         C = int(chunk)
@@ -1852,6 +1859,73 @@ class Model:
         self.timing = tm
         return res
 
+    def _up1_pick(self, items, chunk, final, vis):
+        """DSV41_PF_UP1_SHORT: True when the whole call may run on the one-slot-per-mesh-row context (tt/pf_up1.py: every user from scratch, whole prompt in one window, final, one per mesh row, no prefix hit)."""
+        up1 = self._up1
+        if self.Up != self.U or int(chunk) != up1["C"] or self.__dict__.get("_up1_off"):
+            return False
+        apc, pa = getattr(self, "apc", None), self.__dict__.get("apc_paged")
+
+        def has_hit(b, t, e):
+            if apc is not None and apc.active():
+                if (
+                    apc.lookup(b, torch.as_tensor(t).long(), e) is not None
+                ):  # (a prompt the host prefix cache would restore: the Up = U path owns snapshots and restores)
+                    return True
+            return False
+
+        return PU1.eligible(
+            [(int(b), t, int(st), int(e)) for b, t, st, e in items],
+            int(chunk),
+            self.rows,
+            self.U,
+            self.Up,
+            final,
+            vis=vis,
+            has_hit=has_hit,
+            owned=None if pa is None else pa.owns,
+        )
+
+    def _prefill_up1(self, items, chunk, want_logits, vis, final, totals, rids):
+        """Run the call on the one-slot context (``warm_serving`` built it): own carried tables / buffers / trace; the hand-off (pool pages, rings, compressor state, drafter taps, decode key slabs) goes to the same
+        places as the Up = U path writes (keyed by decode user, exported eagerly). The Up = U slot bookkeeping of these users is dropped (their previous carried state is overwritten anyway).
+        """
+        pm, up1 = self.prefill_model, self._up1
+        rows = self.rows
+        self.flush_key_exports(why="one-slot context")
+        resume = self.__dict__.setdefault("pf_resume", {})
+        of = self.__dict__.get("pf_slot_of", {})
+        owner = self.__dict__.get("pf_slot_owner")
+        for it in items:
+            b = int(it[0])
+            resume.pop(b, None)
+            sl = of.pop(b, None)
+            if sl is not None and owner is not None and owner[sl] == b:
+                owner[sl] = None
+        saved = (self.Up, self.__dict__.pop("pf_slot_owner", None), self.__dict__.pop("pf_slot_of", None))
+        self.__dict__.pop("_look", None)
+        pm.use_dyn(up1["S"])
+        self.Up = 1
+        self._up1_active, self._kx_eager = True, True
+        self.__dict__["pf_slot_owner"] = [None] * rows
+        self.__dict__["pf_slot_of"] = {}
+        try:
+            res = self._prefill_interleaved_one(items, chunk, up1["S"], want_logits, vis, final, totals, rids)
+            tm = dict(self.timing)
+        finally:
+            self._up1_active, self._kx_eager = False, False
+            self.Up = saved[0]
+            self.__dict__.pop("pf_slot_owner", None)
+            self.__dict__.pop("pf_slot_of", None)
+            if saved[1] is not None:
+                self.__dict__["pf_slot_owner"] = saved[1]
+            if saved[2] is not None:
+                self.__dict__["pf_slot_of"] = saved[2]
+            pm.use_dyn(up1["main"])
+        tm["up1"] = 1.0
+        self.timing = tm
+        return res
+
     def _prefill_interleaved_one(
         self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None, rids=None
     ):
@@ -1878,7 +1952,8 @@ class Model:
         items = [(int(b), torch.as_tensor(t).long(), int(st), int(e)) for b, t, st, e in items]
         ends = {b: e for b, _, _, e in items}
         assert len(ends) == len(items), "duplicate users in one prefill call"
-        pa = self.__dict__.get("apc_paged")
+        up1_ = self.__dict__.get("_up1_active", False)
+        pa = None if up1_ else self.__dict__.get("apc_paged")
         hits, tots = {}, {}
         if pa is not None:
             fin_ = None if final is None else {int(b) for b, f in final.items() if f}
@@ -1908,7 +1983,9 @@ class Model:
         self.check_context_supported(max_end)
         S_pad = max(s_pad_max or 0, -(-max_end // C) * C)
         if PSG.enabled():
-            S_pad = self.single_spad(C)  # ONE chunk trace for every prompt length (tt/prefill_single.py)
+            S_pad = (
+                s_pad_max if up1_ else self.single_spad(C)
+            )  # ONE chunk trace for every prompt length (tt/prefill_single.py); the one-slot context has its own small S_pad
         assert S_pad <= self.max_ctx + 128, (
             f"padded prompt length {S_pad} (chunk {C}) exceeds the RoPE tables of the model (max_ctx {self.max_ctx} + 128): build the model with "
             f"max_ctx >= {S_pad - 128} (a multiple of the chunk is the simplest)"
@@ -1975,7 +2052,7 @@ class Model:
             assert -(-max_end // C) * C <= cap, f"Engram history capacity {cap} < padded prompt {-(-max_end // C) * C}"
         res, self._res, self._want_logits = {}, {}, want_logits
         n_replays, t_rep, t_host, t_exp, t_hash, t_apc = 0, 0.0, 0.0, 0.0, 0.0, 0.0
-        apc = getattr(self, "apc", None)
+        apc = None if up1_ else getattr(self, "apc", None)
         if apc is not None and not apc.active():
             apc = None
         apc_defer = (
@@ -2846,6 +2923,26 @@ class Model:
             )  # (a prompt of this context has <= sp_ entries per ratio: only the first prefix sizes ever run)
             pm.use_dyn(int(s_pad))
             self.log_dram(f"after the S_pad {sp_} prefill context")
+        self._up1 = None
+        S1 = (
+            PU1.small_spad(s_pad, chunk) if (compiled and PU1.enabled() and PSG.enabled() and Up == U and U >= 2) else 0
+        )
+        if S1:
+            # DSV41_PF_UP1_SHORT: a second prefill context with ONE slot per mesh row at a small S_pad (own tables, buffers, trace): short from-scratch prompts do not pay for an idle second slot.
+            # Allocated + compiled here, before the first capture; the trace is captured with the others below.
+            self.log_dram("before the one-slot (Up=1) prefill context")
+            self.Up = 1
+            try:
+                self.sink.set_map([None] * rows)
+                pm.compile_dyn_up(chunk, S1, 1)
+                pm.use_dyn(S1)
+                self.warm_key_export(limit=S1)
+                pm.use_dyn(int(s_pad))
+            finally:
+                self.Up = Up
+                self.sink.set_map(None)
+            self._up1 = {"S": S1, "main": int(s_pad), "C": int(chunk)}
+            self.log_dram("after the one-slot (Up=1) prefill context")
         guard = None
         if extra:  # (allocated AFTER the max-context tables: DSV41_PF_EXTRA_FIRST=0)
             # the eager pass right before the max-context capture needs ~17 MiB/bank contiguous (the sharded indexer's scores): keep a hole for it until then (the small contexts' tables and
@@ -2900,6 +2997,15 @@ class Model:
                 pm.use_dyn(sp_)
                 pm.capture_dyn_trace(chunk)
                 self.mem_report(f"after the S_pad {sp_} chunk trace")
+            if self.__dict__.get("_up1") is not None:
+                self.Up = 1
+                try:
+                    pm.use_dyn(self._up1["S"])
+                    pm.capture_dyn_trace(chunk)
+                    self.mem_report(f"after the one-slot (Up=1) S_pad {self._up1['S']} chunk trace")
+                    pm.use_dyn(int(s_pad))
+                finally:
+                    self.Up = Up
             if extra_all:
                 pm.use_dyn(int(s_pad))
             self.__dict__.pop("pf_bucket_of", None)

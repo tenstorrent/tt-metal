@@ -849,6 +849,57 @@ class DSV41PrefillModel:
     _SP_FRESH = {"ctx": None, "dyn_on": False, "kvt": None, "ids": None}
     _IX_FRESH = {"keys": None, "keys_rm": None, "sh": None}
 
+    # users-per-row bundle of a context (DSV41_PF_UP1_SHORT: a second context with ONE prefill slot per mesh row next to the Up = U one): everything whose shape follows the number of prefill slots
+    # and is not already part of the context's own tables. Saved / loaded with the context so that ``use_dyn`` switches the whole model between the two.
+    _UP_PM = ("U", "_bufs", "head_stash", "head_sel", "head_in", "head_pre", "head_fused_out", "active_mask", "cs")
+    _UP_SINK = ("U", "bufs", "slot_b")
+
+    def _up_save(self):
+        sink = self.__dict__.get("sink")
+        pas, sps, ixs = self._dyn_objs()
+        return {
+            "pm": self._grab(self, self._UP_PM),
+            "sink": {} if sink is None else self._grab(sink, self._UP_SINK),
+            "U": ([o.U for o in pas], [o.U for o in sps], [o.U for o in ixs]),
+        }
+
+    def _up_load(self, st):
+        sink = self.__dict__.get("sink")
+        pas, sps, ixs = self._dyn_objs()
+        self._put(self, self._UP_PM, st["pm"])
+        if sink is not None:
+            self._put(sink, self._UP_SINK, st["sink"])
+        for objs, us in zip((pas, sps, ixs), st["U"]):
+            for o, u in zip(objs, us):
+                o.U = u
+
+    def _set_up(self, up):
+        """make the model hold ``up`` prefill slots per mesh row with NO persistent tensor of the previous value (they stay referenced by the stashed context): fresh input buffers / head stashes / sink buffers;
+        the next ``_compile_dyn_body`` allocates everything for ``up``."""
+        self._put(self, self._UP_PM, {"U": int(up), "_bufs": {}})
+        sink = self.__dict__.get("sink")
+        if sink is not None:
+            self._put(sink, self._UP_SINK, {"U": int(up), "bufs": {}, "slot_b": None})
+        pas, sps, ixs = self._dyn_objs()
+        for o in pas + sps + ixs:
+            o.U = int(up)
+
+    def compile_dyn_up(self, C, S_pad, up, after_setup=None):
+        """Allocate + compile ONE ADDITIONAL context with ``up`` prefill slots per mesh row (``DSV41_PF_UP1_SHORT``): own carried tables at ``S_pad``, own input / hand-off buffers and chunk trace(s). The active
+        context is stashed meanwhile and active again afterwards; the new context is left stashed with its trace not captured (``use_dyn(S_pad)`` + ``capture_dyn_trace(C)``). Every persistent buffer of every context
+        must exist before the first capture."""
+        assert C % 128 == 0 and self.dyn is not None and S_pad not in self.dyn_stash and S_pad != self.dyn.S_pad
+        cur = self.dyn.S_pad
+        self.stash_dyn()
+        try:
+            self._set_up(up)
+            self._compile_dyn_body(C, S_pad, after_setup)
+            self.stash_dyn()
+        finally:
+            if self.dyn is None:
+                self.use_dyn(cur)
+        self.use_dyn(cur)
+
     def _dyn_objs(self):
         pas, sps, ixs, seen = [], [], [], set()
         for _, pl in self.layers:
@@ -874,6 +925,7 @@ class DSV41PrefillModel:
     def _dyn_save(self):
         pas, sps, ixs = self._dyn_objs()
         return {
+            "up": self._up_save(),
             "pm": self._grab(self, self._PM_ATTRS),
             "pa": [self._grab(o, self._PA_ATTRS) for o in pas],
             "sp": [self._grab(o, self._SP_ATTRS) for o in sps],
@@ -883,6 +935,8 @@ class DSV41PrefillModel:
     def _dyn_load(self, st):
         pas, sps, ixs = self._dyn_objs()
         self._put(self, self._PM_ATTRS, st["pm"])
+        if "up" in st:
+            self._up_load(st["up"])
         for o, v in zip(pas, st["pa"]):
             self._put(o, self._PA_ATTRS, v)
         for o, v in zip(sps, st["sp"]):
