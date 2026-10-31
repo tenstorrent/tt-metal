@@ -31,6 +31,9 @@
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
+#ifdef FP32_OUTPUT_ACCUMULATION
+#include "api/compute/sfpu_binary_bcast.h"
+#endif
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -540,6 +543,60 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         }
     }
 }
+
+#ifdef FP32_OUTPUT_ACCUMULATION
+/**
+ * cur_cb = prev_cb * bcast_cols(e_cb) + cur_cb, computed exactly in FP32 DST.
+ *
+ * The FP32 running accumulators are read through UnpackToDestFp32 alias views (prev_u2d / cur_u2d, same
+ * SRAM as prev_cb / cur_cb), so they never pass through SrcA/SrcB, which would narrow them to TF32 (9
+ * effective bits under HiFi4 ELWMUL) on every K chunk. e_cb (column vector, BF16) is not popped; prev_cb
+ * is popped; cur_cb is rewritten in place and stays full.
+ */
+template <uint32_t rows, uint32_t cols>
+void rescale_accumulate_fp32(uint32_t prev_cb, uint32_t prev_u2d, uint32_t cur_cb, uint32_t cur_u2d, uint32_t e_cb) {
+    CircularBuffer cb_prev(prev_cb);
+    CircularBuffer cb_cur(cur_cb);
+    CircularBuffer cb_e(e_cb);
+    constexpr uint32_t num_tiles = rows * cols;
+    cb_prev.wait_front(num_tiles);
+    cb_cur.wait_front(num_tiles);
+    cb_e.wait_front(rows);
+    // The alias views have their own read pointers; align them with the accumulators' current front.
+    UNPACK((get_local_cb_interface(prev_u2d).fifo_rd_ptr = get_local_cb_interface(prev_cb).fifo_rd_ptr));
+    UNPACK((get_local_cb_interface(cur_u2d).fifo_rd_ptr = get_local_cb_interface(cur_cb).fifo_rd_ptr));
+    pack_reconfig_data_format(cur_cb);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            const uint32_t idx = i * cols + j;
+            tile_regs_acquire();
+            reconfig_data_format_srca(prev_u2d);
+            copy_tile_to_dst_init_short(prev_u2d);
+            copy_tile(prev_u2d, idx, 0);
+            reconfig_data_format_srca(e_cb);
+            copy_tile_to_dst_init_short(e_cb);
+            copy_tile(e_cb, i, 1);
+            sfpu_mul_bcast_col_init();
+            sfpu_mul_bcast_col(0, 1);
+            reconfig_data_format_srca(cur_u2d);
+            copy_tile_to_dst_init_short(cur_u2d);
+            copy_tile(cur_u2d, idx, 1);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
+            tile_regs_commit();
+            // cur_cb holds exactly num_tiles: popping the front and reserving the back recycles the same
+            // slot, so tile idx is rewritten in place (the alias already read it above).
+            cb_cur.pop_front(1);
+            cb_cur.reserve_back(1);
+            tile_regs_wait();
+            pack_tile(0, cur_cb);
+            tile_regs_release();
+            cb_cur.push_back(1);
+        }
+    }
+    cb_prev.pop_front(num_tiles);
+}
+#endif
 
 /**
  * in0_cb *= in1_cb
@@ -1986,6 +2043,10 @@ void sdpa_inner_loop(
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
+#ifdef FP32_OUTPUT_ACCUMULATION
+                // The packer is still configured for the FP32 output accumulator written by the matmul above.
+                pack_reconfig_data_format(cb_exp_max_diff);
+#endif
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                 CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
@@ -1994,6 +2055,29 @@ void sdpa_inner_loop(
                  * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                  * reduction, containing the sum of tiles in dim=-1 of QK.
                  */
+#ifdef FP32_OUTPUT_ACCUMULATION
+                /**
+                 * cb_cur_sum += cb_prev_sum * cb_exp_max_diff and
+                 * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff, both exactly in FP32 DST.
+                 */
+                {
+                    const auto u2d = [&](uint32_t cb) -> uint32_t {
+                        return cb == cb_out_im_A   ? FP32_ACC_OUT_A_U2D
+                               : cb == cb_out_im_B ? FP32_ACC_OUT_B_U2D
+                               : cb == cb_sum_A    ? FP32_ACC_SUM_A_U2D
+                                                   : FP32_ACC_SUM_B_U2D;
+                    };
+                    rescale_accumulate_fp32<Sq_chunk_t, 1>(
+                        alias_prev_sum, u2d(alias_prev_sum), alias_cur_sum, u2d(alias_cur_sum), cb_exp_max_diff);
+                    rescale_accumulate_fp32<Sq_chunk_t, vDHt>(
+                        alias_mm2_prev_out,
+                        u2d(alias_mm2_prev_out),
+                        alias_mm2_cur_out,
+                        u2d(alias_mm2_cur_out),
+                        cb_exp_max_diff);
+                    CircularBuffer(cb_exp_max_diff).pop_front(Sq_chunk_t);
+                }
+#else
                 mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 /* cb_cur_sum += cb_prev_sum */
@@ -2005,6 +2089,7 @@ void sdpa_inner_loop(
                  */
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
                     alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+#endif
             }
 
             // Swap CB handles to prepare for next iteration

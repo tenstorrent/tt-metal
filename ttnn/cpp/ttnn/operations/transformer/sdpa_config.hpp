@@ -29,6 +29,12 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Standard (non-streaming) SDPA program factory only, validated on paged chunked_scaled_dot_product_attention
+    // (causal, no sliding window). Requires fp32_dest_acc_en and no attention sink; ignored by the decode, ring and
+    // joint ops. Keeps the running softmax @ V output and the softmax sum in FP32 and updates them exactly in DST
+    // (UnpackToDestFp32 views + SFPU), instead of a BF16 output and FPU (TF32) re-reads that lose precision with
+    // every K chunk of a long prefix. Doubles the two output-accumulator CBs in L1.
+    bool fp32_output_accumulation = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

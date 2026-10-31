@@ -1396,6 +1396,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // Opt-in FP32 running output accumulator (standard path only; see SDPAProgramConfig).
+    const bool fp32_output_accumulation = program_config.has_value() && program_config->fp32_output_accumulation;
+    TT_FATAL(
+        !fp32_output_accumulation || !use_streaming_compute,
+        "fp32_output_accumulation requires fp32_dest_acc_en (the standard SDPA compute path)");
+    TT_FATAL(
+        !fp32_output_accumulation || !use_attention_sink,
+        "fp32_output_accumulation is not supported with an attention sink (its rescale path keeps FPU accumulators)");
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -1726,6 +1734,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (fp32_output_accumulation) {
+        defines_map["FP32_OUTPUT_ACCUMULATION"] = "1";
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
@@ -1752,6 +1763,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat stats_df = im_df;
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat out_im_df = fp32_output_accumulation ? tt::DataFormat::Float32 : im_df;
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
     TT_ASSERT(
@@ -1764,6 +1776,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t out_tile_size = tt::tile_size(out_df);
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
+    uint32_t out_im_tile_size = tt::tile_size(out_im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
     uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
     uint32_t sum_tile_size = tt::tile_size(sum_df);
@@ -1856,12 +1869,38 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, out_im_tile_size, out_im_df);
+    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, out_im_tile_size, out_im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    // FP32 output accumulation: the running output and sum CBs get a second buffer index over the same
+    // SRAM, marked UnpackToDestFp32, through which the kernel rescales/accumulates them exactly in DST.
+    // The primary indices stay FPU-readable for the one-shot final reduce and normalization.
+    std::vector<std::pair<std::string, std::string>> fp32_acc_alias_defines;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (fp32_output_accumulation) {
+        TT_FATAL(sum_df == tt::DataFormat::Float32, "fp32_output_accumulation requires FP32 softmax sums");
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        const auto add_alias = [&](uint32_t primary_cb, const char* define_name) {
+            auto it = std::find_if(desc.cbs.begin(), desc.cbs.end(), [&](const CBDescriptor& cb) {
+                return cb.format_descriptors[0].buffer_index == primary_cb;
+            });
+            TT_FATAL(it != desc.cbs.end(), "SDPA CB {} not found for its FP32 alias", primary_cb);
+            const uint32_t alias_cb = next_cb_index++;
+            TT_FATAL(alias_cb < NUM_CIRCULAR_BUFFERS, "SDPA ran out of circular buffer indices");
+            CBFormatDescriptor alias = it->format_descriptors[0];
+            alias.buffer_index = static_cast<uint8_t>(alias_cb);
+            it->format_descriptors.push_back(alias);
+            unpack_to_dest_mode[alias_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            fp32_acc_alias_defines.emplace_back(define_name, std::to_string(alias_cb));
+        };
+        add_alias(cb_ids.out_im_A, "FP32_ACC_OUT_A_U2D");
+        add_alias(cb_ids.out_im_B, "FP32_ACC_OUT_B_U2D");
+        add_alias(cb_ids.sum_A, "FP32_ACC_SUM_A_U2D");
+        add_alias(cb_ids.sum_B, "FP32_ACC_SUM_B_U2D");
+    }
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -2007,10 +2046,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    compute_desc.defines.insert(
+        compute_desc.defines.end(), fp32_acc_alias_defines.begin(), fp32_acc_alias_defines.end());
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 

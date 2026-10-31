@@ -36,6 +36,7 @@ void py_module(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 std::optional<tt::tt_metal::MathFidelity>,
+                bool,
                 bool>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -46,7 +47,8 @@ void py_module(nb::module_& mod) {
             nb::arg("max_cores_per_head_batch") = 16,
             nb::arg("k_splits") = 1,
             nb::arg("matmul_math_fidelity") = nb::none(),
-            nb::arg("segmented_accumulation") = false)
+            nb::arg("segmented_accumulation") = false,
+            nb::arg("fp32_output_accumulation") = false)
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
@@ -56,11 +58,12 @@ void py_module(nb::module_& mod) {
         .def_rw("k_splits", &SDPAProgramConfig::k_splits)
         .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)
         .def_rw("segmented_accumulation", &SDPAProgramConfig::segmented_accumulation)
+        .def_rw("fp32_output_accumulation", &SDPAProgramConfig::fp32_output_accumulation)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
                 "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, k_splits={}, "
-                "matmul_math_fidelity={}, segmented_accumulation={})",
+                "matmul_math_fidelity={}, segmented_accumulation={}, fp32_output_accumulation={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
@@ -69,7 +72,8 @@ void py_module(nb::module_& mod) {
                 config.max_cores_per_head_batch,
                 config.k_splits,
                 config.matmul_math_fidelity,
-                config.segmented_accumulation);
+                config.segmented_accumulation,
+                config.fp32_output_accumulation);
         });
 
     nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
