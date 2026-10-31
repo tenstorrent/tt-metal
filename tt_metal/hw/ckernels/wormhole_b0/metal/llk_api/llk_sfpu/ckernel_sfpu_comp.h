@@ -19,27 +19,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// These constants and function should ideally go to SFPI
-// Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
-#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
-#define BIT_MASK_32 0xFFFFFFFF
-#define SIGN 0x80000000
-#define MAGNITUDE 0x7FFFFFFF
-
-// Convert from sign-magnitude to two's complement format
-sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
-    v_if(value & SIGN) {
-        vInt magnitude = value & MAGNITUDE;
-        value = (~magnitude + 1) & BIT_MASK_32;
-    }
-    v_endif;
-    return value;
-}
-
-#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
 inline void equal_zero_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -269,35 +248,30 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Convert both operands to two's complement format
+    // The Int32 Dest word and the host scalar are both two's complement, so the compare is on
+    // the raw word (DataLayout::I32 load/store). The previous SignMagToTwosComp load followed
+    // by a software sign-magnitude conversion cancelled on every word except INT_MIN, which
+    // it turned into 0 (eq(INT_MIN, INT_MIN) read 0, eq(INT_MIN, 0) read 1).
     //
-    // LOGIC:
-    // - Scalar is already in two's complement (from host)
-    // - Convert SFPU input data from sign-magnitude to two's complement
-    // - Perform comparison with both in two's complement format
-
-    // Scalar stays in original two's complement format
-    vInt converted_scalar = scalar;
+    // Per row: load, store the default result, SFPIADD + SFPSETCC for the equality, store the
+    // other result into the enabled lanes, SFPENCC, TTINCRWC. (A store-side increment would
+    // save the TTINCRWC, but it needs physical ADDR_MOD_6 programmed by this op's init, and
+    // unary_eq/ne share their init with the float kernels across architectures.)
+    const vInt s = scalar;
+    const vInt one = 1;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt val = 0;
-
-        // Convert input data from sign-magnitude to two's complement
-        v = sfpu_sign_mag_to_twos_comp(v);
-
-        // Now both operands are in two's complement format
-        // Use simple comparison like Blackhole
-        if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != converted_scalar) { val = 1; }
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
+        if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0);
+            v_if(s == v) { dst_reg[0].mode<sfpi::DataLayout::I32>() = one; }
             v_endif;
-        } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == converted_scalar) { val = 1; }
+        } else {
+            dst_reg[0].mode<sfpi::DataLayout::I32>() = one;
+            v_if(s == v) { dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0); }
             v_endif;
         }
-
-        dst_reg[0] = val;
         dst_reg++;
     }
 }
