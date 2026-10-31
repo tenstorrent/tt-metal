@@ -22,19 +22,46 @@ import {
 const SOURCE =
   "Source: docs/scratch/pipeline_placement_experiments, REPORT.md section 5.3 and results/rerun_2026-10-27/carve_comparison.md · one 64-core machine, 2026-10-27 · 60 s cap per case";
 
-const GROUPS: { name: string; cases: number; planner: string; footprint: number; resolver: string }[] = [
-  { name: "Original carve cases", cases: 17, planner: "0 (17 budget exhausted)", footprint: 16, resolver: "0.029 s" },
-  { name: "Heterogeneous sweep, 60 to 95% fill", cases: 30, planner: "0 (30 budget exhausted)", footprint: 30, resolver: "0.001 s" },
-  { name: "Single mesh, no 1x1 stages", cases: 45, planner: "0 (stage-0 rule; 2 with it off)", footprint: 43, resolver: "0.029 s" },
-  { name: "Heterogeneous multi-mesh", cases: 12, planner: "0 (stage-0 rule; 0 with it off)", footprint: 12, resolver: "0.001 s" },
-  { name: "Multi-mesh, no 1x1 stages", cases: 28, planner: "0 (stage-0 rule; 0 with it off)", footprint: 26, resolver: "0.036 s" },
+type Group = {
+  name: string;
+  cases: number;
+  planner: string;
+  placed: number;
+  placedRuleOff: number;
+  footprint: string;
+  decided: number;
+  ran: number;
+};
+
+const CARVE_GROUPS: Group[] = [
+  { name: "Original carve cases", cases: 17, planner: "0 (17 budget exhausted)", placed: 0, placedRuleOff: 0, footprint: "16", decided: 16, ran: 17 },
+  { name: "Heterogeneous sweep, 60 to 95% fill", cases: 30, planner: "0 (30 budget exhausted)", placed: 0, placedRuleOff: 0, footprint: "30", decided: 30, ran: 30 },
+  { name: "Single mesh, no 1x1 stages", cases: 45, planner: "0 (stage-0 rule); 2 with the rule off", placed: 0, placedRuleOff: 2, footprint: "43", decided: 43, ran: 45 },
+  { name: "Heterogeneous multi-mesh", cases: 12, planner: "0 (stage-0 rule); 0 with it off", placed: 0, placedRuleOff: 0, footprint: "12", decided: 12, ran: 12 },
+  { name: "Multi-mesh, no 1x1 stages", cases: 28, planner: "0 (stage-0 rule); 0 with it off", placed: 0, placedRuleOff: 0, footprint: "26", decided: 26, ran: 28 },
 ];
 
+const OTHER_GROUPS: Group[] = [
+  { name: "Designed rings (blaze's planner examples)", cases: 9, planner: "3 (3 wrong rejects, 1 fork not handled)", placed: 3, placedRuleOff: 3, footprint: "9", decided: 9, ran: 9 },
+  { name: "Repo-style rings", cases: 9, planner: "1 (8 budget exhausted or rejected)", placed: 1, placedRuleOff: 1, footprint: "9", decided: 9, ran: 9 },
+  { name: "mixed4 and two-4x4 multi-mesh rings", cases: 5, planner: "2", placed: 2, placedRuleOff: 2, footprint: "not run", decided: 0, ran: 0 },
+  { name: "Single-slice rings, one grid or two meshes", cases: 12, planner: "2 (same instances as repo and multi)", placed: 2, placedRuleOff: 2, footprint: "not run", decided: 0, ran: 0 },
+  { name: "Multi-mesh single-slice rings and chains", cases: 18, planner: "0 (14 budget exhausted, 4 chains not handled)", placed: 0, placedRuleOff: 0, footprint: "11", decided: 11, ran: 18 },
+  { name: "Wider multi-mesh sweep, 2 to 8 galaxies", cases: 57, planner: "0 (39 budget exhausted, 18 chains not handled)", placed: 0, placedRuleOff: 0, footprint: "30", decided: 30, ran: 57 },
+];
+
+const sum = (gs: Group[], k: "cases" | "placed" | "placedRuleOff" | "decided" | "ran") =>
+  gs.reduce((s, g) => s + g[k], 0);
+
 const BOTH_FINISH: string[][] = [
+  ["4x4: 1x1, 3x 2x2, 1x1", "16", "0.000 + 0.000", "0.000 + 0.000", "both instant"],
+  ["4x4: 1x1, 2x 2x2, 1x1", "16", "0.000 + 0.000", "0.000 + 0.000", "both instant"],
   ["4x8: 1x1, 2x4, 2x4, 2x2, 1x1", "32", "0.009 + 0.000", "0.001 + 0.000", "~9x"],
   ["4x8 ring of 32 x 1x1", "32", "0.038 + 0.001", "0.004 + 0.001", "~8x"],
-  ["4x8 ring of 16 x 1x2 (planner's stage-0 rule off)", "32", "0.036 + 0.000", "0.002 + 0.000", "~18x"],
-  ["4x4: 1x1, 3x 2x2, 1x1", "16", "0.000 + 0.000", "0.000 + 0.000", "both instant"],
+  ["4x8 fill: 2x 2x4, 2x2 (stage-0 rule off)", "32", "0.005 + 0.000", "0.001 + 0.000", "~5x"],
+  ["4x8 ring of 16 x 1x2 (stage-0 rule off)", "32", "0.036 + 0.000", "0.002 + 0.000", "~18x"],
+  ["mixed4 (P,R): two 1x4 meshes, ring of 4", "8", "0.000 + 0.000", "not run", "-"],
+  ["Two 4x4 meshes, ring of 32 x 1x1", "32", "0.033 + 0.001", "not run", "-"],
 ];
 
 const PLANNER_FAILS: { row: string[]; tone: "danger" | "warning" }[] = [
@@ -51,11 +78,15 @@ const PLANNER_FAILS: { row: string[]; tone: "danger" | "warning" }[] = [
   { row: ["5x5 ring of 25 x 1x1 (infeasible)", "1 mesh", "budget exhausted, no verdict", "proved no, 0.003"], tone: "warning" },
 ];
 
-type Solve = { s: number; note?: string } | { failed: string };
+type Solve = { s: number; note?: string } | { failed: string } | { notRun: string };
 
 const SOLVE_TIMES: { name: string; fabric: string; planner: Solve; footprint: Solve }[] = [
   { name: "4x4: 1x1, 3x 2x2, 1x1", fabric: "16 slices", planner: { s: 0 }, footprint: { s: 0 } },
+  { name: "4x4: 1x1, 2x 2x2, 1x1", fabric: "16 slices", planner: { s: 0 }, footprint: { s: 0 } },
+  { name: "mixed4 (P,R): two 1x4 meshes, ring of 4", fabric: "8 slices", planner: { s: 0 }, footprint: { notRun: "not run on this case" } },
   { name: "4x8: 1x1, 2x4, 2x4, 2x2, 1x1", fabric: "32 slices", planner: { s: 0.009 }, footprint: { s: 0.001 } },
+  { name: "4x8 fill: 2x 2x4, 2x2 (stage-0 rule off)", fabric: "32 slices", planner: { s: 0.005 }, footprint: { s: 0.001 } },
+  { name: "Two 4x4 meshes, ring of 32 x 1x1", fabric: "32 slices", planner: { s: 0.034 }, footprint: { notRun: "not run on this case" } },
   { name: "4x8 ring of 32 x 1x1", fabric: "32 slices", planner: { s: 0.039 }, footprint: { s: 0.005 } },
   {
     name: "4x8 ring of 16 x 1x2 (stage-0 rule off)",
@@ -118,10 +149,11 @@ function SolveTimeChart() {
   const barH = 12;
 
   const bar = (solve: Solve, color: string, who: string) => {
-    if ("failed" in solve) {
+    if ("failed" in solve || "notRun" in solve) {
+      const text = "failed" in solve ? `did not finish: ${solve.failed}` : solve.notRun;
       return (
         <div
-          title={`${who}: ${solve.failed}`}
+          title={`${who}: ${text}`}
           style={{
             height: barH,
             width: "100%",
@@ -137,7 +169,7 @@ function SolveTimeChart() {
             overflow: "hidden",
           }}
         >
-          did not finish: {solve.failed}
+          {text}
         </div>
       );
     }
@@ -225,8 +257,20 @@ const SCALING: string[][] = [
 ];
 
 export default function CarvePlannerVsFootprint() {
-  const totalCases = GROUPS.reduce((s, g) => s + g.cases, 0);
-  const totalFootprint = GROUPS.reduce((s, g) => s + g.footprint, 0);
+  const all = [...CARVE_GROUPS, ...OTHER_GROUPS];
+  const carveCases = sum(CARVE_GROUPS, "cases");
+  const carveDecided = sum(CARVE_GROUPS, "decided");
+  const allCases = sum(all, "cases");
+  const allPlaced = sum(all, "placed");
+  const allPlacedRuleOff = sum(all, "placedRuleOff");
+  const allDecided = sum(all, "decided");
+  const allRan = sum(all, "ran");
+  const groupRow = (g: Group) => [
+    g.name,
+    String(g.cases),
+    g.planner,
+    g.ran === 0 ? "not run" : g.ran === g.cases ? g.footprint : `${g.footprint} of ${g.ran}`,
+  ];
 
   return (
     <Stack gap={24}>
@@ -235,24 +279,35 @@ export default function CarvePlannerVsFootprint() {
         <Text tone="secondary">
           Blaze's ring carve planner (<Code>plan_ring_carve</Code> in <Code>pipeline_builder/carve_planner.py</Code>)
           against the carve as a footprint mapping through tt-metal's topology solver (SAT, with resource
-          completeness), each followed by the resolver. 132 carve-requiring cases.
+          completeness), each followed by the resolver. {allCases} cases in 11 groups, {carveCases} of them
+          carve-requiring.
         </Text>
       </Stack>
 
       <Callout tone="info" title="The finding">
-        Once a solve involves more than 32 host slices (any 8x8 or larger mesh, or more than one 4x8 galaxy), the
-        carve.py planner runs out of its 200k-expansion search budget on every case and places none of the 132
-        carve-requiring cases. The SAT-based footprint solver decided 127 of the 132 within 60 s, most in under a
-        second, the largest (8 galaxies, 128 stages over 256 slices) in 2.6 to 21 s. Where both finish, on small
-        rings of 32 slices or fewer, the SAT solver is about 9x to 18x faster. With more galaxies the footprint solver
-        itself slows down (seconds to tens of seconds on 8 galaxies), and forks were tested on one small case only.
+        The carve.py planner placed {allPlaced} of the {allCases} cases ({allPlacedRuleOff} with its stage-0 rule
+        lifted), and every one of them has 32 host slices or fewer. Once a solve involves more than 32 host slices (any
+        8x8 or larger mesh, or more than one 4x8 galaxy), it runs out of its 200k-expansion search budget on every case,
+        and it places none of the {carveCases} carve-requiring cases. The SAT-based footprint solver decided{" "}
+        {carveDecided} of those {carveCases} within 60 s, most in under a second, the largest (8 galaxies, 128 stages
+        over 256 slices) in 2.6 to 21 s. Where both finish, the SAT solver is about 5x to 18x faster. With more
+        galaxies the footprint solver itself slows down (seconds to tens of seconds on 8 galaxies), and forks were
+        tested on one small case only.
       </Callout>
 
       <Grid columns={4} gap={16}>
-        <Stat value={`0 / ${totalCases}`} label="placed by the carve.py planner" tone="danger" />
-        <Stat value={`${totalFootprint} / ${totalCases}`} label="decided by the footprint solver within 60 s" tone="success" />
-        <Stat value="9x to 18x" label="footprint speedup where both finish (32 slices or fewer)" />
-        <Stat value="36 ms" label="worst resolver time after a footprint carve" />
+        <Stat
+          value={`${allPlaced} / ${allCases}`}
+          label={`placed by the carve.py planner, all groups (${allPlacedRuleOff} with its stage-0 rule off); all 32 slices or fewer`}
+          tone="warning"
+        />
+        <Stat value={`0 / ${carveCases}`} label="carve-requiring cases placed by the carve.py planner" tone="danger" />
+        <Stat
+          value={`${carveDecided} / ${carveCases}`}
+          label={`carve-requiring cases decided by the footprint solver within 60 s (${allDecided} of the ${allRan} cases it ran on)`}
+          tone="success"
+        />
+        <Stat value="5x to 18x" label="footprint speedup where both finish (32 slices or fewer)" />
       </Grid>
 
       <Divider />
@@ -262,22 +317,49 @@ export default function CarvePlannerVsFootprint() {
         <SolveTimeChart />
         <Text size="small" tone="tertiary">
           Wall-clock seconds for the carve plus the resolver (x axis, log scale, 1 ms to the 60 s cap) per case (y
-          axis). A dashed bar is a case the carve.py planner did not finish: it ran out of its 200k-expansion budget
-          (in under 0.06 s) or rejected a feasible case. {SOURCE}
+          axis). The first eight cases are every case the carve.py planner placed. A dashed planner bar is a case it did
+          not finish: it ran out of its 200k-expansion budget (in under 0.06 s) or rejected a feasible case. A dashed
+          footprint bar is a case the footprint solver was not run on. {SOURCE}
         </Text>
       </Stack>
 
       <Stack gap={12}>
         <H2>Cases placed or decided, by group</H2>
+        <H3>Carve-requiring cases (report section 5.3)</H3>
         <Table
-          headers={["Group", "Cases", "carve.py planner + resolver: placed", "Footprint + resolver: decided", "Resolver after footprint, worst"]}
-          columnAlign={["left", "right", "left", "right", "right"]}
+          headers={["Group", "Cases", "carve.py planner + resolver: placed", "Footprint + resolver: decided"]}
+          columnAlign={["left", "right", "left", "right"]}
           rows={[
-            ...GROUPS.map((g) => [g.name, String(g.cases), g.planner, String(g.footprint), g.resolver]),
-            ["All", String(totalCases), "0", String(totalFootprint), "0.036 s"],
+            ...CARVE_GROUPS.map(groupRow),
+            [
+              "Carve-requiring total",
+              String(carveCases),
+              `0 (${sum(CARVE_GROUPS, "placedRuleOff")} with the stage-0 rule off)`,
+              String(carveDecided),
+            ],
           ]}
-          rowTone={[...GROUPS.map(() => undefined), "info"]}
+          rowTone={[...CARVE_GROUPS.map(() => undefined), "info"]}
         />
+        <H3>The other groups: where the planner's placements are</H3>
+        <Table
+          headers={["Group", "Cases", "carve.py planner + resolver: placed", "Footprint + resolver: decided"]}
+          columnAlign={["left", "right", "left", "right"]}
+          rows={[
+            ...OTHER_GROUPS.map(groupRow),
+            [
+              "All groups",
+              String(allCases),
+              `${allPlaced} (${allPlacedRuleOff} with the stage-0 rule off)`,
+              `${allDecided} of the ${allRan} it ran on`,
+            ],
+          ]}
+          rowTone={[...OTHER_GROUPS.map((g) => (g.placed > 0 ? ("success" as const) : undefined)), "info"]}
+        />
+        <Text size="small" tone="tertiary">
+          The planner's 8 placements are 6 distinct instances: the 4x8 ring of 32 and the two-4x4 ring of 32 appear in
+          two groups each. Resolver time after any footprint carve is at most 36 ms. Single-slice groups use the
+          footprint with completeness; the designed and repo groups use plain footprint Auto. {SOURCE}
+        </Text>
       </Stack>
 
       <Grid columns="1fr 1fr" gap={24} align="start">
@@ -287,10 +369,11 @@ export default function CarvePlannerVsFootprint() {
             headers={["Case", "Slices", "carve.py planner (s)", "Footprint (s)", "Speedup"]}
             columnAlign={["left", "right", "right", "right", "right"]}
             rows={BOTH_FINISH}
-            rowTone={["success", "success", "success", undefined]}
+            rowTone={BOTH_FINISH.map((r) => (r[4].endsWith("x") ? ("success" as const) : undefined))}
           />
           <Text size="small" tone="tertiary">
-            Seconds as carve + resolver. Every case the planner completed has 32 host slices or fewer.
+            Every case the planner placed, in seconds as carve + resolver. All have 32 host slices or fewer; the
+            footprint solver was not run on the last two.
           </Text>
         </Stack>
         <Stack gap={12}>

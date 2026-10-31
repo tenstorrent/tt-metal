@@ -3,40 +3,64 @@
 Blaze's ring carve planner (`plan_ring_carve` in tt-blaze `pipeline_builder/carve_planner.py`)
 against the carve as a footprint mapping through tt-metal's topology solver (SAT, with resource
 completeness), each followed by the resolver. The numbers are from `results/rerun_2026-10-23/REPORT.md`
-section 5.3, with every row in `results/rerun_2026-10-27/carve_comparison.md`: 132 carve-requiring
-cases, one 64-core machine, 60 s cap per case. The canvas `../carve-planner-vs-footprint-solver.canvas.tsx`
-shows the same tables.
+section 5.3, with every row in `results/rerun_2026-10-27/carve_comparison.md` and the planner's own
+output in `results/rerun_2026-10-27/planner_then_resolver/`: 242 cases in 11 groups, 132 of them
+carve-requiring, one 64-core machine, 60 s cap per case. The canvas
+`../carve-planner-vs-footprint-solver.canvas.tsx` shows the same tables.
 
 ## Finding
 
-Once a solve involves more than 32 host slices (any 8x8 or larger mesh, or more than one 4x8 galaxy),
-the carve.py planner runs out of its 200k-expansion search budget on every case and places none of the
-132 carve-requiring cases. The SAT-based footprint solver decided 127 of the 132 within 60 s, most in
-under a second, the largest (8 galaxies, 128 stages over 256 slices) in 2.6 to 21 s. Where both finish,
-on small rings of 32 slices or fewer, the SAT solver is about 9x to 18x faster. With more galaxies the
-footprint solver itself slows down, and forks were tested on one small case only.
+The carve.py planner placed 8 of the 242 cases (10 with its stage-0 rule lifted), and every one of them
+has 32 host slices or fewer. Once a solve involves more than 32 host slices (any 8x8 or larger mesh, or
+more than one 4x8 galaxy), it runs out of its 200k-expansion search budget on every case, and it places
+none of the 132 carve-requiring cases. The SAT-based footprint solver decided 127 of those 132 within
+60 s, most in under a second, the largest (8 galaxies, 128 stages over 256 slices) in 2.6 to 21 s. Where
+both finish, the SAT solver is about 5x to 18x faster. With more galaxies the footprint solver itself
+slows down, and forks were tested on one small case only.
 
 ## By group
 
-| Group | Cases | Planner + resolver: placed | Footprint + resolver: decided | Resolver after footprint, worst |
-|---|---|---|---|---|
-| original carve cases | 17 | 0 (17 budget exhausted) | 16 | 0.029 s |
-| heterogeneous sweep, 60 to 95% fill | 30 | 0 (30 budget exhausted) | 30 | 0.001 s |
-| single mesh, no 1x1 stages | 45 | 0 (stage-0 rule; 2 with it off) | 43 | 0.029 s |
-| heterogeneous multi-mesh | 12 | 0 (stage-0 rule; 0 with it off) | 12 | 0.001 s |
-| multi-mesh, no 1x1 stages | 28 | 0 (stage-0 rule; 0 with it off) | 26 | 0.036 s |
-| **all** | **132** | **0** | **127** | **0.036 s** |
+Carve-requiring cases (report section 5.3):
 
-## Where both finish
+| Group | Cases | Planner + resolver: placed | Footprint + resolver: decided |
+|---|---|---|---|
+| original carve cases | 17 | 0 (17 budget exhausted) | 16 |
+| heterogeneous sweep, 60 to 95% fill | 30 | 0 (30 budget exhausted) | 30 |
+| single mesh, no 1x1 stages | 45 | 0 (stage-0 rule); 2 with the rule off | 43 |
+| heterogeneous multi-mesh | 12 | 0 (stage-0 rule); 0 with it off | 12 |
+| multi-mesh, no 1x1 stages | 28 | 0 (stage-0 rule); 0 with it off | 26 |
+| **carve-requiring total** | **132** | **0 (2 with the rule off)** | **127** |
 
-Seconds as carve + resolver. Every case the planner completed has 32 host slices or fewer.
+The other groups, where the planner's placements are:
+
+| Group | Cases | Planner + resolver: placed | Footprint + resolver: decided |
+|---|---|---|---|
+| designed rings (blaze's planner examples) | 9 | 3 (3 wrong rejects, 1 fork not handled) | 9 |
+| repo-style rings | 9 | 1 (8 budget exhausted or rejected) | 9 |
+| mixed4 and two-4x4 multi-mesh rings | 5 | 2 | not run |
+| single-slice rings, one grid or two meshes | 12 | 2 (same instances as repo and multi) | not run |
+| multi-mesh single-slice rings and chains | 18 | 0 (14 budget exhausted, 4 chains not handled) | 11 |
+| wider multi-mesh sweep, 2 to 8 galaxies | 57 | 0 (39 budget exhausted, 18 chains not handled) | 30 |
+| **all groups** | **242** | **8 (10 with the rule off)** | **186 of the 225 it ran on** |
+
+The planner's 8 placements are 6 distinct instances: the 4x8 ring of 32 and the two-4x4 ring of 32
+appear in two groups each. Resolver time after any footprint carve is at most 36 ms. The single-slice
+groups use the footprint with completeness; the designed and repo groups use plain footprint Auto.
+
+## Every case the planner placed
+
+Seconds as carve + resolver. All have 32 host slices or fewer.
 
 | Case | Slices | Planner + resolver | Footprint + resolver | Speedup |
 |---|---|---|---|---|
+| 4x4: 1x1, 3x 2x2, 1x1 | 16 | 0.000 + 0.000 | 0.000 + 0.000 | both instant |
+| 4x4: 1x1, 2x 2x2, 1x1 | 16 | 0.000 + 0.000 | 0.000 + 0.000 | both instant |
 | 4x8: 1x1, 2x4, 2x4, 2x2, 1x1 | 32 | 0.009 + 0.000 | 0.001 + 0.000 | ~9x |
 | 4x8 ring of 32 x 1x1 | 32 | 0.038 + 0.001 | 0.004 + 0.001 | ~8x |
-| 4x8 ring of 16 x 1x2 (planner's stage-0 rule off) | 32 | 0.036 + 0.000 | 0.002 + 0.000 | ~18x |
-| 4x4: 1x1, 3x 2x2, 1x1 | 16 | 0.000 + 0.000 | 0.000 + 0.000 | both instant |
+| 4x8 fill: 2x 2x4, 2x2 (stage-0 rule off) | 32 | 0.005 + 0.000 | 0.001 + 0.000 | ~5x |
+| 4x8 ring of 16 x 1x2 (stage-0 rule off) | 32 | 0.036 + 0.000 | 0.002 + 0.000 | ~18x |
+| mixed4 (P,R): two 1x4 meshes, ring of 4 | 8 | 0.000 + 0.000 | not run | - |
+| two 4x4 meshes, ring of 32 x 1x1 | 32 | 0.033 + 0.001 | not run | - |
 
 ## Where the planner fails
 
