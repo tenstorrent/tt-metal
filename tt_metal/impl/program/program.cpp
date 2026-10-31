@@ -248,8 +248,10 @@ namespace {
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    const auto& env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
+    const auto& env = MetalContext::instance(extract_context_id(device))
+                          .build_env_manager()
+                          .get_device_build_env(device->build_id())
+                          .build_env;
     jit_build_genfiles_descriptors(env, build_options);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
@@ -270,11 +272,10 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
     if (num_binaries <= 0) {
         return false;
     }
+    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(
-                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs = build_env_manager.get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
             return false;
         }
@@ -291,11 +292,10 @@ void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kern
                              .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
     uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
     int num_binaries = kernel->expected_num_binaries();
+    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(
-                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs = build_env_manager.get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         bs.write_reuse_cache(kernel->get_full_kernel_name());
     }
 }
@@ -306,8 +306,8 @@ KernelCompileDescriptor build_kernel_descriptor(
     const std::shared_ptr<Kernel>& kernel,
     const JitBuildOptions& build_options,
     std::size_t kernel_hash) {
-    const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
+    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
+    const auto& build_env = build_env_manager.get_device_build_env(device->build_id());
 
     uint32_t core_type = MetalContext::instance(kernel->get_context_id())
                              .hal()
@@ -330,10 +330,8 @@ KernelCompileDescriptor build_kernel_descriptor(
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(
-                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs = build_env_manager.get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
@@ -2874,12 +2872,14 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     std::vector<uint32_t> binaries_data;
     // Map is used to look up transfer info by kernel id when we populate data ordered by core groups
     std::unordered_map<KernelHandle, kernel_bins_transfer_info> kernel_transfer_info;
+    const uint64_t build_key = MetalContext::instance(extract_context_id(device))
+                                   .build_env_manager()
+                                   .get_device_build_env(device->build_id())
+                                   .build_key();
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
-                                                        .get_device_build_env(device->build_id())
-                                                        .build_key());
+            const auto& binaries = kernel->binaries(build_key);
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -3103,7 +3103,9 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
+    uint64_t device_hash = mesh_device->impl()
+                               .metal_context()
+                               .build_env_manager()
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
     if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
@@ -3143,7 +3145,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
+    uint64_t device_hash = mesh_device->impl()
+                               .metal_context()
+                               .build_env_manager()
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
     if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
@@ -3201,9 +3205,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         context_id_.get(),
         device_context_id.get());
 
-    const auto& cluster = MetalContext::instance(device_context_id).get_cluster();
+    auto& device_context = MetalContext::instance(device_context_id);
+    const auto& cluster = device_context.get_cluster();
 
-    const auto& build_env = BuildEnvManager::get_instance(device_context_id).get_device_build_env(device->build_id());
+    const auto& build_env = device_context.build_env_manager().get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());

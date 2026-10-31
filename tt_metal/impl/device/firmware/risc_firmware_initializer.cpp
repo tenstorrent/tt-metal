@@ -23,17 +23,16 @@
 #include "hal_types.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
-#include "dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include "jit_build/jit_device_config.hpp"
 #include "llrt/llrt.hpp"
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
-#include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
@@ -152,8 +151,12 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
              &worker_logical_row_to_virtual_row_[device_id]});
     }
 
+    MetalContext& metal_context = descriptor_->metal_context();
+    BuildEnvManager& build_env_manager = metal_context.build_env_manager();
     for (auto refs : table_refs) {
-        futures.emplace_back(detail::async([this, refs]() {
+        // Built here rather than in the task: create_jit_device_config() may write rtoptions.
+        JitDeviceConfig jit_device_config = create_jit_device_config(refs.device_id, num_hw_cqs_, metal_context);
+        futures.emplace_back(detail::async([this, refs, jit_device_config, &metal_context, &build_env_manager]() {
             tt::ChipId device_id = refs.device_id;
             // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
@@ -180,8 +183,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
-            const ContextId ctx_id = descriptor_->metal_context().get_context_id();
-            BuildEnvManager::get_instance(ctx_id).add_build_env(device_id, num_hw_cqs_, ctx_id);
+            build_env_manager.add_build_env(device_id, jit_device_config, metal_context.rtoptions());
             // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
             // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
@@ -196,7 +198,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                                        (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
                                         !mock_firmware_sources_available_for(cluster_.arch()));
             if (!skip_fw_build) {
-                BuildEnvManager::get_instance(ctx_id).build_firmware(device_id);
+                build_env_manager.build_firmware(device_id);
             }
             if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
@@ -1118,7 +1120,7 @@ void RiscFirmwareInitializer::initialize_firmware(
     std::optional<CoreCoord> end_core) {
     ZoneScoped;
 
-    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+    BuildEnvManager& build_env_manager = descriptor_->metal_context().build_env_manager();
 
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
@@ -1202,11 +1204,11 @@ void RiscFirmwareInitializer::initialize_firmware(
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [_, num_build_states] = BuildEnvManager::get_instance(ctx_id).get_build_index_and_state_count(
-                    core_type_idx, processor_class, true);
+                auto [_, num_build_states] =
+                    build_env_manager.get_build_index_and_state_count(core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
-                    auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
-                        device_id, core_type_idx, processor_class, riscv_id);
+                    auto fw_path =
+                        build_env_manager.get_firmware_binary_path(device_id, core_type_idx, processor_class, riscv_id);
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
                     hal_.set_iram_text_size(
@@ -1277,7 +1279,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
-                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                        auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1336,7 +1338,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
-                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                        auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1382,7 +1384,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t dm_id = 0; dm_id < num_build_states; dm_id++) {
-                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
+                        auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, dm_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
