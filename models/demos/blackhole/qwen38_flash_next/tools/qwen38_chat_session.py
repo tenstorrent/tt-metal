@@ -64,6 +64,7 @@ test drives the session with a scripted chain.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field, replace
@@ -2487,6 +2488,50 @@ class Qwen38TracedChain:
         self._token_row_value = value  # what the device's token row holds now (nothing runs between read and HEAD)
         self.mark_ple_fenced()
         return value
+
+    def read_token_row_lean(self) -> int:
+        """read_token_row under QWEN38_HOST_LEAN (HOST_FAST and HOST_SPIN on): the spin read with the per-step env
+        lookups and the second numpy image dropped; the same record of the row and the same fence."""
+
+        value = self._read_token_row_spin_lean()
+        self._token_row_value = value
+        if self.__dict__.get("_ple_proofs"):  # execute_tail proved them already; this keeps the fence's own guarantee
+            self.prove_ple_reads()
+        self._ple_upload_pending = False
+        return value
+
+    def _read_token_row_spin_lean(self) -> int:
+        """_read_token_row_spin with one numpy image per poll: the poll that sees the value is also the image the dtype,
+        shape, finite and integral checks run on (token_row_numpy_value took a second image after the wait)."""
+
+        shard = self._token_read_cache()[1]
+        sentinel = self.__dict__.get("_spin_sentinel")
+        if sentinel is None:
+            sentinel = self._spin_sentinel = torch.full(resident_decode.TOKEN_ROW_SHAPE, float("nan"))
+        host = ttnn.from_torch(sentinel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_device_to_host_tensor(shard, host, blocking=False)
+        expected_shape = tuple(resident_decode.TOKEN_ROW_SHAPE)
+        polls = 0
+        deadline = time.perf_counter() + SPIN_TIMEOUT_S
+        while True:
+            array = host.to_numpy()
+            value = array.item(0)
+            polls += 1
+            if value == value:
+                break
+            if polls % 4096 == 0 and time.perf_counter() > deadline:
+                raise resident_decode.ResidentDecodeError("token row spin read: no value after 60 s")
+        if array.dtype.name != "float32" or array.shape != expected_shape:
+            raise resident_decode.ResidentDecodeError(
+                f"token row readback is {array.dtype} {tuple(array.shape)}, expected FP32 {expected_shape}"
+            )
+        if not math.isfinite(value) or value != int(value):
+            raise resident_decode.ResidentDecodeError(f"token row holds the non-integral value {value}")
+        log = self.__dict__.setdefault("spin_poll_log", [])
+        if len(log) < 4096:
+            log.append(polls)
+        self._spin_keep = (host, self.__dict__.get("_spin_keep", (None,))[0])
+        return int(value)
 
     def _token_read_cache(self) -> tuple[Any, Any, Any]:
         """Device 0's replica of the token row and one persistent host tensor of the same spec, built once per

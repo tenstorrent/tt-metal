@@ -138,10 +138,16 @@ def generate(model: Qwen38ForCausalLM, prompt_ids: list[int], max_generated_toke
 
     profiler.start("inference_decode")
     step_seconds = []
+    lean = not host_argmax and os.environ.get("QWEN38_HOST_LEAN", "1") == "1"
+    if lean:  # one input tensor for the whole loop: decode_forward reads the id at once and keeps no reference
+        step_tokens = torch.empty((1, 1), dtype=torch.int32)
+        step_image = step_tokens.numpy()
     for step in range(1, max_generated_tokens):
         started = time.perf_counter()
+        if lean:
+            step_image[0, 0] = generated[-1]
         out = model.decode_forward(
-            tokens=torch.tensor([[generated[-1]]], dtype=torch.int32),
+            tokens=step_tokens if lean else torch.tensor([[generated[-1]]], dtype=torch.int32),
             start_pos=[len(prompt_ids) + step - 1],
             page_table=None,
             kv_cache=None,
@@ -152,6 +158,8 @@ def generate(model: Qwen38ForCausalLM, prompt_ids: list[int], max_generated_toke
         if host_argmax:
             assert torch.isfinite(out[..., :TOKENIZER_SIZE]).all(), f"non-finite decode logits at step {step}"
             generated.append(int(out.argmax()))
+        elif lean:
+            generated.append(out.item())
         else:
             generated.append(int(out.reshape(-1)[0]))
         step_seconds.append(time.perf_counter() - started)

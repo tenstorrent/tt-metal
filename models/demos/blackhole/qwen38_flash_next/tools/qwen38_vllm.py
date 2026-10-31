@@ -130,6 +130,7 @@ PLE_EARLY_DECODE_VARIABLE = (
     "QWEN38_PLE_EARLY"  # "1": B=1 decode does the PLE lookup + host row before HEAD (default off)
 )
 TOKEN_FEEDBACK_VARIABLE = "QWEN38_TOKEN_FEEDBACK"  # B=1 decode skips the token-row write when the device row already holds the token (default on since x53: -0.35..-0.62 ms; "0" off)
+HOST_LEAN_VARIABLE = "QWEN38_HOST_LEAN"  # default "1": with HOST_FAST, the B=1 greedy decode path also drops per-step host work that only the sampled, logprob and batched paths need (cached contract parse, one token-row read check, no per-step env lookups); same tokens
 HOST_FAST_VARIABLE = "QWEN38_HOST_FAST"  # default "1": B=1 decode skips redundant per-step host work (one policy parse, no loop guard, persistent token read, PLE proofs behind the TAIL enqueue); "0": the guarded path
 BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": candidate rows for the sampled lanes
 BATCH_NORMALIZER_VARIABLE = (
@@ -835,6 +836,41 @@ class Qwen38VLLMSlot:
     failed: bool = False
     policy: Qwen38HostSamplingPolicy | None = None
     generator: torch.Generator | None = None
+    lean_env: bool | None = None  # QWEN38_HOST_LEAN: the env checks the lean step needs, made once per request
+
+
+_CONTRACT_FIELDS = (
+    "enable_log_probs",
+    "num_logprobs",
+    "temperature",
+    "top_k",
+    "top_p",
+    "seed",
+    "presence_penalty",
+    "frequency_penalty",
+    "repetition_penalty",
+)
+_CONTRACT_SCALARS = (bool, int, float, type(None))
+_CONTRACT_MISSING = object()
+
+
+def contract_fingerprint(sampling_params: Any) -> tuple | None:
+    """The values ``Qwen38HostSamplingPolicy.from_contract`` reads (one-row lists as tuples), or None when a value is not
+    a plain scalar or list of scalars (a tensor): then the caller parses.  from_contract is a pure function of these
+    values, so equal fingerprints give an equal policy."""
+
+    key = []
+    for name in _CONTRACT_FIELDS:
+        value = getattr(sampling_params, name, _CONTRACT_MISSING)
+        if type(value) in (list, tuple):
+            for item in value:
+                if type(item) not in _CONTRACT_SCALARS:
+                    return None
+            value = tuple(value)
+        elif value is not _CONTRACT_MISSING and type(value) not in _CONTRACT_SCALARS:
+            return None
+        key.append(value)
+    return tuple(key)
 
 
 class _ModelCapabilities:
@@ -1244,6 +1280,24 @@ class Qwen38ForCausalLM:
         ``(token [1, 1] int32, logprob [1] float32)``: the raw logprob of that token (``log_softmax`` of the full row,
         before temperature, penalties, top-k and top-p), read from the full row besides the device's greedy token."""
 
+        if (
+            not kwargs
+            and reload_inputs is True
+            and not self.batch_mode
+            and os.environ.get(HOST_LEAN_VARIABLE, "1") == "1"
+            and os.environ.get(HOST_FAST_VARIABLE, "1") == "1"
+            and os.environ.get("QWEN38_HOST_SPIN", "1") == "1"
+        ):
+            return self._decode_lean(
+                tokens,
+                start_pos,
+                enable_trace,
+                slot_remap,
+                sampling_params,
+                reset_sampling_state,
+                prompt_tokens,
+                output_tokens,
+            )
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract 1: reset_batch is not accepted")
         if reload_inputs is False:
@@ -1309,6 +1363,107 @@ class Qwen38ForCausalLM:
         if not logprobs:
             return token
         return token, torch.tensor([raw_logprob(raw, int(token))], dtype=torch.float32)
+
+    def _lean_policy(self, sampling_params: Any) -> tuple[Qwen38HostSamplingPolicy, bool]:
+        """(policy, plain device greedy) of the contract; the parse is skipped when the contract's values equal the
+        last parsed ones (the checks run inside from_contract, so they ran on the first parse of these values)."""
+
+        key = contract_fingerprint(sampling_params)
+        cached = getattr(self, "_lean_policy_cache", None)
+        if key is not None and cached is not None and cached[0] == key:
+            return cached[1], cached[2]
+        policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
+        greedy = policy.greedy and not policy.penalized
+        if key is not None:
+            self._lean_policy_cache = (key, policy, greedy)
+        return policy, greedy
+
+    def _decode_lean(
+        self,
+        tokens,
+        start_pos,
+        enable_trace,
+        slot_remap,
+        sampling_params,
+        reset_sampling_state,
+        prompt_tokens,
+        output_tokens,
+    ):
+        """decode_forward under QWEN38_HOST_LEAN (B=1, HOST_FAST): the same checks and device calls in the same order,
+        with the per-step host work that is only for the other paths removed or moved behind the TAIL enqueue."""
+
+        if slot_remap is not None and list(slot_remap) != [0]:
+            raise ValueError(f"one resident slot: slot_remap must be None or [0], got {list(slot_remap)}")
+        if tokens.shape[0] != 1:
+            raise ValueError(f"one resident slot: tokens must be [1, 1], got {tuple(tokens.shape)}")
+        token_id = int(tokens[0, 0])
+        if not 0 <= token_id < TOKENIZER_SIZE:
+            raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
+        slot = self.slot
+        policy = history = None
+        greedy_token = False
+        if sampling_params is not None:
+            policy, greedy_token = self._lean_policy(sampling_params)
+            if policy.penalized:
+                history = penalty_history(prompt_tokens, output_tokens)
+        self._require_serviceable(enable_trace)
+        if int(start_pos[0]) != len(slot.committed):
+            raise Qwen38ChatChainError(f"runner position {int(start_pos[0])} vs device position {len(slot.committed)}")
+        if policy is not None and (
+            policy is not slot.policy or reset_sampling_state or (slot.generator is None and policy.seed is not None)
+        ):
+            self._adopt_policy(policy, reseed=reset_sampling_state)
+        lean_env = slot.lean_env
+        if lean_env is None:
+            lean_env = slot.lean_env = (
+                os.environ.get(TOKEN_FEEDBACK_VARIABLE, "1") == "1" and os.environ.get(PLE_EARLY_DECODE_VARIABLE) != "1"
+            )
+        logprobs = policy is not None and policy.logprobs
+        try:
+            if lean_env:
+                chain = self.chain
+                residue = len(slot.committed) % RESIDUE_CLASSES
+                chain.feed_token_row(token_id)
+                chain.execute_head(residue)
+                slot.ple_context = chain.refresh_ple_row(token_id, slot.ple_context)
+                chain.execute_tail(residue)
+                slot.committed.append(token_id)
+            else:
+                residue = self._step(token_id)
+            if greedy_token:
+                result = torch.empty((1, 1), dtype=torch.int32)  # built while the TAIL runs
+                image = result.numpy()
+                token = int(self.chain.read_token_row_lean())
+                if not 0 <= token < TOKENIZER_SIZE:
+                    token = self._padded_greedy_fallback(residue)
+                image[0, 0] = token
+                if not logprobs:
+                    return result
+                token = result
+            logits = self._read_logits(residue)
+        except BaseException:
+            slot.failed = True
+            raise
+        if policy is None:
+            return logits
+        row = logits[0, 0]
+        raw = row.clone() if logprobs and history is not None else row
+        if not greedy_token:
+            if history is not None:
+                apply_penalties(row, *history, policy)
+            token = torch.tensor([[sample_from_row(row, policy, slot.generator)]], dtype=torch.int32)
+        if not logprobs:
+            return token
+        return token, torch.tensor([raw_logprob(raw, int(token))], dtype=torch.float32)
+
+    def _padded_greedy_fallback(self, residue: int) -> int:
+        if not self._warned_padded_greedy:
+            self._warned_padded_greedy = True
+            logger.warning(
+                "device greedy token is outside the tokenizer [0, "
+                f"{TOKENIZER_SIZE}): falling back to the host argmax over the masked full logits"
+            )
+        return int(self._read_logits(residue).argmax())
 
     def _adopt_policy(
         self, policy: Qwen38HostSamplingPolicy, *, reseed: bool, slot: Qwen38VLLMSlot | None = None
