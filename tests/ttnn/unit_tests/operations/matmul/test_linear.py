@@ -18,7 +18,6 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_combo_supported
 
-
 pytestmark = pytest.mark.use_module_device
 
 
@@ -1769,3 +1768,19 @@ def test_linear_in0_column_offset_rejects_invalid_window(
     config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
     with expect_error(RuntimeError, message):
         ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)
+
+
+@pytest.mark.parametrize("op", ["matmul", "linear", "linear_bias"])
+@pytest.mark.parametrize("m, k, n", [(64, 96, 64), (32, 64, 128)])
+def test_matmul_rejects_row_major_optional_output(device, op, m, k, n, expect_error):
+    a = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    w = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn(1, 1, 1, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(1, 1, m, n, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Layout mismatch between optional output tensor"):
+        if op == "matmul":
+            ttnn.matmul(a, w, optional_output_tensor=out)
+        elif op == "linear":
+            ttnn.linear(a, w, optional_output_tensor=out)
+        else:
+            ttnn.linear(a, w, bias=bias, optional_output_tensor=out)
