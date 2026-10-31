@@ -5095,6 +5095,37 @@ def test_conv2d_activation_reuse(
     )
 
 
+@pytest.mark.parametrize(
+    "input_width, act_block_h_override",
+    [(36, 96), (40, 96), (44, 96), (56, 96), (70, 128), (76, 160), (80, 128)],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_conv2d_activation_reuse_act_block_h_past_output_width(
+    device, torch_tensor_map, input_width, act_block_h_override
+):
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=32,
+        input_channels=32,
+        input_height=input_width,
+        input_width=input_width,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1, 1, 1),
+        config_override={"act_block_h": act_block_h_override},
+        shard_layout=HS,
+        has_bias=False,
+        input_dtype=ttnn.bfloat16,
+        enable_activation_reuse=True,
+    )
+
 # this test case represents the first conv in unet on WH;
 # the test case is useful since it hits case where shards on cores don't start from the beginning
 # of the row of the output image - and this happens if we divide the workload on 63 cores
