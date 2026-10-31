@@ -214,7 +214,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/transpose.h
     inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
-    inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
     inc/api/lock.h

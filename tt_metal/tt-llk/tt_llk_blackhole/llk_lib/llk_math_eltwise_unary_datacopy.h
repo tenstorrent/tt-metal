@@ -542,8 +542,8 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
- * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
- * (untilize) which feed the tile.
+ * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose) or @ref _llk_unpack_tilize_init_ (tilize),
+ * which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
 template <
