@@ -234,7 +234,9 @@ code, the forks, ttnn / tt_metal, the framework's measuring code, the spec witho
 waivers its own tests read (a component test: its step's; a swap test: all). Records, docs, knowledge, the skill,
 selftests, approvals, tasks.yaml and other models' bring-up files never re-run it; edit them freely.
 
-**Estimates in agent and device time, never human time (owner, 2026-10-27).** Say how long a piece of work takes as what actually runs: agent hours (writing and fixing code) and device minutes (each test, ladder, profile), e.g. "about 2 agent-hours plus 30 device-minutes". Never "a day of kernel work" or "3 working days": agents did the MoE-block port, estimated at 3-4 agent-days, in a few hours. Base the number on comparable work already done in this run.
+**Estimates in agent and device time, never human time (owner, 2026-10-27).** Say how long a piece of work takes as what actually runs: agent hours (writing and fixing code) and device minutes (each test, ladder, profile), e.g. "about 2 agent-hours plus 30 device-minutes". Never "a day of kernel work" or "3 working days": agents did the MoE-block port, estimated at 3-4 agent-days, in a few hours. Base the number on comparable work already done in this run, and check every estimate a subagent or report gives
+against those actual times before passing it on (DeepSeek-V4.1, 2026-10-31: an analysis agent's "60-80 agent-hours"
+for a layout change was relayed unchecked; the comparable SP=32 change took ~4-6 agent-hours).
 
 ### Always be watching
 
