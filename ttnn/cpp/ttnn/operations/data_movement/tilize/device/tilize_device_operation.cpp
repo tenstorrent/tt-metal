@@ -259,7 +259,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED &&
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::ND_SHARDED;
     if (output_is_sharded && can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
-        log_warning(
+        log_debug(
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
             "factory is being used");
