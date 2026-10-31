@@ -26,6 +26,7 @@ namespace fre = flat_routed_expert;
 // What one resources object keeps for the combine across calls: the plans, the persistent tensors, the arena's spec.
 struct CombineState {
     fre::FlatRoutedExpertConfig flat_config;
+    fre::FlatLayoutOptions layout;  // (as the caller passed it)
     fre::FlatRoutedExpertResources flat;
     CombineConfig combine;
     std::vector<CoreCoord> cells;
@@ -78,6 +79,7 @@ CombineState make_state(
     TT_FATAL(cfg.chunk_tokens % N == 0, "routed_experts_combine: chunk {} over {} chips", cfg.chunk_tokens, N);
     CombineState s;
     s.combine = combine;
+    s.layout = layout;
     s.flat_config = base_flat_config(res, m, activation, layout);
     s.flat = fre::ensure_flat_routed_expert_resources(res, s.flat_config);
     s.flat_config = fre::with_combine_overlap(s.flat_config, *s.flat.plan, true);
@@ -207,7 +209,7 @@ ttnn::Tensor routed_experts_combine(
     });
     TT_FATAL(
         st.combine == combine && st.flat_config.activation == activation &&
-            st.flat_config.max_tokens == (max_tokens_per_expert + 31) / 32 * 32,
+            st.flat_config.max_tokens == (max_tokens_per_expert + 31) / 32 * 32 && st.layout == layout,
         "routed_experts_combine: the resources' combine was planned for another config");
     auto& mesh = resources.mesh_device();
     ttnn::Tensor arena = create_device_tensor(*st.arena_spec, &mesh);

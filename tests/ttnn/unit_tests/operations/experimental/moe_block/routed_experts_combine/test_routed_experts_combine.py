@@ -88,6 +88,20 @@ class _Call:
         self.res.release()
 
 
+def _arena_spec(mesh_device, arena_bytes):
+    """The op's per-call arena (routed_experts_combine.cpp make_state): every worker core, the combine's bytes then the
+    y writers' 192 rows of 64 B, bf16 tiles of 32-wide rows."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    rows = arena_bytes // 64 + 192
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, [rows, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.Shape([grid.x * grid.y * rows, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, mc
+
+
 def _case(mesh_device, case):
     if case == "none":
         pytest.skip(f"no saved {OP} case (dump_ref_routed_experts_combine.py, $MOE_BLOCK_REFS)")
@@ -128,6 +142,16 @@ def test_routed_experts_combine_host_time(mesh_device, case):
             run.call()
         host = (time.perf_counter() - t0) / CALLS * 1e6
         ttnn.synchronize_device(mesh_device)
-        print(f"routed_experts_combine {case}: {host:.1f} us a call (host, cache hit, {CALLS} calls)")
+        # the hit path's per-call arena (allocated and freed inside the call): the same spec alone
+        spec = _arena_spec(mesh_device, run.cfg["arena_bytes"])
+        t0 = time.perf_counter()
+        for _ in range(CALLS):
+            ttnn.deallocate(ttnn.allocate_tensor_on_device(*spec))
+        arena = (time.perf_counter() - t0) / CALLS * 1e6
+        print(
+            f"routed_experts_combine {case}: {host:.1f} us a call (host, cache hit, {CALLS} calls), of which the arena's "
+            f"allocation + free ~{arena:.1f} us, the rest (plan lookup, hash, address patches, enqueue) "
+            f"~{host - arena:.1f} us"
+        )
     finally:
         run.close()

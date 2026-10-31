@@ -39,9 +39,10 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         p.S,
         p.W,
         p.dispatch_in_program,
-        p.flat_config.attribute_values(),
-        p.cells,
-        p.flat.writers,
+        // (the flat expert's per-call choices: not in plan_key; its plan, cells and y writers follow from them and it)
+        p.flat_config.max_tokens,
+        p.flat_config.activation,
+        p.flat_config.layout,
         p.plan_key,
         t.plan.tensor_spec(),
         t.table.tensor_spec(),
