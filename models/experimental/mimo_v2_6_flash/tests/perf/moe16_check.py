@@ -25,6 +25,7 @@ import torch
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.tests.perf import moe_decode_common as common
+from models.experimental.mimo_v2_6_flash.tt.moe_stream import zero_output
 
 CALLS = 20
 REPLAYS = 7
@@ -58,13 +59,26 @@ def steps16(cfg, steps):
     return out16, out8
 
 
-def run(row, moe, inputs, idx):
+def run(row, moe, inputs, idx, norm=None):
+    """The layer's [32, hidden] output for rows ``idx``; with ``norm`` = (gamma [hidden], residual rows [len(idx),
+    hidden]) the fused path (residual + output, and its RMSNorm), concatenated [32, 2 * hidden]."""
     x, mask = common.step_inputs(row, inputs, idx)
-    out = moe.forward_decode(x, mask)
-    full = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()[0, 0]
-    for t in (x, mask, out):
+    if norm is None:
+        out = moe.forward_decode(x, mask)
+        full = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()[0, 0]
+        for t in (x, mask, out):
+            t.deallocate(True)
+        return full
+    gamma, res_rows = norm
+    res, _ = common.device_inputs(row, res_rows)
+    g = moe.reduce_expand.compact_gamma(moe.plan, gamma)
+    normed = zero_output(moe.plan, gamma.numel())
+    y, n = moe.forward_decode(x, mask, residual=res, norm=(g, normed, 1e-6))
+    got = [ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()[0, 0] for t in (y, n)]
+    for t in (x, mask, res, g, y):
         t.deallocate(True)
-    return full
+    normed.deallocate(True)
+    return torch.cat(got, dim=-1)
 
 
 def pcc(a, b):
@@ -106,6 +120,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--bench", action="store_true")
+    parser.add_argument("--norm", action="store_true", help="the fused residual + RMSNorm reduction path")
     args = parser.parse_args()
 
     cfg = common.config()
@@ -118,14 +133,17 @@ def main():
         assert moe16.fused_stream is not None and moe16.fused_stream.halves == 2
         moe8 = common.build_moe(row, cfg, "model_bfp4experts", ttnn.bfloat4_b, users=8)
         worst = {}
+        gamma = torch.randn(cfg.hidden_size) * 0.1 + 1
+        res_rows = torch.randn(16, cfg.hidden_size)
         for name, idx in s16:
-            got = run(row, moe16, inputs, idx)
+            got = run(row, moe16, inputs, idx, (gamma, res_rows) if args.norm else None)
             finite = bool(torch.isfinite(got).all())
             want = torch.zeros_like(got)
             for h in range(2):
                 half = idx[8 * h : 8 * h + 8]
                 if any(i >= 0 for i in half):
-                    want[8 * h : 8 * h + 8] = run(row, moe8, inputs, half)[:8]
+                    norm8 = (gamma, res_rows[8 * h : 8 * h + 8]) if args.norm else None
+                    want[8 * h : 8 * h + 8] = run(row, moe8, inputs, half, norm8)[:8]
             live = [s for s, i in enumerate(idx) if i >= 0]
             p = min(pcc(got[s], want[s]) for s in live)
             exact = torch.equal(got[live], want[live])
