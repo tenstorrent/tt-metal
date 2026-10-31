@@ -86,18 +86,25 @@ def dense_moe_decode_layout_supported(
     system_devices=4,
 ):
     """Host-only form of dense_moe_decode_supported: the validated envelope of the batched decode MoE (gpt-oss-20b on
-    Blackhole 1x4, TP=4, one 32-token tile per device, no expert parallelism)."""
+    Blackhole, one 32-token tile per device, TP over one mesh row, no expert parallelism).
+
+    Two meshes are validated: 1x4 at TP=4 (a QuietBox 2), and 1x2 at TP=2 (the two chips of one P300 board), which is
+    also each half of a QuietBox 2 run data parallel (one model per board, a 1x2 submesh of the 1x4 mesh). The 1x2
+    all-reduces run between the two chips of a board, so the half needs no ring through the other board. A 1x4 slice
+    of a larger system is excluded: its devices do not close a ring."""
+    shape = tuple(mesh_shape)
+    whole_system = system_devices == shape[0] * shape[1]
     return (
         is_blackhole
-        and tuple(mesh_shape) == (1, 4)
-        and tp == 4
+        and (
+            (shape == (1, 4) and tp == 4 and whole_system) or (shape == (1, 2) and tp == 2 and system_devices in (2, 4))
+        )
         and ep == 1
         and num_experts == 32
         and not use_throughput_experts
         and tokens == DENSE_MOE_TOKENS
         and grid[0] * grid[1] >= DENSE_MOE_CORES
         and dram_banks == FUSED_DECODE_DRAM_BANKS
-        and system_devices == mesh_shape[0] * mesh_shape[1]
     )
 
 
