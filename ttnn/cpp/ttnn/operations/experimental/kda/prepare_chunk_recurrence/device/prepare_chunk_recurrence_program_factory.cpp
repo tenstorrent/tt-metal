@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -28,6 +27,25 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 namespace m2 = tt::tt_metal::experimental;
+
+uint64_t prepare_chunk_recurrence_l1_bytes(const PrepareChunkRecurrenceParams& attrs, uint32_t max_items) {
+    constexpr uint64_t fp32 = tt::tile_size(tt::DataFormat::Float32);
+    constexpr uint64_t bf16 = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint64_t Kt = attrs.key_dim / TILE_WIDTH;
+    const uint64_t Vt = attrs.value_dim / TILE_WIDTH;
+    const auto output = [&](uint32_t index) { return (attrs.output_bf16_mask >> index) & 1U ? bf16 : fp32; };
+    // The BF16 q, k, g, v and beta logits, double-buffered, and the activated beta.
+    const uint64_t inputs = 2 * (3 * Kt + Vt + 1) * bf16 + fp32;
+    // eye, tril, ones, gate_tril, gate_ones and the three block masks.
+    const uint64_t constants = 8 * fp32;
+    // Six Kt-tile rows (workspace_0/1/2, centered_inverse_decay, normalized_q/k) and two Kt x Vt blocks
+    // (anchor_decay, workspace_3).
+    const uint64_t intermediates = (6 * Kt + 2 * Kt * Vt) * fp32;
+    // v_beta, kd, q_decay, k_dec_t, dl and intra, double-buffered.
+    const uint64_t outputs = 2 * (Vt * output(0) + Kt * (output(1) + output(2) + output(4) + output(5)) + fp32);
+    return inputs + constants + intermediates + outputs +
+           max_items * prepare_chunk_recurrence_inverse_tiles_per_item * fp32;
+}
 
 ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFactory::create_mesh_workload_artifacts(
     const PrepareChunkRecurrenceParams& attrs,
@@ -55,6 +73,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const auto distribution = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), num_heads * num_chunks, std::numeric_limits<uint32_t>::max());
     const auto& cores = distribution.core_set;
+    // The inverse runs once over all of a core's work items, so its buffers hold one tile per item; validation
+    // checks prepare_chunk_recurrence_l1_bytes, which mirrors the buffer list below, against L1.
+    const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
 
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
@@ -135,8 +156,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
-        make_dfb(akk_dfb, cc, fp32),
-        make_dfb(t_inv_dfb, 2 * cc, output_formats[6]),
+        make_dfb(akk_dfb, max_items * cc, fp32),
+        make_dfb(t_inv_dfb, max_items * cc, output_formats[6]),
         make_dfb(v_beta_dfb, 2 * cv, output_formats[0]),
         make_dfb(kd_dfb, 2 * ck, output_formats[1]),
         make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
@@ -149,10 +170,10 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
-        make_dfb(tile_workspace_0_dfb, 1, fp32),
-        // The nested inverse reads its current level while packing the next one.
-        make_dfb(tile_workspace_1_dfb, 2, fp32),
-        make_dfb(tile_workspace_2_dfb, 1, fp32),
+        make_dfb(tile_workspace_0_dfb, max_items, fp32),
+        // The nested inverse reads its current level while packing the next one, for every item at once.
+        make_dfb(tile_workspace_1_dfb, 2 * max_items, fp32),
+        make_dfb(tile_workspace_2_dfb, max_items, fp32),
 
         make_dfb(workspace_3_dfb, scratch, fp32),
         make_dfb(workspace_2_dfb, ck, fp32),
@@ -190,7 +211,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
              {"Vt", Vt},
              {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH},
              {"beta_offset_tiles", attrs.beta_logits_column_offset / tt::constants::TILE_WIDTH},
-             {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)}},
+             {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)},
+             {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -220,7 +242,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
+        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"max_items", max_items}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -317,13 +339,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             {{"Ct", Ct},
              {"Kt", Kt},
              {"Vt", Vt},
-             {"SCALE_BITS",
-              [&] {
-                  uint32_t bits;
-                  const float value = 1.0F / std::sqrt(static_cast<float>(attrs.key_dim));
-                  std::memcpy(&bits, &value, sizeof(bits));
-                  return bits;
-              }()},
+             {"max_items", max_items},
+             {"SCALE_BITS", std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(attrs.key_dim)))},
              {"EPS_BITS", 0x358637BDU}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
