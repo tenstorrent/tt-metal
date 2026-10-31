@@ -95,6 +95,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 asm volatile("nop");
             }
+            // RC experiment (loop knock-out): byte 3 of L1 0x1FFE8 bit 1 -> unpack instructions wait until all packers are idle
+            const bool rc_ko_unpack_after_pack = ((*reinterpret_cast<volatile std::uint32_t*>(0x1FFE8u) >> 24) & 0x2u) != 0;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
@@ -102,6 +104,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
+                        if (rc_ko_unpack_after_pack)
+                        {
+                            TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_THCON, p_stall::PACK); // RC experiment
+                        }
                         _llk_unpack_AB_matmul_<>(
                             L1_ADDRESS(buffer_A[0]),
                             L1_ADDRESS(buffer_B[0]),
