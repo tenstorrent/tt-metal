@@ -262,7 +262,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         });
     } else if (use_width_sharding) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / tile_hw;
-        constexpr uint32_t num_input_tiles = 2;
+        const uint32_t shard_Wt = a.shard_spec().value().shape[1] / tile_width;
+        const uint32_t num_input_tiles =
+            use_fpu_negate
+                ? std::max(
+                      2U, std::min(ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config), shard_Wt))
+                : 2U;
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN_DFB,
             .entry_size = src0_single_tile_size,

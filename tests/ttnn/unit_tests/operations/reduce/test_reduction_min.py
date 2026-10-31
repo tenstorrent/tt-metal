@@ -223,3 +223,41 @@ def test_min_h_axis_split(device, dtype, shape):
     tt_output = ttnn.min(tt_input, dim=-2)
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert_equal(torch_ref, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("shard_wt", [1, 2, 3, 4, 8, 12])
+def test_min_h_width_sharded_bfp8(device, shard_wt):
+    """H min on WIDTH_SHARDED bfloat8_b with several tile columns per core."""
+    torch.manual_seed(0)
+    grid = ttnn.CoreGrid(y=2, x=2)
+    shard_w = shard_wt * 32
+    torch_input = torch.randn((2, 1, 256, grid.num_cores * shard_w), dtype=torch.bfloat16)
+    input_config = ttnn.create_sharded_memory_config(
+        (512, shard_w),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output_config = ttnn.create_sharded_memory_config(
+        (64, shard_w),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+    torch_ref = torch.amin(ttnn.to_torch(tt_input), dim=-2, keepdim=True)
+
+    tt_output = ttnn.min(tt_input, dim=-2, keepdim=True, memory_config=output_config)
+
+    assert_numeric_metrics(
+        torch_ref,
+        ttnn.to_torch(tt_output),
+        pcc_threshold=0.999,
+        rtol=0.032,
+        atol=0.039,
+        frobenius_threshold=0.005,
+    )
