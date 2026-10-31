@@ -1892,7 +1892,7 @@ tasks:
       pcc_producer_kv_*: '>= limit'
       smoke_runner_ok: == 1
 - id: P.21
-  title: 'CHEAP_BUNDLE: host glue, norms writing their consumers'' buffers and dtypes, the two tiny-op chains as small kernels'
+  title: 'CHEAP_BUNDLE: host glue, norms writing their consumers'' buffers and dtypes (#10 moved to P.24)'
   step: perf
   role: perf
   device: true
@@ -1924,13 +1924,11 @@ tasks:
       HOST_GLUE: 'off'
       NORM_INTO_MOE: 'off'
       NORM_GEMM_DTYPE: 'off'
-      TINY_KERNELS: 'off'
       ENGRAM_TABLE: resident
     change:
       HOST_GLUE: 'on'
       NORM_INTO_MOE: 'on'
       NORM_GEMM_DTYPE: 'on'
-      TINY_KERNELS: 'on'
       ENGRAM_TABLE: resident
   ab_positions:
   - 51200
@@ -2052,6 +2050,43 @@ tasks:
       contract_checks_failed: == 0
       pcc_producer_kv_*: '>= limit'
       smoke_runner_ok: == 1
+- id: P.24
+  title: 'TINY_KERNELS: the compressor pooling chain and the engram gate math as one small fork kernel each'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.23
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-31: opportunity #10 (deferred by P.21): compressor _pool (12 element-wise ops + 4 slices on
+      320x512 fp32 a layer) and engram _gate_math (~27 ops on 640x4 / 640x32) as one small fork kernel each (the engram
+      one may fit mhc_pre_xing_pack''s engram mode); ~95 launches a chunk, ~0.4 ms device / ~8.5 ms host (report
+      /scratch/dnijemcevic/opportunities/report.md #10). Setting TINY_KERNELS (on / off). Same numerics as the op chain
+      (fp32 where it is fp32). Agent rules 18 / 19; forks first; add tests for the fork you add; no fork regression
+      suites; do not profile the model (the orchestrator measures off vs on).'
+  ab:
+    env:
+      TINY_KERNELS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      TINY_KERNELS: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -2069,6 +2104,7 @@ tasks:
   - P.21
   - P.22
   - P.23
+  - P.24
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
