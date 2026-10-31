@@ -8,6 +8,7 @@ with the paged spec attention, plus the ratio-2 compressor state commit at the e
 """
 
 import os
+import time
 
 import torch
 
@@ -306,6 +307,11 @@ class SpecDecoder(SpecVerifier):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._mask_map,
         )
+        self._mask_devs = ttnn.get_device_tensors(
+            self.mask_buf
+        )  # per-device views of the persistent buffer (row-major mesh order r * cols + c)
+        self._mask_last = torch.full((rows * T, words), -1, dtype=torch.int32)  # what the device holds
+        self.mask_stats = dict(calls=0, skipped=0, partial=0, full=0, shards=0, ms=0.0)
         self.mask_shifts = ttnn.from_torch(
             torch.arange(32, dtype=torch.int32),
             device=self.md,
@@ -315,8 +321,31 @@ class SpecDecoder(SpecVerifier):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
         )
 
+    def _mask_upload_mode(self):
+        """``diff`` (default): nothing is uploaded when the whole mask equals the one the device holds; ``full``: always the whole-buffer upload (legacy); ``part``: experimental per-device shard writes of the changed shards only (measured slower than the whole-buffer upload once more than ~15 of 32 shards change).
+        ``DSV41_MASK_UPLOAD`` sets it; the file named by ``DSV41_MASK_UPLOAD_FILE`` (one word) overrides it live (A/B in one server, read every 0.5 s).
+        """
+        path = os.environ.get("DSV41_MASK_UPLOAD_FILE")
+        if path:
+            now = time.monotonic()
+            c = self.__dict__.get("_mask_mode_cache")
+            if c is None or now - c[0] > 0.5:
+                try:
+                    with open(path) as f:
+                        w = f.read().strip().lower()
+                except OSError:
+                    w = ""
+                c = self._mask_mode_cache = (now, w if w in ("diff", "full", "part") else None)
+            if c[1]:
+                return c[1]
+        w = os.environ.get("DSV41_MASK_UPLOAD", "diff")
+        return w if w in ("full", "part") else "diff"
+
     def set_mask(self, packed):
-        """Host: upload ``packed`` int32 [rows*T, 4040] (``tt/grammar_mask.permute_to_runner`` layout) into the persistent buffer, in place (before the round that reads it)."""
+        """Host: upload ``packed`` int32 [rows*T, 4040] (``tt/grammar_mask.permute_to_runner`` layout) into the persistent buffer, in place (before the round that reads it).
+        ``diff`` mode (``_mask_upload_mode``): the host keeps a copy of what the device holds; an identical mask uploads nothing, otherwise only the (mesh row, mesh column) shards that changed are
+        written, each to its own device (a mask changes in the structured rows' mesh rows only, and only in the vocab columns whose allowed set moved); more than 3/4 of the shards changed = one
+        whole-buffer upload."""
         rows, cols = tuple(self.md.shape)
         T = self.U * self.n
         packed = torch.as_tensor(packed)
@@ -324,13 +353,42 @@ class SpecDecoder(SpecVerifier):
             packed.dtype,
             tuple(packed.shape),
         )
+        packed = packed.contiguous()
+        st = self.mask_stats
+        t0 = time.perf_counter()
+        st["calls"] += 1
+        last = self._mask_last
+        mode = self._mask_upload_mode()
+        if mode != "full" and last is not None and last.shape == packed.shape:
+            if torch.equal(packed, last):
+                st["skipped"] += 1
+                st["ms"] += 1e3 * (time.perf_counter() - t0)
+                return
+            wc = self.mask_words // cols
+            chg = (packed != last).reshape(rows, T, cols, wc).any(dim=3).any(dim=1)  # [rows, cols]
+            sel = chg.nonzero().tolist()
+            if mode == "part" and len(sel) * 4 <= rows * cols * 3:
+                new = packed.reshape(rows, T, cols, wc)
+                devs = self._mask_devs
+                for r, c in sel:
+                    h = ttnn.from_torch(new[r, :, c, :].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.copy_host_to_device_tensor(h, devs[r * cols + c])
+                self._mask_last = packed.clone()
+                st["partial"] += 1
+                st["shards"] += len(sel)
+                st["ms"] += 1e3 * (time.perf_counter() - t0)
+                return
         host = ttnn.from_torch(
-            packed.contiguous(),
+            packed,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self._mask_map,
         )
         ttnn.copy_host_to_device_tensor(host, self.mask_buf)
+        self._mask_last = packed.clone()
+        st["full"] += 1
+        st["shards"] += rows * cols
+        st["ms"] += 1e3 * (time.perf_counter() - t0)
 
     def mask_bias(self):
         """Device: packed words -> fp32 bias [1,1,T,16160] (0.0 allowed, MASK_NEG disallowed) of this device's vocab column. Same unpack as the upstream sampler's grammar path (shift by arange(32), and 1)."""

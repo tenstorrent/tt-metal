@@ -1912,9 +1912,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             self._ab_compare(tokens, base, rows)
         gpk = None
         if grammar_bitmask is not None:
+            t_gm = time.perf_counter()
             gpk = self._grammar_for_runner(grammar_bitmask, runner, rows, nv_l, B, n)
             if gpk is not None:
                 self.spec_stats["masked_rounds"] = self.spec_stats.get("masked_rounds", 0) + 1
+                self.spec_stats["perm_ms"] = self.spec_stats.get("perm_ms", 0.0) + 1e3 * (time.perf_counter() - t_gm)
         t0 = time.perf_counter()
         runner.sample_cfg = cfg  # None = greedy rows (the traced sampler then holds / gets greedy parameters)
         if (
@@ -1995,6 +1997,21 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K if self.spec_adapt is None else 'adaptive k rounds ' + str(dict(sorted(self.spec.k_hist.items()))) + ' chosen ' + str(dict(sorted(self.choose_hist.items())))}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)}, masked (grammar) rounds {ss.get('masked_rounds', 0)})"
             )
             st.update(n=0, t=0.0, g=0.0, pre=0.0, post=0.0, prop=0.0, rp=0.0, pv=0.0)
+            if ss.get("masked_rounds"):
+                ms = [
+                    getattr(r.dec, "mask_stats", None) for r in self._spec_runners() + list(self.spec_buckets.values())
+                ]
+                ms = [m for m in ms if m]
+                tot = (
+                    {k: sum(m[k] for m in ms) for k in ("calls", "skipped", "partial", "full", "shards", "ms")}
+                    if ms
+                    else {}
+                )
+                if tot.get("calls"):
+                    logger.info(
+                        f"DSV4.1 grammar mask (cumulative): {ss['masked_rounds']} masked rounds, permute {ss.get('perm_ms', 0.0) / ss['masked_rounds']:.2f} ms/round, upload {tot['ms'] / tot['calls']:.2f} ms/round "
+                        f"(unchanged-skipped {tot['skipped']}, partial {tot['partial']}, full {tot['full']}; device shards written {tot['shards'] / tot['calls']:.1f} per round of {int(os.environ.get('DSV41_MASK_SHARDS', '32'))}; mode {os.environ.get('DSV41_MASK_UPLOAD', 'diff')})"
+                    )
         out = torch.zeros(W, n, dtype=torch.int32)
         if rows:
             out[torch.tensor([x[0] for x in rows])] = a.to(torch.int32)[rr]
