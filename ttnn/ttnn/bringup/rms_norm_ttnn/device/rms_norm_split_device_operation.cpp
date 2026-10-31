@@ -39,6 +39,7 @@ constexpr uint32_t CB_RS = tt::CBIndex::c_4;
 constexpr uint32_t CB_GAMMA = tt::CBIndex::c_5;
 constexpr uint32_t CB_TMP = tt::CBIndex::c_6;
 constexpr uint32_t CB_OUT = tt::CBIndex::c_7;
+constexpr uint32_t CB_TWIN = tt::CBIndex::c_8;  // bfp8_twin (P.21)
 
 constexpr const char* KDIR = "ttnn/ttnn/bringup/rms_norm_ttnn/kernels/";
 
@@ -117,8 +118,8 @@ SplitPlan split_plan(const RmsNormSplitParams& a, const RmsNormSplitInputs& t, u
     }
     p.WB = p.Wt_win / p.B;
     uint32_t dest = a.fp32_dest_acc_en ? (a.dst_full_sync_en ? 8u : 4u) : (a.dst_full_sync_en ? 16u : 8u);
-    if (t.weight.has_value() && mode != MODE_STATS_OUT) {
-        dest /= 2;  // pass B holds the block's gamma tiles beside it in DEST
+    if ((t.weight.has_value() || t.twin.has_value()) && mode != MODE_STATS_OUT) {
+        dest /= 2;  // pass B holds the block's gamma tiles (or the twin's rounded copy) beside it in DEST
     }
     p.BLK = 1;
     for (uint32_t d = std::min(dest, p.WB); d >= 1; --d) {
@@ -158,6 +159,33 @@ void RmsNormSplitDeviceOperation::validate_on_program_cache_miss(
             "rms_norm (split): partial_stats has {} rows, the input {}",
             folded_rows(s),
             folded_rows(t.input));
+    }
+    if (t.twin.has_value()) {
+        const auto& tw = *t.twin;
+        TT_FATAL(!a.stats_out, "rms_norm (split): bfp8_twin takes no stats_out");
+        TT_FATAL(
+            a.out_dtype == DataType::BFLOAT16,
+            "rms_norm (split): bfp8_twin needs a bfloat16 output (its values are the bf16 output's), got {}",
+            a.out_dtype);
+        TT_FATAL(
+            tw.storage_type() == ttnn::StorageType::DEVICE && tw.is_allocated(),
+            "rms_norm (split): bfp8_twin must be an allocated device tensor");
+        TT_FATAL(
+            tw.dtype() == DataType::BFLOAT8_B && tw.layout() == Layout::TILE &&
+                tw.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "rms_norm (split): bfp8_twin must be bfloat8_b TILE interleaved, got {} {} {}",
+            tw.dtype(),
+            tw.layout(),
+            tw.memory_config().memory_layout());
+        auto want = t.input.logical_shape();
+        want[-1] = a.col_end - a.col_start;
+        TT_FATAL(
+            tw.logical_shape() == want,
+            "rms_norm (split): bfp8_twin shape {} is not the output's {}",
+            tw.logical_shape(),
+            want);
+        TT_FATAL(
+            tw.buffer()->address() != t.input.buffer()->address(), "rms_norm (split): bfp8_twin must not be the input");
     }
     if (t.weight.has_value()) {
         const auto& w = *t.weight;
@@ -232,7 +260,9 @@ ttsl::hash::hash_t RmsNormSplitDeviceOperation::compute_program_hash(
         spec_of(t.weight),
         spec_of(t.partial_stats),
         a.max_grid.has_value() ? a.max_grid->x : 0u,
-        a.max_grid.has_value() ? a.max_grid->y : 0u);
+        a.max_grid.has_value() ? a.max_grid->y : 0u,
+        a.pack_precise,
+        spec_of(t.twin));
 }
 
 tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
@@ -241,6 +271,7 @@ tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
     const auto& input = t.input;
     const bool has_gamma = t.weight.has_value();
     const bool has_stats = t.partial_stats.has_value();
+    const bool has_twin = t.twin.has_value();
     const uint32_t mode = mode_of(a, t);
 
     const auto grid = op_grid(a, input);
@@ -283,6 +314,9 @@ tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
         if (has_gamma) {
             add_cb(CB_GAMMA, gamma_fmt, 2 * plan.BLK);
         }
+        if (has_twin) {
+            add_cb(CB_TWIN, tt::DataFormat::Bfp8_b, 2 * plan.BLK);
+        }
     }
 
     std::vector<uint32_t> reader_ct = {
@@ -303,8 +337,9 @@ tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
     TensorAccessorArgs(has_gamma ? t.weight->buffer() : nullptr).append_to(reader_ct);
 
     const uint32_t wt_out = output.padded_shape()[-1] / TILE;
-    std::vector<uint32_t> writer_ct = {CB_OUT, wt_out, plan.WB, plan.BLK, plan.B, mode};
+    std::vector<uint32_t> writer_ct = {CB_OUT, wt_out, plan.WB, plan.BLK, plan.B, mode, CB_TWIN, has_twin ? 1u : 0u};
     TensorAccessorArgs(output.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(has_twin ? t.twin->buffer() : nullptr).append_to(writer_ct);
 
     const float inv_w = 1.0f / static_cast<float>(a.stats_width);
     std::vector<uint32_t> compute_ct = {
@@ -322,7 +357,9 @@ tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
         mode,
         static_cast<uint32_t>(has_gamma),
         std::bit_cast<uint32_t>(inv_w),
-        std::bit_cast<uint32_t>(a.epsilon)};
+        std::bit_cast<uint32_t>(a.epsilon),
+        CB_TWIN,
+        has_twin ? 1u : 0u};
 
     KernelDescriptor reader;
     reader.kernel_source = std::string(KDIR) + "rms_norm_split_reader.cpp";
@@ -347,17 +384,23 @@ tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
         .math_fidelity = a.math_fidelity,
         .fp32_dest_acc_en = a.fp32_dest_acc_en,
         .dst_full_sync_en = a.dst_full_sync_en,
+        .bfp8_pack_precise = a.pack_precise || has_twin,
         .math_approx_mode = a.math_approx_mode};
+    if (a.pack_precise || has_twin) {
+        // (ComputeKernel's config hash leaves bfp8_pack_precise out: a define gives the binary its own cache key)
+        compute.defines.emplace_back("RMS_SPLIT_PACK_PRECISE", "1");
+    }
 
     Buffer* const stats_buf = has_stats ? t.partial_stats->buffer() : nullptr;
     Buffer* const gamma_buf = has_gamma ? t.weight->buffer() : nullptr;
+    Buffer* const twin_buf = has_twin ? t.twin->buffer() : nullptr;
     const auto cores = corerange_to_cores(core_range, num_cores, true);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = cores.at(i);
         const uint32_t us = std::min(i * per_core, units);
         const uint32_t ue = std::min(us + per_core, units);
         reader.emplace_runtime_args(core, {input.buffer(), stats_buf, gamma_buf, us, ue});
-        writer.emplace_runtime_args(core, {output.buffer(), us, ue});
+        writer.emplace_runtime_args(core, {output.buffer(), us, ue, twin_buf});
         compute.emplace_runtime_args(core, {ue - us});
     }
     desc.kernels.push_back(std::move(reader));
@@ -375,9 +418,11 @@ ttnn::Tensor rms_norm_split(
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& partial_stats,
     const ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitParams& attrs,
-    const std::optional<ttnn::Tensor>& output) {
+    const std::optional<ttnn::Tensor>& output,
+    const std::optional<ttnn::Tensor>& twin) {
     using Op = ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitDeviceOperation;
-    auto args = Op::tensor_args_t{.input = input, .weight = weight, .partial_stats = partial_stats, .output = output};
+    auto args = Op::tensor_args_t{
+        .input = input, .weight = weight, .partial_stats = partial_stats, .output = output, .twin = twin};
     return ttnn::device_operation::launch<Op>(attrs, args);
 }
 

@@ -36,11 +36,35 @@ class Setting:
 class Settings:
     def __init__(self, prefix: str, table: dict[str, Setting]):
         self.prefix, self.table = prefix, dict(table)
+        # snapshot(): every switch's value read once (None = get() reads the environment on every call, as before)
+        self.snap: dict | None = None
 
     def env_name(self, name: str) -> str:
         return f"{self.prefix}{name}"
 
     def get(self, name: str):
+        snap = self.snap
+        if snap is not None:  # (a model's load froze the values: no environment read per call)
+            return snap[name]
+        return self._read(name)
+
+    def snapshot(self) -> None:
+        """Read every switch now and serve get() from these values (no os.environ read per call) until ``thaw()`` or
+        the next ``snapshot()``. A model calls it at load time when its own switch asks for it (DeepSeek-V4.1 P.21
+        HOST_GLUE: ~1500 get() calls a chunk); a process that changes the environment after it calls ``refresh()``."""
+        self.snap = None
+        self.snap = {name: self._read(name) for name in self.table}
+
+    def thaw(self) -> None:
+        """get() reads the environment on every call again (the default)."""
+        self.snap = None
+
+    def refresh(self) -> None:
+        """Re-read a snapshot after the environment changed (in-process A/B tests); no-op when not frozen."""
+        if self.snap is not None:
+            self.snapshot()
+
+    def _read(self, name: str):
         s = self.table[name]
         raw = os.environ.get(self.env_name(name))
         if raw is None:

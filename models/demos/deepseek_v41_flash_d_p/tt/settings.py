@@ -801,6 +801,38 @@ TABLE = {
         "layer); the carry's values are the last run's tail (timing only). off = no-op: every timed run rebuilds the "
         "carry (the path before FIX.16; comparison only)",
     ),
+    "HOST_GLUE": Setting(
+        "on",
+        ("on", "off"),
+        "P.21 (galaxy 8x4, owner pick 2026-10-31, opportunity #9): on = the model's load freezes every switch "
+        "(core/model_settings.Settings.snapshot: settings.get serves the load-time values, no os.environ read per call; "
+        "~1500 calls a chunk) and tt/mm_configs.py memoizes each matmul call site's program config (keyed by the "
+        "weight / compute-config objects, dtypes and x's shape; ~190 calls a chunk). Values and configs are the same; "
+        "an in-process environment change after the load needs settings.refresh(). off = every get reads the "
+        "environment and every call rebuilds its config key (the path before P.21)",
+    ),
+    "NORM_INTO_MOE": Setting(
+        "on",
+        ("on", "off"),
+        "P.21 (owner pick 2026-10-31, opportunity #7; MOE_IMPL=block with MOE_HEAD=fused): on = ffn_norm writes the "
+        "MoE block's own x buffer (MoEBlock.input_buffer(), read in place: no bf16 -> bf16 copy) and, through the "
+        "rms_norm fork's bfp8_twin option, the fused head's bfloat8_b x (xq) in the same program (y rounded to bf16 "
+        "as the bf16 output, then packed to bfp8 in one rounding = the typecast it replaces, bit for bit; the head "
+        "skips its typecast). Same bytes. off = ffn_norm writes its own buffer, the head copies it and typecasts xq "
+        "(the path before P.21)",
+    ),
+    "NORM_GEMM_DTYPE": Setting(
+        "on",
+        ("on", "off"),
+        "P.21 (owner pick 2026-10-31, opportunity #8; ATTN_SP32=on, NORM_IMPL=on): on = a norm whose only reader is a "
+        "bfloat8_b GEMM writes bfloat8_b itself, packed from the fp32 DEST in one rounding (rms_norm fork option "
+        "pack_precise): q_norm in the layers without an indexer, with the attention's softmax scale 512^-0.5 folded "
+        "into its gamma at load (the q scale multiply goes; wq_b reads it directly). attn_norm keeps bf16 + q_a's "
+        "typecast (a bfp8 attn_norm takes the fork's one-core-a-row-tile LOCAL mode: +2.3 ms of device a chunk). In the indexer layers "
+        "q_norm writes bf16 and, through bfp8_twin, the indexer's bfp8 q_resid (typecast(bf16) bit for bit: the "
+        "indexer's typecast goes). One rounding (fp32 -> bfp8) instead of two (fp32 -> bf16 -> bfp8, DS41-137); "
+        "never below the reference's fp8 input. off = the norms write bf16 and the readers cast / scale (before P.21)",
+    ),
     "MAX_WORKER_CORES": Setting(
         110,
         None,

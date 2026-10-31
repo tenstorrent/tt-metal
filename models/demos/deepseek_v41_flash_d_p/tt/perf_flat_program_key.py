@@ -72,6 +72,7 @@ def test_program_key(mesh_device, monkeypatch):
     try:
         for mode in ("addresses", "patch"):
             monkeypatch.setenv(env, mode)
+            settings.refresh()  # (HOST_GLUE=on, P.21: the model froze the settings at load)
             for phase, n in (("steady", N_STEADY), ("moving", N_MOVING)):
                 rows = []
                 for i in range(n):

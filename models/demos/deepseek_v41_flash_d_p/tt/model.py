@@ -356,6 +356,23 @@ class TtDS41Block:
         # with whole hidden rows (one all_to_all of attn_in over TP, then local); the attention projections already
         # run there (ATTN_SP32_PROJ=on, P.9)
         self.sp32 = attn_sp32()
+        # NORM_GEMM_DTYPE=on (P.21): q_norm writes wq_b's bfloat8_b input (one rounding from fp32 DEST, fork option
+        # pack_precise, the softmax scale in its gamma) when the attention alone reads q_resid; with an indexer, q_norm
+        # writes bf16 + the indexer's bfp8 q_resid (bfp8_twin). The chip-rows path only (ATTN_SP32). attn_norm stays
+        # bf16 + q_a's typecast: a bfp8 attn_norm takes the fork's split program, whose LOCAL mode runs one core a row
+        # tile (5 for 160 rows): +2.3 ms of device a chunk vs the default program + typecast (P.21 measure, p51200).
+        readers = {}
+        for st in self.steps:
+            for n in st.inputs:
+                readers.setdefault(n, set()).add(st.name)
+        self.norm_gemm = (
+            settings.get("NORM_GEMM_DTYPE") == "on"
+            and self.sp32
+            and settings.get("GEMM_INPUTS") == "bfp8"
+            and settings.get("NORM_IMPL") == "on"
+        )
+        qr_bfp8 = self.norm_gemm and readers.get("q_resid", set()) <= {"attention"}
+        qr_twin = self.norm_gemm and readers.get("q_resid", set()) == {"attention", "indexer"}
         self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm", rows=self.sp32)
         # (MOE_IMPL=block, MOE_HEAD=fused: the fused head gathers x over TP itself - ffn_norm keeps the column split)
         fused_head = settings.get("MOE_IMPL") == "block" and settings.get("MOE_HEAD") == "fused"
@@ -364,7 +381,16 @@ class TtDS41Block:
         self.ffn_res = build_residual(cfg, step="ffn_residual")
         # attention input: one fused [wq_a | wkv] projection for q_a and kv
         proj = TtAttnInProj(mesh, attn_in_weights(ck, cfg, i), full_rows=self.sp32)
-        self.q_a = TtQa(mesh, proj, ck.weight(p + "attn.q_norm.weight", torch.float32), cfg.eps)
+        q_scale = float(cfg.head_dim) ** -0.5  # (the attention's softmax scale, TtWindowAttention.scale)
+        self.q_a = TtQa(
+            mesh,
+            proj,
+            ck.weight(p + "attn.q_norm.weight", torch.float32),
+            cfg.eps,
+            gamma_scale=q_scale if qr_bfp8 else 1.0,
+            dtype=ttnn.bfloat8_b if qr_bfp8 else None,
+        )
+        self.q_a.twin = qr_twin and self.q_a.norm.out_dtype == ttnn.bfloat16
         kv_norm = ck.weight(p + "attn.kv_norm.weight", torch.float32)
         self.kv = TtWindowKv(mesh, proj, kv_norm, cfg.eps, rope, cfg.rope_dim)
         self.compressor = None
@@ -381,6 +407,10 @@ class TtDS41Block:
             self.attention = TtSparseAttention(mesh, cfg, w, rope, model.tables, model.sparse_tables())
         else:
             self.attention = TtWindowAttention(mesh, cfg, w, rope, model.tables)
+        if qr_bfp8:
+            assert self.attention.sp32 and self.attention.stock, "NORM_GEMM_DTYPE: q_resid prescaled needs _q_stock"
+            assert self.attention.scale == q_scale, (self.attention.scale, q_scale)
+            self.attention.q_prescaled = True
         # engram
         self.engram_kv = self.engram_add = None
         if cfg.is_engram(i):
@@ -400,6 +430,16 @@ class TtDS41Block:
             # P.12: the shared expert reads its x rows from the routed experts' gathered row-major q(x) (experts runs
             # first in the block graph)
             self.experts.keep_rows = bool(self.shared.reads_rows)
+        # NORM_INTO_MOE=on (P.21): ffn_norm (the column split, bf16, the fork) writes the MoE block's own x and its
+        # bfloat8_b xq (bfp8_twin) in one program; the fused head reads both in place
+        self.norm_into_moe = (
+            settings.get("NORM_INTO_MOE") == "on"
+            and self.moe_block is not None
+            and fused_head
+            and self.ffn_norm.impl == "on"
+            and self.ffn_norm.out_dtype == ttnn.bfloat16
+        )
+        self._moe_xq_ready = False
         # INDEXER_GLUE=on (P.16): the experts take the router's own weights (no dense scatter, no gather)
         self.router_wts = indexer_glue()
         if self.router is not None:
@@ -464,6 +504,8 @@ class TtDS41Block:
 
         def indexer(ctx, x, qr, *compressed):
             st, start = ctx.state, ctx.start
+            # NORM_GEMM_DTYPE=on (P.21): q_norm's bfloat8_b q_resid, wq_b's input as is
+            self.indexer.qr_twin = self.q_a.twin_out if self.q_a.twin else None
             cache = st.compress[self.kv_src].index_k
             self.indexer.share(st.memo, self.kv_src)  # INDEXER_GLUE=on: the tiled keys once per (source, chunk)
             if isinstance(self.indexer, TtReindexer):
@@ -502,6 +544,12 @@ class TtDS41Block:
             return self.collapse(h, mix)
 
         def ffn_norm(ctx, x):
+            if self.norm_into_moe:  # (P.21: into the block's buffers; pinned, the block frees nothing of them)
+                xb, xq = self.moe_block.input_buffers()
+                if xb is not None and tuple(xb.shape) == tuple(x.shape) and xb.dtype == ttnn.bfloat16:
+                    self._moe_xq_ready = xq is not None
+                    return self.ffn_norm(x, out=xb, twin=xq)
+            self._moe_xq_ready = False
             return self.ffn_norm(x)
 
         def router(ctx, x):
@@ -539,7 +587,8 @@ class TtDS41Block:
                 return Keep()
 
             def experts(ctx, x, routing):  # noqa: F811
-                return self.moe_block(x)
+                ready, self._moe_xq_ready = self._moe_xq_ready, False
+                return self.moe_block(x, xq_ready=ready)
 
             def shared_expert(ctx, x):  # noqa: F811
                 return Keep()
@@ -665,6 +714,11 @@ class TtDS41Model:
         from .engram import engram_hasher
 
         t0 = time.time()
+        # HOST_GLUE=on (P.21): every switch read once here, settings.get serves these values (no environment read
+        # per call); off: thawed, every get reads the environment (a new model's load always re-reads them)
+        settings.thaw()
+        if settings.get("HOST_GLUE") == "on":
+            settings.snapshot()
         self.mesh, self.path = mesh, str(model_path)
         init_caps(mesh)  # FIX.15 (MAX_WORKER_CORES): the mesh's core cap for every op of the model
         self.weight_cache = weight_cache  # the routed experts' laid-out weight cache (tt/experts.py:expert_cache_dir)

@@ -672,10 +672,38 @@ def _run(op, x, w, pc, dtype, ckc, memory_config, out=None):
     return r if out is None else out
 
 
+# HOST_GLUE=on (P.21): the config of each call site, memoized while the settings are frozen (tt/model.py snapshots
+# them at load): key (the weight object, the compute config object, dtypes, batched), checked against the weight's
+# and the config's identity and x's shape; cleared when the snapshot changes. (snapshot, {key: (w, ckc, shape, pc)})
+_SITE_MEMO: list = [None, {}]
+
+
+def _site_config(x, w, dtype, ckc, batched: bool = False, rule: bool = True):
+    """The config ``linear`` / ``matmul`` pass: memoized per call site under HOST_GLUE=on (frozen settings), else
+    program_config's own (key-building) path every call, as before P.21."""
+    snap = settings.snap
+    if snap is None or snap.get("HOST_GLUE") != "on":
+        on = tuned() and (rule or mode() == "galaxy")
+        return program_config(x, w, dtype, ckc, batched=batched) if on else None
+    if _SITE_MEMO[0] is not snap:
+        _SITE_MEMO[0] = snap
+        _SITE_MEMO[1] = {}
+    memo = _SITE_MEMO[1]
+    key = (id(w), id(ckc), dtype, x.dtype, batched, rule)
+    shape = x.shape
+    hit = memo.get(key)
+    if hit is not None and hit[0] is w and hit[1] is ckc and hit[2] == shape:
+        return hit[3]
+    on = tuned() and (rule or mode() == "galaxy")
+    pc = program_config(x, w, dtype, ckc, batched=batched) if on else None
+    memo[key] = (w, ckc, shape, pc)  # (holds w and ckc: their ids stay their own while the entry lives)
+    return pc
+
+
 def linear(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "", out=None):
     """ttnn.linear(x, w) with the MATMUL_CONFIG config (x [..., M, K], w [1, 1, K, N]). ``out``: written in place
     (HOST_ALLOC=on, P.15; the result is then ``out`` itself)."""
-    pc = program_config(x, w, dtype, compute_kernel_config) if tuned() else None
+    pc = _site_config(x, w, dtype, compute_kernel_config)
     if RECORD is not None:
         _record("linear", site, x, w, dtype, compute_kernel_config, memory_config, pc)
     return _run(ttnn.linear, x, w, pc, dtype, compute_kernel_config, memory_config, out)
@@ -686,8 +714,7 @@ def matmul(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "",
     ``rule`` False: no config under MATMUL_CONFIG=tuned (a site that was not routed here before P.19: rope.pairs),
     the GALAXY entry or the rule under galaxy."""
     batched = len(w.shape) >= 3 and math.prod(tuple(w.shape)[:-2]) > 1
-    on = tuned() and (rule or mode() == "galaxy")
-    pc = program_config(x, w, dtype, compute_kernel_config, batched=batched) if on else None
+    pc = _site_config(x, w, dtype, compute_kernel_config, batched=batched, rule=rule)
     if RECORD is not None:
         _record("matmul", site, x, w, dtype, compute_kernel_config, memory_config, pc)
     return _run(ttnn.matmul, x, w, pc, dtype, compute_kernel_config, memory_config, out)
