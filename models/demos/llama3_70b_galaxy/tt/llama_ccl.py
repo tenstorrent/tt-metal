@@ -6,6 +6,7 @@ import ttnn
 import torch
 import os
 from loguru import logger
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import qwen_prefill_opt_ok
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -20,6 +21,10 @@ USE_LINE_AG = {
     # "FF2",
     # "LAYERNORM",
 }
+
+# Prefill seqlens with preallocated CCL buffers (TT_CCL.support_seqlens); the generator traces these
+# and takes the largest as the end of power-of-2 prefill padding (generator.MAX_TRACED_PREFILL_LEN).
+PREFILL_SUPPORT_SEQLENS = (4096, 2048, 1024, 128)
 
 
 class TT_CCL:
@@ -195,7 +200,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [4096, 2048, 1024, 128]
+            self.support_seqlens = list(PREFILL_SUPPORT_SEQLENS)
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -932,7 +937,14 @@ class TT_CCL:
 
         else:
             if self.use_qwen_prefill_ff2_gather_reduce and buffer_key == "FF2":
-                return self._prefill_ff2_gather_reduce(input_tensor_mesh, cluster_axis, memory_config)
+                # Qwen FF2 above the traced lengths (> max(support_seqlens) = 4096): bf16 ring
+                # reduce-scatter + all-gather (the generic path below, same as WO at > 4096; no FF2
+                # persistent buffers exist at these lengths). Traced lengths keep the rank-ordered
+                # gather + local sum, and so does a total context (cached + new) > QWEN_OPT_MAX_SEQ_LEN (main's FF2
+                # path at every length).
+                total_len = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
+                if total_len <= max(self.support_seqlens) or not qwen_prefill_opt_ok(self.model_config, total_len):
+                    return self._prefill_ff2_gather_reduce(input_tensor_mesh, cluster_axis, memory_config)
             if buffer_key == "WO_AG" or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
@@ -1396,6 +1408,12 @@ class TT_CCL:
             num_workers_per_link = 4
         else:
             num_workers_per_link = 1
+        # Qwen long prefill (batch 1): per-buffer worker/sync/buffer overrides from qwen_model_config
+        # (qwen_prefill_ring_rs_params). Llama never takes this branch (is_qwen False, no config key).
+        rs_overrides = {}
+        if self.is_qwen and batch_size == 1 and "QWEN_PREFILL_RING_RS_PARAMS" in self.model_config:
+            rs_overrides = self.model_config["QWEN_PREFILL_RING_RS_PARAMS"](B * seqlen, buffer_key) or {}
+            num_workers_per_link = rs_overrides.pop("num_workers_per_link", num_workers_per_link)
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
@@ -1408,12 +1426,61 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
             num_workers_per_link=num_workers_per_link,
+            **rs_overrides,
         )
 
         # reshape input back
         ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
+
+    def ring_reduce_scatter_seq(self, input_tensor_mesh, memory_config, buffer_key, cluster_axis=0):
+        """Qwen sequence-parallel prefill: reduce-scatter the [1, 1, S, H] partial sums along the sequence (dim 2).
+
+        Device at ring index r of cluster_axis keeps the sum of sequence chunk r ([1, 1, S / ring, H]). Ring topology,
+        4 links, the same per-buffer worker/sync overrides as ring_reduce_scatter (keyed on the full S).
+        """
+        seqlen = input_tensor_mesh.shape[-2]
+        rs_overrides = {}
+        if "QWEN_PREFILL_RING_RS_PARAMS" in self.model_config:
+            rs_overrides = dict(self.model_config["QWEN_PREFILL_RING_RS_PARAMS"](seqlen, buffer_key) or {})
+        out = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            num_links=4,
+            memory_config=memory_config,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+            **rs_overrides,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return out
+
+    def ring_all_gather_seq(self, input_tensor_mesh, memory_config, buffer_key, cluster_axis=0):
+        """Qwen sequence-parallel prefill: all-gather [1, 1, S / ring, H] chunks along the sequence (dim 2), in ring order."""
+        seqlen = input_tensor_mesh.shape[-2] * self.cluster_shape[cluster_axis]
+        ag_overrides = {}
+        if "QWEN_PREFILL_RING_AG_PARAMS" in self.model_config:
+            ag_overrides = dict(self.model_config["QWEN_PREFILL_RING_AG_PARAMS"](seqlen, buffer_key) or {})
+        out = ttnn.experimental.all_gather_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffer=None,
+            dim=2,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_links=4,
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            memory_config=memory_config,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+            **ag_overrides,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return out
 
     def line_all_gather(
         self,
@@ -1573,6 +1640,11 @@ class TT_CCL:
         num_links = (
             4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
         )
+        # Qwen long prefill: per-buffer worker overrides from qwen_model_config (qwen_prefill_ring_ag_params).
+        # Llama never takes this branch (is_qwen False, no config key); the reversed gather keeps its defaults.
+        ag_overrides = {}
+        if self.is_qwen and not reverse_order and "QWEN_PREFILL_RING_AG_PARAMS" in self.model_config:
+            ag_overrides = self.model_config["QWEN_PREFILL_RING_AG_PARAMS"](seqlen, buffer_key) or {}
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1588,6 +1660,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
+            **ag_overrides,
         )
 
         if self.mode == "prefill" and buffer_key is not None and dim != 2:

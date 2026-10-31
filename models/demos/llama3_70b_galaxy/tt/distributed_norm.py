@@ -5,6 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import attach_prefill_opt_eps, prefill_norm_eps
 
 
 class DistributedNorm(LightweightModule):
@@ -14,6 +15,10 @@ class DistributedNorm(LightweightModule):
         self.tt_ccl = tt_ccl
         self.ccl_topology = ccl_topology
         self.use_sharded_decode = use_sharded_decode
+        if getattr(args, "is_qwen", False):
+            # Qwen3's HF rms_norm_eps (1e-6) for prefills of S <= QWEN_OPT_MAX_SEQ_LEN only; decode and longer
+            # prefills keep norm.eps (the RMSNorm default, as on main). The twin shares norm's weights.
+            attach_prefill_opt_eps(norm, args.norm_eps)
         if args.qk_norm:
             core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
         else:
@@ -80,8 +85,13 @@ class DistributedNorm(LightweightModule):
             packer_l1_acc=False,
         )
 
-    def forward(self, x, res, mode):
-        """Apply a norm, possibly gathering inputs if required."""
+    def forward(self, x, res, mode, output_dtype=None, seq_len=None):
+        """Apply a norm, possibly gathering inputs if required. output_dtype (prefill only) overrides the
+        norm output dtype. seq_len (prefill only): the prefill length S; None means x.shape[-2] (x holds
+        the full sequence, or a CP last-token window, which only exists for S <= QWEN_OPT_MAX_SEQ_LEN).
+        The prefill eps (qwen_opt_limits.prefill_norm) is Qwen's only with no cached prefix and a total
+        context <= cap (as recorded by the model for this prefill, else S); decode always uses
+        self.norm.eps (main's)."""
         # On the BH no-prefetch path the residual stream is bf16 (kept high-precision to avoid bf8
         # accumulation error over 64 layers). The norm output only feeds matmuls and is not part of
         # the residual, so force it to bf8 to keep activation/CB footprint small (avoids L1 clashes
@@ -154,10 +164,12 @@ class DistributedNorm(LightweightModule):
         else:
             return tt_distributed_rmsnorm(
                 x,
-                epsilon=self.norm.eps,
+                epsilon=prefill_norm_eps(
+                    self.norm, x.shape[-2] if seq_len is None else seq_len, getattr(self.args, "model_config", None)
+                ),
                 gamma=self.norm.weight_distributed,
                 mesh_device=self.args.mesh_device,
                 compute_kernel_config=self.ln_cfg,
                 tt_ccl=self.tt_ccl,
-                output_dtype=norm_output_dtype,
+                output_dtype=output_dtype if output_dtype is not None else norm_output_dtype,
             )
