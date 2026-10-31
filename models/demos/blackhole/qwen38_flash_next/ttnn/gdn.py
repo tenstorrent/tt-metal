@@ -58,6 +58,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     weight_layout_tag,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mm_stream as fused_mm_stream
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fused_program
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear
 
 TP_AXIS = 1
@@ -236,6 +237,8 @@ def _deallocate(*tensors) -> None:
         if key in seen:
             continue
         seen.add(key)
+        if fused_program.is_pinned(tensor):  # QWEN38_ZERO_DEAD_ROWS: the shared zero-padded tensor stays
+            continue
         ttnn.deallocate(tensor)
 
 
@@ -2033,13 +2036,14 @@ class Qwen38TTNNGDN:
     def _project(self, full_hidden):
         """Project the gathered hidden row into one L1 row tile ``[1,1,1,4160]`` = q|k|v|z|a|b, a and b tile-aligned."""
 
-        projected_ws = fused_mm_stream.linear(
-            full_hidden,
-            self.weights.qkvzab,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=self.in_proj_program_config,
-            compute_kernel_config=self.projection_compute_config,
-        )
+        with fused_program.pinned_scope():  # the streamed matmul writes row 0 only: dead rows stay the pinned zeros
+            projected_ws = fused_mm_stream.linear(
+                full_hidden,
+                self.weights.qkvzab,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.in_proj_program_config,
+                compute_kernel_config=self.projection_compute_config,
+            )
         if os.environ.get("QWEN38_GDN_L1_IN", "1") == "1" and fused.registry.enabled(
             "gdn_step"
         ):  # default on (x55 -0.10 ms)

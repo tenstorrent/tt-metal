@@ -262,7 +262,8 @@ def gdn_step(gdn, projected, window, state):
     run(
         projected, window[:3], window[3], gdn.weights.conv_taps, _constants(gdn), gdn.weights.norm, state.recurrent, out
     )
-    ttnn.deallocate(projected)
+    if not fp.is_pinned(projected):
+        ttnn.deallocate(projected)
     return out
 
 

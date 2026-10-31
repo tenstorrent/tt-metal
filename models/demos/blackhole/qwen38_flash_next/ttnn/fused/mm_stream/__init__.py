@@ -408,7 +408,7 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
     from .. import moe_experts
 
     cols, blk = SHAPES[(k, n)]
-    out = fp.allocate(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
+    out = fp.pinned_output(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
     exclude = frozenset() if os.environ.get("X52_NOEXCL") else moe_experts.model_exclude(mesh)
     fp.run_program(
         [act, weight, out], mm_stream_program(act, weight, out, k=k, n=n, blk=blk, cols=cols, exclude=exclude)

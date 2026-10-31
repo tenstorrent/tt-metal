@@ -285,6 +285,133 @@ def allocate(shape: Sequence[int], dtype, layout, mesh, memory_config=ttnn.DRAM_
     return ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, mesh, memory_config)
 
 
+# ---------------------------------------------------------------- pinned zero-padded outputs (QWEN38_ZERO_DEAD_ROWS)
+#
+# A program that writes only row 0 of an output at rows == 1 leaves tile rows 1..31 as whatever the allocation held before.
+# Row-local consumers do not care; the GDN step at ROWTRIM level 2 does (it must see finite dead rows).  A buffer allocated
+# inside a trace capture cannot be zeroed once: the capture frees and reuses addresses, so another tenant of the address
+# writes its bytes back in at every replay.  So the GDN decode's two row-0-only buffers (the projection;
+# the gathered hidden is not pinned: a pinned gather output made the slab capture miss the program cache) are PINNED: one zero-padded tensor per (shape, dtype, layout, memory config), made eagerly before any capture
+# and shared by all GDN layers (they run in stream order; each is dead before the next layer's call).  A pinned tensor is
+# never deallocated (``is_pinned`` lets the model's deallocate helpers skip it) and no other tensor can take its address.
+
+ZERO_DEAD_ROWS_ENV = "QWEN38_ZERO_DEAD_ROWS"
+_PINNED: dict[tuple, "ttnn.Tensor"] = {}
+_PINNED_IDS: set[int] = set()
+_SCOPE_DEPTH = 0
+_CAPTURE_DEPTH = 0
+UNPINNED_IN_CAPTURE: list[tuple] = []  # keys that were first asked for inside a capture (not pinned; they stay stale)
+
+
+def zero_dead_rows_enabled(environ=None) -> bool:
+    import os
+
+    return (os.environ if environ is None else environ).get(ZERO_DEAD_ROWS_ENV, "1") != "0"
+
+
+def _wrap_capture_calls() -> None:
+    begin, end = ttnn.begin_trace_capture, ttnn.end_trace_capture
+    if getattr(begin, "_pinned_wrapped", False):
+        return
+
+    def begin_wrapped(*args, **kwargs):
+        global _CAPTURE_DEPTH
+        result = begin(*args, **kwargs)
+        _CAPTURE_DEPTH += 1
+        return result
+
+    def end_wrapped(*args, **kwargs):
+        global _CAPTURE_DEPTH
+        try:
+            return end(*args, **kwargs)
+        finally:
+            _CAPTURE_DEPTH = max(0, _CAPTURE_DEPTH - 1)
+
+    begin_wrapped._pinned_wrapped = True
+    ttnn.begin_trace_capture, ttnn.end_trace_capture = begin_wrapped, end_wrapped
+
+
+_wrap_capture_calls()
+
+
+class pinned_scope:
+    """Inside this scope a pin-aware program (``mm_stream``, ``mm_stream2``) at rows == 1 takes its output
+    from ``pinned_output`` instead of ``allocate``.  The caller must not hold two live results of one call site."""
+
+    def __enter__(self):
+        global _SCOPE_DEPTH
+        _SCOPE_DEPTH += 1
+
+    def __exit__(self, *exc):
+        global _SCOPE_DEPTH
+        _SCOPE_DEPTH -= 1
+
+
+def is_pinned(tensor) -> bool:
+    return id(tensor) in _PINNED_IDS
+
+
+def pinned_output(shape: Sequence[int], dtype, layout, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """``allocate`` for a row-0-only output; inside ``pinned_scope`` (and with QWEN38_ZERO_DEAD_ROWS on, rows == 1) the shared
+    zero-padded tensor of this shape and layout.  Outside it, or when it is first asked for inside a trace capture, a plain
+    allocation (not zeroed)."""
+
+    if _SCOPE_DEPTH == 0 or not zero_dead_rows_enabled() or int(shape[-2]) != 1:
+        return allocate(shape, dtype, layout, mesh, memory_config)
+    key = (tuple(int(v) for v in shape), dtype, layout, id(mesh), repr(memory_config))
+    tensor = _PINNED.get(key)
+    if tensor is None:
+        if _CAPTURE_DEPTH:
+            UNPINNED_IN_CAPTURE.append(key)
+            return allocate(shape, dtype, layout, mesh, memory_config)
+        import torch
+
+        tensor = ttnn.from_torch(  # from_torch pads the tile with zeros
+            torch.zeros(tuple(shape), dtype=torch.float32),
+            dtype=dtype,
+            layout=layout,
+            device=mesh,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        _PINNED[key] = tensor
+        _PINNED_IDS.add(id(tensor))
+    return tensor
+
+
+def mark_pinned(tensor) -> None:
+    """Declare ``tensor`` a zero padded input (tests; the model's pinned tensors come from ``pinned_output``)."""
+
+    _PINNED_IDS.add(id(tensor))
+
+
+def pinned_tensors() -> list:
+    return list(_PINNED.values())
+
+
+def check_dead_rows(mesh) -> dict:
+    """Read back every pinned tensor as a full 32-row tile on every die; returns ``{name: (dead-row nonzeros, row-0 nonzeros)}``
+    (a trace replay must leave the first at 0; the second shows the program wrote row 0)."""
+
+    import torch
+
+    report = {}
+    mesh.set_program_cache_misses_allowed(True)  # the chat session's resident chain forbids misses; this read compiles
+    for key, tensor in _PINNED.items():
+        shape = tuple(tensor.shape)
+        dram = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)  # copies the whole padded tile
+        full = ttnn.untilize_with_unpadding(
+            dram, (0, 0, TILE - 1, shape[3] - 1)
+        )  # logical 32 rows: the padded rows too
+        dead = live = 0
+        for shard in ttnn.get_device_tensors(full):
+            host = ttnn.to_torch(shard).to(torch.float32)
+            dead += int(torch.count_nonzero(host[..., 1:, :]))
+            live += int(torch.count_nonzero(host[..., :1, :]))
+        report[f"{key[0]}/{key[1].name if hasattr(key[1], 'name') else key[1]}/{key[4][:40]}"] = (dead, live)
+    return report
+
+
 def stamp_topology(tensor, reference, shard_dim: int | None = None):
     """Give a program's output (``allocate`` leaves the allocation's topology) the distributed topology the chain's op
     would have produced: ``reference``'s mesh and coordinates, replicated (or sharded on ``shard_dim``); a collective

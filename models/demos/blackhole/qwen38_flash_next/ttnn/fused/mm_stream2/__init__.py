@@ -742,7 +742,7 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
         out = fp.allocate(shape, ttnn.float32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
         out_cfg = ttnn.DRAM_MEMORY_CONFIG
     else:
-        out = fp.allocate(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
+        out = fp.pinned_output(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
     exclude = moe_experts.model_exclude(mesh)
     if (k, n) in OPTIMAL_SHAPES and optimal_enabled():
         place = "optimal"

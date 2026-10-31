@@ -227,6 +227,14 @@ def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs, tmp_p
     logger.info(f"route: {route}")
     try:
         runs = [generate(model, prompt_ids, max_generated_tokens, profiler) for _ in range(repeat_runs)]
+        if (
+            os.environ.get("QWEN38_ZERO_DEAD_ROWS_CHECK") == "1"
+        ):  # after the traced replays: the pinned buffers' dead rows
+            from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fused_program
+
+            dead = fused_program.check_dead_rows(mesh_device)
+            logger.info(f"ZERO_DEAD_ROWS_CHECK {dead} unpinned_in_capture={fused_program.UNPINNED_IN_CAPTURE}")
+            assert dead and all(d == 0 for d, _ in dead.values()), dead
     finally:
         model.release_persistent_capture()
     profiler.end("run")
