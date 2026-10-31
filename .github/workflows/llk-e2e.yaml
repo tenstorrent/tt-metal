@@ -1,8 +1,11 @@
 name: "LLK e2e Tests"
+run-name: "review probe ${{ inputs.tag }}"
 
 # Review probe branch (mvlahovicTT), not for main: this file replaces the LLK e2e workflow on this branch only, so a
-# workflow_dispatch here runs a base vs head A/B of one LLK functional module and one perf module per arch, both sides
-# on the same runner card with interleaved perf reps. review-probe/run.sh does the work; results come back as artifacts.
+# workflow_dispatch here runs a base vs head (and main) A/B of LLK test modules per arch, every side on the same runner
+# card: each functional module once plus a rerun of its failing ids, each perf module with interleaved reps.
+# review-probe/run.sh does the work; one artifact per arch holds the logs, perf data and summary.json.
+# The reviewer's auto/ci dispatches it and finds its run by the tag in the run name.
 
 on:
   workflow_dispatch:
@@ -15,12 +18,13 @@ on:
         description: "PR head commit"
         required: true
         type: string
-      func_module:
-        description: "Functional module under tests/python_tests"
-        required: true
+      main_sha:
+        description: "Optional third side: a main commit"
+        required: false
         type: string
-      perf_module:
-        description: "Perf module under tests/python_tests"
+        default: ""
+      modules:
+        description: 'JSON list of {"func": file, "perf": file} under tests/python_tests, "" when absent'
         required: true
         type: string
       reps:
@@ -33,6 +37,11 @@ on:
         required: false
         type: string
         default: '["blackhole", "wormhole"]'
+      tag:
+        description: "Run name tag (auto/ci finds its run by it)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -75,14 +84,24 @@ jobs:
         with:
           ref: ${{ inputs.head_sha }}
           path: head
+      - name: Checkout main
+        if: ${{ inputs.main_sha != '' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.main_sha }}
+          path: main
       - name: Run probe
         shell: bash
         env:
           ARCH: ${{ matrix.arch }}
           REPS: ${{ inputs.reps }}
-          FUNC_MODULE: ${{ inputs.func_module }}
-          PERF_MODULE: ${{ inputs.perf_module }}
-        run: bash probe/review-probe/run.sh "$ARCH" "$REPS" "$FUNC_MODULE" "$PERF_MODULE"
+          MODULES: ${{ inputs.modules }}
+          SIDES: ${{ inputs.main_sha != '' && 'base head main' || 'base head' }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          MAIN_SHA: ${{ inputs.main_sha }}
+        run: bash probe/review-probe/run.sh
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
