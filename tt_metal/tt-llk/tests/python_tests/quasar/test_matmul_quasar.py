@@ -253,7 +253,7 @@ TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
     for width in (16, 32)
     if (height, width) != (32, 32)
 ]
-TINY_MATMUL_FORMATS = [
+NON_MX_MATMUL_FORMATS = [
     format
     for format in MATMUL_FORMAT
     if not format.input_format.is_mx_format()
@@ -558,7 +558,7 @@ def test_matmul(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
-    format=TINY_MATMUL_FORMATS,
+    format=NON_MX_MATMUL_FORMATS,
     math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=[DestSync.Half],
     dest_acc=matmul_dest_acc_modes,
