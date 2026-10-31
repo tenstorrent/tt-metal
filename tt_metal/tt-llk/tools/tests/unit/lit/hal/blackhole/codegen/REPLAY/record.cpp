@@ -2,52 +2,62 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -fno-optimize-sibling-calls -c %s -o %t.o
+// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
+
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently, and sibling
+// calls so a body ending in a call still ends in ret.
+// Recorded bodies use HAL operations; references use TTI_*/TT_* instructions.
+// REPLAY operands are (start, count, execute while recording, record).
 
 #include <cstdint>
 
 #include "hal/replay.h"
+#include "hal/scalar.h"
 
 namespace replay = hal::replay;
-
-// REPLAY operands are (start, count, execute while recording, record).
+namespace scalar = hal::scalar;
 
 extern "C" __attribute__((noinline, used)) void record_only()
 {
     replay::record<replay::BufferRange {16, 2}>(
         []
         {
-            TTI_NOP;
-            TTI_DMANOP;
+            scalar::set_low<1>(hal::gpr<1>());
+            scalar::set_low<2>(hal::gpr<2>());
         });
 }
 
-// CHECK-LABEL: <record_only>:
-// CHECK-NEXT: ttreplay 16,2,0,1
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ttdmanop
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_record_only()
+{
+    TTI_REPLAY(16 /*start_idx*/, 2 /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
+}
 
+// The range wraps past slot 31.
 extern "C" __attribute__((noinline, used)) void record_and_execute_wrapping()
 {
     replay::record<replay::BufferRange {30, 4}, replay::RecordBehavior::RecordAndExecute>(
         []
         {
-            TTI_NOP;
-            TTI_DMANOP;
-            TTI_NOP;
-            TTI_DMANOP;
+            scalar::set_low<1>(hal::gpr<1>());
+            scalar::set_low<2>(hal::gpr<2>());
+            scalar::set_low<3>(hal::gpr<3>());
+            scalar::set_low<4>(hal::gpr<4>());
         });
 }
 
-// CHECK-LABEL: <record_and_execute_wrapping>:
-// CHECK-NEXT: ttreplay 30,4,1,1
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ttdmanop
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ttdmanop
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_record_and_execute_wrapping()
+{
+    TTI_REPLAY(30 /*start_idx*/, 4 /*len*/, 1 /*execute_while_loading*/, 1 /*load_mode*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 3 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 6 /*RegIndex16b*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 4 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 8 /*RegIndex16b*/);
+}
 
 extern "C" __attribute__((noinline, used)) void record_forwarded_arguments()
 {
@@ -56,86 +66,61 @@ extern "C" __attribute__((noinline, used)) void record_forwarded_arguments()
         {
             for (std::uint32_t i = 0; i < count; ++i)
             {
-                TTI_NOP;
+                scalar::set_low<7>(hal::gpr<1>());
             }
         },
         3);
 }
 
-// CHECK-LABEL: <record_forwarded_arguments>:
-// CHECK-NEXT: ttreplay 0,3,0,1
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void record_runtime_count(std::uint32_t count)
+extern "C" __attribute__((noinline, used)) void reference_record_forwarded_arguments()
 {
-    replay::record(
-        replay::BufferRange {8, count},
-        [](const std::uint32_t n)
-        {
-            for (std::uint32_t i = 0; i < n; ++i)
-            {
-                TTI_NOP;
-            }
-        },
-        count);
+    TTI_REPLAY(0 /*start_idx*/, 3 /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
 }
 
-// The REPLAY word 0x04020001 | (count & 63) << 4 goes through the instruction
-// buffer before the recorded body; counts outside [1, 64] assert.
-// CHECK-LABEL: <record_runtime_count>:
-// CHECK-NEXT: addi [[ENCODED:a[0-7]]],a0,-1
-// CHECK-NEXT: li [[LIMIT:a[0-7]]],63
-// CHECK-NEXT: lui [[OP:a[0-7]]],0x4020
-// CHECK-NEXT: addi [[OP]],[[OP]],1
-// CHECK-NEXT: bgeu [[LIMIT]],[[ENCODED]],
-// CHECK: ebreak
-// CHECK-NOT: ttnop
-// CHECK: andi [[COUNT:a[0-7]]],{{a[0-7]}},63
-// CHECK-NEXT: slli [[COUNT]],[[COUNT]],0x4
-// CHECK-NEXT: add [[WORD:a[0-7]]],[[COUNT]],[[OP]]
-// CHECK-NEXT: lui [[BUF:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK: sw [[WORD]],0([[BUF]])
-// CHECK-NOT: ttreplay
-// CHECK: ttnop
+// A count of 64 is encoded as zero by the low six bits. The recorded body is an
+// external call so the comparison covers only the REPLAY word. The HAL hides a
+// runtime count from the optimizer, which the references repeat with an empty
+// asm; lltt::record issues the word through the instruction buffer like
+// TT_REPLAY, in the same operation order as the HAL.
+extern "C" void record_body(std::uint32_t count); // emits count instructions
 
-extern "C" __attribute__((noinline, used)) void record_and_execute_runtime_count(std::uint32_t count)
+extern "C" __attribute__((noinline, used)) void record_runtime_count(const std::uint32_t count)
 {
-    replay::record<replay::RecordBehavior::RecordAndExecute>(
-        replay::BufferRange {8, count},
-        [](const std::uint32_t n)
-        {
-            for (std::uint32_t i = 0; i < n; ++i)
-            {
-                TTI_NOP;
-            }
-        },
-        count);
+    replay::record(replay::BufferRange {8, count}, record_body, count);
 }
 
-// CHECK-LABEL: <record_and_execute_runtime_count>:
-// CHECK-NEXT: addi [[ENCODED:a[0-7]]],a0,-1
-// CHECK-NEXT: li [[LIMIT:a[0-7]]],63
-// CHECK-NEXT: lui [[OP:a[0-7]]],0x4020
-// CHECK-NEXT: addi [[OP]],[[OP]],3
-// CHECK-NEXT: bgeu [[LIMIT]],[[ENCODED]],
-// CHECK: ebreak
-// CHECK-NOT: ttnop
-// CHECK: add [[WORD:a[0-7]]],{{a[0-7]}},[[OP]]
-// CHECK: sw [[WORD]],0({{a[0-7]}})
-// CHECK-NOT: ttreplay
-// CHECK: ttnop
-
-extern "C" __attribute__((noinline, used)) void record_constant_runtime_range()
+extern "C" __attribute__((noinline, used)) void reference_record_runtime_count(const std::uint32_t count)
 {
-    replay::record(replay::BufferRange {12, 1}, [] { TTI_NOP; });
+    std::uint32_t hidden_count = count;
+    asm("" : "+r"(hidden_count));
+    lltt::record<lltt::NoExec>(8 /*start*/, hidden_count & 63);
+    record_body(count);
+}
+
+extern "C" __attribute__((noinline, used)) void record_and_execute_runtime_count(const std::uint32_t count)
+{
+    replay::record<replay::RecordBehavior::RecordAndExecute>(replay::BufferRange {8, count}, record_body, count);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_record_and_execute_runtime_count(const std::uint32_t count)
+{
+    std::uint32_t hidden_count = count;
+    asm("" : "+r"(hidden_count));
+    lltt::record<lltt::Exec>(8 /*start*/, hidden_count & 63);
+    record_body(count);
 }
 
 // A constant range passed to the runtime overload still lowers to an immediate REPLAY.
-// CHECK-LABEL: <record_constant_runtime_range>:
-// CHECK-NEXT: ttreplay 12,1,0,1
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void record_constant_runtime_range()
+{
+    replay::record(replay::BufferRange {12, 1}, [] { scalar::set_low<1>(hal::gpr<1>()); });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_record_constant_runtime_range()
+{
+    TTI_REPLAY(12 /*start_idx*/, 1 /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+}

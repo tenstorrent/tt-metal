@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --enable-var-scope
-// RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --check-prefix=ASSERT
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
+// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
+
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently.
 
 #include <cstdint>
 
@@ -12,217 +15,197 @@
 
 namespace mop = hal::mop;
 
-using Template1Config = mop::MopConfig<mop::MopTemplate::Template1>;
+// Template 1 MopCfg words: 0 = outer count, 1 = inner count, 2 = StartOp,
+// 3 = EndOp0, 4 = EndOp1, 5 = LoopOp, 6 = LoopOp1, 7 = Loop0Last, 8 = Loop1Last.
+// EndOp1 is written only with end ops, and words 5-8 only with a nonzero inner count.
+inline volatile std::uint32_t *reference_mop_cfg()
+{
+    return reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+}
 
-// MopCfg word i is stored at 0xffb80000 + 4 * i, after the mop_sync handshake.
-// Distinct operation words with zero low bits materialize as one lui each; an
-// omitted operation resolves to TT_OP_NOP (0x02000000) unless noted.
-inline constexpr std::uint32_t OP_START       = 0x10001000;
-inline constexpr std::uint32_t OP_END         = 0x10002000;
-inline constexpr std::uint32_t OP_SECOND_END  = 0x10003000;
-inline constexpr std::uint32_t OP_BODY        = 0x10004000;
-inline constexpr std::uint32_t OP_ALTERNATING = 0x10005000;
-inline constexpr std::uint32_t OP_LAST_FINAL  = 0x10006000;
-inline constexpr std::uint32_t OP_LAST_OTHER  = 0x10007000;
+inline constexpr std::uint32_t OP_START      = 0x10001000;
+inline constexpr std::uint32_t OP_END        = 0x10002000;
+inline constexpr std::uint32_t OP_SECOND_END = 0x10003000;
+inline constexpr std::uint32_t OP_BODY       = 0x10004000;
+inline constexpr std::uint32_t OP_ALTERNATE  = 0x10005000;
+inline constexpr std::uint32_t OP_LAST_OUTER = 0x10006000;
+inline constexpr std::uint32_t OP_LAST_INNER = 0x10007000;
 
-inline constexpr Template1Config complete {
-    .outer_loop = {.count = 4, .start_op = OP_START, .end_op = OP_END, .second_end_op = OP_SECOND_END},
-    .inner_loop =
-        {.count                               = 8,
-         .body_op                             = OP_BODY,
-         .alternating_op                      = OP_ALTERNATING,
-         .last_op_on_final_outer_iteration    = OP_LAST_FINAL,
-         .last_op_on_nonfinal_outer_iteration = OP_LAST_OTHER},
-};
+inline constexpr auto complete = mop::loop(4, OP_START, mop::loop(8, OP_BODY, OP_ALTERNATE), OP_END, OP_SECOND_END)
+                                     .patch(mop::last_outer, OP_LAST_OUTER)
+                                     .patch(mop::last_inner, OP_LAST_INNER);
 
 extern "C" __attribute__((noinline, used)) void program_complete()
 {
-    mop::program<complete>();
+    mop::program(complete);
 }
 
-// CHECK-LABEL: <program_complete>:
-// CHECK: sw [[Z:a[0-7]]],0([[SYNC:a[0-7]]])
-// CHECK-NEXT: lw [[DONE:a[0-7]]],0([[SYNC]])
-// CHECK-NEXT: and zero,zero,[[DONE]]
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[V:a[0-7]]],4
-// CHECK-NEXT: sw [[V]],0([[CFG]])
-// CHECK-NEXT: li [[V:a[0-7]]],8
-// CHECK-NEXT: sw [[V]],4([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10001
-// CHECK-NEXT: sw [[V]],8([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10002
-// CHECK-NEXT: sw [[V]],12([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10003
-// CHECK-NEXT: sw [[V]],16([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10004
-// CHECK-NEXT: sw [[V]],20([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10005
-// CHECK-NEXT: sw [[V]],24([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10006
-// CHECK-NEXT: sw [[V]],28([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10007
-// CHECK-NEXT: sw [[V]],32([[CFG]])
-// CHECK-NEXT: ret
-
-inline constexpr Template1Config body_only {
-    .outer_loop = {.count = 2, .second_end_op = OP_SECOND_END},
-    .inner_loop = {.count = 3, .body_op = OP_BODY},
-};
-
-extern "C" __attribute__((noinline, used)) void program_defaults()
+extern "C" __attribute__((noinline, used)) void reference_program_complete()
 {
-    mop::program<body_only>();
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 4;
+    mop_cfg[1] = 8;
+    mop_cfg[2] = OP_START;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = OP_SECOND_END;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = OP_ALTERNATE;
+    mop_cfg[7] = OP_LAST_OUTER;
+    mop_cfg[8] = OP_LAST_INNER;
 }
 
-// The second end op is dropped without an end op, and both last ops default to the body op.
-// CHECK-LABEL: <program_defaults>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[V:a[0-7]]],2
-// CHECK-NEXT: sw [[V]],0([[CFG]])
-// CHECK-NEXT: li [[V:a[0-7]]],3
-// CHECK-NEXT: sw [[V]],4([[CFG]])
-// CHECK-NEXT: lui [[NOP:a[0-7]]],0x2000
-// CHECK-NEXT: sw [[NOP]],8([[CFG]])
-// CHECK-NEXT: sw [[NOP]],12([[CFG]])
-// CHECK-NEXT: sw [[NOP]],16([[CFG]])
-// CHECK-NEXT: lui [[BODY:a[0-7]]],0x10004
-// CHECK-NEXT: sw [[BODY]],20([[CFG]])
-// CHECK-NEXT: sw [[NOP]],24([[CFG]])
-// CHECK-NEXT: sw [[BODY]],28([[CFG]])
-// CHECK-NEXT: sw [[BODY]],32([[CFG]])
-// CHECK-NEXT: ret
-
-inline constexpr Template1Config alternating {
-    .outer_loop = {.count = 1, .start_op = OP_START},
-    .inner_loop = {.count = 2, .body_op = OP_BODY, .alternating_op = OP_ALTERNATING},
-};
-
-extern "C" __attribute__((noinline, used)) void program_alternating_defaults()
+// Without a patch, both last-iteration ops repeat the body op.
+extern "C" __attribute__((noinline, used)) void program_body_only()
 {
-    mop::program<alternating>();
+    mop::program(mop::loop(2, mop::loop(3, OP_BODY)));
 }
 
-// With an alternating op, both last ops default to it instead of the body op.
-// CHECK-LABEL: <program_alternating_defaults>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[V:a[0-7]]],1
-// CHECK-NEXT: sw [[V]],0([[CFG]])
-// CHECK-NEXT: li [[V:a[0-7]]],2
-// CHECK-NEXT: sw [[V]],4([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10001
-// CHECK-NEXT: sw [[V]],8([[CFG]])
-// CHECK-NEXT: lui [[NOP:a[0-7]]],0x2000
-// CHECK-NEXT: sw [[NOP]],12([[CFG]])
-// CHECK-NEXT: sw [[NOP]],16([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10004
-// CHECK-NEXT: sw [[V]],20([[CFG]])
-// CHECK-NEXT: lui [[ALT:a[0-7]]],0x10005
-// CHECK-NEXT: sw [[ALT]],24([[CFG]])
-// CHECK-NEXT: sw [[ALT]],28([[CFG]])
-// CHECK-NEXT: sw [[ALT]],32([[CFG]])
-// CHECK-NEXT: ret
-
-inline constexpr Template1Config no_start_active_end {
-    .outer_loop = {.count = 4, .end_op = OP_END},
-    .inner_loop = {.count = 1, .body_op = OP_BODY},
-};
-
-extern "C" __attribute__((noinline, used)) void program_runtime_counts(std::uint32_t outer, std::uint32_t inner)
+extern "C" __attribute__((noinline, used)) void reference_program_body_only()
 {
-    mop::program<complete>(mop::runtime_field<mop::Template1Field::InnerLoopCount>(inner), mop::runtime_field<mop::Template1Field::OuterLoopCount>(outer));
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 2;
+    mop_cfg[1] = 3;
+    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[3] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP_BODY;
+    mop_cfg[8] = OP_BODY;
 }
 
-// Runtime counts replace words 0 and 1 regardless of argument order; a start op rules out the count anomaly.
-// CHECK-LABEL: <program_runtime_counts>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: sw a0,0([[CFG]])
-// CHECK-NEXT: sw a1,4([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10001
-// CHECK-NEXT: sw [[V]],8([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10002
-// CHECK-NEXT: sw [[V]],12([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10003
-// CHECK-NEXT: sw [[V]],16([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10004
-// CHECK-NEXT: sw [[V]],20([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10005
-// CHECK-NEXT: sw [[V]],24([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10006
-// CHECK-NEXT: sw [[V]],28([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10007
-// CHECK-NEXT: sw [[V]],32([[CFG]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void program_runtime_inner_count(std::uint32_t inner)
+// With an alternate op, both last-iteration ops repeat it instead.
+extern "C" __attribute__((noinline, used)) void program_alternate()
 {
-    mop::program<no_start_active_end>(mop::runtime_field<mop::Template1Field::InnerLoopCount>(inner));
+    mop::program(mop::loop(1, OP_START, mop::loop(2, OP_BODY, OP_ALTERNATE)));
 }
 
-// Without a start op and with an active end op, a runtime inner count whose low
-// ten bits are zero triggers the count anomaly and is asserted before the sync.
-// CHECK-LABEL: <program_runtime_inner_count>:
-// CHECK-NEXT: andi [[LOW:a[0-7]]],a0,1023
-// CHECK-NEXT: beqz [[LOW]],{{[0-9a-f]+}} <[[ANOMALY:\.L[0-9]+]]>
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[V:a[0-7]]],4
-// CHECK-NEXT: sw [[V]],0([[CFG]])
-// CHECK-NEXT: sw a0,4([[CFG]])
-// CHECK: ret
-// CHECK-EMPTY:
-// CHECK-NEXT: {{^}}{{[0-9a-f]+}} <[[ANOMALY]]>:
-// CHECK-NEXT: ebreak
-
-extern "C" __attribute__((noinline, used)) void program_runtime_config(std::uint32_t inner)
+extern "C" __attribute__((noinline, used)) void reference_program_alternate()
 {
-    mop::program(Template1Config {
-        .outer_loop = {.count = 4, .end_op = OP_END},
-        .inner_loop = {.count = inner, .body_op = OP_BODY},
-    });
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 1;
+    mop_cfg[1] = 2;
+    mop_cfg[2] = OP_START;
+    mop_cfg[3] = TT_OP_NOP;
+    mop_cfg[5] = OP_BODY;
+    mop_cfg[6] = OP_ALTERNATE;
+    mop_cfg[7] = OP_ALTERNATE;
+    mop_cfg[8] = OP_ALTERNATE;
 }
 
-// CHECK-LABEL: <program_runtime_config>:
-// CHECK-NEXT: andi [[LOW:a[0-7]]],a0,1023
-// CHECK-NEXT: beqz [[LOW]],{{[0-9a-f]+}} <[[ANOMALY:\.L[0-9]+]]>
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[V:a[0-7]]],4
-// CHECK-NEXT: sw [[V]],0([[CFG]])
-// CHECK-NEXT: sw a0,4([[CFG]])
-// CHECK: ret
-// CHECK-EMPTY:
-// CHECK-NEXT: {{^}}{{[0-9a-f]+}} <[[ANOMALY]]>:
-// CHECK-NEXT: ebreak
-
-// Only the two configurations that can reach the count anomaly assert.
-// ASSERT-LABEL: <program_complete>:
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <program_defaults>:
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <program_alternating_defaults>:
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <program_runtime_counts>:
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <program_runtime_inner_count>:
-// ASSERT-COUNT-1: ebreak
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <program_runtime_config>:
-// ASSERT-COUNT-1: ebreak
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <write_inner_loop_count>:
-// ASSERT-NOT: ebreak
-
-extern "C" __attribute__((noinline, used)) void write_inner_loop_count(std::uint32_t count)
+extern "C" __attribute__((noinline, used)) void program_empty_inner()
 {
-    mop::write<mop::Template1Field::InnerLoopCount>(count);
+    mop::program(mop::loop(3, OP_START, mop::loop(0, OP_BODY), OP_END));
 }
 
-// CHECK-LABEL: <write_inner_loop_count>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: sw a0,4([[CFG]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_program_empty_inner()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 3;
+    mop_cfg[1] = 0;
+    mop_cfg[2] = OP_START;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = TT_OP_NOP;
+}
+
+// With EndOp1 set, the count anomaly needs an outer count of 1, so this
+// no-start, empty-inner configuration is accepted.
+extern "C" __attribute__((noinline, used)) void program_empty_inner_second_end()
+{
+    mop::program(mop::loop(4, mop::loop(0, OP_BODY), OP_END, OP_SECOND_END));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_empty_inner_second_end()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 4;
+    mop_cfg[1] = 0;
+    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = OP_SECOND_END;
+}
+
+// A runtime inner count decides at runtime whether words 5-8 are written.
+extern "C" __attribute__((noinline, used)) void program_runtime_counts(const std::uint32_t outer, const std::uint32_t inner)
+{
+    mop::program(mop::loop(outer, OP_START, mop::loop(inner, OP_BODY), OP_END));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_runtime_counts(const std::uint32_t outer, const std::uint32_t inner)
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = outer;
+    mop_cfg[1] = inner;
+    mop_cfg[2] = OP_START;
+    mop_cfg[3] = OP_END;
+    mop_cfg[4] = TT_OP_NOP;
+    if (inner != 0)
+    {
+        mop_cfg[5] = OP_BODY;
+        mop_cfg[6] = TT_OP_NOP;
+        mop_cfg[7] = OP_BODY;
+        mop_cfg[8] = OP_BODY;
+    }
+}
+
+extern "C" __attribute__((noinline, used)) void program_runtime_operations(const std::uint32_t body, const std::uint32_t last_inner)
+{
+    mop::program(mop::loop(2, mop::loop(4, body)).patch(mop::last_inner, last_inner));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_runtime_operations(const std::uint32_t body, const std::uint32_t last_inner)
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 2;
+    mop_cfg[1] = 4;
+    mop_cfg[2] = TT_OP_NOP;
+    mop_cfg[3] = TT_OP_NOP;
+    mop_cfg[5] = body;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = body;
+    mop_cfg[8] = last_inner;
+}
+
+extern "C" __attribute__((noinline, used)) void update_inner_count(const std::uint32_t count)
+{
+    mop::update(mop::inner_count, count);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_update_inner_count(const std::uint32_t count)
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = count;
+}
+
+extern "C" __attribute__((noinline, used)) void update_last_inner(const std::uint32_t operation)
+{
+    mop::update(mop::last_inner, operation);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_update_last_inner(const std::uint32_t operation)
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[8] = operation;
+}
+
+// Several words share one sync and are written in argument order.
+extern "C" __attribute__((noinline, used)) void update_several(const std::uint32_t outer, const std::uint32_t operation)
+{
+    mop::update(mop::last_outer(operation), mop::outer_count(outer));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_update_several(const std::uint32_t outer, const std::uint32_t operation)
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[7] = operation;
+    mop_cfg[0] = outer;
+}
