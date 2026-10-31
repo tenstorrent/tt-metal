@@ -934,7 +934,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             transpose_b,
             bias_single_tile_size,
             mem_config,
-            std::nullopt,
+            user_fused_activation,
             !bmm,
             user_core_coord,
             compute_kernel_config,
