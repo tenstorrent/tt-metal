@@ -153,7 +153,12 @@ template <
     BinaryOp BINOP,
     int ITERATIONS,
     bool is_fp32_dest_acc_en,
-    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default>
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    // Row-loop unroll factor. Unrolled, the loop rolls into the replay buffer instead of a RISC
+    // bnez loop. POW and NEXTAFTER stay rolled: their bodies are SFPU-bound already and unrolled
+    // they outgrow the instruction cache (POW measured +4% MATH_ISOLATE). A template parameter
+    // because `#pragma GCC unroll` only accepts a literal or a bare template parameter.
+    int UNROLL = (BINOP == BinaryOp::POW || BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) ? 1 : 8>
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
@@ -174,6 +179,7 @@ inline void calculate_sfpu_binary(
         log_d = LogPoly::D;
     }
     // SFPU microcode
+#pragma GCC unroll UNROLL
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
@@ -278,6 +284,7 @@ inline void calculate_sfpu_binary_mul(
     }
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -302,6 +309,7 @@ inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
