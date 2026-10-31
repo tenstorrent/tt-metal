@@ -23,7 +23,18 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 std::optional<std::string> get_shape_fits_shard_grid_error(
     const TensorLayout& tensor_layout, const Shape& logical_shape) {
     const auto& memory_config = tensor_layout.get_memory_config();
-    if (!memory_config.is_sharded() or !memory_config.shard_spec().has_value()) {
+    if (!memory_config.is_sharded()) {
+        return std::nullopt;
+    }
+    if (memory_config.created_with_nd_shard_spec() && memory_config.nd_shard_spec().has_value()) {
+        const auto& nd_shard_shape = memory_config.nd_shard_spec()->shard_shape;
+        for (size_t i = 0; i < nd_shard_shape.rank(); i++) {
+            if (nd_shard_shape[i] == 0) {
+                return fmt::format("ND shard shape must be greater than 0 in every dim, got {}", nd_shard_shape);
+            }
+        }
+    }
+    if (!memory_config.shard_spec().has_value()) {
         return std::nullopt;
     }
 
@@ -396,7 +407,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
 
     TensorMemoryLayout shard_kind = TensorMemoryLayout::BLOCK_SHARDED;
     if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
-        if (shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
+        if (padded_shape()[-1] > 0 && shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::WIDTH_SHARDED;
         } else if (shard_spec.shape[1] == padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::HEIGHT_SHARDED;

@@ -390,6 +390,10 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
             auto shard_spec = input_memory_config.shard_spec().value();
             auto shard_volume = shard_spec.numel();
+            TT_FATAL(
+                new_padded_shape[-1] > 0,
+                "Cannot reshape a sharded tensor to a zero last dimension, new shape: {}",
+                new_padded_shape);
             shard_spec.shape[1] = new_padded_shape[-1];
             shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             output_memory_config =
