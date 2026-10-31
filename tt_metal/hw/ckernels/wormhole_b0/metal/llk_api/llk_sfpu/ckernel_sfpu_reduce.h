@@ -294,6 +294,25 @@ inline void load_row_avg_reciprocal_into(std::uint32_t scratch_lreg, RowAvgRecip
     TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_LOWER, recip.low16);
 }
 
+// Float column SUM/AVG window, recorded by init_reduce_sum_avg: the 6-SFPADD full reduce at [0, 6), then the half
+// reduce A1 A3 | A2 at [6, 9). The column body replays the half reduce in two pieces, [6, 8) and the A2 slot, and
+// fills the latency slot between them with a load (static_assert next to the slot map).
+constexpr std::uint32_t COL_SUM_FLOAT_HALF_START = 6;
+constexpr std::uint32_t COL_SUM_FLOAT_A2_SLOT = 8;
+
+/**
+ * @brief Fills a float column SUM/AVG latency slot: the next face pair's lower-face load into @p lreg, or an SFPNOP
+ *        on the last face pair (@p has_next false).
+ */
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+inline void load_next_lower_or_nop(const bool has_next, const std::uint32_t lreg, const std::uint32_t addr) {
+    if (has_next) {
+        load_and_clear_high_bits<clear_high_bits>(lreg, INSTRUCTION_MODE, ADDR_MOD_3, addr);
+    } else {
+        TTI_SFPNOP;
+    }
+}
+
 template <
     PoolType pool_type,
     InstrModLoadStore INSTRUCTION_MODE,
@@ -313,9 +332,10 @@ inline void perform_reduce_col_sum_avg() {
     // and halves the second reduction pass.
     // Float arm only: SFPADD / SFPMUL need a cycle before their result is read, which the original body paid
     // as SFPNOPs. SFPTRANSP consumes LREG4-7 too, so loads of the NEXT face pair's lower face cannot precede
-    // it, but the two NOP slots after it (after the half reduce, and after the AVG multiply) can each take one
-    // such load: the next iteration then issues 1 (SUM) or 2 (AVG) fewer loads. The lower face of face pair 0
-    // is loaded here in a prologue; the integer arm has no NOPs to fill and keeps the plain order.
+    // it, but the latency slots after it (inside the half reduce after A3, after its final A2, and after the
+    // AVG multiply) can each take one such load: the next iteration then issues 2 (SUM) or 3 (AVG) fewer
+    // loads. The lower face of face pair 0 is loaded here in a prologue; the integer arm has no NOPs to fill
+    // and keeps the plain order.
     if constexpr (!is_integer_mode) {
         load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(LOWER_FACE_ADDRS[0], COLUMN_OFFSETS[0]);
     }
@@ -332,13 +352,14 @@ inline void perform_reduce_col_sum_avg() {
         } else {
             load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0>(upper_face_addr, column_offset);
             if (i > 0) {
-                // LREG4 (and LREG5 for AVG) of this lower face were loaded in the previous iteration's NOP slots.
+                // LREG4-5 (LREG4-6 for AVG) of this lower face were loaded in the previous iteration's latency slots.
                 if constexpr (pool_type != PoolType::AVG) {
                     load_and_clear_high_bits<clear_high_bits>(
-                        p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, lower_face_addr + column_offset + ROWS_PER_LOAD);
+                        p_sfpu::LREG6,
+                        INSTRUCTION_MODE,
+                        ADDR_MOD_3,
+                        lower_face_addr + column_offset + 2 * ROWS_PER_LOAD);
                 }
-                load_and_clear_high_bits<clear_high_bits>(
-                    p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, lower_face_addr + column_offset + 2 * ROWS_PER_LOAD);
                 load_and_clear_high_bits<clear_high_bits>(
                     p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, lower_face_addr + column_offset + 3 * ROWS_PER_LOAD);
             }
@@ -364,15 +385,14 @@ inline void perform_reduce_col_sum_avg() {
         if constexpr (is_integer_mode) {
             lltt::replay(0, 3);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
         } else {
-            lltt::replay(6, 4);  // Half reduce with NOP for 2-cycle SFPADD latency
-            // The half reduce ends with an SFPADD producing LREG0; its next consumer (SFPSTORE for SUM, the
-            // SFPMUL for AVG) needs one cycle. LREG4-7 are dead after the transpose, so that slot takes the
-            // next face pair's first lower load instead of a NOP (a NOP on the last face pair).
-            if (has_next) {
-                load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, next_lower_base);
-            } else {
-                TTI_SFPNOP;
-            }
+            // Half reduce A1, A3 | A2 (recorded without its NOP): A2 reads A3's LREG0, and the SFPSTORE (SUM) or
+            // SFPMUL (AVG) reads A2's, so each needs one slot in between. LREG4-7 are dead after the transpose,
+            // so both slots take the next face pair's first lower loads instead of NOPs (NOPs on the last pair).
+            lltt::replay(COL_SUM_FLOAT_HALF_START, COL_SUM_FLOAT_A2_SLOT - COL_SUM_FLOAT_HALF_START);  // A1, A3
+            load_next_lower_or_nop<INSTRUCTION_MODE, clear_high_bits>(has_next, p_sfpu::LREG4, next_lower_base);
+            lltt::replay(COL_SUM_FLOAT_A2_SLOT, 1);  // A2 -> LREG0
+            load_next_lower_or_nop<INSTRUCTION_MODE, clear_high_bits>(
+                has_next, p_sfpu::LREG5, next_lower_base + ROWS_PER_LOAD);
         }
 
         // Perform averaging if requested (different for int vs float)
@@ -381,14 +401,10 @@ inline void perform_reduce_col_sum_avg() {
                 perform_int_average<INSTRUCTION_MODE, is_signed_int>();
             } else {
                 // Multiply by the preloaded 1/32 (AVG_RECIP_REG); the store needs one cycle after it, which takes
-                // the next face pair's second lower load (a NOP on the last face pair).
+                // the next face pair's third lower load (a NOP on the last face pair).
                 TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-                if (has_next) {
-                    load_and_clear_high_bits<clear_high_bits>(
-                        p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, next_lower_base + ROWS_PER_LOAD);
-                } else {
-                    TTI_SFPNOP;
-                }
+                load_next_lower_or_nop<INSTRUCTION_MODE, clear_high_bits>(
+                    has_next, p_sfpu::LREG6, next_lower_base + 2 * ROWS_PER_LOAD);
             }
         }
         // Store the final column sum/average to the first row.
@@ -432,7 +448,7 @@ inline void horizontal_reduce_rotate_first() {
 // column window of the same init:
 //
 //   init                                       column window          row window
-//   SUM / AVG, float                           tree-add [0, 10)       butterfly stage [10, 16)
+//   SUM / AVG, float                           tree-add [0, 9)        butterfly stage [10, 16)
 //   SUM / AVG, integer                         tree-add [0, 6)        butterfly stage [9, 16)
 //   MAX / MIN, float or 16-bit UInt16          LOADMACRO [0, 9)       butterfly stage [9, 16)
 //   MAX / MIN, DISABLE_SFPLOADMACRO            manual swaps [0, 3)    butterfly stage [9, 16)
@@ -448,7 +464,7 @@ inline void horizontal_reduce_rotate_first() {
 // A row reduce replays what its init recorded, so it needs a fresh init_reduce after anything else records into the
 // SFPU half.
 constexpr std::uint32_t COL_SUM_INT_REPLAY_LEN = 6;     // 6 SFPIADD; [0, 3) doubles as the half reduce
-constexpr std::uint32_t COL_SUM_FLOAT_REPLAY_LEN = 10;  // 6 SFPADD full reduce + 4-slot half reduce
+constexpr std::uint32_t COL_SUM_FLOAT_REPLAY_LEN = 9;   // 6 SFPADD full reduce + 3 SFPADD half reduce (A1 A3 | A2)
 constexpr std::uint32_t COL_MAX_MANUAL_REPLAY_LEN = 3;  // 3 SFPSWAP: LREG4-7 -> LREG4
 // Face-pair combine of the manual column paths: SFPTRANSP, 3-swap chain, SFPTRANSP, 2 face-pair swaps.
 constexpr std::uint32_t COL_MAX_MANUAL_COMBINE_START = COL_MAX_MANUAL_REPLAY_LEN;
@@ -524,6 +540,9 @@ constexpr std::uint32_t horizontal_stage_replay_start() {
 static_assert(
     COL_SUM_FLOAT_REPLAY_LEN <= horizontal_stage_replay_start<HorizontalFold::ADD_FLOAT>(),
     "float row SUM/AVG window overlaps the column tree-add window");
+static_assert(
+    COL_SUM_FLOAT_A2_SLOT + 1 == COL_SUM_FLOAT_REPLAY_LEN,
+    "the float column half reduce must end with A2, which the column body replays on its own");
 static_assert(
     COL_SUM_INT_REPLAY_LEN <= horizontal_stage_replay_start<HorizontalFold::ADD_INT>(),
     "integer row SUM window overlaps the column tree-add window");
@@ -1359,7 +1378,8 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
  * @brief Initialization for SFPU reduce SUM and AVG kernels, column and row.
  *        Records the column tree-add window and, above it, the row butterfly-stage window (see the slot map):
  *        Integer: 6 sequential instructions at [0, 6), first 3 reusable as half-reduce; row window [9, 16).
- *        Float: 6 interleaved instructions at [0, 6) + 4-slot half reduce at [6, 10); row window [10, 16).
+ *        Float: 6 interleaved instructions at [0, 6) + 3-slot half reduce (A1 A3 | A2) at [6, 9); row window
+ *        [10, 16).
  *        Interleaving eliminates NOPs in the full reduce by using B operations to hide A's 2-cycle latency.
  *
  * @note The row SUM/AVG calculate replays the row window instead of recording it, so call this init again after
@@ -1402,9 +1422,9 @@ inline void init_reduce_sum_avg() {
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 4);  // LREG5 = LREG5 + LREG6
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);  // LREG4 = LREG4 + LREG5
     } else {
-        // Float replay buffer: 10 instructions total
+        // Float replay buffer: 9 instructions total
         // Positions 0-5: Full reduce, interleaved to eliminate NOPs (B hides A's 2-cycle latency)
-        // Positions 6-9: Half reduce for LREG0-3 only, with NOP for dependent SFPADD chain
+        // Positions 6-8: Half reduce for LREG0-3 only (A1 A3 | A2), replayed in two pieces by the column body
         lltt::record(0, COL_SUM_FLOAT_REPLAY_LEN);
 
         // Full reduce (positions 0-5): interleaved upper/lower face summation
@@ -1415,12 +1435,11 @@ inline void init_reduce_sum_avg() {
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
         TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // B3 (hides A3 latency)
 
-        // Half reduce (positions 6-9): upper face only, NOP required for 2-cycle SFPADD latency
-        // Reorders A1/A3/A2 so A1 and A3 (disjoint outputs) issue back-to-back; only A3's latency before A2 needs a
-        // NOP.
+        // Half reduce (positions 6-8): upper face only. Reorders A1/A3/A2 so A1 and A3 (disjoint outputs) issue
+        // back-to-back; only A3's latency before A2 needs a slot, which is not recorded here: the column body
+        // replays [6, 8) and [8, 9) separately and fills that slot with a load of the next face pair.
         TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // A3
-        TTI_SFPNOP;  // Cover A3 latency (A1 is already available)
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // A2
     }
 
