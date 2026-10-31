@@ -343,6 +343,19 @@ class _ReplyStream:
                 self._write("\n", None)
 
 
+def decoded_token(out: torch.Tensor) -> int:
+    """The token of one step's :meth:`~DeepSeekV4Model.read_decoded_output`, for either sampling mode.
+
+    With device sampling the output is the token itself: int32 ``[1, 1, words]``, the token first, and nothing
+    else is in it. Without it the output is the ``[1, 1, V]`` logits and the host picks -- this returns the
+    argmax, which is what a greedy turn wants; a turn sampling at a temperature must apply its own sampler to
+    the logits instead, since a device-sampled step cannot sample at a request's temperature.
+    """
+    if out.dtype == torch.int32:
+        return int(out.reshape(-1)[0])
+    return int(out.reshape(1, -1).float()[0].argmax().item())
+
+
 class ChatEngine:
     """The resident model, plus the users that share it.
 
@@ -453,6 +466,12 @@ class ChatEngine:
         # buffers in place, so this happens exactly once per process. Every user's
         # paged session is allocated here too: allocating on a device that already
         # holds a trace is unsafe.
+        #
+        # Only the V4.1 model has a device sampler (``--device-sampling``); the V4 model this class
+        # builds by default does not, so the flag is passed only where it exists.
+        device_sampling = bool(getattr(args, "device_sampling", False)) and hasattr(self.model, "device_sampler")
+        if getattr(args, "device_sampling", False) and not device_sampling:
+            logger.warning("--device-sampling is not available on this model; sampling on the host")
         self.model.prepare_static_decode(
             rope,
             self.max_seq,
@@ -460,10 +479,24 @@ class ChatEngine:
             num_sessions=args.num_users,
             total_tokens=round_context(args.total_context, crs, _PAGE_BLOCK_SIZE),
             block_size=_PAGE_BLOCK_SIZE,
+            **({"device_sampling": True} if device_sampling else {}),
         )
         if self.model.context_limit is not None and self.model.context_limit < self.max_seq:
             logger.warning(f"context capped at {self.model.context_limit} tokens/user by the dense CSA KV")
             self.max_seq = self.model.context_limit
+        # The sampler's temperature is the engine's alone to set, so a subclass cannot silently flip a
+        # greedy server into a stochastic one by re-setting it after this.
+        sampler = getattr(self.model, "device_sampler", None)
+        if sampler is not None:
+            # Greedy unless ``--temperature`` asked for a draw; seeded here so a run is reproducible and
+            # the PRNG still advances from replay to replay.
+            self.temperature = float(getattr(args, "temperature", None) or 0.0)
+            self.seed = int(getattr(args, "seed", 0) or 0)
+            sampler.set_sampling(self.temperature, self.seed)
+            logger.info(
+                f"device sampling: the output stage picks the token "
+                f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
+            )
 
         self.users = [UserSession(self, i, args) for i in range(args.num_users)]
         self.active = 0
@@ -515,9 +548,8 @@ class ChatEngine:
         self.model.write_step_packet(token_id, int(pos))
 
     def read_decoded_token(self) -> int:
-        """Argmax of the oldest in-flight traced step's logits."""
-        logits = self.model.read_decoded_output().reshape(1, -1).float()
-        return int(logits[0].argmax().item())
+        """The token of the oldest in-flight traced step: the device's pick, or the argmax of its logits."""
+        return decoded_token(self.model.read_decoded_output())
 
     def drain_traced(self, token_id: int) -> None:
         """Feed leftover queued traces so they do not sit forever on in-trace recv.
@@ -533,18 +565,16 @@ class ChatEngine:
 
     def step(self, user: "UserSession", token_id: int, pos: int) -> int:
         """Feed ``token_id`` at absolute position ``pos`` of ``user``'s conversation;
-        return the argmax of the resulting single-token logits (the device sync happens
-        when the logits are read back).
+        return the next token -- the device's pick, or the argmax of the step's logits (the device
+        sync happens when the output is read back).
 
         One-step convenience for warmup. Prefill/decode use
         :meth:`post_traced` / :meth:`write_traced` / :meth:`read_decoded_token` so a
         stretch of known positions can park the device on recv before any packet.
         """
         user.activate()
-        # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
-        logits_host = self.model.decode_traced(token_id, pos)
-        logits = logits_host.reshape(1, -1).float()
-        return int(logits[0].argmax().item())
+        # [1, 1, vocab] logits, or the device's token page, read back off the D2H socket
+        return decoded_token(self.model.decode_traced(token_id, pos))
 
     def warmup(self) -> None:
         """Push one throwaway token through so the JIT compile and the trace capture
