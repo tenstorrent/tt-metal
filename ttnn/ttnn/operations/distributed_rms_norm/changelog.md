@@ -284,3 +284,132 @@
   burst with the reads, since mixed traffic exceeds the write-only ceiling (the base measured ~430 GB/s mixed). That
   needs the first wave's inv_rms while later rows are still being read, i.e. a cheaper per-wave chain so that more
   waves pay off (L1 + L2; 3–4 waves were slower in Refinement 3). That is an OVERLAP scheme change, not a local knob.
+
+## Perf 1 — perf tournament, round 1
+- Date: 2026-10-31
+- Focus case: `LOOSE_CASES[0]`, the PERF FOCUS config exactly as declared. Per chip (1,1,640,1792) bf16 TILE,
+  interleaved, fp32_dest_acc_en=True, bf16 TILE γ, Ring, cluster_axis=1, num_links=2, on the 1×4 QuietBox 2 ring.
+  Every knob of it is in SUPPORTED.
+- **Instrumentation.** `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`) does not exist in
+  this tree. The op's permanent stage zones are its own `DRMS_ZONE(...)` macro: a `DeviceZoneScopedN` under the host
+  define `DRMS_ZONES=1`, empty otherwise. They are reused and still cover every changed stage (`rt_collect`, `cp_fin`,
+  `rt_distribute`).
+
+### Measured breakdown (before)
+- **Harness** (`perf_measure.py`, 5 experiments, fastest / slowest chip, µs):
+  - 640×1792: 20.168 / 21.332;
+  - 32×1792: 9.693 / 10.591;
+  - 2048×1280: 40.879 / 43.699.
+  - Not dispatch-bound.
+- **Cumulative ablation**, fastest chip, µs: full 20.17 → exchange stubbed 18.50 → + writes stubbed 16.12 → + finalize
+  math stubbed 14.82. Writes stubbed alone: 16.72.
+- **Zone timeline**, µs from kernel start, every chip similar:
+  - x of wave 0 lands at 2.2–3.2, wave 1 at 4.4–6.3.
+  - Root publish: wave 0 at 5.3–7.5; wave 1 at up to 9.6–9.9.
+  - The ports' last notify (every fabric entry landed) is at 11.5–13.1.
+  - inv_rms distribute: wave 0 at 12.3–13.4, wave 1 at 15.5–18.8.
+  - The output write burst (2.3 MB, at the DRAM write ceiling) runs from 12.3 to 21.2.
+- **Ranked bottleneck.**
+  1. **The post-exchange chain: 2.5–5.5 µs per wave after the last landing.** The root reader pulls each peer slot
+     with a serialized 128 B read + barrier (0.35–0.45 µs each, one of 2.8 µs under the write burst). The root
+     finalize takes ~1.2 µs per tile-row, and the distribute ~0.6 µs.
+  2. The chain before the exchange: land → publish ~2.5 µs, then the port waits ~1.5 µs for the link's slowest root.
+  3. The relay hops: ~3 µs per wave from first send to last landing. The transport itself is small (+0.3 µs data on
+     top of the fence, `fabric_ring_exchange`), so these hops are skew and turnaround, not bandwidth.
+  4. The DRAM write burst: ~8.5 µs at the ceiling. It cannot shrink; it can only start earlier.
+  - The DRAM ceiling gates nothing in 1–2: DRAM sits idle between the end of the reads (~5.5) and the first
+    distribute (~12.3).
+
+### Portfolio (hard cap: 2 experiments)
+1. **push_landed_records** (OVERLAP, post-exchange chain): the ports push each landed entry's per-root records into
+   the L1 of every consuming core, and every core finalizes for itself. No root collect reads, no distribute.
+2. **row_layout_finalize** (local compute on the post-exchange chain): a compact finalize tile holding every slot
+   record, one fused sfpi pass, and the root re-lays inv_rms into column 0.
+
+Floated but not tested (cap): per-root exchange items (skew tolerance, item 2 above), fabric multicast instead of
+relay (TRANSPORT, item 3), and fast multi-row reads in flight.
+
+### Verdicts
+- **push_landed_records: REGRESSION. Not graduated.** Bit-identical outputs. Variants, fastest / slowest µs on the
+  focus case (base 20.168 / 21.332):
+  - grid push from the fabric sender: 23.50 / 31.53;
+  - separate pusher on the port's idle RISC: 19.67 / 23.44 (3 rectangles), 19.41 / 24.50 (one whole-grid rectangle),
+    20.01 / 25.36 (non-blocking);
+  - per-group multicast plus every core finalizing: 31.55 / 47.79;
+  - roots only, multicast: 27.19 / 41.17;
+  - roots only, unicast: 20.38 / 21.95;
+  - pusher on NoC1: hung, not debugged.
+  - Cause: once the output write burst starts, every push from the port stalls 2–4 µs. The fan-out from one port is
+    slower than 10 roots reading in parallel, and the chip spread grows from 1.2 to ~5 µs.
+  - Decode (32×1792) won −0.16 to −0.42 µs on the fastest chip. 2048×1280 regressed +0.34 to +0.51 µs.
+  - Not kept as a decode-only path: the measured regressions cover the focus and prefill cases, so the gate would be
+    an allow-list around one shape plus a second post-exchange protocol.
+  - Artifacts: `perf_experiments/push_landed_records/`.
+- **row_layout_finalize: WIN. Graduated.**
+  - Finalize micro-bench, ns per tile-row (G=4, fp32 DEST, HiFi4, approx off):
+
+    | Variant | ns |
+    |---|---|
+    | column chain (base) | 1161 |
+    | column layout, fused pass | 814 |
+    | 4 tiles, row layout | 602 |
+    | **packed**: 1 tile, 2 vectors | **300** |
+    | dense: 1 tile, 1 vector | 264 |
+
+    The floors are 509 ns (copy + pack of 4 tiles) and 220 ns (1 tile). The ranking holds for 16-bit DEST
+    (983 → 246 ns) and G=2.
+  - In the op copy, fastest / slowest µs on the focus case:
+    - column layout, fused pass: 19.85 / 21.04;
+    - dense: 19.29 / 20.62;
+    - packed: 19.16 / 20.60;
+    - **packed_direct**: 18.96 / 20.50 (packed, with each fp32 record NoC-read straight into its tile rows).
+
+    Dense loses to packed in the op: the reader pays strided stores with runtime indices for it.
+  - Every variant is bit-identical to the real op: outputs compared bitwise on 18 cases (three perf shapes, Linear,
+    1 link, fp32 DEST off, fp32, bf8b, no γ, HEIGHT / WIDTH sharded, masked width, odd shapes).
+  - Artifacts: `perf_experiments/row_layout_finalize/` (`bench/`, `op/`, `test_slice.py`).
+
+### Graduated: compact finalize tile (packed_direct) as the op's one finalize path
+- **Domain.** Every regime (R3-i, R1, R1-HS, R3-s), dtype, DEST mode and placement with G ≤ 16, which is every
+  supported mesh. The fp32 direct read and the Float16_b word-by-word copy are the two record datapaths of one layout.
+- **One carve-out, for feasibility.** With G > 16, 16 slots × 32 words no longer fit one tile, so the code keeps the
+  column-0 layout and the Refinement 3 column chain with the 2-tile fold. It is written as
+  `if (cannot) { legacy } else { new }`: host `FIN_COMPACT_MAX_G`, a CT arg to reader (after the accessors) and compute
+  (index 14). Forcing it to 0 keeps the legacy path tested (`test_out_noc_split[...-fold]`).
+- **Deleted.**
+  - `FINALIZE_ONE_PASS` (knob, CT arg, hash field, env `DRMS_FINALIZE_ONE_PASS`) and the `SumSlotsCol` one-pass fold
+    (Refinement 6, L11), now superseded.
+  - The experiment's dense / col / packed variants and its `FIN_LAYOUT` knob.
+- **CBs.** `cb_stats_gather` goes from `G·Rw` to `Rw` pages. R1 roots gain `cb_rms_root` (`l1_ledger.md`).
+- **Whole op** (`perf_measure.py`, 5 experiments, `CCL_PERF_CASES=all`, fastest / slowest µs; each `ccl_perf compare`
+  vs the round's baseline is a win):
+
+  | Case | Before | After | Δ fastest / slowest |
+  |---|---|---|---|
+  | 640×1792 (PERF FOCUS) | 20.168 / 21.332 | **18.958 / 20.511** | −1.210 / −0.821 |
+  | 32×1792 | 9.693 / 10.591 | **8.616 / 9.838** | −1.077 / −0.753 |
+  | 2048×1280 | 40.879 / 43.699 | **40.138 / 42.886** | −0.741 / −0.812 |
+
+- **Zones after** (focus case): wave-1 inv_rms is distributed at 15.8–17.0 µs (was 17.9–18.8), and collect slot reads
+  take ~0.22 µs (were 0.35–0.45).
+- **Guard set / no regression:**
+  - Golden `test_golden.py`: 10,626 passed, 0 failed (INTERLEAVED 3603, HEIGHT_SHARDED 3420, WIDTH_SHARDED 3600, loose
+    3; the xfails are the expected ones).
+  - `test_ring_mock.py` + `test_regression.py`: 36 passed.
+  - `test_translated.py`: 279 passed, 51 skipped.
+  - Unit tests: knobs 34/34 (including the forced G > 16 path), acceptance 111/111, debug 6/6, precision 20 passed /
+    4 skipped.
+  - Precision: inv_rms is bit-identical, with the same SFPU ops in the same order. The precision contract is
+    untouched.
+- **Remaining headroom.** The focus case is at 18.96 µs against the target of 11.9. Next round's candidates are the
+  chain before the exchange (port waits for the link's slowest root; per-root items) and the relay hops. The write
+  burst still starts only at wave-0 distribute (~11.4–12.3 µs).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| kernel_lib eltwise chain SFPU elements `AddBinary` + `MulUnary` + `AddUnary` + `Rsqrt` (finalize) | capability | Every element runs `VectorMode::RC` over a whole tile, one op and one SFPU init per element. None can (a) fold N operands at arbitrary DEST offsets *inside one tile*, (b) restrict the work to a chosen subset of SFPU vectors (here 2 of 64), or (c) chain several SFPU ops under one init with a DEST store / reload between stages. `FinalizeFused` is a hand-written sfpi pass for this. | 1161 (column chain, already a raw `VectorMode::C` bypass since Refinement 3) | 300 (micro-bench, per tile-row) | `kernels/distributed_rms_norm_compute.cpp:206` (`FinalizeFused`), `:121` (`drms_finalize_vec`) |
+| no helper covers this: dataflow record ↔ tile layout moves (would sit with the `local_copy` / tile-index dataflow helpers) | capability | No helper scatters a contiguous record into tile face rows, re-lays a tile's row-run into column 0, or NoC-reads straight into a face-row offset of a CB page. The reader does these as raw word moves and a raw `noc_async_read`. | — | — | `kernels/distributed_rms_norm_reader.cpp:220` (`record_to_tile_slot`), `:248` (`tile_slot0_to_col0`), `:611` (direct read in `read_slot`) |
+
+Summary: both ideas were measured. 1 graduated, 0 null, 1 regression (not graduated). The op is 1.21 µs faster on the
+focus case (fastest chip), and faster on all three perf cases, with no regression.

@@ -279,7 +279,7 @@ The ports run independently of this loop. At kernel start each port opens its fa
 | L7 **Links** (TRANSPORT) | `num_links = None` uses every usable link. The ring-exchange example measured 2 links equal or slower than 1 for 128 B–8 KiB slots (each link pays its own fence). | the perf case pins `num_links = 2`. Compare against `num_links = 1` on the perf case and report it; the contract keeps `None` = all. |
 | L8 **Port placement** (TRANSPORT) | Ports sit on logical row 0, centred (the placement the ring-exchange numbers were measured with), not under their link's Ethernet core. That costs bandwidth (`blackhole-fabric.md` rule 6), which this payload does not use. | probe-based placement (`fabric_all_gather.probe_ethernet_cores`). Its one-time probe is a second dispatch on the first call, so it must move to resource creation outside the op's call path. |
 | L10 **Output on both NoCs** (Refinement 6, built) | The output write burst runs on NOC1 only. On this Blackhole the burst is DRAM-write-bound (~285 GB/s, the base op's write-only ceiling), so routing alone does not shorten it, but sharing the injection over both NoCs helps once the chain before it is shorter. | `OUT_NOC_SPLIT` (`alternate` default, `direction`, `flipped`, `off`, explicit masks), gated on `OUT_NOC_SPLIT_MIN_BYTES` per chip |
-| L11 **Finalize fold** (Refinement 6, built) | The root's cross-device slot fold ran G−1 copy / SFPU-add pairs, each a math-MOP ↔ SFPU re-init, on the first-inv critical path (≈ 0.8 µs measured by ablation). | `FINALIZE_ONE_PASS`: G copies into D0..D(G−1), one column-face SFPU pass (same adds, same order) |
+| L11 **Finalize fold** (Refinement 6, built) | The root's cross-device slot fold ran G−1 copy / SFPU-add pairs, each a math-MOP ↔ SFPU re-init, on the first-inv critical path (≈ 0.8 µs measured by ablation). | `FINALIZE_ONE_PASS`: G copies into D0..D(G−1), one column-face SFPU pass (same adds, same order). **Superseded by Perf 1** (compact finalize tile, one fused SFPU pass; the knob is deleted) |
 | L9 **Precision under 16-bit DEST** | With `fp32_dest_acc_en = False` the device partial is packed from 16-bit DEST, so the fp32 record carries a 16-bit value. The cross-device sum then folds in 16-bit DEST. | keep an fp32 DEST for `collapse` / `finalize` only. Measure the precision matrix at W_global = 8192 (base L8 found 16-bit Σx² not binding up to W = 8192 on one chip). |
 
 **Stall-shadow check.**
@@ -354,7 +354,7 @@ Members' readers keep the base order: send the partials of every wave of the blo
 | `DRMS_PORT_X0` (env → host `PORT_X0`; unset = centred) | The first x of the port row (lamp L8). Refinement 5: west-shift null, east edge slower. |
 | `DRMS_ABLATE_WRITE` (env → define on every kernel; never in production) | The writer (and the reader's NOC0 share) skip the output NoC writes; the CB protocol is kept. Output wrong, timing valid. Refinement 6: 640×1792 20.46 → 16.56 µs. |
 | `DRMS_ABLATE_FINALIZE` (env → compute define; never in production) | The root's finalize copies slot 0 to its output (sum / scale / eps / rsqrt stubbed). Refinement 6: 20.43 → 19.65 µs. |
-| `DRMS_OUT_NOC_SPLIT`, `DRMS_OUT_NOC_SPLIT_MIN_BYTES`, `DRMS_FINALIZE_ONE_PASS` (env → host knobs) | Override the Refinement 6 knobs (`OUT_NOC_SPLIT` mode / size gate, `FINALIZE_ONE_PASS`) for measurement. |
+| `DRMS_OUT_NOC_SPLIT`, `DRMS_OUT_NOC_SPLIT_MIN_BYTES` (env → host knobs) | Override the Refinement 6 knobs (`OUT_NOC_SPLIT` mode / size gate) for measurement. (`DRMS_FINALIZE_ONE_PASS` was removed in Perf 1.) |
 | Device zones | ports: `prt_conn`, `prt_ready_wait`, `prt_exchange`, `prt_close` (from `port.cpp`); roots: `rt_publish`, `rt_landed_wait`, `rt_collect`, `rt_distribute`; plus the base's per-stage zones. |
 
 ## Work Distribution
@@ -572,3 +572,20 @@ Final (both on, defaults): 640×1792 20.50 / 21.82 → **20.18 / 21.33**; 32×17
 42.67 / 45.44 → **40.93 / 43.66** (all `ccl_perf compare` wins). Exposed transport at the focus case 1.97 → 1.68 µs
 (exchange-ablated 18.50). G-MC was not built: γ is 6 row-0 prefixes per core (< 1 % of the bytes; the base measured
 it at noise on the 640-row shape).
+
+## Implementation notes (Perf 1 — compact finalize tile)
+
+Supersedes the `cb_stats_gather → cb_rms_root` row of the Dataflow Strategy table and L11 for G ≤ 16 (`FIN_COMPACT_MAX_G`;
+every supported mesh):
+
+| Stage | Now |
+|-------|-----|
+| port landing → `cb_stats_gather` | **one** tile per tile-row. Slot q's 32-word record occupies face q/4, rows 4(q%4)..+1 (32 contiguous datums). fp32 interm: the root NoC-reads the record straight from the landing into those rows (no staging copy, no word scatter). Float16_b interm: staged and converted word by word (`>> 16`). |
+| `cb_stats_gather` → `cb_rms_root` | one `CopyTile` + `FinalizeFused`: a hand-written sfpi pass over the 2 SFPU vectors holding slot 0. It does the left fold over slots 0..G−1 in fixed order, ×(1/W_global), +eps, rsqrt, with a DEST store / reload between stages. These are the same SFPU ops in the same order as the column chain, so inv_rms is bit-identical (measured). There is one SFPU init (rsqrt's). |
+| `cb_rms_root` → `cb_inv_rms` | **every** root (R1 too) re-lays slot 0's rows into column 0 of its own `cb_inv_rms` tile (32 word moves). That replaces the own-copy NoC read. R3 roots then multicast faces 0/2 of the re-laid tile to the members as before. R1 roots now carry `cb_rms_root` (`nwpb·Rw` pages, +1 page at R1 shapes). |
+
+G > 16 (a record per slot no longer fits one tile) keeps the column-0 layout (G tiles per tile-row) and the Refinement 3
+column chain with the 2-tile left fold. Host `FIN_COMPACT_MAX_G = 0` forces that path; it is how
+`test_out_noc_split[...-fold]` keeps it covered on a 4-chip box. Measured: finalize micro-bench 1161 → 300 ns per
+tile-row (`perf_experiments/row_layout_finalize/bench`). On the focus case, wave-1 inv_rms reaches the members 1–2 µs
+earlier.

@@ -106,10 +106,11 @@ OUT_NOC_SPLIT = os.environ.get("DRMS_OUT_NOC_SPLIT", "") or "alternate"
 # chip it is latency-bound and the writer <-> reader handshake only adds latency (32x1792, 114 KB: 9.67 -> 10.01 us
 # with "alternate"); 640x1792 (2.3 MB) and 2048x1280 (5.2 MB) win. Env DRMS_OUT_NOC_SPLIT_MIN_BYTES overrides.
 OUT_NOC_SPLIT_MIN_BYTES = int(os.environ.get("DRMS_OUT_NOC_SPLIT_MIN_BYTES", "") or 512 * 1024)
-# Root finalize (Refinement 6): fold the G gathered slots in one SFPU pass over G DEST tiles (True; G <= the DEST
-# limit, else the 2-tile fold) instead of G-1 copy / add element pairs (False). Bit-identical sums (same adds, same
-# order). Env DRMS_FINALIZE_ONE_PASS=0/1 overrides (measurement).
-FINALIZE_ONE_PASS = os.environ.get("DRMS_FINALIZE_ONE_PASS", "1") not in ("", "0")
+# Root finalize (Perf 1): with G <= FIN_COMPACT_MAX_G every slot's 32-word record of a tile-row sits in ONE
+# cb_stats_gather tile (face q/4, rows 4(q%4)..+1), finalized by one fused SFPU pass; every root (R1 too) re-lays the
+# inv_rms into column 0 through cb_rms_root. Above it (a record per slot no longer fits one tile) the column-0 layout
+# with G tiles per tile-row (reader CT arg after the accessors, compute CT arg 14). Tests set 0 to force it.
+FIN_COMPACT_MAX_G = 16
 # Blackhole physical DRAM columns (soc descriptor: channels 0-3 at x = 0, 4-7 at x = 9; bank id = channel).
 _BH_DRAM_SPLIT_X = 9
 _BH_WEST_BANKS = 0x0F
@@ -366,6 +367,14 @@ class Geometry:
     gamma_resident: bool  # cb_gamma_tiles holds the whole window (Wp) vs streams STREAM_DEPTH * C pages
     out_native: bool  # cb_output IS the output shard (same placement as the input shard) vs the writer path
 
+    @property
+    def fin_compact(self) -> bool:  # compact finalize tile (Perf 1); the root reader re-lays inv_rms into column 0
+        return self.G <= FIN_COMPACT_MAX_G
+
+    @property
+    def fin_tpr(self) -> int:  # cb_stats_gather tiles per tile-row
+        return 1 if self.fin_compact else self.G
+
 
 def compute_geometry(
     input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident=True, out_native=None
@@ -440,7 +449,7 @@ def cb_inventory(g: Geometry, R: int, x_depth: int, input_dtype, output_dtype, g
         (CB_SUMSQ_PARTIAL, fi, T_i, Rw),
         (CB_INV_RMS, fi, T_i, R),
         (CB_DEV_PARTIAL, fi, T_i, nwpb * Rw),
-        (CB_STATS_GATHER, fi, T_i, g.G * Rw),
+        (CB_STATS_GATHER, fi, T_i, g.fin_tpr * Rw),
         (CB_STATS_RECORD, ttnn.uint32, RECORD_BYTES, (g.G + 1) * Rw),
     ]
     if not g.sharded:
@@ -454,6 +463,8 @@ def cb_inventory(g: Geometry, R: int, x_depth: int, input_dtype, output_dtype, g
         inv.append((CB_PARTIAL_COL, fi, T_i, R))
         inv.append((CB_GATHER, fi, T_i, nwpb * g.G_w * Rw))
         inv.append((CB_RMS_ROOT, fi, T_i, nwpb * Rw))
+    elif g.fin_compact:
+        inv.append((CB_RMS_ROOT, fi, T_i, nwpb * Rw))  # R1 roots re-lay their own inv_rms too
     if g.masked:
         inv.append((CB_SUMSQ_LAST, fi, T_i, Rw))
         inv.append((CB_SUMSQ_ACC, fi, T_i, Rw))
@@ -1009,6 +1020,7 @@ def create_mesh_program_descriptor(
     ]
     reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    reader_ct.append(int(g.fin_compact))
     compute_ct = [
         int(g.has_gamma),
         R,
@@ -1024,7 +1036,7 @@ def create_mesh_program_descriptor(
         nwpb,
         G,
         int(g.gamma_resident),
-        int(FINALIZE_ONE_PASS),
+        int(g.fin_compact),
     ]
     writer_ct = [
         int(g.has_gamma),
@@ -1101,7 +1113,7 @@ def create_mesh_program_descriptor(
             PORT_OWN_AHEAD,
             READ_WAVE_GATE,
             out_split,
-            FINALIZE_ONE_PASS,
+            FIN_COMPACT_MAX_G,
             fp32_acc,
             compute_kernel_config.math_fidelity,
             compute_kernel_config.math_approx_mode,

@@ -92,22 +92,22 @@ def test_bounded_landing_ring(mesh_shape, cluster_axis, num_links, mesh_device, 
 @pytest.mark.parametrize("mesh_shape", [None])
 @pytest.mark.parametrize("split", ["alternate", "direction", "0F,F0"])
 @pytest.mark.parametrize(
-    "shape,dtype,min_blocks,one_pass",
+    "shape,dtype,min_blocks,fin_compact",
     [
         ((1, 1, 32, 1792), ttnn.bfloat16, 1, True),
         ((1, 1, 64, 1000), ttnn.bfloat16, 1, True),  # ragged last slice (W % 32 != 0)
-        ((2, 4, 128, 512), ttnn.bfloat8_b, 1, False),  # R1, 2-tile fold
+        ((2, 4, 128, 512), ttnn.bfloat8_b, 1, False),  # R1, column-0 layout + 2-tile fold (the G > 16 path)
         ((1, 1, 640, 1792), ttnn.float32, 2, True),  # multi-block, x_depth 2
     ],
     ids=["32x1792", "64x1000", "2x4x128x512-bf8b-fold", "640x1792-fp32-mb2"],
 )
-def test_out_noc_split(mesh_shape, split, shape, dtype, min_blocks, one_pass, mesh_device, monkeypatch):
+def test_out_noc_split(mesh_shape, split, shape, dtype, min_blocks, fin_compact, mesh_device, monkeypatch):
     """Refinement 6: the output NoC split (the reader writes the NOC0 share of every posted quantum) forced on below
-    its size gate, every bank-mask mode, with and without the one-pass finalize; run twice back to back (the local
+    its size gate, every bank-mask mode, with the compact finalize tile and with the column-0 layout forced (the G > 16 carve-out of Perf 1); run twice back to back (the local
     ready / done semaphores are program semaphores, re-armed per launch)."""
     monkeypatch.setattr(pd, "OUT_NOC_SPLIT", split)
     monkeypatch.setattr(pd, "OUT_NOC_SPLIT_MIN_BYTES", 0)
-    monkeypatch.setattr(pd, "FINALIZE_ONE_PASS", one_pass)
+    monkeypatch.setattr(pd, "FIN_COMPACT_MAX_G", pd.FIN_COMPACT_MAX_G if fin_compact else 0)
     monkeypatch.setattr(pd, "MIN_BLOCKS_PER_CORE", min_blocks)
     for seed in (0, 1):
         run_case(mesh_device, shape, cluster_axis=LINEAR_AXES[0], dtype=dtype, gamma_dtype=ttnn.bfloat16, seed=seed)

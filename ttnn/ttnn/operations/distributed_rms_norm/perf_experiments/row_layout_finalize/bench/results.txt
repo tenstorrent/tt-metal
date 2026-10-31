@@ -1,0 +1,42 @@
+G=4 n=1 fp32dest base         1161.0 ns/rep  [TRISC_0=1161.1 TRISC_1=1161.0 TRISC_2=1161.0]  rel=1.06e-07
+G=4 n=1 fp32dest col_fused     814.4 ns/rep  [TRISC_0=814.4 TRISC_1=814.4 TRISC_2=814.3]  rel=1.06e-07 BITWISE==base
+G=4 n=1 fp32dest row_fused     602.0 ns/rep  [TRISC_0=602.0 TRISC_1=602.1 TRISC_2=602.0]  rel=1.06e-07 BITWISE==base
+G=4 n=1 fp32dest packed        300.4 ns/rep  [TRISC_0=300.4 TRISC_1=300.5 TRISC_2=300.2]  rel=1.06e-07 BITWISE==base
+G=4 n=1 fp32dest dense         263.8 ns/rep  [TRISC_0=263.8 TRISC_1=263.8 TRISC_2=263.5]  rel=1.06e-07 BITWISE==base
+G=4 n=1 fp32dest floor_G       508.5 ns/rep  [TRISC_0=508.5 TRISC_1=508.6 TRISC_2=508.4]
+G=4 n=1 fp32dest floor_1       220.2 ns/rep  [TRISC_0=220.2 TRISC_1=220.6 TRISC_2=220.0]
+G=4 n=1 bf16dest base          982.6 ns/rep  [TRISC_0=982.6 TRISC_1=982.6 TRISC_2=982.4]  rel=5.97e-03
+G=4 n=1 bf16dest col_fused     629.2 ns/rep  [TRISC_0=629.2 TRISC_1=629.2 TRISC_2=629.0]  rel=5.97e-03 BITWISE==base
+G=4 n=1 bf16dest row_fused     409.3 ns/rep  [TRISC_0=409.3 TRISC_1=409.3 TRISC_2=409.1]  rel=5.97e-03 BITWISE==base
+G=4 n=1 bf16dest packed        246.2 ns/rep  [TRISC_0=246.2 TRISC_1=246.2 TRISC_2=245.9]  rel=5.97e-03 BITWISE==base
+G=4 n=1 bf16dest dense         212.8 ns/rep  [TRISC_0=212.8 TRISC_1=212.9 TRISC_2=212.5]  rel=5.97e-03 BITWISE==base
+G=4 n=1 bf16dest floor_G       316.7 ns/rep  [TRISC_0=316.7 TRISC_1=316.7 TRISC_2=316.5]
+G=4 n=1 bf16dest floor_1       166.2 ns/rep  [TRISC_0=166.2 TRISC_1=166.7 TRISC_2=166.0]
+G=4 n=2 fp32dest base         2227.8 ns/rep  [TRISC_0=2227.8 TRISC_1=2227.8 TRISC_2=2227.8]  rel=1.17e-07
+G=4 n=2 fp32dest col_fused    1545.5 ns/rep  [TRISC_0=1545.5 TRISC_1=1545.5 TRISC_2=1545.6]  rel=1.17e-07 BITWISE==base
+G=4 n=2 fp32dest row_fused    1116.1 ns/rep  [TRISC_0=1116.1 TRISC_1=1116.1 TRISC_2=1116.1]  rel=1.17e-07 BITWISE==base
+G=4 n=2 fp32dest packed        482.9 ns/rep  [TRISC_0=482.9 TRISC_1=482.9 TRISC_2=482.9]  rel=1.17e-07 BITWISE==base
+G=4 n=2 fp32dest dense         409.9 ns/rep  [TRISC_0=409.9 TRISC_1=409.9 TRISC_2=409.9]  rel=1.17e-07 BITWISE==base
+G=4 n=2 fp32dest floor_G       930.0 ns/rep  [TRISC_0=930.0 TRISC_1=930.0 TRISC_2=930.0]
+G=4 n=2 fp32dest floor_1       324.1 ns/rep  [TRISC_0=324.1 TRISC_1=324.1 TRISC_2=324.0]
+G=4 n=2 bf16dest base         1790.5 ns/rep  [TRISC_0=1790.5 TRISC_1=1790.5 TRISC_2=1790.5]  rel=7.30e-03
+G=4 n=2 bf16dest col_fused    1095.9 ns/rep  [TRISC_0=1095.9 TRISC_1=1095.9 TRISC_2=1096.0]  rel=7.30e-03 BITWISE==base
+G=4 n=2 bf16dest row_fused     659.5 ns/rep  [TRISC_0=659.5 TRISC_1=659.5 TRISC_2=659.5]  rel=7.30e-03 BITWISE==base
+G=4 n=2 bf16dest packed        358.7 ns/rep  [TRISC_0=358.7 TRISC_1=358.7 TRISC_2=358.6]  rel=7.30e-03 BITWISE==base
+G=4 n=2 bf16dest dense         283.9 ns/rep  [TRISC_0=283.9 TRISC_1=283.9 TRISC_2=283.7]  rel=7.30e-03 BITWISE==base
+G=4 n=2 bf16dest floor_G       570.0 ns/rep  [TRISC_0=570.0 TRISC_1=570.0 TRISC_2=570.0]
+G=4 n=2 bf16dest floor_1       210.6 ns/rep  [TRISC_0=210.6 TRISC_1=211.3 TRISC_2=210.6]
+G=2 n=1 fp32dest base          919.2 ns/rep  [TRISC_0=919.3 TRISC_1=919.2 TRISC_2=919.0]  rel=1.08e-07
+G=2 n=1 fp32dest col_fused     593.5 ns/rep  [TRISC_0=593.6 TRISC_1=593.5 TRISC_2=593.3]  rel=1.08e-07 BITWISE==base
+G=2 n=1 fp32dest row_fused     399.4 ns/rep  [TRISC_0=399.4 TRISC_1=399.4 TRISC_2=399.2]  rel=1.08e-07 BITWISE==base
+G=2 n=1 fp32dest packed        293.9 ns/rep  [TRISC_0=293.9 TRISC_1=293.9 TRISC_2=293.6]  rel=1.08e-07 BITWISE==base
+G=2 n=1 fp32dest dense         260.6 ns/rep  [TRISC_0=260.6 TRISC_1=260.6 TRISC_2=260.4]  rel=1.08e-07 BITWISE==base
+G=2 n=1 fp32dest floor_G       314.0 ns/rep  [TRISC_0=314.0 TRISC_1=314.0 TRISC_2=313.7]
+G=2 n=1 fp32dest floor_1       220.6 ns/rep  [TRISC_0=220.6 TRISC_1=221.2 TRISC_2=220.3]
+G=2 n=1 bf16dest base          839.5 ns/rep  [TRISC_0=839.5 TRISC_1=839.5 TRISC_2=839.2]  rel=6.89e-03
+G=2 n=1 bf16dest col_fused     505.4 ns/rep  [TRISC_0=505.5 TRISC_1=505.4 TRISC_2=505.1]  rel=6.89e-03 BITWISE==base
+G=2 n=1 bf16dest row_fused     305.5 ns/rep  [TRISC_0=305.5 TRISC_1=305.5 TRISC_2=305.2]  rel=6.89e-03 BITWISE==base
+G=2 n=1 bf16dest packed        240.3 ns/rep  [TRISC_0=240.3 TRISC_1=240.3 TRISC_2=240.0]  rel=6.89e-03 BITWISE==base
+G=2 n=1 bf16dest dense         206.6 ns/rep  [TRISC_0=206.6 TRISC_1=206.6 TRISC_2=206.3]  rel=6.89e-03 BITWISE==base
+G=2 n=1 bf16dest floor_G       219.5 ns/rep  [TRISC_0=219.5 TRISC_1=219.5 TRISC_2=219.2]
+G=2 n=1 bf16dest floor_1       166.2 ns/rep  [TRISC_0=166.2 TRISC_1=166.7 TRISC_2=166.0]

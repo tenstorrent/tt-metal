@@ -124,3 +124,11 @@ Totals at the focus case (640 × 1792 bf16, G = 4 Ring, L = 2, R3-i):
 Refinement 6: no CB added or resized. Three program semaphores (output quantum ready / done / address, ids after the
 gather semaphores) are declared on the compute cores only; the output NoC split changes which NoC carries each output
 tile, not the DRAM crossings (out still crosses once).
+
+Perf 1 (compact finalize tile, G ≤ `FIN_COMPACT_MAX_G` = 16):
+- `cb_stats_gather` shrinks from `G · Rw` to `Rw` pages: one tile per tile-row holds every slot's 32-word record (face q/4,
+  rows 4(q%4)..+1). G > 16 keeps `G · Rw`.
+- R1 / R1-HS roots now carry `cb_rms_root` (`nwpb · Rw` pages). The finalize packs inv_rms there in the compact layout,
+  and the reader re-lays it into column 0 of `cb_inv_rms`.
+- At R1 shapes the net change is −(G − 1)·Rw + nwpb·Rw tiles. At R3 roots it is −(G − 1)·Rw tiles. Both go through
+  `cb_inventory()`, so the L1 solve sees them.

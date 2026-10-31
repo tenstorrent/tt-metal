@@ -39,6 +39,8 @@
 
 #include <stdint.h>
 
+#include <type_traits>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
@@ -207,6 +209,60 @@ FORCE_INLINE void record_to_tile_col0(uint32_t rec_addr, uint32_t tile_addr) {
     }
 }
 
+// Compact finalize tile (Perf 1, G <= 16): element index (in datums) of element e of slot q's record — face q/4,
+// rows 4(q%4) + e/16, column e%16 (32 contiguous datums). Slot 0's positions hold the finalized inv_rms in cb_rms_root.
+constexpr uint32_t slot_index(uint32_t q, uint32_t e) {
+    return (q / 4) * 256 + (4 * (q % 4) + e / 16) * FACE_DIM + e % 16;
+}
+
+// One 32-word record -> slot q's positions of the compact finalize tile (fp32: the word; Float16_b: its top half).
+template <bool fp32>
+FORCE_INLINE void record_to_tile_slot(uint32_t rec_addr, uint32_t tile_addr, uint32_t q) {
+    const uint32_t* rec = reinterpret_cast<const uint32_t*>(rec_addr);
+#pragma GCC unroll 4
+    for (uint32_t b = 0; b < TILE_DIM; b += 8) {
+        uint32_t v[8];
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < 8; ++i) {
+            v[i] = rec[b + i];
+        }
+        if constexpr (fp32) {
+            volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                tile[slot_index(q, b + i)] = v[i];
+            }
+        } else {
+            volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr);
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                tile[slot_index(q, b + i)] = static_cast<uint16_t>(v[i] >> 16);
+            }
+        }
+    }
+}
+
+// The finalized inv_rms (slot 0's positions of a cb_rms_root tile) -> column 0 of a cb_inv_rms tile (the layout the
+// Col-broadcast scale and the faces-0/2 distribution read). Element size = the interm format's.
+template <bool fp32>
+FORCE_INLINE void tile_slot0_to_col0(uint32_t src_addr, uint32_t dst_addr) {
+    using T = typename std::conditional<fp32, uint32_t, uint16_t>::type;
+    const T* src = reinterpret_cast<const T*>(src_addr);
+    volatile tt_l1_ptr T* dst = reinterpret_cast<volatile tt_l1_ptr T*>(dst_addr);
+#pragma GCC unroll 4
+    for (uint32_t b = 0; b < TILE_DIM; b += 8) {
+        T v[8];
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < 8; ++i) {
+            v[i] = src[slot_index(0, b + i)];
+        }
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < 8; ++i) {
+            dst[col0_index(b + i)] = v[i];
+        }
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -249,6 +305,13 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<28>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     static_assert(num_w_chunks * C == WS || sharded, "interleaved rows are pushed as whole Wp windows");
+    // Compact finalize (Perf 1, G <= 16): one cb_stats_gather tile per tile-row holds every slot's record, and the root
+    // re-lays the finalized inv_rms into column 0 (R1 roots too); G > 16: the column-0 layout (G tiles per tile-row).
+    // fp32 records are NoC-read straight from the landing into their tile rows (direct); Float16_b word by word.
+    constexpr bool compact = get_compile_time_arg_val(output_args.next_compile_time_args_offset()) != 0;
+    static_assert(!compact || G <= 16, "compact finalize tile holds at most 16 slots");
+    constexpr bool direct = compact && interm_fp32;
+    constexpr uint32_t TPR = compact ? 1 : G;
 
     uint32_t a = 0;
     const uint32_t input_addr = get_arg_val<uint32_t>(a++);
@@ -545,6 +608,18 @@ void kernel_main() {
     auto read_slot = [&](uint32_t q, uint32_t n) {
         DRMS_ZONE("rt_collect");
         const uint32_t pp = get_arg_val<uint32_t>(slot_port_idx + q);
+        if constexpr (direct) {
+            // packed fp32: slot q's record IS 32 contiguous words of the tile (face q/4, rows 4(q%4)..+1)
+            const uint32_t dst = stats_cb.get_write_ptr() + slot_index(q, 0) * 4;
+            const uint64_t src =
+                get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (slot_wave(wc) * G + q) * seg_stride + rec_off);
+            for (uint32_t t = 0; t < n; ++t) {
+                noc_async_read(src + t * RECORD_BYTES, dst + t * T_i, RECORD_BYTES);
+            }
+            noc_async_read_barrier();
+            pending &= ~(1u << q);
+            return;
+        }
         const uint32_t rec = staging + q * Rw * RECORD_BYTES;
         noc_async_read(
             get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (slot_wave(wc) * G + q) * seg_stride + rec_off),
@@ -554,7 +629,11 @@ void kernel_main() {
         invalidate_l1_cache();
         const uint32_t dst = stats_cb.get_write_ptr();
         for (uint32_t t = 0; t < n; ++t) {
-            record_to_tile_col0<interm_fp32>(rec + t * RECORD_BYTES, dst + (t * G + q) * T_i);
+            if constexpr (compact) {
+                record_to_tile_slot<interm_fp32>(rec + t * RECORD_BYTES, dst + t * T_i, q);
+            } else {
+                record_to_tile_col0<interm_fp32>(rec + t * RECORD_BYTES, dst + (t * G + q) * T_i);
+            }
         }
         pending &= ~(1u << q);
     };
@@ -563,10 +642,10 @@ void kernel_main() {
             while (wc < own_waves && wave_n(wc) == 0) {
                 ++wc;
             }
-            if (wc >= own_waves || wc >= wp || !stats_cb.pages_reservable_at_back(G * wave_n(wc))) {
+            if (wc >= own_waves || wc >= wp || !stats_cb.pages_reservable_at_back(TPR * wave_n(wc))) {
                 return false;
             }
-            stats_cb.reserve_back(G * wave_n(wc));
+            stats_cb.reserve_back(TPR * wave_n(wc));
             wc_open = true;
             pending = (1u << G) - 1;
             for (uint32_t d = 0; d < 2; ++d) {
@@ -588,7 +667,7 @@ void kernel_main() {
             }
         }
         if (pending == 0) {
-            stats_cb.push_back(G * wave_n(wc));
+            stats_cb.push_back(TPR * wave_n(wc));
             wc_open = false;
             ++wc;
         }
@@ -614,9 +693,23 @@ void kernel_main() {
         const uint32_t dst = inv_base + k * Rw * T_i;
         // Own copy first: this root's compute (the next wave's finalize) is not held behind the member writes.
         inv_cb.reserve_back(n);
-        noc_async_read(get_noc_addr(src), inv_cb.get_write_ptr(), n * T_i);
-        noc_async_read_barrier();
+        const uint32_t own = inv_cb.get_write_ptr();
+        if constexpr (compact) {
+            // compact finalize tile -> column 0 (32 word moves per tile-row); the members get this re-laid tile
+            for (uint32_t t = 0; t < n; ++t) {
+                tile_slot0_to_col0<interm_fp32>(src + t * T_i, own + t * T_i);
+            }
+            rms_root_cb.pop_front(n);
+        } else {
+            noc_async_read(get_noc_addr(src), own, n * T_i);
+            noc_async_read_barrier();
+        }
         inv_cb.push_back(n);
+        if constexpr (!combine) {
+            ++wd;
+            return true;
+        }
+        const uint32_t mc_src = compact ? own : src;
         // Members: per row-run (a logical rectangle of one row; lamp L6) one multicast of faces 0 / 2 of each tile,
         // LINKED to the multicast set of the cumulative wave count on SEM_INV (the root's own SEM_INV word, unused on
         // a root, holds the value): the linked chain to one rectangle arrives in order, so no ack barrier sits between
@@ -639,13 +732,15 @@ void kernel_main() {
             for (uint32_t t = 0; t < n; ++t) {
                 for (uint32_t f = 0; f < 4; f += 2) {
                     const uint32_t off = t * T_i + f * F;
-                    noc_async_write_multicast(src + off, mc(dst + off), F, cnt, true);
+                    noc_async_write_multicast(mc_src + off, mc(dst + off), F, cnt, true);
                 }
             }
             noc_semaphore_set_multicast(sem_inv, mc(sem_inv), cnt);
         }
         noc_async_writes_flushed();
-        rms_root_cb.pop_front(n);
+        if constexpr (!compact) {
+            rms_root_cb.pop_front(n);
+        }
         ++wd;
         return true;
     };
@@ -698,7 +793,7 @@ void kernel_main() {
         if (is_root) {
             // Downstream first: a ready distribute / collect of wave w is on the critical chain to the output
             // write, while the next wave's gather / publish only feeds the exchange (which is still in flight).
-            if constexpr (combine) {
+            if constexpr (combine || compact) {
                 try_distribute();
             }
             try_collect();
@@ -715,7 +810,10 @@ void kernel_main() {
         if (is_root) {
             done = done && wp >= num_waves_total && wc >= own_waves;
             if constexpr (combine) {
-                done = done && wg >= own_waves && wd >= own_waves;
+                done = done && wg >= own_waves;
+            }
+            if constexpr (combine || compact) {
+                done = done && wd >= own_waves;
             }
         } else {
             done = done && ws >= own_waves && wi >= own_waves;
