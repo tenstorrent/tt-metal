@@ -625,8 +625,8 @@ TABLE = {
         "bf16 = bf16 rows, stock sparse_sdpa",
     ),
     "WINDOW_KV_FORMAT": Setting(
-        "bfp8_blocks",
-        ("bf16", "bfp8_blocks"),
+        "bfp8_tiles",
+        ("bf16", "bfp8_blocks", "bfp8_tiles"),
         "the window KV sparse_sdpa reads (DS41-150, OWNER DECISION 2026-10-29 13:00; developed on the 2x2): the reference "
         "stores it as e4m3 with a power-of-two scale per 32 (ds41_ref.py _window_kv). bfp8_blocks = the [carry 128 | "
         "chunk S] window region as bfloat8_b blocks of 32 consecutive rows a page (ttnn.bringup.ckv_bfp4 dtype=bfloat8_b "
@@ -634,7 +634,16 @@ TABLE = {
         "bfp4_rows) or kv_format ROW_BFP8 (window-only layers), two NoC reads a block: 3-4x closer to native than the "
         "reference's e4m3 (lowbit_derisk/LOWBIT_PHASE1.md), sparse_sdpa -4 % compressed / -17 % window-only layers on one "
         "card. The served 0_window_kv cache stays bf16 (contract unchanged; temporary, owner 2026-10-29 13:25). bf16 = "
-        "the bf16 row table (the path before)",
+        "the bf16 row table (the path before). bfp8_tiles (P.18, owner 2026-10-30 A12, the default; needs CKV_FORMAT="
+        "bfp4_rows, STATIC_TABLES=on and more than one chip): each chip's OWN window region, [carry 128 | its q_rows "
+        "query rows] (8x4: 288 rows, 9 tile rows), per layer, as bfloat8_b tile rows (the same 32-row pages, 16-value "
+        "exponent groups and nearest-even rounding as bfp8_blocks: the same values): the chip rounds only its own rows "
+        "(ttnn.bringup.ckv_bfp4 into region rows 128..), the carry (the previous chip's last 128 rows) comes by ONE "
+        "neighbour send over the fabric in sequence order (tt/window_send.py; the last chip sends its kept tail of the "
+        "previous chunk to chip 0) instead of the window all-gathers, and sparse_sdpa reads each query's 128 rows from "
+        "the region by load-time per-chip index lists (a band of consecutive rows, two NoC reads a block). The served "
+        "0_window_kv copy is unchanged (its TP gather and write). bfp8_blocks = the replicated [128 carry | S] blocks "
+        "(the path before P.18)",
     ),
     "INDEX_K_FORMAT": Setting(
         "bfp4",

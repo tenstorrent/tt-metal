@@ -4725,3 +4725,57 @@ overseer (P.20 revert, then the card-0 reset). The P.20 section above is the rej
   P23_MIN_MS=0 ... test_matmul_sweep.py -k "test_sweep and not card"`; positions: `DS41_ENGRAM_TABLE=resident
   BRINGUP_PROFILE_WALL=1 BRINGUP_POS=<p> BRINGUP_PROFILE_HOST=1 ... test_profile.py`, then `BRINGUP_WALL_CLEAN=1` the
   same; gate: `python -m models.demos.common.bringup gate FIX.15 --spec <spec> --check`.
+
+## P.18 WINDOW_TILES (perf, galaxy 8x4, 2026-10-31): a per-chip window region, one neighbour send
+
+- Setting WINDOW_KV_FORMAT gains `bfp8_tiles` (the default; `bfp8_blocks` = the path before, unchanged). Per layer, every
+  chip keeps its OWN window region `TtWindowAttention.region` [1, 1, (128 + q_rows) / 32, 18496] uint8 (8x4: 288 rows,
+  9 pages): [carry 128 | its own 160 query rows] as bfloat8_b pages of one tile row (32 rows), the same 16-value
+  exponent groups and nearest-even rounding as bfp8_blocks (ckv_bfp4 blocks=True), so the same values.
+  Per chunk (`tt/attention._window_region`): (1) the served 0_window_kv write unchanged (TP gather + local write at
+  chunk-aligned starts; the full mesh gather + server-order write at other starts); (2) the chip's own rows (pad rows
+  zeroed by a per-chip iota) rounded into region rows 128.. (one ckv_bfp4, 5 cores); (3) chip 0's carry: the slot's
+  kept tail `TtWindowCache.rtail` when this layer's previous chunk ended at `start`, else the served rows packed into it
+  - on the last chip alone (its local slice, no gather) whenever the carry's owner is the last chip (every
+  chunk-aligned start), else `cache.carry` (gathers; non-aligned prefix hits); start 0 reads none; (4) ONE neighbour
+  send (`tt/window_send.py:WindowSend`, a Python fabric program, one core a chip, prepared): chip q's last 4 pages ->
+  chip q + 1's first 4, the last chip's kept tail -> chip 0, then the last chip keeps its own last 4 pages.
+  sparse_sdpa (unchanged fork, ROW_BFP8 / ROW_BFP4 kv_window) reads the region with load-time per-chip index lists
+  (`WindowTables.region_lists`: query d reads region rows d - d0 + 1 ..; positions < 0 dropped for chip 0 at starts
+  < 128). Removed a layer: the SP gather of the blocks, its slice_write, the carry gathers (TP + SP), their slices.
+- Deviation from the brief (owner please read): the region is stored as 32-row block pages, not TILE-layout tiles,
+  and the sparse_sdpa fork is unchanged (no band-read option): a query's 128 keys start mid tile, so a band read from
+  tiles needs a 5-tile window chunk (the kernel's Skt = 4 is compile-time across its softmax code) or a tile -> row
+  re-tile in compute; the block page is a tile row's bytes row-major, read with 2 NoC reads a block (~70 KB a query
+  vs 87 KB of tiles + a convert) and the existing reader already reads the window as a consecutive band from its first
+  id (DS41-182). Same values either way.
+- No ready fence in the send: the region is per layer and every layer's MoE exchange orders a chip's next write to a
+  receiver after the receiver's read (tt/window_send.py docstring). Routes from tt-metal's dimension-order tables with
+  the open fabric's torus wraps (combine_rf route / mesh_plan); 8x4 torus: (r,3) -> (r+1,0) is Y+ then X+ (wrap).
+- Byte test `tt/perf_window_tiles.py` (8x4 mesh, regions of 9 and 24 pages, 3 prepared calls, io patched): PASS;
+  host enqueue a warm call 220-300 us (32 per-chip programs). Rule 18: send 1 core, own-row ckv_bfp4 5 cores; core
+  audit (`CORES_TAG=_p18`, generated/ds41_cores/cores_p18.json) PASS, max 110.
+- Accuracy: measure quick (last chunk after the golden prefix, every layer vs golden): every layer and state within
+  its limit; L00 0.025307 (= FIX.15), L03 0.07673, L20 0.16442, L39 0.85131 (P.19 0.91435); test_runner_contract
+  (prefix hit at 2496, non-aligned start) PASS, 0 failures (gate unit P.18#test_runner_contract).
+- Speed (this run, change on; before = FIX.15's shipped side, its BREADCRUMBS numbers): quick wall 280.5 ms (rung,
+  FIX.15 303.7); p51200 device 205.54 -> 193.32 ms, wall 302.6 -> 285.2; p512000 device 241.32 -> 234.07, wall
+  306.7 -> 289.1. Section attention 66.6 -> 59.24 ms (p51200; P.19-side profile, the same window path as FIX.15).
+  Per op (core audit, calls a chunk / cores; the audit recorded no device ms for fork ops this run): attention
+  fabric_all_gather 160 -> 40 (the served write's TP gather stays), slice_write 80 -> 0, slice 120 -> 40,
+  ckv_bfp4 80 -> 80 on 20 -> 5 cores (own 160 rows + the carry instead of the SP row's 640 + the carry), window send
+  +40 (1 core). Host (cProfile, p51200, a chunk): window path 60.6 -> 36.4 ms, all_gather 294 -> 174 calls (39.3 ->
+  24.7 ms), the send 3.8 ms / 40 calls; ttnn op launches 2543 -> 2282.
+- Window memory a chip (8x4, chunk 5120): before (bfp8_blocks + P.11) window blocks 164 pages 3.03 MB + packed
+  blocks 20 + 160 pages 3.33 MB + carry buffers 148 pages 2.74 MB = 9.10 MB shared, + 4 pages (74 KB) a layer a slot;
+  after: regions 9 pages a layer = 6.66 MB (40 layers) + index lists 0.41 MB, + the kept tail 74 KB a layer a slot.
+- OV-3: nothing padded. OV-23: the one Python-built program added (the send) runs prepared (patch count checked,
+  2 slots a chip). OV-25: no fork suite run (no fork changed). OV-35: DS41-175 updated.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_window_tiles.py -s`; `python -m models.demos.common.bringup.orchestrator
+  measure --task P.18 --spec <spec>`; old path: DS41_WINDOW_KV_FORMAT=bfp8_blocks.
+- Final check (after the hooks reformatted window_send.py): measure quick on the final code: wall 278.2 ms (spread 7.5),
+  every layer and state within its limit, layer errors identical to the first run. Its p51200 / p512000 position runs
+  were cut: my shell moved the job to the background and killed it at its 10 min limit; SAFE_PYTEST caught the SIGTERM
+  and marked cards 0-31 dirty (09:05). No device job run after it (agent rule 19): the next job resets the box
+  (DS41-183). The position numbers above are from the first measure (same code before black's reformat).
