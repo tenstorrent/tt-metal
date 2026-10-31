@@ -25,6 +25,8 @@ file(
     device/kernels/*.cpp
     device/kernels/*.h
     device/kernels/*.hpp
+    device/unified_kernels/*.hpp
+    device/kernel_includes/*.h
 )
 
 target_sources(
