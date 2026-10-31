@@ -66,6 +66,9 @@ NOTIFY_PER_ENTRY = True
 # The ports send wave w+1's own segment ahead of wave w's relays when it is ready (True), or in strict (wave, item)
 # order (False). Measured null alone at 640x1792 (the roots' collect / finalize / distribute chain binds).
 PORT_OWN_AHEAD = False
+# Wave-ordered reads: a core issues the reads of wave k+1's rows only once its wave k is reduced locally (True), so the
+# grid's wave-0 reads (which gate the first exchange) are not slowed by the fast cores' wave-1 reads.
+READ_WAVE_GATE = True
 R3_ROWS_PER_GROUP = 2
 R3_MAX_GROUP_CORES = 24
 R3_MIN_SLICE_TILES = 4
@@ -917,6 +920,7 @@ def create_mesh_program_descriptor(
         int(g.masked),
         num_waves,
         int(fp32_acc),
+        int(READ_WAVE_GATE),
     ]
     reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     compute_ct = [
@@ -1006,6 +1010,7 @@ def create_mesh_program_descriptor(
             sorted(port_set),
             NOTIFY_PER_ENTRY,
             PORT_OWN_AHEAD,
+            READ_WAVE_GATE,
             fp32_acc,
             compute_kernel_config.math_fidelity,
             compute_kernel_config.math_approx_mode,

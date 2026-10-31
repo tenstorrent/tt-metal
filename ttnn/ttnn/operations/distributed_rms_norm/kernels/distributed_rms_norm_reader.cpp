@@ -220,7 +220,11 @@ void kernel_main() {
     constexpr bool masked_cfg = get_compile_time_arg_val(16) != 0;
     constexpr uint32_t num_waves_total = get_compile_time_arg_val(17);
     constexpr bool interm_fp32 = get_compile_time_arg_val(18) != 0;
-    constexpr auto input_args = TensorAccessorArgs<19>();
+    // Wave-ordered reads (host READ_WAVE_GATE): the reads of a wave's rows are issued only once this core's previous
+    // wave is reduced locally, so the grid's wave-0 reads get the DRAM first (the exchange starts after the slowest
+    // root publishes wave 0) instead of competing with the fast cores' wave-1 reads.
+    constexpr bool read_wave_gate = get_compile_time_arg_val(19) != 0;
+    constexpr auto input_args = TensorAccessorArgs<20>();
     static_assert(num_w_chunks * C == WS || sharded, "interleaved rows are pushed as whole Wp windows");
 
     uint32_t a = 0;
@@ -302,6 +306,20 @@ void kernel_main() {
     auto unpack_x = [](uint32_t v) { return v >> 16; };
     auto unpack_y = [](uint32_t v) { return v & 0xFFFF; };
 
+    // Local reduction progress (read_wave_gate): consumed waves of this core's partial CB (member: sent, combine
+    // root: gathered, R1 root: published) and the partial CB's front.
+    uint32_t ws = 0, wi = 0, inv_count = 0;  // member cursors (send, receive)
+    uint32_t wg = 0;                         // root gather cursor
+    uint32_t wp = 0;                         // root publish cursor
+    [[maybe_unused]] auto wave_reduced = [&](uint32_t w) -> bool {
+        const uint32_t consumed = !is_root ? ws : (combine ? wg : wp);
+        if (consumed > w) {
+            return true;
+        }
+        CircularBuffer& src = combine ? partial_cb : dev_cb;
+        return consumed == w && src.pages_available_at_front(1);
+    };
+
     // ---- load cursor (interleaved), non-blocking: one tile-row's reads in flight; a later pass pushes it once the
     // reads have landed, so the sends / publishes of the waves already reduced are not held behind a row's DRAM
     // latency (measured: a member's wave-0 partial waited ~1.6 us in the row-1 read barrier at 640x1792). ----
@@ -335,6 +353,14 @@ void kernel_main() {
             if (lb >= num_blocks || !x_cb.pages_reservable_at_back(WS)) {
                 return false;
             }
+            if constexpr (read_wave_gate) {
+                // first row of wave k >= 1 of the core: wait until wave k-1's local partial exists (pushed by compute,
+                // or already consumed by this reader)
+                const uint32_t row = lb * R + lr;
+                if (row > 0 && lr % Rw == 0 && !wave_reduced(row / Rw - 1)) {
+                    return false;
+                }
+            }
             DRMS_ZONE("rd_load");
             const uint32_t tile_row = start_tile_row + lb * R + lr;
             x_cb.reserve_back(WS);
@@ -349,7 +375,6 @@ void kernel_main() {
     };
 
     // ---- member cursors (R3, index > 0) ----
-    uint32_t ws = 0, wi = 0, inv_count = 0;
     auto try_send = [&]() -> bool {
         while (ws < own_waves && wave_n(ws) == 0) {
             ++ws;
@@ -392,7 +417,6 @@ void kernel_main() {
 
     // ---- root cursors ----
     static_assert(nwpb <= MAX_WAVES_PER_BLOCK, "one gather semaphore per wave of a block");
-    uint32_t wg = 0;
     uint32_t gather_count[nwpb] = {};  // per wave-in-block: arrivals consumed so far (cumulative over blocks)
     auto try_gather = [&]() -> bool {
         while (wg < own_waves && wave_n(wg) == 0) {
@@ -418,7 +442,6 @@ void kernel_main() {
         return true;
     };
 
-    uint32_t wp = 0;
     auto try_publish = [&]() -> bool {
         if (wp >= num_waves_total) {
             return false;
