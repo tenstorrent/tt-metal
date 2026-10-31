@@ -140,7 +140,7 @@ def _golden_function_backward_with_string(
         pyt_y.backward(gradient=grad_tensor)
         if isinstance(input_tensor_b, (float, int)):
             return [sum_result.grad]
-        return [sum_result.grad, sum_result.grad]
+        return [sum_result.grad.sum_to_size(input_tensor_a.shape), sum_result.grad.sum_to_size(input_tensor_b.shape)]
     elif torch_op == torch.div:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
     else:

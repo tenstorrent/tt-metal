@@ -475,10 +475,12 @@ std::vector<Tensor> remainder_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
-    grad.emplace_back(grad_tensor);
+    grad.emplace_back(operations::binary_backward::detail::reduce_grad_to_operand_shape(
+        grad_tensor, input_a.logical_shape(), output_mem_config));
     Tensor result_div = ttnn::div(input_a, other, false, "floor", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
-    grad.emplace_back(grad_b);
+    grad.emplace_back(operations::binary_backward::detail::reduce_grad_to_operand_shape(
+        grad_b, other.logical_shape(), output_mem_config));
     return grad;
 }
 
@@ -514,9 +516,11 @@ std::vector<Tensor> squared_difference_bw(
     Tensor difference = ttnn::subtract(input_a, other);
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad_tensor, difference, std::nullopt, output_mem_config), 2, std::nullopt, output_mem_config);
-    grad.emplace_back(grad_a);
     Tensor grad_b = ttnn::multiply(grad_a, -1, std::nullopt, output_mem_config);
-    grad.emplace_back(grad_b);
+    grad.emplace_back(operations::binary_backward::detail::reduce_grad_to_operand_shape(
+        grad_a, input_a.logical_shape(), output_mem_config));
+    grad.emplace_back(operations::binary_backward::detail::reduce_grad_to_operand_shape(
+        grad_b, other.logical_shape(), output_mem_config));
     return grad;
 }
 
@@ -666,8 +670,10 @@ std::vector<Tensor> bias_gelu_bw(
     Tensor input = ttnn::add(input_a, input_b);
     std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
-        grad_tensor_res.push_back(gelu_result[0].value());
-        grad_tensor_res.push_back(gelu_result[0].value());
+        grad_tensor_res.push_back(operations::binary_backward::detail::reduce_grad_to_operand_shape(
+            gelu_result[0].value(), input_a.logical_shape(), output_mem_config));
+        grad_tensor_res.push_back(operations::binary_backward::detail::reduce_grad_to_operand_shape(
+            gelu_result[0].value(), input_b.logical_shape(), output_mem_config));
     }
     return grad_tensor_res;
 }
