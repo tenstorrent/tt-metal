@@ -228,8 +228,9 @@ void RejectPrefetcherPipeRelayResize(
 //   - The supplied pipe's geometry (receiver nodes, ring size) matches the parameter's. The spec
 //     names no sender; when this Program runs the sender kernel, the pipe's sender must be one of
 //     that kernel's nodes, which the bind checks per slot.
-//   - The binding is sticky: a parameter already bound to a different pipe object is rejected
-//     (re-supplying the same object is a no-op).
+//   - The binding is sticky: a parameter already bound to a different pipe object is rejected,
+//     unless that pipe has the bound one's binding key (a re-carve at the same addresses), which
+//     replaces it. Re-supplying the same object is a no-op.
 //   - When require_all is true: every declared parameter must be supplied, unless it is already
 //     bound (the binding is program-lifetime state, so a later full SetProgramRunArgs may omit it).
 // Pipe-object-dependent checks that need the slot (lane capacity, relay ring agreement) run at
@@ -257,10 +258,10 @@ void ValidatePrefetcherPipeArgs(
             "Program's mesh.",
             param_name);
         TT_FATAL(
-            binding->bound_pipe == nullptr || binding->bound_pipe_identity == pipe.identity(),
+            binding->accepts(pipe.impl()),
             "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
-            "is bound to. A Program binds a parameter to one pipe for its lifetime; build a new Program to use "
-            "another pipe.",
+            "is bound to. A Program binds a parameter to one pipe, or to one that replaces it at the same addresses "
+            "with the same geometry; build a new Program to use another pipe.",
             param_name);
         TT_FATAL(
             pipe.receiver_cores().num_cores() == binding->receivers.num_cores() &&

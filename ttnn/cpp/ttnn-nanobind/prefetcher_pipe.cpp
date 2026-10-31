@@ -22,10 +22,29 @@
 namespace ttnn::prefetcher_pipe {
 
 using tt::tt_metal::experimental::PrefetcherPipe;
+using tt::tt_metal::experimental::PrefetcherPipeL1Source;
 using tt::tt_metal::experimental::PrefetcherPipeSpace;
 using tt::tt_metal::experimental::PrefetcherPipeSpaceConfig;
 
 void py_module_types(nb::module_& mod) {
+    nb::enum_<PrefetcherPipeL1Source>(mod, "PrefetcherPipeL1Source", R"doc(
+        Which L1 a PrefetcherPipeSpace takes its data ring and config pages from.
+    )doc")
+        .value(
+            "Default",
+            PrefetcherPipeL1Source::Default,
+            "Allocator for a space with DRAM senders, PersistentArena for a worker-only space.")
+        .value(
+            "PersistentArena",
+            PrefetcherPipeL1Source::PersistentArena,
+            "Bottom of worker L1, only on the space's cores. The space must be created before any program places "
+            "program-local L1 on them. Worker-only spaces.")
+        .value(
+            "Allocator",
+            PrefetcherPipeL1Source::Allocator,
+            "Lockstep L1 buffers from the device's L1 allocator, on every worker core. The space can be created at "
+            "any time.");
+
     nb::class_<PrefetcherPipe>(mod, "PrefetcherPipe", R"doc(
         One sender -> receivers PrefetcherPipe carved from a PrefetcherPipeSpace.
 
@@ -48,7 +67,7 @@ void py_module_types(nb::module_& mod) {
         });
 
     nb::class_<PrefetcherPipeSpace>(mod, "PrefetcherPipeSpace", R"doc(
-        A reservation of persistent L1 (data ring + config page) on sender_cores ∪ receiver_domain
+        A reservation of L1 (data ring + config page) on sender_cores ∪ receiver_domain
         from which PrefetcherPipes are carved. Every pipe carved from one space shares the space's
         buffer_address() and config_address(). The space owns the L1; every pipe carved from it
         keeps the space alive, so the L1 is released once the space and all its pipes are gone.
@@ -59,6 +78,7 @@ void py_module_types(nb::module_& mod) {
         .def("config_page_size", &PrefetcherPipeSpace::config_page_size)
         .def("max_receivers_per_pipe", &PrefetcherPipeSpace::max_receivers_per_pipe)
         .def("num_dram_senders", &PrefetcherPipeSpace::num_dram_senders)
+        .def("l1_source", &PrefetcherPipeSpace::l1_source, "Where the space's L1 came from; never Default.")
         .def("sender_cores", &PrefetcherPipeSpace::sender_cores, nb::rv_policy::reference_internal)
         .def("receiver_domain", &PrefetcherPipeSpace::receiver_domain, nb::rv_policy::reference_internal)
         .def("reservation_cores", &PrefetcherPipeSpace::reservation_cores, nb::rv_policy::reference_internal)
@@ -123,13 +143,14 @@ void py_module(nb::module_& mod) {
     // DRAM senders, when capacity is requested, are selected by the tensor-prefetcher factory.
     mod.def(
         "create_prefetcher_pipe_space",
-        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        [](tt::tt_metal::distributed::MeshDevice& mesh_device,
            const tt::tt_metal::CoreRangeSet& sender_cores,
            const tt::tt_metal::CoreRangeSet& receiver_domain,
            uint32_t ring_size,
            uint32_t max_receivers_per_pipe,
            tt::tt_metal::BufferType buffer_type,
-           uint32_t num_dram_senders) {
+           uint32_t num_dram_senders,
+           PrefetcherPipeL1Source l1_source) {
             auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.experimental.create_prefetcher_pipe_space");
             return tt::tt_metal::experimental::CreatePrefetcherPipeSpace(
                 mesh_device,
@@ -140,6 +161,7 @@ void py_module(nb::module_& mod) {
                     .ring_size = ring_size,
                     .max_receivers_per_pipe = max_receivers_per_pipe,
                     .buffer_type = buffer_type,
+                    .l1_source = l1_source,
                 });
         },
         nb::keep_alive<0, 1>(),
@@ -151,12 +173,14 @@ void py_module(nb::module_& mod) {
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
         nb::kw_only(),
         nb::arg("num_dram_senders") = 0,
+        nb::arg("l1_source") = PrefetcherPipeL1Source::Default,
         R"doc(
-            Reserve persistent L1 for PrefetcherPipes on sender_cores ∪ receiver_domain.
+            Reserve L1 for PrefetcherPipes on sender_cores ∪ receiver_domain.
 
-            Must run before any program places program-local L1 on those cores. receiver_domain is
-            every core that MAY later be carved as a receiver, not the 1:N map; pipes are carved
-            afterwards with PrefetcherPipeSpace.create_pipe / create_pipes.
+            With l1_source PersistentArena, must run before any program places program-local L1 on
+            those cores. receiver_domain is every core that MAY later be carved as a receiver, not
+            the 1:N map; pipes are carved afterwards with PrefetcherPipeSpace.create_pipe /
+            create_pipes.
 
             Args:
                 mesh_device (MeshDevice): the mesh device to reserve on.
@@ -165,8 +189,10 @@ void py_module(nb::module_& mod) {
                 ring_size (int): per-core data ring size in bytes (multiple of the L1 alignment).
                 max_receivers_per_pipe (int): largest receiver count of any pipe carved here, at
                     most receiver_domain.num_cores().
-                buffer_type (BufferType): must be L1 (the default); the persistent arena lives in
-                    worker L1 and no other buffer type is accepted.
+                buffer_type (BufferType): must be L1 (the default); no other buffer type is accepted.
+                num_dram_senders (int): capacity for DRAM-sender endpoints; 0 for a worker-only space.
+                l1_source (PrefetcherPipeL1Source): where the L1 comes from. A space with DRAM senders
+                    must use Allocator, which Default resolves to.
 
             Returns:
                 PrefetcherPipeSpace

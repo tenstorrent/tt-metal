@@ -176,6 +176,33 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingDifferentPipeFails) {
     EXPECT_EQ(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe, &first.impl());
 }
 
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingRecarvedPipeReplacesIt) {
+    // A pipe re-carved at the bound one's addresses with its geometry replaces it, as on a program
+    // cache hit after the bound pipe was destroyed and re-carved.
+    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());
+    std::optional<PrefetcherPipe> first = MakeWeightsPipe(*mesh_device_);
+    const CoreRangeSet receivers = first->receiver_cores();
+    const PrefetcherPipeIdentity first_identity = first->identity();
+    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &*first}}));
+    first.reset();
+
+    PrefetcherPipe replacement = RecarveLastPipe(pipe_sender_node, receivers);
+    ASSERT_NE(replacement.identity(), first_identity);
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &replacement}})));
+    const auto* binding = program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get());
+    EXPECT_EQ(binding->bound_pipe, &replacement.impl());
+    for (const auto& [core, participants] : program.impl().get_per_core_prefetcher_pipes()) {
+        for (const auto& participant : participants) {
+            EXPECT_EQ(participant.pipe, &replacement.impl()) << "core " << core.str();
+        }
+    }
+    // Other pipes are still rejected.
+    PrefetcherPipe other = MakeWeightsPipe(*mesh_device_);
+    EXPECT_THROWS_WITH(
+        UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &other}})),
+        "supplies a different PrefetcherPipe object than the one this Program is bound to");
+}
+
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingSamePipeIsNoOpAndUpdateMayOmitIt) {
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
     Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());

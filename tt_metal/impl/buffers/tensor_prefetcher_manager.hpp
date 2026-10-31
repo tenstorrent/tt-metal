@@ -70,9 +70,9 @@ public:
     // `lock_api_function` grabs the owning MeshDevice's api_mutex_ (bound from
     // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
     // of the call so prefetcher operations serialize against the rest of the
-    // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() also
-    // takes it, but only around its manager-state snapshot — it must release the lock
-    // before the dispatcher write, which re-locks the same (non-recursive) api_mutex_.
+    // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() and
+    // enqueue_cq_signal_and_wait_if_active() hold it across their dispatcher write too, which
+    // goes through a queue method that does not re-lock the (non-recursive) api_mutex_.
     TensorPrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~TensorPrefetcherManager();
 
@@ -116,6 +116,10 @@ public:
     // must be within [0, kNumCqSignalSlots).
     void enqueue_cq_signal_and_wait(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
+    // enqueue_cq_signal_and_wait over the full mesh if a prefetcher is running, checked under the
+    // same lock so a stop() on another thread cannot land in between. Returns false, having done
+    // nothing, if none is running.
+    bool enqueue_cq_signal_and_wait_if_active(MeshCommandQueue& cq);
 
     void stop();
 
@@ -183,6 +187,9 @@ private:
     };
 
     void worker_loop();
+    // The body of enqueue_cq_signal_and_wait. The caller holds the API lock and has checked active_.
+    void enqueue_cq_signal_and_wait_locked(
+        MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
     // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
     // the ones whose memory is gone.
     void record_drain_target(

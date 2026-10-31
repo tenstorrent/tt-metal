@@ -45,6 +45,11 @@ protected:
     // The test geometry's pipes carved where their sender kernels run.
     PrefetcherPipe MakeWeightsPipe(distributed::MeshDevice& device);
     PrefetcherPipe MakeOtherPipe(distributed::MeshDevice& device);
+    // Once the last carved pipe is gone, carve it again from its space: same addresses and geometry,
+    // new identity.
+    PrefetcherPipe RecarveLastPipe(const CoreCoord& sender, const CoreRangeSet& receivers) {
+        return spaces_.back().create_pipe(sender, receivers);
+    }
     void ReleasePipeSpaces() { spaces_.clear(); }
 
 private:

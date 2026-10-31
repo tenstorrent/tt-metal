@@ -1951,6 +1951,10 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
+bool MeshDeviceImpl::wait_for_cq_on_tensor_prefetcher_if_active(MeshCommandQueue& cq) const {
+    return tensor_prefetcher_ != nullptr && tensor_prefetcher_->enqueue_cq_signal_and_wait_if_active(cq);
+}
+
 std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     if (!host_region_) {
         // A closed mesh has no live PCIe endpoint to provision against; a fresh region here

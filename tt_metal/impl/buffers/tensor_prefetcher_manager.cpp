@@ -1582,6 +1582,20 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     // api lock and does NOT re-lock, so holding it here does not self-deadlock.
     auto lock = lock_api_function_();
     TT_FATAL(active_, "WaitForCqOnTensorPrefetcher called before StartTensorPrefetcher");
+    enqueue_cq_signal_and_wait_locked(cq, device_subset);
+}
+
+bool TensorPrefetcherManager::enqueue_cq_signal_and_wait_if_active(MeshCommandQueue& cq) {
+    auto lock = lock_api_function_();
+    if (!active_) {
+        return false;
+    }
+    enqueue_cq_signal_and_wait_locked(cq, std::nullopt);
+    return true;
+}
+
+void TensorPrefetcherManager::enqueue_cq_signal_and_wait_locked(
+    MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset) {
     TT_FATAL(
         cq.device() == mesh_device_,
         "WaitForCqOnTensorPrefetcher was given command queue {} of mesh device {}, but this prefetcher was started on "

@@ -627,6 +627,7 @@ from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
 experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.PrefetcherPipeL1Source = _prefetcher_pipe.PrefetcherPipeL1Source
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig

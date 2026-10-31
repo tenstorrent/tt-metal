@@ -3127,6 +3127,11 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     }
 }
 
+// Pipe p's parameter.
+static PrefetcherPipeParamName in1_prefetcher_pipe_name(size_t p) {
+    return PrefetcherPipeParamName{fmt::format("in1_prefetcher_pipe_{}", p)};
+}
+
 // in1 delivered over PrefetcherPipes, shared by the mcast_in0 and gather_in0 bodies. A producer (the
 // Tensor prefetcher, or any worker-sender pipe's) writes each worker's in1 K-blocks straight into a
 // PrefetcherPipe ring on that worker, so in1 is neither read from DRAM nor moved between workers.
@@ -3174,7 +3179,7 @@ static In1PrefetcherPipeRelay make_in1_prefetcher_pipe_relay(
     const uint32_t relay_size = ring_size - ring_size % entry_size;
     In1PrefetcherPipeRelay relay;
     for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
-        const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
+        const PrefetcherPipeParamName name = in1_prefetcher_pipe_name(p);
         relay.names.push_back(name);
         relay.parameters.push_back(PrefetcherPipeParameter{
             .unique_id = name,
@@ -6487,6 +6492,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         untilize_out,
         operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
+}
+
+tt::tt_metal::experimental::Table<PrefetcherPipeParamName, PrefetcherPipeArgument>
+MatmulMultiCoreReuseMcast1DProgramFactory::prefetcher_pipe_args(const ttnn::prim::MatmulParams& operation_attributes) {
+    tt::tt_metal::experimental::Table<PrefetcherPipeParamName, PrefetcherPipeArgument> args;
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = operation_attributes.prefetcher_pipes;
+    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+        args.emplace(
+            reuse_mcast_1d_optimized_helpers::in1_prefetcher_pipe_name(p),
+            PrefetcherPipeArgument{*prefetcher_pipes[p]});
+    }
+    return args;
 }
 
 void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(

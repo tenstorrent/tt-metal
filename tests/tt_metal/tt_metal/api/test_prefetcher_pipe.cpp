@@ -39,6 +39,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -310,6 +311,43 @@ Program& persistent_run_on_mesh_device(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_out, false);
     distributed::Finish(mesh_device->mesh_command_queue());
     return workload_out.get_programs().at(device_range);
+}
+
+// Enqueue a blank kernel with a CB on `cores` and hand back its workload. While the workload is
+// alive its Program keeps that program-local L1 placed, as an op held in the program cache does.
+distributed::MeshWorkload run_program_with_cb(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& cores) {
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        blank_kernel_path,
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateCircularBuffer(
+        program, cores, CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048));
+    distributed::MeshWorkload workload;
+    persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
+    return workload;
+}
+
+bool ranges_overlap(uint64_t a_begin, uint64_t a_end, uint64_t b_begin, uint64_t b_end) {
+    return a_begin < b_end && b_begin < a_end;
+}
+
+// Allocate an L1 buffer while `space` is alive and expect the allocator to have placed it clear of
+// the space's ring and config page.
+void expect_l1_buffer_placed_clear_of(distributed::MeshDevice& mesh_device, const m2::PrefetcherPipeSpace& space) {
+    constexpr uint32_t buffer_size = 2048;
+    auto buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        distributed::DeviceLocalBufferConfig{.page_size = buffer_size, .buffer_type = BufferType::L1},
+        &mesh_device);
+    const uint64_t buffer_begin = buffer->address();
+    const uint64_t buffer_end = buffer_begin + buffer_size;
+    EXPECT_FALSE(
+        ranges_overlap(buffer_begin, buffer_end, space.buffer_address(), space.buffer_address() + space.ring_size()));
+    EXPECT_FALSE(ranges_overlap(
+        buffer_begin, buffer_end, space.config_address(), space.config_address() + space.config_page_size()));
 }
 
 // Overlap producer/consumer across two programs (cross-program shape). Prefer a single Program
@@ -975,6 +1013,13 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_ConfigRejects) {
         std::exception);
     // Worker and DRAM sender capacity may coexist; exact DRAM senders are selected later.
     EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.num_dram_senders = 1; })));
+    // DRAM senders take their worker L1 from the allocator, never from the persistent arena.
+    EXPECT_THROW(
+        m2::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) {
+            c.num_dram_senders = 1;
+            c.l1_source = m2::PrefetcherPipeL1Source::PersistentArena;
+        })),
+        std::exception);
     EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, config));
 }
 
@@ -1083,6 +1128,109 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
     EXPECT_EQ(replacement.buffer_address(), first_ring_address);
     EXPECT_EQ(replacement.config_address(), first_config_address);
     EXPECT_NE(replacement.identity(), first_pipe_identity);
+}
+
+TEST_F(PrefetcherPipeFixture, DefaultL1SourceFollowsSenderType) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto config = one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+    EXPECT_EQ(
+        m2::CreatePrefetcherPipeSpace(*mesh_device, config).l1_source(), m2::PrefetcherPipeL1Source::PersistentArena);
+    config.num_dram_senders = 1;
+    EXPECT_EQ(m2::CreatePrefetcherPipeSpace(*mesh_device, config).l1_source(), m2::PrefetcherPipeL1Source::Allocator);
+}
+
+TEST_F(PrefetcherPipeFixture, AllocatorSpaceTakesItsL1FromTheAllocator) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto config = one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+    config.l1_source = m2::PrefetcherPipeL1Source::Allocator;
+
+    uint32_t first_ring_address = 0;
+    uint32_t first_config_address = 0;
+    {
+        auto space = m2::CreatePrefetcherPipeSpace(*mesh_device, config);
+        first_ring_address = space.buffer_address();
+        first_config_address = space.config_address();
+        EXPECT_EQ(space.config_address() % PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN, 0u);
+        EXPECT_TRUE(mesh_device->allocator_impl()->persistent_l1().occupied_ranges().empty());
+
+        // The allocator places a later L1 buffer around the space.
+        expect_l1_buffer_placed_clear_of(*mesh_device, space);
+    }
+
+    // Destroying the space handed its L1 back, so an identical space lands where it was.
+    auto space = m2::CreatePrefetcherPipeSpace(*mesh_device, config);
+    EXPECT_EQ(space.buffer_address(), first_ring_address);
+    EXPECT_EQ(space.config_address(), first_config_address);
+}
+
+TEST_F(PrefetcherPipeFixture, AllocatorSpaceCanBeCreatedAfterProgramLocalL1) {
+    if (const auto reason = insufficient_worker_grid_reason(3); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "Places its CB through the legacy host API";
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t num_entries = 4;
+    const CoreCoord sender(0, 0);
+    const CoreRangeSet receivers(CoreRange({1, 0}, {2, 0}));
+    const distributed::MeshWorkload cached_workload = run_program_with_cb(mesh_device, receivers);
+
+    // The live program's CB seals the persistent arena on the receivers.
+    auto config = one_pipe_space_config(sender, receivers, entry_size * num_entries);
+    config.l1_source = m2::PrefetcherPipeL1Source::PersistentArena;
+    EXPECT_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, config), std::exception);
+
+    config.l1_source = m2::PrefetcherPipeL1Source::Allocator;
+    auto space = m2::CreatePrefetcherPipeSpace(*mesh_device, config);
+    auto pipe = space.create_pipe(sender, receivers);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, /*write_primitive=*/0), 2u);
+}
+
+TEST_F(PrefetcherPipeFixture, SpacesCreatedTogetherShareL1) {
+    if (const auto reason = insufficient_worker_grid_reason(4); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t num_entries = 4;
+    std::vector<m2::PrefetcherPipeSpaceConfig> configs = {
+        one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * num_entries),
+        one_pipe_space_config(CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0})), entry_size * num_entries),
+    };
+    for (auto& config : configs) {
+        config.l1_source = m2::PrefetcherPipeL1Source::Allocator;
+    }
+
+    // Spaces that share L1 addresses need disjoint cores and one source.
+    EXPECT_THROW(m2::CreatePrefetcherPipeSpaces(*mesh_device, std::vector{configs[0], configs[0]}), std::exception);
+    auto mixed = configs;
+    mixed[1].l1_source = m2::PrefetcherPipeL1Source::PersistentArena;
+    EXPECT_THROW(m2::CreatePrefetcherPipeSpaces(*mesh_device, mixed), std::exception);
+
+    std::vector<m2::PrefetcherPipeSpace> spaces = m2::CreatePrefetcherPipeSpaces(*mesh_device, configs);
+    ASSERT_EQ(spaces.size(), 2u);
+    EXPECT_EQ(spaces[0].buffer_address(), spaces[1].buffer_address());
+    EXPECT_EQ(spaces[0].config_address(), spaces[1].config_address());
+    {
+        auto pipe0 = spaces[0].create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
+        auto pipe1 = spaces[1].create_pipe(CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0})));
+        EXPECT_EQ(
+            run_persistent_1toN_cross_program(mesh_device, pipe0, entry_size, num_entries, /*write_primitive=*/0), 1u);
+        EXPECT_EQ(
+            run_persistent_1toN_cross_program(mesh_device, pipe1, entry_size, num_entries, /*write_primitive=*/0), 1u);
+    }
+
+    // The L1 stays allocated until the last space of the batch is gone.
+    spaces.erase(spaces.begin());
+    expect_l1_buffer_placed_clear_of(*mesh_device, spaces.front());
 }
 
 // ============================================================================
@@ -1764,21 +1912,20 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                 /*is_metal2_kernel=*/true,
                 handles);
             bool saw_binding = false;
-            kernel->process_dataflow_buffer_binding_handles(
-                [&](const std::string& name,
-                    uint16_t logical_id,
-                    bool is_relay,
-                    uint8_t prefetcher_pipe_id,
-                    const std::optional<LLKMetadata>& llk_metadata,
-                    uint8_t /*pap*/,
-                    uint8_t /*cap*/) {
-                    EXPECT_EQ(name, "relay_dfb");
-                    EXPECT_EQ(logical_id, expected_slot);
-                    EXPECT_TRUE(is_relay);
-                    EXPECT_EQ(prefetcher_pipe_id, 0u);
-                    EXPECT_FALSE(llk_metadata.has_value());
-                    saw_binding = true;
-                });
+            kernel->process_dataflow_buffer_binding_handles([&](const std::string& name,
+                                                                uint16_t logical_id,
+                                                                bool is_relay,
+                                                                uint8_t prefetcher_pipe_id,
+                                                                const std::optional<LLKMetadata>& llk_metadata,
+                                                                uint8_t /*pap*/,
+                                                                uint8_t /*cap*/) {
+                EXPECT_EQ(name, "relay_dfb");
+                EXPECT_EQ(logical_id, expected_slot);
+                EXPECT_TRUE(is_relay);
+                EXPECT_EQ(prefetcher_pipe_id, 0u);
+                EXPECT_FALSE(llk_metadata.has_value());
+                saw_binding = true;
+            });
             EXPECT_TRUE(saw_binding);
         }
     }
