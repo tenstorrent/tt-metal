@@ -44,20 +44,17 @@ TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementResizeReservesLargerRegion) 
     EXPECT_GE(next->uniform_alloc_addr(), first->uniform_alloc_addr() + 8 * spec.dataflow_buffers[0].entry_size);
 }
 
-TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementRepeatedPreparationKeepsExcludedMaskClear) {
-    // Repeated argument updates and program preparation keep the DFB disabled on excluded kernel nodes.
+TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementResizeKeepsExcludedMemoryAvailable) {
+    // Growing a DFB preserves independent backing allocations on excluded nodes.
     distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
     auto program = MakeProgramFromSpec(fixture_device, spec);
-    for (int repeat = 0; repeat < 2; ++repeat) {
-        SetProgramRunArgs(program, {});
-        program.impl().compile_and_allocate(&fixture_device, false);
-        test_helpers::FinalizeMockDFBConfig(program);
-    }
-    const auto* group = program.impl().kernels_on_core({1, 0}, test_helpers::TensixIndexForTest(program));
-    EXPECT_EQ(group->launch_msg.view().kernel_config().local_cb_mask(), 0u);
+    ProgramRunArgs args{.dfb_run_overrides = {{.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8}}};
+    SetProgramRunArgs(program, args);
+    program.impl().compile_and_allocate(&fixture_device, false);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_EQ(first->uniform_alloc_addr(), second->uniform_alloc_addr());
 }
 
 }  // namespace

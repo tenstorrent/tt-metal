@@ -68,6 +68,19 @@ inline ProgramSpec MakeSeparateDFBEndpointPairs(tt::ARCH arch) {
     return spec;
 }
 
+// Create a Quasar DFB on nodes (0, 0) and (1, 0), and another on node (0, 0).
+inline ProgramSpec MakeNestedQuasarDFBEndpointPlacementsForTest() {
+    auto spec = MakeSeparateDFBEndpointPairs(tt::ARCH::QUASAR);
+    spec.kernels[3].hw_config = DataMovementHardwareConfig{};
+    spec.work_units[0].kernels = {
+        KernelSpecName{"dm_kernel"},
+        KernelSpecName{"compute_kernel"},
+        KernelSpecName{"other_producer"},
+        KernelSpecName{"other_consumer"}};
+    spec.work_units[1].kernels = {KernelSpecName{"dm_kernel"}, KernelSpecName{"compute_kernel"}};
+    return spec;
+}
+
 // Create a Gen1 DFB with two producer kernels on the same node.
 inline ProgramSpec MakeDFBWithTwoGen1Producers() {
     auto spec = MakeDFBPlacementSpec(tt::ARCH::WORMHOLE_B0);

@@ -58,12 +58,15 @@ struct ProgramSpec {
     //   side of a DataflowBufferSpec get the same cores, and DM0 and DM1 are never used.
     //
     // DataflowBufferSpec endpoints (across all kernels that bind a given DataflowBufferSpec):
-    // - On the effective placement, each node with an endpoint has exactly one producer instance and
-    //   one consumer instance; nodes with neither endpoint are permitted. With Gen1
+    // - On the effective placement, each node has exactly one producer instance and
+    //   one consumer instance. With Gen1
     //   allow_instance_multi_binding, each role may have more than one instance.
-    // - Each node in the effective placements reserves at most 32 DFBs on Wormhole, 64 on Blackhole,
-    //   or 32 on Quasar, including nodes outside all WorkUnitSpecs. Build-time resource limits also apply.
-    // - Aliased DFBs have identical effective placements.
+    // - Each node in the inferred placements uses at most 32 DFB slots on Wormhole, 64 on Blackhole,
+    //   or 32 on Quasar. Placement overrides select backing-memory nodes. Build-time resource limits also apply.
+    // - Aliased DFBs have identical effective node sets, regardless of how ranges are split.
+    // - Quasar device slots are contiguous from zero on each configured node.
+    // - DFBs that share a device slot on a kernel's nodes have compatible format and tile metadata.
+    // - A compute kernel's DFBs that share a slot have compatible unpack modes.
     // - All PRODUCER bindings share access_pattern, and their kernels share num_threads and kind
     //   (compute or data movement). The same holds for all CONSUMER bindings.
     // - Gen1: all data-movement PRODUCER kernels share config_1xx->processor. The same holds for

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -20,7 +21,6 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::ProgramSpecTestBlackhole;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
@@ -30,18 +30,23 @@ protected:
     distributed::MeshDevice& fixture_device() { return *this->mesh_device_; }
 };
 
-using Architectures = ::testing::
-    Types<std::integral_constant<tt::ARCH, tt::ARCH::WORMHOLE_B0>, std::integral_constant<tt::ARCH, tt::ARCH::QUASAR>>;
+using Architectures = ::testing::Types<
+    std::integral_constant<tt::ARCH, tt::ARCH::WORMHOLE_B0>,
+    std::integral_constant<tt::ARCH, tt::ARCH::QUASAR>,
+    std::integral_constant<tt::ARCH, tt::ARCH::BLACKHOLE>>;
 TYPED_TEST_SUITE(DFBPlacementOverrideTest, Architectures);
 
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementAcceptsCompatibleSharedSlotMetadata) {
-    // A default tile and an explicit default tile can share a slot with matching unpack modes.
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSeparatesSlotsWithMatchingMetadata) {
+    // Shared endpoint kernels use separate slots even when disjoint DFBs have matching metadata.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
     spec.dataflow_buffers[1].tile_format_metadata = Tile{};
     std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config).unpack_modes = {
         {DFBSpecName{"dfb_1"}, UnpackMode::UnpackToSrc}};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_NE(first->device_slot, second->device_slot);
 }
 
 TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementAcceptsDifferentFormatsForSeparateKernels) {
@@ -49,51 +54,74 @@ TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementAcceptsDifferentFormatsForS
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeSeparateDFBEndpointPairs(TypeParam::value);
     spec.dataflow_buffers[1].data_format_metadata = tt::DataFormat::Float32;
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_EQ(first->device_slot, second->device_slot);
 }
 
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementRejectsSharedSlotFormatConflict) {
-    // A kernel cannot use two data formats for the same DFB slot on different nodes.
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSeparatesSlotsForDifferentFormats) {
+    // A kernel uses separate slots for disjoint DFBs with different data formats.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
     spec.dataflow_buffers[1].data_format_metadata = tt::DataFormat::Float32;
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("conflicting format or tile")));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_NE(first->device_slot, second->device_slot);
 }
 
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementRejectsSharedSlotTileConflict) {
-    // A kernel cannot use two tile shapes for the same DFB slot on different nodes.
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSeparatesSlotsForDifferentTiles) {
+    // A kernel uses separate slots for disjoint DFBs with different tile shapes.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
     spec.dataflow_buffers[1].tile_format_metadata = Tile({16, 32});
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("conflicting format or tile")));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_NE(first->device_slot, second->device_slot);
 }
 
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementRejectsSharedSlotUnpackConflict) {
-    // An explicit unpack mode must agree with the default of another DFB on the same slot.
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSeparatesSlotsForDifferentUnpackModes) {
+    // A kernel uses separate slots for explicit and default unpack modes on disjoint DFBs.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
     std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config).enable_32_bit_dest = true;
     std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config).unpack_modes = {
         {DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("conflicting unpack modes")));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_NE(first->device_slot, second->device_slot);
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsUnboundSlotFormatConflict) {
-    // DFB metadata on a kernel's nodes must agree even when that kernel does not bind both DFBs.
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementSeparatesSlotsForUnboundMetadata) {
+    // Overlapping endpoint placements use separate slots even without a shared DFB binding.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeSeparateDFBEndpointPairs(tt::ARCH::QUASAR);
     spec.work_units[1].kernels.push_back(KernelSpecName{"dm_kernel"});
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     spec.dataflow_buffers[1].data_format_metadata = tt::DataFormat::Float32;
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("conflicting format or tile")));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_NE(first->device_slot, second->device_slot);
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementPreservesDifferentUnpackModes) {
+    // A compute kernel retains the explicit and default unpack modes in distinct DFB slots.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(tt::ARCH::WORMHOLE_B0);
+    std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config).enable_32_bit_dest = true;
+    std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config).unpack_modes = {
+        {DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto kernel = program.impl().get_kernel_by_spec_name("compute_kernel");
+    const auto config = std::get<ComputeConfig>(kernel->config());
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_EQ(config.unpack_to_dest_mode[first->device_slot], UnpackToDestMode::UnpackToDestFp32);
+    EXPECT_EQ(config.unpack_to_dest_mode[second->device_slot], UnpackToDestMode::Default);
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementOverlappingAllocationsDoNotCollide) {
@@ -108,22 +136,10 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementOverlappingAllocationsDoNotCollide) 
     EXPECT_GE(third->uniform_alloc_addr(), second->uniform_alloc_addr() + 768);
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsSlotGapAtConstruction) {
-    // Quasar rejects a node with slot 1 but no slot 0 when the program is created.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, 2);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
-    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}, {2, 0}));
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("contiguous DFB device slots")));
-}
-
-TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementAllowsSlotGapOnGen1) {
-    // Wormhole accepts a node with slot 1 but no slot 0 and serializes its configuration.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::WORMHOLE_B0, 2);
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSerializesPartiallyOverlappingOverrides) {
+    // A program produces device configuration for partially overlapping DFB storage placements.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value, 2);
     spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
     spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}, {2, 0}));
@@ -166,17 +182,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementUnset) {
     auto program = MakeProgramFromSpec(fixture_device, spec);
     const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     EXPECT_EQ(dfb->core_ranges, CoreRangeSet(CoreRange({0, 0}, {1, 0})));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementSubset) {
-    // A subset override reserves only the selected endpoint nodes.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
-    const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
-    EXPECT_EQ(dfb->core_ranges, CoreRangeSet(CoreRange({0, 0})));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementSuperset) {
@@ -225,7 +230,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesKernelNodes) {
 }
 
 TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementAliasesReserveStorageOnce) {
-    // Aliases reserve one backing region only on the selected endpoint node.
+    // Aliases reserve one backing region on the selected endpoint node.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value, 3);
     spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
@@ -240,13 +245,27 @@ TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementAliasesReserveStorageOnce) 
     EXPECT_EQ(next->uniform_alloc_addr(), first->uniform_alloc_addr() + first->total_size());
 }
 
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementReusesSlotsForDisjointReservations) {
-    // DFBs with disjoint reserved nodes reuse a device slot even when their endpoint kernels run together.
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAliasesShareStorageWithDifferentEndpointNodes) {
+    // Aliases with different inferred placements share storage on their selected common node.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeNestedQuasarDFBEndpointPlacementsForTest();
+    spec.dataflow_buffers[0].advanced_options = {
+        .alias_with = {DFBSpecName{"dfb_1"}}, .override_placement = CoreRangeSet(CoreRange({0, 0}))};
+    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_EQ(first->uniform_alloc_addr(), second->uniform_alloc_addr());
+}
+
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementReusesSlotsForDisjointEndpointNodes) {
+    // Overrides retain slot reuse when the DFBs have disjoint inferred placements.
     distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value, 2);
+    auto spec = test_helpers::MakeSeparateDFBEndpointPairs(TypeParam::value);
     spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.work_units[1].target_nodes = NodeRange({2, 0}, {3, 0});
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
     auto program = MakeProgramFromSpec(fixture_device, spec);
     const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
@@ -263,41 +282,6 @@ TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSeparatesSlotsForOverlappin
     const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
     EXPECT_NE(first->device_slot, second->device_slot);
-}
-
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSplitsKernelGroups) {
-    // Nodes with the same kernels form separate groups when only one node reserves the DFB.
-    distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
-    const uint32_t index = test_helpers::TensixIndexForTest(program);
-    EXPECT_NE(program.impl().kernels_on_core({0, 0}, index), program.impl().kernels_on_core({1, 0}, index));
-}
-
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementGroupsByDFBIdentity) {
-    // Nodes with the same kernels form separate groups for distinct DFBs that reuse a device slot.
-    distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value, 2);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
-    const uint32_t index = test_helpers::TensixIndexForTest(program);
-    EXPECT_NE(program.impl().kernels_on_core({0, 0}, index), program.impl().kernels_on_core({1, 0}, index));
-}
-
-TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementExcludedNodeMask) {
-    // The launch mask disables the DFB on an excluded kernel node.
-    distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
-    test_helpers::FinalizeMockDFBConfig(program);
-    const auto* group = program.impl().kernels_on_core({1, 0}, test_helpers::TensixIndexForTest(program));
-    EXPECT_EQ(group->launch_msg.view().kernel_config().local_cb_mask(), 0u);
 }
 
 TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementIncludedNodeMask) {
@@ -324,14 +308,13 @@ TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementPreservesGroupsWhenUnset) {
 }
 
 TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementDoesNotAllocateOnExcludedNodes) {
-    // An excluded kernel node has no DFB backing allocation.
+    // DFBs with disjoint backing placements can use the same L1 address.
     distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    auto spec = test_helpers::MakeDisjointDFBPlacementsForTest(TypeParam::value);
     auto program = MakeProgramFromSpec(fixture_device, spec);
-    const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
-    EXPECT_FALSE(dfb->core_lookup_.contains(CoreCoord(1, 0)));
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_EQ(first->uniform_alloc_addr(), second->uniform_alloc_addr());
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesSize) {
@@ -360,15 +343,19 @@ TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementAvoidsScratchpadCollision) 
     EXPECT_GE(kernel->scratchpad_binding_handles()[0].allocated_address, dfb->uniform_alloc_addr() + dfb->total_size());
 }
 
-TEST_F(ProgramSpecTestBlackhole, CPU_DFBPlacementSubset) {
-    // A subset override reserves only the selected endpoint nodes.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::BLACKHOLE);
+TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementLeavesExcludedMemoryForScratchpad) {
+    // A scratchpad on an excluded node can use the DFB's L1 address.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value);
     spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
     auto program = MakeProgramFromSpec(fixture_device, spec);
     const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
-    EXPECT_EQ(dfb->core_ranges, CoreRangeSet(CoreRange({0, 0})));
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    EXPECT_EQ(kernel->scratchpad_binding_handles()[0].allocated_address, dfb->uniform_alloc_addr());
 }
 
 }  // namespace

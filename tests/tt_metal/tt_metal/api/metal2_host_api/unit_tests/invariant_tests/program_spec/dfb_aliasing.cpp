@@ -290,14 +290,11 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBsWithClearedArenaOverridesUseDefaultAl
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsAliasesWithDifferentEndpointNodes) {
     // Kernels on different node sets can alias DFBs on their common endpoint node.
     distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeSeparateDFBEndpointPairs(tt::ARCH::QUASAR);
-    spec.kernels[3].hw_config = DataMovementHardwareConfig{};
-    spec.work_units.push_back(MakeMinimalWorkUnit(
-        "common", NodeCoord{2, 0}, {"dm_kernel", "compute_kernel", "other_producer", "other_consumer"}));
+    auto spec = test_helpers::MakeNestedQuasarDFBEndpointPlacementsForTest();
     spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
     spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
     for (auto& dfb : spec.dataflow_buffers) {
-        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
