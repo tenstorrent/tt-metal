@@ -1234,3 +1234,25 @@ not memory; Galaxy 110 cores (rule 18); no single-card jobs / back-door resets o
 - 09:40 FIX.19 gate PASS (layer-20 window-KV check now per position; layers 35 / 38 last block waived; Paris PASS) but `gate FIX.19` did not commit: its contract-test changes went into FIX.18's commit ab0d760b11e (F239, framework: `gate <task>` should commit a PASS like --continue does, or say it does not). FIX.18 PASS (units kept). K.1R units 1-3 PASS (acks 437 s), 4-5 running.
 - 10:05 K.1R PASS 0f14616b586 (contract, kv_layout, acks, runner contract, Paris through tt-d-gen 882 s; acks / runner contract WAIVED on layers 35 / 38 only). Layer-20 window-KV waiver removed from tests.unit_waivers (FIX.19's per-position check passes it); layers 35 / 38 last-block waiver kept (DS41-192). Intake re-approved (owner: waive the three, continue with the fix).
 - 10:30 framework: F239 (a plain gate commits a PASS) and F240 (a pause stops a task's A/B between runs; resume measures the rest without an agent) with selftests; suite 670 pass, 1 old xing40 failure.
+
+## 2026-11-01 10:45 HAND-OFF (context 91 %): run stopped, all pushed (69f7894876e); next session = brainstorm on numerics
+Node bh-glx-110-c10u02, branch dnijemcevic/model_bringup. Orchestrator NOT running (tmux ds41-8x4 gone); watchers: tmux
+memlog + devmem (leak logging). run_ds41_8x4.sh says --until FIX.19 (set it before any relaunch).
+Since 10-30 (reboot): accepted P.16, P.17 (MoE drop, owner), P.19, P.18 (window tiles), FIX.15 (110-core cap), FIX.16
+(steady-state profile), P.21-P.24, FIX.17 (DEEP_LAYERS=all|tail, default all), FIX.18 (no code: DS41-192), FIX.19
+(contract window-KV check per position, DS41-193), K.1R PASS (Paris through tt-d-gen). Rejected P.20 (SP=8), P.25.
+Perf now, 5120-token chunk (warm wall / device ms): 50k 203 / 170 (was 312 / 208 on 10-30), 500k 226 / 208; ~25k
+tok/s a Galaxy with all 40 layers; DEEP_LAYERS=tail ~40k (50k chunk 123 / 93 + tail pass 76-100 ms a prompt).
+Numerics state (quick A/B at 51200, P.24 on): 99 err metrics, worst share of limit 0.91 (err_state_window_kv_L28),
+0.90 (topk_idx_L08: bf16 scores, topk_large_indices is bf16-only), median 0.71; smallest calib that passes all 1.82
+(e2e.calib default 2.0, F128). window_kv history: ~0.91-0.93 since P.12, P.21 -> 0.83, P.23 (OWN_ROWS summation
+order) -> 0.91. Waived: tests.unit_waivers layers 35 / 38 window-KV last block vs tt-d-gen's fixed 0.99 (DS41-192).
+Open for the owner (brainstorm): 16-bit window KV (WINDOW_KV_FORMAT=bf16 exists) and what it costs / buys; PCC ->
+normalized relative error in the contract checks; whether calib 2.0 is too loose; fp32 top-k scores; trace capture
+(host ~30 ms a chunk not hidden); MoE block internals (57 % of device); index-key in-place rounding; layer split
+for serving (A2). Framework open: none urgent (F237-F240 done today). Leak: ~222 GiB unaccounted (owner: reboot at
+~250; report https://claude.ai/artifact/SmvnZSkfoBuDdzZHuopu5B).
+Pointers: opportunities report /scratch/dnijemcevic/opportunities/report.md, tok/s script prefill_tps.py there;
+position profiles in runs/run1/ab/P.*/(old|new)/p51200|p512000; FIX.17 numbers /scratch/dnijemcevic/fix17;
+FIX.18 evidence /scratch/dnijemcevic/fix18 + known_issues_detail DS41-192; KV handover page (v4)
+https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
