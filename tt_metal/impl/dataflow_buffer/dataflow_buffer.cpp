@@ -419,7 +419,6 @@ void populate_dfb_global_header_participation(
 
 void verify_dfb_hart_blobs(
     std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    (void)dfbs_on_core;
     TT_FATAL(config_bytes.size() >= sizeof(dfb_global_header_t), "DFB config too small for hart blob verify");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(config_bytes.data());
 
@@ -449,36 +448,95 @@ void verify_dfb_hart_blobs(
         TT_FATAL(blob_off % 4u == 0u, "hart {} blob offset {} is not 4B-aligned", hartid, blob_off);
 
         const uint8_t* blob = config_bytes.data() + blob_off;
+        const bool is_dm = hartid < ::dfb::TENSIX_RISC_OFFSET;
 
-        // A DM entry is an 8B control prefix + a LocalDFBInterface image, not a
-        // dfb_hart_init_entry_t, so the field checks below do not apply to it.
-        if (hartid < ::dfb::TENSIX_RISC_OFFSET) {
-            continue;
+        uint32_t participating_slots = 0u;
+        for (const auto& dfb : dfbs_on_core) {
+            if (dfb->risc_mask & (1u << hartid)) {
+                participating_slots |= 1u << dfb->device_slot;
+            }
         }
 
-        // Walk init entries and verify they are self-consistent with DFB data.
+        // Walk init entries and verify them. The device trusts every field checked here: a DM indexes
+        // its g_dfb_interface by iface_byte_off and copies num_tcs slots with no bounds checks, and a
+        // TRISC copies num_tcs slots into its pool.
         uint32_t cursor = 0u;
         for (uint8_t e = 0; e < num_entries; e++) {
-            TT_FATAL(
-                blob_off + cursor + sizeof(dfb_hart_init_entry_t) <= config_bytes.size(),
-                "hart {} init entry {} header overflows config",
-                hartid,
-                e);
-            const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(blob + cursor);
-            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(entry->num_tcs);
+            uint32_t logical_dfb_id = 0u;
+            uint32_t num_tcs = 0u;
+            uint32_t entry_sz = 0u;
+            if (is_dm) {
+                // 8B control prefix + LocalDFBInterface image (dfb_write_dm_image_entry).
+                TT_FATAL(
+                    blob_off + cursor + DFB_IFACE_IMAGE_CTRL_BYTES + DFB_DM_IFACE_SCALAR_BYTES <= config_bytes.size(),
+                    "hart {} DM entry {} header overflows config",
+                    hartid,
+                    e);
+                const uint8_t* entry = blob + cursor;
+                const uint32_t iface_byte_off = entry[0] | (static_cast<uint32_t>(entry[1]) << 8);
+                TT_FATAL(
+                    iface_byte_off % DFB_DM_IFACE_SIZE == 0u,
+                    "hart {} DM entry {} iface_byte_off={} is not a whole LocalDFBInterface",
+                    hartid,
+                    e,
+                    iface_byte_off);
+                logical_dfb_id = iface_byte_off / DFB_DM_IFACE_SIZE;
+                num_tcs = entry[DFB_IFACE_IMAGE_CTRL_BYTES + DFB_DM_IFACE_NUM_TCS_BYTE_OFF];
+                TT_FATAL(
+                    num_tcs >= 1u && num_tcs <= ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR,
+                    "hart {} DM entry {} num_tcs={} outside [1, {}]",
+                    hartid,
+                    e,
+                    num_tcs,
+                    ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
+                entry_sz = dfb_dm_image_entry_byte_size(num_tcs);
+                // The device advances by entry_bytes, not by num_tcs.
+                TT_FATAL(
+                    entry[7] == entry_sz,
+                    "hart {} DM entry {} entry_bytes={} != {} for num_tcs={}",
+                    hartid,
+                    e,
+                    entry[7],
+                    entry_sz,
+                    num_tcs);
+            } else {
+                TT_FATAL(
+                    blob_off + cursor + sizeof(dfb_hart_init_entry_t) <= config_bytes.size(),
+                    "hart {} init entry {} header overflows config",
+                    hartid,
+                    e);
+                const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(blob + cursor);
+                logical_dfb_id = entry->logical_dfb_id;
+                num_tcs = entry->num_tcs;
+                TT_FATAL(
+                    num_tcs >= 1u && num_tcs <= ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR,
+                    "hart {} init entry {} num_tcs={} outside [1, {}]",
+                    hartid,
+                    e,
+                    num_tcs,
+                    ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
+                entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
+            }
             TT_FATAL(
                 blob_off + cursor + entry_sz <= config_bytes.size(),
                 "hart {} init entry {} (num_tcs={}) TC arrays overflow config",
                 hartid,
                 e,
-                entry->num_tcs);
+                num_tcs);
             TT_FATAL(
-                entry->logical_dfb_id < ::dfb::NUM_DFBS,
+                logical_dfb_id < ::dfb::NUM_DFBS,
                 "hart {} init entry {} logical_dfb_id={} out of range (maximum {})",
                 hartid,
                 e,
-                entry->logical_dfb_id,
+                logical_dfb_id,
                 ::dfb::NUM_DFBS);
+            TT_FATAL(
+                (participating_slots >> logical_dfb_id) & 1u,
+                "hart {} init entry {} names DFB slot {}, which the hart does not participate in (slots 0x{:x})",
+                hartid,
+                e,
+                logical_dfb_id,
+                participating_slots);
             cursor += entry_sz;
         }
         TT_FATAL(
