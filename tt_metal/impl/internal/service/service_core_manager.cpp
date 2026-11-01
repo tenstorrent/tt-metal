@@ -72,6 +72,7 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
             size, base, dram_align, dram_align, allocator::FreeListOpt::SearchPolicy::FIRST);
         slot.alloc->init();
     }
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoord>& cores) {
@@ -93,6 +94,7 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
                 device->id());
         }
     }
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {
@@ -138,7 +140,10 @@ std::vector<CoreCoord> ServiceCoreManagerImpl::get_claimable_cores(IDevice* devi
     return available;
 }
 
-void ServiceCoreManagerImpl::on_device_close(ChipId device_id) { devices_.erase(device_id); }
+void ServiceCoreManagerImpl::on_device_close(ChipId device_id) {
+    devices_.erase(device_id);
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
+}
 
 bool ServiceCoreManagerImpl::has_any_claims() const {
     for (const auto& [id, state] : devices_) {

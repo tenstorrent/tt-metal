@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/buffers/buffer_impl.hpp"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -18,6 +19,8 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
@@ -599,6 +602,88 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false), std::exception);
 
     MetalContext::instance().get_service_core_manager().release(device, {svc_core});
+}
+
+// Claimed service cores must not disable the cached lockstep L1 validation for programs whose CBs sit
+// on the worker grid: the runner keeps H2D/D2H services claimed for its whole lifetime, and full
+// revalidation on every enqueue made eager prefill host-bound. A program with a CB on a claimed
+// core stays on full validation, and any claim change forces one full revalidation.
+TEST_F(ServiceCoreFdFixture, CachedL1ValidationWithServiceClaims) {
+    auto& mesh_device = this->devices_[0];
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
+    if (device->allocator_impl()->get_config().allocator_mode != AllocatorMode::LOCKSTEP) {
+        GTEST_SKIP() << "The cached L1 validation applies to lockstep allocation only.";
+    }
+    auto& svc = MetalContext::instance().get_service_core_manager();
+    auto claimable = svc.get_claimable_cores(device);
+    ASSERT_GE(claimable.size(), 1u) << "Need at least one claimable service core for this test.";
+    const CoreCoord svc_core = claimable[0];
+    const CoreCoord worker_core{0, 0};
+
+    constexpr uint32_t kCbIndex = 0;
+    constexpr uint32_t kPageSize = 2048;
+    auto make_workload = [&](const CoreCoord& core) {
+        Program prog = CreateProgram(*mesh_device);
+        CreateKernel(
+            prog,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            CoreRangeSet(CoreRange(core)),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        CreateCircularBuffer(
+            prog,
+            CoreRangeSet(CoreRange(core)),
+            CircularBufferConfig(4 * kPageSize, {{kCbIndex, tt::DataFormat::Float16_b}})
+                .set_page_size(kCbIndex, kPageSize));
+        auto workload = std::make_shared<MeshWorkload>();
+        workload->add_program(MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}), std::move(prog));
+        return workload;
+    };
+    IDevice* mesh = mesh_device.get();
+
+    svc.claim(device, {svc_core});
+
+    // Worker-grid CBs: the first enqueue validates fully and caches; later enqueues take the shortcut.
+    auto workload = make_workload(worker_core);
+    auto& prog = workload->get_programs().begin()->second.impl();
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+    Finish(mesh_device->mesh_command_queue());
+    EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+    Finish(mesh_device->mesh_command_queue());
+    EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
+
+    // The shortcut still catches an L1 buffer growing into the CB region.
+    {
+        auto clash = MeshBuffer::create(
+            ReplicatedBufferConfig{.size = kPageSize * device->allocator()->get_num_banks(BufferType::L1)},
+            DeviceLocalBufferConfig{.page_size = kPageSize, .buffer_type = BufferType::L1, .bottom_up = true},
+            mesh_device.get());
+        EXPECT_THAT(
+            [&] { prog.compile_and_allocate(mesh, false); },
+            ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("clash")));
+    }
+    EXPECT_NO_THROW(prog.compile_and_allocate(mesh, false));
+    EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
+
+    // A claim change invalidates the cache until the next full validation.
+    svc.release(device, {svc_core});
+    EXPECT_FALSE(prog.simple_l1_validation_usable(mesh));
+    EXPECT_NO_THROW(prog.compile_and_allocate(mesh, false));
+    EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
+    svc.claim(device, {svc_core});
+    EXPECT_FALSE(prog.simple_l1_validation_usable(mesh));
+    EXPECT_NO_THROW(prog.compile_and_allocate(mesh, false));
+    EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
+
+    // A CB on a claimed service core keeps full validation, which tracks the core's own allocations.
+    auto svc_workload = make_workload(svc_core);
+    auto& svc_prog = svc_workload->get_programs().begin()->second.impl();
+    svc_prog.compile_and_allocate(mesh, false);
+    EXPECT_FALSE(svc_prog.simple_l1_validation_usable(mesh));
+    svc_prog.compile_and_allocate(mesh, false);
+    EXPECT_FALSE(svc_prog.simple_l1_validation_usable(mesh));
+
+    svc.release(device, {svc_core});
 }
 
 }  // namespace tt::tt_metal::distributed::test
