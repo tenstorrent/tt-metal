@@ -287,6 +287,24 @@ Tests, in order:
    chip-time per token-layer with 3 B active: the expert prefill kernel (per-32-token-block sparse matmuls on a
    row's 2048-token slab) is the lever, not the attention path; the push of 2.5.1.1 is a DRAM-footprint and
    lone-prompt-rate item, not a chunk-cost one. The attributed pass (per-module shares) re-runs with the wrapper fix.
+   Attributed pass measured 2026-11-01 07:04 (`prof_1m_chunk_8x4_paged`, GLM53_PAGED_SPARSE=1; its free pass 7.62 s
+   = the non-paged 7.63 s, so the paged op is cost-neutral on the chunk). Exclusive wall per module, a sync at every
+   module boundary (9.51 s attributed vs 7.62 s free, the shares are the measurement):
+
+   | term | KDA+MoE (31 layers) | DSA+MoE (11 layers) | chunk share |
+   |---|---|---|---|
+   | routed experts (`MOE_EXPERTS`) | 3.67 s (118 ms per layer) | 1.28 s (116 ms per layer) | 52 % |
+   | mHC pre + post blocks (`*_HC_PRE/POST`, the composite prefill wrap) | 1.19 s (38 ms per layer) | 0.41 s (37 ms per layer) | 17 % |
+   | DSA attention (`DSA` inclusive: 1.0 s unlabelled = the index scoring over the 1 M pooled keys + top-k, plus kv copy 0.09, index maintain 0.11, absorb 0.15, sparse sdpa 0.05) | - | 1.52 s (138 ms per layer) | 16 % |
+   | collectives (`CCL_*`: row all-gather / reduce-scatter, column all-reduce) | 0.35 s | 0.16 s | 5 % |
+   | KDA scan (`KDA`) | 0.29 s (9 ms per layer) | - | 3 % |
+   | router + shared expert | 0.15 s | 0.04 s | 2 % |
+
+   Levers in order: the expert prefill kernel (118 ms per layer for a 2048-row slab through the routed experts; the
+   per-32-token-block sparse matmul sequence), then the mHC prefill blocks (38 ms per layer for four small
+   elementwise/matmul stages: a fusion target, the decode path already has `TtMHCFast`), then the DSA index scoring
+   at 1 M (~90 ms per DSA layer, the only prefix-dependent term: 10 % of the chunk). The attention path over the
+   prefix is not where the 1 M chunk goes.
 
 Risks:
 
