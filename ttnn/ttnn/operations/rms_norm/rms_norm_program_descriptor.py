@@ -17,7 +17,7 @@ WIDTH / BLOCK_SHARDED (Refinement 2): the shard spec fixes the work split — on
 grid (orientation-aware, groups may span grid rows). Block = the resident shard (sub-blocked along rows
 only under L1 pressure). TILE: cb_x / cb_out are backed on the input / output shards (zero-copy). RM:
 the resident sticks are copied locally into the tilize staging CB (never gathered across Tensix cores).
-Combine topology by k: k <= K_SYM_MAX symmetric unicast all-gather; beyond, a per-row owner gathers the
+Combine topology: k <= K_SYM_MAX_* symmetric unicast all-gather; beyond, a per-row owner gathers the
 k partials, combines + finalizes, and returns inv_rms to every member (L1 per member ~ k * ceil(b/k)).
 """
 
@@ -47,7 +47,7 @@ CB_OUT_RM = 8  # RM: untilized stick pieces -> writer
 CB_X_ALT = 9  # resident x block (pong) — only when x_block_depth == 2
 CB_SUMSQ_ACC = 10  # sharded TILE W tail: raw sum-of-squares of the full W tiles (reduce Accumulate CB)
 CB_TAIL_MASK = 11  # sharded TILE W tail: 0/1 row mask of the valid columns of the last W tile
-CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX): inv_rms of the tile-rows this member owns
+CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows this member owns
 
 SEM_PARTIALS_ARRIVED = 0
 SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
@@ -55,7 +55,13 @@ WRITER_NOC_XY_ARG_BASE = 11  # writer RT index of the first peer (x, y) pair —
 
 # Knob constants (design Phase 0 values).
 K_CAP_MAX = 8  # unicast all-gather mechanism cap (interleaved W split)
-K_SYM_MAX = 8  # combine topology: symmetric all-gather up to k members, per-row owner gather + return beyond
+# Combine topology: symmetric all-gather up to K_SYM_MAX_* members, per-row owner gather + inv_rms return beyond.
+# Interleaved (W split k <= 8): catalog tensix_all_reduce (k <= 8 unicast all-gather). Sharded: the owner
+# topology for every k > 1 — measured BH p150b (bf16, HiFi2, 16-bit DEST): BLOCK (7168,1024) [736,128] 8x10
+# 70.8 -> 32.3 us, (8192,1024) [1024,128] 8x8 96.7 -> 42.7 us (each member combines + finalizes rows/k
+# tile-rows instead of all of them); 1- and 2-tile-row shards flat (<= 3%).
+K_SYM_MAX_INTERLEAVED = 8
+K_SYM_MAX_SHARDED = 1
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
 OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
 RM_IN_DEPTH = 2  # cb_x_rm buffer depth
@@ -144,7 +150,7 @@ class PlanOpts:
     """Regime switches that change the CB inventory (one source of truth for footprint() and the CB list)."""
 
     shard_backed: bool = False  # TILE sharded: cb_x / cb_out alias the shards (tensor buffers, not CB budget)
-    owner_combine: bool = False  # k > K_SYM_MAX: per-row owner gather + return instead of the all-gather
+    owner_combine: bool = False  # k > K_SYM_MAX_*: per-row owner gather + return instead of the all-gather
     gather_depth: int = 2  # symmetric all-gather: blocks of cb_gathered (1 when every core runs one block)
     mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
 
@@ -305,7 +311,9 @@ def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget:
         start += n
     crt_max = base + (1 if rem else 0)
 
-    b, d, opts = _solve_rows(sz, k, slice_w, crt_max, budget, PlanOpts(), allow_depth2=not sz.is_rm)
+    b, d, opts = _solve_rows(
+        sz, k, slice_w, crt_max, budget, PlanOpts(owner_combine=k > K_SYM_MAX_INTERLEAVED), allow_depth2=not sz.is_rm
+    )
     return Blocking(
         k=k,
         slice_w_tiles=slice_w,
@@ -408,7 +416,7 @@ def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int
     c, pitch = _pitch(sz, slice_w)
     base_opts = PlanOpts(
         shard_backed=not sz.is_rm,
-        owner_combine=k > K_SYM_MAX,
+        owner_combine=k > K_SYM_MAX_SHARDED,
         mask_tail=(not sz.is_rm) and geo.W % TILE != 0,
     )
     b, d, opts = _solve_rows(sz, k, slice_w, crt_max, budget, base_opts, allow_depth2=False)

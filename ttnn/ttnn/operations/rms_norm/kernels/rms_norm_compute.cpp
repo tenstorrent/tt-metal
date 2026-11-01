@@ -23,7 +23,7 @@
 // Combine lookahead (k > 1, x_block_depth == 2): pass 1 + collapse of block b+1 run before combine(b), so they
 // overlap the partial all-gather of block b (the only stage that waits on other Tensix cores).
 //
-// Owner combine (k > K_SYM_MAX, WIDTH / BLOCK_SHARDED): tile-row r of a block is owned by member r % k; this
+// Owner combine (k > K_SYM_MAX_*, WIDTH / BLOCK_SHARDED): tile-row r of a block is owned by member r % k; this
 // member combines only its owned rows (k gathered partials each) into cb_inv_owned, which the writer returns
 // to every member's cb_inv_rms. The gathered slots of the rows it does not own (uniform count per block keeps
 // the peers' slot addressing in lockstep) are popped unread.

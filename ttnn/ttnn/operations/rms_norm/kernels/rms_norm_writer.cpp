@@ -11,7 +11,7 @@
 //   blocks: a peer can only reach block b+2 after consuming my partial of b+1, which I send only after my
 //   compute has popped gathered(b) (exchange(b+1) follows store(b) in this kernel).
 //   The semaphore is monotonic: block b is complete at k*(b+1) arrivals; it is never reset.
-// exchange_partials_block — owner topology (combine_owner, k > K_SYM_MAX; WIDTH / BLOCK_SHARDED):
+// exchange_partials_block — owner topology (combine_owner, k > K_SYM_MAX_*; WIDTH / BLOCK_SHARDED):
 //   tile-row r of the block is owned by member r % k. Every member writes its partial of row r into slot
 //   ((r / k) * k + m) of the owner's cb_gathered_sumsq and bumps the owner's arrival semaphore once per row;
 //   every member reserves/pushes the same ceil(rows / k) * k gathered pages per block (lockstep slot base).
