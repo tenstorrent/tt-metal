@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,6 +25,8 @@ namespace ttnn::operations::experimental::moe_block::fused_head {
 struct HeadPatchStore {
     std::mutex mutex;
     std::vector<HeadPatches> chips;
+    // per cached program (each chip's is its own Program): the addresses its args were last patched with
+    std::map<const tt::tt_metal::Program*, HeadLastAddresses> last;
 };
 
 struct FusedHeadParams {

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <numeric>
 #include <set>
+#include <utility>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -1070,8 +1071,20 @@ private:
     std::vector<Arg> arr;
     std::map<std::pair<XDir, uint32_t>, Arg> watch;
     std::map<std::string, Arg> ra;
-    // the address args of each kernel (by its descriptor's address until the kernels are placed)
+    // the address args of each kernel: by its (local) descriptor's address while it is built, then - push moves it into
+    // its function's kernel list - in pushed, one entry per kernel in list order (a descriptor's address does not
+    // survive the moves; take_pushed hands a list's entries to the final assembly)
     std::map<const KernelDescriptor*, std::vector<HeadPatches::Arg>> kpatches;
+    std::vector<std::vector<HeadPatches::Arg>> pushed;
+    void push(std::vector<KernelDescriptor>& ks, KernelDescriptor& k) {
+        auto it = kpatches.find(&k);
+        pushed.push_back(it == kpatches.end() ? std::vector<HeadPatches::Arg>{} : std::move(it->second));
+        if (it != kpatches.end()) {
+            kpatches.erase(it);
+        }
+        ks.push_back(std::move(k));
+    }
+    std::vector<std::vector<HeadPatches::Arg>> take_pushed() { return std::exchange(pushed, {}); }
 
     // a source's address arg (0 for an absent tensor)
     Arg S(HeadSrc s) const { return Arg(bufs.addresses[s], bufs.addresses[s] ? int32_t(s) : -1, 0); }
@@ -1716,8 +1729,8 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         set_rt(ncrisc, c, a);
     }
     set_common(ncrisc, n_crt);
-    ks.push_back(std::move(brisc));
-    ks.push_back(std::move(ncrisc));
+    push(ks, brisc);
+    push(ks, ncrisc);
 
     const auto [glu_code, glu_vals] = glu_defines(h.cfg.glu);
     std::vector<uint32_t> pre_base;
@@ -1785,7 +1798,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
                                     : std::vector<uint32_t>{0});
         }
         compute.common_runtime_args = common_c;
-        ks.push_back(std::move(compute));
+        push(ks, compute);
     }
     return ks;
 }
@@ -2137,9 +2150,9 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
     }
     set_rt(watcher, h.watcher, wl);
     std::vector<KernelDescriptor> ks;
-    ks.push_back(std::move(reader));
-    ks.push_back(std::move(sender));
-    ks.push_back(std::move(watcher));
+    push(ks, reader);
+    push(ks, sender);
+    push(ks, watcher);
     return ks;
 }
 
@@ -2292,7 +2305,7 @@ std::vector<KernelDescriptor> ChipProgram::y_kernels() {
             kernel("dataflow/ra_y_send.cpp", cells({core}), dm(DataMovementProcessor::RISCV_0, NOC::RISCV_0_default));
         routing_defines(y);
         set_rt(y, core, y_args(k, core, "ra_y_send.cpp"));
-        ks.push_back(std::move(y));
+        push(ks, y);
         break;  // (the first Y direction; the second rides the watcher's NCRISC)
     }
     return ks;
@@ -2620,9 +2633,9 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         planner_defines(bk, b_ra0);
         mine(b_rt, bk);
         set_common(bk, common);
-        ks.push_back(std::move(nk));
-        ks.push_back(std::move(ck));
-        ks.push_back(std::move(bk));
+        push(ks, nk);
+        push(ks, ck);
+        push(ks, bk);
     }
     rw_kernel = nullptr;
     return ks;
@@ -2636,11 +2649,20 @@ ProgramDescriptor ChipProgram::build(HeadPatches* patches) {
         desc.semaphores.push_back(SemaphoreDescriptor{.id = i, .core_ranges = semc, .initial_value = 0});
     }
     std::vector<CBDescriptor> c_x, c_r, c_e;
+    take_pushed();
     auto kx = gather(c_x);
+    auto px = take_pushed();
     KernelDescriptor* rw = nullptr;
     auto kr = router(c_r, rw);
+    auto pr = take_pushed();
     auto ky = y_kernels();
+    auto py = take_pushed();
     auto ke = engine(c_e);
+    auto pe = take_pushed();
+    TT_FATAL(
+        px.size() == kx.size() && pr.size() == kr.size() && py.size() == ky.size() && pe.size() == ke.size() &&
+            kpatches.empty(),
+        "fused_head: a kernel's address args not carried to the assembly");
     for (auto* v : {&c_x, &c_r, &c_e}) {
         desc.cbs.insert(desc.cbs.end(), v->begin(), v->end());
     }
@@ -2685,15 +2707,15 @@ ProgramDescriptor ChipProgram::build(HeadPatches* patches) {
         const std::array kernels{std::ref(kr[0])};
         mc.attach(desc, "rw", kernels, 0);
     }
-    for (auto* v : {&kx, &kr, &ky, &ke}) {
-        for (auto& k : *v) {
+    for (auto [v, p] : {std::pair{&kx, &px}, std::pair{&kr, &pr}, std::pair{&ky, &py}, std::pair{&ke, &pe}}) {
+        for (size_t i = 0; i < v->size(); ++i) {
             if (patches) {
-                for (auto a : kpatches[&k]) {
+                for (auto a : (*p)[i]) {
                     a.kernel = u32(desc.kernels.size());
                     patches->args.push_back(a);
                 }
             }
-            desc.kernels.push_back(std::move(k));
+            desc.kernels.push_back(std::move((*v)[i]));
         }
     }
     if (patches) {
@@ -2775,8 +2797,9 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
     return workload;
 }
 
-void patch_head_program(tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers) {
-    // (grouped by source; a source's args only when its address differs from HeadPatches::last)
+void patch_head_program(
+    tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers, HeadLastAddresses& last) {
+    // (grouped by source; a source's args only when its address differs from the one this program last got)
     const auto& args = patches.args;
     for (size_t i = 0; i < args.size();) {
         const uint16_t src = args[i].src;
@@ -2790,8 +2813,8 @@ void patch_head_program(tt::tt_metal::Program& program, const HeadPatches& patch
                                   : tt::tt_metal::GetRuntimeArgs(program, a.kernel, a.core);
             return data[a.index];
         };
-        if (patches.last[src] != addr) {
-            patches.last[src] = addr;
+        if (last.a[src] != addr) {
+            last.a[src] = addr;
             for (size_t k = i; k < j; ++k) {
                 value(args[k]) = addr + args[k].offset;
             }

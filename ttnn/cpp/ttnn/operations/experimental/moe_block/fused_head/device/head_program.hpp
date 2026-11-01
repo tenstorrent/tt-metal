@@ -136,16 +136,18 @@ struct HeadPatches {
     };
     std::vector<Arg> args;  // grouped by source
     std::vector<Cb> arena_cbs;
-    // The address each source's args were last written with (0xFFFFFFFF: unknown - the next hit writes them; reset
-    // whenever a program is built). A hit compares the source's address with it, never with an arg's current value:
-    // the framework's inferred buffer bindings (apply_resolved_bindings) may already have moved an arg that equals a
-    // buffer's address, leaving that source's offset args stale.
-    mutable std::array<uint32_t, kHeadMaxSrc> last = unknown_addresses();
-    static std::array<uint32_t, kHeadMaxSrc> unknown_addresses() {
-        std::array<uint32_t, kHeadMaxSrc> a;
-        a.fill(0xFFFFFFFFu);
-        return a;
-    }
+};
+
+// The address each source's args of one cached program were last written with (0xFFFFFFFF: unknown - the next hit
+// writes them). A hit compares a source's address with it, never with an arg's current value: the framework's
+// inferred buffer bindings (apply_resolved_bindings) may already have moved an arg that equals a buffer's address,
+// leaving that source's offset args stale.
+struct HeadLastAddresses {
+    std::array<uint32_t, kHeadMaxSrc> a = [] {
+        std::array<uint32_t, kHeadMaxSrc> v;
+        v.fill(0xFFFFFFFFu);
+        return v;
+    }();
 };
 
 class HeadModel;
@@ -198,6 +200,7 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
     std::map<std::string, uint32_t>* fabric_starts = nullptr);
 
 // Rewrites the address arguments (and the arena CBs) of one chip's cached program whose sources moved.
-void patch_head_program(tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers);
+void patch_head_program(
+    tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers, HeadLastAddresses& last);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

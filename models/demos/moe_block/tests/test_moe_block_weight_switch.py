@@ -103,19 +103,70 @@ def test_moe_block_weight_switch(mesh_device):
                 bad.append(name)
 
         check("back to layer 0's tensors", run(x0, h0, e0), want0)
-        # (a model prepares each layer's weights, and gets each layer's x, after the programs were built: the same
-        # values at new addresses must give the same output)
-        x0b = x_of(0)
-        check("a new x", run(x0b, h0, e0), want0)
-        h0b = head(0)
-        check("new head weights", run(x0, h0b, e0), want0)
-        e0b = experts(0)
-        check("new expert weights", run(x0, h0, e0b), want0)
-        run(x1, h1, e1)
-        check("all new, after another layer", run(x0b, h0b, e0b), want0)
-        check("that layer again", run(x1, h1, e1), want1)
+        # (a model prepares each layer's weights, and gets each layer's x, after the programs were built - and frees the
+        # x a layer had, whose memory the next tensors reuse: the same values at new addresses, the build's tensors
+        # freed and overwritten, must give the same output)
+        x0b, h0b, e0b = x_of(0), head(0), experts(0)
+        ttnn.deallocate(x0)
+        for t in (h0.w, h0.w_router, h0.router_bias, h0.router_index):
+            ttnn.deallocate(t)
+        for t in (e0.gidx, e0.w_gu, e0.w_d):
+            ttnn.deallocate(t)
+        junk = (x_of(5), head(5), experts(5))  # noqa: F841 (in the freed memory, other values)
+        check("new x, head and expert tensors, the build's freed and overwritten", run(x0b, h0b, e0b), want0)
+        check("another layer's tensors after", run(x1, h1, e1), want1)
+        check("and back", run(x0b, h0b, e0b), want0)
+        x0, h0, e0 = x0b, h0b, e0b
+        # (between two MoE layers the model's programs leave their data in every free L1 byte - the CB region and the
+        # arena's place: fill all of it with noise, then the same call again)
+        grid = mesh.compute_with_storage_grid_size()
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        free = int(ttnn.get_memory_view(mesh, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
+        rows = (free // 2048 - 1) * 32  # (bf16 tiles a core)
+        ncores = grid.x * grid.y
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(cores, (rows, 32), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        noise = ttnn.from_torch(
+            torch.randn(ncores * rows, 32) * 1e3,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=mc,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        ttnn.synchronize_device(mesh)
+        ttnn.deallocate(noise)
+        check(f"after noise in all free L1 ({rows * 64 >> 10} KB a core)", run(x0, h0, e0), want0)
+        check("then once more", run(x0, h0, e0), want0)
+        # (what the model's attention adds between two MoE layers, one at a time)
+        try:
+            g = ttnn.all_gather(x0, 3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
+            ttnn.synchronize_device(mesh)
+            ttnn.deallocate(g)
+            check("after an all_gather over TP", run(x0, h0, e0), want0)
+        except Exception as e:  # noqa: BLE001 (a probe: report and go on)
+            print(f"MOE_WEIGHT_SWITCH all_gather probe failed: {e}"[:300])
+        sem = ttnn.create_global_semaphore(mesh, cores, 0)
+        ttnn.synchronize_device(mesh)
+        del sem
+        check("after a global semaphore", run(x0, h0, e0), want0)
+        rows_sd = 2
+        gather = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, rows_sd - 1))])
+        topk = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, rows_sd), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        mid = mesh.create_sub_device_manager([ttnn.SubDevice([topk]), ttnn.SubDevice([gather])], 0)
+        ttnn.synchronize_device(mesh)
+        check("after creating a sub-device manager", run(x0, h0, e0), want0)
+        mesh.load_sub_device_manager(mid)
+        mesh.clear_loaded_sub_device_manager()
+        ttnn.synchronize_device(mesh)
+        check("after loading and clearing it", run(x0, h0, e0), want0)
+        mesh.remove_sub_device_manager(mid)
+        check("after removing it", run(x0, h0, e0), want0)
         assert not bad, f"a program-cache hit with tensors at new addresses differs: {bad}"
-        for e in (e0, e1, e0b):
+        for e in (e0, e1):
             e.close()
     finally:
         res.release()

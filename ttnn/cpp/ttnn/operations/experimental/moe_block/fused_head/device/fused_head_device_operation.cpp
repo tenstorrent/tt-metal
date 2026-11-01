@@ -163,9 +163,6 @@ tt::tt_metal::WorkloadDescriptor FusedHeadFactory::create_workload_descriptor(
     if (attrs.patches->chips.empty()) {
         attrs.patches->chips = std::move(patches);
     }
-    for (auto& chip : attrs.patches->chips) {  // (a new program: its args are this build's, not the last hit's)
-        chip.last = HeadPatches::unknown_addresses();
-    }
     return w;
 }
 
@@ -178,9 +175,11 @@ void FusedHeadFactory::override_runtime_arguments(
     TT_FATAL(coord.has_value(), "fused_head: one program a chip");
     const HeadBuffers b = head_buffers(attrs, args);
     auto& store = *attrs.patches;
+    HeadLastAddresses* last = nullptr;
     {
         // (programs another resources object built: where their address args sit, once - every chip's)
         std::lock_guard lock(store.mutex);
+        last = &store.last[&program];  // (a map node: stable while we patch)
         if (store.chips.empty()) {
             const auto& m = *attrs.model;
             std::vector<ttnn::MeshCoordinate> all;
@@ -190,7 +189,7 @@ void FusedHeadFactory::override_runtime_arguments(
             build_head_workload(m, b, all, &store.chips);
         }
     }
-    patch_head_program(program, store.chips[(*coord)[0] * attrs.config.shape.G + (*coord)[1]], b);
+    patch_head_program(program, store.chips[(*coord)[0] * attrs.config.shape.G + (*coord)[1]], b, *last);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head
