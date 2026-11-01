@@ -2031,7 +2031,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      timeout: 20
+      # 35: on the MoE block (K3's default MoE) each rank's weight load runs ~50 s an MoE layer (84 bfp4 tensorbins
+      # read from the TTNN cache, NFS-bound, + the checkpoint's gate / shared / latent): 20 cut it off mid-load twice.
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
