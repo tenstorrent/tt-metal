@@ -65,3 +65,13 @@ def test_the_command_check_looks_inside_a_devjob():
     bad = "python -m models.demos.common.bringup.devjob start g -- pytest tests/x.py"
     assert command_violations([ok], repo) == []
     assert any("direct pytest" in v for v in command_violations([bad], repo))
+
+
+def test_a_plain_gate_commits_a_pass():
+    """F239: `gate <task>` with no flag commits a PASS (FIX.19's stayed uncommitted); --no-commit opts out."""
+    import argparse
+
+    from models.demos.common.bringup.__main__ import gate_commits
+
+    assert gate_commits(argparse.Namespace(no_commit=False, commit=False, continue_=False)) is True
+    assert gate_commits(argparse.Namespace(no_commit=True, commit=False, continue_=False)) is False

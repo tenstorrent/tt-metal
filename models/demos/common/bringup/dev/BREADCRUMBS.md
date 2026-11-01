@@ -2503,3 +2503,15 @@ test_timed_runs_take_the_steady_state_path_and_accuracy_runs_the_normal_one. DS4
   `tail`. Agents' rule 3 requires it for runs over ~9 minutes and forbids killing a device job. devjob.py is in
   stamps NO_MEASURE. Selftests test_devjob.py (a job outlives its starter; a timed-out wait leaves it running; no
   double start; the command check judges what a devjob wraps: test_the_command_check_looks_inside_a_devjob).
+
+## F239 / F240: a plain `gate` commits a PASS; a pause stops a task's A/B between runs (DeepSeek-V4.1, 2026-11-01)
+
+- F239: `gate FIX.19` (no flag) passed but did not commit (commit only with --commit / --continue, although the usage
+  says the plain form is --continue); FIX.19's changes were swept into FIX.18's commit. A plain `gate <task>` now
+  commits a PASS (gate_commits); --no-commit (shared with freeze) keeps it uncommitted. Selftest test_devjob.py::
+  test_a_plain_gate_commits_a_pass.
+- F240: a pause stopped only agent attempts and task boundaries, so a useless A/B (P.25, ~40 min) ran to its end:
+  killing it would have marked every card dirty. ab_measure checks the pause before each run (never mid-run); the
+  task records ab_pending when its agent finished, and a resume measures the rest of the A/B without a new agent
+  attempt. Selftest test_perf_ab.py::test_a_pause_stops_the_ab_between_runs_and_resume_measures_without_an_agent.
+Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).

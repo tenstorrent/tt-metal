@@ -12,6 +12,7 @@ F169: a gate never restarts. Every test is its own unit; one that passed in the 
 test is kept. After a failure: fix it, then
     python -m models.demos.common.bringup gate P2.3 --spec S --unit <name>   run only that unit (see it pass)
     python -m models.demos.common.bringup gate P2.3 --spec S --continue      the delta: units not yet passed; commits
+    (a plain `gate P2.3` does the same and commits a PASS, F239; --no-commit keeps it uncommitted)
     python -m models.demos.common.bringup gate P2.3 --spec S --rerun <u,u>   run these passed units again too
     python -m models.demos.common.bringup gate P2.3 --spec S --status        each unit: kept / failed / stopped / not run
     python -m models.demos.common.bringup gate P2.3 --spec S --check         F170: an agent's run of its gate: kept per
@@ -81,6 +82,13 @@ def cmd_next(a):
     return 0
 
 
+def gate_commits(a) -> bool:
+    """F239: a plain `gate <task>` (the default, as --continue) commits a PASS, as the orchestrator does; only
+    --no-commit keeps it uncommitted (DeepSeek-V4.1 FIX.19, 2026-11-01: its PASS stayed uncommitted and its changes were
+    swept into FIX.18's commit)."""
+    return not getattr(a, "no_commit", False)
+
+
 @command("gate", "run one gate")
 def cmd_gate(a):
     if not os.environ.get("TT_VISIBLE_DEVICES"):  # F192: a gate run by hand sees the run mesh's cards (cached)
@@ -102,7 +110,7 @@ def cmd_gate(a):
         res = run_gate(spec, led, a.task, check=True, force=a.force)
     else:  # --continue is the default: the units not yet passed (F169)
         rerun = [u for x in (a.rerun or []) for u in x.split(",") if u]
-        res = run_gate(spec, led, a.task, commit=a.commit or a.continue_, force=a.force, fresh=a.fresh, rerun=rerun)
+        res = run_gate(spec, led, a.task, commit=gate_commits(a), force=a.force, fresh=a.fresh, rerun=rerun)
     print(led.task(a.task)["title"])
     print(res.summary())
     if res.commit:
@@ -463,7 +471,7 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     )
     ap.add_argument("--ledger-only", action="store_true", help="validate: skip the model-spec schema")
     ap.add_argument("--files", nargs="*", help="freeze: files to freeze (default: the task's 'tests')")
-    ap.add_argument("--no-commit", action="store_true", help="freeze: do not commit")
+    ap.add_argument("--no-commit", action="store_true", help="freeze / gate: do not commit (gate: a PASS, F239)")
     ap.add_argument("--from", dest="from_", nargs="+", help="rerun/fork: task id; op-ready: generated op folder(s)")
     ap.add_argument(
         "--codegen-root", help=f"op-export: the op-gen tree (default {'tt_metal/third_party/tt_ops_code_gen'})"
