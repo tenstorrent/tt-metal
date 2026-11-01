@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATMUL_PACK_BLOCK,
     MATMUL_ROW_MOP,
+    MATMUL_DYN_SWITCH,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
     MATMUL_ROW_END_FOLD,
@@ -110,6 +111,8 @@ def test_matmul(
     unpack_ttsync=False,
     dest_sync=DestSync.Half,
     unpack_ttsync_excl=False,
+    source="sources/matmul_test.cpp",
+    dyn_switch=None,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -169,7 +172,7 @@ def test_matmul(
 
 
     configuration = TestConfig(
-        "sources/matmul_test.cpp",
+        source,
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
@@ -178,6 +181,7 @@ def test_matmul(
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
+            *([MATMUL_DYN_SWITCH()] if dyn_switch else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
             *([] if unpack_ttsync else MATMUL_UNPACK_TTSYNC.for_block(formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim, dest_sync)),
@@ -488,3 +492,33 @@ STREAM_NARROW_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 def test_matmul_stream_narrow(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=DestSync.Full)
+
+
+# A dynamic throttle change between k steps (matmul_dyn_switch_test.cpp: even steps run the form of the init, odd ones the
+# throttled tile MOP), re-initialised by the switch path (dyn_switch) and by the full init, against the golden, on the tile and
+# the row form, at both DEST syncs.
+DYN_SWITCH_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b], same=True)
+DYN_SWITCH_BLOCKS = [
+    ((rt * 32, kt * 32), (kt * 32, ct * 32))
+    for rt, ct, kt in [(1, 1, 5), (2, 2, 4), (1, 4, 3), (4, 1, 3), (2, 4, 4), (1, 8, 3)]
+]
+
+
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=DYN_SWITCH_FORMATS,
+    dims=DYN_SWITCH_BLOCKS,
+    dest_sync=[DestSync.Half, DestSync.Full],
+    row_mop=[False, True],
+    dyn_switch=[False, True],
+)
+def test_matmul_dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+    test_matmul(
+        math_fidelity,
+        (formats, DestAccumulation.No, dims),
+        row_mop=row_mop,
+        dest_sync=dest_sync,
+        source="sources/matmul_dyn_switch_test.cpp",
+        dyn_switch=dyn_switch,
+    )

@@ -137,6 +137,14 @@ class MATMUL_REUSE_DIR(TemplateParameter):
 
 
 @dataclass
+class MATMUL_DYN_SWITCH(TemplateParameter):
+    """Blackhole matmul: a dynamic throttle change re-inits through the dyn_switch path of _llk_math_matmul_init_."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_DYN_SWITCH"
+
+
+@dataclass
 class MATMUL_ROW_MOP(TemplateParameter):
     """Blackhole matmul math with one MOP per reuse row."""
 
