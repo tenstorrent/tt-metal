@@ -625,8 +625,8 @@ TABLE = {
         "bf16 = bf16 rows, stock sparse_sdpa",
     ),
     "WINDOW_KV_FORMAT": Setting(
-        "bfp8_tiles",
-        ("bf16", "bfp8_blocks", "bfp8_tiles"),
+        "bf16_tiles",
+        ("bf16", "bfp8_blocks", "bfp8_tiles", "bf16_tiles"),
         "the window KV sparse_sdpa reads (DS41-150, OWNER DECISION 2026-10-29 13:00; developed on the 2x2): the reference "
         "stores it as e4m3 with a power-of-two scale per 32 (ds41_ref.py _window_kv). bfp8_blocks = the [carry 128 | "
         "chunk S] window region as bfloat8_b blocks of 32 consecutive rows a page (ttnn.bringup.ckv_bfp4 dtype=bfloat8_b "
@@ -643,7 +643,13 @@ TABLE = {
         "previous chunk to chip 0) instead of the window all-gathers, and sparse_sdpa reads each query's 128 rows from "
         "the region by load-time per-chip index lists (a band of consecutive rows, two NoC reads a block). The served "
         "0_window_kv copy is unchanged (its TP gather and write). bfp8_blocks = the replicated [128 carry | S] blocks "
-        "(the path before P.18)",
+        "(the path before P.18). bf16_tiles (P.26, OWNER 2026-11-01: 8 vs 16 bits, ready should it be needed; made "
+        "the default for the A/B, the owner decides): bfp8_tiles' per-chip region, neighbour send and index lists, "
+        "but the region kept in bfloat16 with no rounding step: [1, 1, 128 + q_rows, 512] bf16 ROW_MAJOR a layer (8x4: "
+        "288 rows, 294912 B a layer, 11.80 MB for 40 layers vs 166464 B / 6.66 MB in bfp8_tiles; kept tail 128 KiB vs "
+        "74 KB a layer a slot), the chip's own rows untilized + slice_written at row 128, the carry sent as 128 row "
+        "pages (tt/window_send.py), read by sparse_sdpa as bf16 rows (window-only layers: stock sparse_sdpa BF16; "
+        "compressed layers: the fork's ROW_BFP4 kv_window bf16 rows), above the reference's e4m3 (comparison only)",
     ),
     "INDEX_K_FORMAT": Setting(
         "bfp4",
