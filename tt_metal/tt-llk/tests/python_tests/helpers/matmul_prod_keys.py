@@ -604,6 +604,21 @@ _GRID_MAIN_ROWS = (
     ('LoFi', True, True, 'F32', 'B8', 'B2', 4, 1, 1, 0, False, 1),
     ('LoFi', True, True, 'F32', 'F16b', 'B8', 1, 2, 8, 2, False, 1),
     ('LoFi', True, True, 'F32', 'F32', 'F16', 1, 4, 8, 0, False, 1),
+    # Full sync 1x1 blocks of Float16_b or Bfp8_b: re-initialised before every call, the keyed forms read up to 10 cycles per call behind main's
+    ('LoFi', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 1, 0, False, 1),
+    ('LoFi', False, False, 'B8', 'B8', 'B8', 1, 1, 1, 0, False, 1),
+    ('LoFi', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 4, 0, False, 1),
+    ('LoFi', False, False, 'B8', 'B8', 'B8', 1, 1, 4, 0, False, 1),
+    ('HiFi2', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 1, 0, False, 1),
+    ('HiFi2', False, False, 'B8', 'B8', 'B8', 1, 1, 1, 0, False, 1),
+    ('HiFi2', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 4, 0, False, 1),
+    ('HiFi2', False, False, 'B8', 'B8', 'B8', 1, 1, 4, 0, False, 1),
+    ('HiFi2', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 32, 0, False, 1),
+    ('HiFi2', False, False, 'B8', 'B8', 'B8', 1, 1, 32, 0, False, 1),
+    ('HiFi4', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 4, 0, False, 1),
+    ('HiFi4', False, False, 'B8', 'B8', 'B8', 1, 1, 4, 0, False, 1),
+    ('HiFi4', False, False, 'F16b', 'F16b', 'F16b', 1, 1, 32, 0, False, 1),
+    ('HiFi4', False, False, 'B8', 'B8', 'B8', 1, 1, 32, 0, False, 1),
 )
 _GRID_MAIN = frozenset(_GRID_MAIN_ROWS)
 _SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2"}

@@ -109,8 +109,17 @@ def run_dyn(perf_report, fmt, sync, dims, mf, mode):
     def make(source, formats, run_types, templates=None, **kw):
         return orig("sources/matmul_dyn_test.cpp", formats, run_types, templates=list(templates) + [DYN(mode)], **kw)
 
+    # the block keys ttnn's matmul_block passes: the cells llk_matmul_forms.h keeps on main's form apply, as in perf_matmul_grid
+    keys = pm.MATMUL_FORM_KEYS
+    orig_for_block = keys.for_block
+
+    def for_block(*args, **kwargs):
+        return [k.with_block(ct, rt, kt, DestAccumulation.No) for k in orig_for_block(*args, **kwargs)]
+
     pm.PerfConfig = make
+    keys.for_block = staticmethod(for_block)
     try:
         pm.test_perf_matmul(perf_report, (fmt, DestAccumulation.No, sync, ([rt * 32, kt * 32], [kt * 32, ct * 32])), mf)
     finally:
         pm.PerfConfig = orig
+        keys.for_block = staticmethod(orig_for_block)
