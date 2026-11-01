@@ -30,7 +30,7 @@
 #                    on hang with full triage + watcher log dump.
 #   --run-all        Run all tests instead of stopping on first failure (-x).
 #                    Useful for eval scoring where you need full pass/fail counts.
-#   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
+#   --profile        Run under the Tracy device profiler (python -m tracy -p -r). Emits
 #                    a per-op CSV (generated/profiler/reports/<ts>/ops_perf_results*.csv)
 #                    and prints its path as "SAFE_PYTEST: PROFILER CSV: <path>" next to
 #                    the result line. Requires a Tracy-enabled build. NOTE: the tracy
@@ -631,8 +631,13 @@ trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 # --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
+#   -p records only explicit zones: without it every Python function call becomes a
+#   Tracy zone, which slows the tests and leaves a large host trace for the report step
+#   (an 8-test bench: 275 s per call and a 335 MB trace, vs 23 s and 654 KB with -p).
+#   Op rows, signposts and device kernel times are unchanged: they come from ttnn's own
+#   C++ messages. Host-time columns get smaller, without the per-call tracing overhead.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest)
+    PYTEST_CMD=(python -m tracy -p -r -m pytest)
 else
     PYTEST_CMD=(pytest)
 fi
