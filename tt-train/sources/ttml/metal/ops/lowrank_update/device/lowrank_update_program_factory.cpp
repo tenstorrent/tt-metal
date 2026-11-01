@@ -40,7 +40,9 @@ LowrankUpdateProgramFactory::cached_program_t LowrankUpdateProgramFactory::creat
     tt::tt_metal::Program program{};
 
     const auto geo = lowrank_geometry(acc);
-    const uint32_t total_items = geo.images * geo.Mt * geo.Nt;
+    const auto& ws = tensor_args.w.logical_shape();
+    const uint32_t Nw = (args.transpose_b ? ws[2] : ws[3]) / tt::constants::TILE_WIDTH;  // output columns updated
+    const uint32_t total_items = geo.images * geo.Mt * Nw;
     const auto grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
         tt::tt_metal::split_work_to_cores(grid, total_items);
@@ -58,13 +60,13 @@ LowrankUpdateProgramFactory::cached_program_t LowrankUpdateProgramFactory::creat
     }
     const uint32_t scale_bits = std::bit_cast<uint32_t>(args.scale);
 
-    std::vector<uint32_t> reader_ct_args{geo.Mt, geo.Nt};
+    std::vector<uint32_t> reader_ct_args{geo.Mt, Nw, geo.Nt};
     tt::tt_metal::TensorAccessorArgs(acc.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.a.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.w.buffer()).append_to(reader_ct_args);
     auto reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{geo.Mt, geo.Nt};
+    std::vector<uint32_t> writer_ct_args{geo.Mt, Nw, geo.Nt};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
     auto writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
@@ -72,7 +74,7 @@ LowrankUpdateProgramFactory::cached_program_t LowrankUpdateProgramFactory::creat
         return create_compute_kernel(
             program,
             cores,
-            {work_count, geo.Mt, geo.Nt, scale_bits},
+            {work_count, geo.Mt, Nw, scale_bits},
             defines,
             kComputeKernelPath,
             /*fp32_dest_acc_en=*/true);

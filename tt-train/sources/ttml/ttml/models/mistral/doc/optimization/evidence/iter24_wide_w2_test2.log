@@ -1,0 +1,68 @@
+2026-11-01 10:54:57.636 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 1400.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 0 items / 1 error
+
+==================================== ERRORS ====================================
+____________ ERROR collecting tt-train/tests/python/test_mistral.py ____________
+In test_mlp_fused_lora_wide_w2: function uses no argument 'transposed'
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+=========================== short test summary info ============================
+ERROR tests/python/test_mistral.py - Failed: In test_mlp_fused_lora_wide_w2: ...
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+=============================== 1 error in 0.05s ===============================
+2026-11-01 10:54:58.229 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 10:54:58.229 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 10:54:58.229 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 10:54:58.229 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 10:54:58.240 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 10:54:58.240 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 10:54:58.320 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 10:54:58.320 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 10:54:58.320 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 10:54:58.320 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 10:54:58.322 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 10:54:58.564 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 10:54:58.599 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 10:54:58.599 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 10:54:58.599 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "parameters"
+ - leaked function "to"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-11-01 10:54:58.914 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 10:54:58.914 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 10:54:59.129 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 10:54:59.129 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 10:54:59.129 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+rc=2

@@ -12,8 +12,9 @@
 namespace cb = lowrank_update_cb;
 
 constexpr uint32_t Mt = get_compile_time_arg_val(0);
-constexpr uint32_t Nt = get_compile_time_arg_val(1);
-constexpr auto acc_args = TensorAccessorArgs<2>();
+constexpr uint32_t Nt = get_compile_time_arg_val(1);  // output columns (w's N) in tiles: the item space
+constexpr uint32_t Na = get_compile_time_arg_val(2);  // acc row stride in tiles (>= Nt)
+constexpr auto acc_args = TensorAccessorArgs<3>();
 constexpr auto a_args = TensorAccessorArgs<acc_args.next_compile_time_args_offset()>();
 constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 
@@ -59,7 +60,7 @@ void kernel_main() {
             cur_col = n;
         }
         cb_reserve_back(cb::acc, 1);
-        noc_async_read_page(image * per_image + r * Nt + n, acc_acc, get_write_ptr(cb::acc));
+        noc_async_read_page(image * Mt * Na + r * Na + n, acc_acc, get_write_ptr(cb::acc));
         noc_async_read_barrier();
         cb_push_back(cb::acc, 1);
     }

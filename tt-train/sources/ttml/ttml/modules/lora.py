@@ -81,13 +81,22 @@ def skinny_contract(small, big, scale=1.0, transpose_out=False):
     return ttnn.transpose(out, -2, -1) if transpose_out else out
 
 
-def skinny_matmul(a, b, transpose_b=False):
+def skinny_matmul_fits(k, n, b):
+    """Whether the K-split op takes a ``[.., M, >= k] @ b`` product with ``n`` output columns."""
+    return n <= 64 and k >= SKINNY_MIN_K and k % 32 == 0 and b.shape[0] == 1 and b.shape[1] == 1
+
+
+def skinny_matmul(a, b, transpose_b=False, tail_out=None, tail_col=0, tail_tiles=0):
     """``a @ (b^T if transpose_b else b)`` (HiFi4, fp32 accumulation) for a rank-wide ``b``: the K-split op when it
-    pays, ttnn's matmul otherwise."""
-    k = a.shape[-1]
+    pays, ttnn's matmul otherwise. ``a`` may be wider than ``b``'s K (only its first K columns enter). With
+    ``tail_out`` the op also writes the product into tile column ``tail_col`` of that tensor in place, followed by
+    zero tiles up to ``tail_tiles`` columns (iteration 24: the LoRA ``h`` into the wide input buffer's tail); the
+    caller checks :func:`skinny_matmul_fits` first."""
+    k = b.shape[-1] if transpose_b else b.shape[-2]
     n = b.shape[-2] if transpose_b else b.shape[-1]
-    if n <= 64 and k >= SKINNY_MIN_K and k % 32 == 0 and b.shape[0] == 1 and b.shape[1] == 1:
-        return ttml.ops.metal.skinny_matmul(a, b, transpose_b)
+    if skinny_matmul_fits(k, n, b):
+        return ttml.ops.metal.skinny_matmul(a, b, transpose_b, tail_out, tail_col, tail_tiles)
+    assert tail_out is None, "skinny_matmul: the tail write needs the K-split op (skinny_matmul_fits)"
     return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=lora_matmul_config())
 
 

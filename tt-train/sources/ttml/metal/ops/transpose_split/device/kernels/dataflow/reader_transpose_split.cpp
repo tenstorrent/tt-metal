@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// transpose_split reader: item i < dx_items -> (t = i / rows_t, r = i % rows_t), input page r*Tt + t;
+// transpose_split reader: item i < dx_items -> (t = i / dxt, r = i % dxt), input page r*Tt + t;
 // item i >= dx_items -> t = i - dx_items, input page rows_t*Tt + t (the tail tile row).
 
 #include "api/dataflow/dataflow_api.h"
@@ -11,7 +11,8 @@ constexpr uint32_t cb_in = 0;
 constexpr uint32_t Tt = get_compile_time_arg_val(0);
 constexpr uint32_t rows_t = get_compile_time_arg_val(1);
 constexpr uint32_t dx_items = get_compile_time_arg_val(2);
-constexpr auto in_args = TensorAccessorArgs<3>();
+constexpr uint32_t dxt = get_compile_time_arg_val(3);  // dx tile columns (>= rows_t)
+constexpr auto in_args = TensorAccessorArgs<4>();
 
 void kernel_main() {
     uint32_t arg = 0;
@@ -24,8 +25,8 @@ void kernel_main() {
         const uint32_t work = work_start + item;
         uint32_t page;
         if (work < dx_items) {
-            const uint32_t t = work / rows_t;
-            const uint32_t r = work - t * rows_t;
+            const uint32_t t = work / dxt;
+            const uint32_t r = work - t * dxt;
             page = r * Tt + t;
         } else {
             page = rows_t * Tt + (work - dx_items);

@@ -25,7 +25,21 @@ void SwigluPackedBwDeviceOperation::validate_on_program_cache_miss(
     check_device_tensor(dL_dh, kOp, "dL_dh");
     check_same_device(dL_dh, packed, kOp, "dL_dh", "packed");
     swiglu_packed::validate_packed(packed, kOp);
-    swiglu_packed::validate_half_of_packed(dL_dh, packed, "dL_dh", kOp);
+    // dL_dh may be wider than the half width (the wide LoRA input buffer's gradient): only its first I columns
+    // are read.
+    {
+        const auto half = swiglu_packed::halve_last_dim(packed.logical_shape());
+        const auto& g = dL_dh.logical_shape();
+        TT_FATAL(
+            g.rank() == half.rank() && g[-1] >= half[-1] && g[-1] % tt::constants::TILE_WIDTH == 0,
+            "{}: dL_dh {} must be [.., R, >= I {}] (a multiple of 32 wide)",
+            kOp,
+            g,
+            half[-1]);
+        for (int d = 0; d + 1 < static_cast<int>(g.rank()); ++d) {
+            TT_FATAL(g[d] == half[d], "{}: dL_dh {} must match packed {} in every dim but the last", kOp, g, half);
+        }
+    }
 
     if (tensor_args.preallocated_dL_dpacked.has_value()) {
         const auto& out = *tensor_args.preallocated_dL_dpacked;

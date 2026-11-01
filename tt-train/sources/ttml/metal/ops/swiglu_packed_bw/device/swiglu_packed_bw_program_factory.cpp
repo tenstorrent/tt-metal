@@ -79,7 +79,8 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
 
     SwigluPackedBwKernels kernels;
 
-    std::vector<uint32_t> reader_ct_args{block_size, Wt};
+    const uint32_t Wt_dh = tensor_args.dL_dh.padded_shape()[-1] / tt::constants::TILE_WIDTH;  // dL_dh row stride
+    std::vector<uint32_t> reader_ct_args{block_size, Wt, geometry.blocks_per_row, Wt_dh};
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(dh_buf).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);

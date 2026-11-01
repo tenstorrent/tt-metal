@@ -27,6 +27,7 @@ constexpr uint32_t kBlockTiles = 4U;  // x tiles per CB push
 constexpr uint32_t kReaderIn0Idx = 0U;
 constexpr uint32_t kReaderIn1Idx = 1U;
 constexpr uint32_t kWriterOutIdx = 0U;
+constexpr uint32_t kWriterTailIdx = 1U;
 
 struct CoreSplit {
     uint32_t num_cores = 0;
@@ -129,12 +130,14 @@ SkinnyMatmulPartialProgramFactory::cached_program_t SkinnyMatmulPartialProgramFa
         defines["TRANSPOSE_B"] = "1";
     }
 
-    std::vector<uint32_t> reader_ct_args{geo.rows, geo.Kt, geo.Nt, R, S, St, block};
+    std::vector<uint32_t> reader_ct_args{geo.rows, geo.Kt, geo.Nt, R, S, St, block, geo.Kx};
     tt::tt_metal::TensorAccessorArgs(x.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.w.buffer()).append_to(reader_ct_args);
     auto reader = create_reader_kernel(program, split.all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{geo.rows, geo.Kt, geo.Nt, R, S, St, block};
+    // Writer ct args 7..10 are the REDUCE phase's tail target (unused here); the second accessor is a stand-in.
+    std::vector<uint32_t> writer_ct_args{geo.rows, geo.Kt, geo.Nt, R, S, St, block, 0U, 0U, 0U, 0U};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
     auto writer = create_writer_kernel(program, split.all_cores, writer_ct_args, defines, kWriterKernelPath);
 
@@ -149,7 +152,7 @@ SkinnyMatmulPartialProgramFactory::cached_program_t SkinnyMatmulPartialProgramFa
         reader,
         writer,
         {x.buffer()->address(), tensor_args.w.buffer()->address()},
-        {output.buffer()->address()});
+        {output.buffer()->address(), 0U});
 
     return cached_program_t{std::move(program), {reader, writer, std::move(cores)}};
 }
@@ -190,15 +193,30 @@ SkinnyMatmulReduceProgramFactory::cached_program_t SkinnyMatmulReduceProgramFact
     const auto f32 = tt::DataFormat::Float32;
     create_circular_buffer(program, split.all_cores, cb::partials, f32, tt::tile_size(f32), 2U * S);
     create_circular_buffer(program, split.all_cores, cb::out, bf16, tt::tile_size(bf16), 2U);
+    create_circular_buffer(program, split.all_cores, cb::zero, bf16, tt::tile_size(bf16), 1U);
 
     std::map<std::string, std::string> defines{{"REDUCE", "1"}};
 
-    std::vector<uint32_t> reader_ct_args{geo.rows, geo.Kt, geo.Nt, args.rows_per_item, S, args.slice_tiles, 1U};
+    std::vector<uint32_t> reader_ct_args{geo.rows, geo.Kt, geo.Nt, args.rows_per_item, S, args.slice_tiles, 1U, geo.Kx};
     tt::tt_metal::TensorAccessorArgs(tensor_args.partials.buffer()).append_to(reader_ct_args);
     auto reader = create_reader_kernel(program, split.all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{geo.rows, geo.Kt, geo.Nt, args.rows_per_item, S, args.slice_tiles, 1U};
+    const bool tail = tensor_args.tail_out.has_value();
+    const uint32_t tail_stride = tail ? tensor_args.tail_out->padded_shape()[3] / tt::constants::TILE_WIDTH : 0U;
+    std::vector<uint32_t> writer_ct_args{
+        geo.rows,
+        geo.Kt,
+        geo.Nt,
+        args.rows_per_item,
+        S,
+        args.slice_tiles,
+        1U,
+        tail ? 1U : 0U,
+        tail_stride,
+        args.tail_col,
+        args.tail_tiles};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(tail ? tensor_args.tail_out->buffer() : output.buffer()).append_to(writer_ct_args);
     auto writer = create_writer_kernel(program, split.all_cores, writer_ct_args, defines, kWriterKernelPath);
 
     auto cores = create_compute_and_assign_args(
@@ -213,7 +231,7 @@ SkinnyMatmulReduceProgramFactory::cached_program_t SkinnyMatmulReduceProgramFact
         reader,
         writer,
         {tensor_args.partials.buffer()->address(), /*in1*/ 0U},
-        {output.buffer()->address()});
+        {output.buffer()->address(), tail ? tensor_args.tail_out->buffer()->address() : 0U});
 
     return cached_program_t{std::move(program), {reader, writer, std::move(cores)}};
 }
@@ -230,6 +248,8 @@ void SkinnyMatmulReduceProgramFactory::override_runtime_arguments(
     for (const auto& core : shared.cores) {
         reader_args[core.x][core.y][kReaderIn0Idx] = tensor_args.partials.buffer()->address();
         writer_args[core.x][core.y][kWriterOutIdx] = output.buffer()->address();
+        writer_args[core.x][core.y][kWriterTailIdx] =
+            tensor_args.tail_out.has_value() ? tensor_args.tail_out->buffer()->address() : 0U;
     }
 }
 

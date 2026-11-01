@@ -1,0 +1,5 @@
+chip | ops | kernels ms | matmul ms | collectives ms | span ms (cycles/1.35 GHz) | idle % | eff. clock GHz
+0    | only 1 steps
+1    | only 1 steps
+2    | only 1 steps
+3    | only 1 steps

@@ -8,7 +8,9 @@
 
 namespace ttml::metal::ops::swiglu_packed_fw::device {
 
-struct SwigluPackedFwParams {};
+struct SwigluPackedFwParams {
+    uint32_t out_cols = 0;  // output width (>= I, multiple of 32; 0 = I): the wide LoRA input buffer (iteration 24)
+};
 
 // `packed` [.., R, 2*I] = [gate | up]; output h = silu(gate) * up, [.., R, I].
 struct SwigluPackedFwInputs {

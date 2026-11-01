@@ -752,6 +752,7 @@ void py_module(nb::module_& m) {
             &ttml::metal::swiglu_packed_fw,
             nb::arg("packed"),
             nb::arg("preallocated_output") = nb::none(),
+            nb::arg("out_cols") = 0,
             "Fused packed-SwiGLU forward: packed [.., R, 2*I] = [gate|up] -> h = silu(gate)*up "
             "[.., R, I].");
         py_metal.def(
@@ -811,6 +812,7 @@ void py_module(nb::module_& m) {
             nb::arg("rows"),
             nb::arg("tail_rows"),
             nb::arg("tail_scale") = 1.0F,
+            nb::arg("dx_cols") = 0,
             "[input[:rows]^T, tail_scale * input[rows:rows + tail_rows]^T] for a [1, 1, R, T] bf16 input in one pass: "
             "the fused LoRA backward's dx and s*dh from its [in + TAIL, T] product.");
         py_metal.def(
@@ -841,9 +843,14 @@ void py_module(nb::module_& m) {
             nb::arg("x"),
             nb::arg("w"),
             nb::arg("transpose_b") = false,
-            "x [.., M, K] @ W for a skinny W (N <= 64; w is [N, K] with transpose_b, else [K, N]) -> [.., M, N] bf16, "
-            "K split over the cores (fp32 partials per K slice, then summed) instead of one core per output tile. "
-            "HiFi4, fp32 accumulation.");
+            nb::arg("tail_out") = nb::none(),
+            nb::arg("tail_col") = 0,
+            nb::arg("tail_tiles") = 0,
+            "x [.., M, K'] @ W for a skinny W (N <= 64; w is [N, K] with transpose_b, else [K, N], K <= K': only x's "
+            "first K columns enter) -> [.., M, N] bf16, K split over the cores (fp32 partials per K slice, then "
+            "summed) instead of one core per output tile. HiFi4, fp32 accumulation. With tail_out (same rows as x) "
+            "the output is also written in place at tile column tail_col of it, then zero tiles up to tail_tiles "
+            "columns (the fused LoRA h into the wide input buffer's tail).");
         py_metal.def(
             "sdpa_kv_bw_reduce",
             [](const ttnn::Tensor& gk,

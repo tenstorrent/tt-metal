@@ -8,8 +8,9 @@
 
 namespace ttml::metal {
 
-ttnn::Tensor swiglu_packed_fw(const ttnn::Tensor& packed, const std::optional<ttnn::Tensor>& preallocated_output) {
-    return ttnn::prim::ttml_swiglu_packed_fw(packed, preallocated_output);
+ttnn::Tensor swiglu_packed_fw(
+    const ttnn::Tensor& packed, const std::optional<ttnn::Tensor>& preallocated_output, uint32_t out_cols) {
+    return ttnn::prim::ttml_swiglu_packed_fw(packed, preallocated_output, out_cols);
 }
 
 }  // namespace ttml::metal

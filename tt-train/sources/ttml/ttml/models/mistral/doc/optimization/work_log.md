@@ -155,6 +155,14 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 24: w2 K-concat removed (wide LoRA input buffer)
+
+- Roofline / bytes: the per-linear ``concat(x, pad(h))`` moves 17 MB (w2 shard) at 433 GB/s: 101 us per call, ~4 ms/step for w2, plus gate_up's 65 us per call (kept, see below).
+- Structural fix: the producers write the wide buffer (`swiglu_packed_fw out_cols`, `skinny_matmul tail_out`), the consumers take the wide gradient (`transpose_split dx_cols`, `lowrank_update` with a wider acc, `swiglu_packed_bw`), the base matmul reads the buffer as is. Alternatives weighed: a tensor with logical width ``in`` and padded width ``in + 64`` would have kept the backward untouched, but ttnn's matmul validates the logical K and allocates outputs from logical shapes, so the padded view breaks the forward matmul or the dA product; two tensor objects over one buffer would need a C++ view helper. The plain wide tensor costs three small stride changes instead.
+- gate_up: the column-parallel layer's wide ``dx`` ([1024, 5184], 162 tiles) would hit the TP all-reduce's tile divisibility (4 ranks); a 128-row tail (+2.5 % K on the two largest matmuls) or a slice before the collective (a 10 MB copy) each cost about the 65 us concat. Left on the concat path.
+- Verification: `O/iter24_wide_check.py` compares every piece against the concat path bit for bit at the shard shape and times the removed and the changed ops; fused-LoRA harness subset; then the full chain.
+- Lesson: the single-chip harness fuses only transposed shapes, and w2 at 32768 -> 5120 is not one, so no harness case reached the wide path until `test_mlp_fused_lora_wide_w2` (TP shard width) was added: the first chain's TP gradient check found the wrapper bug instead (`O/iter24.log`). A new model-level path needs a harness case at a shape that actually takes it.
+
 ### Iteration 23: SDPA chain hop overlap (kernel boost checklist)
 
 - Roofline / bytes: after iteration 22 the chain hop (ready handshake, 64 KB unicast, flush, relay, serial with the receive on one RISC) set the SDPA kernels' time: Q 147 us per call at the shard shape against ~110 us of compute, forward 145 against ~100, KV 215 against ~170.
@@ -289,6 +297,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 22 | `66b8a997d14` | blocked `sdpa_bw_q` compute kernel, single read barrier per chunk in the three chain injectors, `TTML_SDPA_BW_Q_STREAM` knob, iteration-22 evidence |
 | review 9 | `912f9562ba6` | stage review round 9 record and its doc answers |
 | 23 | `0be1385dbde` | SDPA chain forwarding on the writer RISC / NOC_1 (forward, Q, KV readers, writers, factories), chains reversed, iteration-23 evidence |
-| review 9 P1 | (this commit) | `sdpa_bw_q` factory: one-row K/V blocks outside the chain; list-mode and chain-mode checks, attention tests |
+| review 9 P1 | `4041c62353d` | `sdpa_bw_q` factory: one-row K/V blocks outside the chain; list-mode and chain-mode checks, attention tests |
+| 24 | (this commit) | wide fused-LoRA input for w2 (first chain `O/iter24.log` failed in the wrapper's backward, fixed; chain `O/iter24b*`): `swiglu_packed_fw out_cols`, `skinny_matmul tail_out`, `transpose_split dx_cols`, `lowrank_update` / `swiglu_packed_bw` wide gradient, `MLP.swiglu_op` hook, iteration-24 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

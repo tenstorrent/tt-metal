@@ -24,6 +24,13 @@ void TransposeSplitDeviceOperation::validate_on_program_cache_miss(
         "TransposeSplit: tail_rows must be in 1..32, got {}",
         args.tail_rows);
     TT_FATAL(
+        args.dx_cols == 0 ||
+            (args.dx_cols >= args.rows && args.dx_cols % tt::constants::TILE_HEIGHT == 0 && args.dx_cols <= s[2]),
+        "TransposeSplit: dx_cols {} must be a multiple of 32 in [rows {}, input rows {}]",
+        args.dx_cols,
+        args.rows,
+        s[2]);
+    TT_FATAL(
         s[2] >= args.rows + args.tail_rows,
         "TransposeSplit: input has {} rows, needs rows + tail_rows = {}",
         s[2],
@@ -41,7 +48,7 @@ spec_return_value_t TransposeSplitDeviceOperation::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 input.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), input.memory_config()));
     };
-    return {spec(args.rows), spec(args.tail_rows)};
+    return {spec(args.dx_cols != 0 ? args.dx_cols : args.rows), spec(args.tail_rows)};
 }
 
 tensor_return_value_t TransposeSplitDeviceOperation::create_output_tensors(
@@ -54,7 +61,7 @@ tensor_return_value_t TransposeSplitDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t TransposeSplitDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<TransposeSplitDeviceOperation>(
-        args.rows, args.tail_rows, args.tail_scale, tensor_args.input.logical_shape());
+        args.rows, args.tail_rows, args.tail_scale, args.dx_cols, tensor_args.input.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::transpose_split::device
@@ -62,10 +69,10 @@ ttsl::hash::hash_t TransposeSplitDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttml::metal::ops::transpose_split::device::tensor_return_value_t ttml_transpose_split(
-    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale) {
+    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale, uint32_t dx_cols) {
     using OperationType = ttml::metal::ops::transpose_split::device::TransposeSplitDeviceOperation;
-    auto attributes =
-        OperationType::operation_attributes_t{.rows = rows, .tail_rows = tail_rows, .tail_scale = tail_scale};
+    auto attributes = OperationType::operation_attributes_t{
+        .rows = rows, .tail_rows = tail_rows, .tail_scale = tail_scale, .dx_cols = dx_cols};
     auto tensor_args = OperationType::tensor_args_t{.input = input};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }

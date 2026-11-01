@@ -138,7 +138,8 @@ class LlamaMLP(AbstractModuleBase):
             Output tensor after MLP
         """
         gu = self.w_gate_up(input)
-        h = ttml.ops.swiglu_packed.swiglu_packed(gu)
+        swiglu_op = getattr(self, "swiglu_op", None)  # an injected (gu) callable wins (the wide fused-LoRA input)
+        h = swiglu_op(gu) if swiglu_op is not None else ttml.ops.swiglu_packed.swiglu_packed(gu)
         x = self.w2(h)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:

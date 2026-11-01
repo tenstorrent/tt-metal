@@ -19,6 +19,7 @@ constexpr uint32_t R = get_compile_time_arg_val(3);
 constexpr uint32_t S = get_compile_time_arg_val(4);
 constexpr uint32_t St = get_compile_time_arg_val(5);
 constexpr uint32_t block = get_compile_time_arg_val(6);
+constexpr uint32_t Kx = get_compile_time_arg_val(7);  // x row stride in tiles (>= Kt)
 
 void kernel_main() {
     uint32_t arg = 0;
@@ -27,7 +28,7 @@ void kernel_main() {
     const uint32_t work_start = get_arg_val<uint32_t>(arg++);
     const uint32_t work_count = get_arg_val<uint32_t>(arg++);
 
-    constexpr auto in0_args = TensorAccessorArgs<7>();
+    constexpr auto in0_args = TensorAccessorArgs<8>();
     const auto in0_acc = TensorAccessor(in0_args, in0_addr);
 
 #ifdef REDUCE
@@ -85,7 +86,7 @@ void kernel_main() {
                 cb_reserve_back(cb::x, block);
                 uint32_t l1 = get_write_ptr(cb::x);
                 for (uint32_t j = 0; j < n; ++j) {
-                    noc_async_read_page(r * Kt + k0 + k + j, in0_acc, l1);
+                    noc_async_read_page(r * Kx + k0 + k + j, in0_acc, l1);
                     l1 += tile_bytes;
                 }
                 noc_async_read_barrier();

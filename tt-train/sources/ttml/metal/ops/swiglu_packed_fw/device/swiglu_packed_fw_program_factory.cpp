@@ -72,7 +72,8 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{block_size};
+    const uint32_t Wt_out = output.padded_shape()[-1] / tt::constants::TILE_WIDTH;  // output row stride (>= Wt)
+    std::vector<uint32_t> writer_ct_args{block_size, geometry.blocks_per_row, Wt_out};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
 

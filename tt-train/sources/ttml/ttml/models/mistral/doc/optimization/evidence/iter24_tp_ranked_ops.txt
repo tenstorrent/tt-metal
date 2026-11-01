@@ -1,0 +1,4 @@
+chip 0: 0 steps, 0.00 ms kernels per profiled step; classes:
+   ms/step   ops  op | in0 | in1 | cores
+chip 2: 0 steps, 0.00 ms kernels per profiled step; classes:
+   ms/step   ops  op | in0 | in1 | cores

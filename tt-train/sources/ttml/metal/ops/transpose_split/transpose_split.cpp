@@ -9,8 +9,8 @@
 namespace ttml::metal {
 
 std::vector<ttnn::Tensor> transpose_split(
-    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale) {
-    auto [dx, tail] = ttnn::prim::ttml_transpose_split(input, rows, tail_rows, tail_scale);
+    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale, uint32_t dx_cols) {
+    auto [dx, tail] = ttnn::prim::ttml_transpose_split(input, rows, tail_rows, tail_scale, dx_cols);
     return {dx, tail};
 }
 

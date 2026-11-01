@@ -39,7 +39,8 @@ struct SkinnyMatmulReduceDeviceOperation {
 // Geometry shared by the host code: N tiles of the output and K tiles.
 struct SkinnyGeometry {
     uint32_t rows = 0;  // B * C * Mt
-    uint32_t Kt = 0;
+    uint32_t Kt = 0;    // K tiles of the product (w's K)
+    uint32_t Kx = 0;    // x row stride in tiles (x may be wider than K: the wide LoRA input buffer)
     uint32_t Nt = 0;
     uint32_t n_logical = 0;
 };
@@ -60,6 +61,9 @@ ttnn::Tensor ttml_skinny_matmul_reduce(
     const ttnn::Tensor& w,
     const ttnn::Tensor& partials,
     const ttml::metal::ops::skinny_matmul::device::SkinnySplit& split,
-    bool transpose_b);
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& tail_out = std::nullopt,
+    uint32_t tail_col = 0,
+    uint32_t tail_tiles = 0);
 
 }  // namespace ttnn::prim

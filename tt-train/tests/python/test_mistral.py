@@ -663,6 +663,61 @@ def test_lora_linear_forward_and_gradients_frozen_base():
     assert not layer.weight.tensor.is_grad_initialized(), "frozen base weight received a gradient"
 
 
+def test_mlp_fused_lora_wide_w2():
+    """The fused-LoRA wide input path (iteration 24): an MLP at the TP=4 shard width (w2: 8192 -> 5120, a
+    transposed shape) with LoRA on both linears, fused. SwiGLU writes the [T, 8192 + 64] buffer, h goes into
+    its tail (no concat / pad), the wide gradient flows back through transpose_split, lowrank_update and the
+    SwiGLU backward. Output, dx and every adapter gradient vs torch; the hook must be installed."""
+    rng = seeded(9)
+    inter = 8192
+    x_np = rand_x(rng)
+    w_gu = rand_weight(rng, 2 * inter, HIDDEN)
+    w2 = rand_weight(rng, HIDDEN, inter, std=0.004)
+    dout_np = rand_x(rng, std=0.01)
+    shapes = {"w_gate_up": (HIDDEN, 2 * inter), "w2": (inter, HIDDEN)}
+    adapters = {
+        name: (
+            bf16(rng.uniform(-1 / math.sqrt(i), 1 / math.sqrt(i), (1, 1, RANK, i))),
+            bf16(rng.normal(0.0, 0.02, (1, 1, o, RANK))),
+        )
+        for name, (i, o) in shapes.items()
+    }
+    mlp = LlamaMLP(HIDDEN, inter)
+    assign(mlp.w_gate_up.weight.tensor, w_gu)
+    assign(mlp.w2.weight.tensor, w2)
+    lora = LoraModel(mlp, LoraConfig(rank=RANK, alpha=ALPHA, target_modules=[r"w_gate_up$", r"w2$"]))
+    layers = {"w_gate_up": mlp.w_gate_up, "w2": mlp.w2}
+    for name, layer in layers.items():
+        assert isinstance(layer, LoraLinear), name
+        assign(layer.lora_A.tensor, adapters[name][0])
+        assign(layer.lora_B.tensor, adapters[name][1])
+    converted = transpose_frozen_weights(lora)
+    fused = fuse_lora_into_frozen_weights(lora)
+    assert sorted(fused) == ["model.w2", "model.w_gate_up"], (converted, fused)
+    assert getattr(mlp, "swiglu_op", None) is not None, "the wide SwiGLU hook was not installed on the MLP"
+    x = to_device(x_np, requires_grad=True)
+    out = lora(x)
+    out_val = to_host(out)
+    _backward(out, dout_np)
+
+    s = ALPHA / RANK
+    A = {k: t(v[0][0, 0], True) for k, v in adapters.items()}
+    Bm = {k: t(v[1][0, 0], True) for k, v in adapters.items()}
+    xr = t(x_np, True)
+    gu = ref_lora(xr, t(w_gu[0, 0]), A["w_gate_up"], Bm["w_gate_up"], s)
+    gate, up = gu[..., :inter], gu[..., inter:]
+    ref = ref_lora(torch.nn.functional.silu(gate) * up, t(w2[0, 0]), A["w2"], Bm["w2"], s)
+    ref.backward(t(dout_np))
+
+    rep = Report("mlp, fused LoRA, wide w2 input (no K-concat)")
+    rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("dx", grad_of(x), xr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    for name, layer in layers.items():
+        rep.check(f"dA {name}", grad_of(layer.lora_A.tensor)[0, 0], A[name].grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check(f"dB {name}", grad_of(layer.lora_B.tensor)[0, 0], Bm[name].grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+
+
 @pytest.mark.parametrize(
     "transposed",
     ["plain", "transposed", "fused"],

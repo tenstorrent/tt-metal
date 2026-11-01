@@ -37,7 +37,12 @@ void LowrankUpdateDeviceOperation::validate_on_program_cache_miss(
     const uint32_t wN = args.transpose_b ? ws[2] : ws[3];
     TT_FATAL(K >= 1 && K <= tt::constants::TILE_WIDTH, "LowrankUpdate: K must be <= 32, got {}", K);
     TT_FATAL(wK == K, "LowrankUpdate: K of a ({}) and w ({}) differ (transpose_b={})", K, wK, args.transpose_b);
-    TT_FATAL(wN == as[3], "LowrankUpdate: N of w ({}) and acc ({}) differ", wN, as[3]);
+    // acc may be wider than w's N (the wide LoRA input buffer's gradient): its columns past N are copied as is.
+    TT_FATAL(
+        wN % tt::constants::TILE_WIDTH == 0 && wN <= as[3],
+        "LowrankUpdate: N of w ({}) must be a multiple of 32 and at most acc's width ({})",
+        wN,
+        as[3]);
     TT_FATAL(
         a.padded_shape()[3] == tt::constants::TILE_WIDTH &&
             (args.transpose_b ? w.padded_shape()[3] : w.padded_shape()[2]) == tt::constants::TILE_WIDTH,

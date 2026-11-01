@@ -42,7 +42,9 @@ TransposeSplitProgramFactory::cached_program_t TransposeSplitProgramFactory::cre
 
     const uint32_t Tt = input.padded_shape()[3] / tt::constants::TILE_WIDTH;
     const uint32_t rows_t = args.rows / tt::constants::TILE_HEIGHT;
-    const uint32_t dx_items = Tt * rows_t;
+    const uint32_t dxt =
+        (args.dx_cols != 0 ? args.dx_cols : args.rows) / tt::constants::TILE_HEIGHT;  // dx tile columns
+    const uint32_t dx_items = Tt * dxt;
     const uint32_t total_items = dx_items + Tt;
     const auto grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
@@ -56,7 +58,7 @@ TransposeSplitProgramFactory::cached_program_t TransposeSplitProgramFactory::cre
     const uint32_t scale_bits = std::bit_cast<uint32_t>(args.tail_scale);
     std::map<std::string, std::string> defines;
 
-    std::vector<uint32_t> reader_ct_args{Tt, rows_t, dx_items};
+    std::vector<uint32_t> reader_ct_args{Tt, rows_t, dx_items, dxt};
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
     auto reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -54,6 +55,11 @@ struct Params {
     uint32_t rows_per_item = 4;
     uint32_t num_slices = 1;
     uint32_t slice_tiles = 1;
+    // REDUCE with a tail target: the output tiles are also written into `tail_out` at tile column tail_col
+    // (and zero tiles fill columns tail_col + Nt .. tail_col + tail_tiles): the fused LoRA h into the wide input
+    // buffer's tail (iteration 24).
+    uint32_t tail_col = 0;
+    uint32_t tail_tiles = 0;
 };
 
 struct PartialInputs {
@@ -65,6 +71,7 @@ struct ReduceInputs {
     ttnn::Tensor x;  // shape / memory config of the output
     ttnn::Tensor w;
     ttnn::Tensor partials;  // phase-A output [1, 1, rows*32, num_slices*Nt*32] fp32
+    std::optional<ttnn::Tensor> tail_out = std::nullopt;  // written in place at tile column tail_col (see Params)
 };
 
 namespace partial {

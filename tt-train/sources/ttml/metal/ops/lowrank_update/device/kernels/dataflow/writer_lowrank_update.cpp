@@ -10,8 +10,9 @@
 namespace cb = lowrank_update_cb;
 
 constexpr uint32_t Mt = get_compile_time_arg_val(0);
-constexpr uint32_t Nt = get_compile_time_arg_val(1);
-constexpr auto out_args = TensorAccessorArgs<2>();
+constexpr uint32_t Nt = get_compile_time_arg_val(1);  // output columns (w's N) in tiles: the item space
+constexpr uint32_t Na = get_compile_time_arg_val(2);  // out row stride in tiles (>= Nt)
+constexpr auto out_args = TensorAccessorArgs<3>();
 
 void kernel_main() {
     uint32_t arg = 0;
@@ -29,7 +30,7 @@ void kernel_main() {
         const uint32_t n = rem / Mt;
         const uint32_t r = rem - n * Mt;
         cb_wait_front(cb::out, 1);
-        noc_async_write_page(image * per_image + r * Nt + n, out_acc, get_read_ptr(cb::out));
+        noc_async_write_page(image * Mt * Na + r * Na + n, out_acc, get_read_ptr(cb::out));
         noc_async_write_barrier();
         cb_pop_front(cb::out, 1);
     }

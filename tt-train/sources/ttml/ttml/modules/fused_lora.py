@@ -37,9 +37,15 @@ from .frozen_linear import (
     full_core_grid,
     local_in_out,
 )
-from .lora import lowrank_update, skinny_contract, skinny_matmul
+from .lora import lowrank_update, skinny_contract, skinny_matmul, skinny_matmul_fits
 
-__all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "reduce_partial_lora_grads", "TAIL_ROWS"]
+__all__ = [
+    "FusedLoraLinearT",
+    "SwigluPackedWide",
+    "fuse_lora_into_frozen_weights",
+    "reduce_partial_lora_grads",
+    "TAIL_ROWS",
+]
 
 # Two tile rows: the first holds s * B^T (rank 16, zero-padded to 32), the second stays zero. K then grows by two
 # tiles (162 for in = 5120), which ttnn's block heuristic handles like 160; one extra tile (161, prime) cost 5 % on
@@ -87,12 +93,26 @@ class FusedLoraLinearT(Function):
         if rank != 32:
             bt = ttnn.pad(bt, padding=[(0, 0), (0, 0), (0, 32 - rank), (0, 0)], value=0.0)
         write_tail(w_val, bt, in_features)
-        h = skinny_matmul(x_val, a_val, transpose_b=True)  # [T, rank], K split over the cores (iteration 10)
-        if h_reduce_axis is not None:  # row-parallel: A is sharded on in, h is a partial sum
-            h = ttml.core.distributed.all_reduce(h, h_reduce_axis)
-        h_pad = ttnn.pad(h, padding=[(0, 0), (0, 0), (0, 0), (0, TAIL_ROWS - rank)], value=0.0)
-        x_cat = ttnn.concat([x_val, h_pad], dim=3)  # [T, in + TAIL_ROWS]
-        ttnn.deallocate(h_pad)
+        # Wide input (iteration 24): the producer (SwiGLU) wrote x into a [T, in + TAIL_ROWS] buffer, so h goes
+        # straight into its tail (zero-padded to TAIL_ROWS) and the K-concat and pad disappear. Otherwise the
+        # concat path.
+        wide = (
+            int(x_val.shape[-1]) == in_features + TAIL_ROWS
+            and h_reduce_axis is None
+            and skinny_matmul_fits(in_features, rank, a_val)
+        )
+        if wide:
+            h = skinny_matmul(
+                x_val, a_val, transpose_b=True, tail_out=x_val, tail_col=in_features // 32, tail_tiles=TAIL_ROWS // 32
+            )
+            x_cat = x_val
+        else:
+            h = skinny_matmul(x_val, a_val, transpose_b=True)  # [T, rank], K split over the cores (iteration 10)
+            if h_reduce_axis is not None:  # row-parallel: A is sharded on in, h is a partial sum
+                h = ttml.core.distributed.all_reduce(h, h_reduce_axis)
+            h_pad = ttnn.pad(h, padding=[(0, 0), (0, 0), (0, 0), (0, TAIL_ROWS - rank)], value=0.0)
+            x_cat = ttnn.concat([x_val, h_pad], dim=3)  # [T, in + TAIL_ROWS]
+            ttnn.deallocate(h_pad)
         y = ttnn.matmul(
             x_cat,
             w_val,
@@ -100,14 +120,14 @@ class FusedLoraLinearT(Function):
             **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2], k=x_cat.shape[-1]),
         )
         ctx.save_for_backward(x_val, a_val, h, w_val)
-        ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis)
+        ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide)
         return y
 
     @staticmethod
     def backward(ctx, grad_output):
         x_val, a_val, h, w_val = ctx.saved_tensors
         ctx.save_for_backward()
-        scaling, in_features, out_features, rank, dh_scale, reduce_axis = ctx.meta
+        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide = ctx.meta
         cfg = _compute_config()
         # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
         dcat_t = ttnn.matmul(
@@ -119,15 +139,57 @@ class FusedLoraLinearT(Function):
         )
         # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
         # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
-        dx, s_dh = ttml.ops.metal.transpose_split(dcat_t, in_features, rank, dh_scale)
+        # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
+        # producer's backward never reads) so the autograd shapes match; lowrank_update takes the wider acc.
+        dx, s_dh = ttml.ops.metal.transpose_split(
+            dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0
+        )
         ttnn.deallocate(dcat_t)
         # dx += (s dh) @ A ; dB = s * g^T h ; dA = (s dh)^T x (dh all-reduced first when B is column-sharded)
         dx = lowrank_update(dx, s_dh, a_val)
         grad_b = skinny_contract(h, grad_output, scaling, transpose_out=True)  # s * g^T h -> [out, r]
         if reduce_axis is not None:
             s_dh = ttml.core.distributed.all_reduce(s_dh, reduce_axis)
-        grad_a = skinny_contract(s_dh, x_val)  # (s dh)^T x -> [r, in]
+        grad_a = skinny_contract(s_dh, x_val)  # (s dh)^T x -> [r, in] (+ the tail columns when x is wide)
+        if wide:
+            grad_a = ttnn.slice(grad_a, [0, 0, 0, 0], [1, 1, rank, in_features], [1, 1, 1, 1])
         return dx, None, grad_a, grad_b
+
+
+class SwigluPackedWide(Function):
+    """``silu(gate) * up`` written into a ``[.., R, out_cols]`` buffer (``out_cols = I + TAIL_ROWS``): the wide input
+    of a fused LoRA ``w2`` (iteration 24). The backward takes the wide gradient and reads its first ``I`` columns."""
+
+    @staticmethod
+    def forward(ctx, packed, out_cols):
+        p = packed.get_value()
+        ctx.save_for_backward(p)
+        return ttml.ops.metal.swiglu_packed_fw(p, None, out_cols)
+
+    @staticmethod
+    def backward(ctx, grad_h):
+        (p,) = ctx.saved_tensors
+        ctx.save_for_backward()
+        return ttml.ops.metal.swiglu_packed_bw(p, grad_h)  # one gradient: `out_cols` is not a tensor
+
+
+def _install_wide_swiglu(model, w2_names: set[str]) -> list[str]:
+    """Give every MLP whose ``w2`` is a fused wrapper on the wide path a ``swiglu_op`` that writes its output into
+    the ``[T, in + TAIL_ROWS]`` buffer ``FusedLoraLinearT`` expects (``MLP.forward`` honours the hook)."""
+    installed: list[str] = []
+    for name, module in model.named_modules():
+        w2 = getattr(module, "w2", None)
+        w2_name = f"{name}.w2" if name else "w2"
+        if w2 is None or w2_name not in w2_names:
+            continue
+        out_cols = int(w2.frozen_shape[0]) + TAIL_ROWS
+
+        def swiglu_op(gu, out_cols=out_cols):
+            return SwigluPackedWide.apply(gu, out_cols)
+
+        module.swiglu_op = swiglu_op
+        installed.append(w2_name)
+    return installed
 
 
 def fused_lora_linear_t(
@@ -159,9 +221,10 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
     :func:`reduce_partial_lora_grads` sums over the TP axis in two collectives per step. This marks every TP LoRA
     wrapper, fused or on the composite adapter (the shapes not on the transposed path). The training step must
     call it after the backward and before the optimizer step."""
-    from .lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear
+    from .lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear, skinny_matmul_fits
 
     converted: list[str] = []
+    wide_w2: set[str] = set()
     for name, module in model.named_modules():
         if not isinstance(module, (LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear)):
             continue
@@ -185,6 +248,19 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
         ttnn.deallocate(zeros)
         module.lora_fused = True
         converted.append(name)
+        # The wide input path (iteration 24) needs h unreduced on the rank: every wrapper but a row-parallel one
+        # without the batched gradients (that one all-reduces h before the tail).
+        if (
+            name.endswith(".w2")
+            and (not isinstance(module, LoraRowParallelLinear) or getattr(module, "tp_partial_grads", None))
+            and skinny_matmul_fits(
+                int(module.frozen_shape[0]),
+                int(module.lora_B.tensor.get_value().shape[-1]),
+                module.lora_A.tensor.get_value(),
+            )
+        ):
+            wide_w2.add(name)
+    _install_wide_swiglu(model, wide_w2)
     return converted
 
 

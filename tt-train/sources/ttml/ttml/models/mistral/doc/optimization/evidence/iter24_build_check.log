@@ -1,0 +1,26 @@
+=== build _ttml 2026-11-01T10:31:26Z
+build rc=0
+=== wide path check 2026-11-01T10:31:38Z
+check rc=0
+forward
+  swiglu wide [1, 1, 1024, 8256]
+    swiglu out (first I cols): max|diff| 0.000e+00 differing 0/8388608
+    h: max|diff| 0.000e+00 differing 0/16384
+    tail h: max|diff| 0.000e+00 differing 0/16384
+    tail zeros: max|diff| 0.000e+00 differing 0/49152
+    x part untouched: max|diff| 0.000e+00 differing 0/8388608
+    y: max|diff| 0.000e+00 differing 0/5242880
+backward
+  dx wide [1, 1, 1024, 8256]
+    dx (first I cols): max|diff| 0.000e+00 differing 0/8388608
+    s_dh: max|diff| 0.000e+00 differing 0/16384
+    dx tail = unscaled tail rows^T: max|diff| 0.000e+00 differing 0/65536
+    lowrank_update (first I cols): max|diff| 0.000e+00 differing 0/8388608
+    swiglu bw from the wide grad: max|diff| 0.000e+00 differing 0/16777216
+cost
+  us: pad+concat 101 | skinny 68 -> tail-write 67 | swiglu 136 -> wide 140 | transpose_split 86 -> wide 86
+WIDE PATH PASS
+=== fused-LoRA harness subset 2026-11-01T10:31:45Z
+tests rc=0
+================= 7 passed, 40 deselected in 98.44s (0:01:38) ==================
+=== done 2026-11-01T10:33:26Z

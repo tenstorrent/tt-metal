@@ -49,7 +49,13 @@ void validate_inputs(const Params& args, const ttnn::Tensor& x, const ttnn::Tens
     const uint32_t K = xs[3];
     TT_FATAL(K % tt::constants::TILE_WIDTH == 0, "SkinnyMatmul: K must be a multiple of 32, got {}", K);
     const uint32_t wK = args.transpose_b ? ws[3] : ws[2];
-    TT_FATAL(wK == K, "SkinnyMatmul: K of x ({}) and w ({}) differ (transpose_b={})", K, wK, args.transpose_b);
+    // x may be wider than w's K (the first wK columns are the product's K, the rest is the wide LoRA buffer's tail).
+    TT_FATAL(
+        wK % tt::constants::TILE_WIDTH == 0 && wK <= K,
+        "SkinnyMatmul: K of w ({}) must be a multiple of 32 and at most x's width ({}) (transpose_b={})",
+        wK,
+        K,
+        args.transpose_b);
     const auto geo = skinny_geometry(x, w, args.transpose_b);
     TT_FATAL(geo.Nt >= 1 && geo.Nt <= 2, "SkinnyMatmul: N must be <= 64 (got {} columns)", geo.n_logical);
     TT_FATAL(args.rows_per_item >= 1 && args.num_slices >= 1 && args.slice_tiles >= 1, "SkinnyMatmul: bad split");
@@ -68,7 +74,8 @@ SkinnyGeometry skinny_geometry(const ttnn::Tensor& x, const ttnn::Tensor& w, boo
     const auto& wp = w.padded_shape();
     SkinnyGeometry g;
     g.rows = xp[0] * xp[1] * (xp[2] / tt::constants::TILE_HEIGHT);
-    g.Kt = xp[3] / tt::constants::TILE_WIDTH;
+    g.Kt = (transpose_b ? wp[3] : wp[2]) / tt::constants::TILE_WIDTH;
+    g.Kx = xp[3] / tt::constants::TILE_WIDTH;
     g.Nt = (transpose_b ? wp[2] : wp[3]) / tt::constants::TILE_WIDTH;
     g.n_logical = transpose_b ? w.logical_shape()[2] : w.logical_shape()[3];
     return g;
@@ -119,6 +126,23 @@ void SkinnyMatmulReduceDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(args, tensor_args.x, tensor_args.w);
     check_tensor(tensor_args.partials, "partials", tt::tt_metal::DataType::FLOAT32);
     const auto geo = skinny_geometry(tensor_args.x, tensor_args.w, args.transpose_b);
+    if (tensor_args.tail_out.has_value()) {
+        const auto& t = *tensor_args.tail_out;
+        check_tensor(t, "tail_out", tt::tt_metal::DataType::BFLOAT16);
+        const auto& tp = t.padded_shape();
+        const uint32_t t_rows = tp[0] * tp[1] * (tp[2] / tt::constants::TILE_HEIGHT);
+        const uint32_t t_cols = tp[3] / tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            t_rows == geo.rows && args.tail_tiles >= geo.Nt && args.tail_col + args.tail_tiles <= t_cols,
+            "SkinnyMatmul: tail_out {} must have the x rows and tile columns tail_col {} + tail_tiles {} <= {} (Nt {})",
+            tp,
+            args.tail_col,
+            args.tail_tiles,
+            t_cols,
+            geo.Nt);
+    } else {
+        TT_FATAL(args.tail_tiles == 0, "SkinnyMatmul: tail_tiles without tail_out");
+    }
     const auto& ps = tensor_args.partials.logical_shape();
     TT_FATAL(
         ps.rank() == 4 && ps[2] == geo.rows * tt::constants::TILE_HEIGHT &&
@@ -149,7 +173,13 @@ reduce::tensor_return_value_t SkinnyMatmulReduceDeviceOperation::create_output_t
 ttsl::hash::hash_t SkinnyMatmulReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<SkinnyMatmulReduceDeviceOperation>(
-        args.transpose_b, args.num_slices, tensor_args.x.logical_shape(), tensor_args.w.logical_shape());
+        args.transpose_b,
+        args.num_slices,
+        args.tail_col,
+        args.tail_tiles,
+        tensor_args.x.logical_shape(),
+        tensor_args.w.logical_shape(),
+        tensor_args.tail_out.has_value() ? tensor_args.tail_out->padded_shape() : ttnn::Shape{});
 }
 
 }  // namespace ttml::metal::ops::skinny_matmul::device
@@ -176,14 +206,19 @@ ttnn::Tensor ttml_skinny_matmul_reduce(
     const ttnn::Tensor& w,
     const ttnn::Tensor& partials,
     const ttml::metal::ops::skinny_matmul::device::SkinnySplit& split,
-    bool transpose_b) {
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& tail_out,
+    uint32_t tail_col,
+    uint32_t tail_tiles) {
     using OperationType = ttml::metal::ops::skinny_matmul::device::SkinnyMatmulReduceDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .transpose_b = transpose_b,
         .rows_per_item = split.rows_per_item,
         .num_slices = split.num_slices,
-        .slice_tiles = split.slice_tiles};
-    auto tensor_args = OperationType::tensor_args_t{.x = x, .w = w, .partials = partials};
+        .slice_tiles = split.slice_tiles,
+        .tail_col = tail_col,
+        .tail_tiles = tail_tiles};
+    auto tensor_args = OperationType::tensor_args_t{.x = x, .w = w, .partials = partials, .tail_out = tail_out};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

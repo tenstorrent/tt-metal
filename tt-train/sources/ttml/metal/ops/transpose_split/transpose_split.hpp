@@ -13,6 +13,6 @@ namespace ttml::metal {
 // [1, 1, T, tail_rows]. One pass over the input (one tile transpose per output tile) in place of the two slices
 // and two transposes of the fused LoRA backward's `[in + TAIL, T]` product.
 std::vector<ttnn::Tensor> transpose_split(
-    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale = 1.0F);
+    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale = 1.0F, uint32_t dx_cols = 0);
 
 }  // namespace ttml::metal

@@ -28,6 +28,6 @@ struct TransposeSplitDeviceOperation {
 namespace ttnn::prim {
 
 ttml::metal::ops::transpose_split::device::tensor_return_value_t ttml_transpose_split(
-    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale);
+    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale, uint32_t dx_cols = 0);
 
 }  // namespace ttnn::prim

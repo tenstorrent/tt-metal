@@ -17,5 +17,6 @@ constexpr uint32_t partial_out = 2;  // [2*Nt] fp32 partial products of one row
 // Phase B
 constexpr uint32_t partials = 3;  // [2*S] fp32 the slices of one (row, n)
 constexpr uint32_t out = 4;       // [2] bf16
+constexpr uint32_t zero = 5;      // [1] bf16 zero tile (REDUCE writer, tail columns past N)
 
 }  // namespace skinny_matmul_cb
