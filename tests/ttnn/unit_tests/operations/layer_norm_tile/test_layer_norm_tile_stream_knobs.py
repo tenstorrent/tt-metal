@@ -41,9 +41,8 @@ def test_stream_knobs(device, monkeypatch, knobs, shape, buf, with_residual):
     run_and_check(device, shape, with_residual=with_residual, input_buf=buf, output_buf=buf)
 
 
-# Compute knobs (Refinement 2): the parked fused normalize/affine pass and single-lane passes.
+# Compute knobs (Refinement 2): non-default DEST lanes per acquire.
 COMPUTE_KNOBS = {
-    "fused_affine": dict(FUSE_NORMALIZE_AFFINE=True),
     "one_dest_lane": dict(COMPUTE_DEST_LANES=1),
     "three_dest_lanes": dict(COMPUTE_DEST_LANES=3),
 }

@@ -26,3 +26,27 @@ def test_perf_case(device, case):
     case = dict(case)
     inputs = case.pop("inputs")
     run_layer_norm(inputs, device=device, **case)
+
+
+# Guard set: one representative per remaining path (DEST mode, h_non_aligned, sub-tile S, few cores).
+_FOCUS1 = PERF_CASES[0]
+GUARD_CASES = {
+    "focus1_bf16dest": dict(_FOCUS1, fp32_dest_acc_en=False),
+    "3x500_inL1_resDRAM": next(c for c in LOOSE_CASES if c["inputs"] == ((3, 1, 500, 768),)),
+    "64x17_allDRAM_nores_affTILE": dict(
+        _FOCUS1,
+        inputs=((64, 1, 17, 768),),
+        residual="no_residual",
+        buffer_type=PERF_CASES[2]["buffer_type"],
+        affine_layout=PERF_CASES[-1]["affine_layout"],
+        extras={"output_buffer_type": PERF_CASES[2]["buffer_type"]},
+    ),
+    "2x512_allL1_res": dict(PERF_CASES[3], inputs=((2, 1, 512, 768),)),
+}
+
+
+@pytest.mark.parametrize("case", list(GUARD_CASES.values()), ids=list(GUARD_CASES))
+def test_guard_case(device, case):
+    case = dict(case)
+    inputs = case.pop("inputs")
+    run_layer_norm(inputs, device=device, **case)
