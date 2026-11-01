@@ -2269,6 +2269,60 @@ tasks:
       acks_early: == 0
       pcc_producer_kv_*: '>= limit'
       smoke_runner_ok: == 1
+- id: P.26
+  title: 'WINDOW_KV_BF16: a 16-bit window KV switch (bf16_tiles) next to bfp8_tiles; contract window-KV checks also report relative error'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - K.1R
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-01: a switch between 8-bit and 16-bit window KV, to see what 16 bits buy and to have it ready
+      should it be needed; the default stays bfp8_tiles. (1) A setting value WINDOW_KV_FORMAT=bf16_tiles: the window
+      KV that sparse_sdpa reads exactly as P.18''s bfp8_tiles path (per-chip 288-row region of tiles, one neighbour send of
+      the last 128 rows, dense band read in the sparse_sdpa fork, non-chunk-aligned starts as today) but kept in bfloat16
+      tiles, with no rounding step. The old WINDOW_KV_FORMAT=bf16 (the row layout from before P.18) stays as it is. If
+      the sparse_sdpa fork''s band read needs a bf16 key option, add it behind an option with a test. Report the window
+      region''s memory per chip in both formats (bytes, from the buffers you allocate). (2) Diagnostics in the contract
+      tests (owner approves changing them for this): next to every window-KV PCC check in test_adapter_acks and
+      test_runner_contract (layer 20 per position, the layers 35 / 38 last block, nope and pe), also record the relative
+      L2 error (||device - ref|| / ||ref||) and, where the check compares with the golden, the official reference''s
+      relative error on the same rows (official window_kv.safetensors from FIX.19), as metrics err_* / err_*_official.
+      They are recorded, never gated; no limit changes, no fixed numbers (F138); the PCC checks and the waivers stay as
+      they are. Do not profile the model and do not run the A/B yourself (the orchestrator measures bfp8_tiles vs
+      bf16_tiles at 51200 / 512000 and runs the contract tests on both sides). Agent rules 18 / 19; device jobs over a
+      few minutes through devjob (start / wait), never killed. No fork regression suites; add tests only for what you add.'
+  ab:
+    env:
+      WINDOW_KV_FORMAT: bfp8_tiles
+      ENGRAM_TABLE: resident
+    change:
+      WINDOW_KV_FORMAT: bf16_tiles
+      ENGRAM_TABLE: resident
+  ab_mode: full
+  ab_rungs:
+  - last
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -2287,6 +2341,7 @@ tasks:
   - P.22
   - P.23
   - P.24
+  - P.26
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh

@@ -1256,3 +1256,14 @@ Pointers: opportunities report /scratch/dnijemcevic/opportunities/report.md, tok
 position profiles in runs/run1/ab/P.*/(old|new)/p51200|p512000; FIX.17 numbers /scratch/dnijemcevic/fix17;
 FIX.18 evidence /scratch/dnijemcevic/fix18 + known_issues_detail DS41-192; KV handover page (v4)
 https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
+
+## 2026-11-01 overseer session (after compaction): numerics brainstorm, then P.26
+- Brainstorm notes: the device's err_state_window_kv reads the served bf16 copy (ring_host), the reference's state is its
+  fp8 _q8(kv), so the limit carries the reference's fp8 rounding (L00 share 0.08); window-KV L28 on rung last: bf16 era
+  (P.9) 0.1477, bfp8 (P.12) 0.1585, P.21 0.1447, P.23 0.1592. topk_idx L08 0.047 -> 0.155 at FIX.14 (bfp4 index keys).
+  Shares at calib 1.0 / 1.2 / 1.5 / 1.8: 87 / 78 / 34 / 2 of 99 fail.
+- OWNER: a switch 8 vs 16-bit window KV (speed, memory, accuracy at 50k / 500k + 5k chunk) and the contract checks in
+  relative error. Queued P.26 WINDOW_KV_BF16 (WINDOW_KV_FORMAT=bf16_tiles, default stays bfp8_tiles; contract tests
+  record err_* / err_*_official next to the window-KV PCC checks, ungated): ab_mode full, ab_rungs [last],
+  ab_positions 51200 / 512000, gate = ladder last + profile + acks + runner contract (the A/B runs both contract tests on
+  both sides). X.3 deps += P.26. Leak ~222 GiB before the run (reboot at ~250; this A/B ~10-15 GiB). Run --until P.26.
