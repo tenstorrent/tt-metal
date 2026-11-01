@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "cyclic_sdpa_bw_program_factory.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -315,8 +316,12 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // towards -x, -y), so a hop to a grid neighbour on the wrong NoC goes
     // round the torus. The relay chooses the NoC per hop; both data movement
     // kernels therefore run in dynamic NoC mode, where either may use either.
-    sync_defines["DIRECTIONAL_NOC"] = "1";
-    constexpr auto kNocMode = NOC_MODE::DM_DYNAMIC_NOC;
+    // TTML_CYCLIC_OWN_NOC=1 keeps each kernel on its own NoC (for A/B timing).
+    const bool own_noc = std::getenv("TTML_CYCLIC_OWN_NOC") != nullptr;
+    if (!own_noc) {
+        sync_defines["DIRECTIONAL_NOC"] = "1";
+    }
+    const auto kNocMode = own_noc ? NOC_MODE::DM_DEDICATED_NOC : NOC_MODE::DM_DYNAMIC_NOC;
     // The unmasked schedule: every block pair live, 2T timesteps in two
     // passes. All three kernels need it, since it changes the timestep count
     // and which pair each core takes; the compute kernel additionally stops

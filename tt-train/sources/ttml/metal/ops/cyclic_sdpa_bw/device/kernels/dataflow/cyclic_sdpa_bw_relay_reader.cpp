@@ -141,6 +141,17 @@
 #endif
 // Whether a DRAM access happens: never skipped in the op; at level 1 only
 // the reloads are skipped; at level 2 everything after timestep 0.
+// Timing experiments on top of DRAM_SKIP (movement-only runs; the gradients
+// are wrong under them): SKIP_RELOAD_READ drops the dQ read at a later
+// streak start (the one DRAM read on the packet's critical path that is not
+// prefetched); SKIP_SPILL_BARRIER leaves a streak-end spill in flight instead
+// of waiting for its acknowledgement before publishing the endpoint.
+#ifndef SKIP_RELOAD_READ
+#define SKIP_RELOAD_READ 0
+#endif
+#ifndef SKIP_SPILL_BARRIER
+#define SKIP_SPILL_BARRIER 0
+#endif
 constexpr bool dram_access(bool reload, uint32_t t) {
     return (DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !reload) || (DRAM_SKIP == 2 && t == 0u);
 }
@@ -157,6 +168,15 @@ constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
 #if defined(PROFILE_NOC_EVENTS)
 #undef DeviceZoneScopedN
 #define DeviceZoneScopedN(name)
+#endif
+
+// PROFILE_DRAM_ZONES: only the zones around DRAM traffic are compiled, so
+// that a whole launch's worth of them fits the per-core marker buffer (about
+// 250 markers a run) and their durations can be summed over a pass.
+#if defined(PROFILE_DRAM_ZONES)
+#define StepZoneScopedN(name)
+#else
+#define StepZoneScopedN(name) DeviceZoneScopedN(name)
 #endif
 
 void kernel_main() {
@@ -469,7 +489,7 @@ void kernel_main() {
         const bool prefetched_dq = prefetched_dq_next;
         prefetched_next = false;
         prefetched_dq_next = false;
-        DeviceZoneScopedN("RELAY-READER-STEP");
+        StepZoneScopedN("RELAY-READER-STEP");
         const auto pair = sched.pair(my_core, t);
         const uint32_t i = pair.i;
         const uint32_t j = pair.j;
@@ -547,7 +567,7 @@ void kernel_main() {
         // Reserve this timestep's slot in every packet buffer, which is the
         // release of t - 2 becoming a credit for whoever fills it.
         {
-            DeviceZoneScopedN("SLOT-RESERVE");
+            StepZoneScopedN("SLOT-RESERVE");
             if (!prefetched) {
                 cb_reserve_back(cb_query, row_tiles);
                 cb_reserve_back(cb_grad_output, val_tiles);
@@ -566,7 +586,7 @@ void kernel_main() {
             // Inside a streak: Q, dO, L and D arrive first, and they are all
             // the compute kernel needs to get as far as dS. The credit for
             // this slot was granted at its release, two timesteps back.
-            DeviceZoneScopedN("RECV-IMM");
+            StepZoneScopedN("RECV-IMM");
             WAYPOINT("RDYW");
             do {
                 invalidate_l1_cache();
@@ -588,6 +608,7 @@ void kernel_main() {
                 const uint64_t endpoint_addr =
                     get_noc_addr(endpoint_x, endpoint_y, get_semaphore(endpoint_sem_ids[e - 1u]));
                 WAYPOINT("ENDW");
+                DeviceZoneScopedN("ENDPOINT-WAIT");
                 if (e == my_core) {
                     // Its own word: a later streak of this row can be consumed
                     // on the endpoint itself, which is the case the paper's
@@ -657,7 +678,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("SEND-IMM");
+            StepZoneScopedN("SEND-IMM");
         if (receiver == my_core) {
             // The self-transition: reserving the destination slot is the
             // credit, and the copies are local.
@@ -753,7 +774,7 @@ void kernel_main() {
         // Now dQ, which is the one field that has to wait for arithmetic --
         // it is the accumulator each consumer adds to.
         if (producer.internal) {
-            DeviceZoneScopedN("RECV-DQ");
+            StepZoneScopedN("RECV-DQ");
             WAYPOINT("DQRW");
             do {
                 invalidate_l1_cache();
@@ -761,7 +782,8 @@ void kernel_main() {
             WAYPOINT("DQRD");
         } else {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
-            if (!prefetched_dq && dram_access(sched.is_later_streak_start(i, t), t)) {
+            if (!prefetched_dq && dram_access(sched.is_later_streak_start(i, t), t) &&
+                !(SKIP_RELOAD_READ && sched.is_later_streak_start(i, t))) {
                 for (uint32_t k = 0; k < row_tiles; ++k) {
                     noc_async_read_page(row_base + (i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
                 }
@@ -773,13 +795,13 @@ void kernel_main() {
 
         // This core's contribution closes the packet.
         {
-            DeviceZoneScopedN("WAIT-COMPUTE-DQ");
+            StepZoneScopedN("WAIT-COMPUTE-DQ");
             cb_wait_front(cb_grad_query_out, row_tiles);
         }
         const uint32_t dq_out = get_read_ptr(cb_grad_query_out);
 
         {
-            DeviceZoneScopedN("SEND-DQ");
+            StepZoneScopedN("SEND-DQ");
         if (receiver == my_core) {
             noc_async_write(dq_out, get_noc_addr(dst_grad_query), stride_grad_query);
             noc_async_write_barrier();
@@ -802,10 +824,13 @@ void kernel_main() {
             // the next streak start observes it. (An inter-streak spill is a
             // reload's other half for DRAM_SKIP.)
             if (dram_access(sched.has_later_active(i, t), t)) {
+                DeviceZoneScopedN("SPILL-DQ");
                 for (uint32_t k = 0; k < row_tiles; ++k) {
                     noc_async_write_page(row_base + (i - 1u) * row_tiles + k, grad_query, dq_out + k * grad_bytes);
                 }
-                noc_async_write_barrier();
+                if (!SKIP_SPILL_BARRIER) {
+                    noc_async_write_barrier();
+                }
             }
 #if ENDPOINT_SYNC
             // An inter-streak spill certifies itself for the later streak's
@@ -830,7 +855,7 @@ void kernel_main() {
         // and it is what lets a producer forward as soon as its payload is
         // ready instead of waiting for its receiver to arrive.
         {
-            DeviceZoneScopedN("RELEASE");
+            StepZoneScopedN("RELEASE");
             cb_wait_front(cb_slot_release, 1);
             cb_pop_front(cb_slot_release, 1);
             const uint32_t released_for = t + 2u;

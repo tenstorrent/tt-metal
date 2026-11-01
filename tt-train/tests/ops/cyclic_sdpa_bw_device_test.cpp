@@ -3934,6 +3934,22 @@ Gradients run_transport(
     if (!cfg.stat_work) {
         dataflow_defines["NO_STAT_WORK"] = "1";
     }
+    // TRANSPORT_PROFILE_DRAM: compile only the DRAM zones of the relay
+    // kernels, so a whole pass of them fits the profiler's marker buffer.
+    if (std::getenv("TRANSPORT_PROFILE_DRAM") != nullptr) {
+        dataflow_defines["PROFILE_DRAM_ZONES"] = "1";
+    }
+    // TRANSPORT_EXTRA_DEFINES="A=1;B=2": further defines for the dataflow kernels.
+    if (const char* extra = std::getenv("TRANSPORT_EXTRA_DEFINES"); extra != nullptr) {
+        std::stringstream ss(extra);
+        std::string item;
+        while (std::getline(ss, item, ';')) {
+            const auto eq = item.find('=');
+            if (eq != std::string::npos && eq > 0) {
+                dataflow_defines[item.substr(0, eq)] = item.substr(eq + 1);
+            }
+        }
+    }
     if (!cfg.dram) {
         dataflow_defines["ENDPOINT_SYNC"] = "1";
         if (cfg.dram_skip != 0) {
@@ -4252,7 +4268,11 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
         std::stringstream ss(only);
         std::string token;
         while (std::getline(ss, token, ',')) {
-            if (!token.empty() && name.find(token) != std::string::npos) {
+            // A token starting with '=' names one variant exactly.
+            if (!token.empty() && token[0] == '=' && name == token.substr(1)) {
+                return true;
+            }
+            if (!token.empty() && token[0] != '=' && name.find(token) != std::string::npos) {
                 return true;
             }
         }

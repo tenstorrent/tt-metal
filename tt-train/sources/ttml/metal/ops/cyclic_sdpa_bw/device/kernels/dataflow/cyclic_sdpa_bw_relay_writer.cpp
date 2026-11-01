@@ -85,6 +85,15 @@ constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
 #define DeviceZoneScopedN(name)
 #endif
 
+// PROFILE_DRAM_ZONES: only the zones around DRAM traffic are compiled, so
+// that a whole launch's worth of them fits the per-core marker buffer (about
+// 250 markers a run) and their durations can be summed over a pass.
+#if defined(PROFILE_DRAM_ZONES)
+#define StepZoneScopedN(name)
+#else
+#define StepZoneScopedN(name) DeviceZoneScopedN(name)
+#endif
+
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
@@ -171,7 +180,7 @@ void kernel_main() {
     // The row tiles are written in row 0 only, the remainder columns in
     // column 0 only, by this thread alone: zero them once.
     {
-        DeviceZoneScopedN("WRITER-INIT");
+        StepZoneScopedN("WRITER-INIT");
         // The zero tile (the fence buffer's page, never written by anyone
         // else) by RISC stores, then the statistic tiles zeroed from it
         // through the NOC -- only row 0 of each is ever written by this
@@ -229,16 +238,16 @@ void kernel_main() {
         // ahead of the reader. Before the column-gradient writes below, which
         // wait on the compute kernel and so must not hold this up.
         {
-            DeviceZoneScopedN("STAT-ROWS");
+            StepZoneScopedN("STAT-ROWS");
             const uint32_t slot = g % 2u;
             const uint32_t block = base_block + slot * stride_block;
             if (!sched.producer(my_core, t).internal) {
                 {
-                    DeviceZoneScopedN("STAT-WAIT-DRAM");
+                    StepZoneScopedN("STAT-WAIT-DRAM");
                     cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
                 }
                 invalidate_l1_cache();
-                DeviceZoneScopedN("STAT-GATHER");
+                StepZoneScopedN("STAT-GATHER");
 #if !NO_STAT_WORK
                 for (uint32_t k = 0; k < Bt; ++k) {
                     cyclic_dataflow::gather_statistic_block(
@@ -253,7 +262,7 @@ void kernel_main() {
                 cb_reserve_back(cyclic_dataflow::kStatsDoneCb, 1);
                 cb_push_back(cyclic_dataflow::kStatsDoneCb, 1);
             } else {
-                DeviceZoneScopedN("STAT-WAIT-FWD");
+                StepZoneScopedN("STAT-WAIT-FWD");
                 WAYPOINT("STRW");
                 do {
                     invalidate_l1_cache();
@@ -261,7 +270,7 @@ void kernel_main() {
                 WAYPOINT("STRD");
             }
             {
-            DeviceZoneScopedN("STAT-EXPAND");
+            StepZoneScopedN("STAT-EXPAND");
             cb_reserve_back(cb_lse_row, Bt);
             cb_reserve_back(cb_u_row, Bt);
             cb_reserve_back(cb_lse_rem, Bt);
@@ -300,8 +309,13 @@ void kernel_main() {
             for (uint32_t u = t + 1u; u < kTimesteps; ++u) {
                 revisited |= (sched.pair(my_core, u).j == pair.j);
             }
-            const bool write_back = (DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !revisited);
+#ifndef SKIP_COL_WRITEBACK
+#define SKIP_COL_WRITEBACK 0
+#endif
+            // SKIP_COL_WRITEBACK: a timing experiment, no column write-backs at all.
+            const bool write_back = !SKIP_COL_WRITEBACK && ((DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !revisited));
             if (write_back) {
+                DeviceZoneScopedN("WRITE-COL");
                 write_tiles_by_row(cb_grad_value, grad_value, val_base + (pair.j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
                 write_tiles_by_row(cb_grad_key, grad_key, row_base + (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
             } else {
