@@ -721,6 +721,8 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: llk-perf-gate-verdict-*
+          # One match or two, the files land in verdicts/ the same way.
+          merge-multiple: true
           path: verdicts
       - name: Check the blocking arches
         env:
@@ -733,33 +735,62 @@ jobs:
             echo "::error::No blocking arch in the thresholds; the gate cannot decide."
             exit 1
           fi
-          FAIL=0
+          # Each verdict file is "<exit code> <kind>", kind: pass, regression, incomplete or no-compare.
+          KINDS=()
           for ARCH in $ARCHES; do
-            CODE=$(cat "verdicts/llk-perf-gate-verdict-${ARCH}/gate_verdict.txt" 2>/dev/null || echo missing)
-            echo "${ARCH}: ${CODE}"
-            [ "$CODE" = 0 ] || FAIL=1
+            { read -r CODE KIND < "verdicts/gate_verdict-${ARCH}.txt"; } 2>/dev/null || { CODE=missing; KIND=no-compare; }
+            echo "${ARCH}: exit ${CODE}, ${KIND}"
+            [ "$CODE" = 0 ] || KINDS+=("${ARCH}:${KIND}")
           done
-          [ "$FAIL" = 0 ] && exit 0
-          if [[ "$HEAD_REF" =~ /pr-([0-9]+)- ]]; then
+          [ ${#KINDS[@]} = 0 ] && exit 0
+
+          ONLY_REGRESSION=true
+          for K in "${KINDS[@]}"; do
+            [ "${K#*:}" = regression ] || ONLY_REGRESSION=false
+          done
+          if [ "$ONLY_REGRESSION" = true ] && [[ "$HEAD_REF" =~ /pr-([0-9]+)- ]]; then
             PR=${BASH_REMATCH[1]}
-            # Accepted: someone other than the author added llk-perf-accepted after the PR's last commit.
+            # Accepted: someone other than the author added llk-perf-accepted after the PR's last push.
+            # The push time is when the first workflow run for the head commit was made; the commit date
+            # can be older than the push.
             AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .user.login)
             HEAD_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .head.sha)
-            HEAD_DATE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}" --jq .commit.committer.date)
+            PUSHED=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
+              --jq '.workflow_runs[].created_at' | sort | head -n 1)
             HAS=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -cx llk-perf-accepted || true)
-            BY=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" \
-              --jq ".[] | select(.event == \"labeled\" and .label.name == \"llk-perf-accepted\"
-                    and .actor.login != \"${AUTHOR}\" and .created_at > \"${HEAD_DATE}\") | .actor.login" | tail -n 1)
+            BY=""
+            if [ -n "$PUSHED" ]; then
+              BY=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" \
+                --jq ".[] | select(.event == \"labeled\" and .label.name == \"llk-perf-accepted\"
+                      and .actor.login != \"${AUTHOR}\" and .created_at > \"${PUSHED}\") | .actor.login" | tail -n 1)
+            fi
             if [ "$HAS" != 0 ] && [ -n "$BY" ]; then
-              echo "::notice::${BY} accepted the LLK perf slowdown of #${PR} (llk-perf-accepted after its last commit)."
+              echo "::notice::${BY} accepted the LLK perf slowdown of #${PR} (llk-perf-accepted after its last push at ${PUSHED})."
               exit 0
             fi
           fi
-          echo "::error::The LLK perf merge gate blocks this entry. See the Blackhole gate report in this run."
-          echo "To look closer: add the llk-perf-gate label to the PR, then run the LLK perf gate workflow by hand"
-          echo "with placement_run_id set to that PR-gate run (stage 2 with no test limit)."
-          echo "To accept the slowdown: a reviewer other than the author adds the llk-perf-accepted label after"
-          echo "the PR's last commit, then the PR is queued again."
+
+          echo "::error::The LLK perf merge gate blocks this entry (${KINDS[*]}). See the gate reports in this run."
+          for K in "${KINDS[@]}"; do
+            case "${K#*:}" in
+              regression)
+                echo "${K%%:*}, regression: stage 2 found stage-1 regressions slower at every code position, or could not"
+                echo "  re-measure them. To look closer: add the llk-perf-gate label to the PR, then run the LLK perf gate"
+                echo "  workflow by hand with placement_run_id set to that PR-gate run (stage 2 with no test limit)."
+                echo "  To accept the slowdown: a reviewer other than the author adds the llk-perf-accepted label after"
+                echo "  the PR's last push, then the PR is queued again."
+                ;;
+              incomplete)
+                echo "${K%%:*}, incomplete: a measuring leg did not finish, so nothing was compared. The gate report"
+                echo "  names the leg. If a perf test failed, fix the test. If a runner or board failed, queue the PR again."
+                echo "  llk-perf-accepted does not apply: there is no measurement to accept."
+                ;;
+              *)
+                echo "${K%%:*}, no-compare: the baseline read or the comparison did not finish (an infrastructure fault)."
+                echo "  Queue the PR again. llk-perf-accepted does not apply: there is no measurement to accept."
+                ;;
+            esac
+          done
           exit 1
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.

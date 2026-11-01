@@ -191,6 +191,8 @@ jobs:
                   LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
                   # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
                   if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
+                  # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
+                  if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
                   REASON="${REASON:+${REASON}; }${LINE}"
                 done <<< "$BAD"
                 REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
@@ -631,36 +633,47 @@ jobs:
       - name: Gate verdict
         if: always()
         env:
+          ARCH: ${{ inputs.arch }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
-          # The merge gate's blocking job reads this.
-          trap 'echo $? > gate_verdict.txt' EXIT
+          # The merge gate's blocking job reads this: the exit code and what kind of verdict it is.
+          KIND=no-compare
+          trap 'echo "$? $KIND" > "gate_verdict-${ARCH}.txt"' EXIT
           # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
           if [ -f perf_gate_report.md ]; then
             cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          HAVE_BASELINE=$(cat have_baseline.txt)
+          HAVE_BASELINE=$(cat have_baseline.txt 2>/dev/null || echo false)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
+            KIND=incomplete
             echo "::error::${MEASURE_REASON:-The measurement did not complete.} The gate compared nothing."
-            echo "This is an infrastructure fault, not a performance result."
+            echo "This is not a performance result: a perf test failed, or a runner or board did."
             exit 1
           fi
 
+          if [ ! -f have_baseline.txt ]; then
+            echo "::error::The baseline read did not finish, so the gate has no verdict."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
           if [ "$HAVE_BASELINE" != "true" ]; then
+            KIND=pass
             echo "⚠️  No baseline found; gate skipped (first run or data missing)"
             exit 0
           fi
 
           if [ "${{ steps.compare.outputs.comparison_finished }}" = "false" ]; then
+            KIND=no-compare
             echo "::error::The comparison did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
 
           if [ "$EXIT_CODE" != "0" ]; then
+            KIND=regression
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
             if [ "${{ steps.stage2.outputs.blocks }}" = "false" ]; then
@@ -674,6 +687,7 @@ jobs:
             exit 0
           fi
 
+          KIND=pass
           echo "✅ No regressions detected"
           cat perf_gate_report.md
 
@@ -682,5 +696,5 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: llk-perf-gate-verdict-${{ inputs.arch }}
-          path: gate_verdict.txt
+          path: gate_verdict-${{ inputs.arch }}.txt
           if-no-files-found: ignore
