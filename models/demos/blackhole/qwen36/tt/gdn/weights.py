@@ -13,6 +13,16 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+
+def _dense_wdtype(default):
+    """Weight dtype for a dense projection. QWEN36_1C_ALL_BFP4=1 forces bfloat4_b everywhere, which is
+    the dense-bfp4 bar the exact-ternary path has to beat. Default returns `default` unchanged."""
+    import os
+
+    import ttnn
+
+    return ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else default
+
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
 
@@ -80,7 +90,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         """Load 2D weight, transposed to [in, out] for ttnn.linear (on a tensor-cache miss only)."""
         return ttnn.as_tensor(
             state_dict[name],
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -114,7 +124,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         )
     qkv_proj_weight = ttnn.as_tensor(
         state_dict[qkv_key],
-        dtype=ttnn.bfloat8_b,
+        dtype=_dense_wdtype(ttnn.bfloat8_b),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

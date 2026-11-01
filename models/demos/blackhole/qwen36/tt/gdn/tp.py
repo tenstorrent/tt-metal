@@ -11,6 +11,18 @@ import os
 import torch
 
 import ttnn
+
+def _dense_wdtype(default):
+    """Weight dtype for a dense projection. QWEN36_1C_ALL_BFP4=1 forces bfloat4_b everywhere.
+    Mirrors the helper in attention/weights.py, gdn/weights.py and model.py so the GDN in/out
+    projections honour the flag too -- they were hardcoded bfloat8_b, which is why an "all bfp4" run
+    still carried layers.N/tp1/{qkvzab,out} at BFLOAT8_B (5.9 GB of the 21.5 GB read per token)."""
+    import os
+
+    import ttnn
+
+    return ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else default
+
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
@@ -249,7 +261,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
         )
     else:
         fused = torch.cat(
@@ -266,7 +278,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=qkvz_mc,
             cache_path=c("qkvz" + (".dramshard" if qkvz_sharded else "")),
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
         )
         # Separate A+B projection (column-parallel fallback)
         ab = torch.cat(
@@ -277,7 +289,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=0,
         )
         tw["ab"] = tpc.shard_w(
-            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
+            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=_dense_wdtype(ttnn.bfloat8_b)
         )
     # Row-parallel out projection: DRAM-width-sharded (like the in-proj) — decode tput win.
     _out_sharded = getattr(args, "gdn_out_weight_memcfg", None) is not None
@@ -287,7 +299,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
         memory_config=args.gdn_out_weight_memcfg if _out_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("out.dramshard" if _out_sharded else "out"),
-        dtype=ttnn.bfloat8_b,
+        dtype=_dense_wdtype(ttnn.bfloat8_b),
     )
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
@@ -298,7 +310,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_path=c("out.colpar"),
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
         )
     # Per-head params
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
@@ -376,6 +388,15 @@ class TPGatedDeltaNet:
         # The durable shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
         # with the user axis folded in (tap j of user u == _conv_win_buf[u, j, :]).
         self._conv_win_buf = None
+        # Single-chip decode (QWEN36_TP1_GDN=1) writes the recurrent state IN PLACE through the fused
+        # recurrence's ring mode, so the per-layer Copy of the fp32 [B,Nv,Dk,Dv] state disappears. The
+        # shared TP=4 module never sets this: a ring write would break its bucketed B<Bmax path and its
+        # state is sharded per device. _rec_ring_idx is the [BH] block index the mode requires.
+        self._inplace_rec_state = (
+            getattr(args, "num_devices", 1) == 1 and os.environ.get("QWEN36_TP1_GDN") == "1"
+        )
+        self._rec_ring_idx = None
+        self._rec_ring_idx_bh = -1
         # One-hot matmul config: HiFi4 + fp32 accumulate keep a 0/1 selector matmul exact in bf16.
         self._cfg_onehot = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -468,6 +489,9 @@ class TPGatedDeltaNet:
         # Fresh (zero) taps and no window: neither mirror is behind.
         self._conv_taps_stale = False
         self._conv_win_stale = False
+        # The ring index is sized by B*Nv and B changes when the prefill scratch binds.
+        self._rec_ring_idx = None
+        self._rec_ring_idx_bh = -1
 
     def _ensure_zero_rec_f32(self):
         """Batch-1 zero initial state the delta op reads when forward_prefill(carry_state=False), allocated once.
@@ -788,7 +812,8 @@ class TPGatedDeltaNet:
             self._ensure_zero_rec_f32()
 
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
+        # prefill_l1_seq_scale: per-chip activations are that many times the TP=4 ones (4 at TP=1).
+        _L1 = tpc.prefill_act_mem(T * getattr(self.args, "prefill_l1_seq_scale", 1), ttnn.L1_MEMORY_CONFIG)
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
@@ -946,7 +971,21 @@ class TPGatedDeltaNet:
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
-        if self._gdn_fuse_out:
+        if self._gdn_fuse_out and getattr(self.args, "num_devices", 1) == 1:
+            # Single chip: nlp_concat_heads selects the full compute grid and its STATIC dataflow
+            # buffers scale with the per-core shard. At TP=1 the activation is TP times wider per chip
+            # than at TP=4, so on [1,Nv,2048,Dv] it wants 1684864 B against the 1572864 B L1 maximum
+            # (measured). The op exposes no grid or program-config argument, so the fix is to not use
+            # it: the head->token relayout below is the same permutation done with a reshape + permute,
+            # which the caller's placement (_L1, already DRAM above the L1 seq ceiling) sizes.
+            n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
+            ttnn.deallocate(o)
+            n = ttnn.reshape(n, (1, Nv, T, Dv))
+            # [1,Nv,T,Dv] -> [1,T,Nv,Dv] -> [1,T,Nv*Dv]: the same element order nlp_concat_heads emits.
+            n = ttnn.permute(n, (0, 2, 1, 3), memory_config=_L1)
+            out_f = ttnn.reshape(n, (1, T, self.value_dim_tp), memory_config=_L1)
+            ttnn.deallocate(n)
+        elif self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
             # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
@@ -1003,9 +1042,15 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
-        out = tpc.tp_reduce_scatter(
-            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        if getattr(self.args, "num_devices", 1) == 1:
+            # Single chip: the out-projection is not row-parallel, so there is one partial and nothing
+            # to reduce. tp_reduce_scatter is a collective and would dereference tt_ccl, which is None
+            # here (layer.py passes None at num_devices == 1). Hand the partial back directly.
+            out = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG) if partial.memory_config() != ttnn.DRAM_MEMORY_CONFIG else partial
+        else:
+            out = tpc.tp_reduce_scatter(
+                partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         if return_state:
             return out, captured[0], captured[1]
         return out
@@ -1425,6 +1470,29 @@ class TPGatedDeltaNet:
             **tpc.prefill_rs_kwargs(self.args),
         )
 
+    def _ensure_rec_ring_idx(self, BH):
+        """The [BH] uint32 ROW_MAJOR block index the fused recurrence's in-place (ring) mode reads.
+
+        Block h means "head h's state slot", so arange(BH) makes each head read from and write back to
+        exactly the rec_state slot it came from. Allocated on the first decode (before any trace capture)
+        and reallocated only if BH changes, so nothing allocates at request time.
+        """
+        if self._rec_ring_idx is not None and self._rec_ring_idx_bh == BH:
+            return self._rec_ring_idx
+        if self._rec_ring_idx is not None:
+            ttnn.deallocate(self._rec_ring_idx)
+            self._rec_ring_idx = None
+        self._rec_ring_idx = ttnn.from_torch(
+            torch.arange(BH, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._rec_ring_idx_bh = BH
+        return self._rec_ring_idx
+
     def forward_decode(self, x):
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
@@ -1474,15 +1542,22 @@ class TPGatedDeltaNet:
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
 
-        # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
+        # GQA expand Q/K Nk->Nv; recurrence L2-norms + scales internally.
+        # QWEN36_TP1_GDN: the fused recurrence's READER replicates query head hv/rf onto value head hv,
+        # so q/k stay at Nk heads and the per-layer repeat_interleave (two untilize+concat+tilize+copy
+        # chains, ~11 us each at decode) disappears. Guarded on use_fused_recurrent_decode, which only
+        # the single-chip path sets: the TP=4 module and the composite decode below keep the expand.
         rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=1)
-        k = ttnn.repeat_interleave(k, rf, dim=1)
+        n_qk = Nk
+        if not self.use_fused_recurrent_decode:
+            q = ttnn.repeat_interleave(q, rf, dim=1)
+            k = ttnn.repeat_interleave(k, rf, dim=1)
+            n_qk = Nv
         # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
         # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
         # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
-        q = ttnn.reshape(q, (B, 1, Nv, Dk), memory_config=_L1)
-        k = ttnn.reshape(k, (B, 1, Nv, Dk), memory_config=_L1)
+        q = ttnn.reshape(q, (B, 1, n_qk, Dk), memory_config=_L1)
+        k = ttnn.reshape(k, (B, 1, n_qk, Dk), memory_config=_L1)
         v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
@@ -1502,17 +1577,39 @@ class TPGatedDeltaNet:
             # near-tie flips between them and acceptance drops (measured 2.82 -> 2.00 /3 when the
             # two paths disagreed at ~1e-5).
             assert B == Bmax, "fused recurrent decode path supports full-batch only (spec decode)"
-            o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
-                q,
-                k,
-                v,
-                beta,
-                g,
-                scale=self.scale,
-                initial_state=self.rec_state,
-                device=self.mesh,
-                high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-            )
+            # Single-chip decode writes the state straight into rec_state through the ring mode: the op is
+            # handed a VIEW of that buffer as its state ring and writes block h = head h back into it, so
+            # the 15.8 us Copy of the fp32 state goes away. At T=1 every head starts and ends at block h,
+            # so arange(BH) is exactly the decode case, and the kernel takes the same path it takes with
+            # per_token=false (per_token || last is true either way) -- see test_gdn_ring_inplace.py for
+            # the output- and state-identical check.
+            rec_in_place = self._inplace_rec_state and B == Bmax
+            if rec_in_place:
+                o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
+                    q,
+                    k,
+                    v,
+                    beta,
+                    g,
+                    scale=self.scale,
+                    initial_state=ttnn.reshape(self.rec_state, (B * Nv, Dk, Dv)),  # metadata view
+                    device=self.mesh,
+                    output_per_token_state=True,
+                    initial_state_block_idx=self._ensure_rec_ring_idx(B * Nv),
+                    high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+                )
+            else:
+                o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
+                    q,
+                    k,
+                    v,
+                    beta,
+                    g,
+                    scale=self.scale,
+                    initial_state=self.rec_state,
+                    device=self.mesh,
+                    high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+                )
         else:
             o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
                 q,
@@ -1528,7 +1625,9 @@ class TPGatedDeltaNet:
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
         # In-place update preserves rec_state address for decode trace replay
-        if B == Bmax:
+        if self.use_fused_recurrent_decode and rec_in_place:
+            pass  # already written through the ring view; new_rec IS that view, not a new buffer
+        elif B == Bmax:
             ttnn.copy(new_rec, self.rec_state)
             ttnn.deallocate(new_rec)
         else:

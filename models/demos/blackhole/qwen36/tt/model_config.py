@@ -8,6 +8,7 @@ Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text confi
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
 
+import copy
 import os
 from pathlib import Path
 
@@ -267,16 +268,23 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
         # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
+        #
+        # QWEN36_1C_GATEUP_11x8: gate/up is the only bfp4 shape in the decode table and the slowest at
+        # 57% of peak (50.1 MB in 170.4 us per the decode profile). A sweep on the real shape measured
+        # 11x8 with in0_block_w=2 at 182.1 us against 195.6 for the 11x4/auto equivalent in the same
+        # harness (-13.5 us/call, x128 calls = -1.73 ms/step). in0_block_w is the same knob that won
+        # -7 ms on down_proj.
+        _gu_cores = 88 if os.environ.get("QWEN36_1C_GATEUP_11x8") == "1" else 44
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
             self.hidden_dim // tp,
-            num_cores=44,
+            num_cores=_gu_cores,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.hidden_dim // tp, num_cores=_gu_cores, grid_w=self.decode_grid_w
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
         # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5.
@@ -337,6 +345,20 @@ class Qwen36ModelArgs(ModelArgs):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+
+    def tp1_args(self, mesh_device):
+        """A copy of these args with the TP-module configs built for TP=1, so a TP module can run on one chip
+        while every other module keeps reading the single-device args."""
+        if getattr(self, "_tp1_args", None) is None:
+            tp1 = copy.copy(self)
+            tp1._init_tp_config(mesh_device)
+            # The 2D prefill configs are tuned per chip at TP=4; at TP=1 the full width lands on 8 grid columns
+            # (per_core_N 65 tiles for the GDN in-projection), past L1. Let ttnn pick the prefill config.
+            tp1.prefill_progcfg = lambda seq_len, k, n: None
+            # Prefill activations kept in L1 up to 2048 rows at TP=4 are 4x larger here; see TPGatedDeltaNet.
+            tp1.prefill_l1_seq_scale = 4
+            self._tp1_args = tp1
+        return self._tp1_args
 
     def _set_hf_params(self, checkpoint_dir):
         # trust_remote_code before base AutoConfig load.
@@ -410,7 +432,10 @@ class Qwen36ModelArgs(ModelArgs):
             dtype = self.weight_dtype
         import ttnn
 
-        if dtype == ttnn.bfloat8_b:
+        if os.environ.get("QWEN36_1C_ALL_BFP4") == "1":
+            # All-dense-bfp4 experiment: own directory so the bfp8 cache is neither read nor written.
+            suffix = "tensor_cache_all_bfp4"
+        elif dtype == ttnn.bfloat8_b:
             suffix = "tensor_cache_bfp8"
         else:
             suffix = "tensor_cache_bf16"

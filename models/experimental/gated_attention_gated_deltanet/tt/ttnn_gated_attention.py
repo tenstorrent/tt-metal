@@ -207,6 +207,7 @@ def gated_attention_forward_ttnn(
     chunk_page_table=None,  # [1, num_blocks_in_chunk] int32 — blocks for this chunk only
     chunk_start_idx=None,  # int — absolute position of this chunk in the full sequence
     chunk_start_idx_tensor=None,  # device tensor [1] int32 — runtime offset for trace-replay (flexible SDPA)
+    fused_qkv_weight=None,  # [dim, qg+k+v] one concatenated in-projection weight (2a); None = three matmuls
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -239,14 +240,33 @@ def gated_attention_forward_ttnn(
     T = hidden_states.shape[1]
     scaling = head_dim**-0.5
 
-    # Q projection: 2x wide
+    # 2a (QWEN36_1C_FUSED_QKV): one in-projection instead of three. q+gate, k and v are three matmuls
+    # on the same activation; k and v are only head_dim*num_kv_heads wide (1024 at TP=1), so at decode
+    # they are mostly fixed cost. ONE [5120, qg+k+v] matmul streams the same bytes and pays one fixed
+    # cost; the three slices that recover qg/k/v are cheap by comparison.
     ckc = compute_kernel_config
-    qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
-    # Split into query and gate
-    query_states, gate = ttnn.chunk(qg, 2, dim=-1)
-    ttnn.deallocate(qg)
-    gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
+    qkv_fused = None
+    if fused_qkv_weight is not None:
+        qkv_fused = ttnn.linear(hidden_states, fused_qkv_weight, compute_kernel_config=ckc, memory_config=memory_config)
+        _qg_n = num_attention_heads * head_dim * 2
+        _kv_n = num_key_value_heads * head_dim
+        _total = _qg_n + 2 * _kv_n
+        qg = ttnn.slice(qkv_fused, (0, 0, 0), (B, T, _qg_n))
+        _k = ttnn.slice(qkv_fused, (0, 0, _qg_n), (B, T, _qg_n + _kv_n))
+        _v = ttnn.slice(qkv_fused, (0, 0, _qg_n + _kv_n), (B, T, _total))
+        ttnn.deallocate(qkv_fused)
+        qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
+        query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+        ttnn.deallocate(qg)
+        gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
+    else:
+        # Q projection: 2x wide
+        qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+        qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
+        # Split into query and gate
+        query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+        ttnn.deallocate(qg)
+        gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
     # Q norm + transpose to [B, H_q, T, D]
     if norm_weights_pre_offset:
@@ -256,7 +276,10 @@ def gated_attention_forward_ttnn(
     query_states = ttnn.transpose(query_states, 1, 2)
 
     # K projection + norm + transpose to [B, H_kv, T, D]
-    key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    if qkv_fused is None:
+        key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    else:
+        key_states = _k
     key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
     if norm_weights_pre_offset:
         key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
@@ -265,7 +288,10 @@ def gated_attention_forward_ttnn(
     key_states = ttnn.transpose(key_states, 1, 2)
 
     # V projection + transpose to [B, H_kv, T, D]
-    value_states = ttnn.linear(hidden_states, v_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    if qkv_fused is None:
+        value_states = ttnn.linear(hidden_states, v_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    else:
+        value_states = _v
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
     value_states = ttnn.transpose(value_states, 1, 2)
 
@@ -560,6 +586,22 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(gate)
 
     # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    # 2c (QWEN36_1C_OPROJ_1D): the 110-core 1D mcast config with the activation in L1. Measured on
+    # this shape: 137.3 us today (DRAM activation, auto config) -> 102.2 us, and the L1 placement on
+    # its own changes nothing (137.7), so the config is what buys the time.
+    if _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        _grid = device.compute_with_storage_grid_size()
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.linear(
+            attn_output,
+            o_proj_weight,
+            compute_kernel_config=ckc,
+            program_config=_tpc.create_matmul_1d_decode_progcfg(1, attn_output.shape[-1], o_proj_weight.shape[-1], 110, grid_w=_grid.x),
+            memory_config=memory_config,
+        )
+    else:
+        attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
 
     return attn_output, new_key, new_value

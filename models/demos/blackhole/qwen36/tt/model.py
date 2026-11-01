@@ -15,6 +15,16 @@ from tqdm import tqdm
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+
+def _dense_wdtype(default):
+    """Weight dtype for a dense projection. QWEN36_1C_ALL_BFP4=1 forces bfloat4_b everywhere, which is
+    the dense-bfp4 bar the exact-ternary path has to beat. Default returns `default` unchanged."""
+    import os
+
+    import ttnn
+
+    return ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else default
+
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
@@ -132,6 +142,9 @@ class Qwen36Model:
         for i in tqdm(self.layer_indices, desc="Loading layers"):
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
+        # QWEN36_TP1_GDN: the TP=1 GDN layers decode with the fused recurrence (batch 1 = max_batch_size).
+        if any(getattr(layer, "_tp1_gdn", False) for layer in self.layers):
+            self.set_gdn_fused_decode(True)
 
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
         # 27B TP: hidden is sharded -> pass is_distributed + tt_ccl or use DistributedNorm.
@@ -196,7 +209,7 @@ class Qwen36Model:
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -909,6 +922,13 @@ class Qwen36Model:
                     cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
                     x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
                 else:
+                    # The GDN prefill kernels require a tile-aligned sequence; a tail chunk that is
+                    # not a multiple of 32 is padded here and trimmed immediately below, so nothing
+                    # downstream (attention, the concat) ever sees the padding.
+                    _n = x_chunk.shape[-2]
+                    _pad = (-_n) % 32
+                    if _pad:
+                        x_chunk = ttnn.pad(x_chunk, [(0, 0), (0, _pad), (0, 0)], 0.0)
                     x_chunk = layer.forward(
                         x_chunk,
                         cos=None,
@@ -916,6 +936,8 @@ class Qwen36Model:
                         mode="prefill",
                         chunk_size=layer.attention.long_prefill_chunk_size,
                     )
+                    if _pad:
+                        x_chunk = ttnn.slice(x_chunk, (0, 0, 0), (1, _n, x_chunk.shape[-1]))
 
                 chunks_out.append(x_chunk)
 
@@ -4183,6 +4205,9 @@ class Qwen36Model:
             # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
             return logits
         logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+        if self.num_devices == 1 and os.environ.get("QWEN36_1C_UNPAD_LOGITS") == "1":
+            # The host reads these logits every step; read the real rows, not the whole 32-row tile.
+            logits = ttnn.untilize_with_unpadding(logits, output_tensor_end=[d - 1 for d in logits.shape])
         return logits, None
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
@@ -4208,35 +4233,26 @@ class Qwen36Model:
             rows = torch.nn.functional.pad(rows, (0, 0, 0, required_rows - rows.shape[0]))
         return rows[:required_rows].view(B, S, self.args.vocab_size)
 
+    @staticmethod
+    def _deltanet_state_tensors(dn):
+        # TPGatedDeltaNet (QWEN36_TP1_GDN) keeps an fp32 rec_state and one conv state per tap.
+        if hasattr(dn, "rec_state"):
+            return [dn.rec_state, *dn.conv_states]
+        return [dn.recurrent_state, dn.fused_conv_state]
+
     def _save_deltanet_states(self):
         """Snapshot GDN state to host (guard across decode-trace capture's double forward)."""
-        saved = []
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                saved.append(
-                    {
-                        "recurrent": ttnn.to_torch(dn.recurrent_state),
-                        "conv": ttnn.to_torch(dn.fused_conv_state),
-                    }
-                )
-        return saved
+        return [
+            [ttnn.to_torch(t) for t in self._deltanet_state_tensors(layer.attention)]
+            for layer in self.layers
+            if not layer.is_full_attention
+        ]
 
     def _restore_deltanet_states(self, saved_states, device):
         """Restore GDN state via ttnn.copy (preserves trace-baked buffer addresses)."""
-        idx = 0
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                saved = saved_states[idx]
-                restored = ttnn.from_torch(
-                    saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                )
-                ttnn.copy(restored, dn.recurrent_state)
+        gdn_layers = [layer for layer in self.layers if not layer.is_full_attention]
+        for layer, saved in zip(gdn_layers, saved_states):
+            for t, host in zip(self._deltanet_state_tensors(layer.attention), saved):
+                restored = ttnn.from_torch(host, dtype=t.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+                ttnn.copy(restored, t)
                 ttnn.deallocate(restored)
-                restored_conv = ttnn.from_torch(
-                    saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                )
-                ttnn.copy(restored_conv, dn.fused_conv_state)
-                ttnn.deallocate(restored_conv)
-                idx += 1

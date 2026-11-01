@@ -557,7 +557,10 @@ def _should_use_chunked_trace(model):
     """True when chunk-outer prefill trace is used (GDN chunk-seq always on)."""
     return any(
         (not layer.is_full_attention)
-        and getattr(getattr(layer.attention, "weights", None), "use_chunk_seq_prefill", False)
+        and (
+            getattr(layer, "_tp1_gdn", False)  # TPGatedDeltaNet prefill is always chunk-seq
+            or getattr(getattr(layer.attention, "weights", None), "use_chunk_seq_prefill", False)
+        )
         for layer in model.layers
     )
 

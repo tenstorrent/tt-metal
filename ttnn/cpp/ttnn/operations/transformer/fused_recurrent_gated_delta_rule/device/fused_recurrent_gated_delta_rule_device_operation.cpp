@@ -85,8 +85,17 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             ++i;
         }
     };
-    check(in.q, "q", {BHT, 1u, K});
-    check(in.k, "k", {BHT, 1u, K});
+    // q/k may carry only the H query heads (BH/gqa): the reader replicates head hv/gqa onto core hv,
+    // so with gqa > 1 they are gqa times shorter than v.
+    const uint32_t gqa = attrs.gqa == 0 ? 1u : attrs.gqa;
+    TT_FATAL(
+        attrs.BH % gqa == 0,
+        "fused_recurrent_gated_delta_rule: BH ({}) must be divisible by gqa ({})",
+        attrs.BH,
+        gqa);
+    const uint32_t BHTQ = BHT / gqa;
+    check(in.q, "q", {BHTQ, 1u, K});
+    check(in.k, "k", {BHTQ, 1u, K});
     check(in.v, "v", {BHT, 1u, V});
     check(in.decay, "decay", {BHT, 1u, 1u});
     check(in.beta, "beta", {BHT, 1u, 1u});
@@ -188,14 +197,24 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         "fused_recurrent_gated_delta_rule: q and v must be rank 3, got ranks {} and {}",
         q_shape.rank(),
         v_shape.rank());
-    const uint32_t BHT = q_shape[0];
-    TT_FATAL(BHT % T == 0, "q dim0 ({}) must be divisible by T ({})", BHT, T);
+    // v fixes the value-head count (BH); q may carry only H = BH/gqa query heads.
+    const uint32_t BHT = v_shape[0];
+    TT_FATAL(BHT % T == 0, "v dim0 ({}) must be divisible by T ({})", BHT, T);
+    TT_FATAL(q_shape[0] % T == 0, "q dim0 ({}) must be divisible by T ({})", q_shape[0], T);
+    const uint32_t BH = BHT / T;
+    const uint32_t q_heads = q_shape[0] / T;
+    TT_FATAL(
+        BH % q_heads == 0,
+        "fused_recurrent_gated_delta_rule: value heads ({}) must be a multiple of query heads ({})",
+        BH,
+        q_heads);
 
     auto attrs = OperationType::operation_attributes_t{
-        .BH = BHT / T,
+        .BH = BH,
         .T = T,
         .key_dim = q_shape[2],
         .val_dim = v_shape[2],
+        .gqa = BH / q_heads,
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
         .output_mem_config = output_mem_config,
