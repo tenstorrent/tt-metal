@@ -17,6 +17,7 @@ build) pass moe_impl="ttmoe".
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 BLOCK = "block"
@@ -65,8 +66,8 @@ def moe_block_mesh_params(
 def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:
     """A Kimi-K3 mesh's device_params with what the MoE block needs when it is K3's MoE: a fabric payload holding one
     combine row of the latent (2 x 3584 + 32 B), L1_SMALL room for its persistent words and semaphores (at least
-    MOE_BLOCK_L1_SMALL) and the XY torus fabric - unless the job pins a mesh graph descriptor (TT_MESH_GRAPH_DESC_PATH,
-    e.g. CI's single_bh_galaxy mesh): then the test's own fabric. Unchanged on TtMoe."""
+    MOE_BLOCK_L1_SMALL) and the XY torus fabric (a pinned TT_MESH_GRAPH_DESC_PATH must be a torus-XY one: on the 2D
+    mesh fabric the block's first call hangs). Unchanged on TtMoe."""
     if not moe_block_enabled("KimiK3Config", moe_impl):
         return params
     import ttnn
@@ -74,8 +75,13 @@ def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> 
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 
     out = dict(params)
-    if not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-        out["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    mgd = os.environ.get("TT_MESH_GRAPH_DESC_PATH", "")
+    assert not mgd or "torus_xy" in Path(mgd).name, (
+        f"Kimi-K3 on the MoE block runs on the XY torus (on the 2D mesh fabric its first call hangs): "
+        f"TT_MESH_GRAPH_DESC_PATH={mgd} is not a torus-XY descriptor - use single_bh_galaxy_torus_xy_graph_descriptor"
+        f".textproto, or K3_MOE_IMPL=ttmoe"
+    )
+    out["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     payload = moe_block_fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
     router = out.get("fabric_router_config")
     if router is None or router.max_packet_payload_size_bytes < payload:
