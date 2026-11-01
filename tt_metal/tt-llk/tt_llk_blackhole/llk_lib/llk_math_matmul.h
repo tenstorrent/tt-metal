@@ -1153,8 +1153,9 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t rt_dim         = 1)
 {
     // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
-    const std::uint32_t blk_ct = key_ct != 0 ? key_ct : ct_dim;
-    const std::uint32_t blk_rt = key_rt != 0 ? key_rt : rt_dim;
+    constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
+    const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
     LLK_ASSERT(key_ct == 0 || key_ct == ct_dim, "matmul: the ct_dim key differs from ct_dim");
     LLK_ASSERT(key_rt == 0 || key_rt == rt_dim, "matmul: the rt_dim key differs from rt_dim");
     static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
@@ -1407,8 +1408,9 @@ inline void _llk_math_matmul_init_switch_(
     const std::uint32_t rt_dim         = 1)
 {
     // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
-    const std::uint32_t blk_ct = key_ct != 0 ? key_ct : ct_dim;
-    const std::uint32_t blk_rt = key_rt != 0 ? key_rt : rt_dim;
+    constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
+    const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
     LLK_ASSERT(key_ct == 0 || key_ct == ct_dim, "matmul: the ct_dim key differs from ct_dim");
     LLK_ASSERT(key_rt == 0 || key_rt == rt_dim, "matmul: the rt_dim key differs from rt_dim");
     static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
