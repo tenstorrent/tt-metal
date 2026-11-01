@@ -1,0 +1,8 @@
+=== sweep start 2026-11-01T15:45:48Z
+L14_h0 case q8 kv2 S1024 D128: wall us fw 131 fw+bw 519 bw 388
+L4_h0 case q8 kv2 S1024 D128: wall us fw 147 fw+bw 598 bw 451
+L5_h0 case q8 kv2 S1024 D128: wall us fw 123 fw+bw 536 bw 414
+L6_h0 case q8 kv2 S1024 D128: wall us fw 120 fw+bw 531 bw 411
+L8_h0 case q8 kv2 S1024 D128: wall us fw 114 fw+bw 506 bw 392
+L7_h0 case q8 kv2 S1024 D128: wall us fw 119 fw+bw 510 bw 391
+=== sweep done 2026-11-01T15:46:03Z

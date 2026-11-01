@@ -155,6 +155,15 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 26: SDPA chain credits, 8-row forward chunks, forward chain length (kernel boost checklist)
+
+- Roofline / bytes: after iteration 25 the SDPA kernels at the shard shape take 136 / 132 / 198 us (forward / Q / KV) for 50 / 53 / 91 us of math stages (stage removal, `O/iter26_attrib.log`); the math-free, pack-free skeletons still 75 / 62 / 99 us. Tracy: device-bound (forward 122 us device), per-core spans 78-122 us, the slowest core sets the time.
+- Structural fixes: credit-based chain hops with three chunks in flight (`O/iter26_patch.py`), 8-row K/V chunks in the forward with the QK^T / exp stages in DEST-sized passes and a two-chunk score CB (`O/iter26b_patch.py`), forward chains of 8 cores (sweep `O/iter26c_sweep*.log`).
+- Measured standalone: forward 136 -> 132 (credits) -> 131 (chunk 8) -> 115 (chain 8); backward 393 -> 387; 32 heads 391 -> 359; S=2048 374 -> 320 forward, 1304 -> 1174 backward.
+- Rejected with evidence: bf16 DEST on the same algorithm (145 us, PCC 0.9999), position-aware LPT loads (slower), chain 4-6 (DRAM-bound injectors).
+- Lesson: removing the `*_init` calls is not a valid skeleton (the device hung twice, `tt-smi -r`); the attribution driver patches compute kernels only and restores them from git, the dataflow files from scratch copies.
+- Verification: standalone six shapes (credits bit-exact; chunk 8 within one bf16 ulp), attention tests, harness 48, TP gradient check PASS, cooled TP=4 MFU + profile, 8-layer loss match PASS (0.0298), TP=4 real weights (`O/iter26.{sh,log}`).
+
 ### Iteration 25: low-rank update fused into transpose_split (kernel boost checklist)
 
 - Roofline / bytes: `LowrankUpdate` 0.88 ms per 4 layers (12 calls: a full read + write of dx, 10-17 MB each, at ~310 GB/s) on top of `TransposeSplit` 0.49 (which already writes every dx tile): the update's whole cost is the second pass.
@@ -307,6 +316,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 23 | `0be1385dbde` | SDPA chain forwarding on the writer RISC / NOC_1 (forward, Q, KV readers, writers, factories), chains reversed, iteration-23 evidence |
 | review 9 P1 | `4041c62353d` | `sdpa_bw_q` factory: one-row K/V blocks outside the chain; list-mode and chain-mode checks, attention tests |
 | 24 | `b88de55dd41` | wide fused-LoRA input for w2 (first chain `O/iter24.log` failed in the wrapper's backward, fixed; chain `O/iter24b*`): `swiglu_packed_fw out_cols`, `skinny_matmul tail_out`, `transpose_split dx_cols`, `lowrank_update` / `swiglu_packed_bw` wide gradient, `MLP.swiglu_op` hook, iteration-24 evidence |
-| 25 | (this commit) | `transpose_split(w=A)`: the low-rank update fused into the transpose (factory, reader, compute, binding), the fused LoRA backward routed through it, iteration-25 evidence |
+| 25 | `0cd8e1213a8` | `transpose_split(w=A)`: the low-rank update fused into the transpose (factory, reader, compute, binding), the fused LoRA backward routed through it, iteration-25 evidence |
+| 26 | (this commit) | SDPA chain credits (`CHAIN_SLOTS = 3`, counting semaphores) in the three chain kernels' readers / writers / factories, 8-row forward chunks (`kMaxSkChunkT = 8`, passes, two-chunk score CB), per-kernel chain-length knobs (forward 8), `lpt_schedule` initial loads + `env_uint32_or` in `program_utils.hpp`, iteration-26 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

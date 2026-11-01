@@ -108,6 +108,9 @@ void kernel_main() {
     constexpr uint32_t one_chunk_tiles = chain_chunk;
     constexpr uint32_t chunks_per_round = Ht / chain_chunk;
 
+    constexpr uint32_t kChainSlots = CHAIN_SLOTS;  // chunks resident per stream CB (slot = chunk % kChainSlots)
+    const uint32_t total_chunks = num_rounds * chunks_per_round;
+    uint32_t credited = 0;  // chunks credited to the previous core (non-injectors)
     for (uint32_t round = 0; round < num_rounds; ++round) {
         const uint32_t item = get_arg_val<uint32_t>(items_base + round);
         if (item != 0xFFFFFFFFU) {
@@ -117,8 +120,9 @@ void kernel_main() {
         }
         for (uint32_t h0 = 0; h0 < Ht; h0 += chain_chunk) {
             const uint32_t c = round * chunks_per_round + h0 / chain_chunk;
-            if (!is_sink && c >= 2U) {
-                forwarded_sem.wait_min(c - 1U);  // the slots' previous chunk (c - 2) has been forwarded
+            if (!is_sink && c >= kChainSlots) {
+                forwarded_sem.wait_min(
+                    c + 1U - kChainSlots);  // the slots' previous chunk (c - kChainSlots) has been forwarded
             }
             cb_reserve_back(cb_query, q_chunk_tiles);
             cb_reserve_back(cb_intermediates, one_chunk_tiles);
@@ -159,9 +163,24 @@ void kernel_main() {
                 cb_push_back(cb_grad_output, vo_chunk_tiles);
                 cb_push_back(cb_u_scalar_row, one_chunk_tiles);
             } else {
-                receiver_sem.set(INVALID);
-                sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
-                receiver_sem.wait(VALID);
+                // Credits (iteration 26): the previous core's writer forwards chunk n once this core has credited
+                // it. Chunk c is credited here (its slots are reserved) and the chunks up to c + kChainSlots - 1
+                // whose slots are already free (the compute popped and the writer forwarded chunk n - kChainSlots)
+                // are credited ahead, so the hop's ready round trip leaves the critical path.
+                if (credited <= c) {
+                    sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
+                    credited = c + 1U;
+                }
+                while (credited < total_chunks && credited < c + kChainSlots &&
+                       (is_sink || credited < kChainSlots || forwarded_sem.value() + kChainSlots >= credited + 1U) &&
+                       cb_pages_reservable_at_back(cb_query, (credited - c + 1U) * q_chunk_tiles) &&
+                       cb_pages_reservable_at_back(cb_intermediates, (credited - c + 1U) * one_chunk_tiles) &&
+                       cb_pages_reservable_at_back(cb_grad_output, (credited - c + 1U) * vo_chunk_tiles) &&
+                       cb_pages_reservable_at_back(cb_u_scalar_row, (credited - c + 1U) * one_chunk_tiles)) {
+                    sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
+                    ++credited;
+                }
+                receiver_sem.wait_min(c + 1U);
                 cb_push_back(cb_query, q_chunk_tiles);
                 cb_push_back(cb_intermediates, one_chunk_tiles);
                 cb_push_back(cb_grad_output, vo_chunk_tiles);

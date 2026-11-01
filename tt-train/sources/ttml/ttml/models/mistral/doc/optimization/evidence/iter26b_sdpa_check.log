@@ -1,0 +1,55 @@
+2026-11-01 15:37:55.534 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-01 15:37:56.082 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 15:37:56.082 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 15:37:56.082 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 15:37:56.082 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 15:37:56.093 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 15:37:56.093 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 15:37:56.174 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 15:37:56.174 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 15:37:56.174 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 15:37:56.174 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 15:37:56.176 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 15:37:56.402 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 15:37:56.436 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 15:37:56.436 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 15:37:56.436 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 15:37:56.477 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+ case q8 kv2 S1024 D128: wall us fw 131 fw+bw 516 bw 386
+    out: pcc 0.99999875 max|diff| 3.906e-03 differing 386851/1048576
+    dQ: pcc 0.99999855 max|diff| 3.906e-03 differing 282653/1048576
+    dK: pcc 0.99999759 max|diff| 3.125e-02 differing 128546/262144
+    dV: pcc 0.99999810 max|diff| 3.125e-02 differing 127199/262144
+ case q32 kv8 S1024 D128: wall us fw 352 fw+bw 1867 bw 1515
+    out: pcc 0.99999877 max|diff| 7.812e-03 differing 1569504/4194304
+    dQ: pcc 0.99999851 max|diff| 7.812e-03 differing 1144565/4194304
+    dK: pcc 0.99999752 max|diff| 1.562e-02 differing 516980/1048576
+    dV: pcc 0.99999795 max|diff| 3.125e-02 differing 515211/1048576
+ case q8 kv8 S1024 D128: wall us fw 129 fw+bw 602 bw 473
+    out: pcc 0.99999878 max|diff| 3.906e-03 differing 395314/1048576
+    dQ: pcc 0.99999849 max|diff| 3.906e-03 differing 284585/1048576
+    dK: pcc 0.99999764 max|diff| 1.562e-02 differing 511565/1048576
+    dV: pcc 0.99999815 max|diff| 1.562e-02 differing 509992/1048576
+ case q4 kv1 S1024 D128: wall us fw 95 fw+bw 361 bw 265
+    out: pcc 0.99999879 max|diff| 3.906e-03 differing 196745/524288
+    dQ: pcc 0.99999861 max|diff| 7.812e-03 differing 141351/524288
+    dK: pcc 0.99999769 max|diff| 1.562e-02 differing 64543/131072
+    dV: pcc 0.99999825 max|diff| 1.562e-02 differing 64046/131072
+ case q8 kv2 S2048 D128: wall us fw 319 fw+bw 1488 bw 1169
+    out: pcc 0.99999776 max|diff| 3.906e-03 differing 1074357/2097152
+    dQ: pcc 0.99999745 max|diff| 3.906e-03 differing 926481/2097152
+    dK: pcc 0.99999636 max|diff| 1.562e-02 differing 339609/524288
+    dV: pcc 0.99999691 max|diff| 3.125e-02 differing 338288/524288
+ case q6 kv2 S512 D64: wall us fw 55 fw+bw 182 bw 128
+    out: pcc 0.99999925 max|diff| 3.906e-03 differing 51656/196608
+    dQ: pcc 0.99999892 max|diff| 3.906e-03 differing 38086/196608
+    dK: pcc 0.99999798 max|diff| 1.562e-02 differing 26859/65536
+    dV: pcc 0.99999838 max|diff| 1.562e-02 differing 27043/65536
+2026-11-01 15:38:03.072 | info     |    BuildKernels | JIT cache stats: 107/133 hits (80.5%) [107 cached, 29 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 15:38:03.072 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 15:38:03.086 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 15:38:03.086 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 15:38:03.245 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 15:38:03.245 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 15:38:03.245 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

@@ -1,0 +1,52 @@
+=== attribution 2 start 2026-11-01T15:08:05Z
+fw noacc: 'pack_tile\\(block_idx, cb_cur_mm_out\\);' x2
+fw noacc: 'pack_tile</\\* out_of_order \\*/ true>\\(/\\* dst \\*/ ' x1
+patched fw ['noacc']
+fw/noacc case q8 kv2 S1024 D128: wall us fw 136 fw+bw 529 bw 393
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+patched fw ['nopack']
+fw/nopack case q8 kv2 S1024 D128: wall us fw 131 fw+bw 524 bw 393
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack']
+fw/skeleton,nopack case q8 kv2 S1024 D128: wall us fw 78 fw+bw 483 bw 405
+kv noacc: 'pack_tile\\(/\\*dst_reg_idx\\*/ block_idx, cb_grad_(v' x2
+patched kv ['noacc']
+kv/noacc case q8 kv2 S1024 D128: wall us fw 139 fw+bw 519 bw 380
+kv nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x15
+patched kv ['nopack']
+kv/nopack case q8 kv2 S1024 D128: wall us fw 136 fw+bw 509 bw 374
+kv noqk: 'matmul_tiles\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+kv noexp: 'sdpa_exp_tile\\(scores_reg\\);' x1
+kv nodp: 'matmul_tiles\\(\\s*cb_grad_output,\\s*cb_value,[^;]*;' x1
+kv nods: 'transpose_dest</\\* is_32bit \\*/ true>\\((grad_reg|a' x2
+kv nods: 'mul_binary_tile\\(grad_reg, attn_weights_reg, grad_' x2
+kv nods: 'copy_tile\\(cb_attention_weights, /\\* tile_idx \\*/ ' x2
+kv nods: 'sub_tiles_bcast_cols\\(\\s*cb_grad_attn_weights,\\s*c' x2
+kv nodv: 'matmul_tiles\\(\\s*cb_attn_weights_transposed,\\s*cb_' x1
+kv nodk: 'matmul_tiles\\(\\s*cb_grad_scores_transposed,\\s*cb_q' x1
+kv nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x15
+patched kv ['noqk', 'noexp', 'nodp', 'nods', 'nodv', 'nodk', 'nopack']
+kv/skeleton,nopack case q8 kv2 S1024 D128: wall us fw 136 fw+bw 430 bw 294
+q noacc: 'pack_tile\\(b, cb_grad_query_accum\\);' x1
+patched q ['noacc']
+q/noacc case q8 kv2 S1024 D128: wall us fw 136 fw+bw 527 bw 391
+q nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x18
+patched q ['nopack']
+q/nopack case q8 kv2 S1024 D128: wall us fw 140 fw+bw 509 bw 369
+q noqk: 'matmul_tiles\\(cb_query, cb_key, /\\* in0 \\*/ f,[^;]' x1
+q noexp: 'sdpa_exp_tile\\(first_reg \\+ i\\);' x1
+q nodp: 'matmul_tiles\\(\\s*cb_dp_grad_output, cb_value,[^;]*' x1
+q nods: 'sub_tiles_bcast_cols\\(cb_grad_attn_weights, cb_u_s' x1
+q nods: 'copy_tile\\(cb_attention_weights, /\\* tile_idx \\*/ ' x1
+q nods: 'mul_binary_tile\\(j, 2U \\+ j, j\\);' x1
+q nodq: 'matmul_tiles\\(cb_grad_scores, cb_key, /\\* in0 \\*/ ' x1
+q nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x18
+patched q ['noqk', 'noexp', 'nodp', 'nods', 'nodq', 'nopack']
+q/skeleton,nopack case q8 kv2 S1024 D128: wall us fw 137 fw+bw 458 bw 322
+=== attribution 2 done 2026-11-01T15:08:41Z

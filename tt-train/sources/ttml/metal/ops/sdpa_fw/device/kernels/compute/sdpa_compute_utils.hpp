@@ -162,55 +162,49 @@ void update_cur_row_max_value(
 // the first exp tile overwrites cb_cur_exp_sum[0], subsequent tiles add to it. This avoids an
 // extra DST cycle (and an extra row-reduce CB) just to fold the per-tile partial sums together.
 //
-// DST budget: Sk_chunk_t registers are held live across sub_tiles_bcast_cols + exp_tile +
-// (two) pack passes. With fp32_dest_acc_en=true the DST has 4 tiles, so Sk_chunk_t <= 4.
-template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t = 1U>
+// DST budget: the chunk is processed in passes of Pass tiles (Pass <= the DEST tile count: 4 with fp32
+// accumulation), each pass one tile_regs cycle. The score CB holds two chunks: the exp tiles go to the free
+// slot and the raw scores are popped, so a chunk larger than DEST needs no in-place aliasing.
+template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t = 1U, uint32_t Pass = Sk_chunk_t>
 void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
+    static_assert(Sk_chunk_t % Pass == 0U, "the chunk is a whole number of passes");
     cb_wait_front(cb_attention_weights, Sk_chunk_t);
     cb_wait_front(cb_cur_max, onetile);
+    cb_reserve_back(cb_attention_weights, Sk_chunk_t);  // the exp tiles' slot (the CB holds two chunks)
+    cb_reserve_back(cb_cur_exp_sum, onetile);
 
     reconfig_data_format(cb_attention_weights, cb_cur_max);
     sub_bcast_cols_init(cb_attention_weights, cb_cur_max);
-
-    // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
-    // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
-    tile_regs_acquire();
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        sub_tiles_bcast_cols(
-            cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
-        sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(n);
-    }
-    tile_regs_commit();
-
-    // In-place overwrite of cb_attention_weights. The CB is sized exactly Sk_chunk_t (no
-    // double-buffering), so pop+reserve aliases to the same physical L1 slots.
-    cb_pop_front(cb_attention_weights, Sk_chunk_t);
-    cb_reserve_back(cb_attention_weights, Sk_chunk_t);
-    cb_reserve_back(cb_cur_exp_sum, onetile);
-
-    tile_regs_wait();
-    // Write the Sk_chunk_t exp tiles back to cb_attention_weights at offsets 0..Sk_chunk_t-1.
     pack_reconfig_data_format(cb_attention_weights);
     pack_reconfig_l1_acc(false);
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        pack_tile(n, cb_attention_weights);
-    }
-    cb_push_back(cb_attention_weights, Sk_chunk_t);
 
-    // Build the chunk's partial sum directly in cb_cur_exp_sum[0]:
-    //   - first exp tile: overwrite slot 0 (L1-acc off);
-    //   - subsequent tiles: L1-accumulate onto slot 0.
-    pack_reconfig_data_format(cb_cur_exp_sum);
-    pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ 0);
-    if constexpr (Sk_chunk_t > 1U) {
-        pack_reconfig_l1_acc(true);
-        for (uint32_t n = 1U; n < Sk_chunk_t; ++n) {
+    for (uint32_t p = 0; p < Sk_chunk_t; p += Pass) {
+        // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
+        // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
+        tile_regs_acquire();
+        for (uint32_t n = 0; n < Pass; ++n) {
+            sub_tiles_bcast_cols(
+                cb_attention_weights, cb_cur_max, /* in0 tile_idx */ p + n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
+            sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(n);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        // The pass's exp tiles, in order, into the reserved chunk.
+        for (uint32_t n = 0; n < Pass; ++n) {
+            pack_tile(n, cb_attention_weights);
+        }
+        // The chunk's partial row sum directly in cb_cur_exp_sum[0]: the first exp tile overwrites slot 0
+        // (L1-acc off), every later tile L1-accumulates onto it.
+        for (uint32_t n = 0; n < Pass; ++n) {
+            pack_reconfig_l1_acc(p + n > 0U);
             pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
         }
         pack_reconfig_l1_acc(false);
+        tile_regs_release();
     }
+    cb_pop_front(cb_attention_weights, Sk_chunk_t);  // the raw scores
+    cb_push_back(cb_attention_weights, Sk_chunk_t);  // the exp tiles
     cb_push_back(cb_cur_exp_sum, onetile);
-    tile_regs_release();
 }
 
 // Computes (attention_weights @ V) where attention_weights is a row of Sk_chunk_t score tiles

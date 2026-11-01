@@ -101,17 +101,18 @@ void kernel_main() {
     const uint32_t rows_base = runtime_args_counter;
     Semaphore sender_sem(get_compile_time_arg_val(4));
     Semaphore receiver_sem(get_compile_time_arg_val(5));
-    Semaphore valid_sem(get_compile_time_arg_val(6));
+    [[maybe_unused]] Semaphore valid_sem(get_compile_time_arg_val(6));
     Semaphore received_sem(get_compile_time_arg_val(7));
     Semaphore forwarded_sem(get_compile_time_arg_val(8));
     const Noc noc;
-    valid_sem.set(VALID);
+    constexpr uint32_t kChainSlots = CHAIN_SLOTS;
     constexpr uint32_t k_chunk_tiles = chain_chunk * qWt;
     constexpr uint32_t v_chunk_tiles = chain_chunk * vWt;
     const uint32_t kv_tile_bytes = get_tile_size(cb_key);
     const uint32_t k_chunk_bytes = k_chunk_tiles * kv_tile_bytes;
     const uint32_t v_chunk_bytes = v_chunk_tiles * kv_tile_bytes;
-    // Two chunks resident per CB; the reader's pushes are whole chunks, so chunk c sits in slot c % 2.
+    // kChainSlots chunks resident per CB; the reader's pushes are whole chunks, so chunk c sits in slot c %
+    // kChainSlots.
     const uint32_t k_base = get_write_ptr(cb_key);
     const uint32_t v_base = get_write_ptr(cb_value);
     constexpr uint32_t chunks_per_round = Ht / chain_chunk;
@@ -120,10 +121,9 @@ void kernel_main() {
             const uint32_t c = round * chunks_per_round + h;
             received_sem.wait_min(c + 1U);
             if (!is_sink) {
-                const uint32_t k_addr = k_base + (c % 2U) * k_chunk_bytes;
-                const uint32_t v_addr = v_base + (c % 2U) * v_chunk_bytes;
-                sender_sem.wait(1);
-                sender_sem.set(0);
+                const uint32_t k_addr = k_base + (c % kChainSlots) * k_chunk_bytes;
+                const uint32_t v_addr = v_base + (c % kChainSlots) * v_chunk_bytes;
+                sender_sem.wait_min(c + 1U);  // the next core's credits (iteration 26)
                 noc.async_write(
                     CoreLocalMem<uint32_t>(k_addr),
                     UnicastEndpoint{},
@@ -137,7 +137,7 @@ void kernel_main() {
                     {},
                     {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = v_addr});
                 noc.async_writes_flushed();
-                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
+                receiver_sem.up(noc, next_noc_x, next_noc_y, 1);  // valid count
                 forwarded_sem.set(c + 1U);
             }
         }
@@ -152,6 +152,7 @@ void kernel_main() {
 #endif
     }
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 #elif defined(WORK_LIST)
     // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
     const uint32_t list_base = runtime_args_counter - 1U;

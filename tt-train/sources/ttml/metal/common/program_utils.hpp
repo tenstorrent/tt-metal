@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <numeric>
 #include <tt-metalium/allocator.hpp>
 #include <type_traits>
@@ -34,14 +35,22 @@ struct LptSchedule {
     uint64_t max_load{};                                // heaviest core's summed weight
 };
 
-inline LptSchedule lpt_schedule(const std::vector<uint32_t>& weights, const uint32_t num_cores) {
+// `initial_load[c]` (optional) is a per-core load the items are placed on top of (e.g. a chain position's hop
+// latency), so the cores that start later get fewer items.
+inline LptSchedule lpt_schedule(
+    const std::vector<uint32_t>& weights, const uint32_t num_cores, const std::vector<uint64_t>& initial_load = {}) {
     TT_FATAL(num_cores > 0, "lpt_schedule: num_cores must be > 0");
+    TT_FATAL(
+        initial_load.empty() || initial_load.size() == num_cores, "lpt_schedule: one initial load per core or none");
     LptSchedule schedule;
     schedule.items_per_core.resize(num_cores);
     std::vector<uint32_t> order(weights.size());
     std::iota(order.begin(), order.end(), 0U);
     std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return weights[a] > weights[b]; });
     std::vector<uint64_t> load(num_cores, 0U);
+    if (!initial_load.empty()) {
+        load = initial_load;
+    }
     for (const uint32_t item : order) {
         const auto core = static_cast<uint32_t>(std::min_element(load.begin(), load.end()) - load.begin());
         schedule.items_per_core[core].push_back(item);
@@ -52,6 +61,12 @@ inline LptSchedule lpt_schedule(const std::vector<uint32_t>& weights, const uint
         schedule.max_load = std::max(schedule.max_load, load[core]);
     }
     return schedule;
+}
+
+// Reads an unsigned integer knob from the environment (sweeps), `fallback` when unset.
+inline uint32_t env_uint32_or(const char* name, uint32_t fallback) {
+    const char* v = std::getenv(name);
+    return (v != nullptr && *v != '\0') ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : fallback;
 }
 
 /**

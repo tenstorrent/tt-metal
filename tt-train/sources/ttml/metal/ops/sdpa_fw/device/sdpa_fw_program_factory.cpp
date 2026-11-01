@@ -69,7 +69,10 @@ const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 const std::string kWorkListDefKey = "WORK_LIST";
 const std::string kChainDefKey = "CHAIN";
-constexpr uint32_t kChainLength = 14U;    // cores per K/V forwarding chain
+constexpr uint32_t kChainSlots = 3U;  // stream chunks resident per core (credits run kChainSlots - 1 ahead)
+// Cores per K/V forwarding chain: 8 measured best at the TP=4 shard shape (iteration 26: 114 us against 131 with 14,
+// 147 with 4 where the injectors' DRAM reads dominate); tunable for sweeps.
+const uint32_t kChainLength = env_uint32_or("TTML_SDPA_FW_CHAIN_LENGTH", 8U);
 constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no row this round" in a chain-mode row list
 
 const std::string kHasGateDefKey = "HAS_GATE";
@@ -80,16 +83,14 @@ const std::string kHasGateDefKey = "HAS_GATE";
 // Constraints:
 //   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
 //      and so the reader never reads past the end of the sequence).
-//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
-//      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
-//   3. Larger chunks amortize softmax / correction overhead more, but consume L1
-//      proportionally for cb_key, cb_value, and cb_attention_weights.
+//   2. The QK^T and exp stages process the chunk in DEST-sized passes (iteration 26), so the
+//      chunk may exceed the DEST tile count; the PV matmul contracts the whole chunk in DEST.
+//   3. Larger chunks amortize the softmax correction (and, in chain mode, the hop count) more,
+//      but consume L1 proportionally for cb_key, cb_value, and cb_attention_weights.
 //
-// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
-// either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
-// DST cycles.
+// We pick the largest power-of-2 in {1, 2, 4, 8} that divides Ht.
 uint32_t pick_sk_chunk_t(uint32_t Ht) {
-    constexpr uint32_t kMaxSkChunkT = 4U;
+    constexpr uint32_t kMaxSkChunkT = 8U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
         if (Ht % c == 0U) {
             return c;
@@ -438,10 +439,20 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // K and V are read in Sk_chunk_t-tile chunks. Double-buffer the chunks so the reader
     // can overlap next-chunk DRAM with current-chunk compute.
     [[maybe_unused]] auto cb_key = create_circular_buffer(
-        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * kWt);
+        program,
+        all_cores,
+        kKeyCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        (use_chain ? kChainSlots : 2U) * Sk_chunk_t * kWt);
 
     [[maybe_unused]] auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * vWt);
+        program,
+        all_cores,
+        kValueCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        (use_chain ? kChainSlots : 2U) * Sk_chunk_t * vWt);
 
     // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly.
     // Not needed for AttentionMaskType::None.
@@ -485,14 +496,19 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    // Holds the Sk_chunk_t QK^T score tiles for the current K chunk. Sized to one chunk
-    // (not double-buffered) since softmax overwrites in-place, then the PV matmul consumes it.
+    // Holds the Sk_chunk_t QK^T score tiles of the current K chunk and, in the second slot, their exp
+    // (iteration 26: the exp stage writes the free slot and pops the raw scores; the PV matmul consumes it).
     //
     // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
     // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
     // through this CB for the softmax critical path (~20 ms regression).
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
-        program, all_cores, kAttentionWeightsCbIndex, precise_data_format, float32_single_tile_size_bytes, Sk_chunk_t);
+        program,
+        all_cores,
+        kAttentionWeightsCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        2U * Sk_chunk_t);
 
     [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
         program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
@@ -605,6 +621,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
     if (use_chain) {
         defines[kChainDefKey] = "1";
+        defines["CHAIN_SLOTS"] = std::to_string(kChainSlots);
     }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
@@ -689,6 +706,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             Sk_chunk_t,          // multi-tile K/V chunking factor
             pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
             scaler_bf16,         // BF16 (RNE) scale for the WH fused scale+exp path
+            dst_size,            // DEST tiles per pass (QK^T / exp passes of the chunk)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -718,6 +736,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             Sk_chunk_t,                 // multi-tile K/V chunking factor
             pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
             scaler_bf16,                // BF16 (RNE) scale for the WH fused scale+exp path
+            dst_size,                   // DEST tiles per pass (QK^T / exp passes of the chunk)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -746,6 +765,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 Sk_chunk_t,                 // multi-tile K/V chunking factor
                 pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
                 scaler_bf16,                // BF16 (RNE) scale for the WH fused scale+exp path
+                dst_size,                   // DEST tiles per pass (QK^T / exp passes of the chunk)
             };
 
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(

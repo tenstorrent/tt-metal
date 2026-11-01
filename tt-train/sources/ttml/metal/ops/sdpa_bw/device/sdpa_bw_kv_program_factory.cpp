@@ -65,7 +65,9 @@ const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 const std::string kWorkListDefKey = "WORK_LIST";
 const std::string kHeadSplitDefKey = "HEAD_SPLIT";
 const std::string kChainDefKey = "CHAIN";
-constexpr uint32_t kChainLength = 14U;    // cores per forwarding chain
+constexpr uint32_t kChainSlots = 3U;  // stream chunks resident per core (credits run kChainSlots - 1 ahead)
+// Cores per forwarding chain (14 measured best for the backward at the TP=4 shard shape, iteration 26); tunable.
+const uint32_t kChainLength = env_uint32_or("TTML_SDPA_BW_CHAIN_LENGTH", 14U);
 constexpr uint32_t kChainChunk = 4U;      // tile rows of the stream per handshake
 constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no item this round" in a chain-mode list
 
@@ -363,7 +365,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // -------------------------------------------------------------------------
 
     // Chain mode forwards Q / dO / lse / u in chunks of chain_chunk query rows: two chunks resident.
-    const uint32_t stream_cb_rows = use_chain ? 2U * chain_chunk : 2U;
+    const uint32_t stream_cb_rows = use_chain ? kChainSlots * chain_chunk : 2U;
     [[maybe_unused]] auto cb_grad_output = create_circular_buffer(
         program, all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, stream_cb_rows * vWt);
 
@@ -505,6 +507,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     if (use_chain) {
         reader_defines[kChainDefKey] = "1";
         writer_defines[kChainDefKey] = "1";
+        reader_defines["CHAIN_SLOTS"] = std::to_string(kChainSlots);
+        writer_defines["CHAIN_SLOTS"] = std::to_string(kChainSlots);
         compute_defines[kChainDefKey] = "1";
     }
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);

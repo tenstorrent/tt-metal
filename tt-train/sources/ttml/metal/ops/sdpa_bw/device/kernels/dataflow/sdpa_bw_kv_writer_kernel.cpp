@@ -78,16 +78,17 @@ void kernel_main() {
     const uint32_t items_base = runtime_args_counter;
     Semaphore sender_sem(get_compile_time_arg_val(7));
     Semaphore receiver_sem(get_compile_time_arg_val(8));
-    Semaphore valid_sem(get_compile_time_arg_val(9));
+    [[maybe_unused]] Semaphore valid_sem(get_compile_time_arg_val(9));
     Semaphore received_sem(get_compile_time_arg_val(10));
     Semaphore forwarded_sem(get_compile_time_arg_val(11));
     const Noc noc;
-    valid_sem.set(VALID);
+    constexpr uint32_t kChainSlots = CHAIN_SLOTS;
     const uint32_t q_chunk_bytes = chain_chunk * qWt * get_tile_size(cb_query);
     const uint32_t interm_chunk_bytes = chain_chunk * get_tile_size(cb_intermediates);
     const uint32_t vo_chunk_bytes = chain_chunk * vWt * get_tile_size(cb_grad_output);
     const uint32_t u_chunk_bytes = chain_chunk * get_tile_size(cb_u_scalar_row);
-    // Two chunks resident per CB; the reader's pushes are whole chunks, so chunk c sits in slot c % 2.
+    // kChainSlots chunks resident per CB; the reader's pushes are whole chunks, so chunk c sits in slot c %
+    // kChainSlots.
     const uint32_t q_base = get_write_ptr(cb_query);
     const uint32_t i_base = get_write_ptr(cb_intermediates);
     const uint32_t vo_base = get_write_ptr(cb_grad_output);
@@ -98,9 +99,8 @@ void kernel_main() {
             const uint32_t c = round * chunks_per_round + h;
             received_sem.wait_min(c + 1U);
             if (!is_sink) {
-                const uint32_t slot = c % 2U;
-                sender_sem.wait(1);
-                sender_sem.set(0);
+                const uint32_t slot = c % kChainSlots;
+                sender_sem.wait_min(c + 1U);  // the next core's credits (iteration 26)
                 const uint32_t q_addr = q_base + slot * q_chunk_bytes;
                 const uint32_t i_addr = i_base + slot * interm_chunk_bytes;
                 const uint32_t vo_addr = vo_base + slot * vo_chunk_bytes;
@@ -130,7 +130,7 @@ void kernel_main() {
                     {},
                     {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = u_addr});
                 noc.async_writes_flushed();
-                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
+                receiver_sem.up(noc, next_noc_x, next_noc_y, 1);  // valid count
                 forwarded_sem.set(c + 1U);
             }
         }
@@ -160,6 +160,7 @@ void kernel_main() {
     }
 #ifdef CHAIN
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 #endif
 #elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;

@@ -1,0 +1,57 @@
+=== attribution 3 start 2026-11-01T15:20:47Z
+base: no patch
+fw/base case q8 kv2 S1024 D128: wall us fw 133 fw+bw 520 bw 387
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack']
+fw/skeleton,nopack case q8 kv2 S1024 D128: wall us fw 75 fw+bw 473 bw 399
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+fw noregs: 'tile_regs_(acquire|commit|wait|release)\\(\\);' x56
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack', 'noregs']
+fw/skeleton,nopack,noregs case q8 kv2 S1024 D128: wall us fw 74 fw+bw 470 bw 396
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+fw noinit: '\\b(reconfig_data_format(_srca|_srcb)?|matmul_block' x78
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack', 'noinit']
+fw skeleton,nopack,noinit: rc=1 (no result)
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+fw nocopy: '\\b(copy_tile|unary_bcast<BroadcastType::COL>|sub_t' x34
+fw nocopy: 'MATH\\(\\(recip_tile_first_column\\(dst_idx\\)\\)\\);' x1
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack', 'nocopy']
+fw/skeleton,nopack,nocopy case q8 kv2 S1024 D128: wall us fw 72 fw+bw 467 bw 395
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+fw noregs: 'tile_regs_(acquire|commit|wait|release)\\(\\);' x56
+fw noinit: '\\b(reconfig_data_format(_srca|_srcb)?|matmul_block' x78
+fw nocopy: '\\b(copy_tile|unary_bcast<BroadcastType::COL>|sub_t' x34
+fw nocopy: 'MATH\\(\\(recip_tile_first_column\\(dst_idx\\)\\)\\);' x1
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack', 'noregs', 'noinit', 'nocopy']
+fw skeleton,nopack,noregs,noinit,nocopy: rc=1 (no result)
+=== attribution 3 done 2026-11-01T15:21:05Z

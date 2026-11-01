@@ -1,0 +1,178 @@
+2026-11-01 15:20:56.899 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-01 15:20:57.432 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 15:20:57.432 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 15:20:57.432 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 15:20:57.432 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 15:20:57.443 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 15:20:57.443 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 15:20:57.522 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 15:20:57.522 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 15:20:57.522 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 15:20:57.522 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 15:20:57.524 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 15:20:57.759 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 15:20:57.793 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 15:20:57.793 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 15:20:57.793 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 15:20:57.833 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-11-01 15:20:58.626 | error    |    BuildKernels | trisc0 compile failure -- cmd: /home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa_fw_compute_kernel/9936659983609091343/" -DKERNEL_COMPILE_TIME_ARGS=3,2,4,4,32,1035273459,3212836864,1315859240,4,4,15797 -c -o /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_fw_compute_kernel/9936659983609091343/trisc0/trisck.594428285649256612_3377908.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_fw_compute_kernel/9936659983609091343/trisc0/trisck.594428285649256612_3377908.d (build.cpp:142)
+2026-11-01 15:20:58.626 | critical |          Always | TT_THROW: trisc0 build failed. Log: In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:30,
+                 from ../chlkc_unpack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:320:1: error: declaration does not declare anything [-fpermissive]
+  320 | void ;
+      | ^~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:321:98: error: expected ')' before '(' token
+  321 |     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+      |            ~                                                                                     ^
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:115:21: note: in definition of macro 'UNPACK'
+  115 | #define UNPACK(...) __VA_ARGS__
+      |                     ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:325:1: error: expected declaration before '}' token
+  325 | }
+      | ^
+ (assert.hpp:104)
+2026-11-01 15:20:58.665 | error    |    BuildKernels | trisc2 compile failure -- cmd: /home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa_fw_compute_kernel/9936659983609091343/" -DKERNEL_COMPILE_TIME_ARGS=3,2,4,4,32,1035273459,3212836864,1315859240,4,4,15797 -c -o /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_fw_compute_kernel/9936659983609091343/trisc2/trisck.594428285649256612_3377908.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_fw_compute_kernel/9936659983609091343/trisc2/trisck.594428285649256612_3377908.d (build.cpp:142)
+2026-11-01 15:20:58.665 | critical |          Always | TT_THROW: trisc2 build failed. Log: In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:30,
+                 from ../chlkc_pack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:320:1: error: declaration does not declare anything [-fpermissive]
+  320 | void ;
+      | ^~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:325:1: error: expected declaration before '}' token
+  325 | }
+      | ^
+ (assert.hpp:104)
+2026-11-01 15:20:58.737 | error    |    BuildKernels | trisc1 compile failure -- cmd: /home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa_fw_compute_kernel/9936659983609091343/" -DKERNEL_COMPILE_TIME_ARGS=3,2,4,4,32,1035273459,3212836864,1315859240,4,4,15797 -c -o /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_fw_compute_kernel/9936659983609091343/trisc1/trisck.594428285649256612_3377908.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_fw_compute_kernel/9936659983609091343/trisc1/trisck.594428285649256612_3377908.d (build.cpp:142)
+2026-11-01 15:20:58.737 | critical |          Always | TT_THROW: trisc1 build failed. Log: In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:30,
+                 from ../chlkc_math.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:320:1: error: declaration does not declare anything [-fpermissive]
+  320 | void ;
+      | ^~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:323:111: error: expected ')' before '(' token
+  323 |     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
+      |          ~                                                                                                    ^
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:83:19: note: in definition of macro 'MATH'
+   83 | #define MATH(...) __VA_ARGS__
+      |                   ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:325:1: error: expected declaration before '}' token
+  325 | }
+      | ^
+ (assert.hpp:104)
+2026-11-01 15:20:58.739 | critical |          Always | TT_THROW: Failed to generate binaries for sdpa_fw_compute_kernel TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/jit_build/build.cpp:149: tt::exception
+info:
+trisc0 build failed. Log: In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:30,
+                 from ../chlkc_unpack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:320:1: error: declaration does not declare anything [-fpermissive]
+  320 | void ;
+      | ^~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:321:98: error: expected ')' before '(' token
+  321 |     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+      |            ~                                                                                     ^
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:115:21: note: in definition of macro 'UNPACK'
+  115 | #define UNPACK(...) __VA_ARGS__
+      |                     ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:325:1: error: expected declaration before '}' token
+  325 | }
+      | ^
+
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1590008) [0x79f627990008]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd5fa0f) [0x79f62595fa0f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c538) [0x79f62598c538]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c4be) [0x79f62598c4be]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x8b370f) [0x79f6254b370f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1ed3) [0x79f6547f7ed3]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x8b3569) [0x79f6254b3569]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c30e) [0x79f62598c30e]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e9395) [0x79f6255e9395]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e7ea0) [0x79f6255e7ea0]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e7388) [0x79f6255e7388]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x79f624054c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x79f6547f2aa4]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x79f65487fa64]
+ (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter26_sdpa_time.py", line 75, in <module>
+    out = fw_bw()
+          ^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter26_sdpa_time.py", line 70, in fw_bw
+    out = sdpa(q, k, v)
+          ^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/program/program.cpp:423: tt::exception
+info:
+Failed to generate binaries for sdpa_fw_compute_kernel TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/jit_build/build.cpp:149: tt::exception
+info:
+trisc0 build failed. Log: In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:30,
+                 from ../chlkc_unpack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:320:1: error: declaration does not declare anything [-fpermissive]
+  320 | void ;
+      | ^~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:321:98: error: expected ')' before '(' token
+  321 |     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+      |            ~                                                                                     ^
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:115:21: note: in definition of macro 'UNPACK'
+  115 | #define UNPACK(...) __VA_ARGS__
+      |                     ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_compute_utils.hpp:325:1: error: expected declaration before '}' token
+  325 | }
+      | ^
+
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1590008) [0x79f627990008]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd5fa0f) [0x79f62595fa0f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c538) [0x79f62598c538]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c4be) [0x79f62598c4be]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x8b370f) [0x79f6254b370f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1ed3) [0x79f6547f7ed3]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x8b3569) [0x79f6254b3569]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c30e) [0x79f62598c30e]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e9395) [0x79f6255e9395]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e7ea0) [0x79f6255e7ea0]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e7388) [0x79f6255e7388]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x79f624054c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x79f6547f2aa4]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x79f65487fa64]
+
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1180a48) [0x79f627580a48]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xab575b) [0x79f6256b575b]
+ --- tt::tt_metal::JitBuildCache::build_once_no_wait(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once_no_wait(unsigned long, std::function<void ()> const&)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xaaead3) [0x79f6256aead3]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xab8dd2) [0x79f6256b8dd2]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c538) [0x79f62598c538]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c4be) [0x79f62598c4be]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x8b370f) [0x79f6254b370f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1ed3) [0x79f6547f7ed3]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x8b3569) [0x79f6254b3569]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0xd8c30e) [0x79f62598c30e]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e9395) [0x79f6255e9395]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e7ea0) [0x79f6255e7ea0]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x9e7388) [0x79f6255e7388]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x79f624054c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x79f6547f2aa4]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x79f65487fa64]
+
+2026-11-01 15:20:58.959 | info     |    BuildKernels | JIT cache stats: 18/18 hits (100.0%) [18 cached, 3 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 15:20:58.959 | info     |    BuildKernels | JIT telemetry: 30 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 15:20:58.972 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 15:20:58.972 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 15:20:59.142 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 15:20:59.142 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 15:20:59.142 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

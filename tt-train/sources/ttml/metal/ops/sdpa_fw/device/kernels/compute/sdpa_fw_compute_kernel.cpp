@@ -44,6 +44,9 @@ constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to tr
 constexpr uint32_t pv_block_size = get_compile_time_arg_val(9);  // PV matmul_block ct_dim (cap = dst_size)
 constexpr uint32_t scaler_bf16_bits =
     get_compile_time_arg_val(10);  // host-side RNE BF16 of scaler_bits, for the WH fused scale+exp
+constexpr uint32_t dst_size = get_compile_time_arg_val(11);  // DEST tiles per pass (4 with fp32 accumulation)
+// The QK^T and exp stages work on the chunk in passes of kPass tiles (iteration 26: chunks of up to 8 K/V rows).
+constexpr uint32_t kPass = (Sk_chunk_t < dst_size) ? Sk_chunk_t : dst_size;
 constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -135,45 +138,45 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_query,
             cb_key,
             /* transpose */ 1,
-            /* ct_dim */ Sk_chunk_t,
+            /* ct_dim */ kPass,
             /* rt_dim */ 1,
             /* kt_dim */ qWt);
-        tile_regs_acquire();
-        {
-            // One matmul_block call does ONE K-step (1 Q tile × ct_dim K tiles → ct_dim
-            // accumulated outputs). Iterate qWt times to contract the full feature dim.
-            uint32_t q_idx = 0;
-            uint32_t k_idx = 0;
-            for (uint32_t feat = 0; feat < qWt; ++feat) {
-                matmul_block(
-                    cb_query,
-                    cb_key,
-                    /* in0 (Q) tile_idx */ q_idx,
-                    /* in1 (K) tile_idx */ k_idx,
-                    /* dst_idx */ 0,
-                    /* transpose */ 1,
-                    /* ct_dim */ Sk_chunk_t,
-                    /* rt_dim */ 1,
-                    /* kt_dim */ qWt);
-                q_idx += 1U;
-                k_idx += Sk_chunk_t;
-            }
-        }
-        tile_regs_commit();
-        tile_regs_wait();
         cb_reserve_back(cb_attention_weights, Sk_chunk_t);
-        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-            pack_tile(n, cb_attention_weights);
+        // The chunk's score tiles in passes of kPass columns (one DEST cycle each), packed in order into the
+        // reserved chunk; one push after the passes (and the mask stamp below).
+        for (uint32_t p = 0; p < Sk_chunk_t; p += kPass) {
+            tile_regs_acquire();
+            {
+                // One matmul_block call does ONE K-step (1 Q tile × kPass K tiles → kPass accumulated
+                // outputs). Iterate qWt times to contract the full feature dim; the K tiles of columns
+                // p .. p + kPass - 1 at feature `feat` sit at feat * Sk_chunk_t + p (col-major chunk).
+                uint32_t q_idx = 0;
+                uint32_t k_idx = p;
+                for (uint32_t feat = 0; feat < qWt; ++feat) {
+                    matmul_block(
+                        cb_query,
+                        cb_key,
+                        /* in0 (Q) tile_idx */ q_idx,
+                        /* in1 (K) tile_idx */ k_idx,
+                        /* dst_idx */ 0,
+                        /* transpose */ 1,
+                        /* ct_dim */ kPass,
+                        /* rt_dim */ 1,
+                        /* kt_dim */ qWt);
+                    q_idx += 1U;
+                    k_idx += Sk_chunk_t;
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t n = 0; n < kPass; ++n) {
+                pack_tile(n, cb_attention_weights);
+            }
+            tile_regs_release();
         }
-        cb_push_back(cb_attention_weights, Sk_chunk_t);
-        tile_regs_release();
 
         if (k_chunk == diag_chunk) {
-            // Re-enter reserved state on the same L1 slots (single-buffered CB wraps back).
-            cb_wait_front(cb_attention_weights, Sk_chunk_t);
-            cb_pop_front(cb_attention_weights, Sk_chunk_t);
-            cb_reserve_back(cb_attention_weights, Sk_chunk_t);
-
+            // The chunk is still reserved (not pushed): the out-of-order packs below address its tiles.
             // Unpacker → mask CB (BF16); packer stays on cb_attention_weights (FP32).
             copy_init(cb_attn_mask);
             pack_reconfig_l1_acc(1);
@@ -191,9 +194,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                 tile_regs_release();
             }
             pack_reconfig_l1_acc(0);
-
-            cb_push_back(cb_attention_weights, Sk_chunk_t);
         }
+        cb_push_back(cb_attention_weights, Sk_chunk_t);
 #else
         // USE_ATTN_MASK (provided mask) and no-mask — a per-`n` matmul_tiles path.
         // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
@@ -242,7 +244,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             alias_cb_prev_max,
             /* do_eltwise_max */ k_chunk > 0);
 
-        apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, Sk_chunk_t>(
+        apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, Sk_chunk_t, kPass>(
             cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
         matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);

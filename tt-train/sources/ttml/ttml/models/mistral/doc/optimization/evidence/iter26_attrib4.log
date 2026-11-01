@@ -1,0 +1,29 @@
+=== attribution 4 start 2026-11-01T15:33:56Z
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack']
+fwdf nofwd: 'noc\\.async_write\\(\\s*CoreLocalMem<uint32_t>\\([kv]_' x2
+fwdf noread: 'read_tile_block_transposed</\\* UseBarrier \\*/ fals' x1
+fwdf noread: 'read_tiles_by_row</\\* UseBarrier \\*/ false>\\(\\s*cb' x1
+patched fwdf ['nofwd', 'noread']
+fw_skel_nostream case q8 kv2 S1024 D128: wall us fw 51 fw+bw 449 bw 397
+fw noqk: 'matmul_block\\(\\s*cb_query,\\s*cb_key,[^;]*;' x1
+fw nomax: 'reduce_tile<pool_type, reduce_dim>\\([^;]*;' x1
+fw nosub: 'sub_tiles_bcast_cols\\(\\s*cb_attention_weights, cb_' x1
+fw noexp: 'sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>\\(n\\' x1
+fw nopv: 'matmul_block\\(\\s*cb_attention_weights,\\s*cb_value,' x1
+fw nocorr: 'update_cur_mm_out\\(vWt, block_size,[^;]*;' x1
+fw nopack: 'pack_tile(</\\* out_of_order \\*/ true>)?\\([^;]*;' x16
+fw noregs: 'tile_regs_(acquire|commit|wait|release)\\(\\);' x56
+fw nocopy: '\\b(copy_tile|unary_bcast<BroadcastType::COL>|sub_t' x34
+fw nocopy: 'MATH\\(\\(recip_tile_first_column\\(dst_idx\\)\\)\\);' x1
+fw noreconfig: '\\b(reconfig_data_format(_srca|_srcb)?|pack_reconfi' x31
+patched fw ['noqk', 'nomax', 'nosub', 'noexp', 'nopv', 'nocorr', 'nopack', 'noregs', 'nocopy', 'noreconfig']
+fw_skel_noreconfig case q8 kv2 S1024 D128: wall us fw 72 fw+bw 469 bw 397
+ 10 files changed, 101 insertions(+), 43 deletions(-)
+=== attribution 4 done 2026-11-01T15:34:03Z
