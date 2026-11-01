@@ -941,6 +941,26 @@ bool Cluster::use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr,
            sz_in_bytes >= this->hal_->get_dma_write_min_bytes(ordering);
 }
 
+void Cluster::sanitize_host_noc_write(tt_cxy_pair core, uint64_t addr, uint32_t sz_in_bytes) const {
+    if (!rtoptions_.get_watcher_enabled() || rtoptions_.watcher_noc_sanitize_disabled()) {
+        return;
+    }
+    TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
+    const ChipId chip_id = core.chip;
+    tt::watcher_sanitize_host_noc_write(
+        *this->hal_,
+        this->get_soc_desc(chip_id),
+        this->virtual_worker_cores_.at(chip_id),
+        this->virtual_eth_cores_.at(chip_id),
+        this->virtual_pcie_cores_.at(chip_id),
+        this->virtual_dram_cores_.at(chip_id),
+        this->virtual_dram_hw_cores_.at(chip_id),
+        this->virtual_dispatch_cores_.at(chip_id),
+        {core.x, core.y},
+        addr,
+        sz_in_bytes);
+}
+
 void Cluster::write_core(
     const void* mem_ptr,
     uint32_t sz_in_bytes,
@@ -952,21 +972,7 @@ void Cluster::write_core(
     }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
-    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
-        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
-        tt::watcher_sanitize_host_noc_write(
-            *this->hal_,
-            soc_desc,
-            this->virtual_worker_cores_.at(chip_id),
-            this->virtual_eth_cores_.at(chip_id),
-            this->virtual_pcie_cores_.at(chip_id),
-            this->virtual_dram_cores_.at(chip_id),
-            this->virtual_dram_hw_cores_.at(chip_id),
-            this->virtual_dispatch_cores_.at(chip_id),
-            {core.x, core.y},
-            addr,
-            sz_in_bytes);
-    }
+    this->sanitize_host_noc_write(core, addr, sz_in_bytes);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
         core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
@@ -1005,21 +1011,7 @@ void Cluster::write_core_with_snoop_if_required(
     }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
-    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
-        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
-        tt::watcher_sanitize_host_noc_write(
-            *this->hal_,
-            soc_desc,
-            this->virtual_worker_cores_.at(chip_id),
-            this->virtual_eth_cores_.at(chip_id),
-            this->virtual_pcie_cores_.at(chip_id),
-            this->virtual_dram_cores_.at(chip_id),
-            this->virtual_dram_hw_cores_.at(chip_id),
-            this->virtual_dispatch_cores_.at(chip_id),
-            {core.x, core.y},
-            addr,
-            sz_in_bytes);
-    }
+    this->sanitize_host_noc_write(core, addr, sz_in_bytes);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     std::unique_ptr<tt::umd::IoWindow> window;
@@ -1078,22 +1070,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
 void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
-
-    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
-        TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
-        tt::watcher_sanitize_host_noc_write(
-            *this->hal_,
-            soc_desc,
-            this->virtual_worker_cores_.at(chip_id),
-            this->virtual_eth_cores_.at(chip_id),
-            this->virtual_pcie_cores_.at(chip_id),
-            this->virtual_dram_cores_.at(chip_id),
-            this->virtual_dram_hw_cores_.at(chip_id),
-            this->virtual_dispatch_cores_.at(chip_id),
-            {core.x, core.y},
-            addr,
-            sz_in_bytes);
-    }
+    this->sanitize_host_noc_write(core, addr, sz_in_bytes);
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     const bool is_remote = this->get_cluster_desc()->is_chip_remote(chip_id);
