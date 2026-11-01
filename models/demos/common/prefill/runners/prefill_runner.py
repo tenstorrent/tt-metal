@@ -683,16 +683,16 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
 
 
 @contextlib.contextmanager
-def _with_hang_timeout():
+def _with_hang_timeout(mesh_device):
     if not CHUNK_TIMEOUT_SECONDS:
         yield
         return
-    saved = ttnn.device.GetOperationTimeoutSeconds()
-    ttnn.device.SetOperationTimeoutSeconds(CHUNK_TIMEOUT_SECONDS)
+    saved = ttnn.device.GetOperationTimeoutSeconds(mesh_device)
+    ttnn.device.SetOperationTimeoutSeconds(mesh_device, CHUNK_TIMEOUT_SECONDS)
     try:
         yield
     finally:
-        ttnn.device.SetOperationTimeoutSeconds(saved)
+        ttnn.device.SetOperationTimeoutSeconds(mesh_device, saved)
 
 
 def _chunk_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
@@ -797,7 +797,7 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
-    with _with_hang_timeout():
+    with _with_hang_timeout(runtime.mesh_device):
         if PER_CHUNK_FORWARDS:
             out = _prefill_chunks(
                 runtime,
@@ -1123,7 +1123,7 @@ def main() -> None:
     )
 
     if CHUNK_TIMEOUT_SECONDS:
-        ttnn.device.SetOperationTimeoutSeconds(0)
+        ttnn.device.SetOperationTimeoutSeconds(mesh_device, 0)
 
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN

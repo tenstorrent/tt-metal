@@ -121,6 +121,7 @@ enum class EnvVarID {
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets
+    TT_METAL_SIMULATOR_DRAM_UNCAPPED,                   // Quasar emulator: address all the DRAM the descriptor declares
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
@@ -723,7 +724,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against.
         // "off", "none" or "0" force plain XY addressing. When unset, XY addressing is used except
         // that MetalEnvImpl defaults the qsr.s1 emulator model to, grendel_qsr1. Unknown map names
-        // are rejected by the Quasar HAL when the JIT defines are generated.
+        // are rejected by the Quasar HAL when the JIT defines are generated. On a simulator,
+        // quasar_aether_2x3 is switched to quasar_aether_2x3_uncapped when
+        // TT_METAL_SIMULATOR_DRAM_UNCAPPED=1, and naming quasar_aether_2x3_uncapped sets that option.
         // Default: unset
         // Usage: export TT_METAL_NOC_ATT=grendel_qsr1
         case EnvVarID::TT_METAL_NOC_ATT: {
@@ -950,6 +953,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS:
             this->simulator_serve_over_sockets = is_env_enabled(value);
             break;
+
+        // TT_METAL_SIMULATOR_DRAM_UNCAPPED
+        // Skip the DRAM clamp on Quasar emulator models that back less DRAM than their soc descriptor
+        // declares, so the whole descriptor size can be addressed. Offsets above the
+        // backing wrap onto the low DRAM. Under ATT, map quasar_aether_2x3 is switched to
+        // quasar_aether_2x3_uncapped.
+        // Default: false
+        // Usage: export TT_METAL_SIMULATOR_DRAM_UNCAPPED=1
+        case EnvVarID::TT_METAL_SIMULATOR_DRAM_UNCAPPED: this->simulator_dram_uncapped = is_env_enabled(value); break;
 
         // TT_METAL_QUASAR_NOC_API_VERSION
         // Set the NOC API version for Quasar.
@@ -2052,6 +2064,21 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
+    }
+
+    // On a simulator TT_METAL_SIMULATOR_DRAM_UNCAPPED and the quasar_aether_2x3_uncapped map imply each
+    // other: the option moves an ATT run of quasar_aether_2x3 to the map whose DRAM window covers the
+    // descriptor's 1 GiB, and naming that map lifts the DRAM clamp.
+    if (this->get_simulator_enabled()) {
+        if (this->simulator_dram_uncapped && this->noc_att_map_ == "quasar_aether_2x3") {
+            this->noc_att_map_ = "quasar_aether_2x3_uncapped";
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_SIMULATOR_DRAM_UNCAPPED=1: TT_METAL_NOC_ATT map quasar_aether_2x3 switched to "
+                "quasar_aether_2x3_uncapped");
+        } else if (this->noc_att_map_ == "quasar_aether_2x3_uncapped") {
+            this->simulator_dram_uncapped = true;
+        }
     }
 
     // Set inspector log path

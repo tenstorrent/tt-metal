@@ -80,16 +80,13 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
 
-      # Supplies the matrix script from upstream main rather than this branch
-      # (#57555, #57579). Must stay AFTER the checkout above, whose
-      # `git clean -ffdx` would delete this directory.
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
       - name: Checkout CI actions from main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          # Explicit: defaults to github.repository, which is the fork when
-          # the workflow runs inside one.
-          repository: tenstorrent/tt-metal
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
           ref: main
           path: ci-main
           sparse-checkout: |
@@ -103,8 +100,6 @@ jobs:
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        # Via ci-main so GITHUB_ACTION_PATH reaches main's script; the yaml
-        # inputs below stay workspace-relative, so config follows the branch.
         uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: "${{ env.TESTS_YAML_PATH }}"
