@@ -173,8 +173,9 @@ enum class InstrModLoadStore
     FP32          = 3,
     INT32         = 4,
     INT8          = 5,
-    LO16          = 6,
+    UINT16        = 6, // load/store the 16-bit Dest view (Dst16b)
     HI16          = 7,
+    LO16          = 9, // load as UINT16; store writes 32-bit Dest (Dst32b) with the 16-bit halves swapped
     INT32_2S_COMP = 12,
     INT8_2S_COMP  = 13,
     LO16_ONLY     = 14,
@@ -250,7 +251,7 @@ constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
         case DataFormat::UInt8:
             return InstrModLoadStore::INT8; // spec value 5: int8 format
         case DataFormat::UInt16:
-            return is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16; // spec value 6: unsigned int16 format
+            return is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16; // spec value 6: unsigned int16 format
         case DataFormat::Int32:
             return InstrModLoadStore::INT32; // spec value 4: int32 format
         case DataFormat::UInt32:

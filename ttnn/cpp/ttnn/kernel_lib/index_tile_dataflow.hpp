@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "ckernel.h"
 #include <type_traits>
+#include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
@@ -34,27 +35,30 @@ namespace dataflow_kernel_lib {
  * (experimental/reduction/deepseek_grouped_gate, experimental/deepseek_prefill/moe_grouped_topk).
  *
  * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for the
- * UInt16 index tile (LO16 dest, WH/BH), uint32_t for the Int32 index tile (INT32 dest, Quasar).
+ * UInt16 index tile (UINT16 dest, WH/BH), uint32_t for the Int32 index tile (INT32 dest, Quasar).
  *
  * @param dfb The kernel's dataflow buffer to write the generated index tile to. Construct it once at
  *            kernel scope and pass it by reference: on Quasar a DataflowBuffer drains when it goes out
  *            of scope, so a helper-owned one would block here until the consumer pops the tile.
  * @param wt  Width tile position [0, Wt)
  */
-template <typename T = uint16_t, typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
-FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
-    constexpr uint32_t one_tile = 1;
-    constexpr uint32_t tile_faces = 2;
-    constexpr uint32_t face_size = 16;
+template <
+    typename T = std::uint16_t,
+    typename DFB,
+    std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
+FORCE_INLINE void generate_index_tile(DFB& dfb, const std::uint32_t wt) {
+    constexpr std::uint32_t one_tile = 1;
+    constexpr std::uint32_t tile_faces = 2;
+    constexpr std::uint32_t face_size = 16;
 
     dfb.reserve_back(one_tile);
 
-    const uint32_t tile_addr = dfb.get_write_ptr();
-    const uint32_t w = wt << 5;  // wt * 32
+    const std::uint32_t tile_addr = dfb.get_write_ptr();
+    const std::uint32_t w = wt << 5;  // wt * 32
 
     if constexpr (sizeof(T) == 2) {
-        constexpr uint32_t face_line_bytes = face_size * sizeof(T);         // 32
-        constexpr uint32_t face_bytes = face_size * face_size * sizeof(T);  // 512
+        constexpr std::uint32_t face_line_bytes = face_size * sizeof(T);         // 32
+        constexpr std::uint32_t face_bytes = face_size * face_size * sizeof(T);  // 512
 
         // How many rows of each upper face the RISC seeds before the NoC replicates them. Per tile
         // that is tile_faces * seed_rows * (face_size / 2) stores and
@@ -69,21 +73,21 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
         // of the machine. One to four rows sit inside a 4% band on the numbers above, so a part
         // with a different ratio pays at most that much until someone re-measures; eight rows is
         // where the trade clearly turns. Only this constant needs to change.
-        constexpr uint32_t seed_rows = 2;
-        constexpr uint32_t seed_words = seed_rows * face_size / 2;
-        constexpr uint32_t seed_bytes = seed_rows * face_line_bytes;
+        constexpr std::uint32_t seed_rows = 2;
+        constexpr std::uint32_t seed_words = seed_rows * face_size / 2;
+        constexpr std::uint32_t seed_bytes = seed_rows * face_line_bytes;
 
         Noc noc;
-        const uint8_t noc_id = noc.get_noc_id();
+        const std::uint8_t noc_id = noc.get_noc_id();
         UnicastEndpoint local_l1;
 
-        for (uint32_t j = 0; j < tile_faces; ++j) {
+        for (std::uint32_t j = 0; j < tile_faces; ++j) {
             // Seed rows of the face: two 16-bit indices per 32-bit word, every row identical.
-            const uint32_t face_addr = tile_addr + j * face_bytes;
-            volatile tt_l1_ptr uint32_t* seed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(face_addr);
-            for (uint32_t r = 0; r < seed_rows; ++r) {
-                uint32_t value = w + face_size * j;
-                for (uint32_t m = 0; m < face_size / 2; ++m) {
+            const std::uint32_t face_addr = tile_addr + j * face_bytes;
+            volatile tt_l1_ptr std::uint32_t* seed = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(face_addr);
+            for (std::uint32_t r = 0; r < seed_rows; ++r) {
+                std::uint32_t value = w + face_size * j;
+                for (std::uint32_t m = 0; m < face_size / 2; ++m) {
                     seed[r * (face_size / 2) + m] = ((value + 1) << 16) | value;
                     value += 2;
                 }
@@ -95,11 +99,11 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
             (void)ckernel::load_blocking(seed + (seed_words - 1));
 
             // Replicate the seed down the remaining rows of the face.
-            uint32_t dst_addr = face_addr + seed_bytes;
-            for (uint32_t k = seed_rows; k < face_size; k += seed_rows) {
+            std::uint32_t dst_addr = face_addr + seed_bytes;
+            for (std::uint32_t k = seed_rows; k < face_size; k += seed_rows) {
                 noc.async_read(
                     local_l1,
-                    CoreLocalMem<uint32_t>(dst_addr),
+                    CoreLocalMem<std::uint32_t>(dst_addr),
                     seed_bytes,
                     {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = face_addr},
                     {});
@@ -111,7 +115,7 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
         // The two lower faces are copies of the two upper ones.
         noc.async_read(
             local_l1,
-            CoreLocalMem<uint32_t>(tile_addr + tile_faces * face_bytes),
+            CoreLocalMem<std::uint32_t>(tile_addr + tile_faces * face_bytes),
             tile_faces * face_bytes,
             {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = tile_addr},
             {});
@@ -122,11 +126,11 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     }
 
     volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(tile_addr);
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < tile_faces; ++i) {
-        for (uint32_t j = 0; j < tile_faces; ++j) {
-            for (uint32_t k = 0; k < face_size; ++k) {
-                for (uint32_t l = 0; l < face_size; ++l) {
+    std::uint32_t count = 0;
+    for (std::uint32_t i = 0; i < tile_faces; ++i) {
+        for (std::uint32_t j = 0; j < tile_faces; ++j) {
+            for (std::uint32_t k = 0; k < face_size; ++k) {
+                for (std::uint32_t l = 0; l < face_size; ++l) {
                     ptr[count] = l + face_size * j + w;
                     count++;
                 }
@@ -137,8 +141,8 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
 }
 
 // The id-only form: builds the DataflowBuffer from the id and runs the form above. See id_only_helpers.hpp.
-template <typename T = uint16_t>
-KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
+template <typename T = std::uint16_t>
+KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void generate_index_tile(const std::uint32_t dfb_id, const std::uint32_t wt) {
     DataflowBuffer dfb(dfb_id);
     generate_index_tile<T>(dfb, wt);
 }

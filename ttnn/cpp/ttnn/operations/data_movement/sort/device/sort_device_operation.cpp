@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
+#include <cstdint>
 
 #include "sort_device_operation.hpp"
 #include "tt_stl/assert.hpp"
@@ -13,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-constexpr uint32_t SORT_WT_THRESHOLD = 64;
+constexpr std::uint32_t SORT_WT_THRESHOLD = 64;
 // UINT16 + ROW_MAJOR uses a lower SingleCore threshold: the SingleCore RM path
 // promotes the value CBs (rm_input_cb, rm_value_output_cb) from UInt16 to
 // Float32 (2× storage) and its per-row page size scales with the full W (Wt *
@@ -22,25 +23,25 @@ constexpr uint32_t SORT_WT_THRESHOLD = 64;
 // not scale with Wt, so we route Wt > 32 UINT16 RM inputs there.  Empirically
 // Wt = 32 stays comfortably below the L1 cap (~1.1 MB static CBs); Wt = 64
 // OOMs during program allocation.
-constexpr uint32_t SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32;
+constexpr std::uint32_t SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32;
 
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
-    const uint32_t w_dim =
+    const std::uint32_t w_dim =
         is_row_major ? tensor_args.input_tensor.logical_shape()[3] : tensor_args.input_tensor.padded_shape()[3];
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
-    const uint32_t Wt = w_dim / tile_width;
+    const std::uint32_t Wt = w_dim / tile_width;
 
     auto* const device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+    const std::uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
     const auto input_dtype = tensor_args.input_tensor.dtype();
     const auto output_specs = compute_output_specs(attributes, tensor_args);
     const auto index_dtype = output_specs[1].data_type();
 
-    const uint32_t total_number_of_tiles_for_hybrid_approach =
+    const std::uint32_t total_number_of_tiles_for_hybrid_approach =
         total_number_of_cores *
         SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
             total_number_of_cores,
@@ -50,7 +51,7 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
             SortProgramFactoryCrossCoreDataExchange::CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
 
     const bool is_uint16 = (input_dtype == DataType::UINT16);
-    const uint32_t single_core_wt_threshold =
+    const std::uint32_t single_core_wt_threshold =
         (is_uint16 && is_row_major) ? SORT_WT_THRESHOLD_UINT16_ROW_MAJOR : SORT_WT_THRESHOLD;
 
     if (Wt <= single_core_wt_threshold) {
@@ -96,8 +97,8 @@ void SortDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_pshape.rank() == 4, "Input shape must be 4D, got {}", input_pshape.rank());
 
-    const int8_t rank = static_cast<int8_t>(input_pshape.rank());
-    const int8_t dim = operation_attributes.dim;
+    const std::int8_t rank = static_cast<std::int8_t>(input_pshape.rank());
+    const std::int8_t dim = operation_attributes.dim;
     TT_FATAL(
         dim == -1 || dim == rank - 1,
         "Sort device op requires dim to be the last axis (-1 or {}), got {}. "
@@ -127,7 +128,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // this only rejects direct prim calls.
     // For TILE the relevant dimension is the padded width; for ROW_MAJOR it is
     // the logical width (padding was already applied in pre_sort_transform_tensor).
-    const uint32_t checked_w = is_row_major ? input_lshape[-1] : input_pshape[-1];
+    const std::uint32_t checked_w = is_row_major ? input_lshape[-1] : input_pshape[-1];
     TT_FATAL(
         checked_w >= 64 && std::has_single_bit(checked_w),
         "Input shape inner dim {} must be a power of two >= 64. Use ttnn.sort, which pads the sort dimension "
@@ -138,7 +139,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // For TILE layout: padded_shape height is tile-aligned by construction.
     // For ROW_MAJOR layout: pre_sort_transform_tensor in sort.cpp pads the H
     //   dimension automatically, so combined_h is always a multiple of 32 here.
-    const uint32_t combined_h = input_pshape[0] * input_pshape[1] * input_pshape[2];
+    const std::uint32_t combined_h = input_pshape[0] * input_pshape[1] * input_pshape[2];
     // Empty tensors must not reach a program factory: a factory that derives
     // its work split from the row count would divide by zero, and the rest
     // would build zero-work programs.
@@ -201,7 +202,7 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // Create output tensors specs
     auto output_shape = tensor_args.input_tensor.logical_shape();
 
-    // Indices are always stored as unsigned integers.  The topk LLK uses LO16
+    // Indices are always stored as unsigned integers.  The topk LLK uses UINT16
     // (uint16) or INT32 (uint32) mode in the SFPU to track indices, so the CB
     // format must match.
     //
@@ -215,7 +216,7 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
     const bool input_is_uint16 = (tensor_args.input_tensor.dtype() == DataType::UINT16);
     DataType index_dtype = DataType::UINT16;
-    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16) {
+    if (output_shape[-1] >= std::numeric_limits<std::uint16_t>::max() || input_is_fp32 || input_is_uint16) {
         index_dtype = DataType::UINT32;
     }
 
@@ -261,7 +262,7 @@ SortDeviceOperation::tensor_return_value_t SortDeviceOperation::create_output_te
 namespace ttnn::prim {
 ttnn::prim::SortDeviceOperation::tensor_return_value_t sort(
     const Tensor& input_tensor,
-    int8_t dim,
+    std::int8_t dim,
     bool descending,
     bool stable,
     const MemoryConfig& output_memory_config,

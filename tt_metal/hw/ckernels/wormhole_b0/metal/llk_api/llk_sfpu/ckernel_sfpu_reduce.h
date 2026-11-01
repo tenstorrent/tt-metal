@@ -244,7 +244,7 @@ inline void perform_reduce_col_sum_avg() {
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Optimized column reduction: Reduce → Add → Transpose → HalfReduce
     // Instead of the naive Transpose → Reduce → Transpose → Reduce → Add approach, we first reduce
@@ -598,7 +598,7 @@ inline void horizontal_reduce_max_int32() {
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16).
  *         Int32 and UInt32 MAX/MIN do not use this helper; they take perform_reduce_row_max_tile_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @param tile_row_offset Base row offset for this tile in the dest register
@@ -677,7 +677,7 @@ inline void perform_reduce_row_sum_tile(
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Process tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31
     // Each face-pair iteration processes 8 rows (two groups of 4 rows each)
@@ -781,7 +781,7 @@ inline void sum_first_columns_across_tiles(
     std::uint32_t tile_row_base, std::uint32_t block_ct_dim, RowAvgReciprocal recip = {}) {
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Row offset for each of the 8 partial row-sum results (face 0: 0,4,8,12; face 2: 32,36,40,44)
     constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
@@ -859,7 +859,7 @@ inline void sum_first_columns_across_tiles(
  * Mirrors sum_first_columns_across_tiles but uses SFPSWAP instead of SFPADD
  * to keep maximum values rather than sums.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16).
  *         Int32 and UInt32 MAX/MIN do not use this helper; they take max_first_columns_across_tiles_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @tparam pack_low16 Whether the final store uses mode 9 (low->high 16-bit) for a UInt16 output.
@@ -968,7 +968,7 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
  * two's-complement path (perform_reduce_row_max_min_int32 / calculate_reduce_max_min_int32_col).
  *
  * @tparam pool_type MAX or MIN.
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16)
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16)
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
@@ -1238,8 +1238,8 @@ inline void init_reduce_max_min_int32_signed() {
  *        For MIN operations, inverts the swap direction by configuring the SFPU control register.
  *
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B) or LO16. Int32 and UInt32 MAX/MIN use init_reduce_max_min_int32_signed, and UInt16 in a 32-bit Dest the manual
- * column path, instead, so it does not go through this init.
+ * FP16B) or UINT16. Int32 and UInt32 MAX/MIN use init_reduce_max_min_int32_signed, and UInt16 in a 32-bit Dest the
+ * manual column path, instead, so it does not go through this init.
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN inverts the swap direction for minimum reduction.
  * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block
  * operations)
@@ -1302,7 +1302,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
  * @note The row SUM/AVG calculate replays the row window instead of recording it, so call this init again after
  *       anything else records into the SFPU half of the replay buffer.
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, UINT16, DEFAULT
  * (FP32, FP16B)
  * @tparam pool_type The PoolType enum value (SUM or AVG). AVG with a float format preloads the 1/32 constant.
  */
@@ -1313,7 +1313,7 @@ inline void init_reduce_sum_avg() {
     // Determine if integer or float mode based on INSTRUCTION_MODE
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Float AVG divides by 32 by multiplying by 1/32. Preload that constant once here (only when it is
     // actually needed: float AVG) into the programmable float const register AVG_RECIP_REG so
@@ -1583,7 +1583,7 @@ inline void calculate_reduce_max_min_int32_col() {
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX and MIN).
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B) or LO16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
+ * FP16B) or UINT16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
  * (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32), and UInt16 in a 32-bit Dest the manual
  * column path (calculate_reduce_max_min_uint16), instead.
  * @param block_ct_dim Number of tiles along x axis (column tiles, default 1).
@@ -1689,7 +1689,7 @@ inline void calculate_reduce_max_min(
  *
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG)
  * @tparam reduce_dim REDUCE_COL (all formats) or REDUCE_ROW (SUM all formats; AVG float formats only)
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, UINT16, DEFAULT
  * (FP32, FP16B)
  * @tparam is_signed_int True when the reduce format is signed (Int32). Passed separately from INSTRUCTION_MODE
  * because UInt32 shares the INT32 mode; see perform_int_average().
@@ -1712,7 +1712,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
     // supported (integer AVG stays column-only, where the divisor is the fixed 32 rows of a tile).
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
-         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+         INSTRUCTION_MODE == InstrModLoadStore::UINT16);
 
     // Compile-time assertions to restrict to currently supported operations
     static_assert(
@@ -1727,7 +1727,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
          INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B);
     static_assert(
         is_supported_reduce_instr_mode,
-        "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT, FP32, FP16B");
+        "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, UINT16, DEFAULT, FP32, FP16B");
 
     if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
         perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>();

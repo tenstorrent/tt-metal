@@ -29,15 +29,14 @@
 #include "llk_sfpu/ckernel_sfpu_binary_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_binary_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
-#include "llk_sfpu/ckernel_sfpu_clamp.h"
-#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
-#include "llk_sfpu/ckernel_sfpu_quant.h"
-#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
+#include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
@@ -76,6 +75,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_quant.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
@@ -971,7 +971,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _calculate_fill_int_,
-                (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX_MODE, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode,
                 static_cast<std::uint32_t>(fill_const_value));
@@ -1253,7 +1253,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         if (math_format == ckernel::to_underlying(DataFormat::UInt16))
         {
             SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS), dst_index, vector_mode);
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::UINT16, ITERATIONS), dst_index, vector_mode);
         }
         else if (math_format == ckernel::to_underlying(DataFormat::Int32) || math_format == ckernel::to_underlying(DataFormat::UInt32))
         {

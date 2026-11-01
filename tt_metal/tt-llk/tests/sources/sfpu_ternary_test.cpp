@@ -19,7 +19,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // configure unpack/math/pack. Supported float/int formats pass through; anything
 // else falls back to a raw 16-bit (UInt16) move.
 //
-// Unlike the where kernel (raw LO16 loads), the addc kernels read Dest with a
+// Unlike the where kernel (raw UINT16 loads), the addc kernels read Dest with a
 // float-aware SFPLOAD (InstrModLoadStore::DEFAULT), so bf16 must stay Float16_b
 // rather than being moved as raw UInt16.
 static constexpr std::uint8_t resolve_ternary_format(std::uint8_t in)

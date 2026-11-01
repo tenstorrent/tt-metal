@@ -23,7 +23,7 @@ inline void _sub_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     // Operand A is input1 (int32/uint16)
     // Operand B is input2 (int32/uint16)
     // Output is int32/uint16
-    static_assert(is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+    static_assert(is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     if constexpr (SIGN_MAGNITUDE_FORMAT)
     {
@@ -63,9 +63,9 @@ inline void _sub_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
         // 2's-complement integer subtract expressed in sfpi. `a - b` lowers to the same single
         // SFPIADD (2's-complement of B) the raw path used, but the loads/store and the dst walk are
         // left to the compiler, dropping the per-iteration bookkeeping. Pick the DataLayout whose
-        // load/store format byte matches the original InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32;
+        // load/store format byte matches the original InstrModLoadStore (UINT16->U16, INT32/2S_COMP->I32;
         // on Blackhole INT32_2S_COMP loads the same raw bits as INT32).
-        constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
+        constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::UINT16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
         using vType                       = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store

@@ -18,15 +18,15 @@ inline void logical_not_unary_init() { math::reset_counters(p_setrwc::SET_ABD_F)
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_logical_not() {
     static_assert(
-        INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::LO16 ||
+        INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::UINT16 ||
             INSTRUCTION_MODE == InstrModLoadStore::INT32,
-        "INSTRUCTION_MODE must be one of: DEFAULT, LO16, INT32.");
+        "INSTRUCTION_MODE must be one of: DEFAULT, UINT16, INT32.");
 
-    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)    ? sfpi::DataLayout::U16
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::UINT16)  ? sfpi::DataLayout::U16
                                         : (INSTRUCTION_MODE == InstrModLoadStore::INT32) ? sfpi::DataLayout::I32
                                                                                          : sfpi::DataLayout::Default;
     using vType = std::conditional_t<
-        INSTRUCTION_MODE == InstrModLoadStore::LO16,
+        INSTRUCTION_MODE == InstrModLoadStore::UINT16,
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 

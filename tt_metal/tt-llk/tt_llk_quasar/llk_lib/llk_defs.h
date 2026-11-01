@@ -238,7 +238,7 @@ enum class SfpuType : std::uint32_t
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its
-// sfpi::DataLayout from DEFAULT / LO16 / INT32. The numbers are the Blackhole SFPLOAD instr_mod0
+// sfpi::DataLayout from DEFAULT / UINT16 / INT32. The numbers are the Blackhole SFPLOAD instr_mod0
 // codes, kept so the names mean the same on every arch; Quasar's own SFPLOAD/SFPSTORE encodings are
 // p_sfpu::sfpmem, so never pack these values into a Quasar instruction word.
 enum class InstrModLoadStore
@@ -249,8 +249,9 @@ enum class InstrModLoadStore
     FP32          = 3,
     INT32         = 4,
     INT8          = 5,
-    LO16          = 6,
+    UINT16        = 6, // load/store the 16-bit Dest view (Dst16b)
     HI16          = 7,
+    LO16          = 9, // load as UINT16; store writes 32-bit Dest (Dst32b) with the 16-bit halves swapped
     INT32_2S_COMP = 12,
     INT8_2S_COMP  = 13,
     LO16_ONLY     = 14,
@@ -260,7 +261,7 @@ enum class InstrModLoadStore
 // The integer layouts the WH/BH SFPI integer kernels accept (e.g. calculate_rsub_int), as on Blackhole.
 inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
 {
-    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::UINT16;
 }
 
 enum class DstSync : std::uint8_t

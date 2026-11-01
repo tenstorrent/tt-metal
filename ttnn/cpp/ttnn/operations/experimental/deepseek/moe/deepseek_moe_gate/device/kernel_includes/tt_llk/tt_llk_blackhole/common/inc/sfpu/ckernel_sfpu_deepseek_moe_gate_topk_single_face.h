@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
@@ -16,11 +17,11 @@
 namespace ckernel {
 namespace sfpu {
 
-constexpr uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
-constexpr uint32_t scores_offset = 0;
-constexpr uint32_t indices_offset = scores_offset + dst_tile_offset;
-constexpr uint32_t bias_offset = indices_offset + dst_tile_offset;
-constexpr uint32_t interm_offset = bias_offset + dst_tile_offset;
+constexpr std::uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
+constexpr std::uint32_t scores_offset = 0;
+constexpr std::uint32_t indices_offset = scores_offset + dst_tile_offset;
+constexpr std::uint32_t bias_offset = indices_offset + dst_tile_offset;
+constexpr std::uint32_t interm_offset = bias_offset + dst_tile_offset;
 
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load16_single_face() {
@@ -31,14 +32,14 @@ inline void bitonic_topk_load16_single_face() {
     TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, bias_offset + 12);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_7, indices_offset + 8);
     TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_offset + 12);
 }
 
-template <bool is_fp32_dest_acc_en, uint32_t offset = 0>
+template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face() {
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, bias_offset + 0 + offset);
@@ -95,7 +96,7 @@ inline void bitonic_topk_store16_single_face() {
     TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, bias_offset + 12);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_7, indices_offset + 8);
@@ -109,7 +110,7 @@ inline void bitonic_topk_load8_even_cols_single_face() {
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, bias_offset + 4);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
 }
@@ -131,7 +132,7 @@ inline void bitonic_topk_store8_even_cols_single_face() {
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, bias_offset + 4);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
 }
@@ -393,7 +394,7 @@ inline void _deepseek_moe_gate_sort_top4_groups() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _deepseek_moe_gate_top8(uint32_t eps, uint32_t scale) {
+inline void _deepseek_moe_gate_top8(std::uint32_t eps, std::uint32_t scale) {
     constexpr bool idir = false;  // Sort descending order
 
     // Combine and sort 4 groups of 8 values to 2 groups of 8 values
