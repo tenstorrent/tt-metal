@@ -22,6 +22,16 @@
 //
 // Combine lookahead (k > 1, x_block_depth == 2): pass 1 + collapse of block b+1 run before combine(b), so they
 // overlap the partial all-gather of block b (the only stage that waits on other Tensix cores).
+//
+// Owner combine (k > K_SYM_MAX, WIDTH / BLOCK_SHARDED): tile-row r of a block is owned by member r % k; this
+// member combines only its owned rows (k gathered partials each) into cb_inv_owned, which the writer returns
+// to every member's cb_inv_rms. The gathered slots of the rows it does not own (uniform count per block keeps
+// the peers' slot addressing in lockstep) are popped unread.
+//
+// Sharded TILE W tail (RMS_MASK_TAIL): cb_x is the caller's shard and is never written, so the tail tile's
+// padding columns are masked instead of zero-filled: pass 1 of the full W tiles collapses into the reduce
+// Accumulate CB (raw sum), pass 1 of the tail tile is folded in with the 0/1 row mask (only_partial) and the
+// finalize runs on that last chunk.
 
 #include <cstdint>
 
@@ -45,6 +55,7 @@ constexpr uint32_t x_row_pitch = get_compile_time_arg_val(1);
 constexpr uint32_t rm_chunk_w_tiles = get_compile_time_arg_val(2);
 constexpr uint32_t x_block_depth = get_compile_time_arg_val(3);
 constexpr bool combine_lookahead = get_compile_time_arg_val(4) != 0;
+constexpr bool combine_owner = get_compile_time_arg_val(5) != 0;
 
 // rsqrt(sum * (1/W) + eps) on DST[dst] — the reduce() post_reduce_op.
 struct FinalizeInvRms {
@@ -60,8 +71,9 @@ struct FinalizeInvRms {
 };
 
 // ---- sum_squares_block: per tile-row, sum_j x[r][j]^2 accumulated in DEST, one fp32 tile per tile-row ----
+// base_col / width: the tile-column window of the block walked (sharded W tail: full tiles, then the tail).
 template <uint32_t cb_x_blk>
-ALWI void sum_squares_block(uint32_t rows, uint32_t core_w_tiles) {
+ALWI void sum_squares_block(uint32_t rows, uint32_t base_col, uint32_t width) {
     cb_wait_front(cb_x_blk, rows * x_row_pitch);
     constexpr auto x_in = input(
         cb_x_blk,
@@ -79,36 +91,43 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t core_w_tiles) {
         TileAddressing::Direct,
         DestAccumulation::PerRow)>;
     eltwise_chain(
-        IterationShape::grid(rows, core_w_tiles),
-        Square{StridedTileRange{0, x_row_pitch}, StridedTileRange{0, x_row_pitch}},
+        IterationShape::grid(rows, width),
+        Square{StridedTileRange{base_col, x_row_pitch}, StridedTileRange{base_col, x_row_pitch}},
         PackRowSum{});
 }
 
 // ---- collapse_sumsq_block: within-tile row collapse (column 0 = row sum) [+ finalize] ----
-template <uint32_t out_cb, typename PostOp>
-ALWI void collapse_sumsq_block(uint32_t rows, PostOp post_op) {
+// scaler_cb: cb_x (never read: no partial tile, default reload — must only be distinct) or, for the masked
+// W tail, cb_tail_mask (the 0/1 row mask folded into the last tile).
+template <uint32_t out_cb, uint32_t scaler_cb = cb_x, typename AccumulateT = NoAccumulation, typename PostOp = NoOp>
+ALWI void collapse_sumsq_block(
+    uint32_t rows,
+    PostOp post_op,
+    AccumulateT acc = AccumulateT{},
+    ReducePartialScaler partial = ReducePartialScaler::none()) {
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         cb_sumsq_tiles,
-        cb_x,  // scaler slot: never read on this path (no partial tile, default reload) — must be distinct
+        scaler_cb,
         out_cb,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Fast,
         ReduceAlgorithm::AccumulateViaAdd,
         ReduceWithinTile::Collapse>(
-        ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post_op);
+        ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), acc, post_op, partial);
 }
 
 // ---- combine_partials_block: sum the k gathered column-0 partials per tile-row + finalize ----
+template <uint32_t out_cb = cb_inv_rms>
 ALWI void combine_partials_block(uint32_t rows, FinalizeInvRms finalize) {
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         cb_gathered_sumsq,
         cb_x,  // scaler slot: never read (see above)
-        cb_inv_rms,
+        out_cb,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Fast,
@@ -197,19 +216,62 @@ ALWI void tilize_x_block(uint32_t rows, uint32_t chunks_this) {
 }
 #endif
 
+// pass 1 + collapse of one block into out_cb (+ post_op).
+template <uint32_t cb_x_blk, uint32_t out_cb, typename PostOp>
+ALWI void sum_and_collapse(uint32_t rows, uint32_t core_w_tiles, PostOp post_op, [[maybe_unused]] bool owns_tail) {
+#ifdef RMS_MASK_TAIL
+    if (owns_tail) {
+        const uint32_t full = core_w_tiles - 1;  // W tiles before the tail tile
+        if (full > 0) {
+            sum_squares_block<cb_x_blk>(rows, 0, full);
+            collapse_sumsq_block<cb_sumsq_acc, cb_tail_mask>(rows, NoOp{}, Accumulate::at(cb_sumsq_acc, 0));
+            sum_squares_block<cb_x_blk>(rows, full, 1);
+            collapse_sumsq_block<out_cb, cb_tail_mask>(
+                rows, post_op, Accumulate::at_last(cb_sumsq_acc, 1), ReducePartialScaler::only_partial());
+        } else {
+            sum_squares_block<cb_x_blk>(rows, 0, 1);
+            collapse_sumsq_block<out_cb, cb_tail_mask>(
+                rows, post_op, NoAccumulation{}, ReducePartialScaler::only_partial());
+        }
+        return;
+    }
+#endif
+    sum_squares_block<cb_x_blk>(rows, 0, core_w_tiles);
+    collapse_sumsq_block<out_cb>(rows, post_op);
+}
+
 // pass 1 + collapse of one block; k == 1 finalizes into cb_inv_rms, k > 1 leaves the raw partial.
 template <uint32_t cb_x_blk>
-ALWI void reduce_front(uint32_t rows, uint32_t core_w_tiles, FinalizeInvRms finalize) {
-    sum_squares_block<cb_x_blk>(rows, core_w_tiles);
+ALWI void reduce_front(uint32_t rows, uint32_t core_w_tiles, FinalizeInvRms finalize, bool owns_tail) {
     if constexpr (w_split_cores == 1) {
-        collapse_sumsq_block<cb_inv_rms>(rows, finalize);
+        sum_and_collapse<cb_x_blk, cb_inv_rms>(rows, core_w_tiles, finalize, owns_tail);
     } else {
-        collapse_sumsq_block<cb_partial_sumsq>(rows, NoOp{});
+        sum_and_collapse<cb_x_blk, cb_partial_sumsq>(rows, core_w_tiles, NoOp{}, owns_tail);
     }
 }
 
+// k > 1: combine the gathered partials of this block into inv_rms.
+ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms finalize) {
+    if constexpr (combine_owner) {
+        const uint32_t owned = member_idx < rows ? (rows - member_idx + w_split_cores - 1) / w_split_cores : 0;
+        const uint32_t slots = ((rows + w_split_cores - 1) / w_split_cores) * w_split_cores;
+        if (owned > 0) {
+            combine_partials_block<cb_inv_owned>(owned, finalize);
+        }
+        const uint32_t unread = slots - owned * w_split_cores;
+        if (unread > 0) {
+            cb_wait_front(cb_gathered_sumsq, unread);
+            cb_pop_front(cb_gathered_sumsq, unread);
+        }
+    } else {
+        combine_partials_block(rows, finalize);
+    }
+}
+
+// norm_w: tiles normalized per tile-row (interleaved: core_w_tiles; sharded TILE: the whole shard row, so the
+// shard-backed cb_out advances by x_row_pitch per tile-row — padding tiles of a ragged shard are don't-care).
 template <uint32_t cb_x_blk>
-ALWI void apply_back(uint32_t rows, uint32_t core_w_tiles, uint32_t chunks_this) {
+ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this) {
     cb_wait_front(cb_inv_rms, rows);
 #ifdef RMS_RM
     for (uint32_t c = 0; c < chunks_this; ++c) {
@@ -218,7 +280,7 @@ ALWI void apply_back(uint32_t rows, uint32_t core_w_tiles, uint32_t chunks_this)
         untilize<rm_chunk_w_tiles, cb_out, cb_out_rm>(rows);
     }
 #else
-    normalize_window<cb_x_blk>(rows, 0, core_w_tiles);
+    normalize_window<cb_x_blk>(rows, 0, norm_w);
 #endif
     cb_pop_front(cb_x_blk, rows * x_row_pitch);
     cb_pop_front(cb_inv_rms, rows);
@@ -231,6 +293,9 @@ void kernel_main() {
     const uint32_t core_w_tiles = get_arg_val<uint32_t>(3);
     [[maybe_unused]] const uint32_t chunks_this = get_arg_val<uint32_t>(4);
     const FinalizeInvRms finalize{get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6)};
+    [[maybe_unused]] const uint32_t member_idx = get_arg_val<uint32_t>(7);
+    [[maybe_unused]] const uint32_t norm_w = get_arg_val<uint32_t>(8);
+    const bool owns_tail = get_arg_val<uint32_t>(9) != 0;
 
 #ifdef RMS_RM
     compute_kernel_hw_startup(cb_x_rm, cb_x_rm, cb_x);
@@ -255,46 +320,46 @@ void kernel_main() {
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = rows_of(blk);
         tilize_x_block(rows, chunks_this);
-        reduce_front<cb_x>(rows, core_w_tiles, finalize);
+        reduce_front<cb_x>(rows, core_w_tiles, finalize, owns_tail);
         if constexpr (w_split_cores > 1) {
-            combine_partials_block(rows, finalize);
+            combine_block(rows, member_idx, finalize);
         }
         apply_back<cb_x>(rows, core_w_tiles, chunks_this);
     }
 #else
     if constexpr (w_split_cores > 1 && combine_lookahead) {
-        reduce_front<cb_x>(rows_of(0), core_w_tiles, finalize);
+        reduce_front<cb_x>(rows_of(0), core_w_tiles, finalize, owns_tail);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             const uint32_t rows = rows_of(blk);
             if (blk + 1 < num_blocks) {
                 if (use_alt(blk + 1)) {
-                    reduce_front<cb_x_alt>(rows_of(blk + 1), core_w_tiles, finalize);
+                    reduce_front<cb_x_alt>(rows_of(blk + 1), core_w_tiles, finalize, owns_tail);
                 } else {
-                    reduce_front<cb_x>(rows_of(blk + 1), core_w_tiles, finalize);
+                    reduce_front<cb_x>(rows_of(blk + 1), core_w_tiles, finalize, owns_tail);
                 }
             }
             combine_partials_block(rows, finalize);
             if (use_alt(blk)) {
-                apply_back<cb_x_alt>(rows, core_w_tiles, chunks_this);
+                apply_back<cb_x_alt>(rows, norm_w, chunks_this);
             } else {
-                apply_back<cb_x>(rows, core_w_tiles, chunks_this);
+                apply_back<cb_x>(rows, norm_w, chunks_this);
             }
         }
     } else {
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             const uint32_t rows = rows_of(blk);
             if (use_alt(blk)) {
-                reduce_front<cb_x_alt>(rows, core_w_tiles, finalize);
+                reduce_front<cb_x_alt>(rows, core_w_tiles, finalize, owns_tail);
                 if constexpr (w_split_cores > 1) {
-                    combine_partials_block(rows, finalize);
+                    combine_block(rows, member_idx, finalize);
                 }
-                apply_back<cb_x_alt>(rows, core_w_tiles, chunks_this);
+                apply_back<cb_x_alt>(rows, norm_w, chunks_this);
             } else {
-                reduce_front<cb_x>(rows, core_w_tiles, finalize);
+                reduce_front<cb_x>(rows, core_w_tiles, finalize, owns_tail);
                 if constexpr (w_split_cores > 1) {
-                    combine_partials_block(rows, finalize);
+                    combine_block(rows, member_idx, finalize);
                 }
-                apply_back<cb_x>(rows, core_w_tiles, chunks_this);
+                apply_back<cb_x>(rows, norm_w, chunks_this);
             }
         }
     }
@@ -302,5 +367,10 @@ void kernel_main() {
 
 #ifdef RMS_HAS_GAMMA
     cb_pop_front(cb_gamma, gamma_tiles);
+#endif
+#ifdef RMS_MASK_TAIL
+    if (owns_tail) {
+        cb_pop_front(cb_tail_mask, 1);  // reduce() waits the mask but never pops it
+    }
 #endif
 }

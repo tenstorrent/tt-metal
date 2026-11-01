@@ -17,6 +17,13 @@
 //         (last W member only), one cb_push_back of x_row_pitch pages (the gap pages, if any, are never read).
 //   RM  : per (tile-row, chunk) one reserve/barrier/push of rm_chunk_w_tiles stick-piece pages in cb_x_rm;
 //         full chunks use read_sticks_for_tilize, the W-tail chunk is read raw + zero-filled to its tile edge.
+// RMS_SHARDED (WIDTH / BLOCK): the input shard is resident in this core's L1 and is never re-read through an
+// accessor.
+//   TILE: cb_x IS the shard (zero-copy CB) — the reader only publishes its pages to compute. The W tail is not
+//         zeroed in place (the caller's shard is never mutated): the tail member emits a 0/1 row mask
+//         (prepare_reduce_mask) that compute applies to the tail tile's x^2 inside the collapse reduce.
+//   RM  : per (tile-row, chunk) the valid stick pieces are copied locally (own-L1 NoC reads) from the shard into
+//         the cb_x_rm tilize staging, zero-filled to the tile edge (covers the W tail and shard padding).
 
 #include <cstdint>
 
@@ -25,6 +32,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#ifdef RMS_MASK_TAIL
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 #include "rms_norm_common.hpp"
 
 using namespace rms_norm_cb;
@@ -131,9 +141,17 @@ FORCE_INLINE void expand_gamma_rows(uint32_t base, uint32_t num_tiles) {
     noc_async_read_barrier();
 }
 
+// gamma_col0 / gamma_cols: first global column and column count of this member's slice (RM gamma). The slice
+// start need not be tile- or 64 B-aligned (RM shards are 16 B granular): the read starts at the 64 B-aligned
+// offset below it and the scatter skips the lead bytes.
 template <typename Accessor>
 FORCE_INLINE void load_gamma_slice(
-    const Accessor& g_acc, uint32_t w_tile_start, uint32_t core_w_tiles, uint32_t gamma_push_tiles) {
+    const Accessor& g_acc,
+    uint32_t w_tile_start,
+    uint32_t core_w_tiles,
+    uint32_t gamma_push_tiles,
+    uint32_t gamma_col0,
+    uint32_t gamma_cols) {
     constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
     constexpr uint32_t row_read_bytes = 64;  // >= one 16-datum face row; BH DRAM read alignment
     cb_reserve_back(cb_gamma, gamma_push_tiles);
@@ -149,17 +167,17 @@ FORCE_INLINE void load_gamma_slice(
         }
         noc_async_read_barrier();
     } else {
-        const uint32_t col0 = w_tile_start * TILE_DIM;
-        const uint32_t col_end =
-            (w_tile_start + core_w_tiles) * TILE_DIM < W ? (w_tile_start + core_w_tiles) * TILE_DIM : W;
-        noc_async_read(g_acc.get_noc_addr(0, col0 * gamma_elem_bytes), base, (col_end - col0) * gamma_elem_bytes);
+        constexpr uint32_t read_align = 64;  // BH DRAM read alignment
+        const uint32_t byte0 = gamma_col0 * gamma_elem_bytes;
+        const uint32_t lead = byte0 & (read_align - 1);
+        noc_async_read(g_acc.get_noc_addr(0, byte0 - lead), base, lead + gamma_cols * gamma_elem_bytes);
         noc_async_read_barrier();
         // Scatter row 0: datums [32j, 32j+16) -> tile j face 0 row 0, [32j+16, 32j+32) -> face 1 row 0.
         constexpr uint32_t words_per_face_row = FACE_DIM * gamma_elem_bytes / sizeof(uint32_t);
         for (uint32_t jj = core_w_tiles; jj > 0; --jj) {
             const uint32_t j = jj - 1;
             volatile tt_l1_ptr uint32_t* src =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * TILE_DIM * gamma_elem_bytes);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + lead + j * TILE_DIM * gamma_elem_bytes);
             volatile tt_l1_ptr uint32_t* dst0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes);
             volatile tt_l1_ptr uint32_t* dst1 =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes + face_bytes);
@@ -188,8 +206,17 @@ void kernel_main() {
     const uint32_t w_tile_start = get_arg_val<uint32_t>(6);
     const uint32_t core_w_tiles = get_arg_val<uint32_t>(7);
     [[maybe_unused]] const uint32_t chunks_this = get_arg_val<uint32_t>(8);
+    [[maybe_unused]] const uint32_t gamma_col0 = get_arg_val<uint32_t>(9);     // first global column of the slice
+    [[maybe_unused]] const uint32_t valid_cols = get_arg_val<uint32_t>(10);    // valid columns of the slice
+    [[maybe_unused]] const uint32_t valid_sticks = get_arg_val<uint32_t>(11);  // RM sharded: valid sticks in shard
+    [[maybe_unused]] const uint32_t owns_tail = get_arg_val<uint32_t>(12);     // sharded TILE: owns the W tail tile
 
-    const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
+#ifdef RMS_MASK_TAIL
+    // The tail tile's x^2 is masked (columns >= w_valid_in_last_tile) inside compute's collapse reduce.
+    if (owns_tail) {
+        dataflow_kernel_lib::prepare_reduce_mask<cb_tail_mask, ckernel::ReduceDim::REDUCE_ROW>(w_valid_in_last_tile);
+    }
+#endif
 
 #ifdef RMS_HAS_GAMMA
     {
@@ -199,7 +226,7 @@ void kernel_main() {
 #else
         const uint32_t gamma_push_tiles = core_w_tiles;
 #endif
-        load_gamma_slice(g_acc, w_tile_start, core_w_tiles, gamma_push_tiles);
+        load_gamma_slice(g_acc, w_tile_start, core_w_tiles, gamma_push_tiles, gamma_col0, valid_cols);
     }
 #endif
 
@@ -207,7 +234,47 @@ void kernel_main() {
     [[maybe_unused]] const bool owns_w_tail =
         (w_valid_in_last_tile < TILE_DIM) && (w_tile_start + core_w_tiles == tensor_w_tiles);
 
-#ifdef RMS_RM
+#if defined(RMS_SHARDED) && defined(RMS_RM)
+    // ---- RM shard: local stick copy (own L1) into the tilize staging, zero-filled to the tile edge ----
+    constexpr uint32_t chunk_row_bytes = rm_chunk_w_tiles * TILE_DIM * elem_bytes;
+    constexpr uint32_t tile_row_bytes = TILE_DIM * elem_bytes;
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+        for (uint32_t r = 0; r < rows; ++r) {
+            const uint32_t s0 = (blk * block_row_tiles + r) * TILE_DIM;  // first stick of the tile-row in the shard
+            const uint32_t nsticks = (valid_sticks - s0) < TILE_DIM ? (valid_sticks - s0) : TILE_DIM;
+            for (uint32_t c = 0; c < chunks_this; ++c) {
+                const uint32_t c0 = c * rm_chunk_w_tiles * TILE_DIM;  // first column of the chunk in the shard
+                const uint32_t cols =
+                    (valid_cols - c0) < rm_chunk_w_tiles * TILE_DIM ? (valid_cols - c0) : rm_chunk_w_tiles * TILE_DIM;
+                const uint32_t bytes = cols * elem_bytes;
+                cb_reserve_back(cb_x_rm, rm_chunk_w_tiles);
+                const uint32_t l1 = get_write_ptr(cb_x_rm);
+                const uint32_t src = x_addr + s0 * x_page_bytes + c0 * elem_bytes;
+                for (uint32_t s = 0; s < nsticks; ++s) {
+                    noc_async_read(get_noc_addr(src + s * x_page_bytes), l1 + s * chunk_row_bytes, bytes);
+                }
+                const uint32_t tail_end = ((bytes + tile_row_bytes - 1) / tile_row_bytes) * tile_row_bytes;
+                if (tail_end > bytes) {
+                    for (uint32_t s = 0; s < nsticks; ++s) {
+                        dataflow_kernel_lib::fill_l1_range<elem_bytes>(
+                            l1 + s * chunk_row_bytes + bytes, tail_end - bytes, 0);
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_x_rm, rm_chunk_w_tiles);
+            }
+        }
+    }
+#elif defined(RMS_SHARDED)
+    // ---- TILE shard: cb_x is backed on the resident shard (zero-copy) — publish its tile-rows to compute ----
+    {
+        const uint32_t shard_rows = (num_blocks - 1) * block_row_tiles + last_block_row_tiles;
+        cb_reserve_back(cb_x, shard_rows * x_row_pitch);
+        cb_push_back(cb_x, shard_rows * x_row_pitch);
+    }
+#elif defined(RMS_RM)
+    const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
     constexpr uint32_t chunk_row_bytes = rm_chunk_w_tiles * TILE_DIM * elem_bytes;  // L1 stride of one stick
     constexpr uint32_t tile_row_bytes = TILE_DIM * elem_bytes;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
@@ -251,6 +318,7 @@ void kernel_main() {
         }
     }
 #else
+    const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
     constexpr uint32_t tile_bytes = x_page_bytes;
     Noc noc;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {

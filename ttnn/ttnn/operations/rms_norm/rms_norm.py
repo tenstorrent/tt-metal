@@ -86,7 +86,11 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 
@@ -104,6 +108,19 @@ EXCLUSIONS = [
     {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
     {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
     {"gamma_dtype": ttnn.bfloat8_b, "gamma_layout": ttnn.ROW_MAJOR_LAYOUT},
+    # ROW_MAJOR input sharded across the W axis with a TILE gamma: an RM shard's W slice starts at any 16 B
+    # granule, not a tile edge, so a member's gamma slice is not a run of whole gamma tiles. Mirrors the
+    # feature_spec INVALID entries (author-scoped) so translated tests get a native refusal.
+    {
+        "layout": ttnn.ROW_MAJOR_LAYOUT,
+        "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "gamma_layout": ttnn.TILE_LAYOUT,
+    },
+    {
+        "layout": ttnn.ROW_MAJOR_LAYOUT,
+        "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "gamma_layout": ttnn.TILE_LAYOUT,
+    },
 ]
 
 
@@ -162,12 +179,19 @@ def validate(input_tensor, *, gamma=None, epsilon=1e-6, compute_kernel_config=No
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"rms_norm: unsupported combination (refinement candidate): {exc}")
 
-    # Output placement (Phase 0: interleaved only).
-    if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise UnsupportedAxisValue(
-            f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED "
-            f"{SUPPORTED['memory_layout']}"
-        )
+    in_mc = input_tensor.memory_config()
+    if in_mc.is_sharded() and in_mc.buffer_type != ttnn.BufferType.L1:
+        raise UnsupportedAxisValue(f"rms_norm: sharded input must be L1-resident, got {in_mc.buffer_type!r}")
+    # Output placement: interleaved input -> interleaved output; sharded input -> the input's shard spec.
+    if memory_config is not None:
+        if in_mc.is_sharded():
+            if memory_config != in_mc:
+                raise UnsupportedAxisValue("rms_norm: a sharded output must use the input's shard spec")
+        elif memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            raise UnsupportedAxisValue(
+                f"rms_norm: output memory_layout={memory_config.memory_layout!r} for an interleaved input "
+                f"(the output follows the input's placement)"
+            )
     if gamma is not None and gamma.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         raise UnsupportedAxisValue("rms_norm: gamma must be interleaved")
 

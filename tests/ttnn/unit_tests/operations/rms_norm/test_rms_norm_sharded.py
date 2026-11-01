@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Refinement 2 — WIDTH_SHARDED / BLOCK_SHARDED rms_norm.
+
+Covers every combine topology and shard-placement path:
+  * k = 1 (one shard column), k <= 8 symmetric all-gather, k > 8 per-row owner gather + inv_rms return;
+  * WIDTH groups spanning several grid rows (auto config over the whole grid);
+  * ragged shards (Split.PAD last column / row), pinned perf geometries;
+  * W tail (masked in the collapse reduce — the caller's shard must not change), H padding, poisoned padding;
+  * ROW_MAJOR stick shards (sub-tile shard widths, local tilize), fp32 / bf16 / bf8b.
+"""
+
+import pytest
+import torch
+import ttnn
+
+from eval.sharding import auto_shard_config, shard_config
+from ttnn.operations.rms_norm import rms_norm
+
+WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+
+def _ref(x, gamma, eps):
+    xf = x.float()
+    y = xf / torch.sqrt(torch.mean(xf * xf, dim=-1, keepdim=True) + eps)
+    return y * gamma.float().reshape(-1) if gamma is not None else y
+
+
+def _pcc(a, b):
+    a, b = a.flatten().double(), b.flatten().double()
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+def _run(
+    device,
+    shape,
+    ml,
+    *,
+    layout=ttnn.TILE_LAYOUT,
+    dtype=ttnn.bfloat16,
+    gamma_layout="same",
+    fp32_dest=True,
+    fidelity=ttnn.MathFidelity.HiFi4,
+    pinned=None,
+    poison=None,
+    pcc=0.999,
+):
+    torch.manual_seed(0)
+    tdt = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    x = torch.randn(shape, dtype=torch.float32).to(tdt)
+    W = shape[-1]
+    gamma_t = None
+    g = None
+    if gamma_layout is not None:
+        gl = layout if gamma_layout == "same" else gamma_layout
+        gamma_t = torch.randn(W, dtype=torch.float32).to(torch.bfloat16)
+        g = ttnn.from_torch(
+            gamma_t.reshape(1, 1, 1, W),
+            dtype=ttnn.bfloat16,
+            layout=gl,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    if pinned is not None:
+        mc = shard_config(pinned[0], pinned[1], ml, layout=layout, dtype=dtype, device=device)
+    else:
+        mc = auto_shard_config(list(shape), ml, layout=layout, dtype=dtype, device=device)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=mc)
+    if poison is not None:
+        xt = ttnn.fill_implicit_tile_padding(xt, poison)
+    before = ttnn.to_torch(xt)
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = fidelity
+    cfg.fp32_dest_acc_en = fp32_dest
+    cfg.math_approx_mode = False
+    out = rms_norm(xt, gamma=g, epsilon=1e-6, compute_kernel_config=cfg, memory_config=xt.memory_config())
+    assert out.memory_config() == mc
+    got = ttnn.to_torch(out).float()
+    if dtype == ttnn.bfloat8_b:
+        x = ttnn.to_torch(xt)  # reference on the device-quantized input
+    exp = _ref(x, gamma_t, 1e-6)
+    p = _pcc(got, exp)
+    assert p >= pcc, f"PCC {p} < {pcc}; max abs {(got - exp).abs().max()}"
+    # The caller's input shard is never mutated (W-tail masking happens in compute, not in place).
+    assert torch.equal(ttnn.to_torch(xt), before)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 32, 2048),  # WIDTH k=8 (symmetric) on BH 13x10 auto: 64 tiles / 130 -> 64 one-tile shards
+        (1, 1, 32, 64),  # 2 one-tile shards
+        (1, 1, 32, 32),  # k = 1
+        (1, 1, 128, 4096),  # k = 128 owner combine, 4 tile-rows -> 4 owners
+        (1, 1, 32, 8192),  # k = 128, 2 tiles per shard, 1 tile-row
+        (4, 8, 32, 256),  # many tile-rows per shard
+    ],
+)
+def test_width_tile(device, shape):
+    _run(device, shape, WS)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 256, 512), (1, 1, 2048, 256), (2, 4, 128, 512), (1, 1, 1024, 1024)])
+def test_block_tile(device, shape):
+    _run(device, shape, BS)
+
+
+@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 32, 50), (2, 1, 100, 47), (1, 1, 17, 64), (1, 1, 416, 1025), (1, 1, 32, 4095)]
+)
+def test_non_aligned_tile(device, ml, shape):
+    _run(device, shape, ml)
+
+
+@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize("shape", [(1, 1, 32, 40), (1, 1, 32, 200), (1, 1, 224, 72), (1, 1, 40, 40)])
+def test_poisoned_padding(device, ml, shape):
+    _run(device, shape, ml, fp32_dest=False, poison=1000.0)
+
+
+@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 32, 64), (1, 1, 256, 512), (2, 1, 100, 47), (1, 1, 32, 4096), (1, 1, 333, 1000), (1, 32, 50)]
+)
+def test_row_major(device, ml, shape):
+    _run(device, shape, ml, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+@pytest.mark.parametrize("ml", [WS, BS])
+def test_fp32_and_no_gamma(device, ml):
+    _run(device, (1, 1, 64, 1024), ml, dtype=ttnn.float32, gamma_layout=None)
+    _run(device, (1, 1, 64, 1000), ml, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+@pytest.mark.parametrize("ml", [WS, BS])
+def test_bf8b_rm_gamma(device, ml):
+    _run(device, (1, 1, 64, 2048), ml, dtype=ttnn.bfloat8_b, gamma_layout=ttnn.ROW_MAJOR_LAYOUT, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "rows,W,ml,shard",
+    [
+        (32, 1024, WS, ([32, 128], (8, 1))),
+        (32, 2304, WS, ([32, 256], (9, 1))),
+        (32, 5120, WS, ([32, 160], (8, 4))),  # k = 32 owner combine over 4 grid rows
+        (32, 7168, WS, ([32, 256], (7, 4))),
+        (640, 6144, BS, ([64, 704], (9, 10))),  # ragged last shard column
+        (640, 7168, BS, ([64, 1024], (7, 10))),
+        (7168, 1024, BS, ([736, 128], (8, 10))),  # ragged last shard row
+        (8192, 1024, BS, ([1024, 128], (8, 8))),
+    ],
+)
+def test_pinned_perf_geometry(device, rows, W, ml, shard):
+    _run(
+        device,
+        (1, 1, rows, W),
+        ml,
+        gamma_layout=ttnn.TILE_LAYOUT,
+        fp32_dest=False,
+        fidelity=ttnn.MathFidelity.HiFi2,
+        pinned=shard,
+        pcc=0.9995,
+    )
