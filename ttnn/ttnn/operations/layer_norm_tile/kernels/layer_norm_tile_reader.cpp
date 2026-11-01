@@ -3,7 +3,8 @@
 
 // layer_norm reader (RISCV_1; NoC chosen per core by the host, see _core_nocs).
 //   load_block   : R_b x Wt tiles of x (and residual, unless the writer RISC streams it) in C-tile
-//                  chunks on a trid ring of `read_trid_depth` chunks (layer_norm_tile_stream.hpp).
+//                  chunks on a trid ring of `read_trid_depth` chunks (layer_norm_tile_stream.hpp). Each
+//                  compute tile-row is one source tile-row (R1) or two 16-row bands (R3, RowSources).
 //   affine       : gamma/beta do not vary along the row split, so ONE injector core reads them,
 //                  issued untagged behind its block 0's last chunk, into a compact block (TILE: per tile
 //                  column 64 B at offset 0 + 64 B at FACE_BYTES; ROW_MAJOR: the 64 B stick span) and
@@ -44,7 +45,10 @@ void kernel_main() {
     constexpr uint32_t affine_elem_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t read_trid_depth = get_compile_time_arg_val(13);
     constexpr bool residual_on_writer = get_compile_time_arg_val(14) != 0;
-    constexpr auto input_args = TensorAccessorArgs<15>();
+    constexpr bool half_band = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t image_row_tiles = get_compile_time_arg_val(16);
+    constexpr uint32_t image_bands = get_compile_time_arg_val(17);
+    constexpr auto input_args = TensorAccessorArgs<18>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -56,9 +60,15 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(1);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(2);
     const uint32_t beta_addr = get_arg_val<uint32_t>(3);
-    const uint32_t row_tile_start = get_arg_val<uint32_t>(4);
-    const uint32_t core_row_tiles = get_arg_val<uint32_t>(5);
+    const uint32_t unit_start = get_arg_val<uint32_t>(4);
+    const uint32_t unit_count = get_arg_val<uint32_t>(5);
     const uint32_t rotation = get_arg_val<uint32_t>(6);
+
+    using Sources =
+        layer_norm_tile::RowSources<half_band, tensor_w_tiles, image_row_tiles, image_bands, input_tile_bytes / 2>;
+    Sources sources(unit_start, unit_count);
+    const uint32_t core_row_tiles = Sources::compute_rows(unit_count);
+    constexpr uint32_t row_chunks = tensor_w_tiles / io_chunk_tiles;
 
     constexpr bool read_residual = has_residual && !residual_on_writer;
 
@@ -158,8 +168,7 @@ void kernel_main() {
     for (uint32_t block_row = 0; block_row < core_row_tiles; block_row += block_row_tiles) {
         const uint32_t rows =
             (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
-        const uint32_t first_page = (row_tile_start + block_row) * tensor_w_tiles;
-        const uint32_t num_chunks = rows * tensor_w_tiles / io_chunk_tiles;
+        const uint32_t num_chunks = rows * row_chunks;
 
         uint32_t input_base = 0;
         uint32_t residual_base = 0;
@@ -173,14 +182,18 @@ void kernel_main() {
             }
         }
 
+        layer_norm_tile::RowSource src{};
         auto issue = [&](uint32_t chunk) {
-            const uint32_t page = first_page + chunk * io_chunk_tiles;
+            const uint32_t col = (chunk % row_chunks) * io_chunk_tiles;
+            if (col == 0) {
+                src = sources.next();
+            }
             const uint32_t offset = chunk * io_chunk_tiles * input_tile_bytes;
-            layer_norm_tile::read_chunk<io_chunk_tiles, input_tile_bytes>(
-                input_accessor, page, input_base + offset, rotation);
+            layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+                input_accessor, src, col, input_base + offset, rotation);
             if constexpr (read_residual) {
-                layer_norm_tile::read_chunk<io_chunk_tiles, input_tile_bytes>(
-                    residual_accessor, page, residual_base + offset, rotation);
+                layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+                    residual_accessor, src, col, residual_base + offset, rotation);
             }
             if (send_pending && chunk + 1 == num_chunks) {
                 dataflow_kernel_lib::set_read_trid(noc, 0);

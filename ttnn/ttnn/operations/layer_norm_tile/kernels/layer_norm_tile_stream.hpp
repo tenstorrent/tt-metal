@@ -44,6 +44,118 @@ FORCE_INLINE void write_chunk(const Accessor& accessor, uint32_t first_page, uin
     });
 }
 
+// Work units (BAND_ROWS, op_design.md R1 / R3). A compute tile-row is filled from two 16-row bands: the top
+// half of its tiles (faces 0-1, bytes [0, half)) and the bottom half (faces 2-3, bytes [half, 2 half)).
+//   R1 (half_band = false): the unit is a whole tile-row, i.e. both bands of one source tile-row.
+//   R3 (half_band = true) : the unit is a 16-row band; a core owns a contiguous run of the valid bands (an
+//                           image's all-padding last band, H % 32 in [1, 16], is not counted), paired in order.
+// A pair (row r top, row r bottom) is `whole`: one full-tile transfer per tile. Any other pair or a lone band
+// moves half tiles. With an odd band count, a run that starts on a bottom band takes it alone first, so the
+// rest pairs whole; otherwise the last band is alone. A lone band leaves the bottom half of its compute
+// tile unread: rows are independent, so those rows are computed on stale L1 and never written.
+struct BandSlot {
+    uint32_t page;    // first page of the source tile-row
+    uint32_t offset;  // byte offset of the band in each page: 0 or half a tile
+};
+
+struct RowSource {
+    BandSlot top;
+    BandSlot bottom;
+    bool has_bottom;
+    bool whole;
+};
+
+template <bool half_band, uint32_t tensor_w_tiles, uint32_t image_row_tiles, uint32_t image_bands, uint32_t half_bytes>
+class RowSources {
+public:
+    RowSources(uint32_t unit_start, uint32_t unit_count) : remaining_(unit_count) {
+        if constexpr (half_band) {
+            image_row_ = (unit_start / image_bands) * image_row_tiles;
+            within_ = unit_start % image_bands;
+            lone_first_ = (unit_count % 2 != 0) && (within_ % 2 != 0);
+        } else {
+            image_row_ = unit_start;
+        }
+    }
+
+    // Compute tile-rows of a run of `unit_count` units.
+    static constexpr uint32_t compute_rows(uint32_t unit_count) {
+        return half_band ? (unit_count + 1) / 2 : unit_count;
+    }
+
+    RowSource next() {
+        RowSource src{};
+        if constexpr (half_band) {
+            src.top = take();
+            src.has_bottom = remaining_ > 0 && !lone_first_;
+            lone_first_ = false;
+            if (src.has_bottom) {
+                src.bottom = take();
+            }
+            src.whole =
+                src.has_bottom && src.top.page == src.bottom.page && src.top.offset == 0 && src.bottom.offset != 0;
+        } else {
+            src.top = {image_row_ * tensor_w_tiles, 0};
+            src.bottom = {src.top.page, half_bytes};
+            src.has_bottom = true;
+            src.whole = true;
+            ++image_row_;
+        }
+        return src;
+    }
+
+private:
+    BandSlot take() {
+        const BandSlot slot{(image_row_ + within_ / 2) * tensor_w_tiles, (within_ % 2) * half_bytes};
+        --remaining_;
+        if (++within_ == image_bands) {
+            within_ = 0;
+            image_row_ += image_row_tiles;
+        }
+        return slot;
+    }
+
+    uint32_t remaining_;
+    uint32_t image_row_ = 0;  // first tile-row of the cursor's image (R1: the next tile-row)
+    uint32_t within_ = 0;     // valid band index inside the image
+    bool lone_first_ = false;
+};
+
+// One chunk of `chunk_tiles` tiles of a compute tile-row starting at tile column `col`.
+template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+FORCE_INLINE void read_row_chunk(
+    const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr, uint32_t rotation) {
+    if (src.whole) {
+        read_chunk<chunk_tiles, tile_bytes>(accessor, src.top.page + col, l1_addr, rotation);
+        return;
+    }
+    constexpr uint32_t half = tile_bytes / 2;
+    for_each_rotated(chunk_tiles, rotation, [&](uint32_t tile) {
+        const uint32_t l1 = l1_addr + tile * tile_bytes;
+        noc_async_read(accessor.get_noc_addr(src.top.page + col + tile, src.top.offset), l1, half);
+        if (src.has_bottom) {
+            noc_async_read(accessor.get_noc_addr(src.bottom.page + col + tile, src.bottom.offset), l1 + half, half);
+        }
+    });
+}
+
+template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+FORCE_INLINE void write_row_chunk(
+    const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr, uint32_t rotation) {
+    if (src.whole) {
+        write_chunk<chunk_tiles, tile_bytes>(accessor, src.top.page + col, l1_addr, rotation);
+        return;
+    }
+    constexpr uint32_t half = tile_bytes / 2;
+    for_each_rotated(chunk_tiles, rotation, [&](uint32_t tile) {
+        const uint32_t l1 = l1_addr + tile * tile_bytes;
+        noc_async_write(l1, accessor.get_noc_addr(src.top.page + col + tile, src.top.offset), half);
+        if (src.has_bottom) {
+            noc_async_write(l1 + half, accessor.get_noc_addr(src.bottom.page + col + tile, src.bottom.offset), half);
+        }
+    });
+}
+
 template <uint32_t depth, typename Issue, typename Retire>
 FORCE_INLINE void read_block_chunks(Noc noc, uint32_t num_chunks, Issue issue, Retire retire) {
     static_assert(depth >= 1 && depth <= NOC_MAX_TRANSACTION_ID, "trid ring depth out of the NoC id range");

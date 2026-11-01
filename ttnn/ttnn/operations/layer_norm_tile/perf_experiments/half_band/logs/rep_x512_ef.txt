@@ -1,0 +1,5 @@
+x512_ef [HALF_BAND_EVEN_FIRST=1] k=allL1_res or L1_nores or affineTILE
+   [24.8, 21.1, 49.1, 14.7]
+   [25.2, 21.2, 48.8, 14.9]
+   [24.9, 21.0, 48.3, 14.7]
+  median [24.9, 21.1, 48.8, 14.7]

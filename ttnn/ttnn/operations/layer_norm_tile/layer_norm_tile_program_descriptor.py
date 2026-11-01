@@ -51,6 +51,19 @@ STREAMED_BLOCKS = None
 # STREAM_NORMALIZE_UNBALANCED, which gives it to the heaviest cores (measured slower: focus1 37.1, focus2 ~51 us).
 STREAM_NORMALIZE = True
 STREAM_NORMALIZE_UNBALANCED = False
+# Work unit (op_design.md R1 / R3, Refinement 4, BH p100a). BAND_ROWS = 16 splits work in 16-row half-tile
+# bands where _half_band_split selects it (measured); 32 is R1 (whole tile-rows) everywhere.
+BAND_ROWS = 16
+# Run order of the band-count groups. None: measured gate (_even_count_first); True / False force it.
+HALF_BAND_EVEN_FIRST = None
+# Parked R3 knobs (measured on the 8x512 rows, 3-5 run medians):
+#   HALF_BAND_NOC_PLAN = False (default NoCs on every core): focus1 50.8, focus2 52.7 us vs 35.4 / 47.3.
+#   HEAVY_READER_NOC_BY_Y (heavy cores in the bottom half read on NoC0): focus2 46.9 vs 47.3, focus3 41.0 (flat).
+#   HALF_BAND_STREAM (streamed stats + per-window normalize on the 2/3-band split): focus1 38.2-39.9,
+#   focus2 48.4-51.8 us, worse on every row.
+HALF_BAND_NOC_PLAN = True
+HEAVY_READER_NOC_BY_Y = False
+HALF_BAND_STREAM = False
 L1_HEADROOM_BYTES = 64 * 1024
 
 CB_INPUT_TILES = 0
@@ -93,14 +106,20 @@ class Blocking:
     one_pass: bool  # one-pass variance (sum and sum of squares in the stats windows)
     stream_normalize: bool  # per-window normalize + affine compiled in (one_pass only)
     stream_normalize_min_rows: int  # cores owning at least this many tile-rows take it
+    half_band: bool  # R3: the work unit is a 16-row band, two per compute tile-row
+    image_row_tiles: int  # tile-rows per (..., H, W) image
+    image_bands: int  # valid (not all-padding) bands per image
     all_cores: object
-    assignment: tuple  # ((core, row_tile_start, core_row_tiles), ...)
+    assignment: tuple  # ((core, unit_start, unit_count, core_row_tiles), ...)
+
+
+def _num_images(shape):
+    return math.prod(shape[:-2]) if len(shape) > 2 else 1
 
 
 def tensor_row_tiles(shape):
     """Per-image ceil: each (..., H, W) image is tile-padded independently."""
-    leading = math.prod(shape[:-2]) if len(shape) > 2 else 1
-    return leading * _div_up(shape[-2], TILE)
+    return _num_images(shape) * _div_up(shape[-2], TILE)
 
 
 def _affine_scratch_bytes(Wt, affine_is_tile):
@@ -158,29 +177,68 @@ def _footprint(pages, formats):
     return sum(num_pages * formats[index][0] for index, num_pages in pages.items())
 
 
-def _split_rows(device, num_row_tiles):
+def image_bands(shape):
+    """Valid 16-row bands per image: the last tile-row's bottom band is all padding when H % 32 in [1, 16]."""
+    return 2 * _div_up(shape[-2], TILE) - (1 if 0 < shape[-2] % TILE <= TILE // 2 else 0)
+
+
+def _split_units(device, num_units, half_band, even_first):
+    """Contiguous unit runs per core: ((core, unit_start, unit_count, compute_rows), ...).
+
+    Half-band: an odd-count run holds one lone band (RowSources). even_first runs the even-count group first,
+    so every even-count run starts on a tile-row and moves whole tiles."""
     grid = device.compute_with_storage_grid_size()
-    (_, all_cores, group_1, group_2, rows_g1, rows_g2) = ttnn.split_work_to_cores(grid, num_row_tiles, row_wise=True)
+    (_, all_cores, group_1, group_2, units_g1, units_g2) = ttnn.split_work_to_cores(grid, num_units, row_wise=True)
+    groups = [(group_1, units_g1), (group_2, units_g2)]
+    if half_band and even_first:
+        groups.sort(key=lambda group: group[1] % 2)
     assignment = []
     start = 0
-    for group, per_core in ((group_1, rows_g1), (group_2, rows_g2)):
+    for group, per_core in groups:
         if per_core == 0:
             continue
+        rows = _div_up(per_core, 2) if half_band else per_core
         for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start, per_core))
+            assignment.append((core, start, per_core, rows))
             start += per_core
-    return all_cores, tuple(assignment), rows_g1
+    return all_cores, tuple(assignment)
+
+
+def _half_band_split(shape, num_grid_cores):
+    """R3 where it measured a win over R1 (8x512 rows ~1 us, under-filled rows 1.2-3.3 us):
+    - more tile-rows than cores, not a multiple: R1 leaves a tail of cores with a whole extra tile-row;
+      R3 cuts it to half a tile-row of bytes (128 rows on 110 cores: 2 rows -> 3 bands);
+    - every band fits on its own core: the same balance on up to twice the cores.
+    It lost where it turns a balanced R1 split into an unbalanced one (8x384 36.1 -> 38.4, 64x17 21.7 -> 22.7 us):
+    the balanced split keeps the streamed row-stats path."""
+    if BAND_ROWS != TILE // 2:
+        return False
+    num_row_tiles = tensor_row_tiles(shape)
+    if num_row_tiles >= num_grid_cores:
+        return num_row_tiles % num_grid_cores != 0
+    return _num_images(shape) * image_bands(shape) <= num_grid_cores
+
+
+def _even_count_first(residual):
+    """Even-band-count cores first puts the 3-band cores at the grid bottom. Measured: residual in DRAM
+    focus2 49.2 -> 47.3, affine TILE 50.9 -> 48.8, focus1 bf16 DEST 36.5 -> 35.3 us; without it (focus3
+    33.2 -> 40.0, L1 no-residual 20.7 -> 21.1) or with the residual in L1 (24.5 -> 24.9) heavy-first wins."""
+    if HALF_BAND_EVEN_FIRST is not None:
+        return HALF_BAND_EVEN_FIRST
+    return residual is not None and residual.memory_config().buffer_type == ttnn.BufferType.DRAM
 
 
 def _io_chunk_tiles(Wt):
     return max(c for c in range(1, min(Wt, IO_CHUNK_TARGET_TILES) + 1) if Wt % c == 0)
 
 
-def _is_balanced(assignment):
-    return len({rows for _, _, rows in assignment}) == 1
+def _is_balanced(assignment, half_band=False):
+    if half_band and HALF_BAND_STREAM:
+        return True
+    return len({units for _, _, units, _ in assignment}) == 1
 
 
-def _stream_row_stats(input_tensor, assignment, *, residual, compute_kernel_config):
+def _stream_row_stats(input_tensor, assignment, *, residual, compute_kernel_config, half_band):
     """Streamed one-pass stats where they win. On an unbalanced split the heavy cores set the end:
     - DRAM input: light cores finishing sooner write into the heavy cores' next-row DRAM reads
       (focus2 median 47.6 -> 48.9 us);
@@ -192,8 +250,8 @@ def _stream_row_stats(input_tensor, assignment, *, residual, compute_kernel_conf
         return False
     dram_input = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
     if residual is not None:
-        return _is_balanced(assignment) and residual.memory_config().buffer_type == ttnn.BufferType.DRAM
-    return _is_balanced(assignment) or not dram_input
+        return _is_balanced(assignment, half_band) and residual.memory_config().buffer_type == ttnn.BufferType.DRAM
+    return _is_balanced(assignment, half_band) or not dram_input
 
 
 def _stats_window_tiles(Wt, C, streamed):
@@ -205,11 +263,13 @@ def _stats_window_tiles(Wt, C, streamed):
     return 2 * C if Wt % 2 == 0 else Wt
 
 
-def _stream_normalize_min_rows(assignment):
+def _stream_normalize_min_rows(assignment, half_band):
     """Fewest tile-rows of a core that streams normalize: every core on a balanced split; on an unbalanced one
     none (or the heaviest under STREAM_NORMALIZE_UNBALANCED). With every core streaming, the light cores'
     earlier writes land on the heavy cores' next-row reads (focus1 36.2 -> 41 us)."""
-    heaviest = max(rows for _, _, rows in assignment)
+    heaviest = max(rows for *_, rows in assignment)
+    if half_band and HALF_BAND_STREAM:
+        return 1
     return heaviest if _is_balanced(assignment) or STREAM_NORMALIZE_UNBALANCED else heaviest + 1
 
 
@@ -236,15 +296,18 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
     C = _io_chunk_tiles(Wt)
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    all_cores, assignment, core_row_tiles_max = _split_rows(device, tensor_row_tiles(shape))
+    half_band = _half_band_split(shape, grid.x * grid.y)
+    num_units = _num_images(shape) * image_bands(shape) if half_band else tensor_row_tiles(shape)
+    all_cores, assignment = _split_units(device, num_units, half_band, _even_count_first(residual))
+    core_row_tiles_max = max(rows for *_, rows in assignment)
     streamed = _stream_row_stats(
-        input_tensor, assignment, residual=residual, compute_kernel_config=compute_kernel_config
+        input_tensor, assignment, residual=residual, compute_kernel_config=compute_kernel_config, half_band=half_band
     )
     G = _stats_window_tiles(Wt, C, streamed)
     one_pass = ONE_PASS_VARIANCE and streamed
-    stream_min_rows = _stream_normalize_min_rows(assignment)
-    stream_normalize = STREAM_NORMALIZE and one_pass and any(rows >= stream_min_rows for _, _, rows in assignment)
-    whole_row_passes = not stream_normalize or any(rows < stream_min_rows for _, _, rows in assignment)
+    stream_min_rows = _stream_normalize_min_rows(assignment, half_band)
+    stream_normalize = STREAM_NORMALIZE and one_pass and any(rows >= stream_min_rows for *_, rows in assignment)
+    whole_row_passes = not stream_normalize or any(rows < stream_min_rows for *_, rows in assignment)
 
     formats = _cb_page_formats(fp32_dest_acc_en)
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank - L1_HEADROOM_BYTES
@@ -284,6 +347,9 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
         one_pass=one_pass,
         stream_normalize=stream_normalize,
         stream_normalize_min_rows=stream_min_rows,
+        half_band=half_band,
+        image_row_tiles=_div_up(shape[-2], TILE),
+        image_bands=image_bands(shape),
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -299,13 +365,15 @@ def _core_nocs(blocking, grid_y):
     >= 2 rows, writes of row k overlap NoC0 reads of row k+1 and the swap measured +10%.
     """
     base = [(0, 1)] * len(blocking.assignment)
-    rows = [core_row_tiles for _, _, core_row_tiles in blocking.assignment]
-    if 2 * rows.count(1) <= len(rows):
+    rows = [core_row_tiles for *_, core_row_tiles in blocking.assignment]
+    if 2 * rows.count(1) <= len(rows) or (blocking.half_band and not HALF_BAND_NOC_PLAN):
         return base
     heavy = max(rows) if len(set(rows)) > 1 else None
     nocs = []
-    for core, _, core_row_tiles in blocking.assignment:
+    for core, *_, core_row_tiles in blocking.assignment:
         reader_noc = 1 if core_row_tiles == heavy else 0
+        if HEAVY_READER_NOC_BY_Y and core_row_tiles == heavy and 2 * core.y >= grid_y:
+            reader_noc = 0
         writer_noc = 0 if 2 * core.y >= grid_y else 1
         if blocking.residual_on_writer and reader_noc == writer_noc:
             # Both RISCs read here, and both use read cmd buf 1: they need different NoCs. Writer choice wins.
@@ -320,7 +388,7 @@ def _core_nocs(blocking, grid_y):
 def _streamed_rows(blocking):
     """Leading tile-rows per core whose stats stream (STREAMED_BLOCKS whole blocks, or every row)."""
     if STREAMED_BLOCKS is None:
-        return max(rows for _, _, rows in blocking.assignment)
+        return max(rows for *_, rows in blocking.assignment)
     return STREAMED_BLOCKS * blocking.block_row_tiles
 
 
@@ -372,7 +440,7 @@ def _cb_descriptors(blocking):
         one_pass=blocking.one_pass,
         stream_normalize=blocking.stream_normalize,
         whole_row_passes=not blocking.stream_normalize
-        or any(rows < blocking.stream_normalize_min_rows for _, _, rows in blocking.assignment),
+        or any(rows < blocking.stream_normalize_min_rows for *_, rows in blocking.assignment),
     )
     formats = _cb_page_formats(blocking.fp32_dest_acc_en)
 
@@ -409,6 +477,7 @@ def create_program_descriptor(
     # Elements per affine page: a tile row for TILE, the stick width for ROW_MAJOR.
     affine_page_elems = TILE if affine_is_tile else list(gamma.shape)[-1]
 
+    band_ct_args = [int(blocking.half_band), blocking.image_row_tiles, blocking.image_bands]
     reader_ct_args = [
         CB_INPUT_TILES,
         CB_RESIDUAL_TILES,
@@ -425,6 +494,7 @@ def create_program_descriptor(
         gamma.element_size(),
         blocking.read_trid_depth,
         int(blocking.residual_on_writer),
+        *band_ct_args,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -447,6 +517,7 @@ def create_program_descriptor(
         blocking.in_depth,
         blocking.read_trid_depth,
         input_tile_bytes,
+        *band_ct_args,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(
@@ -489,7 +560,7 @@ def create_program_descriptor(
     beta_addr = beta.buffer_address()
     out_addr = output_tensor.buffer_address()
     nocs = _core_nocs(blocking, input_tensor.device().compute_with_storage_grid_size().y)
-    for core_idx, (core, row_tile_start, core_row_tiles) in enumerate(blocking.assignment):
+    for core_idx, (core, unit_start, unit_count, core_row_tiles) in enumerate(blocking.assignment):
         rotation = core_idx % C if blocking.bank_stagger else 0
         group_cores, reader_rt, writer_rt = groups.setdefault(
             nocs[core_idx], ([], ttnn.RuntimeArgs(), ttnn.RuntimeArgs())
@@ -500,11 +571,11 @@ def create_program_descriptor(
             res_addr,
             gamma_addr,
             beta_addr,
-            row_tile_start,
-            core_row_tiles,
+            unit_start,
+            unit_count,
             rotation,
         ]
-        writer_rt[core.x][core.y] = [out_addr, row_tile_start, core_row_tiles, rotation, res_addr]
+        writer_rt[core.x][core.y] = [out_addr, unit_start, unit_count, rotation, res_addr]
         compute_rt[core.x][core.y] = [core_row_tiles, int(core_row_tiles >= blocking.stream_normalize_min_rows)]
 
     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)

@@ -1,0 +1,5 @@
+hb_ef_stream [HALF_BAND_EVEN_FIRST=1,HALF_BAND_STREAM=1] k=focus
+   [38.0, 47.2, 37.7, 35.5]
+   [38.6, 48.4, 38.2, 35.3]
+   [38.2, 49.0, 41.7, 35.6]
+  median [38.2, 48.4, 38.2, 35.5]
