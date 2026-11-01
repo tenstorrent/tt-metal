@@ -9,6 +9,8 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include <utility>
+
 namespace ttnn::operations::moreh::moreh_group_norm {
 void MorehGroupNormOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -41,15 +43,19 @@ void MorehGroupNormOperation::validate_tensors(
         C = output.value().padded_shape()[1];
         TT_FATAL(C % num_groups == 0, "output_shape[1] must be divisible by num_groups.");
     }
-    // gamma (1, 1, 1, C)
-    if (gamma.has_value()) {
-        C = gamma.value().logical_shape()[-1];
-        TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
-    }
-    // beta (1, 1, 1, C)
-    if (beta.has_value()) {
-        C = beta.value().logical_shape()[-1];
-        TT_FATAL(C % num_groups == 0, "beta_shape[-1] must be divisible by num_groups.");
+    // gamma and beta (1, 1, 1, C), with C the input's channel count
+    const auto input_channels = input.logical_shape()[1];
+    for (const auto& [affine, name] : {std::pair{&gamma, "gamma"}, std::pair{&beta, "beta"}}) {
+        if (!affine->has_value()) {
+            continue;
+        }
+        const auto& affine_shape = affine->value().logical_shape();
+        TT_FATAL(
+            affine_shape[-1] == input_channels && affine_shape.volume() == input_channels,
+            "moreh_group_norm: {} shape {} must be (1, 1, 1, {}) to match the input's channels",
+            name,
+            affine_shape,
+            input_channels);
     }
 
     // mean (1, 1, N, num_groups)

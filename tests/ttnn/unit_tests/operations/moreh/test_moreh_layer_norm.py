@@ -224,3 +224,24 @@ def test_moreh_layer_norm_backward_large_algorithm(device):
     run_moreh_layer_norm_backward(
         ([1, 2, 500, 1000], 2), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False
     )
+
+
+@pytest.mark.parametrize(
+    "affine_shape",
+    [[1, 1, 1, 32], [1, 1, 32, 128], [1, 1, 1, 256]],
+    ids=["narrower", "extra_rows", "wider"],
+)
+@pytest.mark.parametrize("affine", ["gamma", "beta"])
+def test_moreh_layer_norm_rejects_mismatched_gamma_beta(device, affine_shape, affine, expect_error):
+    input_shape = [1, 1, 64, 128]
+    good = to_ttnn(torch.rand([1, 1, 1, 128]), device=device)
+    bad = to_ttnn(torch.rand(affine_shape), device=device)
+    with expect_error(RuntimeError, f"{affine} shape"):
+        ttnn.moreh_layer_norm(
+            create_ttnn_tilized_tensor(torch.rand(input_shape), device, ttnn.bfloat16),
+            1,
+            1e-5,
+            bad if affine == "gamma" else good,
+            bad if affine == "beta" else good,
+            compute_kernel_config=get_compute_kernel_options(False),
+        )
