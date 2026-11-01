@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -215,7 +216,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
                           // factory, the output has the same shard spec as the input.
         return tt::tt_metal::TensorSpec(
             input_shape,
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::internal::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE),
                 mem_config,
@@ -225,7 +226,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
 
     return tt::tt_metal::TensorSpec(
         input_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,

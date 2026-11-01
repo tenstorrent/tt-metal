@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
@@ -161,7 +162,7 @@ tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
     }
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             args.dtype,
             tt::tt_metal::PageConfig(output_layout),
             args.memory_config,

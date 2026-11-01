@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "pytensor.hpp"
 
 #include <array>
@@ -229,15 +230,14 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
     // Buffer is float tiles; TensorSpec must match so to_vector only untilizes / strips padding.
     TensorSpec decode_spec(
         tensor_spec.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             DataType::FLOAT32,
             tensor_spec.page_config(),
             MemoryConfig{},
             tensor_spec.logical_shape(),
             tensor_spec.padded_shape()));
     auto logical_data =
-        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec)
-            .to_vector<float>();
+        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec).to_vector<float>();
     return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
 }
 
@@ -276,8 +276,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
-        auto logical_data =
-            HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
+        auto logical_data = HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
@@ -1635,8 +1634,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_unique_id",
             [](const Tensor& self) -> std::optional<size_t> {
-                if (!is_device_tensor(self) || !self.is_allocated() ||
-                    !self.device_storage().is_root_allocated()) {
+                if (!is_device_tensor(self) || !self.is_allocated() || !self.device_storage().is_root_allocated()) {
                     return std::nullopt;
                 }
                 auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();

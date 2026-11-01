@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "transpose_device_operation.hpp"
 #include "transpose_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -418,7 +419,7 @@ tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             output_mem_config,

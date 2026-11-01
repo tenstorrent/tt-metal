@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "tilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/program_descriptors.hpp>
@@ -60,7 +61,8 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
-    if (input_tensor.layout() == Layout::ROW_MAJOR && operation_attributes.tile.get_height() < tt::constants::TILE_HEIGHT) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR &&
+        operation_attributes.tile.get_height() < tt::constants::TILE_HEIGHT) {
         return false;
     }
 
@@ -270,7 +272,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                                                          // factory, the output has the same shard spec as the input.
         return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::internal::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,

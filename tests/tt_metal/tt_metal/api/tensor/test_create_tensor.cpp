@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -99,7 +100,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
-    auto tensor_layout = TensorLayout::fromPaddedShape(
+    auto tensor_layout = tt::tt_metal::internal::tensor_layout_from_padded_shape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     auto tensor = MeshTensor::allocate_on_device(

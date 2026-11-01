@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -288,7 +289,7 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             output_data_type,
             PageConfig(output_layout),
             output_memory_config,

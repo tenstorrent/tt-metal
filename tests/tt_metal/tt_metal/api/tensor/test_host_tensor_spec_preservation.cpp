@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -182,7 +183,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadUnpadDropsMemoryConfigToDefault) {
 
     auto expected_pad_spec = TensorSpec(
         logical,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical, padded));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(padded_tensor.tensor_spec(), expected_pad_spec));
     EXPECT_EQ(padded_tensor.memory_config(), MemoryConfig{});

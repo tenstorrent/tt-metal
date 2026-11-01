@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "transpose_device_operation.hpp"
 #include "transpose_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -93,11 +94,7 @@ MemoryConfig derive_effective_output_memory_config(
     // Device-op fallback: use tile-inflated synth so the downstream interleaved factory sees a
     // tensor-width-divisor shard (RM synth can produce a shard_w that doesn't divide tensor_w).
     auto shard_spec = generate_transpose_shard_spec(
-        input_tensor,
-        output_padded_shape,
-        output_mem_config.memory_layout(),
-        std::nullopt,
-        OutputTiling::Default);
+        input_tensor, output_padded_shape, output_mem_config.memory_layout(), std::nullopt, OutputTiling::Default);
     return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 
@@ -236,7 +233,7 @@ tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             output_mem_config,

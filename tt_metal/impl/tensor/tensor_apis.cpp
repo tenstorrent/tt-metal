@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -251,7 +252,7 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     // Construct the new tensor spec first to verify that this is a supported Tensor configuration
     TensorSpec new_tensor_spec(
         tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             tensor.dtype(),
             PageConfig(Layout::ROW_MAJOR),
             MemoryConfig{},

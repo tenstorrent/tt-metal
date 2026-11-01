@@ -12,6 +12,7 @@
 // These stop at the hash on purpose. Most of these ops need Blackhole or a multi-device ring to dispatch, but
 // none of their hashes touches the hardware, so the keys can be checked on any single device.
 
+#include <internal/tensor_layout.hpp>
 #include <gtest/gtest.h>
 
 #include <cstdint>

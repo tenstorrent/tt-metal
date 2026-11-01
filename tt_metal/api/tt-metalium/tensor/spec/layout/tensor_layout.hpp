@@ -45,15 +45,6 @@ public:
     TensorLayout(TensorLayout&& other) noexcept;
     TensorLayout& operator=(TensorLayout&& other) noexcept;
 
-    // static method makes it easy to find and remove all of its usages in the codebase - that's why it is not a
-    // constructor
-    [[deprecated("Use of Padded Shape is deprecated")]] static TensorLayout fromPaddedShape(
-        DataType dtype,
-        const PageConfig& page_config,
-        const MemoryConfig& memory_config,
-        const tt::tt_metal::Shape& logical_shape,
-        const tt::tt_metal::Shape& padded_shape);
-
     Layout get_layout() const;
     Tile get_tile() const;
     PageConfig get_page_config() const;

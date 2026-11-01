@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "clone/clone.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
@@ -33,7 +34,7 @@ static Tensor manual_insertion(
     auto cpu_tensor = input_tensor.cpu();
     auto output_spec = tt::tt_metal::TensorSpec(
         logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
     auto output = Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
                              cpu_tensor.host_storage().buffer(), std::move(output_spec), cpu_tensor.tensor_topology()))

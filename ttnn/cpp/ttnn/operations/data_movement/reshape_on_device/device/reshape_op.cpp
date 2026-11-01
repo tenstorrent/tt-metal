@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "reshape_op.hpp"
 #include "reshape_on_device/device/reshape_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -92,7 +93,7 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config,

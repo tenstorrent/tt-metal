@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "layernorm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -526,7 +527,7 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 return tt::tt_metal::TensorSpec(
                     output_shape,
-                    TensorLayout::fromPaddedShape(
+                    tt::tt_metal::internal::tensor_layout_from_padded_shape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,

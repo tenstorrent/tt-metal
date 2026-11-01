@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "untilize_with_halo_program_factory.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -96,7 +97,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape));
 }
 

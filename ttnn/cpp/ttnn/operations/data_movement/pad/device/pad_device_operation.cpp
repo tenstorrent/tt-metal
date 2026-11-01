@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -215,7 +216,7 @@ tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

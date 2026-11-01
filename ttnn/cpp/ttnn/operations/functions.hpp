@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <internal/tensor_layout.hpp>
 #include <algorithm>
 #include <functional>
 #include <iterator>
@@ -44,7 +45,8 @@ inline TensorLayout legacy_tensor_layout_from_padded_shape(
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-    auto layout = TensorLayout::fromPaddedShape(dtype, page_config, memory_config, logical_shape, padded_shape);
+    auto layout = tt::tt_metal::internal::tensor_layout_from_padded_shape(
+        dtype, page_config, memory_config, logical_shape, padded_shape);
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)
