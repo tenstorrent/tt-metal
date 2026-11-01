@@ -188,6 +188,39 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(::test_utils::kMxDataTypes),
     ::test_utils::dtype_param_name);
 
+// BFLOAT2_B packed tiles (shared exponents included) must survive a host -> device -> host round trip byte for byte.
+// Quasar has no BFP formats.
+TEST_F(MeshDeviceSingleCardFixture, Bfloat2BRoundTrip) {
+    auto& mesh_device = *devices_[0];
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar has no BFP formats";
+    }
+    // 2x2 tiles, so the round trip covers several pages.
+    const Shape shape{64, 64};
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(
+            DataType::BFLOAT2_B,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+
+    // Ternary data is exact in BFLOAT2_B, so the values can be compared exactly too.
+    std::vector<float> data(shape.volume());
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<float>(static_cast<int>(i % 3) - 1);
+    }
+    auto host_tensor = HostTensor::from_vector(data, spec);
+
+    auto& cq = mesh_device.mesh_command_queue();
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
+    EXPECT_EQ(device_tensor.dtype(), DataType::BFLOAT2_B);
+    HostTensor result = cq.enqueue_read_tensor(device_tensor);
+
+    EXPECT_EQ(result.tensor_spec(), host_tensor.tensor_spec());
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), host_buffer::get_as<uint32_t>(host_tensor)));
+    EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), data));
+}
+
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
