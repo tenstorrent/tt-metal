@@ -77,7 +77,17 @@ CONFIGS = [
     (ttnn.bfloat16, ttnn.float32, False, True),
     (ttnn.bfloat16, ttnn.bfloat8_b, False, False),
     (ttnn.bfloat16, ttnn.bfloat8_b, False, True),
+    (ttnn.float32, ttnn.bfloat8_b, True, True),
+    (ttnn.float32, ttnn.float32, True, False),
 ]
+
+
+NTILES = [4, 5, 6, 7, 8, 10, 12]
+
+
+def fits(fp32_dest, full_sync, ntiles):
+    """DEST tiles of the section: 8 half sync and 16 full sync for a 16 bit DEST, half of that for a 32 bit DEST."""
+    return ntiles <= ((8 if full_sync else 4) if fp32_dest else (16 if full_sync else 8))
 
 
 def pcc(a, b):
@@ -133,11 +143,11 @@ def run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, nblocks, reini
 
 @pytest.mark.parametrize("device", [(1,)], indirect=True)
 @pytest.mark.parametrize("in_dt,out_dt,fp32_dest,full_sync", CONFIGS)
-@pytest.mark.parametrize("ntiles", [4, 5, 6, 7, 8])
+@pytest.mark.parametrize("ntiles", NTILES)
 @pytest.mark.parametrize("reinit", [False, True])
 def test_pack_block_api(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, reinit):
-    if fp32_dest and not full_sync and ntiles > 4:
-        pytest.skip("32 bit DEST holds 4 tiles per half")
+    if not fits(fp32_dest, full_sync, ntiles):
+        pytest.skip("the block does not fit the DEST section")
     golden, got = run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, 3, reinit)
     if out_dt == ttnn.bfloat8_b:
         assert pcc(golden, got) > 0.999
