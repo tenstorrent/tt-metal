@@ -327,22 +327,6 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel14copy_tile_initEvNSt8uint32_tENSt8uint32_tE">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1adb72ec43c4d0f707d030d1ddc36f6447"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">copy_tile_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cbid</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel14copy_tile_initEvNSt8uint32_tENSt8uint32_tE" title="Permalink to this definition"></a><br>
-</dt>
-<dd>
-<p>Perform a init for the copy tile operation.</p>
-<p>Return value: None</p>
-<p></p>
-<div class="tt-api-param-list colwidths-auto docutils container">
-<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">cbid  </span><span class="tt-api-param-desc">The identifier of the input circular buffer (CB)  </span></p>
-</div>
-
-</dd>
-</dl>
-
-<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel9copy_tileEvNSt8uint32_tENSt8uint32_tENSt8uint32_tE">
 <span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a51505418b5ec3fd908957dca1ba85da9"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">copy_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in_cb_id</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in_tile_index</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_tile_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel9copy_tileEvNSt8uint32_tENSt8uint32_tENSt8uint32_tE" title="Permalink to this definition"></a><br>
 </dt>
@@ -375,42 +359,6 @@
 <p class="tt-api-param-row"><span class="tt-api-param-name">start_in_tile_index  </span><span class="tt-api-param-desc">The index of the first tile to copy from the input CB  </span></p>
 <p class="tt-api-param-row"><span class="tt-api-param-name">start_dst_tile_index  </span><span class="tt-api-param-desc">The index of the first destination tile in the DST register  </span></p>
 <p class="tt-api-param-row"><span class="tt-api-param-name">ntiles  </span><span class="tt-api-param-desc">The number of consecutive tiles to copy  </span></p>
-</div>
-
-</dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel35copy_tile_to_dst_init_short_with_dtEvNSt8uint32_tENSt8uint32_tENSt8uint32_tE">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a97ec0f9f4ebdffd72169963eba6e62d6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">copy_tile_to_dst_init_short_with_dt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_cbid</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cbid</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel35copy_tile_to_dst_init_short_with_dtEvNSt8uint32_tENSt8uint32_tENSt8uint32_tE" title="Permalink to this definition"></a><br>
-</dt>
-<dd>
-<p>Reconfigures SrcA to the new operand’s data format and re-inits the copy op.</p>
-<p>Return value: None</p>
-<p></p>
-<div class="tt-api-param-list colwidths-auto docutils container">
-<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">old_cbid  </span><span class="tt-api-param-desc">The identifier of the previous input circular buffer (CB) to SrcA  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">new_cbid  </span><span class="tt-api-param-desc">The identifier of the new input circular buffer (CB) to SrcA  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">transpose  </span><span class="tt-api-param-desc">Flag to perform transpose on SrcA  </span></p>
-</div>
-
-</dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel27copy_tile_to_dst_init_shortEvNSt8uint32_tENSt8uint32_tENSt8uint32_tENSt8uint32_tE">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a3f40117edec39498c4c80471a3504691"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">copy_tile_to_dst_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cbid</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose_within_16x16_face</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel27copy_tile_to_dst_init_shortEvNSt8uint32_tENSt8uint32_tENSt8uint32_tENSt8uint32_tE" title="Permalink to this definition"></a><br>
-</dt>
-<dd>
-<p>Perform the init short for copy tile. This does not reconfigure the unpacker data types.</p>
-<p>Return value: None</p>
-<p></p>
-<div class="tt-api-param-list colwidths-auto docutils container">
-<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">cbid  </span><span class="tt-api-param-desc">The identifier of the input circular buffer (CB)  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">transpose  </span><span class="tt-api-param-desc">Flag to perform transpose on SrcA  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">transpose_within_16x16_face  </span><span class="tt-api-param-desc">Flag to perform transpose within 16x16 face  </span></p>
 </div>
 
 </dd>
