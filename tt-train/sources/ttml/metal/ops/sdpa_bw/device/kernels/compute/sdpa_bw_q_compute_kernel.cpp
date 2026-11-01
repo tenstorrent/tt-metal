@@ -122,7 +122,9 @@ const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q ro
  *
  * @param global_row_idx The global row index (across all batches/heads/sequences)
  */
-FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
+// `round_chunks`: chain mode streams that many K/V chunks this round (iteration 27); the ones past the row's
+// diagonal are dropped.
+FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chunks = Ht / kv_block) {
     cb_wait_front(cb_attn_output, v_tiles);
     cb_wait_front(cb_grad_output, v_tiles);
     cb_wait_front(cb_query, qk_tiles);
@@ -322,8 +324,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 #endif
     }
 #ifdef CHAIN
-    // Chain mode streams every K/V chunk of the sequence through this core: drop the ones past the diagonal.
-    for (uint32_t h = ((num_kv_tiles_to_process + kv_block - 1U) / kv_block) * kv_block; h < Ht; h += kv_block) {
+    // Chain mode streams the round's K/V chunks through this core: drop the ones past the diagonal.
+    for (uint32_t h = ((num_kv_tiles_to_process + kv_block - 1U) / kv_block) * kv_block; h < round_chunks * kv_block;
+         h += kv_block) {
         cb_wait_front(cb_key, kv_block * qk_tiles);
         cb_pop_front(cb_key, kv_block * qk_tiles);
         cb_wait_front(cb_value, kv_block * v_tiles);
@@ -370,12 +373,14 @@ void kernel_main() {
 
 #ifdef WORK_LIST
     // Work-list mode: arg0 = number of rows of this core, args 1.. = their global row indices (heaviest first).
-    // Chain mode: the same list padded with 0xFFFFFFFF rounds in which this core only consumes the K/V stream.
+    // Chain mode: the same list padded with 0xFFFFFFFF rounds in which this core only consumes the K/V stream,
+    // then per round the chunk count the chain streams (iteration 27).
     for (uint32_t i = 0; i < start_idx; ++i) {
         const uint32_t row = get_arg_val<uint32_t>(1U + i);
 #ifdef CHAIN
+        const uint32_t round_chunks = get_arg_val<uint32_t>(1U + start_idx + i);
         if (row == 0xFFFFFFFFU) {
-            for (uint32_t h = 0; h < Ht; h += kv_block) {
+            for (uint32_t h = 0; h < round_chunks * kv_block; h += kv_block) {
                 cb_wait_front(cb_key, kv_block * qk_tiles);
                 cb_pop_front(cb_key, kv_block * qk_tiles);
                 cb_wait_front(cb_value, kv_block * v_tiles);
@@ -383,8 +388,10 @@ void kernel_main() {
             }
             continue;
         }
-#endif
+        process_single_row(row, round_chunks);
+#else
         process_single_row(row);
+#endif
     }
 #elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;

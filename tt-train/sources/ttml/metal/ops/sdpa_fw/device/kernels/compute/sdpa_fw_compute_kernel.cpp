@@ -78,7 +78,9 @@ constexpr uint32_t cb_gate = tt::CBIndex::c_16;
  *
  * @param global_row_idx The global row index (across all batches/heads/sequences)
  */
-FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
+// `round_chunks`: chain mode streams that many K/V chunks this round (iteration 27); the ones past the row's
+// diagonal are dropped.
+FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chunks = Ht / Sk_chunk_t) {
     cb_wait_front(cb_query, qWt);
 
     // Calculate position within sequence for causal mask
@@ -271,8 +273,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
     }
 #ifdef CHAIN
-    // Chain mode streams every chunk of the sequence through this core: drop the ones past the diagonal.
-    for (uint32_t k_chunk = num_kv_chunks; k_chunk < Ht / Sk_chunk_t; ++k_chunk) {
+    // Chain mode streams the round's chunks through this core: drop the ones past the diagonal.
+    for (uint32_t k_chunk = num_kv_chunks; k_chunk < round_chunks; ++k_chunk) {
         cb_wait_front(cb_key, Sk_chunk_t * qWt);
         cb_pop_front(cb_key, Sk_chunk_t * qWt);
         cb_wait_front(cb_value, Sk_chunk_t * vWt);
@@ -382,12 +384,14 @@ void kernel_main() {
 
 #ifdef WORK_LIST
     // Work-list mode: arg0 = number of rows of this core, args 1.. = their global row indices (heaviest first).
-    // Chain mode: the same list padded with 0xFFFFFFFF rounds in which this core only consumes the K/V stream.
+    // Chain mode: the same list padded with 0xFFFFFFFF rounds in which this core only consumes the K/V stream,
+    // then per round the chunk count the chain streams (iteration 27).
     for (uint32_t i = 0; i < start_idx; ++i) {
         const uint32_t row = get_arg_val<uint32_t>(1U + i);
 #ifdef CHAIN
+        const uint32_t round_chunks = get_arg_val<uint32_t>(1U + start_idx + i);
         if (row == 0xFFFFFFFFU) {
-            for (uint32_t k_chunk = 0; k_chunk < Ht / Sk_chunk_t; ++k_chunk) {
+            for (uint32_t k_chunk = 0; k_chunk < round_chunks; ++k_chunk) {
                 cb_wait_front(cb_key, Sk_chunk_t * qWt);
                 cb_pop_front(cb_key, Sk_chunk_t * qWt);
                 cb_wait_front(cb_value, Sk_chunk_t * vWt);
@@ -395,8 +399,10 @@ void kernel_main() {
             }
             continue;
         }
-#endif
+        process_single_row(row, round_chunks);
+#else
         process_single_row(row);
+#endif
     }
 #elif defined(BALANCED_PARALLELISM)
     // Balanced parallelism mode: process pairs of rows (light + heavy)

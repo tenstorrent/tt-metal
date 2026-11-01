@@ -90,6 +90,7 @@ void kernel_main() {
     const uint32_t kv_stream = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t rows_base = runtime_args_counter;
+    const uint32_t chunks_base = rows_base + num_rounds;  // per round: the chunks the chain streams (iteration 27)
 
     Semaphore sender_sem(get_compile_time_arg_val(6));
     Semaphore receiver_sem(get_compile_time_arg_val(7));
@@ -97,15 +98,19 @@ void kernel_main() {
     Semaphore forwarded_sem(get_compile_time_arg_val(10));
     const Noc noc;
 
-    constexpr uint32_t num_chunks = Ht / Sk_chunk_t;
+    [[maybe_unused]] constexpr uint32_t num_chunks = Ht / Sk_chunk_t;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * qWt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vWt;
     const uint32_t key_offset = kv_stream * qWt * Ht;
     const uint32_t value_offset = kv_stream * vWt * Ht;
 
     constexpr uint32_t kChainSlots = CHAIN_SLOTS;  // chunks resident per stream CB (slot = chunk % kChainSlots)
-    const uint32_t total_chunks = num_rounds * num_chunks;
+    uint32_t total_chunks = 0;
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        total_chunks += get_arg_val<uint32_t>(chunks_base + round);
+    }
     uint32_t credited = 0;  // chunks credited to the previous core (non-injectors)
+    uint32_t c = 0;         // chunk counter over the rounds (CB slot = c % kChainSlots)
     for (uint32_t round = 0; round < num_rounds; ++round) {
         const uint32_t global_row_idx = get_arg_val<uint32_t>(rows_base + round);
         if (global_row_idx != 0xFFFFFFFFU) {
@@ -114,8 +119,8 @@ void kernel_main() {
             read_tiles_by_row(cb_gate, gate_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
 #endif
         }
-        for (uint32_t k_chunk = 0; k_chunk < num_chunks; ++k_chunk) {
-            const uint32_t c = round * num_chunks + k_chunk;
+        const uint32_t round_chunks = get_arg_val<uint32_t>(chunks_base + round);
+        for (uint32_t k_chunk = 0; k_chunk < round_chunks; ++k_chunk, ++c) {
             if (!is_sink && c >= kChainSlots) {
                 forwarded_sem.wait_min(
                     c + 1U - kChainSlots);  // the slots' previous chunk (c - kChainSlots) has been forwarded

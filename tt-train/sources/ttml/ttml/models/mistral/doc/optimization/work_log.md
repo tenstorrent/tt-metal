@@ -155,6 +155,13 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 27: per-round chain stream bounds (kernel boost checklist)
+
+- Roofline / bytes: every round streamed the whole sequence (24 / 24 / 12 chunks per core for KV / Q / forward) where the rounds' rows need 12 / 12 / 6 (replicated schedule); the stream is the larger part of the skeleton time of the backward kernels.
+- Structural fix: per chain and round a stream bound from the round's items (max diagonal chunk for forward / Q, min K row for KV), passed after the row list; readers, writers and compute loop over it; chunk counter over the rounds for slots and credits (`O/iter27_patch.py`, written while the iteration-26 chain ran, applied after it).
+- Measured standalone: bit-exact; shard backward 387 -> 345 us (with backward chains of 7, re-swept), forward 114 -> 110.
+- Verification: standalone six shapes, attention tests, harness 48, TP gradient check PASS, cooled TP=4 MFU + profile, 8-layer loss match PASS (0.0298, unchanged), TP=4 real weights (`O/iter27.{sh,log}`).
+
 ### Iteration 26: SDPA chain credits, 8-row forward chunks, forward chain length (kernel boost checklist)
 
 - Roofline / bytes: after iteration 25 the SDPA kernels at the shard shape take 136 / 132 / 198 us (forward / Q / KV) for 50 / 53 / 91 us of math stages (stage removal, `O/iter26_attrib.log`); the math-free, pack-free skeletons still 75 / 62 / 99 us. Tracy: device-bound (forward 122 us device), per-core spans 78-122 us, the slowest core sets the time.
@@ -317,6 +324,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 9 P1 | `4041c62353d` | `sdpa_bw_q` factory: one-row K/V blocks outside the chain; list-mode and chain-mode checks, attention tests |
 | 24 | `b88de55dd41` | wide fused-LoRA input for w2 (first chain `O/iter24.log` failed in the wrapper's backward, fixed; chain `O/iter24b*`): `swiglu_packed_fw out_cols`, `skinny_matmul tail_out`, `transpose_split dx_cols`, `lowrank_update` / `swiglu_packed_bw` wide gradient, `MLP.swiglu_op` hook, iteration-24 evidence |
 | 25 | `0cd8e1213a8` | `transpose_split(w=A)`: the low-rank update fused into the transpose (factory, reader, compute, binding), the fused LoRA backward routed through it, iteration-25 evidence |
-| 26 | (this commit) | SDPA chain credits (`CHAIN_SLOTS = 3`, counting semaphores) in the three chain kernels' readers / writers / factories, 8-row forward chunks (`kMaxSkChunkT = 8`, passes, two-chunk score CB), per-kernel chain-length knobs (forward 8), `lpt_schedule` initial loads + `env_uint32_or` in `program_utils.hpp`, iteration-26 evidence |
+| 26 | `c193bd73925` | SDPA chain credits (`CHAIN_SLOTS = 3`, counting semaphores) in the three chain kernels' readers / writers / factories, 8-row forward chunks (`kMaxSkChunkT = 8`, passes, two-chunk score CB), per-kernel chain-length knobs (forward 8), `lpt_schedule` initial loads + `env_uint32_or` in `program_utils.hpp`, iteration-26 evidence |
+| 27 | (this commit) | per-round chain stream bounds in the three SDPA chain kernels (factories compute them per chain and round, readers / writers / compute loop over them), backward chain length 7, iteration-27 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

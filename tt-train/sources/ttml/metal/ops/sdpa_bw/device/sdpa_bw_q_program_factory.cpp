@@ -74,8 +74,9 @@ const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 const std::string kWorkListDefKey = "WORK_LIST";
 const std::string kChainDefKey = "CHAIN";
 constexpr uint32_t kChainSlots = 3U;  // stream chunks resident per core (credits run kChainSlots - 1 ahead)
-// Cores per forwarding chain (14 measured best for the backward at the TP=4 shard shape, iteration 26); tunable.
-const uint32_t kChainLength = env_uint32_or("TTML_SDPA_BW_CHAIN_LENGTH", 14U);
+// Cores per forwarding chain: 7 measured best for the backward at the TP=4 shard shape with the per-round stream
+// bounds (iteration 27: 343-346 us against 355 with 14); tunable for sweeps.
+const uint32_t kChainLength = env_uint32_or("TTML_SDPA_BW_CHAIN_LENGTH", 7U);
 constexpr uint32_t kChainChunk = 4U;      // tile rows of the stream per handshake
 constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no item this round" in a chain-mode list
 
@@ -87,13 +88,31 @@ struct ChainCore {
     bool sink = false;
     uint32_t prev = 0;
     uint32_t next = 0;
+    uint32_t chain = 0;  // global chain index
     std::vector<uint32_t> items;
+    std::vector<uint32_t> stream_bounds;  // per round: the chain's stream bound (iteration 27), see set_stream_bounds
 };
 
 struct ChainSchedule {
     std::vector<ChainCore> cores;
     uint32_t rounds = 0;
+    uint32_t num_chains = 0;
 };
+
+// Per chain and round the stream bound of the round's items (`bound_of_item`, combined with `combine`, `empty` for a
+// round without items): every core of a chain consumes the same chunks, so the chain's items decide (iteration 27).
+template <typename BoundFn, typename CombineFn>
+void set_stream_bounds(ChainSchedule& sched, BoundFn&& bound_of_item, CombineFn&& combine, uint32_t empty) {
+    std::vector<std::vector<uint32_t>> bounds(sched.num_chains, std::vector<uint32_t>(sched.rounds, empty));
+    for (const auto& cc : sched.cores) {
+        for (uint32_t r = 0; r < cc.items.size(); ++r) {
+            bounds[cc.chain][r] = combine(bounds[cc.chain][r], bound_of_item(cc.items[r]));
+        }
+    }
+    for (auto& cc : sched.cores) {
+        cc.stream_bounds = bounds[cc.chain];
+    }
+}
 
 // `items_of_stream(s)` -> (item ids, weights) of stream s.
 template <typename ItemsFn>
@@ -111,6 +130,7 @@ ChainSchedule chain_schedule(uint32_t num_cores, uint32_t num_streams, ItemsFn&&
         for (uint32_t c = 0; c < stream_cores; ++c) {
             auto& cc = sched.cores[first_core + c];
             cc.stream = stream;
+            cc.chain = sched.num_chains + c / kChainLength;
             // The chain runs downward in core index (iteration 23): the writer forwards on NOC_1, whose routes
             // decrease in coordinate, so the next core is the previous index (one link) and the injector is the
             // highest core of its chain; the readers' ready counters travel upward on NOC_0.
@@ -124,9 +144,10 @@ ChainSchedule chain_schedule(uint32_t num_cores, uint32_t num_streams, ItemsFn&&
             }
         }
         first_core += stream_cores;
+        sched.num_chains += (stream_cores + kChainLength - 1U) / kChainLength;
     }
     TT_FATAL(
-        sched.rounds + 24U <= tt::tt_metal::max_runtime_args,
+        2U * sched.rounds + 24U <= tt::tt_metal::max_runtime_args,
         "SDPA chain: {} rounds exceed the runtime-arg limit",
         sched.rounds);
     return sched;
@@ -341,6 +362,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;
         chain = chain_schedule(num_cores, num_streams, items_of_stream);
+        // The stream stops at the diagonal chunk of the round's heaviest row.
+        set_stream_bounds(
+            chain,
+            [&](uint32_t item) { return ((item % St) + 1U + chain_chunk - 1U) / chain_chunk; },
+            [](uint32_t a, uint32_t b) { return std::max(a, b); },
+            /* empty */ 0U);
         num_rows_per_core_group_1 = chain.rounds;
     } else if (use_work_list) {
         num_cores = std::min(num_available_cores, total_rows_to_process);
@@ -734,6 +761,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             const auto& cc = chain.cores[i];
             std::vector<uint32_t> rounds(cc.items);
             rounds.resize(chain.rounds, kNoRow);
+            // The items (padded) then, per round, the chain's stream bound.
+            const auto with_bounds = [&](std::vector<uint32_t> args) {
+                args.insert(args.end(), cc.stream_bounds.begin(), cc.stream_bounds.end());
+                return args;
+            };
             const auto prev = device->worker_core_from_logical_core(
                 tt::tt_metal::CoreCoord{cc.prev / num_cores_y, cc.prev % num_cores_y});
             const auto next = device->worker_core_from_logical_core(
@@ -742,7 +774,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                 program,
                 kernels.reader,
                 core,
-                work_list_runtime_args(
+                with_bounds(work_list_runtime_args(
                     {grad_output_buffer->address(),
                      attn_output_buffer->address(),
                      query_buffer->address(),
@@ -758,12 +790,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                      cc.injector ? 1U : 0U,
                      cc.sink ? 1U : 0U,
                      cc.stream},
-                    rounds));
+                    rounds)));
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                work_list_runtime_args(
+                with_bounds(work_list_runtime_args(
                     {grad_query_buffer->address(),
                      u_scaler_buffer->address(),
                      grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
@@ -771,8 +803,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                      static_cast<uint32_t>(next.x),
                      static_cast<uint32_t>(next.y),
                      cc.sink ? 1U : 0U},
-                    rounds));
-            SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rounds));
+                    rounds)));
+            SetRuntimeArgs(program, kernels.compute_group_1, core, with_bounds(work_list_runtime_args({}, rounds)));
         }
     } else if (use_work_list) {
         for (uint32_t i = 0; i < num_cores; i++) {

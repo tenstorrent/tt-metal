@@ -1,0 +1,10 @@
+fw6_bw7 case q8 kv2 S1024 D128: wall us fw 118 fw+bw 461 bw 343
+fw6_bw10 case q8 kv2 S1024 D128: wall us fw 115 fw+bw 474 bw 359
+fw6_bw14 case q8 kv2 S1024 D128: wall us fw 118 fw+bw 472 bw 354
+fw8_bw7 case q8 kv2 S1024 D128: wall us fw 107 fw+bw 453 bw 346
+fw8_bw10 case q8 kv2 S1024 D128: wall us fw 108 fw+bw 464 bw 356
+fw8_bw14 case q8 kv2 S1024 D128: wall us fw 107 fw+bw 463 bw 355
+fw10_bw7 case q8 kv2 S1024 D128: wall us fw 122 fw+bw 468 bw 346
+fw10_bw10 case q8 kv2 S1024 D128: wall us fw 121 fw+bw 479 bw 358
+fw10_bw14 case q8 kv2 S1024 D128: wall us fw 122 fw+bw 477 bw 355
+fw8_bw14b case q8 kv2 S1024 D128: wall us fw 108 fw+bw 462 bw 355

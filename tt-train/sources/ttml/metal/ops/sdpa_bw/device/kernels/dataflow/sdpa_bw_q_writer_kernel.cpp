@@ -99,6 +99,7 @@ void kernel_main() {
     const uint32_t is_sink = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t rows_base = runtime_args_counter;
+    const uint32_t chunks_base = rows_base + num_rounds;  // per round: the chunks the chain streams (iteration 27)
     Semaphore sender_sem(get_compile_time_arg_val(4));
     Semaphore receiver_sem(get_compile_time_arg_val(5));
     [[maybe_unused]] Semaphore valid_sem(get_compile_time_arg_val(6));
@@ -115,10 +116,10 @@ void kernel_main() {
     // kChainSlots.
     const uint32_t k_base = get_write_ptr(cb_key);
     const uint32_t v_base = get_write_ptr(cb_value);
-    constexpr uint32_t chunks_per_round = Ht / chain_chunk;
+    uint32_t c = 0;  // chunk counter over the rounds (CB slot = c % kChainSlots)
     for (uint32_t round = 0; round < num_rounds; ++round) {
-        for (uint32_t h = 0; h < chunks_per_round; ++h) {
-            const uint32_t c = round * chunks_per_round + h;
+        const uint32_t round_chunks = get_arg_val<uint32_t>(chunks_base + round);
+        for (uint32_t h = 0; h < round_chunks; ++h, ++c) {
             received_sem.wait_min(c + 1U);
             if (!is_sink) {
                 const uint32_t k_addr = k_base + (c % kChainSlots) * k_chunk_bytes;

@@ -139,6 +139,7 @@ void kernel_main() {
     const uint32_t kv_stream = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t rows_base = runtime_args_counter;
+    const uint32_t chunks_base = rows_base + num_rounds;  // per round: the chunks the chain streams (iteration 27)
 
     Semaphore sender_sem(get_compile_time_arg_val(5));
     Semaphore receiver_sem(get_compile_time_arg_val(6));
@@ -149,10 +150,14 @@ void kernel_main() {
     constexpr uint32_t k_chunk_tiles = chain_chunk * qWt;
     constexpr uint32_t v_chunk_tiles = chain_chunk * vWt;
 
-    constexpr uint32_t chunks_per_round = Ht / chain_chunk;
+    [[maybe_unused]] constexpr uint32_t chunks_per_round = Ht / chain_chunk;
     constexpr uint32_t kChainSlots = CHAIN_SLOTS;  // chunks resident per stream CB (slot = chunk % kChainSlots)
-    const uint32_t total_chunks = num_rounds * chunks_per_round;
+    uint32_t total_chunks = 0;
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        total_chunks += get_arg_val<uint32_t>(chunks_base + round);
+    }
     uint32_t credited = 0;  // chunks credited to the previous core (non-injectors)
+    uint32_t c = 0;         // chunk counter over the rounds (CB slot = c % kChainSlots)
     for (uint32_t round = 0; round < num_rounds; ++round) {
         const uint32_t global_row_idx = get_arg_val<uint32_t>(rows_base + round);
         if (global_row_idx != 0xFFFFFFFFU) {
@@ -171,8 +176,8 @@ void kernel_main() {
                 interm_tile_bytes,
                 num_of_interm_tiles);
         }
-        for (uint32_t h0 = 0; h0 < Ht; h0 += chain_chunk) {
-            const uint32_t c = round * chunks_per_round + h0 / chain_chunk;
+        const uint32_t round_rows = get_arg_val<uint32_t>(chunks_base + round) * chain_chunk;
+        for (uint32_t h0 = 0; h0 < round_rows; h0 += chain_chunk, ++c) {
             if (!is_sink && c >= kChainSlots) {
                 forwarded_sem.wait_min(
                     c + 1U - kChainSlots);  // the slot's previous chunk (c - kChainSlots) has been forwarded

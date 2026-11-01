@@ -55,6 +55,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 25 | real weights, warm | 492.2 (489.6) | - | `O/iter25_full_tp4_real.log` |
 | 26 | SDPA chain credits (three chunks in flight), 8-row K/V chunks in the forward, forward chains of 8 cores | **472.5 (465.9)** | **34.33 %** | `O/iter26_tp_mfu_tp4.log` |
 | 26 | real weights, warm | 493.2 (481.4) | - | `O/iter26_full_tp4_real.log` |
+| 27 | per-round chain stream bounds (forward / Q: up to the round's heaviest row; KV: from its lightest item), backward chains of 7 | **468.1 (465.4)** | **34.66 %** | `O/iter27_tp_mfu_tp4.log` |
+| 27 | real weights, warm | 487.5 (483.3) | - | `O/iter27_full_tp4_real.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -325,6 +327,16 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Verification**: harness 48 passed; TP gradient check PASS; 8-layer loss match PASS (max |diff| 0.0298 vs 0.0292 before: the forward's rounding order changed with the chunk); real weights warm 493.2 ms (492.2).
 - **Rejected on the way** (Rejected table): bf16 DEST in the forward with the same algorithm (slower and PCC 0.9999), position-aware LPT loads for the chain stagger (slower: the sink's extra time is the stream fill, which moving rows cannot remove).
 - **Evidence**: `O/iter26_sdpa_time.py`, `O/iter26_attrib_patch.py`, `O/iter26_attrib{,2,3,4}.sh`, `O/iter26_attrib*.log` (the `noinit` variants hung the device: removing the init calls is not a valid skeleton; `tt-smi -r` 16:30), `O/iter26_patch.py` (credits), `O/iter26b_patch.py` (8-row chunks), `O/iter26c_patch.py` (hop loads, reverted but for the chain-length knobs), `O/iter26c_sweep*.{sh,log}`, `O/iter26{,b,c}_build_check.log`, `O/iter26.{sh,log}`, `O/iter26_harness.log`, `O/iter26_tp_grad_check_tp4.log`, `O/iter26_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter26_tp_mfu_tp4_tt-smi.txt`, `O/iter26_loss_comparison.txt`, `O/iter26_full_tp4_real.log`, `O/iter26_sdpa_baseline.log` (the outputs saved as the next baseline).
+
+## Iteration 27 (2026-11-01): per-round chain stream bounds (kernel boost)
+
+- **Roofline / bytes**: in chain mode every round streamed the whole sequence through every core of the chain (24 chunks per core at the shard shape for the backward kernels, 12 for the forward), although a row needs only the chunks up to its diagonal (forward, Q backward) or from its K row on (KV backward); the LPT lists put the heavy rows in round 0 and light ones after, so the replicated schedule (`O/iter26_attrib*`, python) showed the later rounds streaming 2-3x what their rows use: 6.1 / 12.2 / 12.0 chunks per core needed against 12 / 24 / 24 streamed.
+- **Change**: math, kernels we own. Per chain and round the factory computes the stream bound (forward / Q: the chunk count up to the round's heaviest row, `max` over the chain's cores; KV: the first query row, `min` over the items, floored to the chunk; a round without items streams nothing) and passes it after the padded row list (`work_list_runtime_args` + the bounds); the readers, writers and compute kernels loop over that many chunks (KV: from that row on), the chunk counter runs over the rounds for the slots and credits. The backward chain length re-swept with the halved stream: 7 (343-346 us) against 10 / 14 (355-359), the forward stays at 8 (`O/iter27_sweep*.log`). Checklist: `optimization/work_log.md`, "Iteration 27".
+- **Standalone** (`O/iter27_build_check.log`, `O/iter27b_build_check.log` with backward chains of 7): bit-exact with iteration 26 on all six cases; shard shape forward 114 -> 110 us, backward 387 -> 345; 32 heads backward 1518 -> 1210; S=2048 forward 320 -> 288, backward 1174 -> 1046.
+- **Attribution in the step** (chip 0, per 4 layers, cycle-time): `SDPABackwardKV` 0.807 -> 0.722, `SDPABackwardQ` 0.508 -> 0.435, `SDPAForward` 0.422 -> 0.397: -0.18 ms per 4 layers, ~-1.8 ms/step per chip.
+- **Result**: TP=4 472.5 -> 468.1 ms (best 465.9 -> 465.4), 34.66 % MFU; the profile's clock mix 0.98-1.21 GHz (chip 3 at 0.98), so the wall drop understates the cycle-time gain.
+- **Verification**: harness 48 passed; TP gradient check PASS; 8-layer loss match PASS (max |diff| 0.0298, identical to iteration 26: same numerics); real weights warm 487.5 ms (493.2).
+- **Evidence**: `O/iter27_patch.py`, `O/iter27_build_check.{sh,log}`, `O/iter27b_build_check.log`, `O/iter27_sweep.{sh,log}` + `O/iter27_sweep_*.log`, `O/iter27.{sh,log}`, `O/iter27_harness.log`, `O/iter27_tp_grad_check_tp4.log`, `O/iter27_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter27_tp_mfu_tp4_tt-smi.txt`, `O/iter27_loss_comparison.txt`, `O/iter27_full_tp4_real.log`.
 
 ## State after iteration 20 (2026-10-30 night): where the remaining time is
 

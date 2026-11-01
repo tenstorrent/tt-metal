@@ -107,7 +107,9 @@ const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q ro
  * @param global_row_idx The global row index (across all batches/groups/sequences)
  * @param num_heads Query heads accumulated into this output (heads_per_group, or 1 with HEAD_SPLIT)
  */
-FORCE_INLINE void process_row_heads(uint32_t global_row_idx, uint32_t num_heads) {
+// `stream_start`: chain mode streams the query rows from this one on this round (iteration 27); the ones above
+// the diagonal are dropped.
+FORCE_INLINE void process_row_heads(uint32_t global_row_idx, uint32_t num_heads, uint32_t stream_start = 0) {
     cb_wait_front(cb_key, qk_tiles);
     cb_wait_front(cb_value, v_tiles);
 
@@ -134,8 +136,8 @@ FORCE_INLINE void process_row_heads(uint32_t global_row_idx, uint32_t num_heads)
 #endif
 
 #ifdef CHAIN
-    // Chain mode streams every query row of the head through this core: drop the ones above the diagonal.
-    for (uint32_t h = 0; h < q_start_tile; ++h) {
+    // Chain mode streams the round's query rows through this core: drop the ones above the diagonal.
+    for (uint32_t h = stream_start; h < q_start_tile; ++h) {
         cb_wait_front(cb_query, qk_tiles);
         cb_pop_front(cb_query, qk_tiles);
         cb_wait_front(cb_grad_output, v_tiles);
@@ -291,8 +293,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < start_idx; ++i) {
         const uint32_t item = get_arg_val<uint32_t>(1U + i);
 #ifdef CHAIN
+        // Per round the first query row the chain streams (iteration 27).
+        const uint32_t round_start = get_arg_val<uint32_t>(1U + start_idx + i);
         if (item == 0xFFFFFFFFU) {  // a round without an item: consume the stream
-            for (uint32_t h = 0; h < Ht; ++h) {
+            for (uint32_t h = round_start; h < Ht; ++h) {
                 cb_wait_front(cb_query, qk_tiles);
                 cb_pop_front(cb_query, qk_tiles);
                 cb_wait_front(cb_grad_output, v_tiles);
@@ -304,8 +308,10 @@ void kernel_main() {
             }
             continue;
         }
-#endif
+        process_row_heads(item / items_per_row, heads_per_item, round_start);
+#else
         process_row_heads(item / items_per_row, heads_per_item);
+#endif
     }
 #elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;

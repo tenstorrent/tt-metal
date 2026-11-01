@@ -370,12 +370,15 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         uint32_t stream = 0;
         bool injector = false;
         bool sink = false;
-        uint32_t prev = 0;  // linear index of the core it receives from
-        uint32_t next = 0;  // linear index of the core it forwards to
+        uint32_t prev = 0;   // linear index of the core it receives from
+        uint32_t next = 0;   // linear index of the core it forwards to
+        uint32_t chain = 0;  // global chain index
         std::vector<uint32_t> rows;
+        std::vector<uint32_t> stream_chunks;  // per round: the chunks the chain streams (iteration 27)
     };
     std::vector<ChainCore> chain_cores;
     uint32_t chain_rounds = 0;
+    uint32_t num_chains = 0;
     if (use_chain) {
         chain_cores.resize(num_cores);
         const uint32_t rows_per_stream = total_rows_to_process / num_streams;
@@ -401,6 +404,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             for (uint32_t c = 0; c < stream_cores; ++c) {
                 auto& cc = chain_cores[first_core + c];
                 cc.stream = stream;
+                cc.chain = num_chains + c / kChainLength;
                 const uint32_t pos = c % kChainLength;
                 // The chain runs downward in core index (iteration 23): the writer forwards on NOC_1, whose
                 // routes decrease in coordinate, so the next core is the previous index (one link).
@@ -413,9 +417,23 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 }
             }
             first_core += stream_cores;
+            num_chains += (stream_cores + kChainLength - 1U) / kChainLength;
+        }
+        // Per chain and round the stream stops at the diagonal chunk of the round's heaviest row (iteration 27):
+        // every core of the chain consumes the same chunks, so the chain's rows decide.
+        std::vector<std::vector<uint32_t>> chain_chunks(num_chains, std::vector<uint32_t>(chain_rounds, 0U));
+        for (const auto& cc : chain_cores) {
+            for (uint32_t r = 0; r < cc.rows.size(); ++r) {
+                const uint32_t q = cc.rows[r] % St;
+                chain_chunks[cc.chain][r] =
+                    std::max(chain_chunks[cc.chain][r], (q + 1U + Sk_chunk_t - 1U) / Sk_chunk_t);
+            }
+        }
+        for (auto& cc : chain_cores) {
+            cc.stream_chunks = chain_chunks[cc.chain];
         }
         TT_FATAL(
-            chain_rounds + 24U <= tt::tt_metal::max_runtime_args,
+            2U * chain_rounds + 24U <= tt::tt_metal::max_runtime_args,
             "SDPA chain: {} rounds exceed the runtime-arg limit",
             chain_rounds);
         num_rows_per_core_group_1 = chain_rounds;
@@ -791,6 +809,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             const auto& cc = chain_cores[i];
             std::vector<uint32_t> rounds(cc.rows);
             rounds.resize(chain_rounds, kNoRow);
+            // The rows (padded) then, per round, the chunks the chain streams.
+            const auto with_chunks = [&](std::vector<uint32_t> args) {
+                args.insert(args.end(), cc.stream_chunks.begin(), cc.stream_chunks.end());
+                return args;
+            };
             const auto prev = device->worker_core_from_logical_core(
                 tt::tt_metal::CoreCoord{cc.prev / num_cores_y, cc.prev % num_cores_y});
             const auto next = device->worker_core_from_logical_core(
@@ -799,7 +822,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 program,
                 kernels.reader,
                 core,
-                work_list_runtime_args(
+                with_chunks(work_list_runtime_args(
                     {query_buffer->address(),
                      key_buffer->address(),
                      value_buffer->address(),
@@ -812,19 +835,19 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                      cc.injector ? 1U : 0U,
                      cc.sink ? 1U : 0U,
                      cc.stream},
-                    rounds));
+                    rounds)));
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                work_list_runtime_args(
+                with_chunks(work_list_runtime_args(
                     {output_buffer->address(),
                      intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
                      static_cast<uint32_t>(next.x),
                      static_cast<uint32_t>(next.y),
                      cc.sink ? 1U : 0U},
-                    rounds));
-            SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rounds));
+                    rounds)));
+            SetRuntimeArgs(program, kernels.compute_group_1, core, with_chunks(work_list_runtime_args({}, rounds)));
         }
     } else if (use_work_list) {
         for (uint32_t i = 0; i < num_cores; i++) {
