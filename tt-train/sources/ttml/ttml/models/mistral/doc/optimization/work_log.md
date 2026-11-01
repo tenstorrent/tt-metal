@@ -155,6 +155,13 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 33 (rejected): the backward's dx all-reduce overlapped with the LoRA gradient products
+
+- Roofline / bytes: 17 collectives per 4 layers at 4.0 ms (the library's transfer time; 40-90 ms/step with the clock skew); the backward's 8 (the column-parallel layers' dx all-reduces) have independent work beside them: the layer's dA / dB products (~0.6 ms per layer against ~0.24 ms of collective).
+- Expected time after the fix: ~-19 ms/step. Landed: none (the TP gradient check's first backward failed in the dispatcher: a queue-0 program cannot start while queue 1 owns the sub-device; the two queues serialise programs, only separate sub-devices run concurrently).
+- Structural fix tried: two mesh command queues, `all_reduce_async_begin` / `end` (queue 1, mesh events, the reduce-scatter's intermediates and both outputs pre-allocated and held until `end`, a second `CCLResources` set), the fused backward issuing it before the products, the column-parallel fused forward dropping its `broadcast` (`O/iter33_patch.py`). A sub-device split for the collective workers (16-36 cores in the profile) would cost the 110-core matmul grid 9-18 %: +18-36 ms/step against the ~19 hidden. Also tried: dispatch on the Ethernet cores (120 compute cores): not available on this board (`O/iter33_eth_dispatch.log`).
+- Lesson: on tt-metal one sub-device runs one program at a time whatever the queue; overlap needs cores set aside, which this step cannot afford.
+
 ### Iteration 32: cross-entropy forward statistics in one pass (kernel boost checklist)
 
 - Roofline / bytes: the vocab-parallel CE forward's local statistics: `ttnn::max` over the [1024, 8192] bf16 shard (16 MB, 0.34 ms per step in the profile), `subtract + exp` into a 128 MB fp32 tensor (0.63) and `ttnn::sum` over it (0.34): ~1.3 ms per step for two reads of 16 MB (~0.1 ms at bandwidth).
@@ -375,6 +382,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 29 | `2352f1d3241` | `rmsnorm_bw_rows` pass 2 on the FPU (variant A kernel), factory arg -1/C, iteration-29 evidence |
 | 30 | `82f35c84e55` | SDPA forward diagonal chunk prefix (`n_cols` through the QK^T, mask, max, exp and PV stages), iteration-30 evidence |
 | 31 (rejected) | `85a06ef9dfe` | docs and evidence only: skinny_matmul read-ahead measured and reverted |
-| 32 | (this commit) | `metal/ops/vp_ce_row_stats` (new op: device op, factory, kernels, wrapper, binding), `losses.cpp` forward statistics through it, iteration-32 evidence |
+| 32 | `b1b0e107c27` | `metal/ops/vp_ce_row_stats` (new op: device op, factory, kernels, wrapper, binding), `losses.cpp` forward statistics through it, iteration-32 evidence |
+| 33 (rejected) | (this commit) | docs and evidence only: the second-queue collective overlap (implemented, refused by the dispatcher) and the Ethernet dispatch (unavailable), both reverted |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

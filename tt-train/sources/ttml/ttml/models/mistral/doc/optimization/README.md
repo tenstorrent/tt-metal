@@ -51,6 +51,7 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 30 | math (kernel boost) | SDPA forward: the diagonal chunk computes only the tiles up to the diagonal | 48 | **468.4** | **34.63 %** | landed (bit-exact; -0.1 ms/step at the shard shape, -6 % forward at 32 heads) |
 | 31 | math (kernel boost) | `skinny_matmul` x reads in flight before one barrier | - | - | - | rejected (48 -> 47 us per call: not latency-bound; evidence `O/iter31_*`) |
 | 32 | fixed (kernel boost) | cross-entropy forward statistics in one pass over the logits shard (`vp_ce_row_stats`) | 48 | **464.2 (459.5)** | **34.95 %** | landed (500 -> 215 us standalone at identical precision) |
+| 33 | collectives | the backward's dx all-reduce on a second command queue under the LoRA gradient products; dispatch on the Ethernet cores | - | - | - | rejected (one sub-device runs one program at a time across queues; ETH dispatch unavailable here; evidence `O/iter33_*`) |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
@@ -84,6 +85,7 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - Hard constraints (user, 2026-10-30): HiFi4 + fp32 accumulate (no lower fidelity evaluated); result = full-model TP=4 MFU only; a kernel-level item every iteration; a stage-review pass is a checkpoint, not a stop; one change per commit.
 - Loss match on this path (after 14): 8-layer host loss max |diff| 0.0294 vs torch fp64 (tol 0.10); TP=4 real-weight trajectory as the baseline's (526.1 ms warm).
 - Reviews: round 3 more-work-needed, answered in the follow-up; round 4 five P3 doc / test items fixed; round 5 clean-pass; round 6 (iterations 9-10) items answered, clean-pass on re-check; round 7 (iterations 11-12, `review_round7.md`) two P2 doc / hygiene items answered; round 8 (iterations 13-18, `review_round8.md`) four P2 doc items answered in the iteration-19 commit; round 9 (iterations 19-22, `review_round9.md`) more-work-needed: one P1 (the blocked Q kernel's non-chain modes straddle the K/V CB; fixed with `kv_block = 1` outside the chain and a list-mode check in the commit after iteration 23) and P2 doc items (answered in the docs commit that follows iteration 22).
+- 33 (rejected): the collectives cannot overlap compute on this device without a sub-device split that costs more matmul cores than it hides; dispatch on the Ethernet cores is unavailable. The collectives are a ~40 ms/step floor (plus the clock skew) at TP=4.
 - 32: the cross-entropy forward's max and sum-of-exp in one pass each over the logits shard (new `vp_ce_row_stats`): 500 -> 215 us standalone at the old precision.
 - 30: the forward's diagonal chunk computes only the tiles up to the diagonal (bit-exact): -0.1 ms/step at the shard shape, more at longer sequences.
 - 29: the norm backward's pass 2 on the FPU (iteration 20's rejected variant, admissible under the relaxed rule): 172 -> 148 us per call, -2.1 ms/step.

@@ -1,0 +1,360 @@
+2026-11-01 20:21:11.394 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+[tt-train] Inferred fabric config 7 from MGD dim_types
+2026-11-01 20:21:11.936 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 20:21:11.936 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 20:21:11.936 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 20:21:11.936 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 20:21:11.947 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 20:21:11.947 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 20:21:12.028 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 20:21:12.028 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 20:21:12.028 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 20:21:12.028 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 20:21:12.030 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 20:21:12.237 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 20:21:12.269 | info     |     Distributed | Using custom mesh graph descriptor: /home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto (metal_env.cpp:533)
+2026-11-01 20:21:12.269 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 20:21:12.270 | warning  |          Fabric | Physical groupings: Mesh graph descriptor 'M0': no PGD grouping could be placed on the PSD (4 topology match(es)); continuing without pinning hints for this mesh (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-01 20:21:12.316 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-11-01 20:21:12.317 | info     |          Fabric | mesh 0 shape 1x4: axis topologies derived as Y=LINE X=RING (control_plane.cpp:2606)
+2026-11-01 20:21:16.057 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-11-01 20:21:16.057 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+Building brisc, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/dataflow -include /home/ttuser/.cache/tt-metal-cache/pch/2d26ef525aaf937f/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE=36 -DROUTING_MODE=194 -DROW_MAX=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_vp_ce_row_stats/1549549365689936677/" -DKERNEL_COMPILE_TIME_ARGS=1024,7,148,4,2,4096 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/writer_vp_ce_row_stats/1549549365689936677/brisc/brisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/writer_vp_ce_row_stats/1549549365689936677/brisc/brisck.4117155003416620491_3607462.d
+In file included from ../kernel_includes.hpp:2,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/dataflow/writer_vp_ce_row_stats.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/dataflow/writer_vp_ce_row_stats.cpp:36:29: warning: 'void noc_async_write_tile(uint32_t, const TensorAccessor<DSpec>&, uint32_t, uint8_t) [with DSpec = tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295>; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> noc_async_write_page instead. [-Wdeprecated-declarations]
+   36 |         noc_async_write_tile(work, out_acc, get_read_ptr(cb_out));
+      |         ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:1547:19: note: declared here
+ 1547 | FORCE_INLINE void noc_async_write_tile(
+      |                   ^~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/15952742893361969400/" -DKERNEL_COMPILE_TIME_ARGS=2,1024,7,148,4 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/15952742893361969400/trisc1/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/15952742893361969400/trisc1/trisck.4117155003416620491_3607462.d
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:8,
+                 from ../chlkc_math.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h: In function 'void ckernel::copy_dest_values(uint32_t, uint32_t)':
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h:55:43: warning: 'void ckernel::sfpu::copy_dest_value(uint, uint, uint) [with bool APPROXIMATION_MODE = false; int ITERATIONS = 8; uint = long unsigned int]' is deprecated: Use copy_dest_value<DataFormat, APPROXIMATION_MODE, ITERATIONS> instead [-Wdeprecated-declarations]
+   55 |      _llk_math_eltwise_binary_sfpu_params_(                                                               \
+      |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |          ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:83:19: note: in definition of macro 'MATH'
+   83 | #define MATH(...) __VA_ARGS__
+      |                   ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:65:11: note: in expansion of macro 'SFPU_BINARY_CALL'
+   65 |     MATH((SFPU_BINARY_CALL(
+      |           ^~~~~~~~~~~~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:9,
+                 from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h:39:6: note: declared here
+   39 | void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
+      |      ^~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/455804812772720914/" -DKERNEL_COMPILE_TIME_ARGS=3,1024,7,148,4 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/455804812772720914/trisc1/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/455804812772720914/trisc1/trisck.4117155003416620491_3607462.d
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:8,
+                 from ../chlkc_math.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h: In function 'void ckernel::copy_dest_values(uint32_t, uint32_t)':
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h:55:43: warning: 'void ckernel::sfpu::copy_dest_value(uint, uint, uint) [with bool APPROXIMATION_MODE = false; int ITERATIONS = 8; uint = long unsigned int]' is deprecated: Use copy_dest_value<DataFormat, APPROXIMATION_MODE, ITERATIONS> instead [-Wdeprecated-declarations]
+   55 |      _llk_math_eltwise_binary_sfpu_params_(                                                               \
+      |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |          ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:83:19: note: in definition of macro 'MATH'
+   83 | #define MATH(...) __VA_ARGS__
+      |                   ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:65:11: note: in expansion of macro 'SFPU_BINARY_CALL'
+   65 |     MATH((SFPU_BINARY_CALL(
+      |           ^~~~~~~~~~~~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:9,
+                 from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h:39:6: note: declared here
+   39 | void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
+      |      ^~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/dataflow -include /home/ttuser/.cache/tt-metal-cache/pch/2d26ef525aaf937f/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE=36 -DROUTING_MODE=194 -DSUM_EXP=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_vp_ce_row_stats/3012302293934574777/" -DKERNEL_COMPILE_TIME_ARGS=1024,7,148,2,2,4096 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/writer_vp_ce_row_stats/3012302293934574777/brisc/brisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/writer_vp_ce_row_stats/3012302293934574777/brisc/brisck.4117155003416620491_3607462.d
+In file included from ../kernel_includes.hpp:2,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/dataflow/writer_vp_ce_row_stats.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/dataflow/writer_vp_ce_row_stats.cpp:36:29: warning: 'void noc_async_write_tile(uint32_t, const TensorAccessor<DSpec>&, uint32_t, uint8_t) [with DSpec = tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295>; uint32_t = long unsigned int; uint8_t = unsigned char]' is deprecated: Use <typename AddrGen> noc_async_write_page instead. [-Wdeprecated-declarations]
+   36 |         noc_async_write_tile(work, out_acc, get_read_ptr(cb_out));
+      |         ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:1547:19: note: declared here
+ 1547 | FORCE_INLINE void noc_async_write_tile(
+      |                   ^~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/7034179765990378236/" -DKERNEL_COMPILE_TIME_ARGS=3,1024,7,148,2 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/7034179765990378236/trisc0/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/7034179765990378236/trisc0/trisck.4117155003416620491_3607462.d
+In file included from ../chlkc_unpack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:118:37: warning: 'void ckernel::copy_dest_values(uint32_t, uint32_t)' is deprecated: Use copy_dest_values<DataFormat> instead [-Wdeprecated-declarations]
+  118 |                     copy_dest_values(2, 0);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:61:11: note: declared here
+   61 | ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+      |           ^~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/652906513355476732/" -DKERNEL_COMPILE_TIME_ARGS=2,1024,7,148,2 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/652906513355476732/trisc0/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/652906513355476732/trisc0/trisck.4117155003416620491_3607462.d
+In file included from ../chlkc_unpack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:118:37: warning: 'void ckernel::copy_dest_values(uint32_t, uint32_t)' is deprecated: Use copy_dest_values<DataFormat> instead [-Wdeprecated-declarations]
+  118 |                     copy_dest_values(2, 0);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:61:11: note: declared here
+   61 | ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+      |           ^~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/7034179765990378236/" -DKERNEL_COMPILE_TIME_ARGS=3,1024,7,148,2 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/7034179765990378236/trisc2/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/7034179765990378236/trisc2/trisck.4117155003416620491_3607462.d
+In file included from ../chlkc_pack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:118:37: warning: 'void ckernel::copy_dest_values(uint32_t, uint32_t)' is deprecated: Use copy_dest_values<DataFormat> instead [-Wdeprecated-declarations]
+  118 |                     copy_dest_values(2, 0);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:61:11: note: declared here
+   61 | ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+      |           ^~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/652906513355476732/" -DKERNEL_COMPILE_TIME_ARGS=2,1024,7,148,2 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/652906513355476732/trisc2/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/652906513355476732/trisc2/trisck.4117155003416620491_3607462.d
+In file included from ../chlkc_pack.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:118:37: warning: 'void ckernel::copy_dest_values(uint32_t, uint32_t)' is deprecated: Use copy_dest_values<DataFormat> instead [-Wdeprecated-declarations]
+  118 |                     copy_dest_values(2, 0);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:61:11: note: declared here
+   61 | ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+      |           ^~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/7034179765990378236/" -DKERNEL_COMPILE_TIME_ARGS=3,1024,7,148,2 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/7034179765990378236/trisc1/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/7034179765990378236/trisc1/trisck.4117155003416620491_3607462.d
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:8,
+                 from ../chlkc_math.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h: In function 'void ckernel::copy_dest_values(uint32_t, uint32_t)':
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h:55:43: warning: 'void ckernel::sfpu::copy_dest_value(uint, uint, uint) [with bool APPROXIMATION_MODE = false; int ITERATIONS = 8; uint = long unsigned int]' is deprecated: Use copy_dest_value<DataFormat, APPROXIMATION_MODE, ITERATIONS> instead [-Wdeprecated-declarations]
+   55 |      _llk_math_eltwise_binary_sfpu_params_(                                                               \
+      |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |          ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:83:19: note: in definition of macro 'MATH'
+   83 | #define MATH(...) __VA_ARGS__
+      |                   ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:65:11: note: in expansion of macro 'SFPU_BINARY_CALL'
+   65 |     MATH((SFPU_BINARY_CALL(
+      |           ^~~~~~~~~~~~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:9,
+                 from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h:39:6: note: declared here
+   39 | void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
+      |      ^~~~~~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:118:37: warning: 'void ckernel::copy_dest_values(uint32_t, uint32_t)' is deprecated: Use copy_dest_values<DataFormat> instead [-Wdeprecated-declarations]
+  118 |                     copy_dest_values(2, 0);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:61:11: note: declared here
+   61 | ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+      |           ^~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/runtime/sfpi/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute -include /home/ttuser/.cache/tt-metal-cache/pch/18778462d52ccd34/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="vp_ce_row_stats_kernel/652906513355476732/" -DKERNEL_COMPILE_TIME_ARGS=2,1024,7,148,2 -c -o /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/652906513355476732/trisc1/trisck.4117155003416620491_3607462.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ttuser/.cache/tt-metal-cache/15510083999360723248/kernels/vp_ce_row_stats_kernel/652906513355476732/trisc1/trisck.4117155003416620491_3607462.d
+In file included from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:8,
+                 from ../chlkc_math.cpp:4,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h: In function 'void ckernel::copy_dest_values(uint32_t, uint32_t)':
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h:55:43: warning: 'void ckernel::sfpu::copy_dest_value(uint, uint, uint) [with bool APPROXIMATION_MODE = false; int ITERATIONS = 8; uint = long unsigned int]' is deprecated: Use copy_dest_value<DataFormat, APPROXIMATION_MODE, ITERATIONS> instead [-Wdeprecated-declarations]
+   55 |      _llk_math_eltwise_binary_sfpu_params_(                                                               \
+      |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   56 |          ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:83:19: note: in definition of macro 'MATH'
+   83 | #define MATH(...) __VA_ARGS__
+      |                   ^~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:65:11: note: in expansion of macro 'SFPU_BINARY_CALL'
+   65 |     MATH((SFPU_BINARY_CALL(
+      |           ^~~~~~~~~~~~~~~~
+In file included from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:9,
+                 from /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:10:
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h:39:6: note: declared here
+   39 | void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
+      |      ^~~~~~~~~~~~~~~
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/vp_ce_row_stats/device/kernels/compute/vp_ce_row_stats_kernel.cpp:118:37: warning: 'void ckernel::copy_dest_values(uint32_t, uint32_t)' is deprecated: Use copy_dest_values<DataFormat> instead [-Wdeprecated-declarations]
+  118 |                     copy_dest_values(2, 0);
+      |                     ~~~~~~~~~~~~~~~~^~~~~~
+/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/api/compute/copy_dest_values.h:61:11: note: declared here
+   61 | ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+      |           ^~~~~~~~~~~~~~~~
+2026-11-01 20:22:32.474 | critical |          Always | TT_FATAL: Sub device id 0 currently in use by cq 1. Can't enqueue program from cq 0. Finish or wait for an event to transfer ownership. (assert.hpp:104)
+MGD validated: dims=[1, 4], file=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto
+RMSNorm layers on the all-core backward: 3
+residual adds fused into the norms: 2
+tp 4: transposed 3, fused 2
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/autograd/function.py", line 269, in backward_closure
+    grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/fused_lora.py", line 155, in backward
+    grad_b = skinny_contract(h, grad_output, scaling, transpose_out=True)  # s * g^T h -> [out, r]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/lora.py", line 78, in skinny_contract
+    out = ttnn.matmul(small, big, transpose_a=True, compute_kernel_config=cfg)  # [r, N]
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/ttnn/ttnn/decorators.py", line 1245, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dispatch/cq_shared_state.cpp:18: cq_id_ == cq_id
+info:
+Sub device id 0 currently in use by cq 1. Can't enqueue program from cq 0. Finish or wait for an event to transfer ownership.
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x97c37a) [0x789e1817c37a]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x972b87) [0x789e18172b87]
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::enqueue_mesh_workload(tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x360) [0x789e1a3a8cb0]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x13b2c64) [0x789e1a3b2c64]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x789e1a3a78da]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0xcb) [0x789e1a3a3e7b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2ca) [0x789e1a379a8a]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x12c9669) [0x789e1a2c9669]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKNS_6TensorES4_bbRKSt8optionalIKN2tt8tt_metal12MemoryConfigEES5_IKNS7_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNS7_4TileEES5_IS2_ERKS5_IKNS7_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEERKSt6vectorISt10shared_ptrINS1J_14PrefetcherPipeEESaIS1Z_EE+0x386) [0x789e1a2c84d6]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x841457) [0x789e1ca41457]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x841174) [0x789e1ca41174]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x789e1c5d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyObject_Vectorcall+0x3d) [0x199ecfd]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x2282e4) [0x789de20282e4]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x1b7835) [0x789de1fb7835]
+ --- ttml::autograd::Tensor::backward(bool)
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x1b8bab) [0x789de1fb8bab]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x219bfe) [0x789de2019bfe]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x3133) [0x18154f3]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x789e4782a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x789e4782a28b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/examples/mistral_train/tp_gradient_check.py", line 264, in <module>
+    main()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/examples/mistral_train/tp_gradient_check.py", line 174, in main
+    loss.backward(False)
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/autograd/function.py", line 296, in backward_closure
+    raise RuntimeError(f"Error in backward of {bwd_cls.__name__}: {e}") from e
+RuntimeError: Error in backward of FusedLoraLinearT: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dispatch/cq_shared_state.cpp:18: cq_id_ == cq_id
+info:
+Sub device id 0 currently in use by cq 1. Can't enqueue program from cq 0. Finish or wait for an event to transfer ownership.
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x97c37a) [0x789e1817c37a]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/tt_metal/libtt_metal.so(+0x972b87) [0x789e18172b87]
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::enqueue_mesh_workload(tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x360) [0x789e1a3a8cb0]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x13b2c64) [0x789e1a3b2c64]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x789e1a3a78da]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0xcb) [0x789e1a3a3e7b]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2ca) [0x789e1a379a8a]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x12c9669) [0x789e1a2c9669]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKNS_6TensorES4_bbRKSt8optionalIKN2tt8tt_metal12MemoryConfigEES5_IKNS7_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNS7_4TileEES5_IS2_ERKS5_IKNS7_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNS7_14SubDeviceIdTagEEEERKSt6vectorISt10shared_ptrINS1J_14PrefetcherPipeEESaIS1Z_EE+0x386) [0x789e1a2c84d6]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x841457) [0x789e1ca41457]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x841174) [0x789e1ca41174]
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d93ce) [0x789e1c5d93ce]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x1ac2cf8]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyObject_Vectorcall+0x3d) [0x199ecfd]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x2282e4) [0x789de20282e4]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x1b7835) [0x789de1fb7835]
+ --- ttml::autograd::Tensor::backward(bool)
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x1b8bab) [0x789de1fb8bab]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x219bfe) [0x789de2019bfe]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x3133) [0x18154f3]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x789e4782a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x789e4782a28b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+nanobind: leaked 28 instances!
+nanobind: leaked 18 keep_alive records!
+nanobind: leaked 20 types!
+ - leaked type "PreferredPrecision"
+ - leaked type "RunMode"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 265 functions!
+ - leaked function "__repr__"
+ - leaked function "create_output_tensors"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-11-01 20:22:32.722 | info     |    BuildKernels | JIT cache stats: 0/592 hits (0.0%) [0 cached, 295 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 20:22:32.722 | info     |    BuildKernels | JIT telemetry: 45 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 20:22:32.738 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 20:22:32.738 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 20:22:32.891 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 20:22:32.891 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 20:22:32.891 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
