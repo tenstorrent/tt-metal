@@ -1278,3 +1278,9 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   F241 to fix: a switch-only pick). FIX.20 placed by hand in tasks.yaml (deps P.26; gate ladder last + test_logit_kl.py,
   kl_mean_* <= limit): its agent first sets the default back to bfp8_tiles, then the KL check (device both formats).
   overseer.yaml FIX.20 marked placed. Also fixed an unescaped quote I had put in overseer.yaml's FIX.20 text. Run --until FIX.20.
+- 16:25 FIX.20 PASS e821459024d (default WINDOW_KV_FORMAT back to bfp8_tiles; test_logit_kl.py + official_final_norm.py).
+  Mean KL vs the native golden, device / wkv16 / official: s10240 0.0061 / 0.0062 / 0.0028, last 0.0051 / 0.0045 / 0.0024
+  (device 2.1-2.2x the reference, limit 4x); top-1 agree 99.51 / 99.65 % vs official 99.71 / 99.75 %; NLL golden /
+  official / device 0.0175 / 0.0197 / 0.0238 (s10240), 0.0258 / 0.0272 / 0.0306 (last); p99 KL 2.5-3.5x the official.
+  The prompt is near-fully predictable (NLL ~0.02-0.03): a harder text would show more. Run stopped at --until FIX.20.
+  Framework to fix: F241 (a switch-only perf pick keeps the default). Pushed.
