@@ -431,6 +431,23 @@ void kernel_main() {
                           : logical_nt;
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
+    // This step's band of the K split, and which bands below the reducer's have K chunks (the senders whose state the
+    // reducer merges). Out of line: it runs once per ring step.
+    [[maybe_unused]] auto ksplit_bands =
+        [&](uint32_t split_chunks, uint32_t num_valid, uint32_t band_idx, uint32_t ring_id) __attribute__((noinline)) {
+            ring_joint::KSplitRange mine = {0, 0};
+            for (uint32_t band = 0; band < ksplit_count; ++band) {
+                const ring_joint::KSplitRange r =
+                    ring_joint::ksplit_band_range(split_chunks, num_valid, band, ksplit_count, ring_id);
+                if (band + 1 < ksplit_count && !r.empty()) {
+                    ksplit_sender_bands_with_work |= 1u << band;
+                }
+                if (band == band_idx) {
+                    mine = r;
+                }
+            }
+            return mine;
+        };
     // A spare's visit ends: stage its state in half A as a K-split sender does and signal the writer, which lands it
     // in the home's restore CBs; once the writer pops the signal, half A and the visit's Q / W_UK are free again.
     [[maybe_unused]] auto stage_visit = [&]() __attribute__((noinline)) {
@@ -601,14 +618,8 @@ void kernel_main() {
                                                                     ring_id > ring_index,
                                                                     Sk_chunk_t)
                                                               : num_valid;
-                const ring_joint::KSplitRange band_range =
-                    ring_joint::ksplit_band_range(split_chunks, num_valid, step_band, ksplit_count, ring_id);
-                for (uint32_t band = 0; band + 1 < ksplit_count; ++band) {
-                    if (!ring_joint::ksplit_band_range(split_chunks, num_valid, band, ksplit_count, ring_id).empty()) {
-                        ksplit_sender_bands_with_work |= 1u << band;
-                    }
-                }
-                ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
+                ksplit_k_range = ring_joint::interleaved_piece(
+                    ksplit_bands(split_chunks, num_valid, step_band, ring_id), istep.piece, istep.pieces);
                 if constexpr (donation) {
                     if (step - (donated_steps & 0xFF) < (donated_steps >> 8)) {
                         donated_has_state |= !ksplit_k_range.empty();
