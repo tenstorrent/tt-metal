@@ -26,7 +26,6 @@ from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
 R, C = 8, 4
 CHUNK = 5120
-CAP = 8192  # the flat experts' capacity (tokens an expert)
 ACCUMULATORS = 12
 CALLS = 20
 REPO = Path(__file__).resolve().parents[4]
@@ -77,10 +76,8 @@ def test_moe_block_smoke(mesh):
     dtypes = mb.MoEDtypes()
     res = mb.MoEBlockResources(mesh, dims, mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2), dtypes)
     try:
-        block = MoEBlock(
-            mesh, res, dtypes=dtypes, accumulators=ACCUMULATORS, max_tokens_per_expert=CAP, activation=fw.ACTS["silu"]
-        )
-        host = lambda *s: ttnn.from_torch(torch.zeros(*s), dtype=ttnn.float32)  # noqa: E731
+        block = MoEBlock(mesh, res, dtypes=dtypes, accumulators=ACCUMULATORS, activation=fw.ACTS["silu"])
+        host = lambda *s: ttnn.from_torch(torch.zeros(*s), dtype=ttnn.float32)
         head_w = mb.prepare_fused_head_weights(
             host(Is, H), host(Is, H), host(H, Is), None, host(E, H), host(E),
             resources=res, dtypes=dtypes, accumulators=ACCUMULATORS,
@@ -88,8 +85,9 @@ def test_moe_block_smoke(mesh):
         EPC = E // N
         gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
         experts = fw.FlatRoutedExpert(
-            mesh, "uninitialized", m=CAP, H=dims.routed_width, I=I, gids=gids, n_global=E, act="silu", pin=1
-        )
+            mesh, "uninitialized", m=block.expert_kw["max_tokens_per_expert"], H=dims.routed_width, I=I, gids=gids,
+            n_global=E, act="silu", pin=1, layout=block.expert_kw["layout"],
+        )  # fmt: skip
         weights = MoEBlockWeights(head=head_w, expert_ids=experts.gidx, gate_up=experts.w_gu, down=experts.w_d)
         x = ttnn.from_torch(
             torch.zeros(1, 1, CHUNK, H),

@@ -36,7 +36,10 @@ class MoEBlock:
     """One MoE block on ``mesh_device``. ``resources``: the block's MoEBlockResources on it; ``dtypes``: MoEDtypes;
     ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it);
     ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (se3_compute SE_ACT);
-    ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``)."""
+    ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``).
+    Capacity and layout default to the reference's sizing (RoutedExperts.cap_of / layout_of): max(chunk, 256) and
+    FlatLayoutOptions(rows_hint=chunk x top_k / experts, x_helpers=1) - the flat arena then fits next to the combine's
+    in the largest free L1 block (a capacity of 8192 did not)."""
 
     def __init__(
         self,
@@ -45,8 +48,8 @@ class MoEBlock:
         *,
         dtypes,
         accumulators: int,
-        max_tokens_per_expert: int,
         activation: int,
+        max_tokens_per_expert: Optional[int] = None,
         layout=None,
         combine=None,
         l1_free: Optional[int] = None,
@@ -54,12 +57,17 @@ class MoEBlock:
         mb = ttnn.experimental.moe_block
         self.mb, self.mesh_device, self.resources, self.dtypes = mb, mesh_device, resources, dtypes
         self.accumulators, self.l1_free = accumulators, l1_free
+        chunk, dims = resources.config.chunk_tokens, resources.dims
+        if max_tokens_per_expert is None:  # (an expert sees each token at most once; the flat op is built for >= 256)
+            max_tokens_per_expert = max(chunk, 256)
+        if layout is None:
+            layout = mb.FlatLayoutOptions(rows_hint=round(chunk * dims.top_k / dims.num_experts), x_helpers=1)
         self.combine = combine if combine is not None else mb.CombineConfig()
         self.combine.n_acc = accumulators
         self.expert_kw = dict(
             max_tokens_per_expert=max_tokens_per_expert,
             activation=activation,
-            layout=layout if layout is not None else mb.FlatLayoutOptions(),
+            layout=layout,
             combine=self.combine,
         )
         # (plans the head and the combine once; every forward allocates this spec at the same L1 address)
