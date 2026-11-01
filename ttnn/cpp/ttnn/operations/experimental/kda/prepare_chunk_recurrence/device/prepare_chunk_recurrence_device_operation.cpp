@@ -28,23 +28,40 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
-    for (const auto& [tensor, name] : std::array{
-             std::pair{&in.q, "q"},
-             std::pair{&in.k, "k"},
-             std::pair{&in.v, "v"},
-             std::pair{&in.g, "g"},
-             std::pair{&in.beta, "beta"}}) {
-        check_allocated_device_tensor(*tensor, operation_name, name);
-        check_layout(*tensor, Layout::TILE, operation_name, name);
-        check_dtype(*tensor, DataType::BFLOAT16, operation_name, name);
-        check_interleaved(*tensor, operation_name, name);
-        check_same_device(in.q, *tensor, operation_name, name);
-    }
-    const auto* mesh = in.q.device();
-    const auto arch = mesh->arch();
+    check_allocated_device_tensor(in.q, operation_name, "q");
+    const auto arch = in.q.device()->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
+    check_layout(in.q, Layout::TILE, operation_name, "q");
+    check_dtype(in.q, DataType::BFLOAT16, operation_name, "q");
+    check_interleaved(in.q, operation_name, "q");
+    check_allocated_device_tensor(in.k, operation_name, "k");
+    check_layout(in.k, Layout::TILE, operation_name, "k");
+    check_dtype(in.k, DataType::BFLOAT16, operation_name, "k");
+    check_interleaved(in.k, operation_name, "k");
+    check_allocated_device_tensor(in.v, operation_name, "v");
+    check_layout(in.v, Layout::TILE, operation_name, "v");
+    check_dtype(in.v, DataType::BFLOAT16, operation_name, "v");
+    check_interleaved(in.v, operation_name, "v");
+    check_allocated_device_tensor(in.g, operation_name, "g");
+    check_layout(in.g, Layout::TILE, operation_name, "g");
+    check_dtype(in.g, DataType::BFLOAT16, operation_name, "g");
+    check_interleaved(in.g, operation_name, "g");
+    check_allocated_device_tensor(in.beta, operation_name, "beta");
+    check_layout(in.beta, Layout::TILE, operation_name, "beta");
+    check_dtype(in.beta, DataType::BFLOAT16, operation_name, "beta");
+    check_interleaved(in.beta, operation_name, "beta");
+    check_same_device(in.q, in.k, operation_name, "k");
+    check_same_device(in.q, in.v, operation_name, "v");
+    check_same_device(in.q, in.g, operation_name, "g");
+    check_same_device(in.q, in.beta, operation_name, "beta");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    // The FPU forms the q/k norm squares and the gate scale as exact BF16 products, which only HiFi4 guarantees.
+    TT_FATAL(
+        attrs.compute_kernel_config.math_fidelity == MathFidelity::HiFi4,
+        "{}: math_fidelity must be HiFi4, got {}",
+        operation_name,
+        attrs.compute_kernel_config.math_fidelity);
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();
@@ -93,6 +110,7 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
 
     // The batched inverse holds all of a core's work items at once, so the heads' chunks must spread over the cores
     // thinly enough for the program's buffers to fit the L1 free per core.
+    const auto* mesh = in.q.device();
     const auto distribution = kda_factory_detail::distribute_prep(
         mesh->compute_with_storage_grid_size(),
         attrs.num_heads * attrs.num_chunks,
