@@ -24,7 +24,9 @@ own code (tt-d-gen tools/launch_harness/tables.py, kv_manager/tools/kv_dump_comp
   - acks: layers_per_chunk = served layers per chunk: the engine retires every chunk (PREFILL_DONE for every request,
     no stranded acks), or the producer drains layers x chunks
   - each slot's final [0, end) of every served cache vs the golden, kv_dump_compare per-channel PCC >= max(0.93 server,
-    0.97 spec); pad rows of each slot's last record zero
+    calib x the reference's drift); a dumped layer's window KV over every position of the range against the official
+    reference's drift on the same rows and channel (caches.GoldenKV(window="drift"), FIX.19); pad rows of each slot's
+    last record zero
   - slot A after turn 1 vs the golden; its reused prefix [0, resident) byte-identical at the end; its last block
     [resident, turn 1) PCC >= 0.99 (validation.py:55-61 comparison_ranges)
   - the pulled-back chunk: rows below its start unchanged, layer 0's window_kv rewritten with the same bytes
@@ -275,7 +277,7 @@ def kv_checks(
 ) -> list[str]:
     """Every served cache of every slot through the table vs the golden; the prefix / last-block / rewrite rules."""
     _, kvc, _ = R.harness()
-    gk = C.GoldenKV(window="last")  # OV-16 (owner decision B): window KV on the ring positions its limit measures
+    gk = C.GoldenKV(window="drift")  # FIX.19 (owner 2026-11-01): every position vs the official drift on the same rows
     thr = R.state_threshold()
     fails = []
     finals = {}
@@ -331,6 +333,7 @@ def kv_checks(
         fails.append("snapshot snap_overlap not taken")
     fails += gk.coverage_failures(C.served_configs(layers), "golden")
     log(f"golden comparison per config and mode: {gk.coverage_summary()}")
+    log(f"window KV of the dumped layers, worst range per channel (device pcc vs limit): {gk.drift_summary()}")
     return fails
 
 

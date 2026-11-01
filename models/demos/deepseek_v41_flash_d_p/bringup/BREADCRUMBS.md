@@ -5122,3 +5122,61 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_deep_tail.py` (DEEP_TAIL_POS=512000: timing only);
   `DS41_DEEP_LAYERS=tail BRINGUP_POS=51200 BRINGUP_PROFILE_WALL=1 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh
   --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`.
+
+## FIX.18 overseer fix (galaxy 8x4, attempt 1, 2026-11-01): OWN_ROWS_KV_MARGIN, answered `disagree`, no code change
+- **Request**: find what in P.23 (OWN_ROWS) moves the window KV of layers 20 / 35 / 38 (acks and runner-contract checks),
+  and fix it in the OWN_ROWS path.
+- **Found (device probes, on vs off, DS41_OWN_ROWS env; /scratch/dnijemcevic/fix18/)**: no defect. The values
+  reproduce the gate exactly (L20 0.98947, L35 0.98910, L38 0.98994; off 0.99195 / 0.99857 / 0.99651).
+  - Golden input per step (L0-3, 14, 20): every step equally far from the golden; attention / attn_norm / window KV
+    bit-identical on vs off.
+  - The first difference is attn_hc's fp32 mixes (summation order, <= 2.3e-4 rel), which flips 0.13 % of the bf16 stream elements.
+  - MoE block on the same x (owners a2a into the head, the local tail vs the column split): bit-identical.
+  - Over all positions L20 wkv on 0.1836 / off 0.1842, the same per TP column. Over 286 sliding windows, on - off has mean
+    +0.0005 and std 0.004; the failing window is the 16th percentile.
+  - Follow-up rows [2496, 2536) as accurate vs the golden as the first ones in both modes; the "last block" check
+    compares two device runs.
+  - DS41-192 (detail in known_issues_detail.md), the same mechanism as DS41-141 / DS41-125.
+- **Decision**: per the brief ("a genuine one-rounding difference with no lower-precision choice behind it: stop and
+  report"), nothing changed; the evidence goes to the owner for a waiver (or a per-position drift for the contract limit).
+  Speed unchanged (no code change, no device / wall numbers taken).
+- Gate not re-run: the code is K.1R's (3a1a390acd8 = FIX.17 + ledger commits); K.1R's failing values are reproduced to the digit
+  by the probes. adapter_acks / runner_contract will fail as in K.1R; contract / kv_layout / smoke passed at K.1R.
+- Re-run: `DS41_OWN_ROWS=on|off FIX18_OUT=<dir> scripts/tt-probe.sh --mesh fix18_dump < /scratch/dnijemcevic/fix18/probe_fu.py`
+  (and probe.py with FIX18_LAST=20, probe_moe.py); analysis `python3 /scratch/dnijemcevic/fix18/ana.py gin|chain 0,1,2,3,14,20`,
+  `ana_fu.py`.
+
+## FIX.19 overseer fix (galaxy 8x4, attempt 1, 2026-11-01): CONTRACT_WINDOW_DRIFT, window-KV check like with like
+- **Request (owner, 2026-11-01)**: judge the dumped layers' window KV in test_adapter_acks / test_runner_contract over
+  many samples, against calib x the reference's drift over the SAME positions. Until now it was one 128-row window
+  against the final ring's drift (DS41-125 decision B).
+- **Changed** (tests/bringup/contract only, no model code):
+  - `official_kv.py` (new) runs the official reference (numerics official, bf16 = reference.shipped_dtype, layers 0-24
+    resident) over both chunks of the s10240 golden's tokens. It keeps "L<i>.kv" for the dumped layers
+    0, 1, 2, 3, 14, 20, 21, 24 in `<golden dir>-official/window_kv.safetensors` (+ .json carrying the golden's
+    content_hash; a file from another golden is refused). It took 530.5 + 557.8 s = **1096 s** (CPU, no device).
+    The golden dumps had no per-position official KV: drift-s10240.json keeps only the ring.
+    The new file's last 128 rows reproduce that ring entry exactly (L20 pcc 0.99739, rel 0.0722).
+  - `caches.GoldenKV(window="drift")`, mode "drift": a dumped layer's window KV over EVERY position of the checked range.
+    Each kv_dump_compare channel (nope / pe) is checked against `GoldenKV.limits`: drift._float_entry(official,
+    golden) on the same rows and channel -> e2e_limits.pcc_limit (1 - calib^2 x max(1 - pcc, 1 - one bf16
+    rounding)), floor R.PREFILL_GOLDEN_PCC. No fixed number (F138). `drift_summary()` prints each layer's worst range.
+  - test_adapter_acks / test_runner_contract use window="drift" (docstrings updated). Unchanged: compressed caches,
+    non-dumped layers (ring snapshots vs R.state_threshold), the 0.99 last-block rule (tt-d-gen's own; L35 / L38 stay
+    waived), the byte checks.
+- **Numbers** (DS41-193, detail in known_issues_detail.md). Official vs golden L20 nope: [0, 2536) 0.98311, last 128 of
+  it 0.99191, ring 0.99660. Old limit 0.98957 = the ring's margin. FIX.18's device dumps (OWN_ROWS on) against the new limits:
+  - [0, 2536): nope 0.97809 vs 0.93244, pe 0.99310 vs 0.97721
+  - last 128 rows: nope 0.98947 vs 0.96765
+  - 286 windows: device median 0.98761, official median 0.98926, correlation 0.95
+  The device is as far from the golden as the reference at its own precision.
+- **Waiver**: the layer-20 lines of tests.unit_waivers (both tests) can go; the L35 / L38 last-block lines stay. For the
+  overseer (spec is not mine to edit).
+- **Gate: not completed.** I started the gate in the background with a 600 s job limit. Before the limit could cut it
+  mid-device-run, I stopped it (SIGTERM) 10 s into test_contract's UMD device open. run_safe_pytest's pessimistic
+  marker left /tmp/tt-device-{0..31}.dirty, so the next mesh run will `tt-smi -r` the whole box. Rule 19 forbids
+  triggering a reset, so I ran nothing more on the device and did not touch the markers. The CPU check of the new path
+  on the FIX.18 device rows passes, and a noise input fails it. All 5 units are left to the orchestrator's gate.
+- OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.tests.bringup.contract.official_kv` (only for
+  a new golden); `PYTHONPATH=$PWD python /scratch/dnijemcevic/fix19/predict.py`; gate `gate FIX.19 --check`.
