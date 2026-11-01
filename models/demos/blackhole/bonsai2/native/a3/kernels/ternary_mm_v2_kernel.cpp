@@ -160,7 +160,8 @@ void kernel_main() {
         constexpr uint32_t s_bytes = cols * s_tiles * 4096;  // fp32 32x32 scale tiles per output tile
         constexpr uint32_t out_page = out_tile32 ? 2048 : 64;
         uint32_t s_addr = get_arg_val<uint32_t>(0);
-        const InterleavedAddrGen<false> og{.bank_base_address = get_arg_val<uint32_t>(1), .page_size = out_page};
+        constexpr bool out_is_dram = get_named_compile_time_arg_val("tm_out_is_dram") == 1;
+        const InterleavedAddrGen<out_is_dram> og{.bank_base_address = get_arg_val<uint32_t>(1), .page_size = out_page};
         const uint32_t out_tile0 = get_arg_val<uint32_t>(2);
         // out_tile32: a zeroed 2 KB staging tile; each output overwrites row 0 (face 0/1 row 0) only
         constexpr uint32_t cb_stage = 5;

@@ -26,24 +26,30 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 KERNEL = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_kernel.cpp"
 
 
-def worker_cores(device, workers_per_bank: int):
+# Cores kept free of the A3 workers' persistent L1 buffer: the model's final RMSNorm runs on
+# (0, 0) alone with ~1.5 MB of static CBs and clashes with anything resident there.
+AVOID = frozenset({(0, 0)})
+
+
+def worker_cores(device, workers_per_bank: int, avoid=AVOID):
     """[(core, bank, sub)] -- the optimal reader per bank, plus a neighbour per extra worker."""
     primary = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     grid = device.compute_with_storage_grid_size()
-    used = {(c.x, c.y) for c in primary}
-    out = [(ttnn.CoreCoord(c.x, c.y), b, 0) for b, c in enumerate(primary)]
-    for sub in range(1, workers_per_bank):
-        for b, c in enumerate(primary):
-            near = sorted(((dx, dy) for dx in range(-3, 4) for dy in range(-3, 4) if dx or dy),
-                          key=lambda d: (abs(d[0]) + abs(d[1]), abs(d[0])))
-            for dx, dy in near:
-                x, y = c.x + dx, c.y + dy
-                if 0 <= x < grid.x and 0 <= y < grid.y and (x, y) not in used:
-                    used.add((x, y))
-                    out.append((ttnn.CoreCoord(x, y), b, sub))
-                    break
-            else:
-                raise RuntimeError(f"no free neighbour for bank {b} at {c}")
+    used = set(avoid) | {(c.x, c.y) for c in primary}
+    out = [(ttnn.CoreCoord(c.x, c.y), b, 0) for b, c in enumerate(primary) if (c.x, c.y) not in avoid]
+    subs = [(b, c, 0) for b, c in enumerate(primary) if (c.x, c.y) in avoid]
+    subs += [(b, c, s) for s in range(1, workers_per_bank) for b, c in enumerate(primary)]
+    for b, c, sub in subs:
+        near = sorted(((dx, dy) for dx in range(-3, 4) for dy in range(-3, 4) if dx or dy),
+                      key=lambda d: (abs(d[0]) + abs(d[1]), abs(d[0])))
+        for dx, dy in near:
+            x, y = c.x + dx, c.y + dy
+            if 0 <= x < grid.x and 0 <= y < grid.y and (x, y) not in used:
+                used.add((x, y))
+                out.append((ttnn.CoreCoord(x, y), b, sub))
+                break
+        else:
+            raise RuntimeError(f"no free neighbour for bank {b} at {c}")
     return out
 
 
@@ -321,7 +327,8 @@ def prep_cores(device, num_units: int, units_per_core: int):
 def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, scatter: bool = True, debug: int = 0):
     """x: [.., 32, K] bf16 32x32 tiles (row 0 live) or [1, K] 1x32 tiles, interleaved.
     m: hadamard_tensor for width K. x8: masked_input_buffer. Writes x8 in place."""
-    assert x.memory_config().buffer_type == ttnn.BufferType.L1, "prep reads x from L1 (DRAM source: 32 B reads misalign)"
+    assert not (src_tile32 and x.memory_config().buffer_type == ttnn.BufferType.DRAM), \
+        "32x32-tile x must be in L1: its 32 B row reads from DRAM land with the wrong 64 B phase"
     device = x.device()
     k = x.shape[-1]
     nb = k // 1024
@@ -374,22 +381,22 @@ def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, sc
 KERNEL_V2 = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_v2_kernel.cpp"
 
 
-def ternary_linear(x8, w, s, out, workers, gu: bool = False):
+def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0):
     """x8: masked_input_buffer filled by prep(). w/s: from weights_for_device().
     out: L1 interleaved, [.., 32, N] 32x32 tiles (row 0 written, rest zero) or [1, 1, 1, N] 1x32 tiles.
     gu: w/s hold (gate, up) column pairs; out gets silu(gate) * up."""
-    key = ("v2", _sig(x8), _sig(w), _sig(s), _sig(out), len(workers), gu)
+    key = ("v2", _sig(x8), _sig(w), _sig(s), _sig(out), len(workers), gu, k)
     if key not in _progs:
         if len(_progs) > 256:  # outputs are fresh allocations, so keys churn; descriptors don't bind them
             _progs.clear()
-        _progs[key] = _v2_prog(x8, w, s, out, workers, gu)
+        _progs[key] = _v2_prog(x8, w, s, out, workers, gu, k)
     ttnn.generic_op([x8, w, s, out], _progs[key])
     return out
 
 
-def _v2_prog(x8, w, s, out, workers, gu):
+def _v2_prog(x8, w, s, out, workers, gu, k):
     device = x8.device()
-    k = x8.memory_config().shard_spec.shape[1]
+    k = k or x8.memory_config().shard_spec.shape[1]  # x8 may be wider (one buffer serves every K)
     kt = k // 32
     assert kt % 32 == 0
     num_g = kt // 32
@@ -404,7 +411,8 @@ def _v2_prog(x8, w, s, out, workers, gu):
     page, pages = get_max_page_size_and_num_pages(device, 32, tile_bytes)
     grid = core_set([c for c, _, _ in workers])
     out_tile32 = out.get_tile().tile_shape[0] == 32
-    assert out.memory_config().buffer_type == ttnn.BufferType.L1 and not out.is_sharded()
+    assert not out.is_sharded()
+    out_is_dram = out.memory_config().buffer_type == ttnn.BufferType.DRAM
 
     def cb(idx, fmt, ntiles, tile):
         size = tile.get_tile_size(fmt)
@@ -437,7 +445,7 @@ def _v2_prog(x8, w, s, out, workers, gu):
         core_ranges=grid,
         ncrisc_named_compile_time_args=common + [
             ("tm_in1_page_size", page), ("tm_in1_num_pages", pages), ("tm_in1_block_bytes", 32 * tile_bytes)],
-        brisc_named_compile_time_args=common + [("tm_out_tile32", int(out_tile32))],
+        brisc_named_compile_time_args=common + [("tm_out_tile32", int(out_tile32)), ("tm_out_is_dram", int(out_is_dram))],
         trisc_named_compile_time_args=common,
         trisc_compute_config=cfg,
         unified_compile_time_core_descriptors=[UnifiedCompileTimeCoreDescriptor(
