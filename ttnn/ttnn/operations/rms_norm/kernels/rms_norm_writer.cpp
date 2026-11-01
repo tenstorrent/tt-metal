@@ -37,10 +37,10 @@ constexpr uint32_t w_split_cores = get_compile_time_arg_val(7);
 constexpr uint32_t out_unit_tiles = get_compile_time_arg_val(8);
 constexpr uint32_t sem_id = get_compile_time_arg_val(9);
 constexpr uint32_t out_cb_pages = get_compile_time_arg_val(10);  // cb_out capacity (TILE: out_depth * out_unit)
-constexpr auto out_args = TensorAccessorArgs<11>();
+constexpr uint32_t NOC_XY_ARG_BASE = get_compile_time_arg_val(11);  // RT index of the first peer (x, y) pair
+constexpr auto out_args = TensorAccessorArgs<12>();
 
 constexpr uint32_t TILE_DIM = 32;
-constexpr uint32_t NOC_XY_ARG_BASE = 9;
 
 void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(0);

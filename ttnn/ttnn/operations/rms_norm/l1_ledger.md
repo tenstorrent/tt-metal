@@ -47,7 +47,7 @@ Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime.
 | `x_block_depth` | ∈ {1, 2} | 2 iff `num_blocks_this_core > 1` and it fits; RM: 1 |
 | `out_depth`, `rm_in_depth` | 2 | constants (Phase 0) |
 | `out_unit_tiles` | `min(slice_w_tiles, 16)` | constant cap |
-| `budget` | device L1 per Tensix core − allocator base (WH ≈ 1.4 MB, BH ≈ 1.5 MB) | queried on host |
+| `budget` | free L1 between the allocator base and the lowest allocated L1 buffer (BH p150b, empty device: 1 461 120 B; L1-resident input/output tensors lower it) | `cb_l1_budget(device)` reads `ttnn.get_memory_view(device, L1)` on the host (verifier fix: was `get_max_worker_l1_unreserved_size()`, which starts at the kernel-config ring buffer and overshoots the CB region by ~69 KB on BH) |
 
 ## Total per-core footprint
 
@@ -91,6 +91,9 @@ NoC (R2 only) ≈ `k² · tensor_row_tiles · 4 KB`.
 > (−(G/k − 1)·W bytes) is `deferred` because r ≤ 1/32 is in the catalog's measured-null band.
 
 ## Implementation notes (ttnn-implementer)
+
+- (verifier) Single source of truth: every row's capacity above is produced by `cb_plan()` in
+  `rms_norm_program_descriptor.py`; `footprint()` (the L1-fit solve) and the CB declarations both read it.
 
 - `x_row_pitch` = `slice_w_tiles` (TILE) / `slice_w_tiles` padded to a multiple of `rm_chunk_w_tiles` (RM) is
   the page pitch of one tile-row in `cb_x` on EVERY core (one CB list program-wide, required because peers

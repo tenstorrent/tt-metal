@@ -39,6 +39,7 @@ CB_OUT_RM = 8  # RM: untilized stick pieces -> writer
 CB_X_ALT = 9  # resident x block (pong) — only when x_block_depth == 2
 
 SEM_PARTIALS_ARRIVED = 0
+WRITER_NOC_XY_ARG_BASE = 9  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
 
 # Knob constants (design Phase 0 values).
 K_CAP_MAX = 8  # unicast all-gather mechanism cap
@@ -119,29 +120,52 @@ def _normalize_k(tw: int, k: int):
     return _div_up(tw, s), s
 
 
+def _out_unit(slice_w_tiles: int) -> int:
+    """TILE writer batch (tiles per wait/write/flush/pop) — also the cb_out depth unit."""
+    return min(slice_w_tiles, OUT_UNIT_CAP)
+
+
 def _rm_chunk(slice_w_tiles: int):
     chunks = _div_up(slice_w_tiles, RM_CHUNK_CAP)
     c = _div_up(slice_w_tiles, chunks)
     return c, chunks * c
 
 
-def footprint(sz: _Sizes, tw: int, k: int, b: int, d: int) -> int:
-    """Per-Tensix-core CB bytes — the l1_ledger.md expression."""
-    k, s = _normalize_k(tw, k)
+def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int) -> dict:
+    """Single source of truth for every CB's capacity: {cb_index: (pages, page_bytes)}.
+
+    Both footprint() (the L1-fit solve in select_blocking) and create_program_descriptor() (the CB
+    declarations) read this dict, so a knob change lands in exactly one place (l1_ledger.md rows).
+    """
     if sz.is_rm:
-        c, s_x = _rm_chunk(s)
+        c, pitch = _rm_chunk(slice_w)
     else:
-        c, s_x = 1, s
-    fp = d * b * s_x * sz.T_in  # cb_x (+ cb_x_alt when d == 2)
-    fp += (s_x * sz.T_g) if sz.has_gamma else 0  # cb_gamma
-    fp += 2 * b * sz.T32  # cb_sumsq_tiles + cb_inv_rms
+        c, pitch = 1, slice_w
+    plan = {
+        CB_X: (b * pitch, sz.T_in),  # resident x block
+        CB_SUMSQ: (b, sz.T32),
+        CB_INV_RMS: (b, sz.T32),
+    }
+    if d == 2:
+        plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
+    if sz.has_gamma:
+        plan[CB_GAMMA] = (pitch, sz.T_g)
     if k > 1:
-        fp += b * sz.T32 + 2 * k * b * sz.T32  # cb_partial_sumsq + cb_gathered_sumsq
+        plan[CB_PARTIAL] = (b, sz.T32)
+        plan[CB_GATHERED] = (2 * k * b, sz.T32)  # 2 blocks: lockstep slot-reuse mechanism cap
     if sz.is_rm:
-        fp += RM_IN_DEPTH * c * sz.T_in + b * c * sz.T_out + OUT_DEPTH * c * sz.T_out
+        plan[CB_X_RM] = (RM_IN_DEPTH * c, sz.T_in)
+        plan[CB_OUT] = (b * c, sz.T_out)  # spans one chunk column of the block (untilize input)
+        plan[CB_OUT_RM] = (OUT_DEPTH * c, sz.T_out)
     else:
-        fp += OUT_DEPTH * min(s, OUT_UNIT_CAP) * sz.T_out
-    return fp
+        plan[CB_OUT] = (OUT_DEPTH * _out_unit(slice_w), sz.T_out)
+    return plan
+
+
+def footprint(sz: _Sizes, tw: int, k: int, b: int, d: int) -> int:
+    """Per-Tensix-core CB bytes — the l1_ledger.md expression, summed from cb_plan()."""
+    k, s = _normalize_k(tw, k)
+    return sum(pages * page_bytes for pages, page_bytes in cb_plan(sz, k, s, b, d).values())
 
 
 def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget: int, elem_bytes: int) -> Blocking:
@@ -207,9 +231,24 @@ def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget:
         group_rows=group_rows,
         block_row_tiles=b,
         x_block_depth=d,
-        out_unit_tiles=min(slice_w, OUT_UNIT_CAP),
+        out_unit_tiles=_out_unit(slice_w),
         footprint=footprint(sz, tw, k, b, d),
     )
+
+
+def cb_l1_budget(device) -> int:
+    """Bytes of L1 per Tensix core the program's CBs may occupy.
+
+    CBs are placed bottom-up from the allocator's L1 base; L1 buffers (interleaved-L1 / sharded
+    tensors, incl. this op's own output) are allocated top-down. The budget is therefore the free
+    region between the allocator base and the lowest allocated L1 buffer. NOT
+    `ttnn.get_max_worker_l1_unreserved_size()`: that figure starts at the kernel-config ring buffer,
+    below the allocator base, and overshoots by its size (~69 KB on BH) — shapes whose footprint fell
+    in that gap threw "circular buffers grow to N B which is beyond max L1 size".
+    """
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    allocated = [int(b["address"]) for b in view.block_table if b["allocated"] == "yes"]
+    return min(allocated) if allocated else int(view.total_bytes_per_bank)
 
 
 def _cb(index, pages, page_size, dtype, core_ranges):
@@ -233,7 +272,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
 
     grid = device.compute_with_storage_grid_size()
-    budget = ttnn.get_max_worker_l1_unreserved_size()
+    budget = cb_l1_budget(device)
     blk = select_blocking(geo, sz, grid.x, grid.y, budget, elem_bytes)
     k, C, pitch = blk.k, blk.rm_chunk_w_tiles, blk.x_row_pitch
     b, d = blk.block_row_tiles, blk.x_block_depth
@@ -252,26 +291,21 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     core_ranges = ttnn.CoreRangeSet(ranges)
 
     # ---- circular buffers (identical list on every active core: peers address cb_gathered by our address) ----
-    T_in, T_g, T32 = sz.T_in, sz.T_g, sz.T32
-    out_cb_pages = (b * C) if is_rm else (OUT_DEPTH * blk.out_unit_tiles)
-    cbs = [
-        _cb(CB_X, b * pitch, T_in, x_dtype, core_ranges),
-        _cb(CB_SUMSQ, b, T32, ttnn.float32, core_ranges),
-        _cb(CB_INV_RMS, b, T32, ttnn.float32, core_ranges),
-    ]
-    if d == 2:
-        cbs.append(_cb(CB_X_ALT, b * pitch, T_in, x_dtype, core_ranges))
-    if has_gamma:
-        cbs.append(_cb(CB_GAMMA, pitch, T_g, g_dtype, core_ranges))
-    if k > 1:
-        cbs.append(_cb(CB_PARTIAL, b, T32, ttnn.float32, core_ranges))
-        cbs.append(_cb(CB_GATHERED, 2 * k * b, T32, ttnn.float32, core_ranges))
-    if is_rm:
-        cbs.append(_cb(CB_X_RM, RM_IN_DEPTH * C, T_in, x_dtype, core_ranges))
-        cbs.append(_cb(CB_OUT, out_cb_pages, T_in, x_dtype, core_ranges))
-        cbs.append(_cb(CB_OUT_RM, OUT_DEPTH * C, T_in, x_dtype, core_ranges))
-    else:
-        cbs.append(_cb(CB_OUT, out_cb_pages, T_in, x_dtype, core_ranges))
+    cb_dtype = {
+        CB_X: x_dtype,
+        CB_X_ALT: x_dtype,
+        CB_GAMMA: g_dtype,
+        CB_SUMSQ: ttnn.float32,
+        CB_PARTIAL: ttnn.float32,
+        CB_GATHERED: ttnn.float32,
+        CB_INV_RMS: ttnn.float32,
+        CB_X_RM: x_dtype,
+        CB_OUT: x_dtype,
+        CB_OUT_RM: x_dtype,
+    }
+    plan = cb_plan(sz, k, blk.slice_w_tiles, b, d)
+    cbs = [_cb(idx, pages, page_bytes, cb_dtype[idx], core_ranges) for idx, (pages, page_bytes) in plan.items()]
+    out_cb_pages = plan[CB_OUT][0]
 
     defines = []
     if is_rm:
@@ -314,6 +348,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         blk.out_unit_tiles,
         SEM_PARTIALS_ARRIVED,
         out_cb_pages,
+        WRITER_NOC_XY_ARG_BASE,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -341,17 +376,9 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             chunks_this = _div_up(core_w, C)
             reader_rt[c.x][c.y] = [x_addr, g_addr, row_start, num_blocks, b, last_rows, w_start, core_w, chunks_this]
             compute_rt[c.x][c.y] = [num_blocks, b, last_rows, core_w, chunks_this, inv_w_bits, eps_bits]
-            writer_rt[c.x][c.y] = [
-                out_addr,
-                row_start,
-                num_blocks,
-                b,
-                last_rows,
-                w_start,
-                core_w,
-                chunks_this,
-                m,
-            ] + noc_xy
+            writer_base = [out_addr, row_start, num_blocks, b, last_rows, w_start, core_w, chunks_this, m]
+            assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
+            writer_rt[c.x][c.y] = writer_base + noc_xy
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),

@@ -10,6 +10,10 @@ Each shape pins a kernel path the acceptance suite did not exercise when the fir
   * TILE core_w % out_unit != 0  -> writer batch straddling the cb_out ring end
   * TILE W tail on tile-row >= 1 -> zero-fill offset relative to the advanced CB write pointer (it hit cb_gamma)
   * multi-block cores (x_block_depth 2 ping-pong) and the k > 1 combine lookahead
+  * L1 budget at the fit boundary (verifier): the CB budget was get_max_worker_l1_unreserved_size(),
+    which overshoots the allocator's CB region by the kernel-config ring buffer (~69 KB on BH), so a
+    footprint in that gap threw "circular buffers grow to N B which is beyond max L1 size"; and
+    L1-resident input/output tensors shrink the region the CBs may use
 """
 
 import pytest
@@ -19,11 +23,13 @@ import ttnn
 from ttnn.operations.rms_norm import rms_norm
 
 
-def _check(device, shape, layout, *, gamma=True, dtype=ttnn.bfloat16, pcc_min=0.999):
+def _check(
+    device, shape, layout, *, gamma=True, dtype=ttnn.bfloat16, pcc_min=0.999, memory_config=ttnn.DRAM_MEMORY_CONFIG
+):
     torch.manual_seed(0)
     tdt = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     x = torch.randn(shape).to(tdt)
-    tx = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tx = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
     g = tg = None
     if gamma:
         g = torch.randn(shape[-1]).to(tdt)
@@ -66,3 +72,13 @@ def test_rms_norm_debug_paths(device, shape, layout):
 )
 def test_rms_norm_debug_multi_block(device, shape, layout):
     _check(device, shape, layout, pcc_min=0.995)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize(
+    "memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1_interleaved"]
+)
+def test_rms_norm_debug_l1_budget_boundary(device, layout, memory_config):
+    # 17 tile-rows x 344 W tiles (Llama FFN width): k = 1 by occupancy; bf16 footprint ~1.48 MB per core
+    # is above the allocator's CB region (~1.46 MB on BH) but was below the overshooting budget.
+    _check(device, (1, 1, 544, 11008), layout, memory_config=memory_config, pcc_min=0.995)
