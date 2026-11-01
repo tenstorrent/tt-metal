@@ -1,0 +1,65 @@
+{
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual0]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "DRAM",
+    "achievable_ns": 55000,
+    "measured_on": "blackhole_p100a",
+    "floor_ns": 40000
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual0]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "DRAM",
+    "achievable_ns": 70000,
+    "measured_on": "blackhole_p100a",
+    "floor_ns": 40000
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=no_residual0]": {
+    "output_buffer_type": "DRAM",
+    "achievable_ns": 48300,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual1]": {
+    "output_buffer_type": "L1",
+    "residual_buffer_type": "L1",
+    "achievable_ns": 43300,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=no_residual]": {
+    "output_buffer_type": "L1",
+    "achievable_ns": 34500,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x384x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "DRAM",
+    "achievable_ns": 47000,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[32x1x32x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "DRAM",
+    "achievable_ns": 24800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=DRAM-affine_dtype=BFLOAT16-affine_layout=TILE-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "DRAM",
+    "achievable_ns": 125400,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual1]": {
+    "output_buffer_type": "L1",
+    "residual_buffer_type": "L1"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual2]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "L1"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[8x1x512x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=no_residual1]": {
+    "output_buffer_type": "L1"
+  },
+  "eval/golden_tests/layer_norm_tile/test_golden.py::test_op_loose[3x1x500x768-affine_buffer_type=L1-affine_dtype=BFLOAT16-affine_layout=ROW_MAJOR-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-residual=residual]": {
+    "output_buffer_type": "DRAM",
+    "residual_buffer_type": "DRAM"
+  }
+}
