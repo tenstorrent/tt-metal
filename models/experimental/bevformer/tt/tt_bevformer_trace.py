@@ -58,6 +58,8 @@ class TTBEVFormerTrace:
 
     Attributes:
         captures: Seconds each capture took: the first one, then one per growth of the plan.
+        frame_done: Event on the ops queue after the last frame's device work; a host thread can
+            wait on it to time the device while the caller prepares the next frame.
     """
 
     def __init__(self, model, device, host_image, frame, prev_bev, *, score_threshold=None, num_command_queues=1):
@@ -104,6 +106,7 @@ class TTBEVFormerTrace:
         self.trace_ids = {}
         self.levels = self.outputs = None
         self.captures = []
+        self.frame_done = None
         self._generation = None
         # The planner generation the live run compiled every traced program at.
         self._compiled = self.planner.generation
@@ -156,6 +159,11 @@ class TTBEVFormerTrace:
         device ``(scores, labels, boxes, valid)`` of :meth:`TTBEVFormer.detect`, valid until the
         next call; synchronize before reading them. A frame that finds the traces stale, or grows
         the plan, runs live; :meth:`capture_if_stale` then captures them again."""
+        outputs = self._run(img_metas, host_frame)
+        self.frame_done = ttnn.record_event(self.device, CQ_OPS)
+        return outputs
+
+    def _run(self, img_metas, host_frame):
         self.model.refill_frame(img_metas, self.frame, host_frame)
         if self.stale:
             return self._live()

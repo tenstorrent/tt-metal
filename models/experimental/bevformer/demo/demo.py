@@ -415,10 +415,12 @@ def run_demo(args):
                 device_start = time.perf_counter()
                 prepared = tt_model.prepare_frame(metas, prepared)
                 cls_scores, bbox_preds, prev_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
-                compacted = detect_frame(cls_scores, bbox_preds)[0]
+                detections = tt_model.detect(cls_scores, bbox_preds, args.score_threshold)
                 ttnn.synchronize_device(device)
-                ttnn.deallocate(tt_image)
                 device_latency = time.perf_counter() - device_start
+                scores, labels, _, boxes, valid = detections
+                compacted = tt_model.get_bboxes(scores, labels, boxes, valid)[0]
+                ttnn.deallocate(tt_image)
                 record(index, token, compacted, device_latency, time.perf_counter() - end_to_end_start)
 
         def run_traced():
@@ -426,13 +428,14 @@ def run_demo(args):
                 end_to_end_start = time.perf_counter()
                 host_image, metas, token = host_inputs(index)
                 traced.upload(host_image)
-                # As in eager, the images' upload is outside the timed region, and the frame's other
-                # inputs and the compaction, which reads the detections back, inside it.
+                # As in eager, the device latency spans the frame from its other inputs to its last
+                # device work; the images' upload and the detections' readback are outside it.
                 ttnn.synchronize_device(device)
                 device_start = time.perf_counter()
-                compacted = tt_model.get_bboxes(*traced(metas))[0]
-                ttnn.synchronize_device(device)
+                outputs = traced(metas)
+                ttnn.event_synchronize(traced.frame_done)
                 device_latency = time.perf_counter() - device_start
+                compacted = tt_model.get_bboxes(*outputs)[0]
                 end_to_end_latency = time.perf_counter() - end_to_end_start
                 # After a frame that grew the plan, which ran live; timed apart in trace_capture_ms.
                 traced.capture_if_stale()
@@ -446,6 +449,14 @@ def run_demo(args):
             # packing release the GIL, so they overlap the main loop without copying each image batch
             # between processes.
             pool = ThreadPoolExecutor(max_workers=1)
+            # Times each frame's device work: the main thread is busy with the next frame when the
+            # device finishes. event_synchronize releases the GIL while it waits.
+            watcher = ThreadPoolExecutor(max_workers=1)
+
+            def completion_time(event):
+                ttnn.event_synchronize(event)
+                return time.perf_counter()
+
             try:
                 pending = deque()
 
@@ -455,12 +466,15 @@ def run_demo(args):
 
                 for index in range(1, 1 + PREFETCH_FRAMES):
                     prefetch(index)
-                frame_end = time.perf_counter()
                 host_image, metas, token, host_frame = pending.popleft().result()
                 traced.upload(host_image)
+                # Filling the pipeline is not measured, as the warmup is not: the first frame's
+                # interval starts once its inputs are ready, as every later frame's does.
+                frame_end = time.perf_counter()
                 for index in range(1, frame_count):
                     device_start = time.perf_counter()
                     outputs = traced(metas, host_frame)
+                    device_done = watcher.submit(completion_time, traced.frame_done)
                     prefetch(index + PREFETCH_FRAMES)
                     current = token
                     if pending:
@@ -468,7 +482,7 @@ def run_demo(args):
                         traced.upload(host_image)
                     # Reading the detections back waits for this frame only, not for the next upload.
                     compacted = tt_model.get_bboxes(*outputs)[0]
-                    device_latency = time.perf_counter() - device_start
+                    device_latency = device_done.result() - device_start
                     end_to_end_latency = time.perf_counter() - frame_end
                     traced.capture_if_stale()
                     record(index, current, compacted, device_latency, end_to_end_latency)
@@ -478,6 +492,7 @@ def run_demo(args):
             finally:
                 # On a failure, drop the frames not yet started rather than prepare them first.
                 pool.shutdown(wait=True, cancel_futures=True)
+                watcher.shutdown(wait=True, cancel_futures=True)
 
         if traced is None:
             run_eager()
