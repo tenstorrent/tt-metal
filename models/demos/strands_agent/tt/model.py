@@ -91,20 +91,33 @@ def _rms_norm(norm, x):
     return out
 
 
-def plan_batches(lengths, max_batch=MAX_BATCH, max_tokens=MAX_BATCH_TOKENS) -> list[list[int]]:
+def _traced_batch(count, S, max_tokens):
+    """Rows of a traced forward over count prompts at bucket S (padded up to TRACE_BATCHES); None if untraceable."""
+    if S not in TRACED_S:
+        return None
+    Bp = next((b for b in TRACE_BATCHES if b >= count), None)
+    return Bp if Bp is not None and Bp * S <= max_tokens else None
+
+
+def plan_batches(
+    lengths, max_batch=MAX_BATCH, max_tokens=MAX_BATCH_TOKENS, traced=False, bucket=Qwen36Model._mask_bucket_for
+) -> list[list[int]]:
     """Group prompt indices into forwards at the lowest estimated cost.
 
     Prompts are sorted by length. Each group is a run of that order padded to the bucket of its longest prompt,
-    with len(group) <= max_batch and len(group) * bucket <= max_tokens (one prompt always fits)."""
+    with len(group) <= max_batch and len(group) * bucket <= max_tokens (one prompt always fits).
+    traced: the decider runs traceable groups as traces, which pad the rows up to TRACE_BATCHES (costed as such).
+    bucket: length -> bucket."""
     order = sorted(range(len(lengths)), key=lambda i: lengths[i])
-    buckets = [Qwen36Model._mask_bucket_for(lengths[i]) for i in order]
+    buckets = [bucket(lengths[i]) for i in order]
     best = [0.0] + [math.inf] * len(order)
     start = [0] * (len(order) + 1)
     for j in range(1, len(order) + 1):
         for size in range(1, min(max_batch, j) + 1):
             if size > 1 and size * buckets[j - 1] > max_tokens:
                 break
-            cost = best[j - size] + FWD_FIXED_MS + TOKEN_MS * size * buckets[j - 1]
+            rows = (traced and _traced_batch(size, buckets[j - 1], max_tokens)) or size
+            cost = best[j - size] + FWD_FIXED_MS + TOKEN_MS * rows * buckets[j - 1]
             if cost < best[j]:
                 best[j], start[j] = cost, j - size
     groups, j = [], len(order)
@@ -115,7 +128,7 @@ def plan_batches(lengths, max_batch=MAX_BATCH, max_tokens=MAX_BATCH_TOKENS) -> l
 
 
 class StrandsDecider:
-    def __init__(self, mesh_device, args, model, trace=True):
+    def __init__(self, mesh_device, args, model, trace=True, traced_buckets_only=False):
         assert model.num_devices == 1, "strands_agent supports a single chip (1x1 mesh) only"
         self.mesh_device = mesh_device
         self.args = args
@@ -130,6 +143,8 @@ class StrandsDecider:
         self.head = load_head(args.adapter_dir, args.dim)
 
         self.trace = trace
+        # Serving: prompts above 2048 tokens run in the traced 4096 bucket (no eager compiles).
+        self.traced_buckets_only = traced_buckets_only
         self._compiled = set()  # shape keys that have run eagerly
         self._traces = {}  # shape key -> (trace id, output tensor)
         self._trace_inputs = {}  # shape key -> persistent (tokens, select) device tensors
@@ -168,12 +183,12 @@ class StrandsDecider:
         )
 
     @classmethod
-    def from_pretrained(cls, mesh_device, max_seq_len=4096, trace=True):
+    def from_pretrained(cls, mesh_device, max_seq_len=4096, trace=True, traced_buckets_only=False):
         args = StrandsDeciderModelArgs(mesh_device=mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
         state_dict = args.load_state_dict()
         model = Qwen36Model(mesh_device, args, state_dict, tensor_cache_path=args.weight_cache_path())
         del state_dict
-        decider = cls(mesh_device, args, model, trace=trace)
+        decider = cls(mesh_device, args, model, trace=trace, traced_buckets_only=traced_buckets_only)
         # One small forward builds the first-call caches (stateless GDN constants, fused attention weights), so
         # nothing persistent is allocated once a trace exists.
         if swiglu_enabled():
@@ -182,17 +197,28 @@ class StrandsDecider:
         decider.hidden_rows_batch([[1] * 128], [[127]])
         return decider
 
+    def _bucket(self, length):
+        """Bucket of a prompt: with traced_buckets_only, a traced decider rounds untraced buckets up to a traced S."""
+        S = Qwen36Model._mask_bucket_for(length)
+        if self.trace and self.traced_buckets_only and S not in TRACED_S:
+            return next((t for t in TRACED_S if t >= S), S)
+        return S
+
+    def plan(self, lengths) -> list[list[int]]:
+        """plan_batches with this decider's limits, trace padding and buckets (the grouping its forwards use)."""
+        return plan_batches(lengths, self.max_batch, self.max_batch_tokens, traced=self.trace, bucket=self._bucket)
+
     def hidden_rows_batch(self, seqs: list[list[int]], positions: list[list[int]]) -> list[torch.Tensor]:
         """Post-final-norm hidden rows of the given token positions of each prompt, fp32 [len(positions), dim].
 
-        Prompts run in the forwards that plan_batches picks; each forward pads to the bucket of its longest prompt
+        Prompts run in the forwards that plan() picks; each forward pads to the bucket of its longest prompt
         (powers of two 128..2048, then multiples of 128)."""
         for ids, pos in zip(seqs, positions, strict=True):
             if not 1 <= len(ids) <= self.max_seq_len:
                 raise ValueError(f"Prompt has {len(ids)} tokens; supported range is 1..{self.max_seq_len}.")
             assert all(0 <= p < len(ids) for p in pos), "position out of range"
         out = [None] * len(seqs)
-        for group in plan_batches([len(ids) for ids in seqs], self.max_batch, self.max_batch_tokens):
+        for group in self.plan([len(ids) for ids in seqs]):
             rows = self._forward_batch([seqs[i] for i in group], [positions[i] for i in group])
             for i, r in zip(group, rows):
                 out[i] = r
@@ -209,11 +235,11 @@ class StrandsDecider:
 
         Traced forwards pad B up to a power of two and P to TRACED_P, so a few shapes cover every group."""
         B = len(seqs)
-        S = Qwen36Model._mask_bucket_for(max(len(ids) for ids in seqs))
+        S = self._bucket(max(len(ids) for ids in seqs))
         count = max(len(pos) for pos in positions)
-        if self.trace and S in TRACED_S and count <= TRACED_P:
-            Bp = next((b for b in TRACE_BATCHES if b >= B), None)
-            if Bp is not None and Bp * S <= self.max_batch_tokens:
+        if self.trace and count <= TRACED_P:
+            Bp = _traced_batch(B, S, self.max_batch_tokens)
+            if Bp is not None:
                 return Bp, S, TRACED_P, True
         return B, S, -(-count // 32) * 32, False
 

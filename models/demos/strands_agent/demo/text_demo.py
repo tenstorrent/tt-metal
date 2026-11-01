@@ -18,7 +18,7 @@ from safetensors.torch import load_file
 from models.common.utility_functions import comp_pcc, run_for_blackhole
 from models.demos.strands_agent.tests.common import ids_sha256, load_example_state, parametrize_mesh
 from models.demos.strands_agent.tt.answers import build_answer, option_log_probs
-from models.demos.strands_agent.tt.model import StrandsDecider, plan_batches
+from models.demos.strands_agent.tt.model import StrandsDecider
 from models.demos.strands_agent.tt.prompting import encode_request
 
 TESTS_DIR = Path(__file__).parent.parent / "tests"
@@ -106,7 +106,7 @@ def test_strands_decider_text_demo(mesh_device):
 
     def run(idx, label):
         batch = [qs[i] for i in idx]
-        groups = plan_batches([len(q.input_ids) for q in batch], decider.max_batch, decider.max_batch_tokens)
+        groups = decider.plan([len(q.input_ids) for q in batch])
         logger.info(f"[{label}] {len(batch)} questions in {len(groups)} forwards: {[len(g) for g in groups]}")
         start = time.perf_counter()
         out = decider.question_logits_batch(batch)

@@ -85,3 +85,16 @@ def test_plan_batches(lengths):
             [393, 407, 417, 458],
             [2787, 2801],
         ]
+
+
+def test_plan_batches_counts_trace_padding():
+    assert sorted(map(len, plan_batches([128] * 17, traced=True))) == [1, 16]
+    assert sorted(map(len, plan_batches([128] * 17, traced=False))) == [17]
+    assert sorted(map(len, plan_batches([128] * 32, traced=True))) == [32]
+
+
+def test_plan_batches_bucket_override():
+    assert plan_batches([3000], bucket=lambda n: 4096) == [[0]]
+    # Two 3000-token prompts fit 7000 padded tokens at bucket 3072 but not at the overridden bucket 4096.
+    assert len(plan_batches([3000, 3000], max_tokens=7000)) == 1
+    assert len(plan_batches([3000, 3000], max_tokens=7000, bucket=lambda n: 4096)) == 2

@@ -15,7 +15,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from models.demos.strands_agent.tests.common import parametrize_mesh
-from models.demos.strands_agent.tt.model import StrandsDecider, plan_batches
+from models.demos.strands_agent.tt.model import StrandsDecider
 from models.demos.strands_agent.tt.prompting import encode_request
 
 TARGET_LENGTHS = (128, 256, 512, 1024, 2048, 4000)
@@ -77,7 +77,7 @@ def test_strands_decider_latency(mesh_device):
                 decider.question_logits_batch(qs)
                 runs.append((time.perf_counter() - start) * 1000)
             times[len(qs)] = statistics.median(runs)
-        forwards = len(plan_batches([len(q.input_ids)] * BATCH, decider.max_batch, decider.max_batch_tokens))
+        forwards = len(decider.plan([len(q.input_ids)] * BATCH))
         rows.append((len(q.input_ids), times[1], times[BATCH], forwards))
 
     logger.info(f"{'tokens':>7} {'B=1 ms':>8} {'B=32 ms':>9} {'forwards':>9} {'questions/s':>12}")
