@@ -73,6 +73,11 @@ def test_pack_untilize(
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
 
+    benchmark_is_perf = benchmark != "functional"
+    if is_perf != benchmark_is_perf:
+        raise ValueError(f"is_perf={is_perf} does not match benchmark={benchmark!r}")
+    if not is_perf and loop_factor != 1:
+        raise ValueError("Functional pack-untilize runs require loop_factor=1")
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
@@ -81,11 +86,13 @@ def test_pack_untilize(
             "Skipping large dimension test in coverage mode, check issue: #1063 on TT-LLK repo"
         )
 
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE and (
         formats.input_format == DataFormat.Fp8_e4m3
         or formats.output_format == DataFormat.Fp8_e4m3
     ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
+        pytest.skip(
+            "Pack Untilize does not support Fp8_e4m3 on non-Blackhole architectures"
+        )
 
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b format")
@@ -139,7 +146,7 @@ def test_pack_untilize(
 
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
 
-    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+    functional_unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
     # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.
@@ -184,7 +191,9 @@ def test_pack_untilize(
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": (
-            formats.input_format.is_32_bit() if is_perf else unpack_to_dest
+            False
+            if benchmark == "fast_untilize_baseline"
+            else functional_unpack_to_dest
         ),
         "compile_time_formats": compile_time_formats,
     }

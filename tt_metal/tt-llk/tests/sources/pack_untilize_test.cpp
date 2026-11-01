@@ -22,8 +22,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // Only modes supported are L1_TO_L1, PACK_ISOLATE and L1_CONGESTION.
 static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for pack_untilize");
 static_assert(PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE, "Unpack isolation not supported for pack_untilize");
+static_assert(PACK_UNTILIZE_IS_PERF || PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "Functional pack_untilize only supports L1_TO_L1");
 
-static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
+static constexpr std::uint32_t MAX_TILES_DEST = ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
 static_assert(BLOCK_CT_DIM <= MAX_TILES_DEST, "Block must fit in Dest register");
 static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by BLOCK_CT_DIM");
 
@@ -73,19 +74,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
-#else
-    constexpr std::uint32_t num_faces = ckernel::TILE_NUM_FACES;
 #endif
+    const std::uint32_t kernel_num_faces = PACK_UNTILIZE_IS_PERF ? ckernel::TILE_NUM_FACES : num_faces;
+    const ckernel::TensorShape tensor_shape =
+        PACK_UNTILIZE_IS_PERF ? ckernel::DEFAULT_TENSOR_SHAPE : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    LLK_ASSERT(!PACK_UNTILIZE_IS_PERF || num_faces == ckernel::TILE_NUM_FACES, "Pack-untilize perf requires full tiles");
+    LLK_ASSERT(TILE_CNT == FULL_RT_DIM * FULL_CT_DIM, "TILE_CNT must match FULL_RT_DIM * FULL_CT_DIM");
     {
         START_PERF_MEASURE("INIT")
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0 /* transpose_of_faces */,
-            0 /* within_face_16x16_transpose */,
-            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
-            formats.unpack_A_src,
-            formats.unpack_A_dst);
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, kernel_num_faces, kernel_num_faces);
         PROFILER_SYNC();
     }
 
@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     const std::uint32_t input_addr = unpack_address(params, tile);
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                         input_addr, formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -124,11 +124,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
-#else
-    constexpr std::uint32_t num_faces = ckernel::TILE_NUM_FACES;
 #endif
-    constexpr bool is_int_fpu_en            = false;
-    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    constexpr bool is_int_fpu_en = false;
+    const ckernel::TensorShape tensor_shape =
+        PACK_UNTILIZE_IS_PERF ? ckernel::DEFAULT_TENSOR_SHAPE : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    LLK_ASSERT(!PACK_UNTILIZE_IS_PERF || num_faces == ckernel::TILE_NUM_FACES, "Pack-untilize perf requires full tiles");
+    LLK_ASSERT(TILE_CNT == FULL_RT_DIM * FULL_CT_DIM, "TILE_CNT must match FULL_RT_DIM * FULL_CT_DIM");
 
     {
         START_PERF_MEASURE("INIT")
@@ -136,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tensor_shape, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reconfig_remap_wrapper_(true);
+        _llk_math_reconfig_remap_wrapper_(true /* remap_enable */);
         PROFILER_SYNC();
     }
 
@@ -149,7 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
+                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(LOOP_FACTOR * TILE_CNT * num_faces);
             }
             else
             {
@@ -159,11 +160,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; ++block_tile)
                         {
+                            const std::uint32_t dst_tile = block_tile + TILE_DST_CT_OFFSET;
                             LLK_ASSERT(
-                                (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                                "Block tile index exceeds maximum destination tiles");
+                                (dst_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "Block tile index + destination offset exceeds maximum destination tiles");
+                            // With unpack-to-Dest this only acknowledges that Dest was consumed;
+                            // BroadcastType::NONE makes the wrapper synchronize without copying data.
                             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                                block_tile, formats.math, formats.math);
+                                dst_tile, formats.math, formats.math);
                         }
                     }
                 }
@@ -180,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT(
                             (block_tile + TILE_DST_CT_OFFSET < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "Block tile index + TILE_DST_CT_OFFSET exceeds maximum destination tiles");
+                            "Block tile index + destination offset exceeds maximum destination tiles");
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             block_tile + TILE_DST_CT_OFFSET, formats.math, formats.math);
                     }
@@ -213,6 +217,12 @@ std::uint32_t functional_pack_address(const T& params, std::uint32_t rt, std::ui
     return L1_ADDRESS(params.buffer_Res[0]) + rt * row_stride_16B + block_num * block_stride_16B;
 }
 
+inline void untilize_block(std::uint32_t output_address, std::uint32_t output_format, std::uint32_t num_faces)
+{
+    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
+        output_address, output_format, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -222,18 +232,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
-#else
-    constexpr std::uint32_t num_faces = ckernel::TILE_NUM_FACES;
 #endif
     constexpr bool UNTILIZE                = true;
-    const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * num_faces;
+    const std::uint32_t kernel_num_faces   = PACK_UNTILIZE_IS_PERF ? ckernel::TILE_NUM_FACES : num_faces;
+    const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * kernel_num_faces;
+    LLK_ASSERT(!PACK_UNTILIZE_IS_PERF || num_faces == ckernel::TILE_NUM_FACES, "Pack-untilize perf requires full tiles");
+    LLK_ASSERT(TILE_CNT == FULL_RT_DIM * FULL_CT_DIM, "TILE_CNT must match FULL_RT_DIM * FULL_CT_DIM");
 
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
             formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, num_faces);
+        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, kernel_num_faces);
         PROFILER_SYNC();
     }
 
@@ -245,8 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                        PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
+                    untilize_block(PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, kernel_num_faces);
                 }
             }
         }
@@ -257,8 +267,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                        PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
+                    untilize_block(PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, kernel_num_faces);
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
@@ -272,8 +281,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t pack_addr_16B = functional_pack_address(params, rt, block_num, num_faces, formats.pack_dst);
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                        pack_addr_16B, formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
+                    untilize_block(pack_addr_16B, formats.pack_dst, kernel_num_faces);
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
