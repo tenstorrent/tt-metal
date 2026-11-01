@@ -637,8 +637,8 @@ def build_steps(models: list[str]) -> list[Step]:
 def path_needs(group: str, model: str) -> list[str]:
     hf, ttnn_cache, trace = MODEL_PATH_VARS[model]
     if group == "block-random":
-        # Random weights; input is the trace's tokens through the HF model's embedding.
-        return [hf, trace]
+        # Random weights and input: only config.json from the HF model dir.
+        return [hf]
     if group == "block":
         # Without a golden trace the block runs random input and checks determinism only.
         return [hf, ttnn_cache]
