@@ -226,11 +226,14 @@ def test_matmul_commands(tmp_path, monkeypatch):
     assert seen[cmds["matmul:duty-cycle-bursty-5"]]["TT_MESH_GRAPH_DESC_PATH"] == (
         "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
     )
-    assert seen[cmds["matmul:core-sweep"]].items() >= {
-        "TT_SWEEP_MODE": "grid",
-        "TT_SWEEP_GRID": "11x10",
-        "TT_SWEEP_ITERS": "10",
-    }.items()
+    assert (
+        seen[cmds["matmul:core-sweep"]].items()
+        >= {
+            "TT_SWEEP_MODE": "grid",
+            "TT_SWEEP_GRID": "11x10",
+            "TT_SWEEP_ITERS": "10",
+        }.items()
+    )
     assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "10"
     for key in MATMUL_KEYS[:-1]:
         assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds[key]]
@@ -619,11 +622,28 @@ def test_fabric_hang_skips_config_sweep(tmp_path, monkeypatch):
 def test_reset_failure_points_to_log(tmp_path, monkeypatch):
     from gwdt_steps import Ctx, State, reset_gate
 
-    _fake_sh(monkeypatch, 1)
+    calls = _fake_sh(monkeypatch, 1)
     state = State()
     r = reset_gate().run(Ctx(tmp_path, tmp_path, False), state)
-    assert r.status == Status.FAIL
-    assert state.log == str(tmp_path / "reset" / "log_01")
+    assert r.status == Status.FAIL and calls == ["tt-smi -glx_reset_auto"] * 3
+    assert state.log == str(tmp_path / "reset" / "log_01.retry3")
+    assert all((tmp_path / "reset" / name).is_file() for name in ("log_01", "log_01.retry2", "log_01.retry3"))
+
+
+def test_reset_retries_until_it_succeeds(tmp_path, monkeypatch):
+    import gwdt_steps
+    from gwdt_steps import Ctx, State
+
+    logs = []
+
+    def sh(ctx, cmd, log, env=None, timeout=None):
+        logs.append(log)
+        return 1 if len(logs) == 1 else 0
+
+    monkeypatch.setattr(gwdt_steps, "sh", sh)
+    d = tmp_path / "matmul" / "minimal"
+    assert gwdt_steps.reset(Ctx(tmp_path, tmp_path, False), d / "reset.log", State()) is None
+    assert logs == [d / "reset.log", d / "reset.retry2.log"]
 
 
 def test_status_json_has_run_fields(tmp_path):

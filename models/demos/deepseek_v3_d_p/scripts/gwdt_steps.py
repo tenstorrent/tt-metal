@@ -191,11 +191,22 @@ def save_smi(ctx: Ctx, d: Path, attempt: int = 1) -> None:
     sh(ctx, SMI_CMD, attempt_path(d / "tt-smi.json", attempt), timeout=120)
 
 
+# tt-smi's own "auto retry" does not cover a chip that misses firmware init after the IPMI cycle (seen once: GDDR
+# training timeout on one chip, clean on the next reset), so a reset gets a few tries before the step fails.
+RESET_TRIES = 3
+
+
+def retry_path(log: Path, n: int) -> Path:
+    """Retries of one reset sit next to it: reset.log, reset.retry2.log; log_01, log_01.retry2."""
+    return log if n == 1 else log.with_name(f"{log.stem}.retry{n}{log.suffix}")
+
+
 def reset(ctx: Ctx, log: Path, state: State) -> Result | None:
-    if sh(ctx, RESET_CMD, log, timeout=600) != 0:
-        state.log = str(log)
-        return Result(Status.FAIL, f"reset failed: {RESET_CMD}")
-    return None
+    for n in range(1, RESET_TRIES + 1):
+        if sh(ctx, RESET_CMD, retry_path(log, n), timeout=600) == 0:
+            return None
+    state.log = str(retry_path(log, RESET_TRIES))
+    return Result(Status.FAIL, f"reset failed {RESET_TRIES}x: {RESET_CMD}, first log {log}")
 
 
 def pytest_step(
