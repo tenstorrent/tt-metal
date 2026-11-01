@@ -1581,6 +1581,24 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-11-01 06:54: the batch-32 decode at 1 M: 60 ms per step with all 32 resident users decoding together (the capstone's missing row)
+
+`served_8x4_needle1m_32_decode256`: the capstone configuration (32 x 1 038 673-token needle prompts submitted together,
+waves of 8 x 2048 rows per step at prefill budget 524288, the paged sparse attention, resident decode, the 1:1 decode
+interleave), one round, 256 tokens per user with `ignore_eos` so every user keeps decoding after its answer. Prefill:
+32/32 needles, the last wave at 06:54:20 after 4 h 39 min (16 723 s), the capstone's time again. Decode: the engine's
+step markers (`[glm53-vllm-perf]` every 32 steps) put steps 32..256 at 06:54:21.5, 23.3, 25.2, 27.1, 29.0, 31.0, 33.0
+and 35.1 with 32 live users: 60 ms per step = 16.5 tok/s per user, ~530 tok/s aggregate, equal to the 128-token
+greedy ITL (60.9 ms). The 1 M context adds nothing to the decode step. Two measurement traps on the way: (1)
+`vllm bench serve` with 32 one-million-token text prompts reaches the engine staggered (the API server tokenizes the
+4 MB texts one at a time), so its prefills finish minutes apart and short decodes never overlap as a batch of 32;
+(2) the client's streamed chunks are not a decode clock: the API server held the first chunk 9 s after the last
+wave, then delivered 2.6 tokens per chunk at a 62 ms cadence (the client's naive rate read 14 tok/s). A third trap
+is a finding of its own: resubmitting the 32 prompts after round 1 missed the prefix cache entirely (hit rate 0 %,
+KV usage 0 % after the first round, the engine re-prefilling 31 fresh long prompts) although the 64 K x 4 repeat
+hit; open item. A user that finishes its prefill while others still prefill decodes at one token per prefill step
+(~8 s) until the last wave ends: the decode-interleave policy under long bursts is the next decode item.
+
 ### 2026-10-31 19:45: device sampling served on the 8x4: sampled decode 4.1 -> 16.0 tok/s per user, greedy ITL unchanged, draws seed-deterministic
 
 The served A/B at 128 x 128 x 32 users (temperature 1.0 / top-p 0.95 = the eval entries' settings, `vllm bench serve`,
