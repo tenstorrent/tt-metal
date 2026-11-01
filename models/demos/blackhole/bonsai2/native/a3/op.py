@@ -17,6 +17,7 @@ from __future__ import annotations
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreRuntimeArgsDescriptor,
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
@@ -255,3 +256,239 @@ def _ternary_mm_scaled_prog(x8, w, s, y, workers):
         ],
     )
     return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
+
+
+# ---------------------------------------------------------------------------------------------
+# Input prep: x' = H(D x) scattered into the A3 workers' persistent block-masked buffer.
+
+KERNEL_PREP = "models/demos/blackhole/bonsai2/native/a3/kernels/prep_hadamard_kernel.cpp"
+
+
+def hadamard_blocks(had, width: int):
+    """[width, 1024] float32: rows of block b are diag(d_b) H / 32, so x_b @ M_b = rotate(x)_b."""
+    import numpy as np
+    import torch
+
+    from models.demos.blackhole.bonsai2.native.hadamard import sylvester
+
+    h = sylvester(had.block).astype(np.float32)  # already normalized: entries +-1/32
+    d = had.signs[width].astype(np.float32).reshape(-1, had.block, 1)
+    return torch.from_numpy((d * h[None]).reshape(width, had.block))
+
+
+def hadamard_tensor(device, had, width: int):
+    """M as bfp2 (+-1/32 is exact), laid out so each prep unit (b, r) is one contiguous run:
+    a one-tile-wide [U*128*32, 32] tensor, height-sharded over the DRAM banks, where unit
+    u = 8 b + r holds tiles M[32 b + i, j] for j in 4r..4r+3, i in 0..31 (j-major). One 40 KB
+    read per unit instead of 128 scattered 320 B pages (which cost 15 of 24 us)."""
+    import torch
+
+    mb = hadamard_blocks(had, width)  # [width, 1024]
+    nb = width // 1024
+    t = mb.reshape(nb, 32, 32, 32, 32).permute(0, 3, 1, 2, 4)  # [b, j, i, row, col]
+    t = t.reshape(nb, 8, 4, 32, 32, 32)  # [b, r, jj, i, row, col]
+    t = t.reshape(nb * 8 * 128 * 32, 32)
+    banks = device.dram_grid_size().x
+    units = nb * 8
+    assert units % banks == 0
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM,
+                            ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0),
+                                                                             ttnn.CoreCoord(banks - 1, 0))}),
+                                           [units // banks * 128 * 32, 32], ttnn.ShardOrientation.ROW_MAJOR))
+    return ttnn.to_device(ttnn.from_torch(t.contiguous(), dtype=ttnn.DataType.BFLOAT2_B, layout=ttnn.TILE_LAYOUT),
+                          device, memory_config=mem)
+
+
+def masked_input_buffer(device, workers, k: int):
+    """The persistent A3 input: [workers*8, K] 8x32 tiles, one zeroed [8, K] shard per worker."""
+    import torch
+
+    cores = [c for c, _, _ in workers]
+    return ttnn.from_torch(torch.zeros(1, 1, 8 * len(workers), k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                           tile=ttnn.Tile([8, 32]), device=device,
+                           memory_config=ttnn.MemoryConfig(
+                               ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                               ttnn.ShardSpec(core_set(cores), [8, k], ttnn.ShardOrientation.ROW_MAJOR)))
+
+
+def prep_cores(device, num_units: int, units_per_core: int):
+    grid = device.compute_with_storage_grid_size()
+    n = -(-num_units // units_per_core)
+    assert n <= grid.x * grid.y
+    return [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n)]
+
+
+def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, scatter: bool = True, debug: int = 0):
+    """x: [.., 32, K] bf16 32x32 tiles (row 0 live) or [1, K] 1x32 tiles, interleaved.
+    m: hadamard_tensor for width K. x8: masked_input_buffer. Writes x8 in place."""
+    assert x.memory_config().buffer_type == ttnn.BufferType.L1, "prep reads x from L1 (DRAM source: 32 B reads misalign)"
+    device = x.device()
+    k = x.shape[-1]
+    nb = k // 1024
+    units = [(b, r) for b in range(nb) for r in range(8)]
+    if not units_per_core:  # fewest per core that fits the grid
+        g = device.compute_with_storage_grid_size()
+        units_per_core = -(-len(units) // (g.x * g.y))
+    cores = prep_cores(device, len(units), units_per_core)
+    grid = core_set(cores)
+    per = [units[i * units_per_core:(i + 1) * units_per_core] for i in range(len(cores))]
+    m_page = m.get_tile().get_tile_size(m.dtype)
+    upb = len(units) // device.dram_grid_size().x  # units per DRAM bank shard
+    wxy = []
+    for c, _, _ in workers:
+        v = device.worker_core_from_logical_core(c)
+        wxy.append((v.x << 16) | v.y)
+    flat = lambda us: [v for u in us for v in u]  # noqa: E731
+
+    def cb(idx, fmt, tile, ntiles):
+        size = tile.get_tile_size(fmt)
+        return ttnn.CBDescriptor(total_size=ntiles * size, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(
+            buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
+
+    t1 = ttnn.Tile([1, 32])
+    cbs = [cb(0, ttnn.bfloat16, t1, 32), cb(1, m.dtype, ttnn.Tile([32, 32]), 64), cb(2, ttnn.bfloat16, t1, 2)]
+    x_is_dram = x.memory_config().buffer_type == ttnn.BufferType.DRAM
+    uk = UnifiedKernelDescriptor(
+        kernel_source=KERNEL_PREP,
+        core_ranges=grid,
+        ncrisc_named_compile_time_args=[("pp_src_tile32", int(src_tile32)), ("pp_x_is_dram", int(x_is_dram)),
+                                        ("pp_m_page", m_page), ("pp_debug", debug), ("pp_units_per_bank", upb)],
+        brisc_named_compile_time_args=[],
+        trisc_named_compile_time_args=[],
+        trisc_compute_config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False),
+        per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+            ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), len(us)] + flat(us)) for c, us in zip(cores, per)],
+            brisc_args=[(c, [x8.buffer_address(), len(us)] + flat(us) + [len(wxy) if scatter else 0] + wxy) for c, us in zip(cores, per)],
+            trisc_args=[(c, [len(us)]) for c, us in zip(cores, per)],
+        ),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
+    ttnn.generic_op([x, m, x8], prog)
+    return x8
+
+
+# ---------------------------------------------------------------------------------------------
+# v2: runtime addresses (one compile for all layers), fused gate/up, interleaved output.
+
+KERNEL_V2 = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_v2_kernel.cpp"
+
+
+def ternary_linear(x8, w, s, out, workers, gu: bool = False):
+    """x8: masked_input_buffer filled by prep(). w/s: from weights_for_device().
+    out: L1 interleaved, [.., 32, N] 32x32 tiles (row 0 written, rest zero) or [1, 1, 1, N] 1x32 tiles.
+    gu: w/s hold (gate, up) column pairs; out gets silu(gate) * up."""
+    key = ("v2", _sig(x8), _sig(w), _sig(s), _sig(out), len(workers), gu)
+    if key not in _progs:
+        if len(_progs) > 256:  # outputs are fresh allocations, so keys churn; descriptors don't bind them
+            _progs.clear()
+        _progs[key] = _v2_prog(x8, w, s, out, workers, gu)
+    ttnn.generic_op([x8, w, s, out], _progs[key])
+    return out
+
+
+def _v2_prog(x8, w, s, out, workers, gu):
+    device = x8.device()
+    k = x8.memory_config().shard_spec.shape[1]
+    kt = k // 32
+    assert kt % 32 == 0
+    num_g = kt // 32
+    s_tiles = (num_g + 3) // 4
+    cols = 2 if gu else 1
+    assert 3 + cols * s_tiles <= 8, "DST full-sync fp32 holds 8 tiles"
+    banks = device.dram_grid_size().x
+    wpb = len(workers) // banks
+    cols_per_core = w.memory_config().shard_spec.shape[1] // 32 // wpb
+    pcn = cols_per_core // cols
+    tile_bytes = w.get_tile().get_tile_size(w.dtype)
+    page, pages = get_max_page_size_and_num_pages(device, 32, tile_bytes)
+    grid = core_set([c for c, _, _ in workers])
+    out_tile32 = out.get_tile().tile_shape[0] == 32
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1 and not out.is_sharded()
+
+    def cb(idx, fmt, ntiles, tile):
+        size = tile.get_tile_size(fmt)
+        return ttnn.CBDescriptor(total_size=ntiles * size, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(
+            buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
+
+    cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, x8),
+           cb(1, w.dtype, 3 * 32, w.get_tile()),
+           cb(2, ttnn.float32, 2 * cols * s_tiles, ttnn.Tile([32, 32])),
+           cb(4, ttnn.bfloat16, 2, ttnn.Tile([1, 32])),
+           cb(5, ttnn.bfloat16, 1, ttnn.Tile([32, 32]))]
+    vcs, seen = [], []
+    for core, bank, _ in workers:
+        vc = bank & 0x3
+        if any(c.y == core.y and (b & 0x3) == vc for c, b in seen):
+            vc = (vc + 1) & 0x3
+        seen.append((core, bank))
+        vcs.append((core, vc))
+    common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu))]
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
+                                       math_approx_mode=False, dst_full_sync_en=True)
+    cfg.unpack_to_dest_mode = modes
+    per_core = lambda name, vals: PerCoreCompileTimeDescriptor(  # noqa: E731
+        named_compile_time_arg=name, core_values=vals, other_value=0)
+    col0 = lambda b, i: (b * wpb + i)  # noqa: E731  this core's slot among all cores, in column order
+    uk = UnifiedKernelDescriptor(
+        kernel_source=KERNEL_V2,
+        core_ranges=grid,
+        ncrisc_named_compile_time_args=common + [
+            ("tm_in1_page_size", page), ("tm_in1_num_pages", pages), ("tm_in1_block_bytes", 32 * tile_bytes)],
+        brisc_named_compile_time_args=common + [("tm_out_tile32", int(out_tile32))],
+        trisc_named_compile_time_args=common,
+        trisc_compute_config=cfg,
+        unified_compile_time_core_descriptors=[UnifiedCompileTimeCoreDescriptor(
+            named_compile_time_arg="tm_is_active_core", core_range=grid, value=1, other_value=0)],
+        per_core_compile_time_descriptors=[per_core("tm_bank_id", [(c, b) for c, b, _ in workers]),
+                                           per_core("tm_vc", vcs)],
+        per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+            ncrisc_args=[(c, [w.buffer_address() + i * cols_per_core * kt * tile_bytes]) for c, _, i in workers],
+            brisc_args=[(c, [s.buffer_address() + i * cols_per_core * s_tiles * 4096, out.buffer_address(),
+                             col0(b, i) * pcn]) for c, b, i in workers],
+        ),
+    )
+    return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
+
+
+def weights_for_device(device, codes_kn, scales_gn, cache=None):
+    """codes [K, N] in {-1,0,1}, scales [K/128, N] -> (w bfp2, s fp32) DRAM width-sharded, bank-shuffled.
+    cache: path prefix; host tensors are dumped/loaded there (the conversion is the slow part)."""
+    import os
+
+    import torch
+
+    banks = device.dram_grid_size().x
+    k, n = codes_kn.shape
+
+    def host(name, build, dtype):
+        path = f"{cache}.{name}.tensorbin" if cache else None
+        if path and os.path.exists(path):
+            return ttnn.load_tensor(path)
+        t = ttnn.from_torch(build(), dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        if path:
+            ttnn.dump_tensor(path, t)
+        return t
+
+    w = host("w", lambda: shuffle_for_banks(torch.as_tensor(codes_kn, dtype=torch.float32).reshape(1, 1, k, n), banks),
+             ttnn.DataType.BFLOAT2_B)
+    srows = None
+
+    def build_s():
+        sr = scale_rows(torch.as_tensor(scales_gn, dtype=torch.float32))
+        return shuffle_for_banks(sr.reshape(1, 1, *sr.shape), banks)
+
+    s = host("s", build_s, ttnn.float32)
+    s_rows = s.shape[-2]
+    return (ttnn.to_device(w, device, memory_config=weight_mem(device, k, n)),
+            ttnn.to_device(s, device, memory_config=weight_mem(device, s_rows, n)))
+
+
+def interleave_cols(a, b):
+    """[R, N] x2 -> [R, 2N] with 32-column tiles alternating a, b (the GU column-pair stream)."""
+    import numpy as np
+
+    r, n = a.shape
+    return np.stack([a.reshape(r, n // 32, 32), b.reshape(r, n // 32, 32)], axis=2).reshape(r, 2 * n)

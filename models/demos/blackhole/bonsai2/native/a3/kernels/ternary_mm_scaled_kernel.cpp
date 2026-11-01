@@ -44,7 +44,8 @@ constexpr uint32_t s_tiles = (num_g + 3) / 4;
 constexpr uint32_t pcn = get_named_compile_time_arg_val("tm_per_core_n");
 
 #if defined(COMPILE_FOR_TRISC) && defined(TRISC_MATH)
-// DST addressing for sfpi: 32 units per 64-row tile slot, one unit = 2 rows; face f
+// DST addressing for sfpi: 32 units per 64-row tile slot (unit 2q = rows 4q..4q+3 even columns,
+// 2q+1 = the same rows odd columns), face f
 // starts at unit 8 f. Rows 0-7 of a tiny 8x32 tile are units 0-3 (face 0) and 8-11 (face 1).
 constexpr uint32_t U = 32;
 constexpr uint32_t P = 0 * U, A = 1 * U;
