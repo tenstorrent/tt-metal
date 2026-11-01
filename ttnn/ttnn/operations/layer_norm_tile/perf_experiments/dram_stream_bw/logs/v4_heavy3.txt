@@ -1,0 +1,3 @@
+== v4_heavy3 [RESIDUAL_TRID_DEPTH_HEAVY=3] k=perf_case and focus1 copy=1
+  0=38.26
+======================= 1 passed, 23 deselected in 4.49s =======================

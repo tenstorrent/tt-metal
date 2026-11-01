@@ -1,0 +1,3 @@
+== v6_r1w1 [BANK_NOC_POLICY=1,BANK_NOC_WRITE_POLICY=1] k=perf_case and focus1 copy=1
+  0=47.55
+======================= 1 passed, 23 deselected in 4.38s =======================

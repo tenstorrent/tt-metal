@@ -1,0 +1,9 @@
+== v5_banknoc1 [BANK_NOC_POLICY=1] k=perf_case and focus1 copy=1
+
+======================= 1 failed, 23 deselected in 5.46s =======================
+== v5_banknoc1 [BANK_NOC_POLICY=1] k=perf_case and focus1 copy=1
+  0=35.74
+======================= 1 passed, 23 deselected in 4.34s =======================
+== v5_banknoc1 [BANK_NOC_POLICY=1] k=perf_case and focus1 copy=1
+  0=35.93
+======================= 1 passed, 23 deselected in 3.90s =======================

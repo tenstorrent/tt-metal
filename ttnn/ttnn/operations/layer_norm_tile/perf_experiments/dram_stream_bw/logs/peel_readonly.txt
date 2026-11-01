@@ -1,0 +1,6 @@
+== peel_readonly [] k=perf_case and focus1 copy=1
+  0=22.85
+======================= 1 failed, 23 deselected in 7.21s =======================
+== peel_readonly [] k=perf_case and focus3 copy=1
+  0=16.98
+======================= 1 failed, 23 deselected in 5.02s =======================

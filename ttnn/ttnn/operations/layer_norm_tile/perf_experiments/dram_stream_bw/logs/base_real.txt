@@ -1,0 +1,5 @@
+== base_real [] k=perf_case or guard_case copy=0
+  0=3.49  1=3.48  2=3.34  3=3.45  4=3.53
+== base_real [] k=perf_case or guard_case copy=0
+  focus1=35.37  focus2=48.67  focus3=33.81  allL1_res=24.08  L1_nores=20.75  8x384=36.20  32x32=18.69  affTILE=46.91  g_focus1_bf16=35.93  g_3x500=18.51  g_64x17=21.67  g_2x512=13.55
+====================== 12 passed, 12 deselected in 10.45s ======================

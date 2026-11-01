@@ -1,0 +1,88 @@
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_compute.cpp b/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_compute.cpp
+index fc382a855b9..d99e7928c69 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_compute.cpp
++++ b/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_compute.cpp
+@@ -329,6 +329,21 @@ void kernel_main() {
+         // Streaming passes take `dest_lanes` tiles per DEST acquire (one CB handshake per group).
+         [[maybe_unused]] const auto lane_shape = IterationShape::grid(rows, tensor_w_tiles).block_size(dest_lanes);
+ 
++#ifdef LN_ABLATE_COMPUTE
++        input_tiles.wait_front(rows * tensor_w_tiles);
++        input_tiles.pop_front(rows * tensor_w_tiles);
++        if constexpr (has_residual) {
++            residual_tiles.wait_front(rows * tensor_w_tiles);
++            residual_tiles.pop_front(rows * tensor_w_tiles);
++        }
++        gamma_tiles.wait_front(tensor_w_tiles);
++        beta_tiles.wait_front(tensor_w_tiles);
++        for (uint32_t t = 0; t < rows * tensor_w_tiles; t += 4) {
++            output_tiles.reserve_back(4);
++            output_tiles.push_back(4);
++        }
++        continue;
++#endif
+         // residual_add_block + row_stats_window, interleaved per window so the stats run as tiles land
+         {
+             MaybeDeviceZoneScope("compute_add_and_stats");
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_stream.hpp b/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_stream.hpp
+index a9c3d348c1e..dee3b39f423 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_stream.hpp
++++ b/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_stream.hpp
+@@ -125,6 +125,9 @@ private:
+ template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+ FORCE_INLINE void read_row_chunk(
+     const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr, uint32_t rotation) {
++#ifdef LN_ABLATE_READ
++    return;
++#endif
+     if (src.whole) {
+         read_chunk<chunk_tiles, tile_bytes>(accessor, src.top.page + col, l1_addr, rotation);
+         return;
+@@ -142,6 +145,9 @@ FORCE_INLINE void read_row_chunk(
+ template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+ FORCE_INLINE void write_row_chunk(
+     const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr, uint32_t rotation) {
++#ifdef LN_ABLATE_WRITE
++    return;
++#endif
+     if (src.whole) {
+         write_chunk<chunk_tiles, tile_bytes>(accessor, src.top.page + col, l1_addr, rotation);
+         return;
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py b/ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py
+index 3fb764e0fa4..51ed58d8c04 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py
++++ b/ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py
+@@ -624,6 +624,9 @@ def create_program_descriptor(
+         ]
+         compute_rt[core.x][core.y] = [core_row_tiles, int(core_row_tiles >= blocking.stream_normalize_min_rows)]
+ 
++    import os  # TEMP ablation hook
++
++    _defs = [("LN_ABLATE_" + x.upper(), "1") for x in os.environ.get("LN_ABLATE", "").split(",") if x]
+     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+     kernels = []
+     readers = []
+@@ -636,6 +639,7 @@ def create_program_descriptor(
+                 compile_time_args=reader_ct_args,
+                 named_compile_time_args=affine_named_ct_args,
+                 runtime_args=reader_rt,
++                defines=_defs,
+                 config=ttnn.DataMovementConfigDescriptor(
+                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=noc_enum[reader_noc]
+                 ),
+@@ -649,6 +653,7 @@ def create_program_descriptor(
+                 compile_time_args=writer_ct_args,
+                 named_compile_time_args=writer_named_ct_args,
+                 runtime_args=writer_rt,
++                defines=_defs,
+                 config=ttnn.DataMovementConfigDescriptor(
+                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=noc_enum[writer_noc]
+                 ),
+@@ -660,6 +665,7 @@ def create_program_descriptor(
+             core_ranges=cores,
+             compile_time_args=compute_ct_args,
+             runtime_args=compute_rt,
++            defines=_defs,
+             config=_compute_config(compute_kernel_config, blocking),
+         )
+     )

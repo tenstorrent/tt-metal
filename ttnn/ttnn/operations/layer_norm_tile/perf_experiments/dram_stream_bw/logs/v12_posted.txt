@@ -1,0 +1,3 @@
+== v12_posted [WRITE_POSTED=1] k=perf_case and (focus or 8x384) copy=1
+  0=35.66  1=46.69  2=33.75  3=36.04
+======================= 4 passed, 20 deselected in 6.07s =======================

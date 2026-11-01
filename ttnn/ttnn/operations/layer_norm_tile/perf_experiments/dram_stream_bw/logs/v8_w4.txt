@@ -1,0 +1,3 @@
+== v8_w4 [BANK_NOC_WRITE_POLICY=4] k=perf_case and focus1 copy=1
+  0=48.00
+======================= 1 passed, 23 deselected in 4.32s =======================

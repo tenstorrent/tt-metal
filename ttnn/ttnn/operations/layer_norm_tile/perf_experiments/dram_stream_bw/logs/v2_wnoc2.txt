@@ -1,0 +1,3 @@
+== v2_wnoc2 [WRITER_NOC_PLAN=2] k=perf_case and focus1 copy=1
+  0=50.43
+======================= 1 passed, 23 deselected in 4.32s =======================

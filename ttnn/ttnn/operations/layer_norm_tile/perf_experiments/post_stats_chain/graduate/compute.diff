@@ -1,0 +1,84 @@
+--- base/layer_norm_tile_compute.cpp	2026-11-01 21:44:34.049206523 +0000
++++ v2/layer_norm_tile_compute.cpp	2026-11-01 21:44:47.105128722 +0000
+@@ -106,10 +106,10 @@
+     uint32_t cb_inv_std,
+     uint32_t tensor_w_tiles,
+     uint32_t inv_w_bits,
+-    uint32_t epsilon_bits>
++    uint32_t epsilon_bits,
++    uint32_t wait_tiles>
+ ALWI void row_stats_block(uint32_t rows, DataflowBuffer& centered, DataflowBuffer& inv_std) {
+     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+-    centered.wait_front(rows * tensor_w_tiles);
+     reconfig_data_format(cb_centered, cb_centered);
+     pack_reconfig_data_format(cb_inv_std);
+     for (uint32_t row = 0; row < rows; ++row) {
+@@ -117,6 +117,10 @@
+         tile_regs_acquire();
+         mul_init(cb_centered, cb_centered, true);  // a freshly acquired DEST reads 0: the first mul seeds S
+         for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
++            // c is waited cumulatively (never popped here), so c * c starts while center still packs the row.
++            if (col % wait_tiles == 0) {
++                centered.wait_front(base + (col + wait_tiles < tensor_w_tiles ? col + wait_tiles : tensor_w_tiles));
++            }
+             mul_tiles(cb_centered, cb_centered, base + col, base + col, 0);
+         }
+         sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+@@ -450,30 +454,32 @@
+             // row_stats_block (two-pass; c stays resident for normalize_block)
+             if constexpr (!one_pass) {
+                 MaybeDeviceZoneScope("compute_row_stats");
+-                row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(
++                row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits, dest_lanes>(
+                     rows, work_b, inv_std);
+             }
+
+-            // normalize_block
+-            {
+-                MaybeDeviceZoneScope("compute_normalize");
+-                mul<lane_input(cb_row_work_b),
+-                    input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+-                    lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
+-            }
+             {
+                 MaybeDeviceZoneScope("compute_wait_affine");
+                 gamma_tiles.wait_front(tensor_w_tiles);
+                 beta_tiles.wait_front(tensor_w_tiles);
+             }
+
+-            // affine_scale_block
++            // affine_scale_block: c * gamma ahead of the inv_std multiply. It does not depend on inv_std, so it
++            // runs while row_stats' collapse / rsqrt and the inv_std pack -> unpack drain.
+             {
+                 MaybeDeviceZoneScope("compute_affine_scale");
+-                mul<lane_input(cb_row_work_a, same_work_fmt),
++                mul<lane_input(cb_row_work_b),
+                     input(
+                         cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+-                    lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
++                    lane_output(cb_row_work_a)>(lane_shape, work_b, gamma_tiles, work_a);
++            }
++
++            // normalize_block
++            {
++                MaybeDeviceZoneScope("compute_normalize");
++                mul<lane_input(cb_row_work_a, same_work_fmt),
++                    input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
++                    lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, inv_std, work_b);
+             }
+
+             // affine_shift_block
+@@ -481,12 +487,7 @@
+                 MaybeDeviceZoneScope("compute_affine_shift");
+                 add<lane_input(cb_row_work_b, same_work_fmt),
+                     input(
+-                        cb_beta_tiles,
+-                        BroadcastDim::Row,
+-                        WaitPolicy::Upfront,
+-                        PopPolicy::None,
+-                        InputTileMapping::Row,
+-                        same_work_fmt),
++                        cb_beta_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                     lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
+             }
+         }

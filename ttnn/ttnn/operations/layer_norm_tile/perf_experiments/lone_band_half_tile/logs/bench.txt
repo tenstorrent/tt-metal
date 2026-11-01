@@ -1,0 +1,170 @@
+[base] sweep1_base csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_40_42/ops_perf_results_2026_11_01_21_40_42.csv
+  focus1_inL1_resDRAM_outDRAM        35.82 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.01 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.67 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          26.47 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.70 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.29 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  18.75 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    48.86 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.10 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.85 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.51 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    13.49 us  pcc=0.999998 rel_rms=0.00201
+  WARN rows/durations mismatch 24 12 [35816, 47007, 33673, 26470, 20695, 36287, 18748, 48863, 35103, 18852, 21507, 13493]
+[half] sweep1_half csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_41_37/ops_perf_results_2026_11_01_21_41_37.csv
+  focus1_inL1_resDRAM_outDRAM        35.00 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.18 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.42 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          23.03 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.63 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.34 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  18.81 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    47.14 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    36.23 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 19.07 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.00 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    11.66 us  pcc=0.999998 rel_rms=0.00201
+  WARN rows/durations mismatch 24 12 [34996, 47178, 33425, 23032, 20630, 36338, 18811, 47137, 36227, 19073, 21004, 11659]
+[half] f1_half csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_42_26/ops_perf_results_2026_11_01_21_42_26.csv
+  focus1_inL1_resDRAM_outDRAM        35.56 us  pcc=0.999998 rel_rms=0.00203
+[half] sweep2_half csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_43_16/ops_perf_results_2026_11_01_21_43_16.csv
+  focus1_inL1_resDRAM_outDRAM        36.53 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.33 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.16 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          23.02 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.41 us  pcc=0.999998 rel_rms=0.00220
+  32x32_allDRAM_res                  18.88 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    48.14 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.66 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.67 us  pcc=0.999997 rel_rms=0.00261
+  2x512_allL1_res                    11.50 us  pcc=0.999998 rel_rms=0.00201
+[base] sweep2_base csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_44_12/ops_perf_results_2026_11_01_21_44_12.csv
+  focus1_inL1_resDRAM_outDRAM        35.31 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.58 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.09 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          24.48 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.59 us  pcc=0.999998 rel_rms=0.00220
+  32x32_allDRAM_res                  18.66 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    47.29 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.22 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.68 us  pcc=0.999997 rel_rms=0.00261
+  2x512_allL1_res                    13.55 us  pcc=0.999998 rel_rms=0.00201
+[base] sweep3_base csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_45_02/ops_perf_results_2026_11_01_21_45_02.csv
+  focus1_inL1_resDRAM_outDRAM        35.51 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 46.69 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.63 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          27.00 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.80 us  pcc=0.999998 rel_rms=0.00220
+  32x32_allDRAM_res                  18.74 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    48.01 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.69 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.78 us  pcc=0.999997 rel_rms=0.00261
+  2x512_allL1_res                    13.54 us  pcc=0.999998 rel_rms=0.00201
+[half] sweep3_half csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_45_30/ops_perf_results_2026_11_01_21_45_30.csv
+  focus1_inL1_resDRAM_outDRAM        35.19 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.79 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.93 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          24.94 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.46 us  pcc=0.999998 rel_rms=0.00220
+  32x32_allDRAM_res                  19.09 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    48.58 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.42 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.78 us  pcc=0.999997 rel_rms=0.00261
+  2x512_allL1_res                    11.61 us  pcc=0.999998 rel_rms=0.00201
+[base] v2_base csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_55_28/ops_perf_results_2026_11_01_21_55_28.csv
+  focus1_inL1_resDRAM_outDRAM        35.16 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 48.03 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               34.59 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          24.37 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.94 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.17 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  18.96 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    46.53 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.26 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.91 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.84 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    13.46 us  pcc=0.999998 rel_rms=0.00201
+[half] v2_half csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_56_06/ops_perf_results_2026_11_01_21_56_06.csv
+  focus1_inL1_resDRAM_outDRAM        36.11 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.29 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               34.44 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          23.47 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.89 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.26 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  20.25 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    47.26 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.46 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 20.56 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.36 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    11.96 us  pcc=0.999998 rel_rms=0.00201
+[half] v3_half_sub csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_58_01/ops_perf_results_2026_11_01_21_58_01.csv
+  32x32_allDRAM_res                  19.02 us  pcc=0.999997 rel_rms=0.00263
+  3x500_inL1_resDRAM                 19.23 us  pcc=0.999997 rel_rms=0.00261
+  L1_nores                           20.96 us  pcc=0.999998 rel_rms=0.00220
+  2x512_allL1_res                    11.78 us  pcc=0.999998 rel_rms=0.00201
+  allL1_res                          24.01 us  pcc=0.999998 rel_rms=0.00203
+[base] v3_base_sub csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_58_22/ops_perf_results_2026_11_01_21_58_22.csv
+  32x32_allDRAM_res                  18.77 us  pcc=0.999997 rel_rms=0.00263
+  3x500_inL1_resDRAM                 18.86 us  pcc=0.999997 rel_rms=0.00261
+  L1_nores                           20.86 us  pcc=0.999998 rel_rms=0.00220
+  2x512_allL1_res                    13.54 us  pcc=0.999998 rel_rms=0.00201
+  allL1_res                          26.19 us  pcc=0.999998 rel_rms=0.00203
+[base] v3_base_a csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_21_59_55/ops_perf_results_2026_11_01_21_59_55.csv
+  focus1_inL1_resDRAM_outDRAM        35.02 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.94 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.56 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          24.41 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.60 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.83 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  18.93 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    47.51 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    34.90 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.64 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.53 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    13.55 us  pcc=0.999998 rel_rms=0.00201
+[half] v3_half_a csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_22_00_27/ops_perf_results_2026_11_01_22_00_27.csv
+  focus1_inL1_resDRAM_outDRAM        35.40 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.89 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.26 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          23.84 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.80 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.39 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  18.96 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    48.13 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.70 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 19.10 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.46 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    11.84 us  pcc=0.999998 rel_rms=0.00201
+[half] v3_half_b csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_22_00_56/ops_perf_results_2026_11_01_22_00_56.csv
+  focus1_inL1_resDRAM_outDRAM        36.16 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.54 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.58 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          23.50 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.74 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.95 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  19.15 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    47.39 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.33 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 19.38 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.11 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    11.91 us  pcc=0.999998 rel_rms=0.00201
+[base] v3_base_b csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_22_01_13/ops_perf_results_2026_11_01_22_01_13.csv
+  focus1_inL1_resDRAM_outDRAM        35.64 us  pcc=0.999998 rel_rms=0.00203
+  focus2_allDRAM_res                 47.45 us  pcc=0.999998 rel_rms=0.00203
+  focus3_allDRAM_nores               33.35 us  pcc=0.999998 rel_rms=0.00206
+  allL1_res                          24.32 us  pcc=0.999998 rel_rms=0.00203
+  L1_nores                           20.70 us  pcc=0.999998 rel_rms=0.00220
+  8x384_allDRAM_res                  36.29 us  pcc=0.999997 rel_rms=0.00266
+  32x32_allDRAM_res                  19.02 us  pcc=0.999997 rel_rms=0.00263
+  affineTILE_DRAM                    47.26 us  pcc=0.999998 rel_rms=0.00203
+  focus1_bf16dest                    35.70 us  pcc=0.999991 rel_rms=0.00471
+  3x500_inL1_resDRAM                 18.99 us  pcc=0.999997 rel_rms=0.00261
+  64x17_allDRAM_nores_affTILE        21.27 us  pcc=0.999998 rel_rms=0.00216
+  2x512_allL1_res                    13.50 us  pcc=0.999998 rel_rms=0.00201
+[half] v4_half_sub csv=/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_22_03_26/ops_perf_results_2026_11_01_22_03_26.csv
+  allL1_res                          24.18 us  pcc=0.999998 rel_rms=0.00203
+  2x512_allL1_res                    11.75 us  pcc=0.999998 rel_rms=0.00201
+  32x32_allDRAM_res                  19.15 us  pcc=0.999997 rel_rms=0.00263
+  3x500_inL1_resDRAM                 19.47 us  pcc=0.999997 rel_rms=0.00261
+  focus1_inL1_resDRAM_outDRAM        35.46 us  pcc=0.999998 rel_rms=0.00203

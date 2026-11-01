@@ -1,0 +1,3 @@
+== v3_split6 [WRITER_NOC_SPLIT_Y=6] k=perf_case and focus1 copy=1
+  0=37.88
+======================= 1 passed, 23 deselected in 4.14s =======================

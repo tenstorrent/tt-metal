@@ -261,3 +261,70 @@ The affine-overlap reader and the split-reader gate use only helpers or host cod
 - Golden test progress: targeted slice 118/118 (every cell of 32x1x32x768, 8x1x511x768, 5x1x257x768 + test_regression); unit dir 237/237. Full suite left to the harness.
 - Issues encountered: the beta-on-writer placement regression and the single-read trid barrier, both above.
 - Tests added: `test_layer_norm_tile_affine_block.py` (ROW_MAJOR sticks of 1 / 6 / 7 / 24 tile columns per page, partial last groups, Wt = 1, TILE groups, beta on the writer on/off with and without a residual); `test_layer_norm_tile_affine_block_debug.py` (deterministic beta read-back per column).
+
+## Perf 1 (third perf tournament, base 9daa4c30ecf)
+- Date: 2026-11-01. Device: Blackhole p100a, 110 cores. Focus: LOOSE_CASES #1, (8,1,512,768) bf16 TILE, input L1, residual DRAM, output DRAM, gamma/beta ROW_MAJOR in L1, fp32 DEST, HiFi4 (every knob is in SUPPORTED). Flagged #2 / #3 measured alongside. Times are DEVICE KERNEL DURATION under `run_safe_pytest.sh --profile`.
+- Instrumentation: the existing zones cover every stage; the new folded path runs inside them (no new zones, max 32 markers per RISC). Ablation hooks for this round: `perf_experiments/_coordinator/ablation_hooks_perf3.patch` (applies to the base; reverted after the peel).
+
+### Measured breakdown (before)
+- Whole op, us: focus1 35.75, focus2 48.5-49.6, focus3 33.8-34.0, allL1_res 25.5, L1_nores 20.8, 8x384 36.1, 32x32 18.6, affineTILE_DRAM 47.3; guard focus1 bf16 DEST 35.1, 3x500 18.6, 64x17 21.5, 2x512 13.4.
+- Cumulative peel, us, focus1 / focus2 / focus3 / 8x384 / 32x32:
+
+  | full | no compute | no read | no write | compute only | read only | write only | sync only |
+  |---|---|---|---|---|---|---|---|
+  | 35.8 / 48.5 / 33.8 / 36.1 / 18.6 | 36.3 / 51.1 / 38.6 / 37.6 / 14.0 | 26.7 / 26.4 / 24.9 / 22.3 / 14.8 | 33.9 / 41.9 / 24.9 / 32.7 / 18.3 | 19.2 / 19.2 / 16.0 / 13.3 / 13.3 | 22.7 / 31.4 / 16.7 / 25.4 / 10.8 | 18.4 / 18.3 / 17.6 / 13.9 / 7.2 | 3.5 / 3.5 / 3.3 / 3.4 / 3.5 |
+
+- Critical cores are the 36 R3 heavy cores (3 bands: one whole tile-row plus a lone 16-row band computed as a full 24-tile row). focus1 slowest core (13,4): residual row 0 lands at ~17 us, compute row 0 18.0 -> 24.9, lone row 24.9 -> 33.7, write tail to 35.75. Light cores end at ~30-31 us. Per-row math (us): add_and_stats 1.9, center 0.75, row_stats 2.25, normalize 1.48, affine_scale 1.43, affine_shift 0.84.
+- Ranked headroom: (1) lone-band compute on heavy cores; (2) per-row compute chain; (3) DRAM aggregate (focus1 floor ~31.5 us with fixed overhead, focus2 ~45.5).
+
+### Ideas floated and their verdicts
+Artifacts in `perf_experiments/<slug>/`.
+
+| idea | verdict | before -> after (us) | domain / notes |
+|---|---|---|---|
+| `lone_band_fold`: lone band as Wt/2 folded tiles (col 2j in faces 0-1, col 2j+1 in faces 2-3) | WIN, graduated | focus1 35.85 -> 35.73 (flat); allL1_res 24.79 -> 22.31, L1_nores 20.74 -> 19.07, 32x32 19.29 -> 17.13, 3x500 19.05 -> 17.04, 2x512 13.59 -> 10.94 | Every R3 split. Inexpressible: odd Wt, odd chunk C, odd halved stats window (keeps the unfolded row). Precision unchanged (fold_v3 adds halves before the collapse; fold_v1, which added collapsed half sums, doubled the mean error under bf16 DEST at mean 100 and was dropped). |
+| `lone_band_half_tile`: lone row on 16x32 tiles (num_faces = 2, raw LLK) | WIN on 2x512 only (13.54 -> 11.84), flat elsewhere; superseded | focus1 35.51 -> 35.40 | Mutually exclusive with the fold, which wins on every row this one wins. Add/sub passes have ~43 cycles/tile fixed cost, so halving faces only helps the HiFi4 multiplies. |
+| `one_pass_r3`: delete the two-pass sumsq pass on R3 | REGRESSION / BLOCKED | shifted, whole-row window: focus1 35.30 -> 36.49; unshifted: incorrect (PCC 0.705 at mean 100 with residual) | The 24 HiFi4 squares cost ~2 us/row either way; the shift adds ~1.1 us/row. The symmetric-sum experiment shows the large-mean bias is in the squares of fp32 work-page values, not SrcA/SrcB asymmetry. Side note: the base two-pass path measures rel-RMS 0.0203 at mean 100 on the unbalanced residual split in that bench (golden green). |
+| `post_stats_chain`: cumulative c*c wait + gamma before inv_std | NULL | chain bench -3.3%; focus1 35.55 -> 35.36 (medians of 3) | Five FPU ops per tile is the floor at HiFi4; mul is math-bound (~60 ns/tile). bf16 work pages: -3.3% bench, rel-RMS 0.0019 -> 0.0027 (precision-trading option, not graduated). |
+| `dram_stream_bw`: residual ring depth, per-bank NoC choice, flush / posted writes, heavy-core placement | NULL | best: WRITE_CHUNKS_PER_FLUSH=3 35.76 -> 35.50 (noise); others +0.5 to +22 us | Fixing the heavy cores' landing exposes the light cores' write tail and vice versa. `DM_DYNAMIC_NOC` is inexpressible with the mcast sender (`async_writes_flushed<TXN_ID>` static_assert). Posted writes not graduatable. |
+
+### What graduated (5e37d1ea162)
+- **lone_band_fold** is the single lone-band path for every R3 split. Reader / writer retarget the half-tile reads and writes of the lone row to folded slots; the row's CB slot stays Wt pages (the unused Wt/2 are pushed and popped empty, so the rings and the work alias are unchanged); row stats add the halves before the collapse (`fold_row_halves`); gamma/beta slot 2j gets column 2j+1 in faces 2/3 (`AffineBlock::scatter_folded`, 24 extra self-NoC reads on lone-band cores) for a per-face row broadcast (`folded_affine`); the shifted residual path copies face 0 to face 2 of the shift tile.
+- Carve-out (inexpressible, not measured): `_fold` keeps the unfolded lone row for odd Wt, odd C or an odd halved stats window. W is pinned to 768 in SUPPORTED, so every supported R3 cell folds.
+- Replaced code: the unfolded lone row now runs only in the carve-out; there is no knob.
+
+### Whole op, before (9daa4c30ecf) -> after (5e37d1ea162)
+Two alternating full-bench runs each, us; affineTILE and focus3 have three more alternating pairs.
+
+| row | before | after |
+|---|---|---|
+| focus1 in L1 / res DRAM / out DRAM (55.0) | 35.24, 35.92 | 35.47, 36.02 (flat) |
+| focus2 all DRAM + res (70.0) | 46.20, 47.55 | 46.87, 46.42 (flat) |
+| focus3 all DRAM no res (48.3) | 33.24-33.80, median 33.42 (n=5) | 33.59-34.04, median 33.77 (n=5), +1%, inside the round's base spread |
+| all L1 + res (43.3) | 25.92, 26.22 | 22.45, 23.89 (-11%) |
+| L1 no res (34.5) | 20.74, 21.21 | 19.55, 19.41 (-7%) |
+| 8x384 all DRAM (47.0) | 36.37, 36.50 | 36.78, 36.38 (R1, path unchanged) |
+| 32x32 all DRAM (24.8) | 18.66, 18.72 | 17.20, 17.24 (-8%) |
+| affine TILE in DRAM (125.4) | 47.01-48.19, median 47.65 (n=5) | 47.59-49.06, median 48.28 (n=5), +1.3% |
+
+Guard set:
+
+| row | before | after |
+|---|---|---|
+| focus1, bf16 DEST | 35.39, 35.61 | 35.78, 35.88 (flat) |
+| 3x500 (h_non_aligned) | 18.80, 18.51 | 16.89, 16.89 (-10%) |
+| 64x17 all DRAM no res, TILE affine | 21.55, 21.24 | 21.19, 21.68 (R1, flat) |
+| 2x512 all L1 + res | 13.45, 13.44 | 10.94, 10.95 (-19%) |
+
+- No carve-out was earned by a regression. affineTILE (+0.6 us) and focus3 (+0.35 us) are inside this round's base run-to-run spread (affineTILE base 47.0-48.2, focus3 33.1-34.0); the likely affineTILE cost is the 24 folded scatter reads on lone-band cores, which could move after the core's last block if it needs recovering.
+- The flagged rows did not move: the heavy cores' compute end moves 33.5 -> 29.7 us on focus1, but their end is then set by the DRAM write of row 0 (23 -> 34 us) and the light cores' write tail. focus1 / focus2 / focus3 remain DRAM-schedule bound; the dram_stream_bw sweep found no NoC or depth plan that improves it.
+- Golden: 545/545. Op unit tests: 237/237. Precision unchanged (`test_layer_norm_tile_precision_baseline.py`: rel-RMS 0.0019-0.0020 fp32 DEST, 0.0039-0.0044 bf16 DEST).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| eltwise_chain `BinaryFpu` / `mul` / `add` with `BroadcastDim::Row` | capability | The Row broadcast always pairs the ROW unpack MOP with the ROW math. The ROW unpack re-reads B faces 0/1 for the bottom half, so there is no way to broadcast row 0 of faces 0/1 to the top half and row 0 of faces 2/3 to the bottom half (a per-face-pair row broadcast). The raw path unpacks B with the NONE MOP and keeps the ROW math: one pass, the same instruction count as the row broadcast. | n/a (not expressible) | part of the graduated path (2x512 13.4 -> 10.9 us whole op) | kernels/layer_norm_tile_compute.cpp:304 (`folded_affine`) |
+| no helper (SFPU tile-geometry family) | capability | Adding a tile's top half (faces 0/1) to its bottom half (faces 2/3) and writing the sum to both, inside the stats DEST window before `sfpu_reduce`; no helper operates across faces of one tile. | n/a | part of the graduated path | kernels/layer_norm_tile_compute.cpp:104 (`fold_row_halves`) |
+| `copy` (eltwise copy helper) | capability | The folded shift tile needs face 0 copied over face 2 after the tile copy; no helper moves data between faces of a DEST tile. | n/a | part of the graduated path | kernels/layer_norm_tile_compute.cpp:125, :340 (`copy_face0_to_face2`, `folded_shift_copy`) |
+
+The folded gamma/beta scatter (`AffineBlock::scatter_folded`, kernels/layer_norm_tile_stream.hpp:260) extends the Perf 1 local-copy bypass already recorded (strided self-NoC gather).

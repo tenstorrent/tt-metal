@@ -1,0 +1,3 @@
+== v9_r1_wnoc2 [BANK_NOC_POLICY=1,WRITER_NOC_PLAN=2] k=perf_case and focus1 copy=1
+  0=39.86
+======================= 1 passed, 23 deselected in 4.34s =======================

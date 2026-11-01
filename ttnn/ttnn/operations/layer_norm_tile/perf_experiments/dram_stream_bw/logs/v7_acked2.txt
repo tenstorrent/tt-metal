@@ -1,0 +1,3 @@
+== v7_acked2 [WRITE_ACKED_CORES=2] k=perf_case and focus1 copy=1
+  0=35.85
+======================= 1 passed, 23 deselected in 3.93s =======================

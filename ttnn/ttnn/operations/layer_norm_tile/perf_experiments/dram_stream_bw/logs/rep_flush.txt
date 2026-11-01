@@ -1,0 +1,18 @@
+== rep_flush [] k=perf_case and (focus or 8x384) copy=1
+  0=35.76  1=47.30  2=33.05  3=36.83
+======================= 4 passed, 20 deselected in 5.28s =======================
+== rep_flush [WRITE_CHUNKS_PER_FLUSH=3] k=perf_case and (focus or 8x384) copy=1
+  0=35.50  1=47.91  2=33.20  3=36.26
+======================= 4 passed, 20 deselected in 5.11s =======================
+== rep_flush [WRITE_CHUNKS_PER_FLUSH=3] k=perf_case and (focus or 8x384) copy=1
+  0=35.20  1=46.03  2=33.52  3=36.48
+======================= 4 passed, 20 deselected in 5.13s =======================
+== rep_flush [] k=perf_case and (focus or 8x384) copy=1
+  0=36.00  1=47.29  2=33.55  3=36.45
+======================= 4 passed, 20 deselected in 5.65s =======================
+== rep_flush [] k=perf_case and (focus or 8x384) copy=1
+  0=35.73  1=47.55  2=33.42  3=36.93
+======================= 4 passed, 20 deselected in 4.92s =======================
+== rep_flush [WRITE_CHUNKS_PER_FLUSH=3] k=perf_case and (focus or 8x384) copy=1
+  0=35.52  1=47.64  2=33.59  3=36.48
+======================= 4 passed, 20 deselected in 4.94s =======================

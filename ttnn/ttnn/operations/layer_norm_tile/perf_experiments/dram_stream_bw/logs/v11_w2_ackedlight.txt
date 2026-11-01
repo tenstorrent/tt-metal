@@ -1,0 +1,3 @@
+== v11_w2_ackedlight [BANK_NOC_WRITE_POLICY=2,WRITE_ACKED_CORES=2] k=perf_case and focus1 copy=1
+  0=39.37
+======================= 1 passed, 23 deselected in 4.30s =======================
