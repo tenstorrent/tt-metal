@@ -55,6 +55,32 @@ CHUNK_BYTES = {"swa_window": 16 * 1088, "csa_unified": 32 * 1024, "index_k": 4 *
 GROUPS = ("swa_window", "csa_unified", "index_k")
 
 
+def cp2_split() -> bool:
+    """tt-blaze DS41F-0138 (V41_EXPORT_CP2=1): the ring splits every csa_unified / index_k cache by position over the two chips of a
+    stage (unified row r -> chip (r // 8) % 2 at local row (r // 16) * 8 + r % 8; index key w -> chip (w // 1024) % 2 at local
+    (w // 2048) * 1024 + w % 1024). The migration copies verbatim 32-row chunks, so the export is written CHIP-MAJOR (chip 0's
+    local rows, then chip 1's) and the table's position axis is the ring's chip-major local row: p' = chip * half + local, half =
+    the ring's `split_half` (half the replicated-equivalent rows per slot at the capacity S: (256 + S / ratio) // 2 for
+    csa_unified, (S / ratio) // 2 for index_k). Same formula on both sides, independent of the tensors' padding."""
+    import os
+
+    return os.environ.get("V41_EXPORT_CP2") == "1"
+
+
+def split_half(group: str, ratio: int, S: int) -> int:
+    return ((RING if group == "csa_unified" else 0) + int(S) // int(ratio)) // 2
+
+
+def _chip_major(rows_t, gran: int):
+    """[1, 1, n, W] rows interleaved in ``gran``-row blocks over 2 chips -> [2, 1, n / 2, W] (chip 0's blocks, chip 1's), n a
+    multiple of 2 * gran."""
+    n, W = int(rows_t.shape[-2]), int(rows_t.shape[-1])
+    assert n % (2 * gran) == 0, (n, gran)
+    x = ttnn.reshape(rows_t, [n // (2 * gran), 2, gran, W])
+    x = ttnn.permute(x, [1, 0, 2, 3])
+    return ttnn.reshape(x, [2, 1, n // 2, W])
+
+
 def config_name(group: str) -> str:
     """``0_swa_window`` ...: the decode ring's config names (tt-blaze ``deepseek_v4_1_flash_4_GLX/kv_migration.config_name``);
     name-sorted ids == contract order. tt-llm-engine pairs configs by index; tt-d-gen's KV Manager pairs them by name and
@@ -229,7 +255,7 @@ def export_chunk(exp: V41KvExport, pf, slot: int, start: int, end: int) -> None:
             if blockt is not carry:
                 ttnn.deallocate(blockt)
             continue
-        attn._write_rm(exp.win, carry, exp.win_batch(slot, L), row0)
+        _write_window(exp, attn, carry, exp.win_batch(slot, L), row0)
         if r.mode == "full":  # 2 / 8 / 14 at ratio 2; layer 20 (ratio 1) when it is a block (DS41F-0073)
             ent, idx = (exp.ent2, exp.idx2) if r.compress_ratio == 2 else (exp.ent1, exp.idx1)
             _export_entries(
@@ -238,8 +264,21 @@ def export_chunk(exp: V41KvExport, pf, slot: int, start: int, end: int) -> None:
     if pf.kv_attn is not None:
         L, attn, st = pf.kv_only_layer, pf.kv_attn, pf.kv_state
         row0, carry = _carry_ring_block(st, E)
-        attn._write_rm(exp.win, carry, exp.win_batch(slot, L), row0)
+        _write_window(exp, attn, carry, exp.win_batch(slot, L), row0)
         _export_entries(exp, attn, st, slot, L, start, end, ratio=1, ent=exp.ent1, idx=exp.idx1, chunk=pf.chunk)
+
+
+def _write_window(exp, attn, carry, batch, row0):
+    if not cp2_split():
+        attn._write_rm(exp.win, carry, batch, row0)
+        return
+    # DS41F-0138: the 128-row carry (row0 a multiple of 128) is 64 local rows on each chip at local row0 / 2
+    halves = _chip_major(carry, 8)
+    for c in range(2):
+        h = ttnn.slice(halves, [c, 0, 0, 0], [c + 1, 1, 64, HEAD_DIM])
+        attn._write_rm(exp.win, h, batch, c * (RING // 2) + row0 // 2)
+        ttnn.deallocate(h)
+    ttnn.deallocate(halves)
 
 
 def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chunk):
@@ -252,12 +291,28 @@ def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chun
     n = min(n, exp.max_seq_len // ratio - e0)
     b = exp.ent_batch(slot, L)
     rows = ttnn.slice(st.compressed_kv, [0, 0, e0, 0], [1, 1, e0 + n, HEAD_DIM])
-    attn._write_rm(ent, rows, b, e0)
-    ttnn.deallocate(rows)
     keys = ttnn.slice(st.index_k, [0, 0, e0, 0], [1, 1, e0 + n, INDEX_HEAD_DIM])
     k8 = ttnn.typecast(keys, ttnn.bfloat8_b)
     ttnn.deallocate(keys)
-    ttnn.kv_cache.fill_cache_for_user_(idx, k8, b, update_idx=e0)
+    if not cp2_split():
+        attn._write_rm(ent, rows, b, e0)
+        ttnn.kv_cache.fill_cache_for_user_(idx, k8, b, update_idx=e0)
+    else:
+        # DS41F-0138: chip-major export -- entry rows [e0, e0 + n) are 8-row-interleaved over the chips, the index keys in
+        # 1024-row blocks (e0 and n are chunk multiples: >= 2048 at ratio 2); each chip's part lands at c * S2 + e0 / 2
+        S2 = exp.max_seq_len // ratio // 2
+        assert e0 % 2048 == 0 and n % 2048 == 0, (e0, n)
+        ent_c, idx_c = _chip_major(rows, 8), _chip_major(k8, 1024)
+        for c in range(2):
+            er = ttnn.slice(ent_c, [c, 0, 0, 0], [c + 1, 1, n // 2, HEAD_DIM])
+            attn._write_rm(ent, er, b, c * S2 + e0 // 2)
+            ttnn.deallocate(er)
+            kr = ttnn.slice(idx_c, [c, 0, 0, 0], [c + 1, 1, n // 2, INDEX_HEAD_DIM])
+            ttnn.kv_cache.fill_cache_for_user_(idx, kr, b, update_idx=c * S2 + e0 // 2)
+            ttnn.deallocate(kr)
+        ttnn.deallocate(ent_c)
+        ttnn.deallocate(idx_c)
+    ttnn.deallocate(rows)
     ttnn.deallocate(k8)
 
 
@@ -282,14 +337,31 @@ def table_rows(exp: V41KvExport, cfg, *, slot: int, prompt_tokens: int | None = 
             for p in range(0, RING, TILE):
                 yield "swa_window", L, p, exp.swa, exp.swa_batch(slot, L), p
             continue
+        src = r.kv_source
+        ent, idx = (exp.ent2, exp.idx2) if src in exp.sources2 else (exp.ent1, exp.idx1)
+        n_rows = S // r.compress_ratio
+        if cp2_split():
+            # DS41F-0138: chip-major positions p' = c * half + local; the export tensors are chip-major too (row = c * S2 + local)
+            half = split_half("csa_unified", r.compress_ratio, exp.max_seq_len)
+            S2 = exp.max_seq_len // r.compress_ratio // 2
+            for c in range(2):
+                for p in range(0, RING // 2, TILE):
+                    if L <= cfg.first_decoder_layer or exp.decoder:
+                        yield "csa_unified", L, c * half + p, exp.win, exp.win_batch(slot, L), c * (RING // 2) + p
+                    else:
+                        yield "csa_unified", L, c * half + p, exp.zero, 0, p
+                for w in range(0, n_rows // 2, TILE):
+                    yield "csa_unified", L, c * half + RING // 2 + w, ent, exp.ent_batch(slot, src), c * S2 + w
+                if r.index_source == L:
+                    half_i = split_half("index_k", r.compress_ratio, exp.max_seq_len)
+                    for w in range(0, n_rows // 2, TILE):
+                        yield "index_k", L, c * half_i + w, idx, exp.ent_batch(slot, src), c * S2 + w
+            continue
         for p in range(0, RING, TILE):
             if L <= cfg.first_decoder_layer or exp.decoder:
                 yield "csa_unified", L, p, exp.win, exp.win_batch(slot, L), p
             else:  # the ring replays R >= 2541 tokens and rebuilds these windows itself
                 yield "csa_unified", L, p, exp.zero, 0, p
-        src = r.kv_source
-        ent, idx = (exp.ent2, exp.idx2) if src in exp.sources2 else (exp.ent1, exp.idx1)
-        n_rows = S // r.compress_ratio
         for w in range(0, n_rows, TILE):
             yield "csa_unified", L, RING + w, ent, exp.ent_batch(slot, src), w
         if r.index_source == L:
