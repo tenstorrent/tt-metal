@@ -912,6 +912,46 @@ MatmulProgramConfig get_matmul_program_config(
         output_dtype);
 }
 
+// The simple config splits one batch's output over the cores and loops over the batches, so a small output leaves
+// most cores idle. The batched branch of create_matmul_program_config gives each core whole batches instead.
+inline bool should_split_by_batch(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
+    const uint32_t bias_single_tile_size,
+    const MemoryConfig& mem_config,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const CoreCoord& compute_with_storage_grid_size) {
+    // Measured only for plain matmuls on interleaved DRAM; with L1 inputs the simple config already uses every core.
+    const auto is_dram_interleaved = [](const MemoryConfig& config) {
+        return config.is_dram() && !config.is_sharded();
+    };
+    const bool all_dram_interleaved = is_dram_interleaved(input_tensor_a.memory_config()) &&
+                                      is_dram_interleaved(input_tensor_b.memory_config()) &&
+                                      is_dram_interleaved(mem_config);
+    const bool plain_matmul = bias_single_tile_size == 0 && !fused_activation.has_value() &&
+                              input_tensor_a.tensor_spec().tile() == tt::tt_metal::Tile() &&
+                              input_tensor_b.tensor_spec().tile() == tt::tt_metal::Tile();
+    if (!all_dram_interleaved || !plain_matmul) {
+        return false;
+    }
+
+    const auto& a_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
+    const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
+    const uint32_t num_batches = get_batch_size(a_shape);
+    const uint32_t tiles_per_batch = (a_shape[-2] / ttnn::TILE_SIZE) * (b_shape[-1] / ttnn::TILE_SIZE);
+    const uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+
+    // The batched branch needs a batched B.
+    const bool both_batched = num_batches > 1 && get_batch_size(b_shape) > 1;
+    // The simple config keeps at most tiles_per_batch cores busy; splitting by batch keeps min(num_batches, num_cores).
+    const bool small_output_many_batches = tiles_per_batch < num_cores && num_batches >= tiles_per_batch;
+    // Wormhole sweep: with K > 1024 and more than 8 tiles per batch, splitting by batch was up to 31% slower.
+    const bool long_k_slowdown = a_shape[-1] > 1024 && tiles_per_batch > 8;
+    return both_batched && small_output_many_batches && !long_k_slowdown;
+}
+
 inline MatmulProgramConfig generate_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -956,6 +996,27 @@ inline MatmulProgramConfig generate_matmul_program_config(
     }
     tt::tt_metal::distributed::MeshDevice* device = input_tensor_a.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    if (should_split_by_batch(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            mem_config,
+            user_fused_activation,
+            compute_with_storage_grid_size)) {
+        return create_matmul_program_config(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            /*user_core_coord=*/std::nullopt,
+            /*fused_activation=*/std::nullopt,
+            compute_kernel_config,
+            mem_config,
+            output_dtype);
+    }
     return create_simple_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
