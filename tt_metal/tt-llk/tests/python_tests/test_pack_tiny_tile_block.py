@@ -244,6 +244,25 @@ def test_pack_tiny_tile_block_int(formats, dest_acc, tile_dims, num_tiles, pack_
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
+@skip_for_wormhole
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float16, DataFormat.Fp8_e4m3), InputOutputFormat(DataFormat.Float32, DataFormat.Fp8_e4m3)],
+    dest_acc=lambda formats: [DestAccumulation.No] if formats.input_format == DataFormat.Float16 else [DestAccumulation.Yes],
+    tile_dims=[(8, 32), (16, 16), (32, 32)],
+    num_tiles=[2, 4, 8],
+    pack_mode=[1, 2, 3, 4],
+)
+def test_pack_tiny_tile_block_fp8(formats, dest_acc, tile_dims, num_tiles, pack_mode):
+    """Fp8_e4m3 outputs (the only 8-bit float output hw_undefined_reason leaves defined; Lf8 is always undefined there) through the closed block (1), per tile (2), the dense run (3) and the closed W offset block (4)."""
+    if pack_mode == 3 and tile_dims == (32, 32):
+        pytest.skip("The dense block pack records at most eight PACRs per tile")
+    configuration, golden_tensor, torch_format = _make_config(tile_dims, num_tiles, formats, dest_acc, pack_mode)
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == len(golden_tensor)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
 # ── Reconfig test: init 32x32 → reconfig to tiny → multi-tile MOP pack ─────
 
 
