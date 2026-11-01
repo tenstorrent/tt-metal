@@ -67,8 +67,16 @@ WEIGHT_CACHE = os.environ.get("DSV41_WEIGHT_CACHE", "/mnt/tt-data/ssinghal/dsv4-
 
 def expert_cache_dir(layer_id: int):
     """Directory of the packed + quantized routed-expert tensors (see TTMoEDecode ``weight_cache_dir``); None = off."""
-    ensure_stamp(WEIGHT_CACHE)
-    return os.path.join(WEIGHT_CACHE, f"layer_{layer_id}") if WEIGHT_CACHE and WEIGHT_CACHE != "0" else None
+    from models.demos.blackhole.deepseek_v41_flash.tt import moe_place
+
+    ensure_stamp(
+        WEIGHT_CACHE
+    )  # the packed tensors are in DEVICE order: a placement (DSV41_MOE_PLACE) keys the directory by its permutation
+    return (
+        os.path.join(WEIGHT_CACHE, f"layer_{layer_id}{moe_place.cache_suffix(layer_id)}")
+        if WEIGHT_CACHE and WEIGHT_CACHE != "0"
+        else None
+    )
 
 
 def _expert_cache_warm(layer_id: int):
@@ -118,7 +126,12 @@ def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, exper
             _fp8_linear(sh, sp + "w2", dtype)[None, None],
         )
     }
+    from models.demos.blackhole.deepseek_v41_flash.tt import moe_place
+
     return {
+        "expert_mapping": moe_place.assignment(layer_id)
+        if experts is None
+        else None,  # DSV41_MOE_PLACE: chip of every expert (None: sequential)
         "gate_weight": sh.get(p + "gate.weight").T.contiguous().to(torch.float32),  # [hidden, 384]
         "gate_bias": sh.get(p + "gate.bias").to(torch.float32),  # [384]
         "gate_bias_vl": sh.get(p + "gate.bias_vl").to(torch.float32)

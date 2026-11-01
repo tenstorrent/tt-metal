@@ -270,6 +270,11 @@ class Model:
                 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
                 if uni_policy.ring_requested():
+                    from models.demos.blackhole.deepseek_v41_flash.tt import moe_place
+
+                    moe_place.check_prefill_compat(
+                        [L], True
+                    )  # DSV41_MOE_PLACE: the in-place prefill assumes the sequential layout
                     # ONE weight copy: the unified op reads the decode moe_compute (ring layout) expert weights in place (RING_WEIGHTS mode, needs the
                     # private/updated _ttnncpp); decode and interleaved prefill share the same read-only buffers
                     es = layer.moe.decode.expert_state

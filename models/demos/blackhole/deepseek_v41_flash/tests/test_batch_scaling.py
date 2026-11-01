@@ -130,7 +130,7 @@ def test_batch_scaling(mesh_device, device_params):
         return o
 
     Model.decode_forward = wrapped
-    gsm = TD.GSM
+    gsm = os.environ.get("DSV41_BS_PROMPTS", TD.GSM)
     common = (TD.GREEDY,)
     # phase 1 + 2 share one model through ``cache``
     for tr, ngen in (

@@ -141,6 +141,14 @@ class DSV41MoEBlock:
         """
         self._topology, self._shared_in_moe = topology, shared_in_moe
         decode_cfg, gate_cfg = self._configs(mesh_device, batch_per_device, topology, shared_in_moe)
+        if (
+            weights.get("expert_mapping") is not None
+        ):  # DSV41_MOE_PLACE (tt/moe_place.py): this layer's experts sit on the chips of the permutation
+            decode_cfg = decode_cfg.model_copy(
+                update={
+                    "experts": decode_cfg.experts.model_copy(update={"expert_mapping": list(weights["expert_mapping"])})
+                }
+            )
 
         self.mesh_device = mesh_device
         self.decode_config = decode_cfg
