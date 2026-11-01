@@ -38,7 +38,7 @@ inline bool math_matmul_init_reuse_a = true;
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0, bool only_throttle = false>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -65,13 +65,17 @@ inline void matmul_configure_addrmod(
     // SRCB -- 8 rows are needed
     // SRCA -- full 16x16 gets used -- hardware will pair cols of A with rows of B
     // D[8,16] = B[8,16] * A[16,16]
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 8, .clr = 0, .cr = 0},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
+    if constexpr (!only_throttle)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_0);
     }
-        .set(ADDR_MOD_0);
 
+    // ADDR_MOD_5 differs between the tile and the row forms, so a throttle switch writes it
     if constexpr (!row_form)
     {
         // reset all, increment fidelity if we have more fidelity phases
@@ -107,175 +111,217 @@ inline void matmul_configure_addrmod(
             .set(ADDR_MOD_6);
     }
 
-    if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
+    if constexpr (!only_throttle)
     {
-        if (transpose)
+        if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
         {
-            addr_mod_t {
-                .srca = {.incr = 32, .clr = 0, .cr = 0},
-                .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
-                .dest = {.incr = 8, .clr = 0, .cr = 0},
+            if (transpose)
+            {
+                addr_mod_t {
+                    .srca = {.incr = 32, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
+                    .dest = {.incr = 8, .clr = 0, .cr = 0},
+                }
+                    .set(ADDR_MOD_1);
             }
-                .set(ADDR_MOD_1);
+            else
+            {
+                addr_mod_t {
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
+                    .dest = {.incr = 8, .clr = 0, .cr = 0},
+                }
+                    .set(ADDR_MOD_1);
+            }
         }
         else
         {
-            addr_mod_t {
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 0, .clr = 0, .cr = 1}, // cr=16 before
-                .dest = {.incr = 8, .clr = 0, .cr = 0},
+            if (in1_alt)
+            {
+                // second face of in1 next, srcb back to face 1 of in0, dest back to the tile base
+                addr_mod_t {
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 40, .clr = 0, .cr = 0},
+                    .dest = {.incr = 0, .clr = 0, .cr = 1},
+                }
+                    .set(ADDR_MOD_1);
             }
-                .set(ADDR_MOD_1);
+            else if (is_in1_32x16)
+            {
+                addr_mod_t {
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 8, .clr = 0, .cr = 0},
+                    .dest = {.incr = 0, .clr = 0, .cr = 1},
+                }
+                    .set(ADDR_MOD_1);
+            }
+            else
+            {
+                if (transpose)
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 32, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 0, .clr = 0, .cr = 1},
+                        .dest = {.incr = 8, .clr = 0, .cr = 0},
+                    }
+                        .set(ADDR_MOD_1);
+                }
+                else
+                {
+                    addr_mod_t {
+                        //.srca = {.incr = srca_increment, .clr = 0, .cr = 0},
+                        .srca = {.incr = 16, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 0, .clr = 0, .cr = 1},
+                        .dest = {.incr = 8, .clr = 0, .cr = 0},
+                    }
+                        .set(ADDR_MOD_1);
+                }
+            }
         }
-    }
-    else
-    {
+
         if (in1_alt)
         {
-            // second face of in1 next, srcb back to face 1 of in0, dest back to the tile base
+            // jump from in0 face 0 (or 1) to face 2 (or 3) with the same in1 face
             addr_mod_t {
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
-                .srcb = {.incr = 40, .clr = 0, .cr = 0},
-                .dest = {.incr = 0, .clr = 0, .cr = 1},
+                .srca = {.incr = 0, .clr = 0, .cr = 0},
+                .srcb = {.incr = 24, .clr = 0, .cr = 0},
+                .dest = {.incr = 8, .clr = 0, .cr = 0},
             }
-                .set(ADDR_MOD_1);
+                .set(ADDR_MOD_2);
         }
         else if (is_in1_32x16)
         {
             addr_mod_t {
-                .srca = {.incr = 16, .clr = 0, .cr = 0},
+                .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16
+            }
+                .set(ADDR_MOD_2);
+        }
+        else if (is_in0_16x32 || is_in0_32x16)
+        {
+            if (partial_face)
+            {
+                if (transpose)
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 32, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                        .dest = {.incr = 16, .clr = 0, .cr = 0},
+                    }
+                        .set(ADDR_MOD_2);
+                }
+                else
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 16, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                        .dest = {.incr = 16, .clr = 0, .cr = 0},
+                    }
+                        .set(ADDR_MOD_2);
+                }
+            }
+            else
+            {
+                if (transpose)
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 32, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 0, .clr = 0, .cr = 1},
+                        .dest = {.incr = 8, .clr = 0, .cr = 0},
+                    }
+                        .set(ADDR_MOD_2);
+                }
+                else
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 16, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 0, .clr = 0, .cr = 1},
+                        .dest = {.incr = 8, .clr = 0, .cr = 0},
+                    }
+                        .set(ADDR_MOD_2);
+                }
+            }
+        }
+        else
+        {
+            addr_mod_t {
+                .srca = {.incr = 0, .clr = 0, .cr = 1},
+                .srcb = {.incr = 32, .clr = 0, .cr = 1},
+                .dest = {.incr = 8, .clr = 0, .cr = 0},
+            }
+                .set(ADDR_MOD_2);
+        }
+
+        if (is_in0_16x32)
+        {
+            if (partial_face)
+            {
+                if (transpose)
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
+                        .srcb = {.incr = 16, .clr = 0, .cr = 0},
+                        .dest = {.incr = 0, .clr = 1, .cr = 0},
+                    }
+                        .set(ADDR_MOD_4);
+                }
+                else
+                {
+                    // the row form keeps the tile base in the carriage return register, so the body returns to it instead of to 0
+                    addr_mod_t {
+                        .srca = {.incr = 16, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 16, .clr = 0, .cr = 0},
+                        .dest = {.incr = 0, .clr = row_form ? 0 : 1, .cr = row_form ? 1 : 0},
+                    }
+                        .set(ADDR_MOD_4);
+                }
+            }
+            else
+            {
+                if (transpose)
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
+                        .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                        .dest = {.incr = 0, .clr = 0, .cr = 1},
+                    }
+                        .set(ADDR_MOD_4);
+                }
+                else
+                {
+                    addr_mod_t {
+                        .srca = {.incr = 16, .clr = 0, .cr = 0},
+                        .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                        .dest = {.incr = 0, .clr = 0, .cr = 1},
+                    }
+                        .set(ADDR_MOD_4);
+                }
+            }
+        }
+        else if (is_in0_32x16)
+        {
+            addr_mod_t {
+                .srca = {.incr = 0, .clr = 0, .cr = 1},
+                .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                .dest = {.incr = 8, .clr = 0, .cr = 0},
+            }
+                .set(ADDR_MOD_4);
+        }
+        else if (is_in1_32x16)
+        {
+            addr_mod_t {
+                .srca = {.incr = 0, .clr = 0, .cr = 1},
                 .srcb = {.incr = 8, .clr = 0, .cr = 0},
-                .dest = {.incr = 0, .clr = 0, .cr = 1},
+                .dest = {.incr = 16, .clr = 0, .cr = 1},
             }
-                .set(ADDR_MOD_1);
+                .set(ADDR_MOD_4);
         }
         else
         {
             if (transpose)
             {
                 addr_mod_t {
-                    .srca = {.incr = 32, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 0, .clr = 0, .cr = 1},
-                    .dest = {.incr = 8, .clr = 0, .cr = 0},
-                }
-                    .set(ADDR_MOD_1);
-            }
-            else
-            {
-                addr_mod_t {
-                    //.srca = {.incr = srca_increment, .clr = 0, .cr = 0},
-                    .srca = {.incr = 16, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 0, .clr = 0, .cr = 1},
-                    .dest = {.incr = 8, .clr = 0, .cr = 0},
-                }
-                    .set(ADDR_MOD_1);
-            }
-        }
-    }
-
-    if (in1_alt)
-    {
-        // jump from in0 face 0 (or 1) to face 2 (or 3) with the same in1 face
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 24, .clr = 0, .cr = 0},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_2);
-    }
-    else if (is_in1_32x16)
-    {
-        addr_mod_t {
-            .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16
-        }
-            .set(ADDR_MOD_2);
-    }
-    else if (is_in0_16x32 || is_in0_32x16)
-    {
-        if (partial_face)
-        {
-            if (transpose)
-            {
-                addr_mod_t {
-                    .srca = {.incr = 32, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
-                    .dest = {.incr = 16, .clr = 0, .cr = 0},
-                }
-                    .set(ADDR_MOD_2);
-            }
-            else
-            {
-                addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
-                    .dest = {.incr = 16, .clr = 0, .cr = 0},
-                }
-                    .set(ADDR_MOD_2);
-            }
-        }
-        else
-        {
-            if (transpose)
-            {
-                addr_mod_t {
-                    .srca = {.incr = 32, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 0, .clr = 0, .cr = 1},
-                    .dest = {.incr = 8, .clr = 0, .cr = 0},
-                }
-                    .set(ADDR_MOD_2);
-            }
-            else
-            {
-                addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 0, .clr = 0, .cr = 1},
-                    .dest = {.incr = 8, .clr = 0, .cr = 0},
-                }
-                    .set(ADDR_MOD_2);
-            }
-        }
-    }
-    else
-    {
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1},
-            .srcb = {.incr = 32, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_2);
-    }
-
-    if (is_in0_16x32)
-    {
-        if (partial_face)
-        {
-            if (transpose)
-            {
-                addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
-                    .srcb = {.incr = 16, .clr = 0, .cr = 0},
-                    .dest = {.incr = 0, .clr = 1, .cr = 0},
-                }
-                    .set(ADDR_MOD_4);
-            }
-            else
-            {
-                // the row form keeps the tile base in the carriage return register, so the body returns to it instead of to 0
-                addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 16, .clr = 0, .cr = 0},
-                    .dest = {.incr = 0, .clr = row_form ? 0 : 1, .cr = row_form ? 1 : 0},
-                }
-                    .set(ADDR_MOD_4);
-            }
-        }
-        else
-        {
-            if (transpose)
-            {
-                addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
-                    .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 1},
+                    .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_4);
@@ -283,52 +329,13 @@ inline void matmul_configure_addrmod(
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0},
-                    .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                    .srca = {.incr = 32, .clr = 0, .cr = 1},
+                    //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
+                    .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
-        }
-    }
-    else if (is_in0_32x16)
-    {
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1},
-            .srcb = {.incr = 16, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_4);
-    }
-    else if (is_in1_32x16)
-    {
-        addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
-            .dest = {.incr = 16, .clr = 0, .cr = 1},
-        }
-            .set(ADDR_MOD_4);
-    }
-    else
-    {
-        if (transpose)
-        {
-            addr_mod_t {
-                .srca = {.incr = 16, .clr = 0, .cr = 1},
-                .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
-                .dest = {.incr = 0, .clr = 0, .cr = 1},
-            }
-                .set(ADDR_MOD_4);
-        }
-        else
-        {
-            addr_mod_t {
-                .srca = {.incr = 32, .clr = 0, .cr = 1},
-                //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
-                .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
-                .dest = {.incr = 0, .clr = 0, .cr = 1},
-            }
-                .set(ADDR_MOD_4);
         }
     }
 }
@@ -348,7 +355,7 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false, bool end_fold = false, std::uint32_t reuse_dir = 0>
+template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool keep_mod3 = false>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -383,7 +390,7 @@ inline void matmul_configure_mop(
     // The last phase ends on a MVMUL that clears the held source and resets the fidelity phase through ADDR_MOD_3,
     // so the MOP needs no end op slot.
     constexpr bool endfold = high_fidelity && !load_only && end_fold;
-    if constexpr (endfold)
+    if constexpr (endfold && !keep_mod3) // a throttle switch leaves ADDR_MOD_3: the throttled MOP does not use it
     {
         addr_mod_t {
             .srca     = {.incr = 0, .clr = 1, .cr = 1},
@@ -593,7 +600,7 @@ inline void matmul_load_row_replay()
 }
 
 // Build the matmul MOP for a whole reuse row of full 32x32 tiles, the opt-in form of @ref matmul_configure_mop.
-template <MathFidelity math_fidelity, int in1_order = 0>
+template <MathFidelity math_fidelity, int in1_order = 0, bool keep_ends = false>
 inline void matmul_configure_row_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -615,23 +622,26 @@ inline void matmul_configure_row_mop(
     constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
     const bool reuse_a                         = ct_dim >= rt_dim;
 
-    addr_mod_t {
-        .srca     = {.incr = 0, .clr = 1, .cr = 1},
-        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-        .dest     = {.incr = 0, .clr = 0, .cr = 1},
-        .fidelity = {.incr = fidelity_increment, .clr = 0},
-    }
-        .set(ADDR_MOD_7);
+    if constexpr (!keep_ends) // a throttle switch leaves ADDR_MOD_3 and 7: the throttled MOP does not use them
     {
-        // the source and bias words of ADDR_MOD_3 are constants; its DEST word carries the run-time stride
-        constexpr addr_mod_t tile_end {
-            .srca = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb = {.incr = 0, .clr = 1, .cr = 1},
-        };
-        TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
-        TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 0, .cr = 1},
+            .fidelity = {.incr = fidelity_increment, .clr = 0},
+        }
+            .set(ADDR_MOD_7);
+        {
+            // the source and bias words of ADDR_MOD_3 are constants; its DEST word carries the run-time stride
+            constexpr addr_mod_t tile_end {
+                .srca = {.incr = 0, .clr = 1, .cr = 1},
+                .srcb = {.incr = 0, .clr = 1, .cr = 1},
+            };
+            TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
+            TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
+        }
+        matmul_set_row_tile_end_dest(matmul_row_dest_stride(ct_dim, rt_dim));
     }
-    matmul_set_row_tile_end_dest(matmul_row_dest_stride(ct_dim, rt_dim));
     addr_mod_t {
         .srca     = {.incr = 0, .clr = 1, .cr = 1},
         .srcb     = {.incr = 0, .clr = 1, .cr = 1},
@@ -703,12 +713,14 @@ inline bool matmul_rows_fold = false;
 
 // Default form for full 32x32 tiles: one MOP per reuse row, its tile count carried in the MOP instruction. Only
 // ADDR_MOD_3 and ADDR_MOD_5 change, so SFPU ops initialised once around matmul calls keep ADDR_MOD_6 and 7.
-template <MathFidelity math_fidelity, bool row_end_fold = false>
+template <MathFidelity math_fidelity, bool row_end_fold = false, bool keep_ends = false>
 inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     const bool reuse_a           = ct_dim >= rt_dim;
 
+    const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
+    if constexpr (!keep_ends) // a throttle switch leaves ADDR_MOD_3: the throttled MOP does not use it
     {
         constexpr addr_mod_t tile_end {
             .srca = {.incr = 0, .clr = 1, .cr = 1},
@@ -716,9 +728,8 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
         };
         TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
         TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
+        matmul_set_row_tile_end_dest(dest_stride);
     }
-    const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
-    matmul_set_row_tile_end_dest(dest_stride);
     matmul_load_row_replay();
 
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
@@ -1132,7 +1143,7 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, bool dyn_switch = false>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1151,9 +1162,11 @@ inline void _llk_math_matmul_init_(
             ((in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM) && !((in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM))),
         "in1_order 1 needs in1 32x16 tiles and in0 other than 16x32");
 
+    // dyn_switch: a throttle switch of a running kernel; the throttled and the other form share ADDR_MOD_0, 1, 2 and 4 and the zero flag state, and the throttled MOP leaves ADDR_MOD_3 and 7
+    constexpr bool only_throttle = dyn_switch;
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, only_throttle>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
         // throttling is only a throughput cap, and the throttled sequence wedges there.
@@ -1179,32 +1192,32 @@ inline void _llk_math_matmul_init_(
     }
     else if constexpr (row_mop)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, only_throttle>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_row_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_row_mop<math_fidelity, in1_order, dyn_switch>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, only_throttle>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir, dyn_switch>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
-            matmul_configure_mop_rows<math_fidelity, row_end_fold>(ct_dim, rt_dim);
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, 0, only_throttle>(transpose);
+            matmul_configure_mop_rows<math_fidelity, row_end_fold, dyn_switch>(ct_dim, rt_dim);
         }
         else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order, only_throttle>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, only_throttle>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
             matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
@@ -1219,7 +1232,10 @@ inline void _llk_math_matmul_init_(
     // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
     // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
     // (denormal Src results differ). Mirrors what reduce/transpose/datacopy inits already do.
-    math::_configure_default_zero_flag_state_();
+    if constexpr (!dyn_switch)
+    {
+        math::_configure_default_zero_flag_state_();
+    }
 }
 
 /**
