@@ -314,9 +314,12 @@ static std::uint32_t pack_ch1_w_stride = 0;
 [[maybe_unused]] static std::uint32_t pack_w_next       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
 [[maybe_unused]] static std::uint8_t pack_w_last        = 0xff;
+// An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
+#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff)
 #else
 #define LLK_PACK_W_INVALIDATE() ((void)0)
+#define LLK_PACK_W_FORGET_OUTPUT() ((void)0)
 #endif
 
 template <PackMode pack_mode = PackMode::Default>
@@ -343,7 +346,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     pack_ch1_w_stride = 0;
-    LLK_PACK_W_INVALIDATE();
+    LLK_PACK_W_FORGET_OUTPUT();
     LLK_ASSERT_BLOCK(llk_assert_pack_fast_untilize = false);
     TTI_NOP;
     TTI_NOP;
