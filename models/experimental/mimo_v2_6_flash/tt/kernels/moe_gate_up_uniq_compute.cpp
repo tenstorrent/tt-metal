@@ -65,7 +65,7 @@ void kernel_main() {
         // multiply.
         cb_wait_front(cb_wt, 1);
         reconfig_data_format_srca(cb_w, cb_wt);
-        copy_tile_to_dst_init_short(cb_wt);
+        copy_init(cb_wt);
         copy_tile(cb_wt, 0, 1);
         mul_binary_tile_init();
         mul_binary_tile(0, 1, 0);

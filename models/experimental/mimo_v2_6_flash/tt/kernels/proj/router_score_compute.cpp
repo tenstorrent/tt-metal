@@ -64,7 +64,7 @@ void kernel_main() {
         cb_wait_front(cb_gather, group - 1);
         reconfig_data_format_srca(cb_gather);
         for (uint32_t i = 0; i < group - 1; i++) {
-            copy_tile_to_dst_init_short(cb_gather);
+            copy_init(cb_gather);
             copy_tile(cb_gather, i, 1);
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
@@ -77,7 +77,7 @@ void kernel_main() {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, (false, DST_ACCUM_MODE, rows / 2), 0, VectorMode::R));
     cb_wait_front(cb_bias, 1);
     reconfig_data_format_srca(cb_bias);
-    copy_tile_to_dst_init_short(cb_bias);
+    copy_init(cb_bias);
     copy_tile(cb_bias, 0, 1);
     add_binary_tile_init();
     add_binary_tile(0, 1, 1);

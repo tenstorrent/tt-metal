@@ -34,7 +34,7 @@ template <uint32_t tiles>
 FORCE_INLINE void convert(uint32_t in, uint32_t out) {
     cb_wait_front(in, tiles);
     reconfig_data_format_srca(in);
-    copy_tile_to_dst_init_short(in);
+    copy_init(in);
     for (uint32_t j = 0; j < tiles; j++) {
         tile_regs_acquire();
         copy_tile(in, j, 0);
