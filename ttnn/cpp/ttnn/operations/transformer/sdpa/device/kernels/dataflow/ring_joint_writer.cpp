@@ -623,7 +623,15 @@ void kernel_main() {
     constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
     const bool seg_active = seg_accum_enabled && global_q_end - global_q_start == 1;
     const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
-    const uint32_t ksplit_peer_args = argidx + 1;
+    // Slot donation (ring_joint_ksplit.hpp): [visiting spare, visit count, per visit its home] between the band and the
+    // K-split peers, each a physical x | y << 16.
+    constexpr bool donation = get_named_compile_time_arg_val("donation") == 1;
+    [[maybe_unused]] const uint32_t donation_args = argidx + 1;
+    [[maybe_unused]] const uint32_t visiting_spare = donation ? get_arg_val<uint32_t>(donation_args) : 0;
+    [[maybe_unused]] const bool donates = visiting_spare != 0;
+    [[maybe_unused]] const uint32_t donation_visits = donation ? get_arg_val<uint32_t>(donation_args + 1) : 0;
+    [[maybe_unused]] const bool is_spare = donation && donation_visits > 0;
+    const uint32_t ksplit_peer_args = argidx + 1 + (donation ? ring_joint::kDonationWriterArgWords : 0);
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -861,7 +869,10 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+    // With slot donation (single-Q K-split cores only) no core has per-iteration work here, so the writer goes straight
+    // to the hand-offs below, where a home serves its spare as soon as a partial is staged.
+    const uint32_t writer_ring_iterations = donation ? 0 : sdpa_ring_iterations;
+    for (uint32_t ring_iter = 0; ring_iter < writer_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         // A packed pass consumes every member's sequencer step; only the first member's ID is used.
         uint32_t first_packed_source_id = 0;
@@ -1365,8 +1376,57 @@ void kernel_main() {
             noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
         noc.async_write_barrier();
     };
+    // Lands the state that core (x, y) staged in its half A in this core's restore CBs (one entry each); the K-split
+    // reducer takes its senders' states this way, a home its spare's partial.
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    static_assert(
+        !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out), "K split copies out tiles raw");
+    [[maybe_unused]] auto pull_partial = [&](uint32_t x, uint32_t y) __attribute__((noinline)) {
+        UnicastEndpoint source_l1;
+        auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
+            cb.reserve_back(tiles);
+            noc.async_read(
+                source_l1,
+                CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+                tiles * get_tile_size(source_cb),
+                {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
+                {});
+        };
+        CircularBuffer in_max(cb_max_in);
+        CircularBuffer in_sum(ksplit_cb_sum_in);
+        CircularBuffer in_out(cb_prev_out);
+        pull(in_max, cb_max_A, Sq_chunk_t);
+        pull(in_sum, cb_sum_A, Sq_chunk_t);
+        pull(in_out, cb_out_im_A, out_tiles);
+        noc.async_read_barrier();
+        in_max.push_back(Sq_chunk_t);
+        in_sum.push_back(Sq_chunk_t);
+        in_out.push_back(out_tiles);
+    };
+    if constexpr (donation) {
+        // A spare signals each staged visit to its home, which pulls the partial and acknowledges; popping the signal
+        // then frees half A for the spare's next visit.
+        Semaphore<> pulled(get_named_compile_time_arg_val("donation_pulled_sem"));
+        if (is_spare) {
+            CircularBuffer staged(cb_signal);
+            for (uint32_t v = 0; v < donation_visits; ++v) {
+                const uint32_t home = get_arg_val<uint32_t>(donation_args + 2 + v);
+                staged.wait_front(1);
+                ksplit_bits.signal(noc, home & 0xFFFF, home >> 16, ring_joint::kDonationOrdinal);
+                noc.async_atomic_barrier();
+                pulled.wait_min(v + 1);
+                staged.pop_front(1);
+            }
+        } else if (donates) {
+            // Only a reducer clears its K-split bits; a sender home relies on the launch re-initialising semaphores.
+            ksplit_bits.wait(ring_joint::kDonationOrdinal);
+            pull_partial(visiting_spare & 0xFFFF, visiting_spare >> 16);
+            pulled.up(noc, visiting_spare & 0xFFFF, visiting_spare >> 16, 1);
+            noc.async_atomic_barrier();
+        }
+    }
     if constexpr (ksplit_enabled) {
-        if (ksplit_active && ksplit_band + 1 < ksplit_count) {
+        if (ksplit_active && !is_spare && ksplit_band + 1 < ksplit_count) {
             // Sender: compute signals once its state sits in half A, where it stays until the program ends.
             CircularBuffer staged(cb_signal);
             staged.wait_front(1);
@@ -1377,36 +1437,13 @@ void kernel_main() {
                 ksplit_band + 1);
             noc.async_atomic_barrier();
             staged.pop_front(1);
-        } else if (ksplit_active) {
+        } else if (ksplit_active && !is_spare) {
             // Reducer: land each sender's state in the restore CBs, one at a time (they hold one entry each).
-            constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-            static_assert(
-                !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out),
-                "K split copies out tiles raw");
-            UnicastEndpoint sender_l1;
             for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                const uint32_t x = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender);
-                const uint32_t y = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1);
                 ksplit_bits.wait(sender + 1);
-                auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
-                    cb.reserve_back(tiles);
-                    noc.async_read(
-                        sender_l1,
-                        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
-                        tiles * get_tile_size(source_cb),
-                        {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
-                        {});
-                };
-                CircularBuffer in_max(cb_max_in);
-                CircularBuffer in_sum(ksplit_cb_sum_in);
-                CircularBuffer in_out(cb_prev_out);
-                pull(in_max, cb_max_A, Sq_chunk_t);
-                pull(in_sum, cb_sum_A, Sq_chunk_t);
-                pull(in_out, cb_out_im_A, out_tiles);
-                noc.async_read_barrier();
-                in_max.push_back(Sq_chunk_t);
-                in_sum.push_back(Sq_chunk_t);
-                in_out.push_back(out_tiles);
+                pull_partial(
+                    get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender),
+                    get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1));
             }
             ksplit_bits.reset_after_run();
 

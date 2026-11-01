@@ -12,6 +12,7 @@
 #include "sliding_halo_layout.hpp"
 #include "ring_joint_sdpa_schedule.hpp"
 #include "ring_joint_sdpa_plan.hpp"
+#include "ring_joint_donation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
@@ -2332,6 +2333,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             append_head_work(i, unit, 1);
         }
     }
+    // Slot donation (ring_joint_donation.hpp): the cores without a unit take one slot of every home head pair. Needs
+    // interleaved steps (they define the slots), one batch, head pairs and the plain gather.
+    const ring_joint::DonationPlan donation_plan =
+        k_expand && slice_readiness && ksplit_count > 1 && B == 1 && num_q_chunks == 2 && grouped_sources == 1
+            ? ring_joint::make_donation_plan(
+                  grid_size.x,
+                  grid_size.y,
+                  ksplit_rows_per_split,
+                  ksplit_count,
+                  total_q_chunks,
+                  num_q_chunks,
+                  ring_size)
+            : ring_joint::DonationPlan{};
+    const bool donation = donation_plan.enabled;
+    auto is_spare = [&](uint32_t core_idx) { return donation && !donation_plan.visits[core_idx].empty(); };
     for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
@@ -2407,6 +2423,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         CoreCoord injector_physical = CoreCoord{0, 0};
         CoreCoord phys_start = CoreCoord{0, 0};
         CoreCoord phys_end = CoreCoord{0, 0};
+        uint32_t width = 0;  // the row's leading cores in the rectangle
     };
 
     // Pick a row-wide multicast injector among max-work cores. The recent-column FIFO spreads injectors across
@@ -2418,8 +2435,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             recent_cols.pop_front();
         }
 
+        // With slot donation the row's spares, which trail its homes, read their own K.
+        const uint32_t row_width = donation ? donation_plan.row_homes[row] : grid_size.x;
         uint32_t row_max_q = 0;
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col < row_width; ++col) {
             const uint32_t ci = row * grid_size.x + col;
             row_max_q = std::max(row_max_q, core_work[ci].global_q_count);
         }
@@ -2428,7 +2447,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
 
         uint32_t injector_idx = std::numeric_limits<uint32_t>::max();
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col < row_width; ++col) {
             const uint32_t ci = row * grid_size.x + col;
             if (core_work[ci].global_q_count != row_max_q) {
                 continue;
@@ -2455,10 +2474,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .row = row,
             .injector_idx = injector_idx,
             .max_q = row_max_q,
-            .num_receivers = grid_size.x - 1,
+            .num_receivers = row_width - 1,
             .injector_physical = injector_physical,
             .phys_start = device->worker_core_from_logical_core(CoreCoord{0, row}),
-            .phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, row}),
+            .phys_end = device->worker_core_from_logical_core(CoreCoord{row_width - 1, row}),
+            .width = row_width,
         };
     };
 
@@ -2486,7 +2506,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
             chain_max_q[ci] = selection.max_q;
         };
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col < selection.width; ++col) {
             configure_core(selection.row * grid_size.x + col);
         }
     };
@@ -2674,6 +2694,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ksplit_count == 1 || !k_uses_batch_chain || !build_kv_chains || k_mcast_enabled,
         "ring_joint K split requires the row-wide shared-K multicast ({})",
         k_mcast_fallback_reason);
+    // A spare reads its own K, one real Q slot per step (it is in no multicast).
+    for (uint32_t i = 0; i < num_cores && k_uses_batch_chain && build_kv_chains; ++i) {
+        if (is_spare(i)) {
+            k_chain_max_q[i] = 1;
+        }
+    }
 
     // Rotate remainder Q chunks across multicast groups between active ring iterations.
     // Saved (m, l, O) state is addressed by chunk ID; semaphore handoffs protect migration.
@@ -2869,6 +2895,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 kexp_peer[segs[r].core_idx] = segs[1 - r].core_idx;
             }
         }
+        // A spare pair splits every visit's expansion the same way.
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (is_spare(i)) {
+                kexp_rank[i] = donation_plan.spare_rank[i];
+                kexp_peer[i] = donation_plan.spare_peer[i];
+            }
+        }
     }
     // Reducer's ready semaphore: one bit per sender, set once its state is staged.
     uint32_t ksplit_sem_id = 0;
@@ -2883,6 +2916,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .initial_value = 0,
         });
     }
+    // Slot donation: a spare's count of partials its homes have pulled (ring_joint_ksplit.hpp).
+    const uint32_t donation_pulled_sem_id =
+        donation ? add_ring_joint_semaphore(desc, core_grid_set, 0, "slot donation") : 0;
 
     // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
@@ -3235,6 +3271,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"slice_readiness", slice_readiness ? 1u : 0u},
         {"ring_interleave", ring_interleave ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
+        {"donation", donation ? 1u : 0u},
+        {"donation_pulled_sem", donation_pulled_sem_id},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3274,6 +3312,42 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Rotation keeps a contiguous base range; only its remainder unit changes by ordinal.
         uint32_t global_q_start = use_rotated_q_split ? i * rotated_base_chunks : work.global_q_start;
         uint32_t global_q_end = global_q_start + (use_rotated_q_split ? rotated_base_chunks : work.global_q_count);
+        if (is_spare(i)) {
+            // One unit at a time, its first visit's: the kernels take each visit's unit from the donation block.
+            global_q_start = donation_plan.visits[i].front().unit;
+            global_q_end = global_q_start + 1;
+        }
+        // The donation block (ring_joint_ksplit.hpp), padded to a fixed size: reader and compute [donated steps, visit
+        // count | visit steps << 8, packed visits], the writer [visiting spare's x | y << 16, visit count, packed home
+        // cores].
+        std::vector<uint32_t> donation_args;
+        std::vector<uint32_t> donation_writer_args;
+        if (donation) {
+            const auto& visits = donation_plan.visits[i];
+            const uint32_t slot = donation_plan.donated_slot[i];
+            const bool donates = slot != ring_joint::kNoDonatedSlot;
+            uint32_t visit_steps = 0;
+            for (const auto& v : visits) {
+                visit_steps += ring_joint::slot_step_count(v.slot, ring_size);
+            }
+            donation_args = {
+                donates ? ring_joint::donation_steps(slot, ring_size) : 0u,
+                static_cast<uint32_t>(visits.size()) | visit_steps << 8};
+            uint32_t visiting_spare = 0;
+            if (donates) {
+                const auto& spare = core_work.at(donation_plan.visitor[i]).physical_core;
+                visiting_spare = static_cast<uint32_t>(spare.x) | static_cast<uint32_t>(spare.y) << 16;
+            }
+            donation_writer_args = {visiting_spare, static_cast<uint32_t>(visits.size())};
+            for (const auto& v : visits) {
+                TT_FATAL(v.unit < 256 && v.band < 256, "slot donation packs a unit and band in a byte each");
+                const auto& home = core_work.at(v.home).physical_core;
+                donation_args.push_back(ring_joint::donation_steps(v.slot, ring_size) | v.unit << 16 | v.band << 24);
+                donation_writer_args.push_back(static_cast<uint32_t>(home.x) | static_cast<uint32_t>(home.y) << 16);
+            }
+            donation_args.resize(ring_joint::kDonationArgWords, 0);
+            donation_writer_args.resize(ring_joint::kDonationWriterArgWords, 0);
+        }
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -3363,7 +3437,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(ksplit_band(i));
         }
         // Expanded K: W_UK's address (patched on cache hits like the other buffers), then this core's rank in its
-        // head pair and its peer's physical core: the last reader args.
+        // head pair and its peer's physical core.
         if (k_expand) {
             const auto& peer_phys = core_work[kexp_peer[i]].physical_core;
             reader_args.push_back(tensor_args.k_expand_weight->buffer());
@@ -3371,6 +3445,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(peer_phys.x);
             reader_args.push_back(peer_phys.y);
         }
+        reader_args.append(donation_args);
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -3410,6 +3485,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // [band], then a sender's reducer core or a reducer's sender cores (physical x, y).
             const uint32_t band = ksplit_band(i);
             writer_args.push_back(band);
+            writer_args.append(donation_writer_args);
             if (work.global_q_count > 0) {
                 for (uint32_t peer = 0; peer < ksplit_count; ++peer) {
                     const bool is_peer = band + 1 < ksplit_count ? peer == ksplit_count - 1 : peer != band;
@@ -3458,6 +3534,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (k_expand) {
             compute_args.push_back(kexp_rank[i]);
         }
+        compute_args.append(donation_args);
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 

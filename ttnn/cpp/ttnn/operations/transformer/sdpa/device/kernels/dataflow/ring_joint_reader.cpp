@@ -558,6 +558,13 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t kexp_peer_x = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 2) : 0;
     [[maybe_unused]] const uint32_t kexp_peer_y = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 3) : 0;
     [[maybe_unused]] uint32_t kexp_exchanged = 0;  // cumulative: semaphores count up and are reset by the launch
+    // Slot donation (ring_joint_ksplit.hpp): its block follows the expanded-K args. A home skips its donated slot; a
+    // spare walks only its visits' steps, each visit with the visit's unit and band and a fresh Q / W_UK.
+    constexpr bool donation = get_named_compile_time_arg_val("donation") == 1;
+    static_assert(!donation || (k_expand && ring_interleave));
+    [[maybe_unused]] const uint32_t donation_args = wuk_arg_idx + 4;
+    [[maybe_unused]] const uint32_t donated_steps = donation ? get_arg_val<uint32_t>(donation_args) : 0;
+    [[maybe_unused]] const uint32_t donation_visits = donation ? get_arg_val<uint32_t>(donation_args + 1) & 0xFF : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
@@ -909,15 +916,44 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration: its ID and slice direction come from its
-    // first step, the only one that advances the sequencer. A revisit is always within the iteration's pair, whose
-    // members differ in parity.
-    uint32_t step_ring_ids[2];
-    uint32_t step_dirs[2];
+    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration and a spare visits slots out of order, so
+    // every iteration's ID and direction is kept; only an iteration's first use advances the sequencer. A slice is read
+    // with readiness waits only while it is still the latest one returned in its direction (an earlier one is full).
+    ASSERT(sdpa_ring_iterations <= ring_joint::kMaxRingIterations);
+    uint32_t iter_ring_ids[ring_joint::kMaxRingIterations];
+    uint32_t iter_dirs[ring_joint::kMaxRingIterations];
+    uint32_t latest_iter_in_dir[2] = {0, 0};
+    uint32_t known_ring_iters = 0;
     uint32_t ring_dir = 0;
     const uint32_t sdpa_steps =
         ring_interleave ? ring_joint::interleaved_step_count(sdpa_ring_iterations) : sdpa_ring_iterations;
-    for (uint32_t step = 0; step < sdpa_steps; ++step) {
+    uint32_t loop_steps = sdpa_steps;
+    if constexpr (donation) {
+        if (donation_visits > 0) {
+            loop_steps = get_arg_val<uint32_t>(donation_args + 1) >> 8;
+        }
+    }
+    [[maybe_unused]] uint32_t visit = 0;
+    [[maybe_unused]] uint32_t visit_step = 0;
+    for (uint32_t loop_step = 0; loop_step < loop_steps; ++loop_step) {
+        uint32_t step = loop_step;
+        uint32_t step_q_start = global_q_start;
+        uint32_t step_band = ksplit_idx;
+        if constexpr (donation) {
+            if (donation_visits > 0) {
+                const uint32_t packed = get_arg_val<uint32_t>(donation_args + 2 + visit);
+                step = (packed & 0xFF) + visit_step;
+                step_q_start = (packed >> 16) & 0xFF;
+                step_band = packed >> 24;
+                if (visit_step == 0) {
+                    q_pushed = false;  // a new visit: its unit's Q and W_UK
+                }
+                if (++visit_step == ((packed >> 8) & 0xFF)) {
+                    ++visit;
+                    visit_step = 0;
+                }
+            }
+        }
         const ring_joint::InterleavedStep istep = ring_interleave
                                                       ? ring_joint::interleaved_step(step, sdpa_ring_iterations)
                                                       : ring_joint::InterleavedStep{step, 0, 1};
@@ -951,15 +987,17 @@ void kernel_main() {
             ring_id = packed_source_ids[0];
         } else if (has_sliding_window) {
             ring_id = ring_index;
-        } else if (istep.piece == 0) {
-            ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-            ring_dir = fused_op_receiver.last_dir;
-            step_ring_ids[ring_iter & 1] = ring_id;
-            step_dirs[ring_iter & 1] = ring_dir;
         } else {
-            ring_id = step_ring_ids[ring_iter & 1];
-            ring_dir = step_dirs[ring_iter & 1];
+            while (known_ring_iters <= ring_iter) {
+                iter_ring_ids[known_ring_iters] =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                iter_dirs[known_ring_iters] = fused_op_receiver.last_dir;
+                latest_iter_in_dir[fused_op_receiver.last_dir] = known_ring_iters;
+                ++known_ring_iters;
+            }
+            ring_id = iter_ring_ids[ring_iter];
+            ring_dir = iter_dirs[ring_iter];
         }
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
@@ -1002,8 +1040,14 @@ void kernel_main() {
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             const ring_joint::KSplitRange band_range =
-                ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
+                ring_joint::ksplit_range(num_valid, step_band, ksplit_count, ring_id);
             ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
+            if constexpr (donation) {
+                // The home's whole row group skips this slot together, so its multicast skips it too.
+                if (step - (donated_steps & 0xFF) < (donated_steps >> 8)) {
+                    ksplit_k_range.end = ksplit_k_range.begin;
+                }
+            }
         }
         // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
         // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
@@ -1085,7 +1129,7 @@ void kernel_main() {
                                               : rotated_slots.at(q_iter);
             } else {
                 is_padded_iter = (q_iter >= q_per_core);
-                flat_q_index = padded_slot_flat_q<false>({}, global_q_start, q_per_core, q_iter, 1);
+                flat_q_index = padded_slot_flat_q<false>({}, step_q_start, q_per_core, q_iter, 1);
             }
 
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
@@ -1300,7 +1344,7 @@ void kernel_main() {
                     has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
 
                 if constexpr (slice_readiness) {
-                    if (!source_is_local) {
+                    if (!source_is_local && latest_iter_in_dir[ring_dir] == ring_iter) {
                         fused_op_receiver.wait_part(
                             ring_dir,
                             ttnn::ring_attention_all_gather::readiness_part_of(

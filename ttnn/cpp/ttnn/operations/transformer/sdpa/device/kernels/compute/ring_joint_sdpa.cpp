@@ -255,7 +255,7 @@ void kernel_main() {
         (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
     // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
-    // Expanded-K head pairs: this core's rank, the last runtime arg (after the K-split band). Pairs run without the
+    // Expanded-K head pairs: this core's rank, the runtime arg after the K-split band. Pairs run without the
     // rotated split and segmented accumulation (the host refuses both).
     static_assert(!k_expand || (!rotated_q_split_enabled && !seg_accum_enabled));
     // Only the streaming path expands K (sdpa_expand_k_chunk); the fp32 path reads DHt-wide K.
@@ -264,6 +264,15 @@ void kernel_main() {
         k_expand ? get_arg_val<uint32_t>(rotated_args_base + (ksplit_enabled ? 1 : 0)) : 0;
     // Each launch starts with cb_kexp_own's pointers at its base: restart the slot parity with it.
     k_expand_chunk_count = 0;
+    // Slot donation (ring_joint_ksplit.hpp): its block follows the expanded-K rank, as in the reader.
+    constexpr bool donation = get_named_compile_time_arg_val("donation") == 1;
+    static_assert(!donation || (k_expand && ring_interleave));
+    [[maybe_unused]] const uint32_t donation_args = rotated_args_base + (ksplit_enabled ? 1 : 0) + (k_expand ? 1 : 0);
+    [[maybe_unused]] const uint32_t donated_steps = donation ? get_arg_val<uint32_t>(donation_args) : 0;
+    [[maybe_unused]] const uint32_t donation_visits = donation ? get_arg_val<uint32_t>(donation_args + 1) & 0xFF : 0;
+    [[maybe_unused]] const bool is_spare = donation && donation_visits > 0;
+    // Whether the donated slot holds chunks of this core's band: the spare's partial then carries state.
+    [[maybe_unused]] bool donated_has_state = false;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
     const bool seg_active = seg_accum_enabled && q_per_core == 1;
     bool seg_state_valid = false;
@@ -416,6 +425,32 @@ void kernel_main() {
                           : logical_nt;
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
+    // A spare's visit ends: stage its state in half A as a K-split sender does and signal the writer, which lands it
+    // in the home's restore CBs; once the writer pops the signal, half A and the visit's Q / W_UK are free again.
+    [[maybe_unused]] auto stage_visit = [&]() __attribute__((noinline)) {
+        constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+        configure_single_tile_pack(cb_max_A);
+        if (seen_active_iter) {
+            sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
+            sdpa_cb_pop_front_out_of_line(cb_wuk, wuk_tiles);
+            if (acc_state.prev.out != cb_out_im_A) {
+                copy_block(acc_state.prev.max, cb_max_A, Sq_chunk_t);
+                copy_block(acc_state.prev.sum, cb_sum_A, Sq_chunk_t);
+                copy_block(acc_state.prev.out, cb_out_im_A, out_tiles);
+            }
+        }
+        sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
+        sdpa_cb_push_back_out_of_line(cb_signal, 1);
+        sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
+        if (seen_active_iter) {
+            sdpa_cb_pop_front_out_of_line(cb_max_A, Sq_chunk_t);
+            sdpa_cb_pop_front_out_of_line(cb_sum_A, Sq_chunk_t);
+            sdpa_cb_pop_front_out_of_line(cb_out_im_A, out_tiles);
+        }
+        acc_state.prev = {cb_sum_A, cb_max_A, cb_out_im_A};
+        acc_state.cur = {cb_sum_B, cb_max_B, cb_out_im_B};
+        seen_active_iter = false;
+    };
     auto arrival_preview = fused_op_indexer.seq;
     // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
     // binary so it carries none of the packed-source path.
@@ -435,12 +470,43 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration: its ID comes from its first step, the only
-    // one that advances the sequencer. A revisit is always within the iteration's pair, whose members differ in parity.
-    uint32_t step_ring_ids[2];
+    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration and a spare visits slots out of order, so
+    // every iteration's ID is kept; only an iteration's first use advances the sequencer.
+    uint32_t iter_ring_ids[ring_joint::kMaxRingIterations];
+    uint32_t known_ring_iters = 0;
     const uint32_t sdpa_steps =
         ring_interleave ? ring_joint::interleaved_step_count(sdpa_ring_iterations) : sdpa_ring_iterations;
-    for (uint32_t step = 0; step < sdpa_steps; ++step) {
+    uint32_t loop_steps = sdpa_steps;
+    if constexpr (donation) {
+        if (donation_visits > 0) {
+            loop_steps = get_arg_val<uint32_t>(donation_args + 1) >> 8;
+        }
+    }
+    [[maybe_unused]] uint32_t visit = 0;
+    [[maybe_unused]] uint32_t visit_step = 0;
+    // A visit is staged at the next step (or after the loop), so inactive iterations, which skip the step body,
+    // still stage it.
+    [[maybe_unused]] bool visit_ends = false;
+    for (uint32_t loop_step = 0; loop_step < loop_steps; ++loop_step) {
+        uint32_t step = loop_step;
+        uint32_t step_q_start = global_q_start;
+        uint32_t step_band = ksplit_idx;
+        if constexpr (donation) {
+            if (visit_ends) {
+                stage_visit();
+            }
+            if (donation_visits > 0) {
+                const uint32_t packed = get_arg_val<uint32_t>(donation_args + 2 + visit);
+                step = (packed & 0xFF) + visit_step;
+                step_q_start = (packed >> 16) & 0xFF;
+                step_band = packed >> 24;
+                visit_ends = ++visit_step == ((packed >> 8) & 0xFF);
+                if (visit_ends) {
+                    ++visit;
+                    visit_step = 0;
+                }
+            }
+        }
         const ring_joint::InterleavedStep istep = ring_interleave
                                                       ? ring_joint::interleaved_step(step, sdpa_ring_iterations)
                                                       : ring_joint::InterleavedStep{step, 0, 1};
@@ -490,12 +556,13 @@ void kernel_main() {
             ring_id = packed_source_ids[0];
         } else if (has_sliding_window) {
             ring_id = ring_index;
-        } else if (istep.piece == 0) {
-            ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-            step_ring_ids[ring_iter & 1] = ring_id;
         } else {
-            ring_id = step_ring_ids[ring_iter & 1];
+            while (known_ring_iters <= ring_iter) {
+                iter_ring_ids[known_ring_iters++] =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            }
+            ring_id = iter_ring_ids[ring_iter];
         }
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
@@ -522,8 +589,14 @@ void kernel_main() {
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 const ring_joint::KSplitRange band_range =
-                    ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
+                    ring_joint::ksplit_range(num_valid, step_band, ksplit_count, ring_id);
                 ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
+                if constexpr (donation) {
+                    if (step - (donated_steps & 0xFF) < (donated_steps >> 8)) {
+                        donated_has_state |= !ksplit_k_range.empty();
+                        ksplit_k_range.end = ksplit_k_range.begin;
+                    }
+                }
                 if (ksplit_active) {
                     ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
                 }
@@ -718,8 +791,8 @@ void kernel_main() {
                 single_q>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
-                rotated_q_split_enabled ? 0u : global_q_start,
-                rotated_q_split_enabled ? rotated_my_count : global_q_end,
+                rotated_q_split_enabled ? 0u : step_q_start,
+                rotated_q_split_enabled ? rotated_my_count : step_q_start + q_per_core,
                 iter_num_kv_chunks,
                 num_q_chunks,
                 ring_iter,
@@ -748,7 +821,7 @@ void kernel_main() {
                 rotated_slots,
                 ksplit_k_range.begin,
                 ksplit_k_range.end,
-                ksplit_active ? ksplit_idx : 0,
+                ksplit_active ? step_band : 0,
                 ksplit_active ? ksplit_count : 1,
                 packed_sources ? packed_source_ids : nullptr,
                 packed_sources ? source_group_size : 0,
@@ -860,6 +933,12 @@ void kernel_main() {
         }
     }
 
+    if constexpr (donation) {
+        if (visit_ends) {
+            stage_visit();
+        }
+    }
+
     if constexpr (seg_accum_enabled) {
         if (seg_active) {
             // The reader pushes Q with this core's first K chunk; no ring iteration popped it.
@@ -885,7 +964,7 @@ void kernel_main() {
     // K split epilogue: acc_state.prev holds this core's unnormalized state. Only primitives the K loop already
     // instantiates are used, since the program is at the kernel config buffer limit.
     if constexpr (ksplit_enabled) {
-        if (ksplit_active) {
+        if (ksplit_active && !is_spare) {
             // A single-chunk slice runs only a first K step, which leaves the packer at the QKT@V subblock width;
             // copy_block and max_block_sfpi pack one tile per pack_tile.
             configure_single_tile_pack(cb_max_A);
@@ -897,16 +976,38 @@ void kernel_main() {
                     sdpa_cb_pop_front_out_of_line(cb_wuk, wuk_tiles);
                 }
             }
-            const bool reducer = ksplit_idx == ksplit_count - 1;
-            // On the reducer the writer lands the senders' states in the restore CBs, one at a time; a sender
-            // whose slice is empty sends no state and is discarded.
+            // The writer lands partial states in the restore CBs, one at a time.
             const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
+            // A home first takes its donated slot's partial from the spare: merged, adopted when this core accumulated
+            // nothing, or dropped when the slot held no chunks.
+            bool has_state = seen_active_iter;
+            if constexpr (donation) {
+                if (donated_steps != 0) {
+                    if (!donated_has_state) {
+                        discard_incoming();
+                    } else if (has_state) {
+                        merge_into_prev(incoming);
+                    } else {
+                        // Adopt it. This core ran no K chunk, so the unpacker and packer still have the kernel's
+                        // startup data formats (Q's and the QK intermediate's), not the K loop's.
+                        reconfig_data_format_srca(incoming.max);
+                        pack_reconfig_data_format(acc_state.prev.max);
+                        copy_block(incoming.max, acc_state.prev.max, Sq_chunk_t);
+                        copy_block(incoming.sum, acc_state.prev.sum, Sq_chunk_t);
+                        copy_block(incoming.out, acc_state.prev.out, out_tiles);
+                        has_state = true;
+                    }
+                }
+            }
+            const bool reducer = ksplit_idx == ksplit_count - 1;
+            // On the reducer, the senders' states follow; a sender whose slice is empty sends no state and is
+            // discarded.
             for (uint32_t sender = 0; reducer && sender + 1 < ksplit_count; ++sender) {
-                const bool has_state =
+                const bool sender_has_state =
                     !(has_sliding_window ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
                                          : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count))
                          .empty();
-                if (!has_state) {
+                if (!sender_has_state) {
                     discard_incoming();
                     continue;
                 }
@@ -915,7 +1016,7 @@ void kernel_main() {
             if (!reducer) {
                 // Sender: leave the state in half A, where the reducer reads it, and signal the writer. An empty
                 // slice stages no state; the reducer discards it using the same chunk counts.
-                if (seen_active_iter && acc_state.prev.out != cb_out_im_A) {
+                if (has_state && acc_state.prev.out != cb_out_im_A) {
                     copy_block(acc_state.prev.max, cb_max_A, Sq_chunk_t);
                     copy_block(acc_state.prev.sum, cb_sum_A, Sq_chunk_t);
                     copy_block(acc_state.prev.out, cb_out_im_A, out_tiles);
@@ -924,7 +1025,7 @@ void kernel_main() {
                 sdpa_cb_push_back_out_of_line(cb_signal, 1);
             } else {
                 // Reducer: its slice holds the diagonal chunk, so its own state always exists.
-                ASSERT(seen_active_iter);
+                ASSERT(has_state);
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 normalize_row_streaming<
                     false,

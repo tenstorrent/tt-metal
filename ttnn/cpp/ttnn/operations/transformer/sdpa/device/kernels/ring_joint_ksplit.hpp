@@ -106,6 +106,21 @@ inline InterleavedStep interleaved_step(uint32_t step, uint32_t ring_iterations)
     return {ring_iterations - 1, 0, 1};
 }
 
+// Slot donation (ring_joint_donation.hpp): every home core gives one slot of its walk, about one ring iteration of its
+// band, to a spare core. The donation runtime args, the same block in the reader and compute: [the donated slot's steps
+// (a home's; 0 if none), visit count | total visit steps << 8 (a spare's; 0 if none), then per visit one word]. Steps
+// pack as first step | step count << 8; a visit as its steps | unit << 16 | band << 24. The writer's block holds [the
+// physical x | y << 16 of the spare visiting this core (0 if none), visit count, then per visit its home's]. A spare
+// signals kDonationOrdinal on its home's K-split semaphore once a visit is staged in its half A; the home pulls it into
+// its restore CBs and bumps the spare's donation_pulled_sem, which frees half A.
+constexpr uint32_t kDonationMaxVisits = 8;
+constexpr uint32_t kDonationArgWords = 2 + kDonationMaxVisits;
+constexpr uint32_t kDonationWriterArgWords = 2 + kDonationMaxVisits;
+// The K-split semaphore ordinal a spare signals (senders use 1 .. kKSplitMaxCount - 1).
+constexpr uint32_t kDonationOrdinal = kKSplitMaxCount;
+// Ring iterations whose IDs a core keeps (a spare visits slots out of order); the host caps ring_size at this.
+constexpr uint32_t kMaxRingIterations = 32;
+
 // Piece `piece` of `pieces` of a K-split slice (the readiness parts land in this order, see
 // ring_attention_slice_readiness.hpp).
 inline KSplitRange interleaved_piece(KSplitRange range, uint32_t piece, uint32_t pieces) {
