@@ -6372,6 +6372,7 @@ _ORDER_LEVER = (("order", "structural-order"), "PERF_MCP_MAX_ORDER_ATTEMPTS")
 _CONV_LEVER = (("conv-prep", "structural-conv"), "PERF_MCP_MAX_CONV_ATTEMPTS")
 _SPLIT_LEVER = (("split", "structural-split"), "PERF_MCP_MAX_SPLIT_ATTEMPTS")
 _STOCK_LEVER = (("stock", "structural-stock"), "PERF_MCP_MAX_STOCK_ATTEMPTS")
+_LAYOUT_LEVER = (("layout-prep", "structural-layout"), "PERF_MCP_MAX_LAYOUT_ATTEMPTS")
 # THE FUSION LADDER: what a group of ops repeated within a layer is offered, in order, each rung only
 # once the one before it is spent without a win. The fold used to be the whole of it -- three tries
 # and the group closed, so a group the fold could not help never reached the step that could:
@@ -6391,6 +6392,7 @@ _GATE_LEVERS = (
     _FOLD_LEVER,
     _ORDER_LEVER,
     _CONV_LEVER,
+    _LAYOUT_LEVER,
     _SPLIT_LEVER,
     _STOCK_LEVER,
     _SHARE_LEVER,
@@ -7552,6 +7554,68 @@ def _conv_gate(prof: dict, attempts: list) -> dict | None:
             "note='none: <evidence>' and the cap will release it."
         )
         % (_codes or "conv", gap),
+    }
+
+
+def _layout_gate(prof: dict, attempts: list) -> dict | None:
+    """MANDATORY datamove layout preparation, for a model that spends material time on runtime
+    Transpose/Permute ops whose work can be done once at load time.
+
+    THE SAME PATTERN AS conv_prep, FOR A DIFFERENT OP CLASS. conv_prep says "prepare conv weights
+    once at load, not per call". This says "pre-transpose weight tensors at load so the runtime
+    datamove op disappears". Both move work from forward() to __init__(); conv_prep fires for
+    conv_pool ops, this fires for datamove ops with material gap.
+
+    Not every datamove op is eliminable -- an activation transpose (e.g. K^T in attention) is
+    computed from a per-call input and cannot be moved to load. The recipe tells the agent to
+    distinguish weight transposes (eliminable) from activation transposes (not), and to record
+    'none: <evidence>' for the latter so the cap releases it.
+
+    Same three-part structure as every other gate:
+      1. APPLICABILITY FIRST. No datamove ops with material gap -> return None.
+      2. MEASUREMENT-GATED EXIT. Clears on a MEASURED win, never on "attempted".
+      3. CAPPED. PERF_MCP_MAX_LAYOUT_ATTEMPTS real tries, so a genuinely irreducible transpose
+         does not block a run forever.
+    """
+    datamoves = [
+        o
+        for o in (prof.get("open_ops") or [])
+        if _is_datamove(str(o.get("op_code") or "")) and float(o.get("gap_ms") or 0.0) > 0
+    ]
+    if not datamoves:
+        return None
+    gap = sum(float(o.get("gap_ms") or 0.0) for o in datamoves)
+    if not _per_request_reader(prof).material_sum(datamoves):
+        return None
+    if _gate_retired(_LAYOUT_LEVER, attempts):
+        return None
+    _codes = ", ".join(sorted({str(o.get("op_code") or "") for o in datamoves})[:4])
+    return {
+        "op": "datamove_layout",
+        "op_class": "datamove",
+        "gap_ms": round(gap, 4),
+        "bound_by": "memory",
+        "grid": None,
+        "weight_dtype": None,
+        "next_rung": "structural-layout",
+        "reason": (
+            "MANDATORY datamove layout preparation -- a lever SEPARATE from the kernel rungs, and it "
+            "comes BEFORE them. This model has runtime datamove ops (%s) carrying %.3fms of gap. "
+            "For each, determine whether the op transposes a WEIGHT tensor or an ACTIVATION tensor:\n"
+            "  WEIGHT TRANSPOSE (eliminable): the tensor being transposed was loaded from the "
+            "checkpoint and stored on device. Pre-transpose it at load time in __init__ and store "
+            "the transposed version, so the runtime ttnn.transpose/permute call can be removed.\n"
+            "  ACTIVATION TRANSPOSE (not eliminable at load): the tensor is computed per call "
+            "(e.g. K^T = ttnn.transpose(k_proj, -2, -1) in attention, where k_proj is a per-call "
+            "projection). This cannot be moved to load. Record it with note='none: activation "
+            "transpose, computed per call, cannot be pre-transposed at load' and the cap will "
+            "release it.\n"
+            "Authoring a tt-lang or C++ kernel does NOT resolve this and will NOT clear the gate. "
+            "Then record_kernel_attempt(op='datamove_layout','layout-prep',measured_ms,"
+            "beat_baseline) -- this clears ONLY on a MEASURED reduction, or after the cap with "
+            "note='none: <evidence>'."
+        )
+        % (_codes or "datamove", gap),
     }
 
 
@@ -9052,6 +9116,9 @@ def termination_check() -> dict:
         conv_block = _conv_gate(_gate_prof, attempts)
         if conv_block:
             blocking.append(conv_block)
+        layout_block = _layout_gate(_gate_prof, attempts)
+        if layout_block:
+            blocking.append(layout_block)
         fold_block = _fold_gate(_gate_prof, attempts)
         if fold_block:
             blocking.append(fold_block)
