@@ -190,9 +190,11 @@ def _assert_shards_equal(sent, received, what):
     out_shards = ttnn.get_device_tensors(received)
     assert len(in_shards) == len(out_shards), f"{what}: shard count {len(in_shards)} != {len(out_shards)}"
     for k, (a, b) in enumerate(zip(in_shards, out_shards)):
-        assert (a.dtype, a.layout, a.shape) == (b.dtype, b.layout, b.shape), (
-            f"{what}: shard {k} spec {(b.dtype, b.layout, b.shape)} != sent {(a.dtype, a.layout, a.shape)}"
-        )
+        assert (a.dtype, a.layout, a.shape) == (
+            b.dtype,
+            b.layout,
+            b.shape,
+        ), f"{what}: shard {k} spec {(b.dtype, b.layout, b.shape)} != sent {(a.dtype, a.layout, a.shape)}"
         assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{what}: shard {k} round-trip mismatch"
 
 
