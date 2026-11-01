@@ -651,3 +651,29 @@ def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
     )
     with expect_error(RuntimeError, "same number of dimensions"):
         ttnn.gather(ttnn_input, -1, index=ttnn_index)
+
+
+def test_gather_rejects_row_major_out_for_tile_input(device, expect_error):
+    torch.manual_seed(0)
+    input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 32, 32), dtype=torch.int64)
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    neighbour = ttnn.from_torch(
+        torch.full((1, 1, 512, 1024), 768.0), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    with expect_error(RuntimeError, "Output tensor layout must match the input tensor layout"):
+        ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 512, 1024), 768.0, dtype=torch.bfloat16))
+
+
+def test_gather_row_major_out_for_row_major_input(device):
+    torch.manual_seed(0)
+    input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 32, 32), dtype=torch.int64)
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch.gather(input, -1, index))
