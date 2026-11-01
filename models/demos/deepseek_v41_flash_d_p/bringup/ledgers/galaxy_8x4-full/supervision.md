@@ -1227,3 +1227,4 @@ not memory; Galaxy 110 cores (rule 18); no single-card jobs / back-door resets o
   the change and take it back).
 - 01:25 K.1R: test_runner_contract FAIL (same 3 window_kv checks as adapter_acks, identical values), test_runner_smoke PASS (Paris through tt-d-gen, 833 s). Run stays paused: acks / runner-contract margins are the owner's call (waiver like DS41-141, or locate the tipping change, likely P.23 OWN_ROWS).
 - 01:55 overseer diagnosis (BRINGUP_RECORD_TASK=DIAG_OWN_ROWS_OFF, results /scratch/dnijemcevic/diag_acks, not in the ledger): test_adapter_acks with DS41_OWN_ROWS=off PASSES (561 s); with on (K.1R) it fails the 3 window_kv checks. P.23 OWN_ROWS tipped them.
+- 02:05 queued FIX.18 OWN_ROWS_KV_MARGIN (gate K.1: acks + runner contract) to find / fix what P.23 moves (no precision raise; if a genuine rounding difference: evidence for the owner's waiver). Waiver itself stays the owner's call. Run --until FIX.18.
