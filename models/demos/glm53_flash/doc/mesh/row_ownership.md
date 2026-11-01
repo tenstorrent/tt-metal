@@ -306,6 +306,33 @@ Tests, in order:
    at 1 M (~90 ms per DSA layer, the only prefix-dependent term: 10 % of the chunk). The attention path over the
    prefix is not where the 1 M chunk goes.
 
+   Where the routed experts' 118 ms go (2026-11-01 07:25-07:45, `tests/test_moe_prefill_paths.py` on the 8x4 at
+   2048 tokens per row = 16 384 gathered per chip, `GLM53_REGIONS_TIMING=1`, layer-4 weights): the hybrid layout
+   splits every expert's intermediate dim over the 8 rows (chip (r, c) = column c's 72 experts x I-slice r), so each
+   row gathers ALL rows' tokens and the regions path (`TtRoutedExperts._forward_regions`) runs them in sub-chunks of
+   `GLM53_REGIONS_T`. Per sub-chunk, device-synced:
+
+   | sub-chunk T | bookkeeping | pick tables | region gather | expert kernel | out relayout | pick gather | post combine | per layer (warmed, unsynced) |
+   |---|---|---|---|---|---|---|---|---|
+   | 2048 (default, 8 calls) | 4.5 | 1.7 | 3.6 | 3.8 | 1.7 | 2.4 | 1.3 | 168 ms (129 ms without the stamps) |
+   | 4096 (4 calls) | 8.1 | 3.1 | 6.7 | 4.5 | 2.9 | 4.7 | 2.2 | 137 ms |
+   | 8192 (2 calls) | 14.4 | 4.7 | 12.7 | 5.3 | 5.5 | 9.1 | 3.1 | 119 ms |
+
+   The d_p `unified_routed_expert_moe` kernel is nearly flat in T (3.8 -> 5.3 ms for 4x the rows: its per-expert
+   fixed cost dominates; ~6 ms per layer at 16 K); everything else is plain-ttnn glue that scales with the tokens
+   (~6 us per gathered token: `cumsum` / one-hot bookkeeping over [T, 288], `ttnn.embedding` row gathers at
+   43-57 GB/s, the bf8 TILE -> bf16 ROW_MAJOR relayout of the [max_buf, H] output). On the (2,4) block the same
+   path costs 41 ms for 4 K gathered tokens (the stale test had measured the blocks path twice; fixed d141fb36187).
+   Plan (the custom-ops directive): (1) `custom_ops/region_plan`: ids [T, k] + the chip's expert mask -> counts,
+   tile-aligned offsets, the picks' slots and local flags in one kernel (replaces bookkeeping + pick tables, ~19 ms
+   per 8192 -> ~2 ms); (2) `custom_ops/row_gather`: a multi-core NoC row gather of 8 KB bf16 rows by index
+   (replaces both `ttnn.embedding` gathers, ~22 ms per 8192 -> ~5 ms at DRAM speed); (3) fold the output relayout
+   into the pick gather (read the kernel's bf8 tiles for the pick rows, write bf16 rows: 5.5 ms -> 0). Target
+   ~40 ms per layer at 16 K tokens (kernel 6 + glue ~34) against 119-168 today: the MoE share of the 16 K chunk
+   at 1 M from 4.2-5.5 s to ~1.5 s, the chunk from 7.6 s to ~4.5 s, a lone 1 M prefill from 505 s to ~300 s.
+   The existing fabric `dispatch` path (the d_p all-to-all ops building the region buffers in-kernel) is measured
+   next on the block as the possible shortcut.
+
 Risks:
 
 | risk | note |
