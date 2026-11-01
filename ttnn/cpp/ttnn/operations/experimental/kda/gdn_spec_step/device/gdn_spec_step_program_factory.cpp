@@ -409,6 +409,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             "GDN_DTB_FP32", in.dt_bias.dtype() == DataType::FLOAT32 ? "1" : "0");
         writer.compiler_options.defines.emplace(
             "GDN_NEA_FP32", in.neg_exp_A.dtype() == DataType::FLOAT32 ? "1" : "0");
+        if ((a.kernel_opts & kGdnSpecOptNarrowGateReads) != 0) {
+            writer.compiler_options.defines.emplace("GDN_NARROW_GR", "1");  // face-row gate reads (bit-identical)
+        }
     }
     const m2::SemaphoreSpecName READY{"ready"};
     const m2::SemaphoreSpecName VALID{"valid"};

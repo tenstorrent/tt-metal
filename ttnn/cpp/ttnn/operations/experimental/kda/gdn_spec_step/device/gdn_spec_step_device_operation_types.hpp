@@ -84,8 +84,13 @@ enum GdnSpecStepKernelOpt : uint32_t {
     kGdnSpecOptGscSplit = 1u << 6,
     // value_blocks > 1: each block normalizes / gates only its own output columns (the row stats stay full-row)
     kGdnSpecOptVsTail = 1u << 7,
+    // gate scalars (bit 1): the writer's gate reads fetch only the face rows they use -- the user's T rows of the a|b
+    // tile(s), tile 0's face row of dt_bias / -exp(A) holding the head -- instead of whole 2-4 KB pages that every core
+    // reads from the same DRAM bank. Bit-identical. (Bits 8 / 9 are K4 / SFPU gates on the x7 branch; not here.)
+    kGdnSpecOptNarrowGateReads = 1u << 10,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
-                     kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail,
+                     kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
+                     kGdnSpecOptNarrowGateReads,
 };
 
 struct GdnSpecStepInputs {

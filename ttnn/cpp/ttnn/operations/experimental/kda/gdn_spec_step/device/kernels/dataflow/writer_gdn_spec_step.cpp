@@ -40,6 +40,9 @@
 #ifndef GDN_GSC_SPLIT
 #define GDN_GSC_SPLIT 0  // kernel_opts bit 6 (GATE_SCALARS, VB > 1): the head's blocks split the T gate computations
 #endif
+#ifndef GDN_NARROW_GR
+#define GDN_NARROW_GR 0  // kernel_opts bit 10 (GATE_SCALARS): gate reads fetch only the face rows they use (bit-identical)
+#endif
 #if GDN_GATE_SCALARS
 #define GDN_GATE_NOINLINE 1  // code size; see gdn_step_gate_math.hpp
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_spec_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
@@ -82,6 +85,37 @@ inline void write_whole_tile(const Accessor& acc, DataflowBuffer& dfb, Noc& noc,
     const uint32_t entry = dfb.get_entry_size();
     noc.async_write(dfb, acc, entry, {.offset_bytes = src_tile * entry}, {.page_id = page});
 }
+
+#if GDN_NARROW_GR
+// NARROW_GR: rows [r0, r0 + n) of tile `page` into the same rows of slot `dst_tile`, one face-row segment (16 elements)
+// per row and tile half (left: columns 0..15, right: 16..31). The gate reads of every core hit the same few DRAM pages
+// (the users' a|b tile row, tile 0 of dt_bias / -exp(A)): fetching 4 KB pages for a handful of elements serialized on
+// one bank. Source / destination offsets are equal; esz is the source's element size.
+template <typename Accessor>
+inline void read_rows_at(
+    const Accessor& acc,
+    DataflowBuffer& dfb,
+    Noc& noc,
+    uint32_t page,
+    uint32_t dst_tile,
+    uint32_t r0,
+    uint32_t n,
+    bool left,
+    bool right,
+    uint32_t esz) {
+    const uint32_t entry = dfb.get_entry_size();
+    const uint32_t seg = 16 * esz;
+    for (uint32_t r = r0; r < r0 + n; ++r) {
+        for (uint32_t half = 0; half < 2; ++half) {
+            if ((half == 0 && !left) || (half == 1 && !right)) {
+                continue;
+            }
+            const uint32_t off = tile_elem_index(r, half * 16) * esz;
+            noc.async_read(acc, dfb, seg, {.page_id = page, .offset_bytes = off}, {.offset_bytes = dst_tile * entry + off});
+        }
+    }
+}
+#endif
 }  // namespace
 
 template <
@@ -244,6 +278,18 @@ TT_KERNEL void writer(
         const uint32_t pg = tr * GDN_W_TILES;
         // staging only (never pushed): the a|b tile(s) and the head scalars' tile 0, all issued under one barrier
         ab_w.reserve_back(1 + AB2);
+#if GDN_NARROW_GR
+        // only the user's T rows of the a|b tile(s) (both halves: a at column h, b at column Nv + h) and tile 0's face
+        // row of dt_bias / -exp(A) holding column h
+        read_rows_at(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + (h >> 5), 0, r0, T, true, true, 2);
+        if (b_tile != 0) {
+            read_rows_at(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + ((Nv + h) >> 5), 1, r0, T, true, true, 2);
+        }
+        dtb_ws.reserve_back(1);
+        nea_ws.reserve_back(1);
+        read_rows_at(dtb_acc, dtb_ws, noc, 0, 0, 0, 1, (h & 16u) == 0, (h & 16u) != 0, GDN_DTB_FP32 ? 4 : 2);
+        read_rows_at(nea_acc, nea_ws, noc, 0, 0, 0, 1, (h & 16u) == 0, (h & 16u) != 0, GDN_NEA_FP32 ? 4 : 2);
+#else
         read_tiles_at(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + (h >> 5), 1, 0);
         if (b_tile != 0) {
             read_tiles_at(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + ((Nv + h) >> 5), 1, 1);
@@ -252,6 +298,7 @@ TT_KERNEL void writer(
         nea_ws.reserve_back(1);
         noc.async_read(dtb_acc, dtb_ws, GDN_DTB_FP32 ? 4096u : 2048u, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read(nea_acc, nea_ws, GDN_NEA_FP32 ? 4096u : 2048u, {.page_id = 0}, {.offset_bytes = 0});
+#endif
         noc.async_read_barrier();
         uint32_t dtb_bits, nea_bits;
         {

@@ -121,6 +121,12 @@ def gdn_spec_step_kernel_opts():
     return opts
 
 
+# x8 (kernel_opts bit 10, kGdnSpecOptNarrowGateReads; port of x7 5c6149788ed onto r9): the gate-scalar writer reads only
+# the face rows it uses (the a|b rows of the user, dt_bias / -exp(A)'s face row) instead of whole DRAM pages that every
+# core reads from one bank. Bit-identical; QWEN36_SPEC_STEP_NARROW_GR=1 adds it wherever gate scalars (bit 1) are on.
+SPEC_STEP_OPT_NARROW_GR = 1024
+
+
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
     """rows: list of 4 torch [C] vectors ([q | k | v] channels of one device) -> [Nv, 4, 32, 32] bf16 packed head
     tiles for gdn_decode_step: tile (h, s) holds rows[s]'s channels [q_hk | k_hk | v_h] (hk = h // rf) as 32-wide
@@ -3674,6 +3680,15 @@ class TPGatedDeltaNet:
             _log_spec_step_once(
                 ("kernel_opts", _opts),
                 f"[gdn-spec-step] QWEN36_SPEC_STEP_OPT={_opts:#x}: bit-identical kernel restructurings on",
+            )
+        if (
+            os.environ.get("QWEN36_SPEC_STEP_NARROW_GR", "0").strip() == "1"
+            and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_GATE_SCALARS
+        ):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_GR
+            _log_spec_step_once(
+                ("narrow_gr", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR=1: face-row gate reads (bit-identical)",
             )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
