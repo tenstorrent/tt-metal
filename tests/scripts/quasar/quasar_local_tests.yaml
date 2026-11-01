@@ -308,6 +308,29 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_c
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+# Debug of the 2-core resnet50 layer1 conv2 (Horizon/Trinity e2e top-1 549 != 610)
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer1_conv2_repeat.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_correctness_bisect.py:
+  - runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2.py:
+  - filter: "test_quasar_layer_conv2[quasar-layer1-device_params0]"
+    runner: pytest
+    config: 2x3
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py:
   - runner: pytest
     config: 2x3

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import math
 import os
 import re
@@ -23,6 +24,11 @@ from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resne
 #
 # Optionally set RESNET_PCC_DUMP=<dir> to also save each op's torch output to
 # <dir>/op<NNN>_<name>.pt, so exact PCC can be computed offline (dump on WH, load+compare on Quasar).
+# RESNET_PCC_DUMP_ONLY=<regex> saves only the ops whose NAME matches it. The dump is bfloat16 (the
+# device values are bfloat16, so no value changes).
+#
+# Each op also logs [OPHASH]: the sha256 of its bfloat16 output. Equal hashes => bit-identical outputs,
+# so two runs (or two platforms) can be compared op by op without a dump.
 #
 # NOTE: enabling this forces a device->host readback per op (implicit sync), so it perturbs timing --
 # use it for numeric comparison, not perf. Disabled by default => zero overhead.
@@ -101,6 +107,8 @@ def _log_op(name, t):
             f"inf={int(torch.isinf(f).sum().item())} posinf={int(torch.isposinf(f).sum().item())} "
             f"first8={[round(v, 4) for v in f[:8].tolist()]}"
         )
+        sha = hashlib.sha256(tt.to(torch.bfloat16).view(torch.int16).numpy().tobytes()).hexdigest()[:16]
+        logger.info(f"[OPHASH] op{idx:03d} {name} sha256={sha}")
         g = _GOLDEN.get(name)
         if g is not None:
             pcc, finite_frac = _pcc(tt, g)
@@ -109,7 +117,8 @@ def _log_op(name, t):
                 f"dev={tuple(tt.shape)} gold={tuple(g.shape)}" + ("  <<< DIVERGES" if not (pcc >= 0.98) else "")
             )
         dump = os.environ.get("RESNET_PCC_DUMP")
-        if dump:
+        dump_only = os.environ.get("RESNET_PCC_DUMP_ONLY")
+        if dump and (not dump_only or re.search(dump_only, name)):
             # Sanitize path components before touching the filesystem (path-traversal / SAST): the op
             # `name` becomes a filename, so strip anything that isn't a safe filename char (no path
             # separators, no ".."), and confine the write to the RESNET_PCC_DUMP dir via a realpath
@@ -119,7 +128,7 @@ def _log_op(name, t):
             out_path = os.path.realpath(os.path.join(dump_dir, f"op{idx:03d}_{safe_name}.pt"))
             if os.path.commonpath([dump_dir, out_path]) == dump_dir:
                 os.makedirs(dump_dir, exist_ok=True)
-                torch.save(tt, out_path)
+                torch.save(tt.to(torch.bfloat16), out_path)
     except Exception as e:
         logger.info(f"[PCCLOG] op{idx:03d} {name} <to_torch failed: {type(e).__name__}: {e}>")
     return t

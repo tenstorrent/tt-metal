@@ -68,6 +68,11 @@ def test_resnet50_e2e(device, use_pretrained_weight, model_location_generator):
     #   - downsamples: all take the HEIGHT_SHARDED force_1x1_nonmm_split SPLIT plain-matmul route (Program B
     #     full GEMM, no N-halving, no fused conv_bmm multi-K hang). layer3_module1 @28 routed HS on Quasar;
     #     verified by test_conv2d_layer3_downsample_split.py::..._hs_split (and layer2 @56 / layer4 @14).
+    # Debug (2-core conv2 run-to-run changes): RESNET_NO_PROGRAM_CACHE=1 compiles a fresh program for every op,
+    # so the layer1_module2/3.conv2 calls do not reuse the cached layer1_module1.conv2 program.
+    if os.environ.get("RESNET_NO_PROGRAM_CACHE") == "1":
+        device.disable_and_clear_program_cache()
+        logger.info("[e2e] program cache disabled (RESNET_NO_PROGRAM_CACHE=1)")
     _saved_cod = dict(_rn._CONV_ON_DEVICE)
     try:
         test_infra = create_test_infra(
@@ -82,6 +87,10 @@ def test_resnet50_e2e(device, use_pretrained_weight, model_location_generator):
         tt_inputs_host, input_mem_config = test_infra.setup_input(device)
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         dev_out = test_infra.run()  # full network -> [1, 1, 1, 1000]-ish logits on device
+        try:
+            logger.info(f"[e2e] program cache entries={device.num_program_cache_entries()}")
+        except Exception as e:  # debug log only; never fail the run on it
+            logger.info(f"[e2e] program cache entries=<{type(e).__name__}: {e}>")
 
         dev = ttnn.to_torch(dev_out).float().reshape(1, -1)[:, :1000]
         golden = test_infra.torch_output_tensor.float().reshape(1, -1)[:, :1000]

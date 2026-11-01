@@ -229,3 +229,25 @@ def test_conv2d_correctness_bisect(mesh_device, label, with_bias, activation, pa
         packer_l1_acc=packer_l1_acc,
         reshard=reshard,
     )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_conv2d_correctness_bisect_pad1(mesh_device):
+    """The relu variant above with padding 1, so the halo zero-pad runs (the 2-core resnet50 conv2 debug).
+
+    Compare its [BISECT] per-oh-row PCC with the padding 0 test: bad first/last rows, or bad rows at the
+    shard edge (row 8 of 16 on 2 cores), point to a halo / zero-pad defect."""
+    if is_wormhole_b0():
+        pytest.xfail("WH fused conv_bmm_tilize cadence race; see test_conv2d_correctness_bisect")
+    _run(
+        mesh_device,
+        kernel=(3, 3),
+        padding=1,
+        full_inner_dim=False,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        with_bias=True,
+        activation="relu",
+        packer_l1_acc=True,
+        reshard=True,
+    )
