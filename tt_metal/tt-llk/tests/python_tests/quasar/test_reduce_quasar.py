@@ -329,8 +329,8 @@ def test_reduce_quasar_multi_tile_unpack(
         reduce_dim,
         pool_type,
         MathFidelity.LoFi,
-        False,
-        DestSync.Half,
+        is_reduce_to_one=False,
+        dest_sync_mode=DEST_SYNC().dest_sync,  # DestSync.Half
         run_types=[PerfRunType.L1_TO_L1],
         loop_factor=1,
         unpack_num_tiles=unpack_num_tiles,

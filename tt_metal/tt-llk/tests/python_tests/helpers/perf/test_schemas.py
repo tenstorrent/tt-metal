@@ -1418,7 +1418,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
