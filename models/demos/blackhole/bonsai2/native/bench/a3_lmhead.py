@@ -23,7 +23,7 @@ from .a1_calib import device_kernel_us
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--name", default="output.weight", help="GGUF tensor, or gdn_in:<layer> for the GDN [qkv|z] rows")
+    ap.add_argument("--name", default="output.weight", help="GGUF tensor, or gdn_in:<layer> / attn_qkv:<layer> for the reordered rows")
     ap.add_argument("--calls", type=int, default=5)
     ap.add_argument("--cache", default=os.path.expanduser("~/avan/native2bit/agentA/tt_cache/pq2_0/a3_linear"))
     args = ap.parse_args()
@@ -33,7 +33,7 @@ def main() -> int:
 
     import ttnn
     from models.demos.blackhole.bonsai2.native import cpu_ref
-    from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, gdn_in_rows
+    from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, attn_qkv_rows, gdn_in_rows
     from models.demos.blackhole.bonsai2.native.a3.mlp import Shared
     from models.demos.blackhole.bonsai2.native.gguf_ternary import read_ternary
 
@@ -42,11 +42,11 @@ def main() -> int:
     rc = 0
     try:
         sh = Shared(device)
-        if args.name.startswith("gdn_in:"):
-            layer = int(args.name.split(":")[1])
-            codes, scales = gdn_in_rows(sh, layer)
-            lin = TernaryLinear(sh, f"blk.{layer}.gdn_in", args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG,
-                                rows=(codes, scales))
+        if args.name.split(":")[0] in ("gdn_in", "attn_qkv"):
+            kind, layer = args.name.split(":")[0], int(args.name.split(":")[1])
+            codes, scales = (gdn_in_rows if kind == "gdn_in" else attn_qkv_rows)(sh, layer)
+            cache_name = f"blk.{layer}.gdn_in" if kind == "gdn_in" else f"blk.{layer}.attn_qkv_fused"
+            lin = TernaryLinear(sh, cache_name, args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG, rows=(codes, scales))
             w = codes.astype(np.float64) * np.repeat(scales.astype(np.float64), 128, 1)
         else:
             lin = TernaryLinear(sh, args.name, args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG)
