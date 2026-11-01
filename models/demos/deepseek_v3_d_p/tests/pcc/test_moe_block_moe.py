@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""The MoE block (ttnn.experimental.moe_block through TtK3MoEBlockFfn, GLM-5.3's default MoE) vs the CPU MoE reference
+on random weights: the block-path twin of test_ttnn_moe.py::test_glm_moe (which tests the TtMoe module itself).
+
+One 5120-token chunk on the 8x4 XY torus (S/8 rows, H/4 columns a chip), the weights given as host tensors (the
+TtPrefillBlock state dict the synthetic-weight tests use), the router non-degenerate on random weights. Also logs the
+block's time a call (eager, after the build and a warm-up call).
+"""
+
+import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+from tests.ttnn.utils_for_testing import comp_pcc
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
+
+CHUNK = 5120
+FINAL_PCC = 0.982  # (test_ttnn_moe.run_model's final-output bar)
+_PAYLOAD, _L1_SMALL = moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0, moe_impl="block")
+
+
+def _random_moe_weights(hidden, inter, n_routed, seed):
+    """GLM-5.3 MoE weights as test_prefill_block's _glm_random_moe_weights makes them (bf16, 1/sqrt(fan-in))."""
+    g = torch.Generator().manual_seed(seed)
+    hs, ds = hidden**-0.5, inter**-0.5
+
+    def expert():
+        return {
+            "gate_proj": (torch.randn(inter, hidden, generator=g) * hs).to(torch.bfloat16),
+            "up_proj": (torch.randn(inter, hidden, generator=g) * hs).to(torch.bfloat16),
+            "down_proj": (torch.randn(hidden, inter, generator=g) * ds).to(torch.bfloat16),
+        }
+
+    gate = {
+        "weight": (torch.randn(n_routed, hidden, generator=g) * hs).to(torch.bfloat16),
+        "e_score_correction_bias": (torch.randn(n_routed, generator=g) * 0.01).to(torch.float32),
+    }
+    return gate, [expert() for _ in range(n_routed)], expert()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=_PAYLOAD,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=_L1_SMALL,
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1200)
+def test_glm_moe_block(mesh_device, device_params):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
+
+    R, C = tuple(mesh_device.shape)
+    H = GLM53Config.EMB_SIZE
+    gate, routed, shared = _random_moe_weights(H, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, 3)
+    sd = {"gate_weights": gate, "routed_expert_weights": routed, "shared_expert_weights": shared}
+    ffn = TtK3MoEBlockFfn(mesh_device, GLM53Config, layer_idx=6, state_dict=sd)
+
+    x = (torch.randn(1, 1, CHUNK, H, generator=torch.Generator().manual_seed(7)) * 0.5).to(torch.bfloat16)
+    x_tt = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3)),
+    )
+    y_tt = ffn(x_tt)  # (the build and the weights, then one call)
+    ttnn.synchronize_device(mesh_device)
+    comp = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    y = ttnn.to_torch(y_tt, mesh_composer=comp).float()
+
+    want = glm_moe_reference(
+        x[0],
+        gate_weights=gate,
+        routed_expert_weights=routed,
+        shared_expert_weights=shared,
+        emb_dim=H,
+        num_experts_per_tok=GLM53Config.NUM_EXPERTS_PER_TOKEN,
+        n_group=GLM53Config.NUM_EXPERT_GROUPS,
+        topk_group=GLM53Config.NUM_LIMITED_GROUPS,
+        routed_scaling_factor=GLM53Config.ROUTE_SCALE,
+    ).float()
+    ok, msg = comp_pcc(want.reshape(-1, H), y.reshape(-1, H), FINAL_PCC)
+    logger.info(f"MoE block (GLM-5.3, random weights, {CHUNK} tokens) vs the CPU MoE: {msg}")
+
+    # (time a call: eager, programs built, weights resident)
+    ttnn.deallocate(y_tt)
+    calls = 5
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        ttnn.deallocate(ffn(x_tt))
+    t1 = time.perf_counter()
+    ttnn.synchronize_device(mesh_device)
+    t2 = time.perf_counter()
+    logger.info(
+        f"MoE block (GLM-5.3) {CHUNK} tokens: {(t1 - t0) / calls * 1e3:.2f} ms a call to enqueue, "
+        f"{(t2 - t0) / calls * 1e3:.2f} ms with the device"
+    )
+    assert ok, f"MoE block vs the CPU MoE: {msg} (need {FINAL_PCC})"
