@@ -51,13 +51,17 @@ def glm_moe_reference(
         use_bitonic_sort=False,
     )
     gate.weight.data = gate_weights["weight"]
-    # Match the device: TtMoEGatePrefill stores e_score_correction_bias as bf16 (even in DEVICE_FP32,
-    # which only makes the *logits* fp32). GLM's real bias is ~34.5 with a ~±0.14 inter-expert spread —
-    # finer than bf16's ~0.125-0.25 resolution near 34.5 — and it dominates top-k selection, so an fp32
-    # reference bias would pick different experts than the device (bf16). Quantize to bf16 here so the
-    # reference routes like the device. (The bf16-bias precision itself is a separate model-accuracy
-    # concern, not what this block test validates.)
-    gate.e_score_correction_bias.data = gate_weights["e_score_correction_bias"].to(torch.bfloat16).float()
+    # Match the device MoE's routing-bias precision. TtMoEGatePrefill stores e_score_correction_bias as bf16 (even in
+    # DEVICE_FP32, which only makes the *logits* fp32); the MoE block (GLM-5.3's default MoE, tt/moe_impl.py) keeps the
+    # checkpoint's fp32. GLM's real biases share a large offset (|b| ~7-35, layer 3 ~34.5) with a ~±0.14 inter-expert
+    # spread - finer than bf16's 0.03-0.125 resolution there - and dominate top-k selection: a bias at the other
+    # precision picks another top-8 for most tokens. (fp32 is the checkpoint's and the model's own precision.)
+    from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
+
+    bias = gate_weights["e_score_correction_bias"].float()
+    if not moe_block_enabled("GLM53Config"):
+        bias = bias.to(torch.bfloat16).float()
+    gate.e_score_correction_bias.data = bias
     # MoEGate.forward expects [bsz, seq, hidden] (it unpacks 3 dims); it flattens internally and
     # returns topk_idx / topk_weight as [tokens, top_k].
     topk_idx, topk_weight = gate(hidden_states.float())
