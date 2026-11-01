@@ -70,6 +70,11 @@ inline uint32_t tile_col0_offset_fp32(uint32_t r) {
 
 inline uint32_t tile_col16_offset_fp32(uint32_t r) { return tile_col0_offset_fp32(r) + FP32_FACE_NBYTES; }
 
+// Byte offset of element (r, c) of a float32 tile.
+inline uint32_t tile_elem_offset_fp32(uint32_t r, uint32_t c) {
+    return (c < 16 ? tile_col0_offset_fp32(r) : tile_col16_offset_fp32(r)) + (c % 16) * 4;
+}
+
 // Byte offset of element (r, c) of a bf16 tile.
 inline uint32_t tile_elem_offset(uint32_t r, uint32_t c) {
     const auto off = tile_row_offsets(r);

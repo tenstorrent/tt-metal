@@ -144,6 +144,10 @@ std::vector<FabricType> get_all_mgd_fabric_types();
 // The fabric topology of `mesh_device`'s context.
 tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
+// True when the fabric built for `mesh_device`'s context carries inter-mesh traffic on VC0, with no VC1.
+// TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 asks for it; the builder keeps VC1 when meshes need pass-through.
+bool is_intermesh_vc_disabled(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
 struct FabricEriscDatamoverKernelConfig {
     tt::tt_metal::Program& program;
     const std::string& kernel_path;

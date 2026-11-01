@@ -24,11 +24,10 @@
 //
 // with the three constants folded per level on the host — on the SFPU per
 // point, or as matrix entries on the FPU with the tiled geometry. This reader
-// only decides *which* bf16 pair is the reference and which is the offset (and,
+// only decides *which* staged pair is the reference and which is the offset (and,
 // tiled, where they land in the block's tiles); it does no arithmetic on
 // either. reference_points are bf16, or float32 when REF_FP32 is defined
-// (per-point path only; REF_FP32 changes the reference operand's tile format
-// to float32).
+// (REF_FP32 changes the reference operand's tile format to float32).
 // Everything else is fused_msda_reader_common.hpp, shared with V1.
 
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/fused_msda_reader_common.hpp"
@@ -94,23 +93,33 @@ struct ReferencePlusOffset {
         return stage_refs(noc, b, q_start, v_rows);
     }
 
-    // Reference k of row r to (r, k) and (r, 16 + k); see
-    // msda_tiled_geometry.hpp. Plain loads and stores, fenced on both sides
-    // here; the caller has barriered the arena's NoC reads.
+    // Reference k of row r to (r, k) and (r, 16 + k), in the reference tile's
+    // format; see msda_tiled_geometry.hpp. Plain loads and stores, fenced on
+    // both sides here; the caller has barriered the arena's NoC reads.
     void fill_ref_tile(uint32_t tile_l1, uint32_t v_rows) const {
         asm volatile("" ::: "memory");
         constexpr uint32_t STICK_WORDS = ref_stick_nbytes / sizeof(uint32_t);
         for (uint32_t r = 0; r < v_rows; ++r) {
+            const uint32_t* src = &CoreLocalMem<uint32_t>(ref_arena_l1 + r * NUM_REFS * ref_stick_nbytes)[0];
+#ifdef REF_FP32
+            uint32_t* x = &CoreLocalMem<uint32_t>(tile_l1 + fused_msda_tile_layout::tile_col0_offset_fp32(r))[0];
+            uint32_t* y = &CoreLocalMem<uint32_t>(tile_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r))[0];
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < NUM_REFS; ++k) {
+                x[k] = src[k * STICK_WORDS];
+                y[k] = src[k * STICK_WORDS + 1];
+            }
+#else
             const auto off = fused_msda_tile_layout::tile_row_offsets(r);
             uint16_t* x = &CoreLocalMem<uint16_t>(tile_l1 + off.lo)[0];
             uint16_t* y = &CoreLocalMem<uint16_t>(tile_l1 + off.hi)[0];
-            const uint32_t* src = &CoreLocalMem<uint32_t>(ref_arena_l1 + r * NUM_REFS * ref_stick_nbytes)[0];
 #pragma GCC unroll 4
             for (uint32_t k = 0; k < NUM_REFS; ++k) {
                 const uint32_t xy = src[k * STICK_WORDS];  // (x, y) bf16, little-endian
                 x[k] = static_cast<uint16_t>(xy);
                 y[k] = static_cast<uint16_t>(xy >> 16);
             }
+#endif
         }
         asm volatile("" ::: "memory");
     }

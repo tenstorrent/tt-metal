@@ -298,6 +298,7 @@ inline void _llk_unpack_A_mop_config_(
  * @note On the plain path, a face shorter than 16 rows waits for math and zeroes both SrcA banks
  *       (see @ref _llk_unpack_A_mop_config_). Re-run this init after any op that writes SrcA, for example a
  *       MOVD2A or MOVB2A.
+ * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -324,6 +325,13 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
+    // The unpack-to-dest ROW MOP copies row 0 of faces 0 and 1 into dest faces 0 and 1. On a 32x16 tile
+    // face 1 is the bottom face, so its half of the output takes the wrong row. Same MOP as Wormhole, where
+    // the output is wrong; ttsim cannot run this path.
+    LLK_ASSERT(
+        !(BType == BroadcastType::ROW && should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) &&
+          is_tensor_shape_2x1_face_grid(tensor_shape)),
+        "Row broadcast with unpack to dest does not support 32x16 tiles");
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
