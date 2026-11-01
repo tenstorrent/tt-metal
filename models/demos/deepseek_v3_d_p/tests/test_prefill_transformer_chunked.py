@@ -66,7 +66,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
-from models.demos.deepseek_v3_d_p.tt.moe_impl import MOE_BLOCK_L1_SMALL, moe_block_enabled, moe_block_fabric_payload
+from models.demos.deepseek_v3_d_p.tt.moe_impl import (
+    MOE_BLOCK_L1_SMALL,
+    k3_moe_block_device_params,
+    moe_block_enabled,
+    moe_block_fabric_payload,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -111,25 +116,21 @@ def _glm_payload():
 
 
 def _k3_device_params():
-    """K3's fabric (K3_FABRIC=torus_xy: the XY torus); K3_MOE_IMPL=block also opens it with the payload the MoE block's
-    combine needs (2 x 3584 + 32 B) and L1_SMALL room for its persistent words and semaphores (K3_L1_SMALL overrides).
-    """
-    payload = moe_fabric_payload(KimiK3Config)
-    if os.environ.get("K3_MOE_IMPL") == "block":
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import fabric_payload
-
-        payload = fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
+    """K3's fabric (K3_FABRIC=torus_xy: the XY torus), and what the MoE block needs when it is K3's MoE (the default;
+    K3_MOE_IMPL=ttmoe for TtMoe): the XY torus, its combine's fabric payload and L1_SMALL (tt/moe_impl.py; K3_L1_SMALL
+    overrides the L1_SMALL)."""
     extra = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY} if os.environ.get("K3_FABRIC") == "torus_xy" else {}
-    return fabric2d_device_params(
-        fabric_payload_size=payload,
-        l1_small_size=int(
-            os.environ.get(
-                "K3_L1_SMALL", 5888 if os.environ.get("K3_MOE_IMPL") == "block" else KimiK3Config.L1_SMALL_SIZE
-            )
-        ),
-        trace_region_size=256 * 1024 * 1024,
-        **extra,
+    params = k3_moe_block_device_params(
+        fabric2d_device_params(
+            fabric_payload_size=moe_fabric_payload(KimiK3Config),
+            l1_small_size=KimiK3Config.L1_SMALL_SIZE,
+            trace_region_size=256 * 1024 * 1024,
+            **extra,
+        )
     )
+    if os.environ.get("K3_L1_SMALL"):
+        params["l1_small_size"] = int(os.environ["K3_L1_SMALL"])
+    return params
 
 
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024

@@ -3,9 +3,10 @@
 
 """Which MoE a prefill block builds: TtMoe or the MoE block's C++ ops (ttnn.experimental.moe_block).
 
-GLM-5.3 defaults to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert from the checkpoint, the
-routed experts from the TtMoe tensorbin cache. Every other model stays on TtMoe (Kimi-K3 opts in with K3_MOE_IMPL).
-Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL, then the model's default.
+GLM-5.3 and Kimi-K3 default to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
+latent pair) from the checkpoint, the routed experts from the TtMoe tensorbin cache. Every other model stays on TtMoe.
+Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3: $K3_MOE_IMPL first), then the model's
+default.
 
 A mesh that runs the block needs room for its persistent words and semaphores in L1_SMALL (MOE_BLOCK_L1_SMALL) and a
 fabric payload that holds one combine row (moe_block_fabric_payload). Paths that cannot give it that (the runner, MTP,
@@ -19,20 +20,22 @@ from typing import Optional
 
 BLOCK = "block"
 TTMOE = "ttmoe"
-_BLOCK_DEFAULT = ("GLM53Config",)  # model config classes whose MoE is the block by default
+_BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
 
-# L1_SMALL a mesh needs for the block's persistent words + packed semaphores (4608 B measured on GLM-5.3) on top
-# of the model's own L1_SMALL users.
+# L1_SMALL a mesh needs for the block's persistent words + packed semaphores (4608 B measured on GLM-5.3, 5376 B on
+# Kimi-K3) on top of the model's own L1_SMALL users.
 MOE_BLOCK_L1_SMALL = 5888
 
 
 def moe_impl_of(model_cfg=None, moe_impl: Optional[str] = None) -> str:
-    """"block" or "ttmoe" for a model config class (or its name)."""
-    choice = moe_impl or os.environ.get("MOE_IMPL")
+    """ "block" or "ttmoe" for a model config class (or its name)."""
+    name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
+    choice = (
+        moe_impl or (os.environ.get("K3_MOE_IMPL") if name == "KimiK3Config" else None) or os.environ.get("MOE_IMPL")
+    )
     if choice:
         assert choice in (BLOCK, TTMOE), f"MOE_IMPL / moe_impl must be '{BLOCK}' or '{TTMOE}', got {choice!r}"
         return choice
-    name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
     return BLOCK if name in _BLOCK_DEFAULT else TTMOE
 
 
@@ -44,3 +47,25 @@ def moe_block_enabled(model_cfg=None, moe_impl: Optional[str] = None) -> bool:
 def moe_block_fabric_payload(emb_dim: int) -> int:
     """Fabric payload bytes the block's combine needs: one row (emb_dim bf16) plus its trailer, 64-B aligned."""
     return max(7232, (2 * emb_dim + 32 + 63) // 64 * 64)
+
+
+def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:
+    """A Kimi-K3 mesh's device_params with what the MoE block needs when it is K3's MoE: a fabric payload holding one
+    combine row of the latent (2 x 3584 + 32 B), L1_SMALL room for its persistent words and semaphores (at least
+    MOE_BLOCK_L1_SMALL) and the XY torus fabric - unless the job pins a mesh graph descriptor (TT_MESH_GRAPH_DESC_PATH,
+    e.g. CI's single_bh_galaxy mesh): then the test's own fabric. Unchanged on TtMoe."""
+    if not moe_block_enabled("KimiK3Config", moe_impl):
+        return params
+    import ttnn
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+    from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+
+    out = dict(params)
+    if not os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+        out["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    payload = moe_block_fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
+    router = out.get("fabric_router_config")
+    if router is None or router.max_packet_payload_size_bytes < payload:
+        out["fabric_router_config"] = create_fabric_router_config(payload)
+    out["l1_small_size"] = max(int(out.get("l1_small_size", 0)), MOE_BLOCK_L1_SMALL)
+    return out

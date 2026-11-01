@@ -30,6 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params
 from models.common.utility_functions import comp_pcc
 
 # Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
@@ -106,7 +107,10 @@ PLACEMENTS = [
         # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
         # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
         # clears AttnRes with margin while leaving MLA its working space.
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        # (the MoE block, K3's default MoE: the XY torus, its fabric payload and L1_SMALL - tt/moe_impl.py)
+        k3_moe_block_device_params(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE}
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
     )

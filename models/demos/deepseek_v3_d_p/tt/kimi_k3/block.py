@@ -19,13 +19,13 @@ answers `writes_kv`, and a residual it talks to rather than carries.
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
@@ -67,6 +67,7 @@ class TtKimiK3Block(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
+        moe_impl: Optional[str] = None,  # tt/moe_impl.py: "block" (K3's default) / "ttmoe"
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -116,7 +117,7 @@ class TtKimiK3Block(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
 
-        self.moe_block = self.is_moe and os.environ.get("K3_MOE_IMPL") == "block"
+        self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
         if self.moe_block:
             # (the MoE block's C++ ops: router, shared expert, latent and routed experts in one call -
             # tt/kimi_k3/moe_block_ffn.py)
