@@ -14,7 +14,8 @@ Numerics: the per-token output is the same sum of the same expert outputs. A pla
 sequential layout (the tail sums the slots of a column in slot order, whichever chip of the column computed them); a placement that moves experts across columns changes only which
 column partial a slot lands in, so the bf16 accumulation order of the column partials / reduce_scatter changes (PCC against the golden unchanged).
 
-Not supported together with the unified (deepseek_prefill) routed-expert prefill reading the decode weights in place (it assumes the sequential layout): ``check_prefill_compat``.
+The unified (deepseek_prefill) routed-expert prefill reads the decode weights in place and assumes the sequential layout: its router ids are relabelled by ``relabel(layer)`` (a [384] id LUT gather
+in ``DSV41UnifiedMoE.forward``; ``DSV41_MOE_PLACE_PF_RELABEL=0`` restores the old refusal, ``check_prefill_compat``).
 """
 import hashlib
 import json
@@ -79,13 +80,38 @@ def samecol(a):
     return all(c % 8 == e // 48 for e, c in enumerate(a))
 
 
+def relabel(layer_id):
+    """pi (list of 384) for the unified prefill reading the decode ring weights in place, or None for the sequential layout.
+
+    The weights of expert e sit at chip a[e], slot j = rank of e among the experts of that chip (ascending id). The unified prefill finds the weights of id e' at the chip of the
+    SEQUENTIAL layout, slot e' % 12; so the router id e is handed to it as pi(e) = the j-th smallest sequential id of chip a[e]. pi is a permutation (a same-column placement relabels inside its column group).
+    """
+    a = assignment(layer_id)
+    if a is None:
+        return None
+    seq = sequential()
+    seq_set = {d: sorted(e for e in range(NE) if seq[e] == d) for d in range(NCHIP)}
+    nxt = {d: 0 for d in range(NCHIP)}
+    pi = [0] * NE
+    for e in range(NE):  # ascending e: the j-th expert of chip a[e]
+        d = a[e]
+        pi[e] = seq_set[d][nxt[d]]
+        nxt[d] += 1
+    assert sorted(pi) == list(range(NE))
+    return pi
+
+
+def prefill_relabel_enabled():
+    return os.environ.get("DSV41_MOE_PLACE_PF_RELABEL", "1") == "1"
+
+
 def check_prefill_compat(layer_ids, ring_prefill):
-    """raise if a placement is active for a layer whose decode weights the unified prefill reads in place (sequential layout assumed)"""
-    if not enabled() or not ring_prefill:
+    """raise if a placement is active for a layer whose decode weights the unified prefill reads in place AND the router-id relabel is switched off (DSV41_MOE_PLACE_PF_RELABEL=0)"""
+    if not enabled() or not ring_prefill or prefill_relabel_enabled():
         return
     bad = [L for L in layer_ids if assignment(L) is not None]
     if bad:
         raise RuntimeError(
-            f"DSV41_MOE_PLACE is set for layers {bad[:5]}... but the unified prefill reads the decode expert weights in place (DSV41_UNI_RING=1) and assumes the sequential layout: "
-            "set DSV41_PREFILL_MOE=off or DSV41_UNI_RING=0 (separate prefill copy), or unset DSV41_MOE_PLACE"
+            f"DSV41_MOE_PLACE is set for layers {bad[:5]}... but the unified prefill reads the decode expert weights in place (DSV41_UNI_RING=1) and assumes the sequential layout, and "
+            "the relabel is off (DSV41_MOE_PLACE_PF_RELABEL=0): set DSV41_PREFILL_MOE=off or DSV41_UNI_RING=0 (separate prefill copy), or unset DSV41_MOE_PLACE"
         )

@@ -205,7 +205,7 @@ class DSV41UnifiedMoE:
     chunk (all tokens of the mesh row, replicated over the columns) and returns the per-column PARTIAL weighted sums [1,1,N,D] (tile, DRAM).
     """
 
-    def __init__(self, md, layer_id, weights=None, log=print, ring=None):
+    def __init__(self, md, layer_id, weights=None, log=print, ring=None, gate=None):
         """ring: (w0_w1, w2) = the moe_compute decode weight tensors of the layer; the op then reads them in place (RING_WEIGHTS mode, 8 columns,
         no second weight copy): the same tensor is passed EPC times in the gate/up/down lists."""
         self.md, self.layer_id = md, layer_id
@@ -213,16 +213,99 @@ class DSV41UnifiedMoE:
             self.gate_projs = [ring[0]] * EPC
             self.up_projs = [ring[0]] * EPC
             self.down_projs = [ring[1]] * EPC
+            self.lut = None
+            self.gate_view = None
+            from models.demos.blackhole.deepseek_v41_flash.tt import moe_place
+
+            pi = moe_place.relabel(layer_id) if moe_place.prefill_relabel_enabled() else None
+            if (
+                pi is not None
+            ):  # DSV41_MOE_PLACE: the in-place weights follow the placement; router ids are relabelled by pi before bincount / dispatch
+                lut = torch.zeros(NUM_ROUTED, 32)
+                lut[:, 0] = torch.tensor(pi) // 16
+                lut[:, 1] = torch.tensor(pi) % 16
+                self.lut = ttnn.from_torch(
+                    lut.to(torch.bfloat16),
+                    device=md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+                )
+                if (
+                    gate is not None
+                    and os.environ.get("DSV41_MOE_PLACE_PF_GATE", "1") == "1"
+                    and os.environ.get("DSV41_ROUTER", "fused") == "fused"
+                ):  # the router of the prefill ranks the PERMUTED columns: its ids come out already relabelled (no extra op per window)
+                    self.gate_view = self._permuted_gate(gate, pi)
+                    self.gate_src = gate
         else:
+            self.lut = None
+            self.gate_view = None
             self.gate_projs, self.up_projs, self.down_projs = (
                 weights if weights is not None else build_expert_weights(md, layer_id, log=log)
             )
 
-    def forward(self, x_rm, scores, indices, upto=99, overlap=None):
+    def _permuted_gate(self, gate, pi):
+        """shallow copy of the fused-router gate whose weight / bias / bias_vl COLUMN pi(e) holds expert e: router_select then returns the relabelled ids pi(e) (ranks are bit-identical per
+        expert; only an exact fp32 tie of two ranks would break differently)"""
+        import copy
+
+        inv = torch.empty(NUM_ROUTED, dtype=torch.long)
+        inv[torch.tensor(pi)] = torch.arange(NUM_ROUTED)  # column pi(e) <- column e
+        v = copy.copy(gate)
+        rep = ttnn.ReplicateTensorToMesh(self.md)
+        for name in ("_w_exact", "_bias_exact", "_dbias"):
+            t = getattr(gate, name, None)
+            if t is None:
+                continue
+            h = ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+            assert h.shape[-1] == NUM_ROUTED
+            setattr(
+                v,
+                name,
+                ttnn.from_torch(
+                    h[..., inv].contiguous(),
+                    device=self.md,
+                    dtype=t.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                ),
+            )
+        return v
+
+    def _relabel(self, indices, N):
+        """[N,1,1,k] uint16 RM router ids -> pi(ids) (placement relabel, tt/moe_place.py): embedding gather of a [384, 32] bf16 LUT (columns: pi // 16, pi % 16)"""
+        t = ttnn.to_layout(ttnn.reshape(indices, [N, TOPK]), ttnn.TILE_LAYOUT)
+        t32 = ttnn.typecast(t, ttnn.uint32)
+        ttnn.deallocate(t)
+        ids = ttnn.to_layout(t32, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(t32)
+        emb = ttnn.embedding(
+            ids, self.lut, layout=ttnn.ROW_MAJOR_LAYOUT
+        )  # [N, k, 32] bf16: column 0 = pi // 16, column 1 = pi % 16 (both exact in bf16)
+        ttnn.deallocate(ids)
+        parts = []
+        for c in (0, 1):
+            col = ttnn.reshape(ttnn.slice(emb, [0, 0, c], [N, TOPK, c + 1]), [N, TOPK])
+            parts.append(ttnn.typecast(ttnn.to_layout(col, ttnn.TILE_LAYOUT), ttnn.float32))
+            ttnn.deallocate(col)
+        ttnn.deallocate(emb)
+        f = ttnn.add(ttnn.multiply(parts[0], 16.0), parts[1])  # fp32: exact
+        c16 = ttnn.typecast(f, ttnn.uint16)
+        out = ttnn.reshape(ttnn.to_layout(c16, ttnn.ROW_MAJOR_LAYOUT), [N, 1, 1, TOPK])
+        for t_ in (parts[0], parts[1], f, c16):
+            ttnn.deallocate(t_)
+        return out
+
+    def forward(self, x_rm, scores, indices, upto=99, overlap=None, relabelled=False):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (the router outputs, N = tokens of this row)."""
         md = self.md
         N = x_rm.shape[1]
         sh = get_shared(md, N)
+        if self.lut is not None and not relabelled:
+            indices = self._relabel(indices, N)
         self.mask = sh.dispatch_table  # experts_in_dispatch_group (same table as the dispatch op)
         idx2 = ttnn.reshape(indices, [N, TOPK])
         idx_t = ttnn.to_layout(idx2, ttnn.TILE_LAYOUT)
@@ -496,10 +579,17 @@ def moe_cols(um, gate, hh_own, mc, cc, overlap=None, vl=None, pad=None):
     """
     D = hh_own.shape[3]
     h = mc.allgather(hh_own, cc, axis=1, dim=2)
-    sc_all, ix_all, junk = route_cols(gate, hh_own, h, mc, cc, vl=vl, pad=pad)
+    gv = getattr(um, "gate_view", None)
+    pre = (
+        gv is not None
+        and gate is um.gate_src
+        and os.environ.get("DSV41_UNI_ROUTE", "own") == "own"
+        and os.environ.get("DSV41_UNI_ROUTER", "batched") == "batched"
+    )  # placement: the permuted router already returns relabelled ids
+    sc_all, ix_all, junk = route_cols(gv if pre else gate, hh_own, h, mc, cc, vl=vl, pad=pad)
     x_rm = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [1, h.shape[2], D])
     ttnn.deallocate(h)
-    part = um.forward(x_rm, sc_all, ix_all, overlap=overlap)
+    part = um.forward(x_rm, sc_all, ix_all, overlap=overlap, relabelled=pre)
     for t_ in (x_rm, sc_all, ix_all) + tuple(junk):
         ttnn.deallocate(t_)
     return reduce_scatter_tokens(part, cc)

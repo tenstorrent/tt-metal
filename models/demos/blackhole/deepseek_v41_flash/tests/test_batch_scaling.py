@@ -137,7 +137,23 @@ def test_batch_scaling(mesh_device, device_params):
         (False, int(os.environ.get("DSV41_BS_STEPS", "6")) + 1),
         (True, int(os.environ.get("DSV41_BS_TSTEPS", "24")) + 1),
     ):
-        TD._run_demo(md, gsm, B, 1, 512, ngen, None, TD.GREEDY, tr, True, None, True, True, False, cache=cache)
+        TD._run_demo(
+            md,
+            gsm,
+            B,
+            1,
+            int(os.environ.get("DSV41_BS_MAXLEN", "512")),
+            ngen,
+            None,
+            TD.GREEDY,
+            tr,
+            True,
+            None,
+            True,
+            True,
+            False,
+            cache=cache,
+        )
         cache_model = list(cache.values())[0][1]
         cache_model.release_trace()
     torch.save(routes, os.path.join(OUT, "routes.pt"))

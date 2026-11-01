@@ -278,7 +278,9 @@ class Model:
                     # ONE weight copy: the unified op reads the decode moe_compute (ring layout) expert weights in place (RING_WEIGHTS mode, needs the
                     # private/updated _ttnncpp); decode and interleaved prefill share the same read-only buffers
                     es = layer.moe.decode.expert_state
-                    pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log, ring=(es.tt_w0_w1, es.tt_w2))
+                    pls[-1][1].umoe = DSV41UnifiedMoE(
+                        mesh_device, L, log=log, ring=(es.tt_w0_w1, es.tt_w2), gate=layer.moe.gate
+                    )
                 else:
                     pls[-1][1].umoe = DSV41UnifiedMoE(
                         mesh_device, L, log=log, weights=None if keep is None else keep["umoe"].get(L)
