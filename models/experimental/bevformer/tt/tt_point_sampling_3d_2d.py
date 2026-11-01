@@ -17,13 +17,7 @@ import torch
 from typing import Tuple, List, Optional
 
 from ..reference.point_sampling_3d_2d import generate_reference_points as torch_generate_reference_points
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from .tt_common import signpost
 
 
 def generate_reference_points_ttnn(
@@ -51,8 +45,7 @@ def generate_reference_points_ttnn(
     Returns:
         Reference points [bs, bev_h*bev_w, num_points, 3] in normalized coordinates [0, 1].
     """
-    if use_signpost:
-        signpost(header="TTNN Generate Reference Points Start")
+    signpost(header="TTNN Generate Reference Points Start")
 
     # TODO: Calculate during initialization, and pass as parameters
     torch_ref_points = torch_generate_reference_points(
@@ -67,8 +60,7 @@ def generate_reference_points_ttnn(
     # Convert to TTNN tensor
     ttnn_ref_points = ttnn.from_torch(torch_ref_points, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
-    if use_signpost:
-        signpost(header="TTNN Generate Reference Points End")
+    signpost(header="TTNN Generate Reference Points End")
 
     return ttnn_ref_points
 
@@ -106,20 +98,18 @@ def point_sampling_3d_to_2d_ttnn(
             - reference_points_cam: Projected 2D points [num_cams, bs, num_queries, num_points, 2].
             - bev_mask: Validity mask [num_cams, bs, num_queries, num_points] indicating valid projections.
     """
-    if use_signpost:
-        signpost(header="TTNN Point Sampling 3D to 2D Start")
+    signpost(header="TTNN Point Sampling 3D to 2D Start")
+    signpost(header="Point Sampling Tensor Setup Start")
 
-    # Convert inputs to TTNN tensors if needed
+    # Convert inputs to TTNN tensors if needed. float32 throughout: in bfloat16 the projection
+    # moves the points by several pixels on average and by hundreds at worst.
     if isinstance(reference_points, torch.Tensor):
-        reference_points = ttnn.from_torch(
-            reference_points, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
+        reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
     if isinstance(lidar2img, torch.Tensor):
-        lidar2img = ttnn.from_torch(lidar2img, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        lidar2img = ttnn.from_torch(lidar2img, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
-    if use_signpost:
-        signpost(header="Point Sampling Tensor Setup Complete")
+    signpost(header="Point Sampling Tensor Setup End")
 
     # Get tensor shapes
     batch_size, num_queries, num_points, _ = reference_points.shape
@@ -129,8 +119,7 @@ def point_sampling_3d_to_2d_ttnn(
     x_min, y_min, z_min = pc_range[0], pc_range[1], pc_range[2]
     x_max, y_max, z_max = pc_range[3], pc_range[4], pc_range[5]
 
-    if use_signpost:
-        signpost(header="Point Sampling Coordinate Scaling Start")
+    signpost(header="Point Sampling Coordinate Scaling Start")
 
     # Scale normalized coordinates [0, 1] to actual world coordinates
     reference_points_x = reference_points[:, :, :, 0:1]
@@ -141,39 +130,48 @@ def point_sampling_3d_to_2d_ttnn(
     reference_points_y = ttnn.add(ttnn.mul(reference_points_y, y_max - y_min), y_min)
     reference_points_z = ttnn.add(ttnn.mul(reference_points_z, z_max - z_min), z_min)
 
-    ones = ttnn.ones_like(reference_points_x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    reference_points = ttnn.concat([reference_points_x, reference_points_y, reference_points_z, ones], dim=-1)
-    reference_points = ttnn.permute(reference_points, (0, 2, 1, 3))  # [bs, num_points, num_queries, 4]
+    # [bs, num_points, num_queries, 1] each
+    world = [
+        ttnn.permute(coord, (0, 2, 1, 3)) for coord in (reference_points_x, reference_points_y, reference_points_z)
+    ]
 
-    if use_signpost:
-        signpost(header="Point Sampling Camera Loop Start")
+    signpost(header="Point Sampling Coordinate Scaling End")
+    signpost(header="Point Sampling Camera Loop Start")
 
     reference_points_cam_list = []
 
     for cam_idx in range(num_cams):
-        if use_signpost:
-            signpost(header=f"Point Sampling Camera {cam_idx}")
-        cam_lidar2img = lidar2img[:, cam_idx, :, :]  # [B, 4, 4] for current camera
-        ref_points_flat = ttnn.reshape(reference_points, (batch_size, num_points * num_queries, 4))  # [B, D*Q, 4]
+        signpost(header=f"Point Sampling Camera {cam_idx} Start")
 
-        # [B, D*Q, 4] @ [B, 4, 4]
-        cam_lidar2img_T = ttnn.transpose(cam_lidar2img, -2, -1)  # Last two dims transpose
-        points_cam_flat = ttnn.matmul(ref_points_flat, cam_lidar2img_T)  # [B, D*Q, 4]
+        # The camera's matrix as multiply-adds with per-sample [B, 1, 1, 1] coefficients: a matmul
+        # truncates float32 to tf32 and moves the points by about a pixel.
+        def coefficient(row, col):
+            return lidar2img[:, cam_idx : cam_idx + 1, row : row + 1, col : col + 1]
 
-        points_cam = ttnn.reshape(points_cam_flat, (batch_size, num_points, 1, num_queries, 4))  # [B, D, 1, Q, 4]
-        points_cam = ttnn.permute(points_cam, (1, 0, 2, 3, 4))  # [D, B, 1, Q, 4]
+        rows = [
+            ttnn.add(
+                ttnn.add(ttnn.mul(world[0], coefficient(row, 0)), ttnn.mul(world[1], coefficient(row, 1))),
+                ttnn.add(ttnn.mul(world[2], coefficient(row, 2)), coefficient(row, 3)),
+            )
+            for row in range(3)
+        ]
+        points_cam_flat = ttnn.concat(rows, dim=-1)  # [B, D, Q, 3]
+
+        points_cam = ttnn.reshape(points_cam_flat, (batch_size, num_points, 1, num_queries, 3))  # [B, D, 1, Q, 3]
+        points_cam = ttnn.permute(points_cam, (1, 0, 2, 3, 4))  # [D, B, 1, Q, 3]
         reference_points_cam_list.append(points_cam)
+        signpost(header=f"Point Sampling Camera {cam_idx} End")
 
-    reference_points_cam = ttnn.concat(reference_points_cam_list, dim=2)  # [D, B, num_cam, Q, 4]
+    reference_points_cam = ttnn.concat(reference_points_cam_list, dim=2)  # [D, B, num_cam, Q, 3]
 
-    if use_signpost:
-        signpost(header="Point Sampling Depth Calculation")
+    signpost(header="Point Sampling Camera Loop End")
+    signpost(header="Point Sampling Depth Calculation Start")
 
     depth = reference_points_cam[..., 2:3]  # [D, B, num_cams, Q, 1]
     bev_mask = depth > eps
 
     depth_safe = ttnn.maximum(
-        depth, ttnn.mul(ttnn.ones_like(depth, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), eps)
+        depth, ttnn.mul(ttnn.ones_like(depth, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), eps)
     )
     reference_points_cam_xy = ttnn.div(reference_points_cam[..., 0:2], depth_safe)
 
@@ -194,15 +192,15 @@ def point_sampling_3d_to_2d_ttnn(
         [reference_points_cam_x, reference_points_cam_y], dim=-1
     )  # [D, B, num_cams, Q, 2]
 
-    if use_signpost:
-        signpost(header="Point Sampling Boundary Validation")
-    # Clamp to [-10, 10] and create validity masks
+    signpost(header="Point Sampling Depth Calculation End")
+    signpost(header="Point Sampling Boundary Validation Start")
+    # Clamp to [-10, 10] and create validity masks: inside the image, open bounds as upstream.
     reference_points_cam_clamped = ttnn.clamp(reference_points_cam, -10.0, 10.0)
     valid_x = ttnn.logical_and(
-        (reference_points_cam_clamped[..., 0:1] >= 0.0), (reference_points_cam_clamped[..., 0:1] <= 1.0)
+        (reference_points_cam_clamped[..., 0:1] > 0.0), (reference_points_cam_clamped[..., 0:1] < 1.0)
     )
     valid_y = ttnn.logical_and(
-        (reference_points_cam_clamped[..., 1:2] >= 0.0), (reference_points_cam_clamped[..., 1:2] <= 1.0)
+        (reference_points_cam_clamped[..., 1:2] > 0.0), (reference_points_cam_clamped[..., 1:2] < 1.0)
     )
 
     bev_mask = ttnn.logical_and(bev_mask, valid_x)
@@ -216,7 +214,7 @@ def point_sampling_3d_to_2d_ttnn(
     reference_points_cam = ttnn.permute(reference_points_cam, (2, 1, 3, 0, 4))  # [num_cams, B, Q, D, 2]
     bev_mask = ttnn.squeeze(ttnn.permute(bev_mask, (2, 1, 3, 0, 4)), -1)  # [num_cams, B, Q, D]
 
-    if use_signpost:
-        signpost(header="TTNN Point Sampling 3D to 2D End")
+    signpost(header="Point Sampling Boundary Validation End")
+    signpost(header="TTNN Point Sampling 3D to 2D End")
 
     return reference_points_cam, bev_mask

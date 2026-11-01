@@ -54,7 +54,6 @@ SHARED = {
 AWAITING_MOVE = frozenset(
     {
         "ckernel_sfpu_add_int.h",
-        "ckernel_sfpu_cdf.h",
         "ckernel_sfpu_ema.h",
         "ckernel_sfpu_isinf_isnan.h",
         "ckernel_sfpu_mul_int.h",

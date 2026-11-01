@@ -10,9 +10,7 @@ from models.experimental.bevformer.tt.tt_spatial_cross_attention import TTSpatia
 from models.experimental.bevformer.reference.spatial_cross_attention import SpatialCrossAttention
 
 
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
-)
+from models.experimental.bevformer.tests.common import PRESETS
 
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
@@ -75,23 +73,18 @@ def test_spatial_cross_attention_forward(
     torch.manual_seed(seed)
 
     # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
-    model_config = preset_config.model_config
+    config = PRESETS[config_name]
 
     # Extract parameters from configs
-    embed_dims = model_config.embed_dims
-    num_heads = model_config.num_heads
-    num_levels = model_config.num_levels
-    num_points = model_config.num_points
-    num_cams = dataset_config.num_cams
+    embed_dims = config.embed_dims
+    num_heads = config.num_heads
+    num_levels = config.num_levels
+    num_points = config.num_points
+    num_cams = config.num_cams
     num_queries = bev_h * bev_w
 
     # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]
+    spatial_shapes_list = config.spatial_shapes[:num_levels]
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
     sca_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
@@ -160,22 +153,14 @@ def test_spatial_cross_attention_forward(
     ref_model = SpatialCrossAttention(
         embed_dims=embed_dims,
         num_cams=num_cams,
-        batch_first=True,
-        deformable_attention={
-            "embed_dims": embed_dims,
-            "num_levels": num_levels,
-            "num_points": num_points,
-            "num_heads": num_heads,
-        },
+        num_heads=num_heads,
+        num_levels=num_levels,
+        num_points=num_points,
     )
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
-    tt_parameters = create_spatial_cross_attention_parameters(
-        torch_model=ref_model,
-        device=device,
-        dtype=ttnn.float32,
-    )
+    tt_parameters = create_spatial_cross_attention_parameters(ref_model, device, dtype=ttnn.float32)
 
     # Create ttnn model with preprocessed parameters using extracted parameters
     tt_model = TTSpatialCrossAttention(
@@ -200,12 +185,10 @@ def test_spatial_cross_attention_forward(
     # Forward pass with PyTorch reference model
     ref_model_output = ref_model(
         query=bev_queries,
+        value=camera_features,
         reference_points_cam=reference_points_cam,
         bev_mask=bev_mask,
-        key=camera_features,
-        value=camera_features,
         spatial_shapes=spatial_shapes,
-        level_start_index=level_start_index,
     )
 
     # Forward pass with ttnn model

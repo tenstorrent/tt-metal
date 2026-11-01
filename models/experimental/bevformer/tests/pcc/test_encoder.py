@@ -8,8 +8,7 @@ from typing import Dict, Any, List
 
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
-from models.experimental.bevformer.config.encoder_config import get_preset_config
-from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
+from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset
 
 
 from models.experimental.bevformer.tests.test_utils import (
@@ -34,9 +33,7 @@ ENABLE_LOGGING = True
 torch.manual_seed(0)
 
 # Get default configuration for testing (can be overridden in individual tests)
-DEFAULT_TEST_CONFIG = get_preset_config("nuscenes_base")  # NuScenes + Base model
-DEFAULT_DATASET_CONFIG = DEFAULT_TEST_CONFIG.dataset_config
-DEFAULT_MODEL_CONFIG = DEFAULT_TEST_CONFIG.model_config
+DEFAULT_TEST_CONFIG = PRESETS["nuscenes_base"]  # NuScenes + Base model
 
 # Flag to control detailed comparison output
 PRINT_DETAILED_COMPARISON_FLAG = False
@@ -45,7 +42,7 @@ PRINT_DETAILED_COMPARISON_FLAG = False
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 32 * 1024})
 
 
-def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_DATASET_CONFIG) -> List[Dict[str, Any]]:
+def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_TEST_CONFIG) -> List[Dict[str, Any]]:
     """Create img_metas from the dataset's deterministic surround-view rig.
 
     ``lidar2img`` decides ``bev_mask`` and therefore the spatial-cross-attention
@@ -88,22 +85,17 @@ def test_bevformer_encoder_forward(
     torch.manual_seed(seed)
 
     # Get configuration
-    config = get_preset_config(config_name)
-    if config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = config.dataset_config
-    model_config = config.model_config
+    config = PRESETS[config_name]
 
     # Extract parameters from configs
     bev_h, bev_w = bev_size
     num_queries = bev_h * bev_w
-    embed_dims = model_config.embed_dims
-    num_cams = dataset_config.num_cams
-    num_levels = model_config.num_levels
+    embed_dims = config.embed_dims
+    num_cams = config.num_cams
+    num_levels = config.num_levels
 
     # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]  # Take required number of levels
+    spatial_shapes_list = config.spatial_shapes[:num_levels]  # Take required number of levels
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
     # --------------------------------------------------------------------------- #
@@ -119,15 +111,9 @@ def test_bevformer_encoder_forward(
     spatial_total_length = sum(h * w for h, w in spatial_shapes.tolist())
     camera_features = torch.randn(num_cams, spatial_total_length, batch_size, embed_dims, dtype=torch.float32)
 
-    # Level start index using centralized utility function
-    level_start_index = config.get_level_start_index()
-    # Limit to actual num_levels being used in this test
-    if len(level_start_index) > num_levels:
-        level_start_index = level_start_index[:num_levels]
-
     # Camera metadata for point sampling; the rig derives resolution and camera
     # count from the dataset config itself
-    img_metas = create_sample_img_metas(batch_size, dataset_config)
+    img_metas = create_sample_img_metas(batch_size, config)
 
     # Convert tensors to ttnn format for ttnn model
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -139,25 +125,21 @@ def test_bevformer_encoder_forward(
     # --------------------------------------------------------------------------- #
 
     # Create PyTorch reference model using config
-    encoder_kwargs = config.get_encoder_kwargs()
-
-    encoder_kwargs.update(
-        {
-            "num_layers": num_layers,  # Test-specific layer count
-            "batch_first": True,
-            "return_intermediate": False,
-        }
+    encoder_kwargs = dict(
+        num_layers=num_layers,  # Test-specific layer count
+        embed_dims=embed_dims,
+        num_heads=config.num_heads,
+        num_levels=num_levels,
+        num_points=config.num_points,
+        num_cams=num_cams,
+        pc_range=list(config.pc_range),
     )
 
-    ref_model = BEVFormerEncoder(**encoder_kwargs)
+    ref_model = BEVFormerEncoder(**encoder_kwargs, tsa_num_points=config.tsa_num_points)
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
-    tt_parameters = create_bevformer_encoder_parameters(
-        torch_model=ref_model,
-        device=device,
-        dtype=ttnn.bfloat16,
-    )
+    tt_parameters = create_bevformer_encoder_parameters(ref_model, device, dtype=ttnn.bfloat16)
 
     # Create ttnn model with preprocessed parameters using config
     tt_model = TTBEVFormerEncoder(
@@ -166,6 +148,10 @@ def test_bevformer_encoder_forward(
         bev_h=bev_h,
         bev_w=bev_w,
         spatial_shapes=spatial_shapes,
+        batch_first=True,
+        return_intermediate=False,
+        feedforward_channels=tt_parameters.config.feedforward_channels,
+        temporal_num_points=config.tsa_num_points,
         **encoder_kwargs,
     )
 
@@ -175,15 +161,14 @@ def test_bevformer_encoder_forward(
 
     # Forward pass with PyTorch reference model
     with torch.no_grad():
+        # The upstream reference takes the queries sequence-first and returns them batch-first.
         ref_output = ref_model(
-            bev_query=bev_query,
-            key=camera_features,
+            bev_query=bev_query.permute(1, 0, 2),
             value=camera_features,
             bev_h=bev_h,
             bev_w=bev_w,
-            bev_pos=bev_pos,
+            bev_pos=bev_pos.permute(1, 0, 2),
             spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
             prev_bev=None,  # No temporal attention
             img_metas=img_metas,
         )
