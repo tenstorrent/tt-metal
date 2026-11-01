@@ -69,3 +69,13 @@ class TernaryMLP:
         out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, 5120]), ttnn.bfloat16, ttnn.TILE_LAYOUT,
                                              sh.device, ttnn.L1_MEMORY_CONFIG)
         return a3.ternary_linear(sh.x8[17408], self.w_d, self.s_d, out, sh.workers, gu=False)
+
+
+_shared = {}
+
+
+def shared_for(device):
+    """One Shared per device (H tensors and buffers are common to all layers)."""
+    if id(device) not in _shared:
+        _shared[id(device)] = Shared(device)
+    return _shared[id(device)]
