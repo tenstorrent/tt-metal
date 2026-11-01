@@ -161,15 +161,17 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
     )
 
 
-def _down_decode_progcfg(n):
+def _down_decode_progcfg(n, dtype=None):
     """Single-chip decode down_proj (M=1): 1D mcast on 11x10 with in0_block_w=4.
 
     ttnn's auto config picks in0_block_w=2 at K=17408, which stalls at about 53% of DRAM peak;
     in0_block_w=4 reaches about 74% with the same output.
     QWEN36_1C_DOWN_40C=1: Agent A's 11x4 grid with per_core_N=4 (40 active cores at N=5120);
-    isolated bfp4 161.4 vs 183.3 us.
+    isolated bfp4 161.4 vs 183.3 us. E2E (5-run medians, chip 2): bfp4 down 68.913 -> 67.120 ms/token,
+    bfp8 down 79.036 -> 79.845 (worse), so it applies to a bfloat4_b weight only.
     """
-    grid = (11, 4) if os.environ.get("QWEN36_1C_DOWN_40C") == "1" else (11, 10)
+    use_40c = os.environ.get("QWEN36_1C_DOWN_40C") == "1" and dtype == ttnn.bfloat4_b
+    grid = (11, 4) if use_40c else (11, 10)
     per_core_n = 4 if grid == (11, 4) else -(-n // (ttnn.TILE_SIZE * 110))
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -242,7 +244,7 @@ class Qwen36MLP:
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
         elif T <= 1 and os.environ.get("QWEN36_1C_DOWN_PCFG") == "1":
-            down_pc = _down_decode_progcfg(w.w2.shape[-1])
+            down_pc = _down_decode_progcfg(w.w2.shape[-1], w.w2.dtype)
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
