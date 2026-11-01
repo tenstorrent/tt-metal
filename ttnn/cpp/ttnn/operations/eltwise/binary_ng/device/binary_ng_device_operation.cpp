@@ -51,8 +51,9 @@ void validate_fast_and_approximate_mode(
 bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     using enum BinaryOpType;
     using enum DataType;
-    // The FPU path reads a FLOAT32 operand at TF32, so a FLOAT32/BFLOAT16 pair has to take the SFPU path.
-    const bool fp32_bf16_pair = (a == FLOAT32 && b == BFLOAT16) || (a == BFLOAT16 && b == FLOAT32);
+    // The FPU path reads a FLOAT32 operand at TF32, so FLOAT32 paired with a narrower float has to take the SFPU path.
+    const auto is_narrow_float = [](DataType t) { return t == BFLOAT16 || t == BFLOAT8_B || t == BFLOAT4_B; };
+    const bool fp32_bf16_pair = (a == FLOAT32 && is_narrow_float(b)) || (is_narrow_float(a) && b == FLOAT32);
     switch (val) {
         case ADD:
         case SUB:
@@ -65,7 +66,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case SQUARED_DIFFERENCE:
             return fp32_bf16_pair || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case MUL:
-            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+            return !fast_and_approximate_mode || fp32_bf16_pair ||
+                   (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         // logaddexp and logaddexp2 are fused SFPU kernels templated on the destination
         // precision, so the 16-bit formats route to them as well as float32. Which body they
