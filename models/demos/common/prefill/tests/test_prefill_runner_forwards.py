@@ -69,7 +69,7 @@ def loop(monkeypatch):
             d2d_rows=0,
             d2d_width=0,
             h2d_service=object(),
-            d2d_out=d2d_out,
+            outbound=runner.D2DBoundary(activation=d2d_out),
             sockets=runner.SocketBuffers(metadata=None),
         )
 
@@ -106,7 +106,7 @@ def test_first_rank_refuses_a_bad_forward(loop, expect_error):
 def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect_error, is_last_rank, returns, message):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
-    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
     monkeypatch.setattr(runner, "_device_record", lambda words, dev: _Tensor())
 
@@ -127,7 +127,7 @@ def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect
 def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_error):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
-    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     runtime = _PackedRuntime()
     runtime.config.is_last_rank = False
     d2d_out = object()
@@ -268,8 +268,8 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
         3,
         d2d_rows=0,
         d2d_width=0,
-        d2d_in=_D2D(),
-        d2d_out=_D2D(),
+        inbound=runner.D2DBoundary(activation=_D2D()),
+        outbound=runner.D2DBoundary(activation=_D2D()),
         sockets=sockets,
     )
 
