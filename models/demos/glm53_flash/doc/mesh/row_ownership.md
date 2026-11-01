@@ -276,6 +276,17 @@ Tests, in order:
    (#62997), 4.6x our per-token rate at 1 M (16 K in ~7.4 s); the profile decides whether the replicated-cache
    all-gather or the attention over the replicated prefix is the term to attack first, and the push of 2.5.1.1
    only matters if it is the former.
+   Free pass measured 2026-11-01 01:52 (`prof_1m_chunk_8x4`, 45 layers bfp8, the 16 K chunk at prefix 1 032 192):
+   7.63 s = 2148 tok/s; per layer kind KDA+MoE 155 ms x 31 = 4.80 s, DSA+MoE 242 ms x 11 = 2.66 s, KDA+dense
+   31 ms x 3 = 0.09 s. Subtracting a KDA+dense layer from a KDA+MoE layer puts the routed MoE at ~125-135 ms per
+   layer per 2048-row slab (~4.2 s, 55 % of the chunk), the DSA attention over the 1 M prefix at ~87 ms per DSA
+   layer (~1 s, 13 %), the KDA scan near 0.8 s (11 %); the rest (norms, mHC, collectives, head) ~1.5 s. So the
+   1 M chunk is dominated by prefix-INDEPENDENT per-token work, the routed experts first: the same conclusion as the
+   64 K block profile of 2026-10-21, now at the 1 M position on the full mesh. Against DeepSeek-V3's 621 ms per
+   5120-token chunk at 1020 K (61 layers, 37 B active, EP over the 32 chips), our KDA+MoE layer costs ~4.7x more
+   chip-time per token-layer with 3 B active: the expert prefill kernel (per-32-token-block sparse matmuls on a
+   row's 2048-token slab) is the lever, not the attention path; the push of 2.5.1.1 is a DRAM-footprint and
+   lone-prompt-rate item, not a chunk-cost one. The attributed pass (per-module shares) re-runs with the wrapper fix.
 
 Risks:
 

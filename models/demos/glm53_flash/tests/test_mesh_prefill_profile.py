@@ -189,10 +189,12 @@ def _install_labels(model: GLM53MeshModel, timer: _ModuleTimer):
     for dec in model.layers:
         layer = dec.layer
         for hc, tag in ((layer.attn_hc, "ATTN_HC"), (layer.ffn_hc, "FFN_HC")):
+            # TtMHCSplit holds a decode and a prefill implementation behind ``select``; a chunk runs the prefill one
+            hc = getattr(hc, "prefill", hc)
             if hasattr(hc, "hc_pre"):
                 timer.wrap(hc, "hc_pre", f"{tag}_PRE")
                 timer.wrap(hc, "hc_post", f"{tag}_POST")
-            else:  # TtMHCFast / TtMHCSplit: one label for the whole wrap minus the sublayer
+            else:  # TtMHCFast: one label for the whole wrap minus the sublayer
                 timer.wrap(hc, "forward", tag)
         timer.wrap(layer, "_norm", "NORM")
         if layer.is_kda:
