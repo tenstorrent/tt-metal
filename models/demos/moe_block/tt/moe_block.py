@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from loguru import logger
+
 import ttnn
 
 
@@ -80,12 +82,52 @@ class MoEBlock:
         )
         self.in_program_dispatch = resources.config.experts_during_dispatch
         self.exchange_spec = (
-            None  # (the dispatch + combine's arena when smaller than the head's: the first call sets it)
+            None  # (the dispatch + combine's arena when the head's does not fit: the first call sets it)
         )
+        self.one_arena = None
+
+    def _static_cb_bytes(self) -> int:
+        """L1 a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts +
+        the combine) take for their static circular buffers from the bottom of L1 - what the exchange's arena reserve
+        (routed_experts_combine: exchange_arena_reserve) keeps below its arena, without its alignment slack."""
+        mb, res = self.mb, self.resources
+        topo, dims = res.topology, res.dims
+        R, C = int(topo["R"]), int(topo["C"])
+        N, W = R * C, dims.routed_width
+        S = res.config.chunk_tokens // N
+        kw = self.expert_kw
+        m = (kw["max_tokens_per_expert"] + 31) // 32 * 32
+        flat = mb.flat_routed_expert_plan(
+            self.mesh_device, W, dims.routed_expert_hidden_dim, dims.num_experts // N, dims.num_experts, m,
+            weights_bf8=False, pin=1, layout=kw["layout"],
+        ).as_dict()["static_l1_bytes"]  # fmt: skip
+        dispatch = mb.dispatch_static_cb_bytes(N, S, W, group=8 if 2 * W <= 7168 else 2)
+        manifest = (mb.manifest_layout(R, C, bool(topo["wrap_x"]), bool(topo["wrap_y"]), S)[2] * 16 + 63) // 64 * 64
+        flat = (flat + 63) // 64 * 64
+        if self.in_program_dispatch:
+            return max(flat, dispatch) + manifest
+        return max(flat, manifest + dispatch)
+
+    def _one_arena_fits(self) -> bool:
+        """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
+        (allocated top-down in the largest free L1 block, it reaches from the block's top down by its size), else two:
+        the head's, then the exchange's (planned above them). The real fix is those CBs in the arena."""
+        free = int(ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
+        static = self._static_cb_bytes()
+        head = int(self.arena_spec.memory_config.shard_spec.shape[0]) * 64
+        bound = free - static - 1024  # (1 KB for the allocator's alignment)
+        fits = head <= bound
+        logger.info(
+            f"MoEBlock: arena {head} B a core, room above the block's static CBs {bound} B (largest free L1 block "
+            f"{free} B, static CBs {static} B): {'one arena' if fits else 'two arenas (the exchange planned above them)'}"
+        )
+        return fits
 
     def __call__(self, x: ttnn.Tensor, weights: MoEBlockWeights) -> ttnn.Tensor:
         """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's)."""
         mb = self.mb
+        if self.exchange_spec is None:  # (the first call, before any arena: one arena or two)
+            self.one_arena = self._one_arena_fits()
         arena = ttnn.allocate_tensor_on_device(self.arena_spec, self.mesh_device)
         self.arena_address = int(arena.buffer_address())
         head = mb.fused_head(
@@ -99,11 +141,13 @@ class MoEBlock:
         )
         self.last_head = head  # (its persistent outputs: a model's checks read the routing rows)
         if self.exchange_spec is None:  # (once: the exchange's own arena - the combine's, without the head's bytes)
-            spec = mb.routed_experts_combine_arena_spec(
-                self.resources, rows_cap=int(head.table.shape[-2]) * 32, **self.expert_kw
+            self.exchange_spec = (
+                False
+                if self.one_arena
+                else mb.routed_experts_combine_arena_spec(
+                    self.resources, rows_cap=int(head.table.shape[-2]) * 32, **self.expert_kw
+                )
             )
-            rows = lambda sp: int(sp.memory_config.shard_spec.shape[0])  # noqa: E731
-            self.exchange_spec = spec if rows(spec) < rows(self.arena_spec) else False
         if self.exchange_spec:
             # (two arenas a forward, as the reference block for a head larger than the exchange's arena - K3: the head's
             # arena reaches below the dispatch's static circular buffers; the exchange's arena is planned above them)
