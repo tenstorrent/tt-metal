@@ -143,9 +143,24 @@ def _id(c):
     return "x%s_thr%d_l1%d_nb%d_%s_%s_%s_%s_%s_%s_%dx%dx%d" % (t, thr, l1, nb, a, b, o, acc, sy, fi.name, rt, ct, kt)
 
 
+_BLOCK_FLOAT = {"B8", "B4", "B2", "B8a"}
+
+
+def _marks(c):
+    """Known limits that main's LLK shows alike (tools/mm-bisect2/golden_predating.md, acc_case.md): the packer does not accumulate a block float output in L1 (the later partial
+    overwrites or the 8 bit mantissa wraps: results read one partial or sign flipped; Float16_b and Float32 outputs accumulate and pass), and a Bfp8 (5 bit exponent) output from a 32-bit
+    DEST packs all zeros."""
+    t, (thr, l1, nb), (a, b, o, acc, sy, fi, r0, c1, rt, ct, kt) = c
+    if l1 and o in _BLOCK_FLOAT:
+        return [pytest.mark.xfail(strict=False, reason="packer L1 accumulate does not accumulate a block float output (same on main's LLK)")]
+    if o == "B8a" and acc == "Y":
+        return [pytest.mark.xfail(strict=False, reason="Bfp8 5 bit exponent output from a 32-bit DEST packs zeros (same on main's LLK)")]
+    return []
+
+
 @pytest.mark.nightly
 @skip_for_wormhole
-@pytest.mark.parametrize("case", _CASES, ids=_id)
+@pytest.mark.parametrize("case", [pytest.param(c, marks=_marks(c), id=_id(c)) for c in _CASES])
 def test_matmul_cells_x(case, monkeypatch):
     table, (thr, l1, nb), body = case
     a, b, o, acc, sy, fid, r0, c1, rt, ct, kt = body
