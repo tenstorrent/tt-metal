@@ -421,7 +421,6 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
 
 
 def _config_sites_in_function(fn, specs, helpers, post_init):
-    """(kernel label, emitted fields) for the templates=/runtimes= lists in one function."""
     fields, label = set(), None
 
     def add_list(list_node):
@@ -462,10 +461,6 @@ def _config_sites_in_function(fn, specs, helpers, post_init):
 
 
 def derive_perf_test_column_sets(quasar: bool = False) -> dict:
-    """{perf_test_name -> {frozenset of fields: [labels]}}, one entry per test function.
-
-    Sources that back more than one perf test are skipped.
-    """
     specs = class_field_specs()
     helpers = helper_returned_param_calls(specs)
     post_init = class_post_init_copies()
