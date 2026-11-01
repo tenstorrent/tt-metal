@@ -205,9 +205,13 @@ def device_sources(mesh, layer_idx: int, epc: int, cache):
 class TtK3MoEBlockFfn:
     """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
-    def __init__(self, mesh_device, model_cfg, layer_idx: int, hf_config=None, cache_path=None):
+    def __init__(self, mesh_device, model_cfg, layer_idx: int, hf_config=None, cache_path=None, state_dict=None):
         self.mesh, self.layer_idx, self.hf_config = mesh_device, int(layer_idx), hf_config
         self.cache = Path(cache_path) if cache_path is not None else None
+        # (a TtPrefillBlock state dict holding the MoE's host weights - gate_weights, shared_expert_weights,
+        # routed_expert_weights, K3: latent_weights - as the synthetic-weight tests give TtMoe: the block's weights are
+        # made from them, expert e on chip e // (E / N), instead of from the checkpoint and the TtMoe cache)
+        self.host_sd = state_dict if state_dict and state_dict.get("routed_expert_weights") is not None else None
         self.dims, self.act = block_dims(model_cfg)
         self.weights = None  # (this layer's MoEBlockWeights, made at its first call)
         self.calls = 0
@@ -304,12 +308,65 @@ class TtK3MoEBlockFfn:
         )
         return gidx, dst["w_gu"], dst["w_d"]
 
+    def _routed_host(self, block):
+        """This layer's flat expert tensors from the state dict's host routed experts (expert e on chip e // epc, in
+        the chips' row-major order: the block's global expert e is the model's expert e)."""
+        mb, fw = ttnn.experimental.moe_block, flat_weights_module()
+        R, C = tuple(self.mesh.shape)
+        N, E = R * C, self.dims.num_experts
+        epc, Hr, I = E // N, self.dims.routed_width, self.dims.routed_expert_hidden_dim
+        kw = block.expert_kw
+        lay = mb.flat_routed_expert_plan(
+            self.mesh, Hr, I, epc, E, kw["max_tokens_per_expert"], weights_bf8=False, pin=1, layout=kw["layout"]
+        ).as_dict()
+        rw = self.host_sd["routed_expert_weights"]
+        assert len(rw) == E, f"MoE block: {len(rw)} routed experts in the state dict, the model has {E}"
+        f = lambda t: t.float().T.contiguous()  # noqa: E731  ((out, in) Linear weights -> the flat op's [in, out])
+        per_dev = [
+            [(f(rw[e]["gate_proj"]), f(rw[e]["up_proj"]), f(rw[e]["down_proj"])) for e in range(n * epc, (n + 1) * epc)]
+            for n in range(N)
+        ]
+        packed = [fw.flat_weight_regions(W_l, lay) for W_l in per_dev]
+        w_gu = fw.bank_sharded([p[0] for p in packed], lay["banks"], ttnn.bfloat4_b, self.mesh)
+        w_d = fw.bank_sharded([p[1] for p in packed], lay["banks"], ttnn.bfloat4_b, self.mesh)
+        gidx = ttnn.from_torch(
+            torch.arange(E, dtype=torch.int32).reshape(N, 1, epc),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+        return gidx, w_gu, w_d
+
+    def _host_sd_weights(self):
+        """The non-routed weights from the state dict (the model's expert order: no permutation), as host_weights."""
+        sd = self.host_sd
+        g, s = sd["gate_weights"], sd["shared_expert_weights"]
+        w = {
+            "router_weight": g["weight"].float().contiguous(),
+            "router_bias": g["e_score_correction_bias"].float().contiguous(),
+            "gate": s["gate_proj"].float(),
+            "up": s["up_proj"].float(),
+            "down": s["down_proj"].float(),
+        }
+        lat = sd.get("latent_weights")
+        if self.dims.latent_dim is not None:
+            assert lat is not None, "MoE block: a latent model's state dict without latent_weights"
+            w.update(
+                latent_down=lat["down_proj"].float(), latent_up=lat["up_proj"].float(), latent_norm=lat["norm"].float()
+            )
+        return w
+
     def _weights(self, block):
         if self.weights is None:
             mb = ttnn.experimental.moe_block
             res = block.resources
             t0 = time.time()
-            w = host_weights(self.mesh, self.dims, self.layer_idx, self.hf_config)
+            if self.host_sd is not None:
+                w = self._host_sd_weights()
+            else:
+                w = host_weights(self.mesh, self.dims, self.layer_idx, self.hf_config)
             host = lambda k: ttnn.from_torch(w[k], dtype=ttnn.float32)  # noqa: E731
             head = mb.prepare_fused_head_weights(
                 host("gate"),
@@ -327,7 +384,7 @@ class TtK3MoEBlockFfn:
             if "latent_up" in w:
                 w_up = mb.prepare_fused_tail_weights(host("latent_up"), host("latent_norm"), resources=res)
             t1 = time.time()
-            gidx, w_gu, w_d = self._routed(block)
+            gidx, w_gu, w_d = self._routed_host(block) if self.host_sd is not None else self._routed(block)
             self.weights = MoEBlockWeights(head=head, expert_ids=gidx, gate_up=w_gu, down=w_d, w_up=w_up)
             logger.info(
                 f"MoE block layer {self.layer_idx}: checkpoint weights {t1 - t0:.0f} s, routed {time.time() - t1:.0f} s"

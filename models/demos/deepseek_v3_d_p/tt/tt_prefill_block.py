@@ -412,7 +412,12 @@ class TtPrefillBlock(LightweightModule):
             from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
 
             self.ffn = TtK3MoEBlockFfn(
-                mesh_device, model_cfg, layer_idx, hf_config=config, cache_path=weight_cache_path
+                mesh_device,
+                model_cfg,
+                layer_idx,
+                hf_config=config,
+                cache_path=weight_cache_path,
+                state_dict=state_dict,  # (host MoE weights, when the caller gives them: the synthetic-weight tests)
             )
         elif self.is_moe:
             self.ffn = self._build_moe(

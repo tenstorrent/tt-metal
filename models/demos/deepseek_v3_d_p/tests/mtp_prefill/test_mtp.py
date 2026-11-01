@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests._reuse import acquire_module
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from models.demos.deepseek_v3_d_p.tests.mtp_prefill.conftest import glm53_checkpoint_path
 from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
     compute_predictor_reference,
@@ -120,9 +121,11 @@ def _assert_level_pcc(expected, actual, pcc: float, k: int, what: str):
 _MESH_PARAMS = [
     pytest.param(
         (8, 4),
+        # (the MTP layer's MoE is GLM-5.3's default - the MoE block, tt/moe_impl.py: its fabric payload and L1_SMALL)
         torus_xy_device_params(
-            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+            fabric_payload_size=moe_block_mesh_params(GLM53Config, GLM53Config.FABRIC_PAYLOAD_SIZE, 0)[0],
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            l1_small_size=moe_block_mesh_params(GLM53Config, GLM53Config.FABRIC_PAYLOAD_SIZE, 0)[1],
         ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
