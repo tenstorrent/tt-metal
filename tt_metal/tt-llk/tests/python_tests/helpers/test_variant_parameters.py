@@ -1008,7 +1008,7 @@ class TILIZE(TemplateParameter):
 class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 
-    pack_block: bool = False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness
+    pack_block: bool = False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness, 5 the plain and closed blocks that program the output (the first block of an output, LLK_PACK_W_OFFSET_OFF)
 
     def convert_to_cpp(self) -> str:
         # negative: a block too short for llk_pack_block, which packs it one tile at a time as main does
@@ -1016,7 +1016,8 @@ class PACK_BLOCK(TemplateParameter):
         return (
             f"constexpr bool pack_block_en = {str(en).lower()};\n"
             f"constexpr bool pack_block_w = {str(en and self.pack_block == 3).lower()};\n"
-            f"constexpr bool pack_block_fast = {str(en and self.pack_block == 4).lower()};"
+            f"constexpr bool pack_block_fast = {str(en and self.pack_block == 4).lower()};\n"
+            f"constexpr bool pack_block_plain = {str(en and self.pack_block == 5).lower()};"
         )
 
 
