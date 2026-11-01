@@ -78,9 +78,9 @@ _SRC = _SRC.replace("tile_count_res=matmul_config.tile_dimensions.tile_cnt * num
 _SRC = _SRC.replace("    golden_tensor = golden_tensor.repeat(num_blocks)", "    golden_tensor = _accum(golden_tensor, num_blocks) if _L1[0] else golden_tensor.repeat(num_blocks)")
 _SRC = _SRC.replace("tile_cnt = matmul_config.tile_dimensions.output_tile_cnt * num_blocks", "tile_cnt = matmul_config.tile_dimensions.output_tile_cnt * (1 if _L1[0] else num_blocks)")
 assert _SRC.count("_L1[0]") == 3 and "_accum" in _SRC and "_NB[0]" in _SRC, "the body of test_matmul_grid2_tiny changed"
-exec(compile(_SRC, "test_matmul_grid2_tiny_blocks", "exec"), dict(_t.__dict__, _NB=_NB, _L1=_L1, _accum=_accum), _t.__dict__)
-_bodyx = _t.__dict__["_bodyx"]
 _t.__dict__["_NB"], _t.__dict__["_L1"], _t.__dict__["_accum"] = _NB, _L1, _accum
+exec(compile(_SRC, "test_matmul_grid2_tiny_blocks", "exec"), _t.__dict__)  # the body's globals are the module's, so the patched TestConfig applies
+_bodyx = _t.__dict__["_bodyx"]
 _KEYED = (tvp.MATMUL_PHASE_ELIDE, tvp.MATMUL_STREAM_NARROW, tvp.MATMUL_REUSE_DIR, tvp.MATMUL_STREAM_Z, tvp.MATMUL_UNPACK_TTSYNC, tvp.MATMUL_K_LOOP, tvp.MATMUL_ROW_END_FOLD, tvp.MATMUL_ROW_MOP, tvp.MATMUL_IN1_ALT)
 
 
@@ -124,9 +124,7 @@ def _cases():
         for r in rows:
             fid, half, acc, a, b, o, rt, ct, kt, thr, l1, nb = r
             c = _case(table, a, b, o, "Y" if acc else "N", "H" if half else "F", fid, rt, ct, kt)
-            # the L1 accumulate ids are off: the functional pack (MATMUL_L1_FUNC of math_matmul_test.cpp) fails the golden on every block, table cell or not (the second tile
-            # of a block reads wrong), so the cells with packer L1 accumulate stay uncovered until that pack path is fixed
-            if c is not None and not l1:
+            if c is not None:
                 add((table, (thr, int(bool(l1)), nb), c[2]))
 
     row("main", sorted(_pk._GRID_MAIN_ROWS))
