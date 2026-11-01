@@ -16,11 +16,13 @@ W_MIN_TILES = 5
 BLOCK_MIN_TILES = 4
 
 
-def pack_block_form(ntiles, dst_format, first_block_of_output, small_tile=False, contiguous=True):
+def pack_block_form(ntiles, dst_format, first_block_of_output, small_tile=False, contiguous=True, bfp=False):
     """Form of one llk_pack_block call whose block form is taken (contiguous, plain format, full tiles)."""
     if ntiles < BLOCK_MIN_TILES and not (ntiles >= 2 and small_tile):
         return "per_tile"
-    if dst_format == "Float32" and ntiles <= 5 and (ntiles == 4 or first_block_of_output):
+    if dst_format == "Float32" and ntiles <= 7 and (ntiles == 4 or first_block_of_output):
+        return "per_tile"
+    if bfp and ntiles == 4 and first_block_of_output:
         return "per_tile"
     if ntiles < W_MIN_TILES or first_block_of_output:
         return "plain"
@@ -31,6 +33,10 @@ def test_mirror_cells():
     assert pack_block_form(3, "Float16_b", False) == "per_tile"
     assert pack_block_form(4, "Float16_b", False) == "plain"
     assert pack_block_form(4, "Float32", False) == "per_tile"
+    assert pack_block_form(7, "Float32", True) == "per_tile"
+    assert pack_block_form(8, "Float32", True) == "plain"
+    assert pack_block_form(4, "Bfp8_b", True, bfp=True) == "per_tile"
+    assert pack_block_form(4, "Bfp8_b", False, bfp=True) == "plain"
     assert pack_block_form(5, "Float32", True) == "per_tile"
     assert pack_block_form(5, "Float32", False) == "w_offset"
     assert pack_block_form(8, "Float16_b", True) == "plain"
@@ -41,5 +47,6 @@ def test_header_matches_mirror():
     src = API.read_text()
     assert re.search(rf"#define LLK_PACK_W_MIN_TILES {W_MIN_TILES}\b", src)
     assert re.search(rf"#define LLK_PACK_BLOCK_MIN_TILES {BLOCK_MIN_TILES}\b", src)
-    assert "ntiles <= 5 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && (ntiles == 4 || pack_w_last != output_id)" in src
+    assert "ntiles <= 7 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && (ntiles == 4 || first_block)" in src
+    assert "(ntiles == 4 && first_block && llk_pack_dst_is_bfp(output_id))" in src
     assert "if (ntiles < LLK_PACK_W_MIN_TILES) {" in src

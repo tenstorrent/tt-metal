@@ -368,8 +368,11 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         return;
     }
 #ifdef LLK_PACK_W_OFFSET
-    // The plain block packs Float32 tiles of a 4 or 5 tile block slower than the per-tile pack: 4 tiles always, 5 tiles for the first block of an output (the next one takes the W offset).
-    if (ntiles <= 5 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && (ntiles == 4 || pack_w_last != output_id)) {
+    // The plain block is slower than the per-tile pack for Float32 tiles up to 7 tiles and for a 4 tile block-float block, right after an init: those take the per-tile pack
+    // for the first block of an output (the next one the W offset or the plain block); Float32 blocks of 4 tiles always, no W offset exists below 5 tiles.
+    const bool first_block = pack_w_last != output_id;
+    if ((ntiles <= 7 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && (ntiles == 4 || first_block)) ||
+        (ntiles == 4 && first_block && llk_pack_dst_is_bfp(output_id))) {
         if (pack_w_last != output_id) {
             _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
             pack_w_last = output_id;
