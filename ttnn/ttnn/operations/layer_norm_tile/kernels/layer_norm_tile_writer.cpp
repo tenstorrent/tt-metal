@@ -25,14 +25,27 @@ void kernel_main() {
     constexpr uint32_t in_depth = get_compile_time_arg_val(8);
     constexpr uint32_t read_trid_depth = get_compile_time_arg_val(9);
     constexpr uint32_t input_tile_bytes = get_compile_time_arg_val(10);
-    constexpr auto output_args = TensorAccessorArgs<11>();
+    constexpr bool half_band = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t image_row_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t image_bands = get_compile_time_arg_val(13);
+    constexpr auto output_args = TensorAccessorArgs<14>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_affine_scratch = get_named_compile_time_arg_val("affine_scratch_cb");
+    constexpr uint32_t affine_group_cols = get_named_compile_time_arg_val("affine_group_cols");
+    constexpr bool beta_on_writer = get_named_compile_time_arg_val("affine_beta_on_writer") != 0;
+    constexpr bool affine_is_tile = get_named_compile_time_arg_val("affine_is_tile") != 0;
+    constexpr uint32_t affine_page_elems = get_named_compile_time_arg_val("affine_page_elems");
+    constexpr uint32_t affine_page_bytes = get_named_compile_time_arg_val("affine_page_bytes");
+    constexpr uint32_t affine_elem_bytes = get_named_compile_time_arg_val("affine_elem_bytes");
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
-    const uint32_t row_tile_start = get_arg_val<uint32_t>(1);
-    const uint32_t core_row_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t unit_start = get_arg_val<uint32_t>(1);
+    const uint32_t unit_count = get_arg_val<uint32_t>(2);
     const uint32_t rotation = get_arg_val<uint32_t>(3);
     [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(4);
+    [[maybe_unused]] const uint32_t beta_addr = get_arg_val<uint32_t>(5);
+    const bool affine_injector = get_arg_val<uint32_t>(6) != 0;
 
     static_assert(tensor_w_tiles % io_chunk_tiles == 0, "every block pop must be a whole number of chunks");
     static_assert(write_chunks_per_flush >= 1, "flush group must hold at least one chunk");
@@ -43,6 +56,15 @@ void kernel_main() {
     [[maybe_unused]] const auto residual_accessor = TensorAccessor(residual_args, residual_addr, input_tile_bytes);
     const Noc noc;
 
+    static_assert(input_tile_bytes == output_tile_bytes, "residual and output share one band layout");
+    using Sources =
+        layer_norm_tile::RowSources<half_band, tensor_w_tiles, image_row_tiles, image_bands, output_tile_bytes / 2>;
+    // Separate cursors: the residual stream runs `in_depth - 1` blocks ahead of the output.
+    Sources output_sources(unit_start, unit_count);
+    [[maybe_unused]] Sources residual_sources(unit_start, unit_count);
+    const uint32_t core_row_tiles = Sources::compute_rows(unit_count);
+    constexpr uint32_t row_chunks = tensor_w_tiles / io_chunk_tiles;
+
     auto block_rows = [&](uint32_t block_row) {
         return (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
     };
@@ -50,34 +72,40 @@ void kernel_main() {
     auto load_residual = [&](uint32_t block_row) {
         MaybeDeviceZoneScope("writer_residual_block");
         const uint32_t rows = block_rows(block_row);
-        const uint32_t first_page = (row_tile_start + block_row) * tensor_w_tiles;
         residual_tiles.reserve_back(rows * tensor_w_tiles);
         const uint32_t residual_base = residual_tiles.get_write_ptr();
+        layer_norm_tile::RowSource src{};
         layer_norm_tile::read_block_chunks<read_trid_depth>(
             noc,
-            rows * tensor_w_tiles / io_chunk_tiles,
+            rows * row_chunks,
             [&](uint32_t chunk) {
-                layer_norm_tile::read_chunk<io_chunk_tiles, input_tile_bytes>(
-                    residual_accessor,
-                    first_page + chunk * io_chunk_tiles,
-                    residual_base + chunk * io_chunk_tiles * input_tile_bytes,
-                    rotation);
+                const uint32_t col = (chunk % row_chunks) * io_chunk_tiles;
+                if (col == 0) {
+                    src = residual_sources.next();
+                }
+                layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+                    residual_accessor, src, col, residual_base + chunk * io_chunk_tiles * input_tile_bytes, rotation);
             },
             [&]() { residual_tiles.push_back(io_chunk_tiles); });
     };
 
     auto store_block = [&](uint32_t block_row) {
         MaybeDeviceZoneScope("writer_store_block");
-        const uint32_t first_page = (row_tile_start + block_row) * tensor_w_tiles;
-        const uint32_t num_chunks = block_rows(block_row) * tensor_w_tiles / io_chunk_tiles;
+        const uint32_t num_chunks = block_rows(block_row) * row_chunks;
+        layer_norm_tile::RowSource src{};
         for (uint32_t group = 0; group < num_chunks; group += write_chunks_per_flush) {
             const uint32_t group_chunks =
                 (num_chunks - group) < write_chunks_per_flush ? (num_chunks - group) : write_chunks_per_flush;
             for (uint32_t chunk = 0; chunk < group_chunks; ++chunk) {
+                const uint32_t col = ((group + chunk) % row_chunks) * io_chunk_tiles;
+                if (col == 0) {
+                    src = output_sources.next();
+                }
                 output_tiles.wait_front((chunk + 1) * io_chunk_tiles);
-                layer_norm_tile::write_chunk<io_chunk_tiles, output_tile_bytes>(
+                layer_norm_tile::write_row_chunk<io_chunk_tiles, output_tile_bytes>(
                     output_accessor,
-                    first_page + (group + chunk) * io_chunk_tiles,
+                    src,
+                    col,
                     output_tiles.get_read_ptr() + chunk * io_chunk_tiles * output_tile_bytes,
                     rotation);
             }
@@ -86,7 +114,32 @@ void kernel_main() {
         }
     };
 
+    // Injector only (beta_on_writer): beta into the scratch block's second half, handed to the reader by the push.
+    // Runs before any other read of this RISC, so the plain read barrier (software-counted) is exact; a trid
+    // barrier right after a single read can pass before the NIU counts it outstanding (seen with one group).
+    auto load_beta = [&]() {
+        using Affine = layer_norm_tile::
+            AffineBlock<affine_is_tile, tensor_w_tiles, affine_group_cols, affine_page_elems, affine_elem_bytes>;
+        DataflowBuffer scratch(cb_affine_scratch);
+        scratch.reserve_back(1);
+        const uint32_t beta_block = scratch.get_write_ptr() + Affine::tensor_bytes;
+        Affine::issue_reads(TensorAccessor(beta_args, beta_addr, affine_page_bytes), beta_block);
+        noc_async_read_barrier();
+        if constexpr (!affine_is_tile) {
+            Affine::shift_face1_rows(beta_block);
+            noc_async_read_barrier();
+        }
+        scratch.push_back(1);
+    };
+
     constexpr uint32_t prefetch_rows = (in_depth - 1) * block_row_tiles;
+    // Before the residual prefetch: the multicast waits on beta, and the injector's first residual block can
+    // land late under all-core load.
+    if constexpr (beta_on_writer) {
+        if (affine_injector) {
+            load_beta();
+        }
+    }
     if constexpr (residual_on_writer) {
         for (uint32_t block_row = 0; block_row < prefetch_rows && block_row < core_row_tiles;
              block_row += block_row_tiles) {
