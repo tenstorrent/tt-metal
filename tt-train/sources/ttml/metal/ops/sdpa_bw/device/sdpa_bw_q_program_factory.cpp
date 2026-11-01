@@ -76,7 +76,6 @@ const std::string kChainDefKey = "CHAIN";
 constexpr uint32_t kChainLength = 14U;    // cores per forwarding chain
 constexpr uint32_t kChainChunk = 4U;      // tile rows of the stream per handshake
 constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no item this round" in a chain-mode list
-constexpr uint32_t kDefaultKvBlock = 4U;  // K/V rows per compute block without the chain (at most four)
 
 // Chain schedule: per stream a contiguous run of cores, the stream's items LPT-scheduled over them, chains of
 // kChainLength consecutive cores (highest core injector, lowest core sink). Every core runs `rounds` rounds.
@@ -406,9 +405,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         bfloat16_single_tile_size_bytes,
         2 * qWt);
 
-    // The compute kernel works on K/V blocks of kv_block rows (the chain chunk under CHAIN, else up to four
-    // rows): two blocks resident, and the P / dP / dS CBs hold one block each.
-    const uint32_t kv_block = use_chain ? chain_chunk : std::min(St, kDefaultKvBlock);
+    // The compute kernel works on K/V blocks of kv_block rows: the chain chunk under CHAIN (the reader pushes and
+    // the compute pops whole chunks, so a block never straddles the CB end); one row in the other modes, whose
+    // readers push row by row (review round 9 P1: a multi-row block there walked past the CB end after a
+    // partial last block). Two blocks resident, and the P / dP / dS CBs hold one block each.
+    const uint32_t kv_block = use_chain ? chain_chunk : 1U;
     const uint32_t kv_cb_rows = 2U * kv_block;
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(
