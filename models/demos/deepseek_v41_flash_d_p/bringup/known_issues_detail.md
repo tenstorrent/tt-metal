@@ -524,3 +524,50 @@ P.26 perf (galaxy 8x4, attempt 1, 2026-11-01): a 16-bit window KV switch + contr
   the same code): profile rung chunk_wall_ms 198.7 / device_ms_total 161.92; p51200 wall 202.8 (spread 31.1), device
   172.31, attention section 45.0 ms; p512000 wall 233.7 (spread 10.8), device 211.43, attention 45.19 ms. No change-off
   side measured here (the orchestrator's A/B).
+
+## The device's 1.55x of the official hidden error is 2.1-2.2x its logit KL, but ~0.1-0.2 pp of top-1
+
+BREADCRUMBS section of FIX.20 (overseer fix, 8x4, 2026-11-01); BREADCRUMBS.md is at the 500 KB hook limit (DS41-194).
+
+- **Model change (the only one):** `tt/settings.py` WINDOW_KV_FORMAT default `bf16_tiles` -> `bfp8_tiles` (owner
+  2026-11-01: bf16_tiles is a switch only, the shipped window KV stays 8-bit, as the reference's e4m3; the setting's
+  text says so). The P.26 ladder unit (rung last) passes on it: final hidden rel 0.1902 (limit 0.2422; bf16_tiles gave
+  0.1907), top-1 0.9971, top-5 1.0.
+- **New:** `tests/bringup/test_logit_kl.py` (the FIX.20 unit) and `tests/bringup/official_final_norm.py` (the official
+  final norm, CPU, made once: `<golden dir>-official/final_norm-<rung>.safetensors` + `.json` with the golden's
+  content_hash and the file's own sha256; a mismatch is refused). The rung is in the file name because rungs last and
+  s56320 share one golden but not one feed. The official run is reference/drift.py:replay (all 40 layers, bf16,
+  numerics official), fed as the ladder feeds the device; its final-norm rel equals drift-<rung>.json final_hidden
+  exactly (s10240 0.12807, last 0.12109). Made in **1838 s** (s10240, 2 chunks from 0) and **931 s** (last, 1 chunk
+  after the golden prefix).
+- **Method:** logits = final_norm @ head.weight (fp32, 256-row blocks), log-softmax in float64; vs the native golden
+  per position: KL(p_golden || p_x), top-1 agreement, top-5 overlap (|top5 & top5| / 5), next-token NLL (the rung's
+  last position has no next token). Gate: kl_mean_<rung> <= calib^2 (4) x official kl_mean. Sanity: golden logits'
+  argmax = the golden's stored top32_ids[:, 0] on 1024 / 1024 rows; golden vs its bf16 rounding KL 3.5e-8.
+- **Results** (5120 positions each; device = shipped bfp8_tiles; wkv16 = DS41_WINDOW_KV_FORMAT=bf16_tiles):
+
+| rung | x | final_norm rel | kl_mean | kl_p99 | kl_max | top-1 | top-5 ovl | NLL (golden) |
+|---|---|---|---|---|---|---|---|---|
+| s10240 | device | 0.1971 | 0.00608 | 0.1267 | 2.62 | 0.9951 | 0.8886 | 0.0238 (0.0175) |
+| s10240 | wkv16 | 0.1966 | 0.00622 | 0.0947 | 3.34 | 0.9955 | 0.8888 | 0.0249 |
+| s10240 | official | 0.1281 | 0.00277 | 0.0360 | 2.08 | 0.9971 | 0.9241 | 0.0197 |
+| last | device | 0.1902 | 0.00508 | 0.0790 | 2.39 | 0.9965 | 0.8941 | 0.0306 (0.0258) |
+| last | wkv16 | 0.1907 | 0.00447 | 0.0627 | 2.01 | 0.9971 | 0.8945 | 0.0291 |
+| last | official | 0.1211 | 0.00242 | 0.0308 | 1.56 | 0.9975 | 0.9271 | 0.0272 |
+
+  Limits: s10240 0.01110, last 0.00969: both pass (device 0.55x / 0.52x of the limit).
+- **Answer to the owner:** the device's 1.54-1.57x of DeepSeek's hidden-state error becomes 2.1-2.2x its KL (KL ~
+  rel^2: 1.55^2 = 2.4), but at the tokens it is small: top-1 agreement with the golden 0.9951 / 0.9965 vs the
+  official 0.9971 / 0.9975 (10 / 5 more flips in 5120), next-token NLL +0.0041 / +0.0034 nats a token over the
+  official (+0.0063 / +0.0048 over the golden). Top-5 overlap 0.89 vs 0.92 counts near-zero-probability tail tokens.
+  Window KV 8 vs 16 bits is not visible at the tokens: kl_mean 0.00608 vs 0.00622 (s10240), 0.00508 vs 0.00447
+  (last); the rest of the gap to the official is elsewhere.
+- **20 worst positions** (device, shipped) are in the FIX.20 unit log and generated/fix20_logit_kl/<rung>-<variant>.json
+  (pos, token, next, KL, official KL, golden / device / official top-1). Top of the list: s10240 pos 9834 KL 2.62
+  (official 0.85; golden 5887, device and official both 458), 6295 KL 2.09 (official 0.03; golden 334, device 11146);
+  last pos 56220 KL 2.39 (official 0.19; golden 411, device 411, official 260), 53760 KL 1.71 (official 0.61). 7 (s10240)
+  and 9 (last) of the 20 worst are positions the official also moves (official KL > 0.15).
+- **Gate:** `gate FIX.20 --check`: P.26 PASS (621 s), FIX.20 PASS (1859 s: 4 device cases, ~230-246 s model load each).
+- OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.tests.bringup.official_final_norm s10240 last`
+  (only for a new golden); `gate FIX.20 --check --unit FIX.20`.
