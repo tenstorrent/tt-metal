@@ -68,7 +68,15 @@ def cp2_split() -> bool:
 
 
 def split_half(group: str, ratio: int, S: int) -> int:
-    return ((RING if group == "csa_unified" else 0) + int(S) // int(ratio)) // 2
+    """The ring's chip-major half for a layer of compress ratio ``ratio``: (256 + P / ratio) // 2 with P = the RING's position
+    capacity (its DSV4_MAX_POSITIONS, passed as V41_EXPORT_CP2_POSITIONS -- NOT this runner's MAXSEQ: 262144 vs the ring's 261120
+    would shift chip 1's rows by 512), the same formula as the ring's kv_migration.split_half and the engine's kvm client
+    row_ranges. One half per layer for every group."""
+    import os
+
+    del group
+    P = int(os.environ.get("V41_EXPORT_CP2_POSITIONS") or S)
+    return (RING + int(P) // int(ratio)) // 2
 
 
 def index_split_chunk() -> int:
