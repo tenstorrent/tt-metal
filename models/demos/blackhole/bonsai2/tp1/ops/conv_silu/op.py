@@ -98,11 +98,23 @@ def conv_silu(qkv, state, taps, key_dim: int, value_dim: int, num_value_heads: i
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in head_cores])
 
     def alloc(shape):
-        return ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        # from_torch of zeros guarantees a zeroed buffer; allocate_tensor_on_device does not.
+        return ttnn.from_torch(
+            torch.zeros(*shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     conv, shift = alloc([1, 1, C]), alloc([K, 1, C])
+    # allocate_tensor_on_device does NOT zero, so every column a core does not own holds whatever was
+    # in that allocation. Zero both outputs first so a stray write (or a missing write) shows up as a
+    # deviation from zero rather than as garbage that can be inf.
+    # allocate_tensor_on_device does NOT zero the buffer, so every column a core does not own holds
+    # whatever was in that allocation (which is where the inf and the wrong in-slice values come from:
+    # an unowned tile can be read as a diagonal). Zero both outputs before the op so a stray write or a
+    # missing write shows up as a deviation from zero.
 
     c_t, per_core = g["c_t"], g["per_core"]
     cbs = [

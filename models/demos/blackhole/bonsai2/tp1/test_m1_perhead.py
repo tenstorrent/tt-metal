@@ -87,9 +87,12 @@ def test_single_head_isolation(mesh_device, hv, probe):
     stray = got[mask].abs().max().item()
     n_stray = int((got[mask].abs() > 1e-6).sum())
 
+    # which 128-channel blocks are non-zero? one probe slice is 128 channels; any block that is not
+    # [lo,hi) and not zero tells us where the head actually wrote.
+    blocks = [b for b in range(C // 128) if got[b * 128:(b + 1) * 128].abs().max() > 1e-3]
     print(
         f"hv={hv:2d} probe={probe} cols[{lo}:{hi}]: err_in={err_in:.4e}  "
-        f"stray_max={stray:.4e} ({n_stray} cols)"
+        f"stray_max={stray:.4e} ({n_stray} cols)  nonzero blocks={blocks[:12]}"
     )
     assert stray < 1e-3, (
         f"head {hv} wrote outside its {probe} slice: {n_stray} other columns non-zero, max {stray:.4e}. "

@@ -58,10 +58,15 @@ void kernel_main() {
                 matmul_tiles(cb_state, cb_diag, j * per_core + c, j * per_core + c, i);
             }
         }
+        // SiLU is a MATH-thread (SFPU) op, so it has to run inside the acquire..commit window. Running
+        // it after tile_regs_wait executes it on the PACK thread, which is a correctness bug, not just
+        // a scheduling one.
+        for (uint32_t i = 0; i < nn; i++) {
+            silu_tile(i);
+        }
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < nn; i++) {
-            silu_tile(i);
             pack_tile<true>(i, cb_work, i);
         }
         tile_regs_release();
