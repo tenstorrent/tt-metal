@@ -401,10 +401,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 auto& cc = chain_cores[first_core + c];
                 cc.stream = stream;
                 const uint32_t pos = c % kChainLength;
-                cc.injector = (pos == 0U);
-                cc.sink = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
-                cc.prev = cc.injector ? first_core + c : first_core + c - 1U;
-                cc.next = cc.sink ? first_core + c : first_core + c + 1U;
+                // The chain runs downward in core index (iteration 23): the writer forwards on NOC_1, whose
+                // routes decrease in coordinate, so the next core is the previous index (one link).
+                cc.injector = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
+                cc.sink = (pos == 0U);
+                cc.prev = cc.injector ? first_core + c : first_core + c + 1U;
+                cc.next = cc.sink ? first_core + c : first_core + c - 1U;
                 for (const uint32_t item : schedule.items_per_core[c]) {
                     cc.rows.push_back(rows[item]);
                 }
@@ -420,6 +422,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
+    const uint32_t chain_received_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);   // reader -> writer
+    const uint32_t chain_forwarded_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // writer -> reader
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -612,15 +616,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,                 // num tile in inner dim in query/key (d_qk/TILE_W)
-        vWt,                 // num tile in inner dim in value (d_v/TILE_W)
-        St,                  // num tile in seq len dim (S/TILE_H)
-        qNH,                 // number of heads in query
-        heads_per_group,     // number of heads per group
-        Sk_chunk_t,          // multi-tile K/V chunking factor
-        chain_sender_sem,    // chain mode: "next core is ready" counter (incremented by the next core)
-        chain_receiver_sem,  // chain mode: "data valid" flag (set by the previous core)
-        chain_valid_sem,     // chain mode: local VALID value relayed to the next core
+        qWt,                  // num tile in inner dim in query/key (d_qk/TILE_W)
+        vWt,                  // num tile in inner dim in value (d_v/TILE_W)
+        St,                   // num tile in seq len dim (S/TILE_H)
+        qNH,                  // number of heads in query
+        heads_per_group,      // number of heads per group
+        Sk_chunk_t,           // multi-tile K/V chunking factor
+        chain_sender_sem,     // chain mode: "next core is ready" counter (incremented by the next core)
+        chain_receiver_sem,   // chain mode: "data valid" flag (set by the previous core)
+        chain_valid_sem,      // chain mode: local VALID value relayed to the next core
+        chain_received_sem,   // chain mode: chunks the reader has received (to the writer)
+        chain_forwarded_sem,  // chain mode: chunks the writer has forwarded (to the reader)
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -636,9 +642,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        vWt,  // num tile in inner dim in output/value (d_v/TILE_W)
-        St,   // num tile in seq len dim (S/TILE_H)
-        qNH,  // number of heads in query
+        vWt,               // num tile in inner dim in output/value (d_v/TILE_W)
+        St,                // num tile in seq len dim (S/TILE_H)
+        qNH,               // number of heads in query
+        Sk_chunk_t,        // K/V chunk tiles (the writer forwards the chain's chunks)
+        qWt,               // num tile in inner dim in query/key
+        chain_sender_sem,  // chain mode semaphores
+        chain_receiver_sem,
+        chain_valid_sem,
+        chain_received_sem,
+        chain_forwarded_sem,
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -785,7 +798,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 kernels.writer,
                 core,
                 work_list_runtime_args(
-                    {output_buffer->address(), intermediates_buffer != nullptr ? intermediates_buffer->address() : 0},
+                    {output_buffer->address(),
+                     intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
+                     static_cast<uint32_t>(next.x),
+                     static_cast<uint32_t>(next.y),
+                     cc.sink ? 1U : 0U},
                     rounds));
             SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rounds));
         }

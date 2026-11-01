@@ -101,11 +101,13 @@ ChainSchedule chain_schedule(uint32_t num_cores, uint32_t num_streams, ItemsFn&&
         for (uint32_t c = 0; c < stream_cores; ++c) {
             auto& cc = sched.cores[first_core + c];
             cc.stream = stream;
+            // The chain runs downward in core index (iteration 23): the writer forwards on NOC_1, whose routes
+            // decrease in coordinate, so the next core is the previous index (one link).
             const uint32_t pos = c % kChainLength;
-            cc.injector = (pos == 0U);
-            cc.sink = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
-            cc.prev = cc.injector ? first_core + c : first_core + c - 1U;
-            cc.next = cc.sink ? first_core + c : first_core + c + 1U;
+            cc.injector = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
+            cc.sink = (pos == 0U);
+            cc.prev = cc.injector ? first_core + c : first_core + c + 1U;
+            cc.next = cc.sink ? first_core + c : first_core + c - 1U;
             for (const uint32_t item : lpt.items_per_core[c]) {
                 cc.items.push_back(items[item]);
             }
@@ -508,6 +510,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
+    const uint32_t chain_received_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);   // reader -> writer
+    const uint32_t chain_forwarded_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // writer -> reader
     if (head_split) {
         reader_defines[kHeadSplitDefKey] = "1";
         writer_defines[kHeadSplitDefKey] = "1";
@@ -523,16 +527,18 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,                 // 0: Q/K width in tiles (Q@K^T path)
-        kWt,                 // 1: key width in tiles (K read)
-        vWt,                 // 2: value/dO/O width in tiles
-        St,                  // 3: sequence length in tiles
-        qNH,                 // 4: number of query heads
-        heads_per_group,     // 5: heads per group
-        chain_sender_sem,    // 6: chain mode semaphores
-        chain_receiver_sem,  // 7
-        chain_valid_sem,     // 8
-        chain_chunk,         // 9: chain mode query rows per handshake
+        qWt,                  // 0: Q/K width in tiles (Q@K^T path)
+        kWt,                  // 1: key width in tiles (K read)
+        vWt,                  // 2: value/dO/O width in tiles
+        St,                   // 3: sequence length in tiles
+        qNH,                  // 4: number of query heads
+        heads_per_group,      // 5: heads per group
+        chain_sender_sem,     // 6: chain mode semaphores
+        chain_receiver_sem,   // 7
+        chain_valid_sem,      // 8
+        chain_chunk,          // 9: chain mode query rows per handshake
+        chain_received_sem,   // 10: chain mode: chunks the reader has received (to the writer)
+        chain_forwarded_sem,  // 11: chain mode: chunks the writer has forwarded (to the reader)
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
@@ -546,11 +552,18 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
-        kWt,             // 0: key width in tiles (grad_K)
-        vWt,             // 1: value width in tiles (grad_V)
-        St,              // 2: sequence length in tiles
-        qNH,             // 3: number of query heads
-        heads_per_group  // 4: heads per group
+        kWt,                  // 0: key width in tiles (grad_K)
+        vWt,                  // 1: value width in tiles (grad_V)
+        St,                   // 2: sequence length in tiles
+        qNH,                  // 3: number of query heads
+        heads_per_group,      // 4: heads per group
+        chain_chunk,          // 5: chain mode query rows per handshake
+        qWt,                  // 6: Q/K width in tiles (the forwarded Q chunk)
+        chain_sender_sem,     // 7: chain mode semaphores (the writer forwards the stream)
+        chain_receiver_sem,   // 8
+        chain_valid_sem,      // 9
+        chain_received_sem,   // 10
+        chain_forwarded_sem,  // 11
     };
     tt::tt_metal::TensorAccessorArgs(grad_key_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(grad_value_buffer).append_to(writer_compile_args);
@@ -694,7 +707,13 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                 program,
                 kernels.writer,
                 core,
-                work_list_runtime_args({grad_key_buffer->address(), grad_value_buffer->address()}, rounds));
+                work_list_runtime_args(
+                    {grad_key_buffer->address(),
+                     grad_value_buffer->address(),
+                     static_cast<uint32_t>(next.x),
+                     static_cast<uint32_t>(next.y),
+                     cc.sink ? 1U : 0U},
+                    rounds));
             SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rounds));
         }
     } else if (use_work_list) {

@@ -8,6 +8,15 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#ifdef CHAIN
+#include <hostdevcommon/common_values.hpp>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#endif
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -22,11 +31,12 @@ void kernel_main() {
     constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
+    // 3: K/V chunk tiles, 4: Q/K width in tiles, 5..9: chain semaphores (sender, receiver, valid, received, forwarded)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<10>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
@@ -89,14 +99,70 @@ void kernel_main() {
 #endif
     };
 
-#ifdef WORK_LIST
+#ifdef CHAIN
+    // Chain mode (iteration 23): this writer forwards the K/V stream to the next core on its own NoC while the
+    // reader receives the next chunk on the other (see the Q backward writer); after a round's chunks the row's
+    // output goes out.
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t qWt = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_key = tt::CBIndex::c_1;
+    constexpr uint32_t cb_value = tt::CBIndex::c_2;
+    const uint32_t next_noc_x = num_rows_to_process;
+    const uint32_t next_noc_y = start_row;
+    const uint32_t is_sink = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t rows_base = runtime_args_counter;
+    Semaphore sender_sem(get_compile_time_arg_val(5));
+    Semaphore receiver_sem(get_compile_time_arg_val(6));
+    Semaphore valid_sem(get_compile_time_arg_val(7));
+    Semaphore received_sem(get_compile_time_arg_val(8));
+    Semaphore forwarded_sem(get_compile_time_arg_val(9));
+    const Noc noc;
+    valid_sem.set(VALID);
+    const uint32_t k_chunk_bytes = Sk_chunk_t * qWt * get_tile_size(cb_key);
+    const uint32_t v_chunk_bytes = Sk_chunk_t * vWt * get_tile_size(cb_value);
+    // Two chunks resident per CB; the reader's pushes are whole chunks, so chunk c sits in slot c % 2.
+    const uint32_t k_base = get_write_ptr(cb_key);
+    const uint32_t v_base = get_write_ptr(cb_value);
+    constexpr uint32_t num_chunks = Ht / Sk_chunk_t;
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        for (uint32_t h = 0; h < num_chunks; ++h) {
+            const uint32_t c = round * num_chunks + h;
+            received_sem.wait_min(c + 1U);
+            if (!is_sink) {
+                const uint32_t k_addr = k_base + (c % 2U) * k_chunk_bytes;
+                const uint32_t v_addr = v_base + (c % 2U) * v_chunk_bytes;
+                sender_sem.wait(1);
+                sender_sem.set(0);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(k_addr),
+                    UnicastEndpoint{},
+                    k_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = k_addr});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(v_addr),
+                    UnicastEndpoint{},
+                    v_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = v_addr});
+                noc.async_writes_flushed();
+                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
+                forwarded_sem.set(c + 1U);
+            }
+        }
+        const uint32_t row = get_arg_val<uint32_t>(rows_base + round);
+        if (row != 0xFFFFFFFFU) {  // a round without a row
+            write_row(row);
+        }
+    }
+    noc.async_write_barrier();
+#elif defined(WORK_LIST)
     // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
     const uint32_t list_base = runtime_args_counter - 1U;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t row = get_arg_val<uint32_t>(list_base + i);
-        if (row != 0xFFFFFFFFU) {  // chain mode pads the list with rounds without a row
-            write_row(row);
-        }
+        write_row(row);
     }
 #else
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {

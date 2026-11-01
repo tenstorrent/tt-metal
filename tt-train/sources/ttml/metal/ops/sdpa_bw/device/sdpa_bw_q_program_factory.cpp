@@ -75,11 +75,11 @@ const std::string kWorkListDefKey = "WORK_LIST";
 const std::string kChainDefKey = "CHAIN";
 constexpr uint32_t kChainLength = 14U;    // cores per forwarding chain
 constexpr uint32_t kChainChunk = 4U;      // tile rows of the stream per handshake
-constexpr uint32_t kDefaultKvBlock = 4U;  // K/V rows per compute block without the chain (at most four)
 constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no item this round" in a chain-mode list
+constexpr uint32_t kDefaultKvBlock = 4U;  // K/V rows per compute block without the chain (at most four)
 
 // Chain schedule: per stream a contiguous run of cores, the stream's items LPT-scheduled over them, chains of
-// kChainLength consecutive cores (first core injector, last core sink). Every core runs `rounds` rounds.
+// kChainLength consecutive cores (highest core injector, lowest core sink). Every core runs `rounds` rounds.
 struct ChainCore {
     uint32_t stream = 0;
     bool injector = false;
@@ -110,11 +110,14 @@ ChainSchedule chain_schedule(uint32_t num_cores, uint32_t num_streams, ItemsFn&&
         for (uint32_t c = 0; c < stream_cores; ++c) {
             auto& cc = sched.cores[first_core + c];
             cc.stream = stream;
+            // The chain runs downward in core index (iteration 23): the writer forwards on NOC_1, whose routes
+            // decrease in coordinate, so the next core is the previous index (one link) and the injector is the
+            // highest core of its chain; the readers' ready counters travel upward on NOC_0.
             const uint32_t pos = c % kChainLength;
-            cc.injector = (pos == 0U);
-            cc.sink = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
-            cc.prev = cc.injector ? first_core + c : first_core + c - 1U;
-            cc.next = cc.sink ? first_core + c : first_core + c + 1U;
+            cc.injector = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
+            cc.sink = (pos == 0U);
+            cc.prev = cc.injector ? first_core + c : first_core + c + 1U;
+            cc.next = cc.sink ? first_core + c : first_core + c - 1U;
             for (const uint32_t item : lpt.items_per_core[c]) {
                 cc.items.push_back(items[item]);
             }
@@ -565,6 +568,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
+    const uint32_t chain_received_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);   // reader -> writer
+    const uint32_t chain_forwarded_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // writer -> reader
 
     // Gate: reader streams G, compute produces grad_gate + gated dO, writer flushes both
     if (args.has_gate) {
@@ -582,15 +587,17 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,                 // 0: Q/K width in tiles
-        vWt,                 // 1: V/dO/O width in tiles
-        St,                  // 2: sequence length in tiles
-        q_heads,             // 3: number of query heads
-        heads_per_group,     // 4: heads per group
-        chain_sender_sem,    // 5: chain mode semaphores
-        chain_receiver_sem,  // 6
-        chain_valid_sem,     // 7
-        chain_chunk,         // 8: chain mode K/V rows per handshake
+        qWt,                  // 0: Q/K width in tiles
+        vWt,                  // 1: V/dO/O width in tiles
+        St,                   // 2: sequence length in tiles
+        q_heads,              // 3: number of query heads
+        heads_per_group,      // 4: heads per group
+        chain_sender_sem,     // 5: chain mode semaphores
+        chain_receiver_sem,   // 6
+        chain_valid_sem,      // 7
+        chain_chunk,          // 8: chain mode K/V rows per handshake
+        chain_received_sem,   // 9: chain mode: chunks the reader has received (to the writer)
+        chain_forwarded_sem,  // 10: chain mode: chunks the writer has forwarded (to the reader)
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);
@@ -605,9 +612,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
-        qWt,  // 0: query width in tiles
-        St,   // 1: sequence length in tiles
-        vWt,  // 2: V/dO width in tiles (grad_gate / gated dO rows)
+        qWt,                  // 0: query width in tiles
+        St,                   // 1: sequence length in tiles
+        vWt,                  // 2: V/dO width in tiles (grad_gate / gated dO rows)
+        chain_chunk,          // 3: chain mode K/V rows per handshake
+        chain_sender_sem,     // 4: chain mode semaphores (the writer forwards the stream)
+        chain_receiver_sem,   // 5
+        chain_valid_sem,      // 6
+        chain_received_sem,   // 7
+        chain_forwarded_sem,  // 8
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(u_scaler_buffer).append_to(writer_compile_args);
@@ -749,7 +762,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                     {grad_query_buffer->address(),
                      u_scaler_buffer->address(),
                      grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
-                     gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U},
+                     gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U,
+                     static_cast<uint32_t>(next.x),
+                     static_cast<uint32_t>(next.y),
+                     cc.sink ? 1U : 0U},
                     rounds));
             SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rounds));
         }

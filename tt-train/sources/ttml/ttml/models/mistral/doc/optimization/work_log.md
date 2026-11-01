@@ -155,6 +155,14 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 23: SDPA chain hop overlap (kernel boost checklist)
+
+- Roofline / bytes: after iteration 22 the chain hop (ready handshake, 64 KB unicast, flush, relay, serial with the receive on one RISC) set the SDPA kernels' time: Q 147 us per call at the shard shape against ~110 us of compute, forward 145 against ~100, KV 215 against ~170.
+- Structural fix: forwarding on the writer RISC (NOC_1) with a received / forwarded counter pair between the two RISCs (plain L1 words, `wait_min`); the reader only receives. First build forwarded upward in core index: backward 427 -> 592 us, every NOC_1 hop to the next core went the long way round the ring (NOC_1 routes in decreasing coordinates). Chains reversed (injector = highest core of its chain): Q 427 -> 412 (`O/iter23b`), KV -> 395 (`O/iter23c`), forward 145 -> 137 (`O/iter23d`); all bit-exact with iteration 22.
+- Measured in the step: SDPA rows -0.156 ms per 4 layers (-1.6 ms/step); TP=4 480.3 ms / 33.78 % (the wall drop beyond the attribution is this run's clock mix).
+- Lesson: a NoC's routing direction decides the chain direction; a hop against it costs ~10x.
+- Verification: standalone six shapes bit-exact, attention tests, harness 47, TP gradient check PASS, cooled TP=4 MFU + profile, 8-layer loss match, TP=4 real weights (`O/iter23.{sh,log}`).
+
 ### Iteration 22: SDPA backward data path (kernel boost checklist)
 
 - Roofline / bytes: `SDPABackwardQ` 196 us per call in the step (0.784 ms per 4 layers per chip), `SDPABackwardKV` 273, `SDPAForward` 140, against ~1.5-2.5 us of FPU + SFPU work per (row, K tile) unit x 38 units per core = 60-100 us; K/V stream 12 MB per call through the chains.
@@ -279,5 +287,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | state | `c219767ba30` | state after iteration 20: where the remaining step time is |
 | 21 | `fd17a21a00b` | rejected `sdpa_scheduler` forward port: evidence and docs only (kernels unchanged) |
 | 22 | `66b8a997d14` | blocked `sdpa_bw_q` compute kernel, single read barrier per chunk in the three chain injectors, `TTML_SDPA_BW_Q_STREAM` knob, iteration-22 evidence |
+| review 9 | `912f9562ba6` | stage review round 9 record and its doc answers |
+| 23 | (this commit) | SDPA chain forwarding on the writer RISC / NOC_1 (forward, Q, KV readers, writers, factories), chains reversed, iteration-23 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

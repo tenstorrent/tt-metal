@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
 
     // compile-time args 6..9: chain-mode semaphores and chunk rows
-    constexpr auto grad_output_args = TensorAccessorArgs<10>();
+    constexpr auto grad_output_args = TensorAccessorArgs<12>();  // 6..11: chain semaphores and chunk rows
     constexpr auto query_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -81,11 +81,14 @@ void kernel_main() {
     // Q / lse / dO / u rows (query head of the stream, all Ht query tiles) arrive in chunks of chain_chunk rows:
     // read from DRAM by the injector, received from the previous core otherwise, forwarded to the next core
     // by every core but the sink.
+    // The writer forwards every chunk to the next core on the other NoC (iteration 23): this reader hands it
+    // chunk c with received = c + 1 and, before reusing a chunk's CB slots, waits for forwarded >= c - 1.
     constexpr uint32_t chain_chunk = get_compile_time_arg_val(9);
+    Semaphore received_sem(get_compile_time_arg_val(10));
+    Semaphore forwarded_sem(get_compile_time_arg_val(11));
     const uint32_t prev_noc_x = num_rows_to_process;
     const uint32_t prev_noc_y = start_row;
-    const uint32_t next_noc_x = get_arg_val<uint32_t>(runtime_args_counter++);
-    const uint32_t next_noc_y = get_arg_val<uint32_t>(runtime_args_counter++);
+    runtime_args_counter += 2U;  // next core's NoC coordinates: the writer forwards
     const uint32_t is_injector = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t is_sink = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t q_stream = get_arg_val<uint32_t>(runtime_args_counter++);  // batch * q_heads + query head
@@ -94,9 +97,7 @@ void kernel_main() {
 
     Semaphore sender_sem(get_compile_time_arg_val(6));
     Semaphore receiver_sem(get_compile_time_arg_val(7));
-    Semaphore valid_sem(get_compile_time_arg_val(8));
     const Noc noc;
-    valid_sem.set(VALID);
 
     const uint32_t q_offset = q_stream * Ht * qWt;
     const uint32_t vo_offset = q_stream * Ht * vWt;
@@ -105,10 +106,7 @@ void kernel_main() {
     constexpr uint32_t q_chunk_tiles = chain_chunk * qWt;
     constexpr uint32_t vo_chunk_tiles = chain_chunk * vWt;
     constexpr uint32_t one_chunk_tiles = chain_chunk;
-    const uint32_t q_chunk_bytes = q_chunk_tiles * tile_bytes;
-    const uint32_t vo_chunk_bytes = vo_chunk_tiles * tile_bytes;
-    const uint32_t interm_chunk_bytes = one_chunk_tiles * interm_tile_bytes;
-    const uint32_t u_chunk_bytes = one_chunk_tiles * get_tile_size(cb_u_scalar_row);
+    constexpr uint32_t chunks_per_round = Ht / chain_chunk;
 
     for (uint32_t round = 0; round < num_rounds; ++round) {
         const uint32_t item = get_arg_val<uint32_t>(items_base + round);
@@ -118,6 +116,10 @@ void kernel_main() {
             read_tiles_by_row(cb_value, value_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
         }
         for (uint32_t h0 = 0; h0 < Ht; h0 += chain_chunk) {
+            const uint32_t c = round * chunks_per_round + h0 / chain_chunk;
+            if (!is_sink && c >= 2U) {
+                forwarded_sem.wait_min(c - 1U);  // the slots' previous chunk (c - 2) has been forwarded
+            }
             cb_reserve_back(cb_query, q_chunk_tiles);
             cb_reserve_back(cb_intermediates, one_chunk_tiles);
             cb_reserve_back(cb_grad_output, vo_chunk_tiles);
@@ -165,36 +167,7 @@ void kernel_main() {
                 cb_push_back(cb_grad_output, vo_chunk_tiles);
                 cb_push_back(cb_u_scalar_row, one_chunk_tiles);
             }
-            if (!is_sink) {
-                sender_sem.wait(1);
-                sender_sem.set(0);
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(q_addr),
-                    UnicastEndpoint{},
-                    q_chunk_bytes,
-                    {},
-                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = q_addr});
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(i_addr),
-                    UnicastEndpoint{},
-                    interm_chunk_bytes,
-                    {},
-                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = i_addr});
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(vo_addr),
-                    UnicastEndpoint{},
-                    vo_chunk_bytes,
-                    {},
-                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = vo_addr});
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(u_addr),
-                    UnicastEndpoint{},
-                    u_chunk_bytes,
-                    {},
-                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = u_addr});
-                noc.async_writes_flushed();
-                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
-            }
+            received_sem.set(c + 1U);  // the writer forwards it
         }
     }
     noc.async_atomic_barrier();
