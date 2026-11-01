@@ -843,6 +843,10 @@ class TPGatedDeltaNet:
         self.cfg_in = tpc.COMPUTE_LOFI if tpc.bfp4_gdn_in_enabled() else self.cfg
         # QWEN36_BFP4_LAYOUT_LOFI: the decode out-proj on a bfloat4_b weight in LoFi (bit-identical to HiFi2 there).
         self.cfg_out_dec = tpc.COMPUTE_LOFI if tpc.bfp4_layout_lofi(self.tw["out"].dtype) else self.cfg
+        # QWEN36_PREFILL_BFP4_LOFI (default 0): the prefill in-proj / out-proj on bfloat4_b weights in LoFi (== HiFi2 there).
+        self.cfg_pf_in = tpc.COMPUTE_LOFI if tpc.prefill_bfp4_lofi(self.tw["qkvz"].dtype) else self.cfg
+        _w_out = self.tw["out_colpar"] if "out_colpar" in self.tw else self.tw["out"]
+        self.cfg_pf_out = tpc.COMPUTE_LOFI if tpc.prefill_bfp4_lofi(_w_out.dtype) else self.cfg
         # Must match load_gdn_weights_tp gates
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
         self._fuse_ab = self._dram_sharded
@@ -2339,7 +2343,7 @@ class TPGatedDeltaNet:
                     x,
                     self.tw["qkvz"],
                     self.tt_ccl,
-                    self.cfg,
+                    self.cfg_pf_in,
                     self.args.ccl_topology(),
                     out_memory_config=_proj_mc,
                 )
@@ -2621,7 +2625,7 @@ class TPGatedDeltaNet:
                 gated,
                 tw["out_colpar"],
                 self.tt_ccl,
-                self.cfg,
+                self.cfg_pf_out,
                 self.args.ccl_topology(),
                 out_memory_config=_L1,
                 persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated),
@@ -2639,7 +2643,7 @@ class TPGatedDeltaNet:
             # fp32 output is load-bearing: o_proj is row-parallel, so the RS SUMS 4 per-device partials
             # across devices — bf16 there tanks PCC to ~0.69 even at ISL 2048 (test_oproj_dtype_isl). Keep fp32.
             out = tpc.matmul_reduce_scatter_prefill(
-                x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
+                x_out, tw["out"], self.tt_ccl, self.cfg_pf_out, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
             )
             ttnn.deallocate(gated)
             if return_state:
