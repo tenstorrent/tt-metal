@@ -829,6 +829,18 @@ TABLE = {
         "layer); the carry's values are the last run's tail (timing only). off = no-op: every timed run rebuilds the "
         "carry (the path before FIX.16; comparison only)",
     ),
+    "DEEP_LAYERS": Setting(
+        "all",
+        ("all", "tail"),
+        "FIX.17 (owner 2026-10-31, best effort): all = every layer on every chunk (the default: the tt-d-gen contract "
+        "and the bring-up tests need every layer's whole history). tail = the layers above the last KV / candidate "
+        "source (21-39) are skipped on normal chunks; layer 20's output of the last two chunks is kept on the device "
+        "(DS41DeviceState.deep_in) and, when the caller signals the prompt's end, TtDS41Model.tail_pass(state, end) "
+        "runs them over the chunk(s) holding the last (n_deep + 1) x 127 + 1 = 2541 positions (one chunk, or two when "
+        "the last chunk holds fewer), each layer's window carry as its cache holds it (zeros before the tail). Exact "
+        "for the tail's rows; the deep layers' served window rows outside it are never written. Not for serving (the "
+        "runner refuses it)",
+    ),
     "HOST_GLUE": Setting(
         "on",
         ("on", "off"),

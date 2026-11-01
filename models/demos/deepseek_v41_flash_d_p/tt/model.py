@@ -127,6 +127,16 @@ class DevH:
         return row
 
 
+class Skipped:
+    """DEEP_LAYERS=tail (FIX.17): what the last full layer (20) returns on a normal chunk, and what the skipped deep
+    layers hand on: no tensors (its output went to DS41DeviceState.deep_in; ``free`` of it is a no-op)."""
+
+    __slots__ = ()
+
+
+SKIPPED = Skipped()
+
+
 class Keep:
     """A step output the per-layer state owns (a served-cache marker, a top-k kept for this chunk's readers): the
     block's freeing never touches it."""
@@ -216,6 +226,9 @@ class DS41DeviceState:
         self.tail = {i: model.engram[i].new_tail() for i in model.engram}
         self.tokens = None
         self.history = None  # this slot's real token ids by position (host; the engram tail of any start)
+        # DEEP_LAYERS=tail (FIX.17): {chunk start: (layer 20's output DevH, the chunk's end)} of the last two chunks,
+        # the deep layers' input for TtDS41Model.tail_pass
+        self.deep_in = {}
         model.state = self  # begin_chunk reads (and advances) the active slot's engram tail
 
     # ------------------------------------------------------------------ per chunk (device)
@@ -223,11 +236,23 @@ class DS41DeviceState:
         if store is self.topk and self.memo is not None:  # a new top-k: the index list made from the old one goes
             self.memo.drop(("index", layer))
         stale = [start] if self.keep_history else list(store[layer])
+        if self.model.deep and not self.keep_history:  # DEEP_LAYERS=tail: the tail pass may also read the previous
+            stale = [k for k in stale if k != start - self.model.chunk]  # chunk's top-k / pool
         for k in stale:
             old = store[layer].pop(k, None)
             if old is not None:
                 _free(old)
         store[layer][start] = t
+
+    def keep_deep_input(self, start: int, end: int, h: DevH) -> None:
+        """DEEP_LAYERS=tail: takes ``h`` (the last full layer's output of the chunk [start, end)); keeps it and the
+        previous chunk's, frees any other."""
+        old = self.deep_in.pop(start, None)
+        if old is not None:
+            _free(old[0])
+        for k in [k for k in self.deep_in if k != start - self.model.chunk]:
+            _free(self.deep_in.pop(k)[0])
+        self.deep_in[start] = (h, int(end))
 
     def note_tokens(self, tokens: torch.Tensor, start: int, end: int) -> None:
         """Host, before ``begin_chunk``: the chunk's real ids [start, end) into this slot's id history, and every
@@ -347,6 +372,9 @@ class DS41DeviceState:
             for d in store.values():
                 for t in d.values():
                     _free(t)
+        for h, _ in self.deep_in.values():
+            _free(h)
+        self.deep_in = {}
         self.window, self.compress, self.topk, self.cands = {}, {}, {}, {}
         if self.model.state is self:
             self.model.state = None
@@ -822,6 +850,21 @@ class TtDS41Model:
         self.blocks = {}
         for i in self.layers:
             self.blocks[i] = TtDS41Block(self, i)
+        # DEEP_LAYERS=tail (FIX.17): the layers above the last KV / candidate source (21-39: window attention over
+        # the sources' state, no state of their own another layer reads) run only in tail_pass, on the rows the
+        # prompt's last token needs: (n_deep + 1) x (window - 1) + 1 positions of the last full layer's output
+        self.deep, self.deep_src, self.tail_rows = [], None, 0
+        if settings.get("DEEP_LAYERS") == "tail":
+            first = max(list(cfg.kv_sources) + [cfg.cand_source]) + 1
+            self.deep = [i for i in self.layers if i >= first]
+            if self.deep:
+                assert (
+                    self.deep == list(range(first, self.layers[-1] + 1)) and first - 1 in self.layers
+                ), f"DEEP_LAYERS=tail needs layers {first - 1}..{self.layers[-1]} loaded, consecutive: {self.layers}"
+                assert not any(cfg.is_engram(i) or cfg.is_kv_source(i) for i in self.deep), self.deep
+                self.deep_src = first - 1
+                self.tail_rows = (len(self.deep) + 1) * (cfg.window - 1) + 1
+        self._deep_set = frozenset(self.deep)
         # INDEXER_GLUE=on (P.16): the shared tensors of a chunk (tt/sparse_attention.ChunkMemo) and the last loaded
         # layer that reads each: {layer: [slots dropped after it]}; None = off
         self.memo_last = None
@@ -977,7 +1020,52 @@ class TtDS41Model:
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 
     def layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
-        return self.blocks[i](h, start, state, end)
+        if i in self._deep_set:  # DEEP_LAYERS=tail: not on a normal chunk (tail_pass runs it)
+            assert isinstance(h, Skipped), f"layer {i}: DEEP_LAYERS=tail runs it only in tail_pass"
+            return h
+        out = self.blocks[i](h, start, state, end)
+        if i == self.deep_src:  # DEEP_LAYERS=tail: the deep layers' input, kept for the tail pass
+            state.keep_deep_input(start, start + self.chunk if end is None else end, out)
+            return SKIPPED
+        return out
+
+    def tail_pass(self, state: DS41DeviceState, end: int | None = None, on_layer=None) -> DevH:
+        """DEEP_LAYERS=tail, once the prompt's last chunk ran (the caller signals it; the prompt's length is not
+        needed before): the deep layers over the kept chunks that hold positions [end - tail_rows, end) (the last
+        chunk, and the one before when the last holds fewer), each chunk at its own start through the normal block
+        (window carry from the layer's cache: zeros, or the previous tail chunk's). Returns the last layer's output
+        of the last chunk (rows past ``end - tail_rows + (layer - 20) x 127`` exact; the last token's always).
+        ``end``: the prompt's end (default, and it must be, the last chunk's). ``on_layer(i, start, h)``: a test's read-back.
+        """
+        assert self.deep, "tail_pass needs DEEP_LAYERS=tail and the deep layers loaded"
+        assert state.deep_in, "tail_pass: no chunk ran since the last tail pass"
+        last = max(state.deep_in)
+        end = state.deep_in[last][1] if end is None else int(end)
+        assert end == state.deep_in[last][1], f"tail_pass: the last chunk ran to {state.deep_in[last][1]}, not {end}"
+        first = max(0, end - self.tail_rows)
+        starts = sorted(s for s in state.deep_in if s + self.chunk > first)
+        assert starts[0] <= first and starts == list(range(starts[0], last + 1, self.chunk)), (
+            f"tail_pass: positions [{first}, {end}) need the chunks from {first // self.chunk * self.chunk}; kept "
+            f"{sorted(state.deep_in)}"
+        )
+        out = None
+        for s in starts:
+            h, e = state.deep_in.pop(s)
+            if state.memo is not None:  # (INDEXER_GLUE: the memo's tensors were made for the last normal chunk)
+                state.memo.clear()
+            for i in self.deep:
+                h2 = self.blocks[i](h, s, state, e)
+                if on_layer is not None:
+                    on_layer(i, s, h2)
+                _free(h)
+                h = h2
+            if s == last:
+                out = h
+            else:
+                _free(h)
+        for k in list(state.deep_in):
+            _free(state.deep_in.pop(k)[0])
+        return out
 
     def final_norm(self, h: DevH) -> ttnn.Tensor:
         """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on; OWN_ROWS:
