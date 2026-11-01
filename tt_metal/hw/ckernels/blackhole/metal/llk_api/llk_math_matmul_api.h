@@ -27,7 +27,9 @@ template <
     int in1_order = 0,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    bool half_end_fold = false>
+    bool half_end_fold = false,
+    std::uint32_t key_ct = 0,
+    std::uint32_t key_rt = 0>
 inline void llk_math_matmul_init_impl(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
@@ -37,7 +39,7 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull || half_end_fold, reuse_dir, row_end_fold>(
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -80,7 +82,9 @@ template <
     int in1_order = 0,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    bool half_end_fold = false>
+    bool half_end_fold = false,
+    std::uint32_t key_ct = 0,
+    std::uint32_t key_rt = 0>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -111,7 +115,7 @@ inline void llk_math_matmul_init(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
-    llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold>(
+    llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -124,7 +128,9 @@ template <
     int in1_order = 0,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    bool half_end_fold = false>
+    bool half_end_fold = false,
+    std::uint32_t key_ct = 0,
+    std::uint32_t key_rt = 0>
 inline void llk_math_matmul_init_switch_impl(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
@@ -134,7 +140,7 @@ inline void llk_math_matmul_init_switch_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_switch_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull || half_end_fold, reuse_dir, row_end_fold>(
+    _llk_math_matmul_init_switch_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -146,7 +152,9 @@ template <
     int in1_order = 0,
     std::uint32_t reuse_dir = 0,
     bool row_end_fold = false,
-    bool half_end_fold = false>
+    bool half_end_fold = false,
+    std::uint32_t key_ct = 0,
+    std::uint32_t key_rt = 0>
 inline void llk_math_matmul_init_switch(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -177,7 +185,7 @@ inline void llk_math_matmul_init_switch(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
-    llk_math_matmul_init_switch_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold>(
+    llk_math_matmul_init_switch_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 

@@ -304,8 +304,13 @@ constexpr bool matmul_half_end_fold_k = false;
 #define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
 #endif
 #ifdef ARCH_BLACKHOLE
+#ifdef MATMUL_PACK_KEYS
+#define MATMUL_INIT_KEYS MATMUL_PK_CT, MATMUL_PK_RT
+#else
+#define MATMUL_INIT_KEYS 0, 0
+#endif
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
-#define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, MATMUL_INIT_KEYS
 #else
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
 #define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
@@ -313,7 +318,7 @@ constexpr bool matmul_half_end_fold_k = false;
 #line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
-#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
+#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true, false, 0, false, false, 0, false, MATMUL_INIT_KEYS
 #else
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_MATH_DEFAULT_ARGS
 #define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_MATH_DEFAULT_INIT_ARGS

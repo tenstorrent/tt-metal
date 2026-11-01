@@ -1141,7 +1141,7 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, std::uint32_t key_ct = 0, std::uint32_t key_rt = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1152,6 +1152,11 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
+    // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
+    const std::uint32_t blk_ct = key_ct != 0 ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = key_rt != 0 ? key_rt : rt_dim;
+    LLK_ASSERT(key_ct == 0 || key_ct == ct_dim, "matmul: the ct_dim key differs from ct_dim");
+    LLK_ASSERT(key_rt == 0 || key_rt == rt_dim, "matmul: the rt_dim key differs from rt_dim");
     static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
@@ -1178,48 +1183,48 @@ inline void _llk_math_matmul_init_(
 
         if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
             matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
-                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+                blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     else if constexpr (row_mop)
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, true>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_row_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_row_mop<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
-            matmul_configure_mop_rows<math_fidelity, row_end_fold>(ct_dim, rt_dim);
+            matmul_configure_mop_rows<math_fidelity, row_end_fold>(blk_ct, blk_rt);
         }
         else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
-    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Matmul never sets the Src zero-substitution flag itself, so
@@ -1380,7 +1385,7 @@ inline void matmul_configure_mop_switch(
 }
 
 // _llk_math_matmul_init_ for a throttle switch: the last init of the kernel ran the other form with the same operands
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0, bool row_end_fold = false, std::uint32_t key_ct = 0, std::uint32_t key_rt = 0>
 inline void _llk_math_matmul_init_switch_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1391,6 +1396,11 @@ inline void _llk_math_matmul_init_switch_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
+    // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
+    const std::uint32_t blk_ct = key_ct != 0 ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = key_rt != 0 ? key_rt : rt_dim;
+    LLK_ASSERT(key_ct == 0 || key_ct == ct_dim, "matmul: the ct_dim key differs from ct_dim");
+    LLK_ASSERT(key_rt == 0 || key_rt == rt_dim, "matmul: the rt_dim key differs from rt_dim");
     static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
     if constexpr (THROTTLE_LEVEL > 0)
     {
@@ -1398,46 +1408,46 @@ inline void _llk_math_matmul_init_switch_(
         constexpr bool fallback_matches_execute = !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>();
         if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
             matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
-                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+                blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     else if constexpr (row_mop)
     {
         matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
-        matmul_configure_row_mop_switch<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_row_mop_switch<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
         matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
-        matmul_configure_mop_switch<math_fidelity, in1_order, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop_switch<math_fidelity, in1_order, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM))
         {
             matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, true>();
-            matmul_configure_mop_rows_switch<math_fidelity, row_end_fold>(ct_dim, rt_dim);
+            matmul_configure_mop_rows_switch<math_fidelity, row_end_fold>(blk_ct, blk_rt);
         }
         else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
-    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
