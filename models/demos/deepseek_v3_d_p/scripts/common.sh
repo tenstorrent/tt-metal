@@ -101,12 +101,15 @@ HANG_SECS="${HANG_SECS:-120}"
 
 triage_out() { printf "%s/crash_triage_%02d.csv" "$1" "$2"; }
 
+# tt-triage scripts run on a hang; keep in sync with HANG_TRIAGE in gwdt_steps.py.
+HANG_TRIAGE="--run=dump_op_mesh --run=dump_running_operations --run=dump_op_window --op-window=20 --run=check_dram_health --run=dump_callstacks --run=check_noc_status --run=check_arc --run=check_eth_status"
+
 # Env prefix arming hang detection for one iteration: triage_env <log_dir> <n>. Empty when TRIAGE!=1:
 # arming the watchdog also bounds metal's own core waits, so it is opt-in.
 triage_env() {
   [ "$TRIAGE" = "1" ] || return 0
   printf 'TT_METAL_OPERATION_TIMEOUT_SECONDS=%s TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=%q ' "$HANG_SECS" \
-    "$TT_METAL_HOME/python_env/bin/python $TT_METAL_HOME/tools/tt-triage.py --disable-progress --run=dump_op_mesh --run=check_dram_health --run=dump_callstacks --llm-output --llm-output-path=$(triage_out "$1" "$2"); kill -9 \$PPID"
+    "$TT_METAL_HOME/python_env/bin/python $TT_METAL_HOME/tools/tt-triage.py --disable-progress $HANG_TRIAGE --llm-output --llm-output-path=$(triage_out "$1" "$2"); kill -9 \$PPID"
 }
 
 # Path of the Nth outer-iteration log (zero-padded): log_for 3 -> <dir>/log_03

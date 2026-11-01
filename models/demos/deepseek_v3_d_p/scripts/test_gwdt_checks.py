@@ -954,3 +954,13 @@ def test_device_step_saves_smi_snapshot_after_run(tmp_path, monkeypatch):
     step = next(s for s in build_steps(["glm53"]) if s.key == "block-random:glm53")
     step.run(Ctx(tmp_path, tmp_path, False), State())
     assert seen[-1] == ("tt-smi -s --snapshot_no_tty", tmp_path / "block-random" / "glm53" / "tt-smi.json")
+
+
+def test_hang_triage_matches_common_sh():
+    import re
+
+    from gwdt_steps import HANG_TRIAGE
+
+    sh = (Path(__file__).parent / "common.sh").read_text()
+    assert re.search(r'^HANG_TRIAGE="(.*)"$', sh, re.M).group(1) == HANG_TRIAGE
+    assert "--run=dump_op_window --op-window=" in HANG_TRIAGE and "--run=check_noc_status" in HANG_TRIAGE

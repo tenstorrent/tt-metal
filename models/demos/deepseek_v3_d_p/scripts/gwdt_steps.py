@@ -115,14 +115,22 @@ def common_sh(repo: Path, model: str, extra: dict[str, str] | None = None) -> tu
     return dict(kv.split("=", 1) for kv in out[0].split()), out[1]
 
 
+# tt-triage scripts run on a hang; keep in sync with HANG_TRIAGE in common.sh. Besides where each core is stuck
+# (op mesh, callstacks), the op window shows the ops just before and after the hung one, check_noc_status catches
+# posted-write/ack counters that never drained, and check_arc / check_eth_status cover firmware and links.
+HANG_TRIAGE = (
+    "--run=dump_op_mesh --run=dump_running_operations --run=dump_op_window --op-window=20 "
+    "--run=check_dram_health --run=dump_callstacks --run=check_noc_status --run=check_arc --run=check_eth_status"
+)
+
+
 def triage_env(repo: Path, csv: Path) -> dict[str, str]:
     """Same hang handling as common.sh triage_env: triage on dispatch timeout, then kill the hung pytest."""
     py = repo / "python_env/bin/python"
     return {
         "TT_METAL_OPERATION_TIMEOUT_SECONDS": str(HANG_SECS),
         "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE": f"{py} {repo}/tools/tt-triage.py --disable-progress "
-        "--run=dump_op_mesh --run=check_dram_health --run=dump_callstacks --llm-output "
-        f"--llm-output-path={csv}; kill -9 $PPID",
+        f"{HANG_TRIAGE} --llm-output --llm-output-path={csv}; kill -9 $PPID",
     }
 
 
