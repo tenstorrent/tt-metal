@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -1671,6 +1672,25 @@ class TtRoutedExperts(LightweightModule):
         d = self._dispatch
         E, E_loc, H, k = self.E, self.E_local, self.H, idx.shape[-1]
         T = x.shape[-2]
+        # GLM53_REGIONS_TIMING=1 (a measurement knob, never in serving): a device sync + wall stamp per stage
+        if os.environ.get("GLM53_REGIONS_TIMING", "0") == "1":
+            stamps: list[tuple[str, float]] = []
+            t_prev = [None]
+
+            def tick(label: str) -> None:
+                ttnn.synchronize_device(self.device)
+                now = time.perf_counter()
+                if t_prev[0] is not None:
+                    stamps.append((label, now - t_prev[0]))
+                t_prev[0] = now
+
+            tick("start")
+        else:
+            stamps = None
+
+            def tick(label: str) -> None:
+                return None
+
         # the kernel wants a tile-multiple token count (decode gathers 2 tokens; a ragged last chunk any T): pad the
         # rows with zeros (zero routing = no pick, every padded row lands on the dummy slot) and slice the output back
         T_pad = -(-T // TILE) * TILE
@@ -1696,6 +1716,7 @@ class TtRoutedExperts(LightweightModule):
         )  # [1,1,T,E]
         for t in (rank, aligned, incl):
             ttnn.deallocate(t)
+        tick("bookkeeping")  # one-hot, counts, ranks, tile-aligned offsets, slot positions [T, E]
         idx_u32 = ttnn.typecast(idx, ttnn.uint32)
         pos_tk = ttnn.gather(pos_te, -1, idx_u32)  # [1,1,T,k] fp32: the region slot of every pick (dummy if not local)
         loc_tk = ttnn.gather(onehot, -1, idx_u32)  # [1,1,T,k]: 1 at the local picks
@@ -1705,9 +1726,13 @@ class TtRoutedExperts(LightweightModule):
         pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
         ttnn.deallocate(pos_tk)
         # slot -> token (the picks' slots are distinct; the non-local picks all land on the dummy slot)
+        tick("pick_tables")  # the picks' slots / local flags [T, k]
         slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
-        buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, max_buf, H] bf16: the regions
+        buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tick(
+            "region_gather"
+        )  # slot -> token scatter + the [max_buf, H] row gather  # [1, max_buf, H] bf16: the regions
         ttnn.deallocate(slot_src)
         ttnn.deallocate(x_rm)
         counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
@@ -1726,12 +1751,15 @@ class TtRoutedExperts(LightweightModule):
             compute_kernel_config=self.compute,
             activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         )  # [max_buf, H] bf8 TILE
+        tick("expert_kernel")
         ttnn.deallocate(buf)
         out16 = ttnn.typecast(out, ttnn.bfloat16)
         ttnn.deallocate(out)
         y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
         ttnn.deallocate(out16)
-        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, T*k, H]: every pick's output row
+        tick("out_relayout")  # bf8 -> bf16 -> ROW_MAJOR of the [max_buf, H] output
+        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tick("pick_gather")  # the [T*k, H] output rows  # [1, T*k, H]: every pick's output row
         ttnn.deallocate(y_rm)
         ttnn.deallocate(pos_rm)
         comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
@@ -1744,8 +1772,16 @@ class TtRoutedExperts(LightweightModule):
         y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
             comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
+        tick("post_combine")  # the routing weights + the weighted sum over the picks
         for t in (comb, w_rm, counts, offsets):
             ttnn.deallocate(t)
+        if stamps is not None:
+            total = sum(v for _, v in stamps)
+            logger.info(
+                f"regions timing: T={T} k={k} E_loc={E_loc} max_buf={max_buf}: "
+                + ", ".join(f"{l} {v * 1e3:.1f} ms" for l, v in stamps)
+                + f"; total {total * 1e3:.1f} ms"
+            )
         if y.dtype != self.activation_dtype:
             y = ttnn.typecast(y, self.activation_dtype)
         for t in padded:
