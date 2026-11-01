@@ -1729,12 +1729,7 @@ class TtRoutedExperts(LightweightModule):
         tick("pick_tables")  # the picks' slots / local flags [T, k]
         slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
-        if self._row_gather_serves():
-            # GLM53_REGIONS_GATHER=rowgather: the model-local multi-core row gather (custom_ops/row_gather) in
-            # place of ttnn.embedding (43-57 GB/s on these shapes, 2026-11-01)
-            buf = self._row_gather(x_rm, slot_src, max_buf)  # [max_buf, H] bf16: the regions
-        else:
-            buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, max_buf, H] bf16: the regions
+        buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
         tick(
             "region_gather"
         )  # slot -> token scatter + the [max_buf, H] row gather  # [1, max_buf, H] bf16: the regions
@@ -1763,10 +1758,7 @@ class TtRoutedExperts(LightweightModule):
         y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
         ttnn.deallocate(out16)
         tick("out_relayout")  # bf8 -> bf16 -> ROW_MAJOR of the [max_buf, H] output
-        if self._row_gather_serves():
-            comb = self._row_gather(y_rm, pos_rm, T * k)  # [T*k, H]: every pick's output row
-        else:
-            comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, T*k, H]: every pick's output row
+        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
         tick("pick_gather")  # the [T*k, H] output rows  # [1, T*k, H]: every pick's output row
         ttnn.deallocate(y_rm)
         ttnn.deallocate(pos_rm)
@@ -1797,23 +1789,6 @@ class TtRoutedExperts(LightweightModule):
         if T_logical != T:
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
-
-    # ---------------------------------------------- GLM53_REGIONS_GATHER=rowgather (custom_ops/row_gather)
-    def _row_gather_serves(self) -> bool:
-        return os.environ.get("GLM53_REGIONS_GATHER", "embedding") == "rowgather"
-
-    def _row_gather(self, src_rm: ttnn.Tensor, index_rm: ttnn.Tensor, n_rows: int) -> ttnn.Tensor:
-        """``out[r] = src_rm[index_rm[r]]`` for a bf16 ROW_MAJOR ``src_rm`` [S, H] and a uint32 ROW_MAJOR index
-        [1, n_rows] (one page per row / one page) through the model-local row gather; the [n_rows, H] output is
-        allocated here (a transient of the call, like the embedding's)."""
-        from models.demos.glm53_flash.custom_ops.row_gather.op import RowGather
-
-        if getattr(self, "_row_gather_op", None) is None:
-            self._row_gather_op = RowGather(self.device)
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([n_rows, self.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
-        )
-        return self._row_gather_op(src_rm, index_rm, out)
 
     def _iota_rows(self, T: int, k: int) -> ttnn.Tensor:
         """uint32 ROW_MAJOR [1, T*k] with value t at (t, j) (cached per geometry)."""
