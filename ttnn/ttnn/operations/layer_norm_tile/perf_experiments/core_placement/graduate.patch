@@ -1,0 +1,55 @@
+--- a/ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py	2026-11-01 16:32:56.505826602 +0000
++++ b/ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py	2026-11-01 16:32:56.561826298 +0000
+@@ -119,18 +119,44 @@
+     return sum(num_pages * formats[index][0] for index, num_pages in pages.items())
+ 
+ 
++def _east_start(device, grid):
++    """First logical x past the widest gap in the translated worker columns; grid.x if contiguous."""
++    tx = [device.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x for x in range(grid.x)]
++    widest, at = max(((tx[i] - tx[i - 1], i) for i in range(1, grid.x)), default=(1, grid.x))
++    return at if widest > 1 else grid.x
++
++
++def _core_range_set(cores):
++    ranges = []
++    for core in sorted(cores, key=lambda c: (c.y, c.x)):
++        last = ranges[-1] if ranges else None
++        if last and last[1] == core.y and last[2] + 1 == core.x:
++            last[2] = core.x
++        else:
++            ranges.append([core.x, core.y, core.x])
++    return ttnn.CoreRangeSet(
++        [ttnn.CoreRange(ttnn.CoreCoord(x0, y), ttnn.CoreCoord(x1, y)) for x0, y, x1 in ranges]
++    )
++
++
+ def _split_rows(device, num_row_tiles):
++    # NoC0 reads land fastest at high y, and the block past the column gap drains its DRAM writes last
++    # (Perf 1 grid): use the highest-y cores when rows < cores, and put the extra row on the west
++    # block, highest y first, so the 2-row cores are no longer the critical path.
+     grid = device.compute_with_storage_grid_size()
+-    (_, all_cores, group_1, group_2, rows_g1, rows_g2) = ttnn.split_work_to_cores(grid, num_row_tiles, row_wise=True)
++    east = _east_start(device, grid)
++    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
++    used = min(num_row_tiles, len(cores))
++    base, extra = divmod(num_row_tiles, used)
++    chosen = sorted(cores, key=lambda c: (-c.y, c.x >= east, c.x))[:used]
++    big = {(c.x, c.y) for c in sorted(chosen, key=lambda c: (c.x >= east, -c.y, c.x))[:extra]}
+     assignment = []
+     start = 0
+-    for group, per_core in ((group_1, rows_g1), (group_2, rows_g2)):
+-        if per_core == 0:
+-            continue
+-        for core in ttnn.corerange_to_cores(group, None, True):
+-            assignment.append((core, start, per_core))
+-            start += per_core
+-    return all_cores, tuple(assignment), rows_g1
++    for core in sorted(chosen, key=lambda c: (c.y, c.x)):
++        rows = base + ((core.x, core.y) in big)
++        assignment.append((core, start, rows))
++        start += rows
++    return _core_range_set(chosen), tuple(assignment), base + (extra > 0)
+ 
+ 
+ def _io_chunk_tiles(Wt):

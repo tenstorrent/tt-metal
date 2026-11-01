@@ -48,6 +48,7 @@ CB_ROW_WORK_B = 5
 CB_ROW_MEAN = 6
 CB_ROW_SUMSQ = 7
 CB_INV_STD = 8
+CB_AFFINE_SCRATCH = 9  # reader-private landing block of the gamma/beta multicast
 CB_OUTPUT_TILES = 16
 
 # Work-pair page format: one id per allocation group, the alias partner shares it (l1_ledger.md).
@@ -78,6 +79,12 @@ def tensor_row_tiles(shape):
     """Per-image ceil: each (..., H, W) image is tile-padded independently."""
     leading = math.prod(shape[:-2]) if len(shape) > 2 else 1
     return leading * _div_up(shape[-2], TILE)
+
+
+def _affine_scratch_bytes(Wt, affine_is_tile):
+    """gamma + beta compact multicast block: per tile column two 64 B tile rows (TILE) or one 64 B stick span."""
+    entry_bytes = 2 * TILE * 2 if affine_is_tile else TILE * 2
+    return 2 * Wt * entry_bytes
 
 
 def _cb_pages(R, in_depth, *, Wt, has_residual):
@@ -162,7 +169,8 @@ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
         return 2 if _div_up(core_row_tiles_max, R) >= 2 else 1
 
     def fits(R):
-        return _footprint(_cb_pages(R, in_depth_for(R), Wt=Wt, has_residual=has_residual), formats) <= budget
+        pages = _cb_pages(R, in_depth_for(R), Wt=Wt, has_residual=has_residual)
+        return _footprint(pages, formats) + _affine_scratch_bytes(Wt, affine_is_tile=True) <= budget
 
     R = next((r for r in range(_div_up(core_row_tiles_max, MIN_BLOCKS_PER_CORE), 0, -1) if fits(r)), None)
     if R is None:
@@ -206,11 +214,25 @@ def _core_nocs(blocking, grid_y):
             # Both RISCs read here, and both use read cmd buf 1: they need different NoCs. Writer choice wins.
             reader_noc = 1 - writer_noc
         nocs.append((reader_noc, writer_noc))
+    # The affine injector (last core) multicasts from its reader RISC; it keeps the default pair, the only
+    # one its multicast was validated on (a swapped injector hung the writer's write barrier).
+    nocs[-1] = (0, 1)
     return nocs
 
 
 def _float_bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _affine_scratch_cb(blocking, affine_is_tile):
+    scratch_bytes = _affine_scratch_bytes(blocking.tensor_w_tiles, affine_is_tile)
+    return ttnn.CBDescriptor(
+        total_size=scratch_bytes,
+        core_ranges=blocking.all_cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=CB_AFFINE_SCRATCH, data_format=ttnn.bfloat16, page_size=scratch_bytes)
+        ],
+    )
 
 
 def _cb_descriptors(blocking):
@@ -348,18 +370,23 @@ def create_program_descriptor(
 
     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
     kernels = []
+    readers = []
     for (reader_noc, writer_noc), (group_cores, reader_rt, writer_rt) in groups.items():
         ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in group_cores])
-        kernels += [
+        readers.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "layer_norm_tile_reader.cpp"),
                 core_ranges=ranges,
                 compile_time_args=reader_ct_args,
+                named_compile_time_args=[("affine_scratch_cb", CB_AFFINE_SCRATCH)],
                 runtime_args=reader_rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=noc_enum[reader_noc]
                 ),
-            ),
+            )
+        )
+        kernels += [
+            readers[-1],
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "layer_norm_tile_writer.cpp"),
                 core_ranges=ranges,
@@ -379,4 +406,20 @@ def create_program_descriptor(
             config=compute_kernel_config,
         )
     )
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=_cb_descriptors(blocking))
+    descriptor = ttnn.ProgramDescriptor(cbs=_cb_descriptors(blocking) + [_affine_scratch_cb(blocking, affine_is_tile)])
+    # gamma/beta do not vary along the row split: one injector (the last core of the split) reads them
+    # and multicasts the compact block to the active cores (Perf 1: affine TILE in DRAM 76.1 -> 52.9 us).
+    # No handshake: the landing block is a fresh reader-private CB. Cores without rows are not in
+    # `cores`, so they are neither receivers nor in the program. The send runs on the injector's
+    # reader NoC, which sets the rectangle corner order.
+    injector = blocking.assignment[-1][0]
+    affine_mcast = ttnn.Mcast(
+        input_tensor.device(),
+        ttnn.McastConfig(handshake=False, noc=noc_enum[nocs[-1][0]]),
+        cores,
+        cores.num_cores(),
+        ttnn.McastExplicitFixedSenderConfig([injector]),
+    )
+    affine_mcast.attach(descriptor, "amc", readers, 0)
+    descriptor.kernels = kernels
+    return descriptor

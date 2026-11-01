@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// layer_norm writer (RISCV_0, NoC1).
+// layer_norm writer (RISCV_0; NoC chosen per core by the host, see _core_nocs).
 //   store_block   : R_b x Wt output tiles in C-tile chunks; one flush + pop per `write_chunks_per_flush`
 //                   chunks, one write barrier at kernel end.
 //   load_residual : (residual_on_writer, split_reader) the residual stream on this RISC and NoC, kept
