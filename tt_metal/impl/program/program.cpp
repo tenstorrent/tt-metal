@@ -2623,22 +2623,30 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
+namespace {
+// Union of the cores claimed through ServiceCoreManager on the physical devices behind `device`
+// (each chip of a MeshDevice, or the device itself).
+std::unordered_set<CoreCoord> claimed_cores_behind(
+    const tt::tt_metal::internal::ServiceCoreManagerImpl& svc, const IDevice* device) {
+    if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+        std::unordered_set<CoreCoord> claimed;
+        for (auto device_id : mesh->get_device_ids()) {
+            auto chip_claimed = svc.claimed_cores(device_id);
+            claimed.insert(chip_claimed.begin(), chip_claimed.end());
+        }
+        return claimed;
+    }
+    return svc.claimed_cores(device->id());
+}
+}  // namespace
+
 bool detail::ProgramImpl::cb_regions_touch_service_cores(const IDevice* device) const {
     const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
     if (!svc.has_any_claims()) {
         return false;
     }
-    // Union of claimed cores over the physical devices behind `device` (a handful of dispatch-column
-    // cores), so the CB ranges below are tested against that small set instead of core by core.
-    std::unordered_set<CoreCoord> claimed;
-    if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-        for (auto device_id : mesh->get_device_ids()) {
-            auto chip_claimed = svc.claimed_cores(device_id);
-            claimed.insert(chip_claimed.begin(), chip_claimed.end());
-        }
-    } else {
-        claimed = svc.claimed_cores(device->id());
-    }
+    // Test the CB ranges against the claimed cores (usually a few dispatch-column cores), not core by core.
+    const auto claimed = claimed_cores_behind(svc, device);
     auto range_touches = [&](const CoreRange& range) {
         return std::any_of(claimed.begin(), claimed.end(), [&](const CoreCoord& core) { return range.contains(core); });
     };
@@ -2685,14 +2693,7 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
-        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (auto device_id : mesh->get_device_ids()) {
-                auto chip_claimed = svc.claimed_cores(device_id);
-                claimed.insert(chip_claimed.begin(), chip_claimed.end());
-            }
-        } else {
-            claimed = svc.claimed_cores(device->id());
-        }
+        claimed = claimed_cores_behind(svc, device);
     }
     auto entirely_on_service_cores = [&](const CoreRange& cr) {
         if (claimed.empty()) {

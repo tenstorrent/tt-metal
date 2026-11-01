@@ -675,12 +675,24 @@ TEST_F(ServiceCoreFdFixture, CachedL1ValidationWithServiceClaims) {
     EXPECT_NO_THROW(prog.compile_and_allocate(mesh, false));
     EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
 
+    // A batch that fails on an already-claimed core midway still claims the cores before it, so it
+    // must invalidate the cache too.
+    if (claimable.size() >= 2) {
+        const CoreCoord other_core = claimable[1];
+        EXPECT_ANY_THROW(svc.claim(device, {other_core, svc_core}));
+        EXPECT_TRUE(svc.claimed_cores(device->id()).contains(other_core));
+        EXPECT_FALSE(prog.simple_l1_validation_usable(mesh));
+        svc.release(device, {other_core});
+        EXPECT_NO_THROW(prog.compile_and_allocate(mesh, false));
+        EXPECT_TRUE(prog.simple_l1_validation_usable(mesh));
+    }
+
     // A CB on a claimed service core keeps full validation, which tracks the core's own allocations.
     auto svc_workload = make_workload(svc_core);
     auto& svc_prog = svc_workload->get_programs().begin()->second.impl();
     svc_prog.compile_and_allocate(mesh, false);
     EXPECT_FALSE(svc_prog.simple_l1_validation_usable(mesh));
-    // Claim all of the core's service L1: the lowest allocation now sits below the CB region end.
+    // Allocate all of the core's service L1: the lowest allocation now sits below the CB region end.
     const DeviceAddr svc_l1 = svc.allocate_l1(device, svc_core, svc.bytes_available(device, svc_core));
     EXPECT_THAT(
         [&] { svc_prog.compile_and_allocate(mesh, false); },
