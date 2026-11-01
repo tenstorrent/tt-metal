@@ -282,8 +282,8 @@ UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = (
     {
-        # C++ MoE block (ttnn.experimental.moe_block), held Galaxy b09u02 2026-11-01; recentre from the first CI run.
-        (78, 11, 10): [0.293, 0.292, 0.298, 0.297, 0.300, 0.303, 0.299, 0.302, 0.307, 0.310, 0.315],
+        # C++ MoE block (ttnn.experimental.moe_block), CI run 41315199133 / job 124876058286 (bh_sc1_high_power).
+        (78, 11, 10): [0.283, 0.283, 0.288, 0.287, 0.291, 0.293, 0.290, 0.292, 0.298, 0.300, 0.305],
     }
     if GLM_MOE_BLOCK
     else {
