@@ -717,7 +717,9 @@ class TPGatedDeltaNet:
                     fuse_batch=True,
                     fused_activation=None,
                     mcast_in0=True,
-                ),
+                )
+                if S <= tpc.TILE_SIZE
+                else None,  # prefill (C): per_core_M=1 on 3 cores can't hold S/32 row blocks; ttnn auto
             )
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=_proj_mc)
             b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=_proj_mc)
