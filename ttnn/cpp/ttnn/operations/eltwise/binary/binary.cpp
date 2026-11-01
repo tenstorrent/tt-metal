@@ -713,6 +713,27 @@ inline auto invoke_binary_ng_impl(
         }
     }
 
+    // The promoted result is floating point. Writing it into an integer output (an in-place op such as
+    // multiply_(int32_tensor, 1.5), or an explicit integer dtype / output_tensor) would truncate it
+    // silently; torch refuses the same call ("result type Float can't be cast to the desired output type").
+    if (scalar_needs_promotion) {
+        const auto is_integer_dtype = [](DataType dt) {
+            return dt == DataType::INT32 || dt == DataType::UINT32 || dt == DataType::UINT16 || dt == DataType::UINT8;
+        };
+        std::optional<DataType> requested_output_dtype;
+        if (output_preallocated) {
+            requested_output_dtype = output->dtype();
+        } else if (dtype.has_value()) {
+            requested_output_dtype = *dtype;
+        }
+        TT_FATAL(
+            !requested_output_dtype.has_value() || !is_integer_dtype(*requested_output_dtype),
+            "Binary: an integer {} tensor with a floating scalar gives a floating result, which cannot be written to "
+            "an integer {} output; pass an integer scalar or a floating output",
+            a_dtype,
+            *requested_output_dtype);
+    }
+
     // Mixed float x 32-bit-integer arithmetic: binary_ng has no value conversion for a mismatched
     // integer operand, so its raw bits are reinterpreted as float when the integer CB is unpacked in
     // fp32 mode, producing inf / garbage (e.g. div(bf16, uint32) -> inf). Promote the integer operand
