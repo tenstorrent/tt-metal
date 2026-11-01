@@ -1,6 +1,6 @@
 intake:
   by: dnijemcevic
-  at: '2026-10-29T15:44:54'
+  at: '2026-11-01T07:37:45'
   files:
-    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: d12a2528a3fc86551b7701d3a0049cbfed1f41a6a88a21bf19bc655f93325daf
+    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: 80a7df5d768b9a83293db576b7d34b39c6650e66e4f69dfc7e4ca4f8dc0d0752
   note: ''

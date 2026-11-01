@@ -119,14 +119,20 @@ class GoldenKV:
     ``select`` / ``golden_failures``, which counts what was compared per (config, layer, mode): ``coverage_failures``
     fails a served (config, layer) never compared, so no layer is skipped.
 
-    ``window="last"`` (owner decision B, 2026-10-27, OV-16): a dumped layer's window KV is compared on the positions the
-    reference drift measures, whose limit R.state_threshold applies (drift state_window_kv_L*: the ring = the last
-    `window` positions): the last min(window, hi - lo) positions of the compared range [lo, hi), mode "last-window".
-    Accuracy over every position stays covered by the ladder's per-layer err. ``window="all"``: every position."""
+    ``window="drift"`` (FIX.19, owner 2026-11-01; replaces decision B's ``"last"`` in the acks / runner tests): a
+    dumped layer's window KV is compared over EVERY position of the range [lo, hi) (mode "drift"), per channel against
+    calib x the reference's own drift over the SAME rows (``limits``: the official reference's per-position window KV,
+    official_kv.py, vs this golden). One 128-row window is a sample of a spread ten times the margin (DS41-192: the
+    device's PCC varies by +-0.004 over the 286 windows of a 2536-token prompt), and the ring drift measured on
+    positions 10112-10239 is another window's margin (DS41-125). ``window="last"`` (owner decision B, 2026-10-27,
+    OV-16): the last min(window, hi - lo) positions of the range, mode "last-window", limit R.state_threshold (the ring
+    drift). ``window="all"``: every position, limit R.state_threshold."""
 
     def __init__(self, window: str = "all"):
-        assert window in ("all", "last"), window
+        assert window in ("all", "last", "drift"), window
         self.window = window
+        self._official = None
+        self.drift_log = []  # (what, layer, channel, device pcc, limit, official pcc) of every "drift" comparison
         from models.demos.common.bringup.reference.golden import Golden
 
         s = R._spec()
@@ -196,6 +202,8 @@ class GoldenKV:
         """(local row indices into the rows of the complete groups of [lo_tok, hi_tok), golden rows there float32,
         mode "full" | "last-window")."""
         a, b = rows_of(cfg, lo_tok, hi_tok)
+        if cfg["kind"] == "window" and self.dumped(layer) and self.window == "drift":
+            return np.arange(b - a), self.rows(cfg, layer, lo_tok, hi_tok), "drift"
         if cfg["kind"] != "window" or (self.dumped(layer) and self.window == "all"):
             return np.arange(b - a), self.rows(cfg, layer, lo_tok, hi_tok), "full"
         if self.dumped(layer):  # window == "last": the ring the drift measures, the last positions of the range
@@ -216,6 +224,29 @@ class GoldenKV:
             t = self.g.state(layer)[name][a:b]
         return t.float().numpy()
 
+    def limits(self, kvc, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> dict[str, tuple[float, float]]:
+        """{channel: (limit, the official reference's PCC there)} for a dumped layer's window KV over [lo_tok, hi_tok):
+        the official reference (official_kv.py) vs the golden on those rows and that channel (kv_dump_compare's
+        channels), turned into a limit by testing/e2e_limits.pcc_limit (1 - calib^2 x max(1 - pcc, 1 - pcc of the
+        golden rounded once to bf16)), never below the server's prefill-golden PCC (R.state_threshold's floor)."""
+        from models.demos.common.bringup.reference.drift import _float_entry
+        from models.demos.common.bringup.testing import e2e_limits as E
+        from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import official_kv
+
+        if self._official is None:
+            self._official = official_kv.load(self.g)
+        if layer not in self._official:
+            raise KeyError(f"no official window KV of layer {layer} (official_kv.py: {sorted(self._official)})")
+        want = self._boundary(layer, "kv")[lo_tok:hi_tok].float()
+        off = self._official[layer][lo_tok:hi_tok]
+        split = cfg["split"]
+        chans = [("all", 0, want.shape[1])] if not split else [("nope", 0, split), ("pe", split, want.shape[1])]
+        out = {}
+        for name, a, b in chans:
+            e = _float_entry(off[:, a:b].contiguous(), want[:, a:b].contiguous())
+            out[name] = (max(R.PREFILL_GOLDEN_PCC, E.pcc_limit({"k": e}, "k")), e["pcc"])
+        return out
+
     def note(self, cfg: dict, layer: int, mode: str, n: int) -> None:
         c = self.coverage.setdefault((cfg["name"], layer), {})
         c[mode] = c.get(mode, 0) + int(n)
@@ -228,6 +259,19 @@ class GoldenKV:
             for layer in c["layers"]
             if not sum(self.coverage.get((c["name"], layer), {}).values())
         ]
+
+    def drift_summary(self) -> str:
+        """Per dumped layer and channel: the worst device PCC of the "drift" comparisons, its limit and range."""
+        worst = {}
+        for what, layer, ch, pcc, thr, off in self.drift_log:
+            k = (layer, ch)
+            m = (pcc if pcc is not None else -1.0) - thr
+            if k not in worst or m < worst[k][0]:
+                worst[k] = (m, what, pcc, thr, off)
+        return "; ".join(
+            f"L{layer} {ch} {w[2]:.5f} vs {w[3]:.5f} (official {w[4]:.5f}, {w[1]})"
+            for (layer, ch), w in sorted(worst.items())
+        )
 
     def coverage_summary(self) -> str:
         """Per config and mode: the layers and the rows compared (full: every row; last-window: the positions the
@@ -288,8 +332,24 @@ def pcc_failures(kvc, cfg: dict, got: np.ndarray, want: np.ndarray, layer: int, 
 def golden_failures(kvc, gk: GoldenKV, cfg: dict, got: np.ndarray, layer: int, lo: int, hi: int, thr, what: str):
     """``got`` (the rows of the complete groups of [lo, hi)) vs the golden rows ``gk.select`` has there: every row of a
     dumped layer or a compressed cache; for another layer's window KV the positions in its ring snapshots. Counted in
-    ``gk.coverage``."""
+    ``gk.coverage``. Mode "drift" (GoldenKV(window="drift")): a dumped layer's window KV, every row, per channel
+    against ``gk.limits`` (the official drift on the same rows) instead of ``thr``."""
     idx, want, mode = gk.select(cfg, layer, lo, hi)
+    if mode == "drift":  # FIX.19: every position, per channel against the official drift on the same rows
+        gk.note(cfg, layer, mode, want.shape[0])
+        if got.shape != want.shape:
+            return [f"{what}: {cfg['name']} layer {layer}: shape {got.shape} vs golden {want.shape}"]
+        lim = gk.limits(kvc, cfg, layer, lo, hi)
+        out = []
+        for f in kvc.tensor_pcc(got.astype(np.float32), want.astype(np.float32), layer, 0.0, cfg["split"]):
+            thr, off = lim[f["channel"]]
+            gk.drift_log.append((what, layer, f["channel"], f["pcc"], thr, off))
+            if f["pcc"] is None or f["pcc"] < thr:
+                out.append(
+                    f"{what} (drift {want.shape[0]} rows): {cfg['name']} layer {layer} {f['channel']} pcc {f['pcc']} "
+                    f"< {thr:.5f} (calib x the official reference's drift on the same rows, its pcc {off:.5f})"
+                )
+        return out
     if mode == "full":
         gk.note(cfg, layer, mode, want.shape[0])
         return pcc_failures(kvc, cfg, got, want, layer, thr, what)

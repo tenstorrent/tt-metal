@@ -1,0 +1,79 @@
+{
+ "used": [
+  {
+   "id": "DS41-124",
+   "how": "window KV of non-dumped layers stays on the ring snapshots; the per-position drift is made only for the golden's dumped layers (0-3, 14, 20, 21, 24)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-125",
+   "how": "identified the limit-vs-position gap (ring drift applied to other rows); fixed by measuring the official drift on the checked rows",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-141",
+   "how": "286-window spread of the device's L20 PCC: the reason to judge every position, not one window",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-192",
+   "how": "FIX.18's device dumps (chain_L20_wkv on/off) used to check the new limit on CPU: 0.978 vs 0.932 over [0, 2536)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the golden's drift keeps only the final window-KV ring; a per-position official dump for the contract did not exist (now official_kv.py, DS41-193)",
+  "a gate started as a background job with the default 600 s limit gets cut mid-device-run; stopping it during device open leaves /tmp/tt-device-*.dirty on every card (whole-box reset on the next mesh run)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.19",
+   "answer": "done",
+   "evidence": "GoldenKV(window='drift') in both tests: every position, per channel, limit = calib^2 x official-vs-golden drift on the same rows (official_kv.py, 1096 s CPU; ring reproduces drift-s10240 L20 pcc 0.99739). FIX.18 device L20 [0,2536) nope 0.97809 vs 0.93244, last-128 0.98947 vs 0.96765. Layer-20 unit_waivers lines can go. Gate not completed on device: see BREADCRUMBS (dirty markers, rule 19)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding; test-side change only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run"
+  }
+ ],
+ "cited_only": [
+  "DS41-193"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.19",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-01T08:01:52",
+  "head": "62079c536d2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.19.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/official_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py"
+  ]
+ }
+}
