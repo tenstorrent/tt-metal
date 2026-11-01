@@ -39,9 +39,11 @@ class Shared:
         self.had = BlockHadamard.from_metadata(self.gguf.kv)
         self.workers = a3.worker_cores(device, WPB)
         self.m = {k: a3.hadamard_tensor(device, self.had, k) for k in (5120, 17408)}
-        self.x8 = {k: a3.masked_input_buffer(device, self.workers, k) for k in (5120, 17408)}
+        # One masked buffer serves both widths: K-tile k's live row is (k/4) % 8 whatever K is.
+        self.x8 = a3.masked_input_buffer(device, self.workers, 17408)
+        # h in DRAM: an L1-interleaved buffer would sit on every core, (0, 0) included (see a3.AVOID).
         self.h = ttnn.from_torch(torch.zeros(1, 1, 1, 17408), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                                 tile=ttnn.Tile([1, 32]), device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+                                 tile=ttnn.Tile([1, 32]), device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class TernaryMLP:
@@ -63,12 +65,12 @@ class TernaryMLP:
 
     def forward(self, x):
         sh = self.sh
-        a3.prep(x, sh.m[5120], sh.x8[5120], sh.workers, src_tile32=True)
-        a3.ternary_linear(sh.x8[5120], self.w_gu, self.s_gu, sh.h, sh.workers, gu=True)
-        a3.prep(sh.h, sh.m[17408], sh.x8[17408], sh.workers, src_tile32=False)
+        a3.prep(x, sh.m[5120], sh.x8, sh.workers, src_tile32=True)
+        a3.ternary_linear(sh.x8, self.w_gu, self.s_gu, sh.h, sh.workers, gu=True, k=5120)
+        a3.prep(sh.h, sh.m[17408], sh.x8, sh.workers, src_tile32=False)
         out = ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,  # residual-stream logical shape
                                              sh.device, ttnn.L1_MEMORY_CONFIG)
-        return a3.ternary_linear(sh.x8[17408], self.w_d, self.s_d, out, sh.workers, gu=False)
+        return a3.ternary_linear(sh.x8, self.w_d, self.s_d, out, sh.workers, gu=False, k=17408)
 
 
 _shared = {}
