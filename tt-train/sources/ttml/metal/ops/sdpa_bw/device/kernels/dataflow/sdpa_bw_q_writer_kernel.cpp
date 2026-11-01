@@ -102,7 +102,6 @@ void kernel_main() {
     const uint32_t chunks_base = rows_base + num_rounds;  // per round: the chunks the chain streams (iteration 27)
     Semaphore sender_sem(get_compile_time_arg_val(4));
     Semaphore receiver_sem(get_compile_time_arg_val(5));
-    [[maybe_unused]] Semaphore valid_sem(get_compile_time_arg_val(6));
     Semaphore received_sem(get_compile_time_arg_val(7));
     Semaphore forwarded_sem(get_compile_time_arg_val(8));
     const Noc noc;

@@ -80,7 +80,6 @@ void kernel_main() {
         items_base + num_rounds;  // per round: the first query row the chain streams (iteration 27)
     Semaphore sender_sem(get_compile_time_arg_val(7));
     Semaphore receiver_sem(get_compile_time_arg_val(8));
-    [[maybe_unused]] Semaphore valid_sem(get_compile_time_arg_val(9));
     Semaphore received_sem(get_compile_time_arg_val(10));
     Semaphore forwarded_sem(get_compile_time_arg_val(11));
     const Noc noc;

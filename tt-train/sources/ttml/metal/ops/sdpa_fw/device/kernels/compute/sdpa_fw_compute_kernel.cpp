@@ -128,14 +128,11 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chu
         // outer, seq inner) so matmul_block's MOP steps in1_idx by +Sk_chunk_t per feat
         // (TTNN's `matmul_blocks` idiom in `compute_common.hpp`).
         //
-        // Phase 2 (diagonal chunk only): mask is *L1-accumulated* onto the already-packed
-        // scores using TTNN's `apply_causal_mask_lightweight` pattern from
-        // `compute_common.hpp`. We pop+reserve cb_attention_weights to re-enter reserved state
-        // on the same physical L1 slots (CB is single-buffered, size=Sk_chunk_t, so the wr_ptr
-        // wraps back). Then `pack_reconfig_l1_acc(1)` enables the packer's read-modify-write:
-        // read FP32 score from L1, add the DST tile (mask) in FP32, write back FP32. Score
-        // stays at full FP32 precision the whole time — no DST→SRC conversion truncation
-        // to TF32.
+        // Phase 2 (diagonal chunk only): the mask is *L1-accumulated* onto the already-packed
+        // scores (TTNN's `apply_causal_mask_lightweight` pattern): the chunk is still reserved,
+        // so the out-of-order packs below address its tiles, and `pack_reconfig_l1_acc(1)` makes
+        // the packer read the FP32 score from L1, add the DST tile (mask) in FP32 and write it
+        // back (iteration 26: the score CB holds two chunks, the exp stage writes the free one).
         matmul_block_init(
             cb_query,
             cb_key,

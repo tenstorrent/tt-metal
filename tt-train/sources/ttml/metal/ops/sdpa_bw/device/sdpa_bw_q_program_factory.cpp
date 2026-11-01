@@ -599,7 +599,9 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     }
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
+    // The VALID relay of iterations 15-25 was replaced by the counting receiver semaphore (iteration 26); its
+    // compile-arg slot stays at 0 so the argument indices after it are unchanged.
+    constexpr uint32_t chain_valid_sem = 0U;
     const uint32_t chain_received_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);   // reader -> writer
     const uint32_t chain_forwarded_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // writer -> reader
 

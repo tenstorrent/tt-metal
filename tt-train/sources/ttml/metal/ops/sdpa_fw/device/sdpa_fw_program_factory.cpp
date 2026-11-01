@@ -440,7 +440,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
+    // The VALID relay of iterations 15-25 was replaced by the counting receiver semaphore (iteration 26); its
+    // compile-arg slot stays at 0 so the argument indices after it are unchanged.
+    constexpr uint32_t chain_valid_sem = 0U;
     const uint32_t chain_received_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);   // reader -> writer
     const uint32_t chain_forwarded_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // writer -> reader
 
@@ -659,7 +661,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Sk_chunk_t,           // multi-tile K/V chunking factor
         chain_sender_sem,     // chain mode: "next core is ready" counter (incremented by the next core)
         chain_receiver_sem,   // chain mode: "data valid" flag (set by the previous core)
-        chain_valid_sem,      // chain mode: local VALID value relayed to the next core
+        chain_valid_sem,      // unused slot (the VALID relay, replaced in iteration 26)
         chain_received_sem,   // chain mode: chunks the reader has received (to the writer)
         chain_forwarded_sem,  // chain mode: chunks the writer has forwarded (to the reader)
     };
