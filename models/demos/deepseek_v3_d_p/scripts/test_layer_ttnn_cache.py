@@ -943,3 +943,234 @@ def test_install_and_restore_timers():
     assert _Override.__dict__["build_ttnn_cache"] is orig_override
     assert _Base.__dict__["build_ttnn_cache"] is orig_base
     assert _Sub.build_ttnn_cache(5) == ("_Sub", 5)
+
+
+# ---- HF download
+
+
+def _fake_weight_map():
+    wm = {"language_model.model.embed_tokens.weight": "model-00001-of-00009.safetensors"}
+    for n in range(12):
+        wm[f"language_model.model.layers.{n}.self_attn.q_a_proj.weight"] = (
+            f"model-{n // 2 + 2:05d}-of-00009.safetensors"
+        )
+        wm[f"language_model.model.layers.{n}.mlp.gate.weight"] = f"model-{n // 3 + 2:05d}-of-00009.safetensors"
+    wm["language_model.model.layers.10.mlp.experts.0.w1.weight"] = "model-00009-of-00009.safetensors"
+    wm["vision_tower.blocks.1.weight"] = "model-00008-of-00009.safetensors"
+    return wm
+
+
+@pytest.fixture
+def fake_hub(tmp_path, monkeypatch):
+    """Stands in for huggingface_hub.snapshot_download; records each call's kwargs."""
+    import huggingface_hub
+
+    snap = tmp_path / "hub" / "models--org--name" / "snapshots" / "abc123"
+    snap.mkdir(parents=True)
+    (snap / "model.safetensors.index.json").write_text(json.dumps({"weight_map": _fake_weight_map()}))
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(snap)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    return snap, calls
+
+
+DL_BASE = [
+    "config.json",
+    "*.safetensors.index.json",
+    "generation_config.json",
+    "tokenizer*",
+    "tiktoken*",
+    "configuration_deepseek.py",
+    "modeling_deepseek.py",
+    "*.py",
+]
+
+
+def _shards(calls):
+    assert len(calls) == 2
+    assert calls[0]["allow_patterns"] == DL_BASE and calls[0]["ignore_patterns"] == ["*.safetensors"]
+    assert calls[1]["allow_patterns"][: len(DL_BASE)] == DL_BASE and "ignore_patterns" not in calls[1]
+    return calls[1]["allow_patterns"][len(DL_BASE) :]
+
+
+@pytest.mark.parametrize(
+    "layers, embed, expected",
+    [
+        ([3, 7], False, ["00003", "00004", "00005"]),
+        ([0, 1], True, ["00001", "00002"]),
+        ([10], False, ["00005", "00007", "00009"]),
+    ],
+)
+def test_download_layers_selects_exact_shards(fake_hub, tmp_path, layers, embed, expected):
+    from models.demos.deepseek_v3_d_p.utils.hf_download import download_layers
+
+    snap, calls = fake_hub
+    planned = []
+    out = download_layers("org/name", tmp_path / "c", layers, embed=embed, on_plan=lambda s, sh: planned.append(sh))
+    assert out == snap
+    assert _shards(calls) == [f"*-{n}-of-*.safetensors" for n in expected]
+    assert planned == [[f"model-{n}-of-00009.safetensors" for n in expected]]
+    assert all(c["repo_id"] == "org/name" and c["cache_dir"] == str(tmp_path / "c") for c in calls)
+
+
+def _conftest_reference_patterns(weight_map, layer_idx, num_layers):
+    """Shard selection of the tests conftest download_model_weights before it moved to hf_download."""
+    required_shards = set()
+    for key, shard_file in weight_map.items():
+        if "embed_tokens" in key:
+            required_shards.add(shard_file)
+    for layer_id in range(layer_idx, layer_idx + num_layers):
+        for key, shard_file in weight_map.items():
+            if f"model.layers.{layer_id}." in key:
+                required_shards.add(shard_file)
+    return [f"*-{shard_file.split('-')[1]}-of-*.safetensors" for shard_file in sorted(required_shards)]
+
+
+@pytest.mark.parametrize("layer_idx, num_layers", [(0, 6), (0, 1), (1, 1), (3, 4), (10, 2)])
+def test_download_layers_matches_conftest_reference(fake_hub, tmp_path, layer_idx, num_layers):
+    from models.demos.deepseek_v3_d_p.utils.hf_download import download_layers
+
+    _, calls = fake_hub
+    download_layers("org/name", tmp_path / "c", range(layer_idx, layer_idx + num_layers))
+    assert _shards(calls) == _conftest_reference_patterns(_fake_weight_map(), layer_idx, num_layers)
+
+
+def test_resolve_hf_snapshot_dir(tmp_path):
+    from models.demos.deepseek_v3_d_p.utils.hf_download import resolve_hf_snapshot_dir
+
+    root = tmp_path / "models--org--name"
+    for h in ("old", "main"):
+        (root / "snapshots" / h).mkdir(parents=True)
+        (root / "snapshots" / h / "model.safetensors.index.json").write_text("{}")
+    (root / "refs").mkdir()
+    (root / "refs" / "main").write_text("main\n")
+    assert resolve_hf_snapshot_dir(root) == root / "snapshots" / "main"
+    (root / "refs" / "main").unlink()
+    os.utime(root / "snapshots" / "old", (1, 1))
+    assert resolve_hf_snapshot_dir(root) == root / "snapshots" / "main"
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert resolve_hf_snapshot_dir(plain) == plain
+    assert resolve_hf_snapshot_dir(root / "snapshots" / "old") == root / "snapshots" / "old"
+
+
+def test_guard_accepts_hub_cache_root(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    _, args = _guard_args(tmp_path, monkeypatch, "1")
+    root = tmp_path / "hubroot" / "models--org--name"
+    snap = root / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    (snap / "model.safetensors.index.json").write_text("{}")
+    args.hf_model = str(root)
+    assert script.guard_phase(args).hf_model == snap
+
+
+def test_main_rejects_download_with_hf_model(monkeypatch, tmp_path):
+    import layer_ttnn_cache as script
+
+    monkeypatch.setattr(script, "run_phase", lambda ctx: pytest.fail("run_phase reached"))
+    monkeypatch.setattr(script, "download_phase", lambda ctx: pytest.fail("download_phase reached"))
+    argv = ["--model", "glm_5_3", "--layers", "1", "--download", "--hf-model", str(tmp_path)]
+    assert main(argv) == 2
+
+
+def _download_guard_args(tmp_path, monkeypatch, layers, mounts=None):
+    import layer_ttnn_cache as script
+
+    _, args = _guard_args(tmp_path, monkeypatch, layers)
+    args.hf_model, args.download = None, True
+    monkeypatch.delenv("HF_HOME", raising=False)
+    if mounts is not None:
+        monkeypatch.setattr(script, "read_mounts", lambda text: mounts)
+    return args
+
+
+def test_guard_refuses_default_hf_cache_on_weka(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    cache = tmp_path / "home" / ".cache"
+    args = _download_guard_args(tmp_path, monkeypatch, "1", _mounts((str(cache), "wekafs")))
+    cache.mkdir()
+    with pytest.raises(GuardError, match="HF cache"):
+        script.guard_phase(args)
+
+
+def test_guard_refuses_hf_home_on_weka(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    wk = tmp_path / "wk"
+    wk.mkdir()
+    args = _download_guard_args(tmp_path, monkeypatch, "1", _mounts((str(wk), "wekafs")))
+    monkeypatch.setenv("HF_HOME", str(wk / "hf"))
+    with pytest.raises(GuardError, match="HF_HOME"):
+        script.guard_phase(args)
+    assert not (wk / "hf").exists()
+
+
+def test_guard_download_uses_hf_home(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    args = _download_guard_args(tmp_path, monkeypatch, "1")
+    ctx = script.guard_phase(args)
+    assert ctx.hf_model is None and ctx.hf_cache == tmp_path / "home" / ".cache" / "huggingface"
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hfh"))
+    assert script.guard_phase(args).hf_cache == tmp_path / "hfh"
+
+
+@pytest.mark.parametrize("layers, expected", [("3,7", ["00003", "00004", "00005"]), ("0-1", ["00001", "00002"])])
+def test_download_phase(fake_hub, tmp_path, monkeypatch, capsys, layers, expected):
+    import layer_ttnn_cache as script
+
+    snap, calls = fake_hub
+    ctx = script.guard_phase(_download_guard_args(tmp_path, monkeypatch, layers))
+    monkeypatch.setattr(script, "_missing_shard_bytes", lambda repo, s, shards: 5 * script.GIB)
+    script.download_phase(ctx)
+    assert ctx.hf_model == snap
+    assert ctx.hf_config == ctx.hf_cache / "flat_config" / "moonshotai--Kimi-K2_7-Code"
+    index = ctx.hf_config / "model.safetensors.index.json"
+    assert index.is_file() and not index.is_symlink()
+    assert calls[0]["repo_id"] == "moonshotai/Kimi-K2.7-Code"
+    assert calls[0]["cache_dir"] == str(ctx.hf_cache)
+    assert _shards(calls) == [f"*-{n}-of-*.safetensors" for n in expected]
+    out = capsys.readouterr().out
+    assert f"{len(expected)} shards, 5.0 GiB not yet cached" in out
+    assert all(f"  model-{n}-of-00009.safetensors" in out for n in expected)
+
+
+def test_download_phase_disk_check_stops_before_shards(fake_hub, tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    _, calls = fake_hub
+    ctx = script.guard_phase(_download_guard_args(tmp_path, monkeypatch, "1"))
+    monkeypatch.setattr(script, "_missing_shard_bytes", lambda repo, s, shards: 1 << 60)
+    with pytest.raises(GuardError, match="disk"):
+        script.download_phase(ctx)
+    assert len(calls) == 1
+
+
+def test_flat_config_dir_copies_real_files_without_weights(tmp_path):
+    from models.demos.deepseek_v3_d_p.utils.hf_download import flat_config_dir
+
+    blobs, snap = tmp_path / "blobs", tmp_path / "snapshots" / "abc"
+    blobs.mkdir()
+    snap.mkdir(parents=True)
+    for name in ("config.json", "configuration_deepseek.py", "model-00001-of-00002.safetensors"):
+        (blobs / name).write_text(name)
+        (snap / name).symlink_to(blobs / name)
+    dest = flat_config_dir(snap, tmp_path / "flat", "org/Model-1.5")
+    assert dest == tmp_path / "flat" / "org--Model-1_5"
+    assert sorted(p.name for p in dest.iterdir()) == ["config.json", "configuration_deepseek.py"]
+    assert not any(p.is_symlink() for p in dest.iterdir())
+    assert (dest / "configuration_deepseek.py").read_text() == "configuration_deepseek.py"
+
+
+def test_missing_shard_bytes_skips_cached(tmp_path):
+    import layer_ttnn_cache as script
+
+    (tmp_path / "a.safetensors").write_bytes(b"x")
+    assert script._missing_shard_bytes("org/name", tmp_path, ["a.safetensors"]) == 0
