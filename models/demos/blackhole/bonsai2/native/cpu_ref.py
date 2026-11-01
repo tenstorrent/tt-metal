@@ -47,7 +47,7 @@ def pcc(a: np.ndarray, b: np.ndarray) -> float:
 def dense_weight(t: TernaryTensor, had: BlockHadamard) -> np.ndarray:
     """The equivalent dense ``W`` for a rotated ternary weight, float64 ``[N, K]``."""
     w = t.dequant().astype(np.float64)
-    return had.unrotate_float64(w)
+    return had.unrotate(w)
 
 
 def project_ternary(t: TernaryTensor, had: BlockHadamard, x: np.ndarray) -> np.ndarray:
@@ -56,7 +56,7 @@ def project_ternary(t: TernaryTensor, had: BlockHadamard, x: np.ndarray) -> np.n
     k = x.shape[-1]
     if k != t.codes.shape[1]:
         raise ValueError(f"x has K={k}, weight has K={t.codes.shape[1]}")
-    xr = had.rotate_float64(x)
+    xr = had.rotate(x)
     w = t.dequant().astype(np.float64)  # [N, K]
     return xr @ w.T
 

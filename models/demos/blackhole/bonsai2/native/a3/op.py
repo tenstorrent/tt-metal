@@ -79,6 +79,12 @@ def out_mem(cores, n: int):
 _progs = {}
 
 
+def clear_cache():
+    """Call after freeing any tensor a cached program was built on: the descriptor's CBs
+    hold that tensor's Buffer, and ttnn's generic_op cache hit re-binds it (segfault)."""
+    _progs.clear()
+
+
 def _sig(t):
     """Cache key part: a freed tensor's address is reused by the next allocation, so the
     dtype and shape go in too (a bfp4 weight landing on a freed bfp2 one segfaulted)."""

@@ -103,6 +103,7 @@ def main() -> int:
                         print(f"{fmt:5s} wpb={wpb} sbk={sbk:3d} FAILED {type(e).__name__}: {str(e)[:300]}", flush=True)
                         rc = 1
                     ttnn.deallocate(yt)
+                    a3.clear_cache()
                 ttnn.deallocate(xt)
             ttnn.deallocate(w)
     finally:
