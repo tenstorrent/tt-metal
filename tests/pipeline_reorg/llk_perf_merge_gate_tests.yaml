@@ -15,6 +15,12 @@
     wh_n150_civ2:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "L1_TO_L1"
+    PIPELINE: "merge_baseline"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_merge_gate_wormhole group 2/3
   split_group: 2
@@ -27,6 +33,12 @@
     wh_n150_civ2:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "L1_TO_L1"
+    PIPELINE: "merge_baseline"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_merge_gate_wormhole group 3/3
   split_group: 3
@@ -39,6 +51,12 @@
     wh_n150_civ2:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "L1_TO_L1"
+    PIPELINE: "merge_baseline"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_merge_gate_blackhole group 1/3
   split_group: 1
@@ -51,6 +69,12 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "L1_TO_L1"
+    PIPELINE: "merge_baseline"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_merge_gate_blackhole group 2/3
   split_group: 2
@@ -63,6 +87,12 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "L1_TO_L1"
+    PIPELINE: "merge_baseline"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_merge_gate_blackhole group 3/3
   split_group: 3
@@ -75,3 +105,9 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "L1_TO_L1"
+    PIPELINE: "merge_baseline"
+    TT_LLK_DISABLE_ASSERTS: "1"

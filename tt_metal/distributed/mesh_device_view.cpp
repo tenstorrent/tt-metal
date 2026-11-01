@@ -29,9 +29,10 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-std::vector<IDevice*> get_devices_from_coordinates(
+template <typename DevicePtr>
+std::vector<DevicePtr> get_devices_from_coordinates(
     const MeshDeviceViewImpl& mesh, const std::vector<MeshCoordinate>& coords) {
-    std::vector<IDevice*> devices;
+    std::vector<DevicePtr> devices;
     devices.reserve(coords.size());
     for (const auto& coord : coords) {
         if (auto* device = mesh.get_device(coord)) {
@@ -57,13 +58,13 @@ std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_from_coordinates(
 
 MeshDeviceViewImpl::MeshDeviceViewImpl(
     const MeshShape& shape,
-    const std::vector<IDevice*>& devices,
+    const std::vector<Device*>& devices,
     const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) :
     MeshDeviceViewImpl(shape, wrap_to_maybe_remote(devices), fabric_node_ids) {}
 
 MeshDeviceViewImpl::MeshDeviceViewImpl(
     const MeshShape& shape,
-    const std::vector<MaybeRemote<IDevice*>>& devices,
+    const std::vector<MaybeRemote<Device*>>& devices,
     const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) :
     devices_(shape, devices), fabric_node_ids_(shape, fabric_node_ids), mesh_id_([&fabric_node_ids, &shape]() {
         TT_FATAL(
@@ -86,13 +87,17 @@ MeshDeviceViewImpl::MeshDeviceViewImpl(
         *mesh_id_);
 
     // Build coordinate map.
+    idevices_.reserve(devices.size());
     for (const auto& [coord, maybe_device] : devices_) {
         maybe_device.if_local([this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
+        idevices_.push_back(maybe_device.when(
+            [](Device* device) { return MaybeRemote<IDevice*>::local(device); },
+            [] { return MaybeRemote<IDevice*>::remote(); }));
     }
 }
 
-std::vector<IDevice*> MeshDeviceViewImpl::get_devices(const MeshCoordinateRange& range) const {
-    std::vector<IDevice*> devices_in_region;
+std::vector<Device*> MeshDeviceViewImpl::get_devices(const MeshCoordinateRange& range) const {
+    std::vector<Device*> devices_in_region;
     devices_in_region.reserve(range.shape().mesh_size());
     for (const auto& coord : range) {
         devices_.at(coord).if_local([&devices_in_region](const auto& device) { devices_in_region.push_back(device); });
@@ -100,7 +105,7 @@ std::vector<IDevice*> MeshDeviceViewImpl::get_devices(const MeshCoordinateRange&
     return devices_in_region;
 }
 
-std::vector<IDevice*> MeshDeviceViewImpl::get_devices() const { return extract_locals(devices_.values()); }
+std::vector<Device*> MeshDeviceViewImpl::get_devices() const { return extract_locals(devices_.values()); }
 
 std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceViewImpl::get_fabric_node_ids(
     const MeshCoordinateRange& range) const {
@@ -171,7 +176,7 @@ bool MeshDeviceViewImpl::contains(const MeshCoordinate& coord) const noexcept {
     return devices_.coord_range().contains(coord);
 }
 
-IDevice* MeshDeviceViewImpl::get_device(const MeshCoordinate& coord) const {
+Device* MeshDeviceViewImpl::get_device(const MeshCoordinate& coord) const {
     if (!contains(coord)) {
         return nullptr;
     }
@@ -398,11 +403,11 @@ std::vector<MeshCoordinate> MeshDeviceViewImpl::get_ring_coordinates() const {
 }
 
 std::vector<IDevice*> MeshDeviceViewImpl::get_line_devices() const {
-    return get_devices_from_coordinates(*this, get_line_coordinates());
+    return get_devices_from_coordinates<IDevice*>(*this, get_line_coordinates());
 }
 
 std::vector<IDevice*> MeshDeviceViewImpl::get_ring_devices() const {
-    return get_devices_from_coordinates(*this, get_ring_coordinates());
+    return get_devices_from_coordinates<IDevice*>(*this, get_ring_coordinates());
 }
 
 std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceViewImpl::get_line_fabric_node_ids() const {
@@ -466,10 +471,14 @@ MeshDeviceView::MeshDeviceView(MeshDeviceView&&) noexcept = default;
 MeshDeviceView& MeshDeviceView::operator=(MeshDeviceView&&) noexcept = default;
 
 std::vector<IDevice*> MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
-    return pimpl_->get_devices(range);
+    auto devices = pimpl_->get_devices(range);
+    return {devices.begin(), devices.end()};
 }
 
-std::vector<IDevice*> MeshDeviceView::get_devices() const { return pimpl_->get_devices(); }
+std::vector<IDevice*> MeshDeviceView::get_devices() const {
+    auto devices = pimpl_->get_devices();
+    return {devices.begin(), devices.end()};
+}
 
 std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids(const MeshCoordinateRange& range) const {
     return pimpl_->get_fabric_node_ids(range);
@@ -548,8 +557,8 @@ bool MeshDeviceView::is_local(const MeshCoordinate& coord) const { return pimpl_
 
 MeshCoordinateRange MeshDeviceView::get_local_mesh_coord_range() const { return pimpl_->get_local_mesh_coord_range(); }
 
-std::vector<MaybeRemote<IDevice*>>::const_iterator MeshDeviceView::begin() const { return pimpl_->begin(); }
+std::vector<MaybeRemote<IDevice*>>::const_iterator MeshDeviceView::begin() const { return pimpl_->idevices().begin(); }
 
-std::vector<MaybeRemote<IDevice*>>::const_iterator MeshDeviceView::end() const { return pimpl_->end(); }
+std::vector<MaybeRemote<IDevice*>>::const_iterator MeshDeviceView::end() const { return pimpl_->idevices().end(); }
 
 }  // namespace tt::tt_metal::distributed

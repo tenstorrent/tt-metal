@@ -83,6 +83,14 @@ ttnn::Tensor fused_msda(
 // Each level's H_l and W_l must be <= 256: the bilinear corner crosses from the
 // SFPU geometry to the reader as bf16, which represents every integer up to 256
 // exactly and only some beyond it.
+//
+// num_valid_queries, when given, holds one count per batch (each in [0, Q], at
+// least one nonzero): only queries [0, num_valid_queries[b]) of batch b are
+// computed. The output rows past it are left unwritten and hold undefined data,
+// possibly NaN or Inf, so a caller must drop them with a select such as
+// ttnn.where, not by multiplying with a 0/1 mask. Changing the counts between
+// calls reuses the cached program; because they are runtime args, a captured
+// trace replays the counts it was captured with.
 ttnn::Tensor fused_msda_from_offsets(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
@@ -91,7 +99,8 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
     bool align_corners = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt);
 
 // Whether fused_msda_from_offsets can stage value (ROW_MAJOR, interleaved L1)
 // and its bf16 output in L1 alongside its circular buffers. value may still be

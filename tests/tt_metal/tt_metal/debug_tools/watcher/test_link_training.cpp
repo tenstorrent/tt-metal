@@ -20,8 +20,8 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -36,7 +36,7 @@ static void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribut
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->impl().get_devices()[0];

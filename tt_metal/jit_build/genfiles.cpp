@@ -262,17 +262,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     struct TaEntry {
         string name;
         uint32_t cta_offset;
-        uint32_t addr_crta_offset;
+        bool is_per_node;
+        uint32_t addr_offset;
         LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles(
-        [&ta_entries](
-            const string& name,
-            uint32_t cta_offset,
-            uint32_t addr_crta_offset,
-            uint32_t /*num_rt_words*/,
-            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
+    settings.process_tensor_binding_handles([&ta_entries](
+                                                const string& name,
+                                                uint32_t cta_offset,
+                                                bool is_per_node,
+                                                uint32_t addr_offset,
+                                                uint32_t /*num_rt_words*/,
+                                                const LLKMetadata& metadata) {
+        ta_entries.push_back({name, cta_offset, is_per_node, addr_offset, metadata});
+    });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -431,10 +434,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
     // template with extra metadata in the future without touching kernel source.
     //
+    // Per-node bindings get a PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> instead.
+    //
     // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
     for (const auto& entry : ta_entries) {
-        content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
-                << entry.addr_crta_offset << "u>;\n";
+        const char* token_type = entry.is_per_node ? "PerNodeTensorBindingToken" : "TensorBindingToken";
+        content << "using " << entry.name << "_t = ::tensor_accessor::" << token_type << "<" << entry.cta_offset
+                << "u, " << entry.addr_offset << "u>;\n";
         content << "constexpr " << entry.name << "_t " << entry.name << "{";
         content << serialize_llk_metadata(entry.metadata);
         content << "};\n";
@@ -500,6 +506,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // so we read them directly here. The vararg helpers below need the vararg-section
     // start offset to skip past sections 1 and 2.
     const KernelCrtaLayout crta_layout = settings.get_crta_layout();
+    const KernelRtaLayout rta_layout = settings.get_rta_layout();
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
@@ -565,9 +572,10 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // around get_arg_val / get_common_arg_val.
     // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
     // which already accounts for both the user-named CRTAs and the TensorBinding section.
-    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
-            << " + idx); }\n"
+    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs
+    // and the per-node TensorBinding section.
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>("
+            << rta_layout.vararg_section_offset << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
 

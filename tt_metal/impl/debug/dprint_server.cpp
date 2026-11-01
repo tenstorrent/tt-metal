@@ -29,9 +29,9 @@
 #include "context/metal_env_accessor.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
@@ -817,7 +817,7 @@ bool DPrintServer::Impl::poll_device_print_data(
         while (pos + header_size <= payload.size()) {
             DramStreamMessageHeader header;
             std::memcpy(&header, payload.data() + pos, header_size);
-            const uint32_t align = header.align;
+            const uint32_t align = header.align * sizeof(uint32_t);
             const uint32_t length = header.length;
             const bool buffer_wrapped = header.buffer_wrapped != 0;
 

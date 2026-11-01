@@ -41,7 +41,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
-    const bool packed_head = attrs.packed_head;
     const auto distribution =
         kda_factory_detail::distribute_value_blocks(device.compute_with_storage_grid_size(), BH, Vt_full);
     const auto& cores = distribution.core_set;
@@ -101,8 +100,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::TensorParamName tail_entry_states_tensor_name{"tail_entry_states"};
     const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
     const tt::tt_metal::experimental::TensorParamName final_state_tensor_name{"final_state"};
-    const tt::tt_metal::experimental::TensorParamName tail_output_tensor_name{"tail_output"};
-    const tt::tt_metal::experimental::TensorParamName tail_final_state_tensor_name{"tail_final_state"};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto output_format = tt::DataFormat::Float16_b;
@@ -146,7 +143,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(summary_head_output_dfb_name, split_head_tiles, output_format),
         make_dfb(summary_head_state_dfb_name, split_head_tiles, output_format),
         make_dfb(tail_entry_states_dfb_name, tail_entry_states_tiles, fp32),
-        // The packed head writer's identity tile for ranks without a head.
+        // The summary writer's identity tile for slots without a valid segment.
         make_dfb(identity_scratch_dfb_name, 1, output_format),
     };
 
@@ -223,18 +220,21 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(identity_scratch_dfb_name, "identity_scratch"),
                 tt::tt_metal::experimental::ConsumerOf(identity_scratch_dfb_name, "identity_scratch"),
             },
-        // The packed head is the only output; its writer still parses the other output names.
+        // The packed summary is the only summary output; its writer still parses the recurrence's final_state.
         .tensor_bindings =
             {tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
              tt::tt_metal::experimental::TensorBinding{
-                 packed_head ? output_tensor_name : final_state_tensor_name, "final_state"}},
+                 summary ? output_tensor_name : final_state_tensor_name, "final_state"}},
         .compile_time_args =
             {{"Ct", Ct},
              {"Kt", Kt},
              {"Vt", Vt},
              {"Vt_full", Vt_full},
+             // Only the summary writer addresses slots by head count; keep the recurrence binary BH-independent.
+             {"batch_heads", summary ? BH : 0},
              {"summary", static_cast<uint32_t>(summary)},
-             {"packed_head", static_cast<uint32_t>(packed_head)},
+             {"tail", static_cast<uint32_t>(attrs.tail)},
+             {"init", static_cast<uint32_t>(attrs.init)},
              {"late_on_writer", static_cast<uint32_t>(late_on_writer)}},
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -262,22 +262,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         tt::tt_metal::experimental::SemaphoreBinding{ready_late_semaphore_name, "ready_late"});
     writer.semaphore_bindings.push_back(
         tt::tt_metal::experimental::SemaphoreBinding{valid_late_semaphore_name, "valid_late"});
-
-    if (packed_head) {
-        writer.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{output_tensor_name, "tail_output"});
-        writer.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{output_tensor_name, "tail_final_state"});
-    } else if (summary) {
-        writer.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{tail_output_tensor_name, "tail_output"});
-        writer.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{tail_final_state_tensor_name, "tail_final_state"});
-    } else {
-        // Parsed even when if-constexpr discards segmented summary emission.
-        writer.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{output_tensor_name, "tail_output"});
-        writer.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{final_state_tensor_name, "tail_final_state"});
-    }
 
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
@@ -393,17 +377,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         tt::tt_metal::experimental::TensorParameter{
             .unique_id = output_tensor_name, .spec = outputs[0].mesh_tensor().tensor_spec()},
     };
-    if (!packed_head) {
+    if (!summary) {
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
             .unique_id = final_state_tensor_name, .spec = outputs[1].mesh_tensor().tensor_spec()});
-    }
-    if (summary && !packed_head) {
-        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
-            .unique_id = tail_output_tensor_name, .spec = outputs[2].mesh_tensor().tensor_spec()});
-        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
-            .unique_id = tail_final_state_tensor_name, .spec = outputs[3].mesh_tensor().tensor_spec()});
-    }
-    if (!summary) {
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
             .unique_id = q_decay_tensor_name, .spec = q_decay_tensor.tensor_spec()});
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
@@ -442,20 +418,14 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         {t_inv_tensor_name, t_inv_tensor},
         {output_tensor_name, outputs[0].mesh_tensor()},
     };
-    if (!packed_head) {
-        run_args.tensor_args.emplace(final_state_tensor_name, outputs[1].mesh_tensor());
-    }
     if (!summary) {
+        run_args.tensor_args.emplace(final_state_tensor_name, outputs[1].mesh_tensor());
         run_args.tensor_args.emplace(q_decay_tensor_name, q_decay_tensor);
         run_args.tensor_args.emplace(intra_tensor_name, intra_tensor);
         run_args.tensor_args.emplace(group_entry_states_tensor_name, in.group_entry_states->mesh_tensor());
         run_args.tensor_args.emplace(tail_entry_states_tensor_name, in.tail_entry_states->mesh_tensor());
     }
 
-    if (summary && !packed_head) {
-        run_args.tensor_args.emplace(tail_output_tensor_name, outputs[2].mesh_tensor());
-        run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
-    }
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
     kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
     // The writer reads the chronology channel on the same condition as the reader publishes it.
