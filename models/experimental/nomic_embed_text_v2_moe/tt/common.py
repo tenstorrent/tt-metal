@@ -41,6 +41,8 @@ two layouts and the data is physically copied.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -284,6 +286,49 @@ class LayerNormParameters:
         """(weight, bias) for a layer norm over x, (B, 1, S, W)."""
         m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
         return self.row_major if m_tiles > SMALL_M_TILES else self.tiled
+
+
+# The generated single-dispatch layer norm (ttnn/ttnn/operations/layer_norm_tile) is 32-36% faster than
+# ttnn.layer_norm on every placement the 8x512 forward uses. NOMIC_LN_IMPL=stock selects ttnn.layer_norm.
+LAYER_NORM_IMPL = os.environ.get("NOMIC_LN_IMPL", "generated")
+
+
+def layer_norm(
+    x: ttnn.Tensor,
+    parameters: LayerNormParameters,
+    *,
+    epsilon: float,
+    memory_config: ttnn.MemoryConfig,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    residual: ttnn.Tensor | None = None,
+) -> ttnn.Tensor:
+    """LayerNorm(x [+ residual]) over the last dim, one device op either way."""
+    weight, bias = parameters.for_input(x)
+    if LAYER_NORM_IMPL == "stock":
+        return ttnn.layer_norm(
+            x,
+            residual_input_tensor=residual,
+            weight=weight,
+            bias=bias,
+            epsilon=epsilon,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    from ttnn.operations.layer_norm_tile import layer_norm as generated_layer_norm
+
+    return generated_layer_norm(
+        x,
+        weight,
+        bias,
+        residual,
+        epsilon=epsilon,
+        compute_kernel_config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=compute_kernel_config.math_fidelity,
+            fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
+            math_approx_mode=compute_kernel_config.math_approx_mode,
+        ),
+        memory_config=memory_config,
+    )
 
 
 def flatten_tokens(x: ttnn.Tensor) -> ttnn.Tensor:

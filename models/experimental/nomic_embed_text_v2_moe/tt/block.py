@@ -19,7 +19,11 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
-from models.experimental.nomic_embed_text_v2_moe.tt.common import LayerNormParameters, activation_memory_config
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    LayerNormParameters,
+    activation_memory_config,
+    layer_norm,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
@@ -74,12 +78,10 @@ class TtNomicBertBlock(LightweightModule):
         parameters: LayerNormParameters,
         memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor:
-        weight, bias = parameters.for_input(x)
-        return ttnn.layer_norm(
+        return layer_norm(
             x,
-            residual_input_tensor=residual,
-            weight=weight,
-            bias=bias,
+            parameters,
+            residual=residual,
             epsilon=self.epsilon,
             memory_config=activation_memory_config(x.shape) if memory_config is None else memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),

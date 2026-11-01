@@ -64,6 +64,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     RotaryTables,
     activation_memory_config,
     additive_attention_mask,
+    layer_norm,
     pooling_mask,
     prepare_token_ids,
 )
@@ -154,11 +155,9 @@ class TtNomicBertModel(LightweightModule):
         """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H); see forward."""
         seqlen = input_ids.shape[-1]
         hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
-        weight, bias = self.emb_ln.for_input(hidden)
-        normalized = ttnn.layer_norm(
+        normalized = layer_norm(
             hidden,
-            weight=weight,
-            bias=bias,
+            self.emb_ln,
             epsilon=self.config.layer_norm_epsilon,
             memory_config=activation_memory_config(hidden.shape),
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
