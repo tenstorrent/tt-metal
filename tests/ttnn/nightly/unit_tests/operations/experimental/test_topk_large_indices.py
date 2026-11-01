@@ -1353,21 +1353,32 @@ def test_topk_large_indices_row_split_metadata_empty_half(device, k, n, valid_le
     _assert_topk_values_match_torch(torch_input[:, :valid_length], tt_indices, k)
 
 
-@pytest.mark.parametrize("k", [1024, 2048], ids=lambda v: f"k={v}")
+# Lengths replayed through one trace, per (n, k): one chunk of K' (not halved), then two or more (halved), then
+# back. At n=131072 the program is the long-row one (rows past 32 chunks: segmented split body, L1 accumulator,
+# block-aligned cut), so the lengths also cover a halved row past one block and the full width.
+METADATA_TIE_LENGTHS = {
+    (5120, 1024): [896, 1024, 1025, 5120, 896],
+    (5120, 2048): [896, 2049, 5120, 2048, 896],
+    # 40 chunks: cut at block 32, an 8-chunk second half.
+    (131072, 1024): [896, 1025, 40000, 131072, 896],
+    # 34 chunks: cut at block 32, a 2-chunk second half; then 64 chunks, cut at 32.
+    (131072, 2048): [896, 2049, 33 * 2048 + 5, 131072, 896],
+}
+
+
+@pytest.mark.parametrize("n,k", list(METADATA_TIE_LENGTHS), ids=lambda v: str(v))
 @pytest.mark.parametrize("rows", ["leftover", "pairs_only"])
-def test_topk_large_indices_metadata_split_rows_match_scalar_on_ties(device, k, rows):
+def test_topk_large_indices_metadata_split_rows_match_scalar_on_ties(device, n, k, rows):
     """A metadata length (the traced form) must give the scalar length's (the eager form's) indices bit for
     bit, ties included: a row halved in one form but not the other joins its halves in an unfused merge that
     orders tied values differently, and the downstream sparse attention sums in that order.
 
-    GLM-5.3 prefill (issue #63408): a 5120-wide cache row and a partial-chunk prompt. The host plans a metadata
+    GLM-5.3 prefill (issue #63408): a 5120-wide cache row and a partial-chunk prompt; 131072 for long rows. The host plans a metadata
     call from the physical width (halved) but a scalar one from the length, so the device decides. One trace is
     replayed across lengths that flip that decision both ways, as the model does between prefill chunks."""
     # Earlier cache-reuse tests disable caching on this module-scoped device, and a trace needs a cached program.
     device.enable_program_cache()
-    n = 5120
-    # One chunk of K' (not halved), then two or more (halved), then back.
-    lengths = [896, 2049, n, 2048, 896] if k == 2048 else [896, 1024, 1025, n, 896]
+    lengths = METADATA_TIE_LENGTHS[(n, k)]
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
     # leftover: whole rows on every core plus paired leftovers, as in the 160-row-per-chip GLM-5.3 indexer.
