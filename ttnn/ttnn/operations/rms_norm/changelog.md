@@ -258,3 +258,200 @@
   - `test_rms_norm_gamma_share.py`: (96,4096) re-pinned to the new spanning per-core regime, and (96,1024) pins the column regime.
   - `perf_r5_rms_norm.py`: profiling probe with forced-k / no-gamma / sharded-guard env hooks (no `test_` prefix).
   - Unit directory: 329 passed, 3 skipped.
+
+## Perf 1 — perf tournament round 1 (fan-out; nothing added to SUPPORTED)
+- Date: 2026-11-01. Board: Blackhole p150b, 13×10 = 130 Tensix cores, AICLK 1350 MHz. Timer: the grader's
+  real-time profiler (`eval/eval_test_runner.sh`, `device_kernel_ns`). Breakdown runs use Tracy zones. Before → after
+  pairs come from one session: the round-start op (worktree of 8216b2fa1e6) vs the final op, built by
+  `tests/ttnn/unit_tests/operations/rms_norm/perf_p1_ab_rms_norm.py`. Precision contract untouched (no change to
+  `fp32_dest_acc_en` / `math_fidelity` / `math_approx_mode` / dtypes).
+
+### Instrumentation (permanent)
+- `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`; the header named in the perf
+  methodology was missing from this checkout, so it was added).
+- Block-level zones on every stage, with each wait split from its work:
+  - reader: `rd_reserve` / `rd_read` / `rd_block`
+  - compute: `cmp_wait_x` / `cmp_pass1` / `cmp_collapse` / `cmp_wait_gathered` / `cmp_combine` / `cmp_wait_inv` /
+    `cmp_wait_gamma` / `cmp_pass2` / `cmp_tilize`
+  - writer: `wr_gamma_issue` / `wr_gamma_finish` / `wr_wait_partial` / `wr_xchg_send` / `wr_wait_peers` /
+    `wr_inv_return` / `wr_wait_inv` / `wr_gamma_stream` / `wr_store`
+- Ablation defines (`PERF_ABLATE`: `RMS_ABLATE_EMPTY`, `RMS_ABLATE_DM`, `CKL_ELTWISE_CHAIN_SKIP_COMPUTE`). Probes only;
+  the op never sets them.
+- Probes:
+  - `perf_p1_rms_norm.py`: scoreboard cells built exactly like the golden harness.
+  - `perf_p1_ab_rms_norm.py`: round start vs head.
+  - `perf_experiments/tools/zones.py`: per-zone max / p50 summary over Tensix cores.
+
+### Measured breakdown (round start)
+- Fixed-cost floor (all three kernels return at once, same Tensix cores): 0.18–0.39 µs.
+- Cumulative ablation, µs. "chains stubbed" = `CKL_ELTWISE_CHAIN_SKIP_COMPUTE`; "no DM" = x/out NoC payload removed.
+
+  | cell | full | no gamma | + chains stubbed | no DM | DM + chains stubbed |
+  |---|---|---|---|---|---|
+  | hgt_tile_g | 79.4 | 36.3 | 10.4 | — | — |
+  | blk_perf_7168x1024 | 30.3 | 21.4 | 15.9 | — | — |
+  | wid_perf_32x7168 | 8.9 | 6.4 | 5.5 | — | — |
+  | wid_tile_2048x256 | 54.9 | 46.7 | 39.4 | — | — |
+  | int_prefill_7168 | 650 | 633 | — | 40.7 | 18.3 |
+  | int_mid_7168 | 52.2 | 50.2 | — | 6.7 | — |
+
+- Ranked bottlenecks:
+  1. **Gamma handling.**
+     - Expand, stream and load cost 15–55 % of HEIGHT / BLOCK / WIDTH / ROW_MAJOR cells.
+     - HEIGHT wide W: `wr_gamma_stream` 75.6 of 79 µs; pass 2 starved.
+  2. **Per-tile-row fixed cost on tall k > 1 shards.**
+     - SFPU collapse ≈ 220 ns per tile-row.
+     - Full-tile finalize (rsqrt ≈ 750 ns per tile, catalog `sfpu_tile_scope`).
+     - Exchange and owner combine not overlapped with compute.
+  3. **Interleaved DRAM-bound cells.** Equal work per Tensix core, but Tensix-core imbalance max/p50 = 1.47 (rd_read
+     15..545 µs; NoC arbitration by grid position).
+  4. **ROW_MAJOR narrow shards.** 16 B stick pieces, one local NoC transaction + one zero fill each.
+- Close to ceiling (no ideas spent): blk_perf_640x6144, 19.2 µs vs achievable 19.0 µs.
+
+### Earlier-snapshot check
+- The R5 golden snapshot showed DRAM-bound interleaved cells 7.5 % (median) to 28 % faster than R3 / R4 and today,
+  e.g. (8192,7168): R3 643 µs, R4 638 µs, R5 478 µs.
+  - Not reproducible: the same golden node measured 640 µs at round start, with the code R5 left.
+  - Recorded as a snapshot environment artifact, not a regression to chase. 16 of the 19 cells still above their R5
+    time are faster than R4 now; the rest are within 2–4 % of R4 (see "Guard set").
+- test_regression (2,1,128,256) fp32: 5.5 µs in R2–R4, 8.9 µs in the R5 snapshot. At round start it measured 5.5 µs,
+  so the R5 value is the same artifact. It is 4.48 µs now.
+
+### Classes targeted and why
+1. HEIGHT_SHARDED wide W (largest measured ÷ ceiling: 2.2–3.5×, gamma-bound).
+2. Tall WIDTH / BLOCK k > 1: the BLOCK perf profiles sat 1.5–1.6× over `achievable_ns`, WIDTH 2048×256 about 6× over
+   the per-Tensix-core ceiling.
+3. WIDTH decode: 1.5–1.6× over `achievable_ns`.
+4. ROW_MAJOR sharded narrow: about 5–8× over.
+5. Interleaved DRAM-bound: 1.14–1.22× over the ~430 GB/s read+write ceiling. These are the largest cells.
+
+### Portfolio and verdicts
+Eight `perf-part-optimizer` subagents ran in parallel; two later ports were rebased onto the partly graduated op.
+Artifacts: `perf_experiments/<slug>/`; raw profiler dumps over 400 KB are gitignored.
+
+| idea | verdict | before → after, ns | domain / notes |
+|---|---|---|---|
+| `gamma_rowbcast`: gamma as a ROW-broadcast dest-reuse operand, no expand | **WIN, graduated** | hgt_tile_grm 119 794 → 70 276 · hgt_rm_grm 183 468 → 86 137 · blk_perf_640x6144 19 878 → 15 953 · wid_perf_32x7168 9 518 → 7 964 · int_rm_128x4096_gf32 20 237 → 15 033 | everywhere, bit-identical. Helper-only reorder (A1) changed output by ≤ 1 bf16 ulp and was +7–10 % on pass-2-bound cells (rejected). |
+| `gamma_stream_l1`: compact resident gamma row, local chunk assembly, NCRISC split | WIN, superseded | hgt_tile_g 79 293 → 69 790; `gamma_rowbcast` reaches 70 1xx on the same cells (floor 69.7) | its **bug fix** graduated: streamed gamma on a shard-backed output packed multi-row blocks window-major (PCC 0.11 on (1,1,8320,4608) HEIGHT fp32 gamma, 0.50 forced). |
+| `fused_rowsum_finalize`: FPU `reduce_tile` row collapse + column-0 sfpi finalize + raw batched pass 1 | **WIN, graduated** | wid_tile_2048x256 55 165 → 43 953 · blk_perf_7168x1024 30 241 → 24 696 · blk_perf_8192x1024 40 973 → 33 406 · blk_tail_224x1000 6 930 → 5 243 | everywhere. Fusing pass 1 with the SFPU collapse alone was only 8–12 %; the FPU collapse is the lever. |
+| `owner_raw_partials`: ship uncollapsed Σx², owner collapses once | WIN behind k·T_acc ≤ 32 KB, superseded | wid_tile 54 804 → 50 467 · blk 7168 30 236 → 27 279; k·T_acc > 32 KB +1.5–4 % | saves the per-row SFPU collapse that the FPU collapse already cut to ~55 ns (break-even ~70 ns/row). Not graduated. |
+| `combine_pipeline`: sharded owner combine over row sub-blocks | **WIN, graduated (port)** | blk_perf_7168x1024 24 930 → 22 401 · 8192x1024 33 510 → 29 272 · 7168x2048 34 987 → 30 572 · wid_tile_2048x256 43 875 → 31 447 | rule below; found a mask-tail cb_sumsq ring-wrap bug that `fused_rowsum_finalize` removes. |
+| `inv_mcast_return`: owner returns inv_rms by one multicast | **WIN for single-owner blocks, graduated** | wid_perf_32x7168 8 940 → 7 381 · wid_perf_32x5120 8 239 → 6 487 · int_decode_32768 1.02–1.05× | multi-owner blocks: measured carve-out. Graduated the kernel_lib `Mcast` version; raw was only 2.5–3.2 % faster (noise band). |
+| `dram_noc_balance`: reversed NoC pairing on the 3 DRAM-adjacent worker columns | **WIN, graduated (port), no carve-out** | int_prefill_7168 639 246 → 603 219 · int_prefill_1024 89 168 → 82 828 · int_mid_7168 50 609 → 45 344 · int_decode_32768 20 016 → 18 228 · (1024,4096) bf8b gamma 46 578 → 40 774 | see "Carve-outs and measured trades". |
+| `rm_narrow_staging`: ROW_MAJOR sharded staging | **WIN, graduated** | wid_rm_2048x256 246 401 → 153 021 · blk_rm_2048x256 25 359 → 20 848 · wid_rm_1504x544 197 687 → 130 290 | everywhere, bit-identical. The assigned RISC-V copy LOST at every width ≥ 16 B. The win is: zero each staging slot's tail once, one transfer per tile-row when pitches match, stateful NoC per stick otherwise. |
+
+### What graduated (commits), domain, deleted code
+- **aaa60521c87, row-broadcast gamma.** The single path everywhere.
+  - Deleted: `expand_gamma_rows` / `expand_gamma_exponents`.
+  - `cb_gamma` pages are faces 0/1 only.
+  - Also contains the streamed-window strided-pack correctness fix, with a regression param.
+- **e4ca4c0003c, FPU collapse + column-0 finalize + raw batched pass 1.** The single path everywhere.
+  - Deleted: the two-call `Accumulate` / `only_partial` W-tail path and `CB_SUMSQ_ACC`.
+  - Added: `cb_ones` (the 1.0 scaler).
+- **583d00cdad1, ROW_MAJOR sharded staging.** The single path. Each sub-lever falls back to the old per-stick
+  behaviour only where its condition cannot hold (pitches differ, more than one chunk).
+- **cb6097a66f7, single-owner inv_rms multicast.** Applies to every owner-combine block of one tile-row whose groups
+  `ttnn.Mcast` can express (≤ 3 member-only rectangles, member 0 first). Otherwise the unicast return.
+- **cc8f0cc2920, combine pipeline.** TILE sharded, owner combine, resident gamma, whole shard one block.
+  - n = the most sub-blocks in [2, n_max] such that, with s = ceil(crt/n): s ≥ 2, s·(w+1) ≥ 8, k ≤ 2·s·(w+1).
+  - n_max = 3, or max(3, ceil(crt / max(8, k))) for one-tile-wide shards.
+  - `RMS_INV_MCAST` stays off on this path: a rotated one-row sub-block is not owned by member 0.
+  - New test `test_combine_pipeline` pins it on.
+- **aeecdcad80d, reversed NoC pairing.** Every interleaved cell. Sharded is untouched by construction. Every multicast
+  sender keeps the usual pairing.
+- **9b355328ef7, RM-gamma fix found by the guard-set run.** `gamma_rowbcast` read an RM gamma with one 64 B DRAM read
+  per tile on every loader. An RM gamma is ONE DRAM page, so per-core loads (sharded k > 1, interleaved groups without
+  multicast) and streamed re-reads hammered one bank.
+  - Golden-suite context, without → with the fix: RM HEIGHT fp32 (128,8192) 409 → 113 µs, RM HEIGHT (1,224,11008)
+    340 → 122 µs, RM BLOCK (96,6144) 27.3 → 12.2 µs.
+  - Isolated runs did not take that path, so the regression was invisible to the subagent's bench.
+  - Direct reads now run only on the multicast sender (a slice's sole reader).
+
+### Carve-outs and measured trades
+- **inv_rms multicast — multi-owner blocks keep unicast.** Concurrent owner multicasts into the same members
+  serialize: BLOCK (7168,1024) 30.3 → 52.8–64.7 µs, WIDTH (2048,256) 55.2 → 91–95 µs. Written as a narrow runtime
+  branch (`rows == 1` → multicast), not an allow-list.
+- **Combine pipeline gates** (each a measured regression):
+  - s = 1: blk_perf_640x6144 +6.7 %.
+  - k > 2·s·(w+1): WIDTH (256,2048) k = 64 +18 %.
+  - s·(w+1) < 8: (2048,256) BLOCK s = 3 0.96× vs s = 4 0.90×.
+- **Reversed NoC pairing — no carve-out.** No portable predicate separates the losers from winning neighbours with the
+  same Tensix-core count, k, tiles or bytes per Tensix core, or total bytes. A W sweep at 8192 rows wins 1.06–1.11× at
+  every Wt from 8 to 48. Measured costs kept:
+  - small k = 2 cells at 16–20 Tensix cores: +4..9 % (0.2–0.6 µs);
+  - (128,8192) bf8b k = 26: about +5–7 % against the swap-off variant, still 1.18× faster than round start;
+  - (3,3104,544): 3–4 % in paired runs; vs round start 0.958–0.989× over 3 runs, at the noise edge;
+  - against about 36 µs won on (8192,7168) alone.
+- **RM gamma direct reads restricted to the multicast sender.** Measured regression on the per-core / streamed loads,
+  see 9b355328ef7.
+
+### Scoreboard — round start → final, same session (ns, speedup)
+
+| class (bottleneck) | cell | before | after | × |
+|---|---|---|---|---|
+| interleaved TILE prefill (DRAM) | (8192,7168) perf cfg | 637 197 | 598 522 | 1.07 |
+| interleaved TILE prefill (DRAM) | (8192,1024) | 88 141 | 82 554 | 1.07 |
+| interleaved TILE mid (DRAM + combine) | (640,7168) k = 6 | 52 313 | 45 569 | 1.15 |
+| interleaved decode (owner k = 49) | (32,32768) HiFi4 fp32 DEST | 22 693 | 18 391 | 1.23 |
+| interleaved fp32 | (128,8192) fp32 + fp32 gamma | 27 511 | 24 066 | 1.14 |
+| interleaved bf8b | (128,8192) bf8b | 13 889 | 11 745 | 1.18 |
+| interleaved RM | (1,1,128,4096) fp32 RM gamma | 19 000 | 15 704 | 1.21 |
+| interleaved RM owner | (1,1,160,11008) RM | 29 742 | 24 016 | 1.24 |
+| interleaved RM tall | (99991,64) RM | 273 900 | 235 384 | 1.16 |
+| interleaved non-aligned | (13,777,1023) | 115 927 | 109 737 | 1.06 |
+| BLOCK perf (combine + pass 2) | (7168,1024) [736,128] 8×10 | 30 254 | 21 552 | 1.40 |
+| BLOCK perf | (8192,1024) [1024,128] 8×8 | 40 934 | 28 342 | 1.44 |
+| BLOCK perf | (7168,2048) [736,192] 11×10 | 39 198 | 29 783 | 1.32 |
+| BLOCK perf (close to ceiling at start) | (640,6144) [64,704] 9×10 | 19 456 | 14 387 | 1.35 |
+| WIDTH decode (combine) | (32,7168) [32,256] 7×4 | 8 745 | 4 725 | 1.85 |
+| WIDTH decode | (32,5120) [32,160] 8×4 | 8 172 | 4 469 | 1.83 |
+| WIDTH tall k = 8 | (1,1,2048,256) | 54 829 | 29 902 | 1.83 |
+| HEIGHT wide W (gamma) | (128,8192) TILE, bf16 TILE gamma | 79 237 | 68 803 | 1.15 |
+| HEIGHT wide W | (128,8192) RM gamma / bf8b gamma | 119 651 / 126 074 | 68 831 / 68 909 | 1.74 / 1.83 |
+| HEIGHT | (1,1,128,4096) | 57 346 | 35 200 | 1.63 |
+| HEIGHT RM | (128,8192) RM + RM gamma | 183 682 | 84 189 | 2.18 |
+| HEIGHT RM | (1,224,11008) / fp32 (128,8192) | 165 932 / 155 009 | 122 111 / 113 337 | 1.36 / 1.37 |
+| WIDTH RM narrow | (1,1,2048,256) 16 B pieces | 246 566 | 140 602 | 1.75 |
+| BLOCK RM | (1,1,2048,256) / (96,6144) / (128,4096) | 24 978 / 16 042 / 12 627 | 17 870 / 12 070 / 9 069 | 1.40 / 1.33 / 1.39 |
+| small (≤ 64 tiles) | (2,1,128,256) fp32, (256,256) fp32 | 5 551 / 6 078 | 4 484 / 5 034 | 1.24 / 1.21 |
+
+- vs `achievable_ns`:
+  - WIDTH perf profiles now beat their references: (32,7168) 4.7 vs 5.5 µs, (32,5120) 4.5 vs 5.3 µs.
+  - BLOCK (640,6144) beats its reference: 14.4 vs 19.0 µs.
+  - Remaining over their references:
+    - BLOCK (7168,1024): 1.14× (21.6 vs 18.9 µs)
+    - BLOCK (8192,1024): 1.11× (28.3 vs 25.6 µs)
+    - BLOCK (7168,2048): 1.15× (29.8 vs 25.9 µs)
+  - Interleaved perf profiles were already below their references.
+- DRAM ceiling (~430 GB/s read + write): (8192,7168) 1.10×, (8192,1024) 1.06×, (640,7168) 1.07×.
+
+### Guard set / golden (all green)
+- Golden `test_golden` + `test_regression`: 5444 passed, 0 failed, 0 hangs. Same counts as R5; run in 4 placement
+  chunks plus `test_regression`.
+- `test_translated`: 104 passed, 2 xfailed.
+- Unit directory: 336 passed, 3 skipped. New tests: streamed-window regression param, single-row / mixed owner
+  blocks, `test_combine_pipeline`.
+- Per axis value vs the R5 snapshot (3227 cells > 32 tiles): median 0.724×.
+  - HEIGHT 0.611, WIDTH 0.616, BLOCK 0.712, INTERLEAVED 0.814.
+  - Every sharded class: max ≤ 0.987×.
+  - The 19 cells above their R5 time are all DRAM-bound INTERLEAVED (the R5 artifact). 16 of them are faster than R4;
+    3 are within 2–4 % of R4, at the noise edge — (2047,2047) TILE, (7136,736) RM, (3,3104,544) TILE.
+- Direct round-start A/B over 33 cells: every cell faster except (3,3104,544) 0.96–0.99× and (7136,736) RM 0.98×
+  (noise band), plus (2047,2047) 0.96–1.03× (noise).
+
+### Next bottlenecks (for Perf 2)
+- **BLOCK perf cells: pass 2.** About 14.5 of 21.6 µs on (7168,1024): two FPU ops + pack per tile at ~157 ns/tile.
+- **HEIGHT wide W: compute.** Pass 2 is 52 µs on 256 tiles at HiFi4, fp32 DEST.
+- **WIDTH (2048,256): the writer exchange.** `wr_xchg_send` 14 µs.
+- **Interleaved prefill: DRAM.** 1.10× over the ceiling.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::DestReuseBinary` (+ `mul_reuse_dest_init` / `mul_reuse_dest_tiles`) | capability | No `BroadcastDim` on the dest-reuse multiply: init/exec hard-code `BroadcastType::NONE`. The LLK supports a ROW-broadcast CB operand (`llk_unpack_A<ROW, …, DEST_TO_SRCA>`, `llk_math_eltwise_binary<ELWMUL, ROW, …, DEST_TO_SRCA>`). Without it gamma must be expanded to all 32 rows in L1. Suggested API: a `BroadcastDim` template param on `DestReuseBinary` and the `*_reuse_dest_*` APIs. | 119 794 (hgt_tile_grm, helper with expanded gamma) | 70 276 | `kernels/rms_norm_compute.cpp:234` (`MulGammaRowBcast`) |
+| SFPU compute API `mul_unary_tile` / `add_unary_tile` / `rsqrt_tile` (in `reduce()`'s `post_reduce_op`) | capability | Work can be scoped by face (`VectorMode`) or `ITERATIONS`, never to one column parity. Column 0 lives in the 8 even-parity vectors of faces 0/2, so the three calls run three full-tile passes (32 vectors each, three DEST round trips). Suggested API: a column-parity vector mode / fused scalar-mul-add-rsqrt entry. | 30 241 (blk_perf_7168x1024, finalize only) | 28 881 | `kernels/rms_norm_compute.cpp:97` (`finalize_col0_body`) |
+| `eltwise_chain` `BinaryFpu<…, DestAccumulation::PerRow>` (pass 1) | capability | Cannot fold the masked W-tail tile into the PerRow DEST accumulation (`x·mask` bcast-row, then DEST-reuse `·x`). It also packs one tile-row per DEST acquire (no multi-row batching). On cores without a tail the chain was equal (≤ 1 %); the raw form keeps one pass-1 path for both. | 6 699 (blk_tail_224x1000, chain + legacy tail) / 44 507 (wid_tile, no tail) | 5 243 / 43 953 | `kernels/rms_norm_compute.cpp:129` (`sum_squares_block`) |
+| `dataflow_kernel_lib` local copy (`local_copy_helpers_dataflow.hpp`: `set_read_state` / `read_with_state`) | capability | The stateful read programs source + size ONCE and varies only the destination. The ROW_MAJOR shard staging steps BOTH a source pitch (shard stick) and a destination pitch (staging row) per stick. There is no stateful local-WRITE helper for the write-back twin, so raw `noc_async_{read,write}_one_packet_set_state` / `_with_state` are used. | 163 563 (wid_rm_2048x256, non-stateful per-stick NoC) | 157 073 | `kernels/rms_norm_reader.cpp:159`, `kernels/rms_norm_writer.cpp:717` |
+
+The inv_rms multicast uses the kernel_lib `Mcast` helper (no bypass). The raw multicast variant was within the noise
+band of it.

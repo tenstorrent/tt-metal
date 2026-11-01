@@ -713,7 +713,8 @@ void kernel_main() {
                     // Shard pitch == staging pitch: the tile-row's sticks are one contiguous run.
                     noc_async_write(l1, get_noc_addr(dst), nsticks * chunk_row_bytes);
                 } else {
-                    // Stateful one-packet writes: NoC coordinates + length programmed once per tile-row.
+                    // Stateful one-packet writes: NoC coordinates + length programmed once per tile-row. Raw API
+                    // (documented helper bypass): kernel_lib has no stateful local-write copy helper.
                     noc_async_write_one_packet_set_state(get_noc_addr(dst), bytes);
                     for (uint32_t s = 0; s < nsticks; ++s) {
                         noc_async_write_one_packet_with_state(l1 + s * chunk_row_bytes, dst + s * out_page_bytes);

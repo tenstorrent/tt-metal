@@ -126,6 +126,10 @@ void kernel_main() {
 
 #if defined(RMS_SHARDED) && defined(RMS_RM)
     // ---- RM shard: local stick copy (own L1) into the tilize staging, zero-filled to the tile edge ----
+    // Helper bypass (documented, Perf 1 changelog "Helper bypasses"): dataflow_kernel_lib's local copy
+    // (local_copy_helpers_dataflow.hpp set_read_state / read_with_state) fixes the SOURCE and varies only the
+    // destination; this staging steps both a shard-stick source pitch and a staging-row destination pitch, so the raw
+    // one_packet set_state / with_state pair is used (wid_rm_2048x256: per-stick NoC 163.6 us -> stateful 157.1 us).
     // Narrow pieces are transaction-count-bound (~20 ns per local NoC read on BH; a RISC-V word copy is slower
     // still at every legal piece width >= 16 B). So: shard row pitch == staging pitch and a full piece -> ONE
     // read per (tile-row, chunk); otherwise one read per stick through the one-packet set_state / with_state pair

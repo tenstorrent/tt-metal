@@ -262,6 +262,14 @@ Compute order with `combine_lookahead` (k > 1, ≥ 2 blocks): `sum_squares(0), c
 | Writer batching (TILE) | per-tile write + flush | wait/pop in `out_unit_tiles` units with one barrier per unit |
 | Gamma row-0 reads (TILE gamma) | 2 × 64 B reads per tile are transaction-count-bound | read whole gamma tiles (2 KB) once per core when `core_w_tiles` is small |
 
+Perf 1 status (changelog "Perf 1"): **Finalize SFPU scope** built (column-0 sfpi finalize). **Gamma fusion / Gamma
+residency** superseded: gamma is a ROW-broadcast dest-reuse operand (raw `MulGammaRowBcast`), never expanded, `cb_gamma`
+pages are faces 0/1. **Overlap** for sharded owner combine built as the combine pipeline (row sub-blocks). The
+within-tile collapse is the FPU `reduce_tile` path (not AccumulateViaAdd's SFPU reduce). Interleaved: reversed NoC
+pairing on the 3 DRAM-adjacent worker columns. Owner combine: single-owner blocks return inv_rms by one `ttnn.Mcast`.
+"Gamma row-0 reads": measured — one faces-0/1 read per tile was +19 % on blk_perf_640x6144 (more DRAM bytes); kept
+2 × 64 B. Remaining levers: pass 2 cost (BLOCK perf), HEIGHT compute floor, WIDTH exchange send.
+
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
