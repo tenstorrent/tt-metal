@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -253,7 +254,12 @@ constexpr uint32_t kWidthDimension = 3;
 
 // Independent performance tunables. Keep these named rather than deriving one from another: the reader prefetch
 // window and writer header pool protect different pipelines.
-constexpr uint32_t kPrefetchPackets = 4;
+constexpr uint32_t kHaloPrefetchPackets = 4;  // neighbor halo exchange
+// The all-gather reader is DRAM-latency bound and needs ~128 KiB of reads in flight per worker to keep a link busy, so
+// its prefetch window is sized in bytes (clamped to a packet range) rather than packets.
+constexpr uint32_t kGatherPrefetchBytesInFlight = 128 * 1024;
+constexpr uint32_t kMinGatherPrefetchPackets = 4;
+constexpr uint32_t kMaxGatherPrefetchPackets = 32;
 // The halo writer scatters up to the fabric's scatter-write chunk limit (NOC_SCATTER_WRITE_MAX_CHUNKS).
 constexpr uint32_t kMaxHaloPagesPerPacket = 4;
 constexpr uint32_t kPacketHeaderSlots = 8;
@@ -353,7 +359,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     const uint32_t page_size = op_config.get_page_size();
     const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t pages_per_packet = std::min(packet_buffer_bytes / page_size, kMaxHaloPagesPerPacket);
-    const uint32_t cb_pages = kDoubleBufferingFactor * kPrefetchPackets * pages_per_packet;
+    const uint32_t cb_pages = kDoubleBufferingFactor * kHaloPrefetchPackets * pages_per_packet;
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.front().dtype());
     constexpr uint32_t data_cb = tt::CB::c_in2;
     constexpr uint32_t packet_header_cb = tt::CB::c_in1;
@@ -405,7 +411,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         pages_per_packet,
         page_size,
         num_inputs,
-        kPrefetchPackets,
+        kHaloPrefetchPackets,
         reader_meta_cb,
         static_cast<uint32_t>(halo.collects_arrivals()),
         halo.arrivals_expected,
@@ -709,7 +715,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    RingAttentionSliceReadiness slice_readiness) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -866,6 +873,33 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const bool output_bank_owned_schedule =
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(input_tensor, output_tensor, dim);
+    if (slice_readiness.bands > 0) {
+        TT_FATAL(fuse_op, "Slice readiness requires a fused consumer");
+        // Both directions receive slices, and on an even ring each direction's last one is the split diametric half
+        // (the gather reader's marker count assumes it).
+        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Slice readiness requires Ring topology");
+        TT_FATAL(
+            num_targets_forward > 0 && num_targets_backward > 0,
+            "Slice readiness requires active traffic in both ring directions");
+        TT_FATAL(
+            slice_readiness.truncate_tiles <= input_tensor[0].padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            "Slice readiness truncation ({} tiles) exceeds the gathered slice",
+            slice_readiness.truncate_tiles);
+        TT_FATAL(!partial_readiness_enabled, "Slice readiness and midpoint partial readiness are exclusive");
+        TT_FATAL(output_bank_owned_schedule, "Slice readiness currently requires the bank-owned packet schedule");
+        TT_FATAL(slice_readiness.chunk_tiles > 0, "Slice readiness needs the consumer's K chunk size");
+        // The gather reader counts each slave link's markers in its own byte of the master's sync semaphore.
+        TT_FATAL(num_links <= 4, "Slice readiness supports at most 4 links per direction, got {}", num_links);
+        TT_FATAL(
+            ring_size * ttnn::ring_attention_all_gather::kReadinessParts < 256,
+            "Slice readiness marker count exceeds a byte for ring size {}",
+            ring_size);
+        for (const auto& tensor : input_tensor) {
+            TT_FATAL(
+                tensor.padded_shape()[2] == input_tensor[0].padded_shape()[2],
+                "Slice readiness needs every gathered input to have the same rows");
+        }
+    }
     if (partial_readiness_enabled) {
         TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
         TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Partial all-gather readiness requires Ring topology");
@@ -935,9 +969,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         max_payload_size_bytes);
     const uint32_t num_pages_per_packet =
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
-    // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
+    // Must be >= kDoubleBufferingFactor * gather_prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
-    const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
+    const uint32_t gather_prefetch_packets = std::clamp(
+        kGatherPrefetchBytesInFlight / (num_pages_per_packet * l1_scratch_cb_page_size_bytes),
+        kMinGatherPrefetchPackets,
+        kMaxGatherPrefetchPackets);
+    const uint32_t cb_num_pages = kDoubleBufferingFactor * gather_prefetch_packets * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -1054,10 +1092,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            kPrefetchPackets,                                   // kPrefetchPackets
-            // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
-            // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
+            gather_prefetch_packets,                            // kPrefetchPackets
+            // The reader reads it as kHasSlotMetadata and kReaderFixedCompileTimeArgCount (asserted just below)
+            // counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
+            slice_readiness.bands,                     // kSliceReadinessBands
+            slice_readiness.chunk_tiles,               // kSliceReadinessChunkTiles
+            slice_readiness.truncate_tiles,            // kSliceReadinessTruncateTiles
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -1112,6 +1153,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
+            slice_readiness.bands,                              // kSliceReadinessBands
+            slice_readiness.chunk_tiles,                        // kSliceReadinessChunkTiles
+            slice_readiness.truncate_tiles,                     // kSliceReadinessTruncateTiles
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
@@ -1239,14 +1283,17 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             uint32_t batch_head_size = full_batch_head_size;
             uint32_t input_batch_base = 0;
             if (input_batch_slice_idx.has_value()) {
+                // A batch-1 input (V beside an indexed K cache) is every slot's.
+                const bool shared_input = input_tensor_shape[kBatchDimension] == 1;
                 TT_FATAL(
-                    *input_batch_slice_idx < input_tensor_shape[kBatchDimension],
+                    shared_input || *input_batch_slice_idx < input_tensor_shape[kBatchDimension],
                     "input_batch_slice_idx={} out of range for input batch={}",
                     *input_batch_slice_idx,
                     input_tensor_shape[kBatchDimension]);
+                const uint32_t slice_idx = shared_input ? 0 : *input_batch_slice_idx;
                 batch_head_size = num_heads;
                 input_batch_base = ttnn::ring_attention_all_gather_async_detail::input_batch_base_pages(
-                    *input_batch_slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
+                    slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
             }
 
             tensor_descriptor_args.push_back(input_tensor_Wt);   // 0 == input_tensor_Wt
@@ -1316,11 +1363,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (fuse_op) {
             std::vector<uint32_t> signaler_args;
             auto& signaler = is_forward ? fused_op_signaler_forward : fused_op_signaler_backward;
+            // Packed fused-op core coordinates (the reader and writer build OpSignalerT<true>): they are most of these
+            // kernels' runtime args.
             signaler->push_all_gather_fused_op_rt_args(
                 signaler_args,
                 static_cast<uint32_t>(direction_signaler_cores.size()),
                 worker_signaler_index,
-                is_forward ? 1 : 0);
+                is_forward ? 1 : 0,
+                /*pack_receiver_coords=*/true);
             reader_args.append(signaler_args);
         }
         auto& reader_kernel = is_forward ? sender_reader_forward_kernel : sender_reader_backward_kernel;
@@ -1364,10 +1414,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (fuse_op) {
             if (is_forward) {
                 fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
-                    writer_extra_args, static_cast<uint32_t>(forward_signaler_cores.size()), worker_signaler_index, 1);
+                    writer_extra_args,
+                    static_cast<uint32_t>(forward_signaler_cores.size()),
+                    worker_signaler_index,
+                    1,
+                    /*pack_receiver_coords=*/true);
             } else {
                 // Backward writers never issue the local-slice signal, but retain the writer ABI.
-                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_extra_args, 1, 0, 0);
+                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                    writer_extra_args, 1, 0, 0, /*pack_receiver_coords=*/true);
             }
         }
         writer_args.append(writer_extra_args);
