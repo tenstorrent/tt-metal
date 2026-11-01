@@ -74,7 +74,7 @@ bool reader_kernel_no_send(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -151,7 +151,7 @@ bool writer_kernel_no_receive(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -225,7 +225,7 @@ bool noc_reader_and_writer_kernels(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -395,9 +395,17 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
                     .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx)};
                 ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-                    static_cast<UnitMeshCQSingleCardProgramFixture*>(this), mesh_device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+                    static_cast<UnitMeshCQSingleCardProgramFixture*>(this),
+                    mesh_device,
+                    WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    eth_core));
                 ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-                    static_cast<UnitMeshCQSingleCardProgramFixture*>(this), mesh_device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+                    static_cast<UnitMeshCQSingleCardProgramFixture*>(this),
+                    mesh_device,
+                    WORD_SIZE * 1024,
+                    src_eth_l1_byte_address,
+                    eth_core));
                 ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
                     static_cast<UnitMeshCQSingleCardProgramFixture*>(this),
                     mesh_device,

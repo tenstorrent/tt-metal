@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""ResNet101-DCN backbone for BEVFormer.
-
-Bottleneck stages. layer3 and layer4 use a modulated deformable conv for conv2.
+"""Bottleneck ResNet backbone for BEVFormer: ResNet101 with a modulated deformable conv2 in
+layer3 and layer4, or ResNet50 without one, as ``model_config`` selects.
 Each BatchNorm is already folded into the conv before it.
 """
 
@@ -26,7 +25,7 @@ class TTModulatedDeformConv2dPack:
         """``weights_dtype`` is the offset conv's."""
         offset_args = conv_args.conv_offset
         # __call__ reshapes the input to the output's (B, H, W), which holds only at stride 1.
-        # BEVFormer's caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
+        # The DCN variants' caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
         assert tuple(offset_args.stride) == (1, 1), f"DCN supports stride 1 only, got {offset_args.stride}"
         self.batch_size = offset_args.batch_size
 
@@ -94,7 +93,7 @@ class TTResLayer:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
-        block_sharded_downsample=False,
+        block_sharded=False,
         fp32_acc=False,
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
@@ -113,7 +112,7 @@ class TTResLayer:
                     dram_activation=dram_activation,
                     dram_input=dram_input and first,
                     dram_conv_slices=dram_conv_slices,
-                    block_sharded_downsample=block_sharded_downsample,
+                    block_sharded=block_sharded,
                     fp32_acc=fp32_acc,
                     conv2_act_block_h=conv2_act_block_h,
                     weights_dtype=weights_dtype,
@@ -141,7 +140,7 @@ class TTBottleneck:
     a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
     ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
     covers the convs that read the block input, for a block fed by a DRAM layer whose own
-    activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
+    activations fit in L1. ``block_sharded`` block-shards the downsample and a non-DCN conv2.
     ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
     non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
     (TTModulatedDeformConv2dPack). ``conv2_act_block_h`` is a non-DCN conv2's act_block_h
@@ -163,7 +162,7 @@ class TTBottleneck:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
-        block_sharded_downsample=False,
+        block_sharded=False,
         fp32_acc=False,
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
@@ -201,6 +200,7 @@ class TTBottleneck:
                 weights_dtype=weights_dtype,
                 fp32_dest_acc_en=fp32_acc,
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                is_blk=block_sharded,
                 act_block_h=conv2_act_block_h,
                 dealloc_act=True,
                 dram_activation="conv2" in dram_convs,
@@ -240,7 +240,7 @@ class TTBottleneck:
                 weights_dtype=weights_dtype,
                 fp32_dest_acc_en=fp32_acc,
                 activation=None,
-                is_blk=block_sharded_downsample,
+                is_blk=block_sharded,
                 dram_activation="downsample" in dram_convs,
                 dram_conv_slices=dram_conv_slices,
                 input_dtype=input_dtype,
@@ -271,17 +271,18 @@ class TTResNet:
     strides, the max pool, each layer's block count and which blocks are DCNv2. ``params.tt_kwargs``
     holds the memory and precision arguments below, the ones the weights were prepared for.
 
-    ``out_indices``, ``dram_activation_stages`` and ``block_sharded_downsample_stages``
+    ``out_indices``, ``dram_activation_stages`` and ``block_sharded_stages``
     index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
     whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
     spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
     matmul. A layer that follows one of them and is not listed itself reads its input from
-    DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
-    conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
-    destination register (see TTBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h`` are
-    the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
-    ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives
-    BEVFormer-base's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
+    DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
+    conv2s are block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an
+    fp32 destination register (see TTBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h``
+    are the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
+    ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
+    configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
+    ``out_indices``.
     """
 
     num_layers = 4
@@ -333,7 +334,7 @@ class TTResNet:
         i,
         dram_activation_stages=(),
         dram_conv_slices=None,
-        block_sharded_downsample_stages=(),
+        block_sharded_stages=(),
         fp32_acc_stages=(),
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
@@ -344,7 +345,7 @@ class TTResNet:
             dram_activation=i in dram_activation_stages,
             dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
-            block_sharded_downsample=i in block_sharded_downsample_stages,
+            block_sharded=i in block_sharded_stages,
             fp32_acc=i in fp32_acc_stages,
             conv2_act_block_h=conv2_act_block_h,
             weights_dtype=weights_dtype,
@@ -375,13 +376,13 @@ class TTResNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
         )
-        signpost(header="ResNet Stem Complete")
+        signpost(header="ResNet Stem End")
 
         outs = []
         for i, res_layer in enumerate(self.res_layers):
             signpost(header=f"ResNet Layer{i + 1} Start")
             x = res_layer(x)
-            signpost(header=f"ResNet Layer{i + 1} Complete")
+            signpost(header=f"ResNet Layer{i + 1} End")
             if i in self.out_indices:
                 outs.append(x)
         signpost(header="TTNN ResNet Forward End")

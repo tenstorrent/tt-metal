@@ -69,7 +69,7 @@ struct SourceInjectCandidate {
 struct SourceInjectProgram {
     ChipId physical_id;
     std::shared_ptr<tt_metal::distributed::MeshDevice> device;
-    tt_metal::Program program;
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
     bool is_target;
 };
 
@@ -144,16 +144,23 @@ bool candidate_exercises_z_fanout(const SourceInjectCandidate& candidate) {
     return candidate_contains_z(candidate) && candidate.root_outputs.size() > 1;
 }
 
-bool outputs_match_branch(const std::vector<RoutingDirection>& root_outputs, RoutingDirection primary_output) {
+// A branch's root outputs are its own cardinal and, when that cardinal lies on the mesh's express
+// axis, possibly the chord Z. `express_axis` is 0 when the chords run along N/S, 1 when they run
+// along E/W, and nullopt on a non-express mesh, where Z is never a legal root output.
+bool outputs_match_branch(
+    const std::vector<RoutingDirection>& root_outputs,
+    RoutingDirection primary_output,
+    std::optional<int> express_axis) {
     if (root_outputs.empty()) {
         return false;
     }
+    const bool primary_on_y = primary_output == RoutingDirection::N || primary_output == RoutingDirection::S;
+    const bool primary_on_express_axis = express_axis.has_value() && ((*express_axis == 0) == primary_on_y);
     return std::all_of(root_outputs.begin(), root_outputs.end(), [&](RoutingDirection output) {
         if (output == primary_output) {
             return true;
         }
-        return output == RoutingDirection::Z &&
-               (primary_output == RoutingDirection::N || primary_output == RoutingDirection::S);
+        return output == RoutingDirection::Z && primary_on_express_axis;
     });
 }
 
@@ -299,6 +306,13 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
         TT_FATAL(y_topology != nullptr && x_topology != nullptr, "Missing 2D axis topology for mesh {}", mesh_id);
 
         const bool express = control_plane.express_routing_enabled(mesh_id);
+        // Which axis the chords run along decides which cardinal branches may also launch Z.
+        std::optional<int> express_axis;
+        if (express) {
+            const auto* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
+            TT_FATAL(express_rings != nullptr, "Mesh {} reports express routing but has no express rings", mesh_id);
+            express_axis = express_rings->axis_dim;
+        }
         if (!express && best.has_value() && candidate_contains_z(best.value())) {
             return best;
         }
@@ -339,9 +353,10 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
                             mesh_id,
                             source_chip_id,
                             failure);
-                        // A legal branch may leave on its cardinal output and, for N/S under express
-                        // routing, Z. Reject wrapped/combined candidates that change the logical branch.
-                        if (!outputs_match_branch(root_outputs, branch.primary_output)) {
+                        // A legal branch may leave on its cardinal output and, when that cardinal lies on
+                        // the express axis (N/S on a Y-express mesh, E/W on an X-express mesh), Z. Reject
+                        // wrapped/combined candidates that change the logical branch.
+                        if (!outputs_match_branch(root_outputs, branch.primary_output, express_axis)) {
                             return false;
                         }
 
@@ -537,7 +552,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
             QUIESCENCE_TIME_US;
         ASSERT_LE(quiescence_cycles, std::numeric_limits<uint32_t>::max());
 
-        auto program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateProgram(*source_device);
         const auto receiver_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"

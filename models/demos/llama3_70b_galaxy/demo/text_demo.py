@@ -23,7 +23,7 @@ from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -65,7 +65,7 @@ def load_inputs(user_input, len_per_batch, instruct):
     user_input = user_input * batch
     in_prompt = []
     all_prompts = []
-    cache_dir = Path("models/tt_transformers/demo/context_cache")
+    cache_dir = Path("models/ttt_compat/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
@@ -100,7 +100,7 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        reference_data_file = os.path.join("models/ttt_compat/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file), f"Reference data file {reference_data_file} does not exist"
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
@@ -136,7 +136,7 @@ class TokenAccuracy:
 
 def get_accuracy_thresholds(model_args):
     """Parse token accuracy thresholds from the common PERF.md Performance table."""
-    perf_file = "models/tt_transformers/PERF.md"
+    perf_file = "models/ttt_compat/PERF.md"
     with open(perf_file, "r") as f:
         content = f.read()
 

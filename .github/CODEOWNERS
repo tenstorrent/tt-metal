@@ -80,7 +80,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tests/model_behavior/ @tenstorrent/metalium-models-maintainers @tchedaTT
 tests/pipeline_reorg/agentic_research_model_tests.yaml @tenstorrent/metalium-models-maintainers @tchedaTT @jonathansuTT @cglagovichTT
-tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/blaze_models_prefill_tests.yaml @tenstorrent/metalium-developers-ds-prefill @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_device_perf_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_e2e_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_sweep_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
@@ -578,6 +578,8 @@ tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py @te
 tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_*.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gdn_*.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/unit_tests/operations/transformers/gdn_decode_test_utils.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/nightly/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise
@@ -664,7 +666,8 @@ models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttn
 models/experimental/tt_transformers_v2 @tenstorrent/metalium-models-maintainers
 
 models/tt_dit/ @jonathansuTT @cglagovichTT @jamesleeTT @rouzbehTT @nwoodallTT @losullivanTT @rsalmanTT @sosborne-TT @sadesoyeTT @smartonTT @pshahTT @sgutierrezTT @tenstorrent/cse-developer-ttnn
-models/tt_transformers @tenstorrent/metalium-models-maintainers @cglagovichTT
+models/tt_transformers @adrian-pascual-bernal @yieldthought @mtairum
+models/ttt_compat @adrian-pascual-bernal @yieldthought @mtairum
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-models-maintainers
 models/vllm_test_utils/ @viktorpusTT @tchedaTT @tenstorrent/metalium-models-maintainers
 

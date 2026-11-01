@@ -34,7 +34,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Safety factor applied to format maxima when clamping add operands.
 # Ensures |a| + |b| stays within representable range with headroom for rounding /
@@ -158,9 +158,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_input_dims):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 

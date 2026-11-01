@@ -97,7 +97,10 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
-    PCC_THRESHOLD=0.83
+    # The rank 2 KV cache PCC changes from run to run. On SC4 with the D2D relay (the GLM default) it ranged
+    # 0.8277-0.8337 over 17 runs; without the relay 0.8318-0.8331 over 13 runs. 0.82 keeps CI from failing on that.
+    # Tracked in https://github.com/tenstorrent/tt-metal/issues/62682.
+    PCC_THRESHOLD=0.82
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
