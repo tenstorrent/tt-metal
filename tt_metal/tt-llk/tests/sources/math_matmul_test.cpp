@@ -229,6 +229,13 @@ constexpr bool matmul_row_end_fold_k = false;
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
+#ifdef MATMUL_SFPU_AFTER
+// an SFPU op after the matmul block in one kernel (init once at the start, as Metal's full inits do): relu on every tile of the block
+#include "ckernel_sfpu.h"
+#include "sfpu/ckernel_sfpu_relu.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
 constexpr bool matmul_tile_mop = !(MATMUL_FORCE_FORM_CHAR == 'r' || MATMUL_FORCE_FORM_CHAR == 'R');
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
@@ -290,6 +297,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+#ifdef MATMUL_SFPU_AFTER
+        _llk_math_eltwise_unary_sfpu_init_once_();
+#endif
         _llk_math_matmul_init_<MATMUL_MATH_INIT_ARGS>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
@@ -330,6 +340,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
+#ifdef MATMUL_SFPU_AFTER
+                    for (std::uint32_t sfpu_tile = 0; sfpu_tile < NUM_TILES_IN_BLOCK; sfpu_tile++)
+                    {
+                        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_lrelu_<false>, DST_INDEX + sfpu_tile, VectorMode::RC, 8, 0u);
+                    }
+#endif
                     #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_UNFUSED_POST)
                     [[maybe_unused]] constexpr bool fused_post_flip = false;
                     #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)

@@ -633,7 +633,7 @@ inline void matmul_configure_row_mop(
         .dest     = {.incr = 0, .clr = 0, .cr = 1},
         .fidelity = {.incr = fidelity_increment, .clr = 0},
     }
-        .set_no_bias(ADDR_MOD_7);
+        .set_no_bias(ADDR_MOD_5);
     {
         // the source and bias words of ADDR_MOD_3 are constants; its DEST word carries the run-time stride
         constexpr addr_mod_t tile_end {
@@ -658,7 +658,7 @@ inline void matmul_configure_row_mop(
         reuse_a ? ct_dim : rt_dim /* outer loop: tiles of the row */,
         inner_loops,
         lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
-        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_7, 0));
+        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
     tmp.program();
@@ -1277,7 +1277,7 @@ inline void matmul_configure_addrmod_switch()
     }
 }
 
-// matmul_configure_row_mop without the writes of ADDR_MOD_3 and 7
+// matmul_configure_row_mop without the write of ADDR_MOD_3; the fidelity step ADDR_MOD_5 is written again (the throttled form uses it)
 template <MathFidelity math_fidelity, int in1_order = 0>
 inline void matmul_configure_row_mop_switch(
     const std::uint32_t ct_dim,
@@ -1296,6 +1296,16 @@ inline void matmul_configure_row_mop_switch(
     }
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     const bool reuse_a           = ct_dim >= rt_dim;
+    if constexpr (high_fidelity)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 0, .cr = 1},
+            .fidelity = {.incr = 1, .clr = 0},
+        }
+            .set_no_bias(ADDR_MOD_5);
+    }
     addr_mod_t {
         .srca     = {.incr = 0, .clr = 1, .cr = 1},
         .srcb     = {.incr = 0, .clr = 1, .cr = 1},
@@ -1306,7 +1316,7 @@ inline void matmul_configure_row_mop_switch(
     matmul_load_row_replay();
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
     ckernel_template tmp(
-        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_7, 0));
+        reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_6, 0));
     tmp.program();
