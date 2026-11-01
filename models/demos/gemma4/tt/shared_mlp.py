@@ -25,7 +25,7 @@ from models.demos.gemma4.tt.ccl import (
     ccl_lane_gather_rows,
     ccl_lane_scatter_rows,
 )
-from models.demos.gemma4.tt.compute_config import gelu_variant
+from models.demos.gemma4.tt.compute_config import gelu_variant, prefill_linear_compute_kernel_config
 from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag, pipeline_row_for
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -257,12 +257,14 @@ class SharedMLP:
                 down_proj, mesh_device, k=down_k, n=self.hidden_size, enabled=decode_1d, max_block_w=_MLP_DOWN_BLOCK_W
             )
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, prefill=False):
         """
         GeGLU MLP forward with TP support.
 
         gate/up are column-parallel, down is row-parallel + allreduce.
+        ``prefill`` selects the fp32-accumulation prefill linear config.
         """
+        ckc = prefill_linear_compute_kernel_config(hidden_states.device()) if prefill else None
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
@@ -293,6 +295,7 @@ class SharedMLP:
         shard = self._inter_per_device
         if (
             flag("GEMMA4_MLP_GEGLU_SHARDED")
+            and not prefill
             and not lane_sharded
             and isinstance(self.gate_up_proj, DramShardedLinear)
             and isinstance(self.down_proj, DramShardedLinear)
@@ -316,7 +319,7 @@ class SharedMLP:
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
                 output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
             return output
-        gate_up = self.gate_up_proj(hidden_states)
+        gate_up = self.gate_up_proj(hidden_states, compute_kernel_config=ckc, prefill=prefill)
         s = gate_up.shape[-2]
         if flag("GEMMA4_MLP_GEGLU_FUSED") and _geglu_fused_rows(gate_up) and shard % TILE_SIZE == 0:
             # GEMMA4_MLP_GEGLU_FUSED=1: up * gelu(gate) over the fused [up | gate] output as one program
@@ -339,7 +342,7 @@ class SharedMLP:
             up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden)
+        output = self.down_proj(hidden, compute_kernel_config=ckc, prefill=prefill)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
