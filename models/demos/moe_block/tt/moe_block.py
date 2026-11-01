@@ -79,6 +79,9 @@ class MoEBlock:
             resources, dtypes=dtypes, accumulators=accumulators, l1_free=l1_free, **self.expert_kw
         )
         self.in_program_dispatch = resources.config.experts_during_dispatch
+        self.exchange_spec = (
+            None  # (the dispatch + combine's arena when smaller than the head's: the first call sets it)
+        )
 
     def __call__(self, x: ttnn.Tensor, weights: MoEBlockWeights) -> ttnn.Tensor:
         """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's)."""
@@ -95,6 +98,17 @@ class MoEBlock:
             arena=arena,
         )
         self.last_head = head  # (its persistent outputs: a model's checks read the routing rows)
+        if self.exchange_spec is None:  # (once: the exchange's own arena - the combine's, without the head's bytes)
+            spec = mb.routed_experts_combine_arena_spec(
+                self.resources, rows_cap=int(head.table.shape[-2]) * 32, **self.expert_kw
+            )
+            rows = lambda sp: int(sp.memory_config.shard_spec.shape[0])  # noqa: E731
+            self.exchange_spec = spec if rows(spec) < rows(self.arena_spec) else False
+        if self.exchange_spec:
+            # (two arenas a forward, as the reference block for a head larger than the exchange's arena - K3: the head's
+            # arena reaches below the dispatch's static circular buffers; the exchange's arena is planned above them)
+            ttnn.deallocate(arena)
+            arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
         if self.in_program_dispatch:  # (the dispatch is the combine's first phase: it fills xbuf from route)
             dispatched, route = head.xbuf, head.route
         else:

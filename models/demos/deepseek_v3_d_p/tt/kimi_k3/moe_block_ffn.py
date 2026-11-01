@@ -43,12 +43,6 @@ _REPLAY: dict = {}  # (MOE_BLOCK_REPLAY=1: the first MoE call's x, weights and o
 _FACE_MAPS: dict = {}  # (H, I, E, layout) -> flat_face_map: the same every layer
 
 
-def _combine_config(arena_bytes: int):
-    c = ttnn.experimental.moe_block.CombineConfig()
-    c.arena_bytes = arena_bytes
-    return c
-
-
 def _bytes_of(d):
     """A device shard's values as bytes (bf16 viewed as int16: numpy has no bfloat16)."""
     t = ttnn.to_torch(d).contiguous()
@@ -126,7 +120,7 @@ def _cache_dir(mesh):
 
     R, C = tuple(mesh.shape)
     ckpt = Path(os.environ.get("KIMI_K3_CKPT", ""))
-    root = Path(os.environ.get("K3_BLOCK_WEKA_CACHE", _WEKA_CACHE))
+    root = Path(os.environ.get("K3_BLOCK_WEKA_CACHE") or os.environ.get("TT_KIMI_K3_PREFILL_TTNN_CACHE") or _WEKA_CACHE)
     return root / f"kimi_k3_bh_{R * C}dev" / _checkpoint_identity(ckpt) / f"mesh{R}x{C}.tpaxis1"
 
 
@@ -243,11 +237,6 @@ class TtK3MoEBlockFfn:
                 layout=mb.FlatLayoutOptions(
                     rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts), x_helpers=1
                 ),
-                # (K3: the arena under the block's own programs' static CBs - at the auto sizing (the head's 1270 KB)
-                # it reached them: a clash at 263744 < 312960 on the row-0 cores. The head planned on 1220 KB (its least: 1199), the
-                # combine on 1180 KB (+ its writers' words). TODO: the auto sizing's reserve for K3; GLM-5.3: auto)
-                combine=_combine_config(1180 * 1024) if self.dims.latent_dim is not None else None,
-                l1_free=1220 * 1024 if self.dims.latent_dim is not None else None,
             )
             logger.info(
                 f"MoE block: built for chunk {chunk} at layer {self.layer_idx} in {time.time() - t0:.1f} s - "
@@ -430,9 +419,15 @@ class TtK3MoEBlockFfn:
             from models.demos.moe_block.tt.moe_block import l1_small_bytes
 
             mv = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1_SMALL)
+            ex = block.exchange_spec
             logger.info(
                 f"MoE block: L1_SMALL {l1_small_bytes(self.mesh)} B a bank allocated after its first call (the mesh "
-                f"has {int(mv.total_bytes_allocated_per_bank) + int(mv.total_bytes_free_per_bank)} B)"
+                f"has {int(mv.total_bytes_allocated_per_bank) + int(mv.total_bytes_free_per_bank)} B); "
+                + (
+                    f"two arenas: the exchange's {ex.memory_config.shard_spec.shape[0] * 64 >> 10} KB"
+                    if ex
+                    else "one arena"
+                )
             )
             block._logged_l1_small = True
         if getattr(block, "_logged_arena", None) != block.arena_address:  # (where each call's arena lands)
