@@ -943,17 +943,21 @@ void process_write_packed_large(uint32_t* l1_cache) {
                     // Unset Link flag
                     cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0, num_dests, noc_index);
                     uint32_t data_offset = xfer_size - rem_xfer_size;
+#if defined(ARCH_QUASAR)
                     if (snoop) {
-                        cq_noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/true, /*flush=*/false);
+                        noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/true, /*flush=*/false);
                     }
+#endif
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         static_cast<uint32_t>(data_ptr + data_offset),
                         dst_addr + data_offset,
                         rem_xfer_size,
                         num_dests);
+#if defined(ARCH_QUASAR)
                     if (snoop) {
-                        cq_noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/false, /*flush=*/false);
+                        noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/false, /*flush=*/false);
                     }
+#endif
                     // Later writes must barrier, but the `must_barrier = true` in the `if (init_state)` block above
                     // will see to that.
                 } else {
