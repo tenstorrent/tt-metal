@@ -66,7 +66,7 @@ class TernaryMLP:
         a3.prep(x, sh.m[5120], sh.x8[5120], sh.workers, src_tile32=True)
         a3.ternary_linear(sh.x8[5120], self.w_gu, self.s_gu, sh.h, sh.workers, gu=True)
         a3.prep(sh.h, sh.m[17408], sh.x8[17408], sh.workers, src_tile32=False)
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, 5120]), ttnn.bfloat16, ttnn.TILE_LAYOUT,
+        out = ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,  # residual-stream logical shape
                                              sh.device, ttnn.L1_MEMORY_CONFIG)
         return a3.ternary_linear(sh.x8[17408], self.w_d, self.s_d, out, sh.workers, gu=False)
 
