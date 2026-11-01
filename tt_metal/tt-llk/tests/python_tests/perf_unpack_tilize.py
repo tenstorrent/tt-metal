@@ -15,6 +15,7 @@ _PERF_RUN_TYPES = [
     PerfRunType.PACK_ISOLATE,
     PerfRunType.L1_CONGESTION,
 ]
+PERF_LOOP_FACTOR = 256
 
 
 def _input_dimensions(rt_dim, ct_dim):
@@ -34,7 +35,7 @@ def _input_dimensions(rt_dim, ct_dim):
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     run_types=[_PERF_RUN_TYPES],
-    loop_factor=[256],
+    loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
 )
 def test_perf_unpack_tilize_float(
@@ -73,7 +74,7 @@ def test_perf_unpack_tilize_float(
     rt_dim=[1, 2],
     ct_dim=[1, 2],
     run_types=[_PERF_RUN_TYPES],
-    loop_factor=[256],
+    loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
 )
 def test_perf_unpack_tilize_int(
