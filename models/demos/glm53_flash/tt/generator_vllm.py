@@ -908,6 +908,9 @@ class GLM53FlashForCausalLM:
             layers=layers,  # a GLM53_MODEL_LAYERS subset (block tests) is planned at its own depth
             vision_bytes=vision_static,
             vision_transient=vision_transient,
+            # GLM53_PAGED_SPARSE=1: the sparse attention reads the paged latent cache in place, so no per-chunk
+            # whole-prefix copy is reserved (1.2 GB per chip at 1 M: the KDA snapshot ring fits the 1 M profile)
+            prefix_copy=os.environ.get("GLM53_PAGED_SPARSE", "0") != "1",
         )
         layers = cls._layer_ids(n_layers, cfg.num_hidden_layers)
         if len(layers) < cfg.num_hidden_layers:

@@ -272,11 +272,18 @@ def test_planner_tail_split_and_snapshot_sizing():
         f"{plan.spare(4, 1048576) / 2**20:.0f} MiB -> {fit_1m} entries per slot; 128 K x 28: "
         f"{plan.spare(28, 131072) / 2**20:.0f} MiB -> {fit_128k} entries per slot\n" + plan.table()
     )
-    assert fit_1m == 0, "the 1 M x 4 profile has no DRAM for a ring (host store)"
+    assert (
+        fit_1m == 0
+    ), "the 1 M x 4 profile has no DRAM for a ring (host store) while the whole-prefix copy is reserved"
     assert fit_128k >= 1
-    with_ring = MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False, snapshot_entries=fit_128k)
-    assert with_ring.fits(28, 131072) and not with_ring.fits(28, 131072 + 16384 * 4)
-    assert with_ring.bytes_for(28, 131072) - plan.bytes_for(28, 131072) == (28 * fit_128k + 1) * per_user
+    # GLM53_PAGED_SPARSE=1 (the paged sparse attention, no per-chunk whole-prefix copy): the reserve falls back to the
+    # chunk's dense working set (1.15 GB at 16 K tokens, ~59 MB below the 1.2 GB copy at 1 M), and the modelled spare
+    # of the 1 M x 4 profile then holds one ring entry per slot (4 x 35 MiB + the scratch entry); the live free DRAM
+    # after the build (``_prefix_cache_plan(free_bytes=...)``) may grant more
+    paged = MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False, prefix_copy=False)
+    gain = paged.spare(4, 1048576) - plan.spare(4, 1048576)
+    assert not paged.prefix_copy and 50 * 2**20 < gain < 70 * 2**20, gain / 2**20
+    assert paged.max_snapshot_entries(4, 1048576) == 1, paged.max_snapshot_entries(4, 1048576)
 
 
 # -------------------------------------------------------------------------------------- adapter e2e

@@ -189,15 +189,17 @@ def reserve_bytes(
     e_local: int = 72,
     chunk_tokens: int = 16384,
     vision_transient: float = 0.0,
+    prefix_copy: bool = True,
 ) -> float:
     """Working set beside the caches during a prefill chunk + the decode trace region (``vision_transient``: the
     multimodal path's per-request working set, ``vision_transient_bytes``, which precedes the layers' transient
-    rather than adding to it)."""
+    rather than adding to it; ``prefix_copy``: the sparse attention rebuilds the whole prefix as a ROW_MAJOR copy
+    every chunk, False with ``GLM53_PAGED_SPARSE=1``: the paged op reads the latent cache in place)."""
     trace = trace_mb * 2**20
     regions = 3 * (regions_t * k + e_local * TILE) * 4096 * 2  # region buffer, gather table, pick rows (bf16)
     qblock = default_prefill_qblock(isl) if qblock is None else qblock
     score = qblock * (isl / 4) * 2  # the index scorer's [qblock, pools] bf16 block
-    prefix_copy = isl * 576 * 2  # the per-chunk whole-prefix ROW_MAJOR latent copy (sparse_sdpa contract)
+    copy = isl * 576 * 2 if prefix_copy else 0.0  # the per-chunk whole-prefix ROW_MAJOR latent copy (sparse_sdpa)
     misc = 256 * 2**20
     # the floor of the prefill transient is a device chunk's dense working set: about four [chunk, 4384] fp32 buffers of
     # the mHC collapse / expand (1.15 GB at 16 K tokens), whatever the context. Two calibration points (2026-10-27): the
@@ -208,7 +210,7 @@ def reserve_bytes(
     chunk_ws = 4 * chunk_tokens * 4384 * 4
     # the regions buffers and the score block are released before the attention of a sub-block takes the whole-prefix
     # copy; the observed peak transient at 1 M (QBLOCK 512, regions 2048) was ~1.5 GB with ~1 GB left at the last chunk
-    return trace + misc + max(prefix_copy, regions + score, chunk_ws, vision_transient)
+    return trace + misc + max(copy, regions + score, chunk_ws, vision_transient)
 
 
 @dataclass(frozen=True)
@@ -230,6 +232,10 @@ class MemoryPlan:
     # tower is built per request or images are off) and the per-request vision working set (``vision_transient_bytes``)
     vision_bytes: float = 0.0
     vision_transient: float = 0.0
+    # the sparse attention's per-chunk whole-prefix copy (``reserve_bytes``): absent under GLM53_PAGED_SPARSE=1; the
+    # reserve then falls back to the chunk's dense working set (~59 MB less at 1 M), enough for one KDA snapshot
+    # entry per slot on the 1 M x 4 profile (modelled; the live free DRAM after the build may grant more)
+    prefix_copy: bool = True
     # waves (doc/mesh/row_ownership.md): every row runs W = wave_rows of its own chunk; the MoE gathers rows x W tokens
     # per chip, so the chunk working set is that of a rows x W global chunk: neutral at W = 2048 on the 8x4 (16 K)
     wave_rows: int = 2048
@@ -250,6 +256,7 @@ class MemoryPlan:
         layers=None,
         snapshot_entries: int = 0,
         vision_bytes: float = 0.0,
+        prefix_copy: bool = True,
         vision_transient: float = 0.0,
     ) -> "MemoryPlan":
         """``layers``: the layer ids the instance builds (None = the whole config); the block tests' 4-layer models
@@ -268,6 +275,7 @@ class MemoryPlan:
             int(snapshot_entries),
             vision_bytes,
             vision_transient,
+            prefix_copy=prefix_copy,
         )
 
     @classmethod
@@ -312,7 +320,13 @@ class MemoryPlan:
             self.dram_bytes
             - self.weights_bytes
             - self.vision_bytes
-            - reserve_bytes(isl, self.trace_mb, chunk_tokens=chunk_tokens, vision_transient=self.vision_transient)
+            - reserve_bytes(
+                isl,
+                self.trace_mb,
+                chunk_tokens=chunk_tokens,
+                vision_transient=self.vision_transient,
+                prefix_copy=self.prefix_copy,
+            )
         )
 
     def max_wave_rows(self, users_per_row: int, isl: int, step: int = 128) -> int:
