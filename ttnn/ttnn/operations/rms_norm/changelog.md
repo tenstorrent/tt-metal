@@ -189,3 +189,72 @@
   - `test_forced_streamed_gamma_rm` (RM: G = C, 8 tile-rows × 4 chunks, H tail, k > 1).
   - `perf_r4_rms_norm.py`: profiling probe (no `test_` prefix).
   - Unit directory: 307 passed, 3 skipped.
+
+## Refinement 5 — Speed up the few-row wide-W interleaved cells: widen the W split past 8 Tensix cores
+- Date: 2026-11-01
+- What was done:
+  - **W split past 8 Tensix cores (knob-turn).** Interleaved `K_CAP` is now `min(K_CAP_MAX, grid cores)` instead of `min(8, grid_x)`.
+    - `K_CAP_MAX = (341 − 13) / 2 = 164`: the writer carries one (x, y) NoC pair per member as runtime args, and a kernel gets at most 341 runtime args.
+    - k ≤ 8 keeps the symmetric all-gather. k > 8 uses Refinement 2's owner combine, which is already built for sharded.
+    - k ≤ grid_x keeps the one-grid-row group placement, so the gamma multicast column groups are unchanged. k > grid_x packs groups row-major across grid rows (`_max_groups`, `core_of`), and those groups load gamma per Tensix core (`_gamma_mcast_groups` → None).
+    - Cost model: `_occ_cost` adds `ceil(rows/k)·k·OWNER_MEMBER_COST` for k > 8. The constant is 0.4 x-tile-equivalents, fitted on a forced-k sweep: the owner pays ≈ 0.15 µs per member versus ≈ 0.41 µs per slice tile.
+    - `_choose_k` now rejects a candidate k whose owner gathered CB does not fit L1.
+  - **Gamma load finished after the exchange** (`GAMMA_AFTER_SEND`, gated to blocks of ≤ `GAMMA_AFTER_SEND_MAX_ROWS = 8` tile-rows, per-core gamma load only).
+    - Ablation, (160,11008) at k = 16–25 without gamma: 21.4 µs flat. With gamma: 29.4 µs. The writer loaded gamma before it shipped its partial, and those DRAM reads queue behind the readers' x stream, so the whole combine waited on the slowest gamma load.
+    - The writer now issues the gamma DRAM reads at kernel start (`GammaSliceLoad::begin`). It finishes them (barrier + expand, `end`) only after block 0's partials are out and its owner duties (combine wait, inv_rms return) are done.
+    - The exchange is split into `exchange_send` / `exchange_recv_partials` / `exchange_recv_inv`.
+    - Not applied to multicast gamma, which measured worse: a late sender stalls its whole slice group (k = 13 (160,11008) 25.7 → 34.8 µs).
+    - Not applied to long blocks, which measured worse: tall BLOCK (7168,1024), 23 tile-rows, 29.9 → 30.8 µs, because the early load was already hidden behind pass 1.
+  - **Signal fence** (`SIGNAL_AFTER_FLUSH`, catalog `tensix_all_reduce`, design perf lamp "Signal fence").
+    - Each semaphore increment that publishes partial or inv_rms writes now follows `noc_async_writes_flushed()` instead of a write barrier. The writes and `noc_semaphore_inc` share NoC, VC (`NOC_UNICAST_WRITE_VC`) and destination, so delivery is in order. The kernel-exit barrier retires the acks.
+    - Result: 2–4% on every k > 1 shape.
+  - Reused: owner combine (compute + writer), Mcast plumbing, CB plan, all compute code (unchanged).
+  - Added: `_max_groups`, a row-spanning `core_of`, `OWNER_MEMBER_COST`, `GammaSliceLoad` (begin/end split of the gamma loader), the exchange split, `fence_before_signal`, and 2 writer CT args (20 `gamma_after_send`, 21 `signal_after_flush`).
+- Device kernel time (BH p150b 13×10, perf config: bf16, `fp32_dest_acc_en=False`, HiFi2, TILE gamma), HEAD → now (ns):
+  - TILE:
+    - (1,1,32,32768): 50 598 → 20 876 (2.42×, k 8 → 49)
+    - (1,1,32,16384): 27 710 → 14 585 (1.90×, k 32)
+    - (1,1,32,7168): 14 497 → 9 962 (1.46×, k 25)
+    - (1,1,32,5120): 11 531 → 9 083 (1.27×, k 20)
+    - (1,1,96,6144): 16 491 → 13 308 (1.24×, k 24, 72 Tensix cores)
+    - (1,1,160,11008): 28 982 → 24 270 (1.19×, k 25, 125 Tensix cores)
+  - ROW_MAJOR:
+    - (32,32768): 54 048 → 23 513 (2.30×)
+    - (32,16384): 30 144 → 17 039 (1.77×)
+    - (32,7168): 16 010 → 12 570 (1.27×)
+    - (96,6144): 18 370 → 14 884 (1.23×)
+    - (160,11008): 30 066 → 25 216 (1.19×)
+    - (32,5120): 12 905 → 11 640 (1.11×)
+  - Guard set, unchanged k:
+    - TILE (640,6144): 45 884 → 45 550
+    - TILE (1024,1024): 15 226 → 15 101
+    - TILE (352,4096) (k 6, per-core gamma): 25 918 → 23 543
+    - TILE (32,1024): 5 816 → 5 536
+    - RM (640,6144): 47 597 → 48 219 (+1.3%, noise band)
+    - RM (1024,1024): 16 004 → 16 036
+    - RM (352,4096): 26 160 → 24 790
+  - Sharded pinned geometries (same writer path):
+    - WIDTH (32,1024) 5 176 → 5 124 · (32,2304) 6 865 → 6 741 · (32,5120) 8 127 → 7 764 · (32,7168) 9 253 → 8 342
+    - BLOCK (640,6144) 19 815 → 19 059 · (640,7168) 26 344 → 24 604 · (7168,1024) 30 068 → 29 924 · (8192,1024) 40 727 → 40 517
+  - The one slower cell is RM (1,1,32,1024), a 32-tile cell below the >32-tile perf bar: 7 720 → ~7 900. The late gamma costs ~0.3 µs there (k = 4, per-core gamma, pass 1 includes tilize). Knob off: 7 584.
+- Bottleneck now (finding):
+  - (32,32768) at k = 49: 19.0 µs without gamma vs 20.9 µs with it. A forced-k sweep is flat from k = 32 to k = 64 (21.4–23.0 µs). Time ≈ 3.5 + 0.41·slice + 0.15·k µs, so at the optimum about a third is the owner's per-member combine: k gathered tile-adds plus 2k face writes of the inv_rms return, serial on one Tensix core.
+  - Next levers, not attempted (each is a combine-topology rewrite, not this knob-turn):
+    - multicast return of inv_rms. It needs rectangular groups (k a multiple of grid_x) or idle-core handling inside the multicast rectangle.
+    - row-vector partials (32 datums per member, ⌈k/32⌉ tiles to column-reduce on the owner), catalog `tensix_all_reduce`.
+    - gamma without the per-core expand: a Row-broadcast gamma multiply in compute. It would remove the remaining 1.6–3.4 µs gamma cost on these shapes.
+- Accuracy achieved: PCC ≥ 0.999984 on every measured perf-config shape (rtol / atol not gated; PCC-only checks). New unit tests: PCC ≥ 0.9995 (perf config), ≥ 0.999 (fp32 / bf8b gamma), ≥ 0.9999 (fp32 input + fp32 DEST).
+- Golden test progress (targeted slices): every INTERLEAVED `test_op_loose` cell 107/107 passed (perf profiles + resilience, incl. 32×{5120, 7168, 16384, 32768}, 96×6144, 160×11008, 1×224×11008); INTERLEAVED bf16 cartesian of 1x1x32x8192 and 2x1x64x4096: 48 passed, 144 skipped (INVALID), 0 failed.
+- Issues encountered:
+  - Late gamma before the symmetric gather push delayed the local combine (RM 32×1024 9.1 µs). Fixed by finishing gamma after the gathered push on both topologies.
+  - Tracy's `-k` passthrough breaks on parentheses (the probe selects cells by env var instead).
+- Tests added:
+  - `test_rms_norm_wide_split.py` (18 cases):
+    - cost-model choice k > 8 (k > grid_x on 13×10), TILE / RM
+    - forced k = 12 / 20 / 40 on W- and H-non-aligned, TILE / RM
+    - gamma formats bf16-RM / fp32 / bf8b; no gamma; fp32 input + fp32 DEST
+    - multi-block owner exchange (`OVERLAP_BLOCKS = 2`)
+    - both new knobs off
+  - `test_rms_norm_gamma_share.py`: (96,4096) re-pinned to the new spanning per-core regime, and (96,1024) pins the column regime.
+  - `perf_r5_rms_norm.py`: profiling probe with forced-k / no-gamma / sharded-guard env hooks (no `test_` prefix).
+  - Unit directory: 329 passed, 3 skipped.

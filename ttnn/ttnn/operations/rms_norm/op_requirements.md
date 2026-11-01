@@ -91,7 +91,7 @@ Use the relevant entries of `ttnn/ttnn/operations/examples/master.md`. No SUPPOR
 
 **Done when**: `HEIGHT_SHARDED` ∈ `SUPPORTED["memory_layout"]`; every golden cell whose only gap was this value passes (TILE and ROW_MAJOR); shards consumed zero-copy; no loud verifier category; prior phases green.
 
-### [ ] Refinement 5 — Speed up the few-row wide-W interleaved cells: widen the W split past 8 Tensix cores
+### [x] Refinement 5 — Speed up the few-row wide-W interleaved cells: widen the W split past 8 Tensix cores
 
 **Type**: perf
 
@@ -100,3 +100,5 @@ Use the relevant entries of `ttnn/ttnn/operations/examples/master.md`. No SUPPOR
 **Verifier notes**: depends on Refinement 2 (the k > 8 combine topology) — a true dependency. Large cells first (perf_rules: cells > 32 tiles; rank by size): W ≥ 16384 single tile-row, the 2–5 tile-row wide rows of the resilience set (e.g. (1,1,160,11008), (1,1,96,6144)), then the decode profiles (1,1,32,{5120,7168}). Re-check the k_occ boundary against Refinement 3's retuned predicate so the two phases do not fight over the same shapes.
 
 **Done when**: measured device-ns improves on the most-impacted few-row wide-W shape(s) at their own config, golden suite green, and no regression across the config-spanning guard set (one representative per distinct kernel path × layout × placement).
+
+**Outcome**: (BH p150b, perf config, device ns) interleaved k now goes past 8 (owner combine; groups span grid rows for k > grid_x; `_occ_cost` prices the owner at `OWNER_MEMBER_COST` = 0.4 tile per member, fitted on a forced-k sweep). TILE (32,32768) 50 598 → 20 876 (k 49), (32,16384) 27 710 → 14 585, (32,7168) 14 497 → 9 962, (32,5120) 11 531 → 9 083, (96,6144) 16 491 → 13 308, (160,11008) 28 982 → 24 270; RM 1.11–2.30× on the same shapes. Two combine levers were added. `GAMMA_AFTER_SEND` issues the gamma reads at kernel start but finishes them after the exchange; it applies to per-core gamma with blocks of ≤ 8 tile-rows, and an ablation showed the combine had been waiting on the gamma load. `SIGNAL_AFTER_FLUSH` (flush before the semaphore increment) gains 2–4% on every k > 1 shape. Guards (interleaved k ≤ 8, sharded WIDTH / BLOCK) are flat or faster, except RM (32,1024), a ≤ 32-tile cell, which is +2–3%. Now the owner's per-member combine (k tile-adds + 2k face writes, ~0.15 µs per member) is about a third of the time at the optimum, and gamma still costs 1.6–3.4 µs. Next: multicast inv_rms return, which needs rectangular groups; row-vector partials; a Row-broadcast gamma multiply with no expand. Not attempted: each is a topology / compute rewrite beyond this knob-turn.

@@ -6,9 +6,10 @@
 Blocking (op_design.md -> Blocking Model):
   * row axis (tile-rows, leading dims folded): split over row-groups across the whole Tensix grid;
     each group's assignment is processed in blocks of `block_row_tiles` tile-rows.
-  * W axis: split over `w_split_cores` (k) consecutive Tensix cores of one grid row; every member
-    keeps its W share resident (cb_x) across pass 1 and pass 2, and the k members all-gather their
-    per-row sum-of-squares partials over the NoC (k > 1 only).
+  * W axis: split over `w_split_cores` (k) consecutive Tensix cores (one grid row while k <= grid_x, else
+    row-major across grid rows); every member keeps its W share resident (cb_x) across pass 1 and pass 2,
+    and the k members combine their per-row sum-of-squares partials over the NoC (k > 1 only): symmetric
+    all-gather for k <= 8, per-row owner gather + inv_rms return beyond (Refinement 5).
 Every knob below (k, block_row_tiles, x_block_depth, rm_chunk_w_tiles, out_unit_tiles) is computed
 once here and handed to the kernels as a CT/RT arg; the kernels derive all trip counts from them.
 
@@ -55,7 +56,11 @@ SEM_GAMMA_MCAST_FIRST = 2  # gamma multicast channel (ttnn.Mcast allocates its s
 WRITER_NOC_XY_ARG_BASE = 13  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
 
 # Knob constants (design Phase 0 values).
-K_CAP_MAX = 8  # unicast all-gather mechanism cap (interleaved W split)
+# Interleaved W split cap: the writer carries one (x, y) NoC pair per member as runtime args, so k is bounded by
+# the per-kernel runtime-arg limit (tt-metalium kernel_types.hpp max_runtime_args = 341). Beyond K_SYM_MAX_INTERLEAVED
+# the owner combine runs; beyond grid_x a group spans grid rows (members placed row-major over the grid).
+MAX_RUNTIME_ARGS = 341
+K_CAP_MAX = (MAX_RUNTIME_ARGS - WRITER_NOC_XY_ARG_BASE) // 2
 # Combine topology: symmetric all-gather up to K_SYM_MAX_* members, per-row owner gather + inv_rms return beyond.
 # Interleaved (W split k <= 8): catalog tensix_all_reduce (k <= 8 unicast all-gather). Sharded: the owner
 # topology for every k > 1 — measured BH p150b (bf16, HiFi2, 16-bit DEST): BLOCK (7168,1024) [736,128] 8x10
@@ -72,6 +77,18 @@ GAMMA_MCAST = True
 # multicast applies (one DRAM read of gamma per launch instead of one per Tensix core). WIDTH / BLOCK k > 1 keep the
 # per-core slice load (a shard grid column need not hold a single W slice).
 GAMMA_MCAST_SHARDED_K1 = True
+# k > 1, per-core gamma load (no multicast): the writer issues the gamma DRAM reads at kernel start but finishes the
+# load (barrier + expand) only after block 0's partials are sent / its owner duties are done, so the cross-core
+# combine no longer waits on it. Pays when pass 1 is short (few tile-rows per block): BH p150b, perf config,
+# blocks of 1-2 tile-rows — (1,1,32,32768) k=49 24.3 -> 20.8 us, (160,11008) k=25 29.4 -> 24.8 us, (352,4096)
+# 25.9 -> 24.2 us, WIDTH (32,7168) 9.3 -> 8.3 us. With long blocks the early load is already hidden behind pass 1
+# and the late expand only delays pass 2: BLOCK (7168,1024) [736,128] (23 tile-rows) 29.9 -> 30.8 us. Gated on
+# block_row_tiles <= GAMMA_AFTER_SEND_MAX_ROWS.
+GAMMA_AFTER_SEND = True
+GAMMA_AFTER_SEND_MAX_ROWS = 8
+# Combine signal fence: flush (writes left this Tensix core) instead of a write barrier before each semaphore
+# increment of the partial exchange / inv_rms return (catalog tensix_all_reduce, design perf lamp "Signal fence").
+SIGNAL_AFTER_FLUSH = True
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
 OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
 # Streamed gamma (fallback when the resident expanded gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
@@ -86,6 +103,7 @@ RM_CHUNK_CAP = 32  # balanced RM streaming chunk cap (tiles)
 RM_PIECE_FLOOR_BYTES = 512  # occupancy split must keep RM stick pieces >= this
 OCC_TILES_PER_MEMBER = 4  # occupancy split keeps >= 4 W tiles per member
 COMBINE_TILE_COST = 3  # k > 1: per-tile-row collapse + exchange + combine cost, in x-tile equivalents
+OWNER_MEMBER_COST = 0.4  # owner combine: per gathered partial on the owner (add + return write), x-tile equivalents
 # Whole assignment fits: split it into this many depth-2 blocks (1 = one block per core). Measured 2 on BH p150b
 # (perf config): (8192,7168) 630 -> 673 us, (7168,1024) 76 -> 81 us — the k = 1 prefill shapes are DRAM-write-
 # bound (compute stubbed: same time; write-only 438 vs read-only 313 us at 8192x7168), so 1 stays the default.
@@ -346,18 +364,31 @@ def _solve_rows_sharded(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: 
     )
 
 
-def _occ_cost(trt: int, tw: int, k: int, grid_x: int, grid_y: int) -> int:
+def _max_groups(k: int, grid_x: int, grid_y: int) -> int:
+    """Row-groups a W split k fits on the grid: k <= grid_x keeps each group inside one grid row (grid_x // k per
+    row — a grid column then holds a single W slice, which the gamma multicast relies on); k > grid_x packs the
+    groups row-major over the whole grid (a group spans grid rows)."""
+    return (grid_x // k) * grid_y if k <= grid_x else (grid_x * grid_y) // k
+
+
+def _occ_cost(trt: int, tw: int, k: int, grid_x: int, grid_y: int) -> float:
     """Per-core critical-path work of a W split k, in x-tile equivalents.
 
     Rows of the busiest group x (its slice width + the per-tile-row cost of the k > 1 collapse / exchange /
-    combine). Row-groups of one split fill the grid as (grid_x // k) groups per grid row.
+    combine). The owner combine (k > K_SYM_MAX_INTERLEAVED) adds, on the busiest owner, ceil(rows / k) owned rows
+    x k gathered partials (one combine add + one inv_rms return write each): with few rows it grows with k.
     """
-    groups = min((grid_x // k) * grid_y, trt)
+    groups = min(_max_groups(k, grid_x, grid_y), trt)
     rows = _div_up(trt, groups)
-    return rows * (_div_up(tw, k) + (COMBINE_TILE_COST if k > 1 else 0))
+    cost = rows * (_div_up(tw, k) + (COMBINE_TILE_COST if k > 1 else 0))
+    if k > K_SYM_MAX_INTERLEAVED:
+        cost += _div_up(rows, k) * k * OWNER_MEMBER_COST
+    return cost
 
 
-def _choose_k(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, k_fit: int, k_cap: int, elem_bytes: int) -> int:
+def _choose_k(
+    geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, k_fit: int, k_cap: int, elem_bytes: int, budget: int
+) -> int:
     """w_split_cores: the k >= k_fit that minimizes the busiest Tensix core's work (catalog width_split).
 
     A split is a candidate only while every member keeps >= OCC_TILES_PER_MEMBER W tiles (RM: stick pieces
@@ -373,6 +404,10 @@ def _choose_k(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, k_fit: int, k
             break
         if sz.is_rm and s * TILE * elem_bytes < RM_PIECE_FLOOR_BYTES:
             break
+        if _max_groups(kk, grid_x, grid_y) < 1:
+            break
+        if footprint(sz, tw, kk, 1, 1, PlanOpts(owner_combine=kk > K_SYM_MAX_INTERLEAVED)) > budget:
+            continue  # the owner's k gathered partials outgrow L1
         c = _occ_cost(trt, tw, kk, grid_x, grid_y)
         if c < best:
             best_k, best = kk, c
@@ -380,8 +415,9 @@ def _choose_k(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, k_fit: int, k
 
 
 def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget: int, elem_bytes: int) -> Blocking:
-    """INTERLEAVED: row-groups over the whole grid x a W split over k consecutive cores of one grid row."""
-    k_cap = min(K_CAP_MAX, grid_x)
+    """INTERLEAVED: row-groups over the whole grid x a W split over k consecutive Tensix cores (one grid row while
+    k <= grid_x, else row-major across grid rows)."""
+    k_cap = min(K_CAP_MAX, grid_x * grid_y)
     tw, trt = geo.tensor_w_tiles, geo.tensor_row_tiles
 
     k_fit = None
@@ -394,26 +430,28 @@ def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget:
             f"rms_norm: W={geo.W} too wide — even w_split_cores={k_cap} does not fit L1 ({budget} B per core)"
         )
 
-    k, slice_w = _normalize_k(tw, _choose_k(geo, sz, grid_x, grid_y, k_fit, k_cap, elem_bytes))
+    k, slice_w = _normalize_k(tw, _choose_k(geo, sz, grid_x, grid_y, k_fit, k_cap, elem_bytes, budget))
     c, pitch = _pitch(sz, slice_w)
 
-    groups_per_grid_row = grid_x // k
-    num_groups = min(groups_per_grid_row * grid_y, trt)
+    num_groups = min(_max_groups(k, grid_x, grid_y), trt)
     base, rem = divmod(trt, num_groups)
+
+    def core_of(g, m):
+        if k <= grid_x:
+            gpr = grid_x // k
+            return ttnn.CoreCoord((g % gpr) * k + m, g // gpr)
+        idx = g * k + m
+        return ttnn.CoreCoord(idx % grid_x, idx // grid_x)
+
     groups, start = [], 0
     for g in range(num_groups):
         n = base + (1 if g < rem else 0)
-        vx, vy = g % groups_per_grid_row, g // groups_per_grid_row
         members = []
         for m in range(k):
             w_start = m * slice_w
             core_w = min(slice_w, tw - w_start)
             col0 = w_start * TILE
-            members.append(
-                Member(
-                    ttnn.CoreCoord(vx * k + m, vy), m, start, n, w_start, core_w, col0, min(core_w * TILE, geo.W - col0)
-                )
-            )
+            members.append(Member(core_of(g, m), m, start, n, w_start, core_w, col0, min(core_w * TILE, geo.W - col0)))
         groups.append(members)
         start += n
     crt_max = base + (1 if rem else 0)
@@ -572,6 +610,8 @@ def _gamma_mcast_groups(blk: Blocking, grid_x: int):
     n = len(blk.groups)
     if blk.k == 1:
         return n, ttnn.McastCoreOrder.RowMajor
+    if blk.k > grid_x:
+        return None  # groups span grid rows: a slice's Tensix cores are not one grid column
     gpr = grid_x // blk.k
     if n % gpr == 0:
         return n // gpr, ttnn.McastCoreOrder.ColumnMajor
@@ -734,6 +774,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         g_elem_bytes,
         1 if gamma_is_tile else 0,
         _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
+        1 if (GAMMA_AFTER_SEND and b <= GAMMA_AFTER_SEND_MAX_ROWS) else 0,
+        1 if SIGNAL_AFTER_FLUSH else 0,
     ]
     writer_ct.extend(out_acc_args.get_compile_time_args())
     writer_ct.extend(

@@ -135,7 +135,7 @@ Step-1 table — one row per axis of every data object, no blanks:
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| Unicast all-gather in one grid row | `w_split_cores` (k) | `k ≤ K_CAP = min(8, grid_x)`; a group = k consecutive Tensix cores of one grid row | k > 8: combine grows ~linearly in k (catalog `width_split`: 4 µs at k = 16); k > grid_x: group spans rows, NoC coords assumption breaks |
+| Unicast all-gather in one grid row | `w_split_cores` (k) | symmetric all-gather for `k ≤ K_SYM_MAX_INTERLEAVED = 8`; **Refinement 5**: owner combine beyond, `k ≤ K_CAP = min(K_CAP_MAX, grid cores)` with `K_CAP_MAX = (341 − 13) / 2` (writer RT args: one (x, y) pair per member); k ≤ grid_x: a group = k consecutive Tensix cores of one grid row; k > grid_x: groups packed row-major across grid rows | owner combine grows ~linearly in k on the owner (~0.15 µs per member, BH p150b): priced in `_occ_cost` via `OWNER_MEMBER_COST` |
 | Lockstep slot reuse in `cb_gathered_sumsq` (peers write into my CB without my `cb_reserve_back`) | its depth | exactly 2 blocks (`2·k·block_row_tiles` pages) | depth 1: a peer's block b+1 partial overwrites my block b slot before my compute pops it → silently wrong inv_rms |
 | Identical CB addresses across group members | every CB | all CBs declared on the **full active core range** (same CBDescriptor list for every core) | a peer computes my `cb_gathered_sumsq` slot address from its own write pointer → writes to the wrong L1 |
 | Monotonic arrival semaphore | blocks per core | wait for `sem ≥ k·(block_idx+1)`; never reset | resetting races the next block's arrivals → hang or early release |
@@ -158,7 +158,7 @@ Named memory boundary: DRAM. Minimum = x read once, out written once, gamma read
 | R2 lookahead (schedule variant of R2) | built | R2 and `num_blocks_this_core ≥ 2` (then `x_block_depth = 2`) | same | same as R2 | lifts pass 1 of block b+1 into the gather wait of block b (stall-shadow) |
 | two_pass_dram_restream (W chunked in-core, x re-read from DRAM for pass 2) | **rejected** — dead end, superseded by R2 everywhere: R2 keeps the slice resident, R2's combine (k²·block_row_tiles·4 KB NoC) replaces a second full read of x from DRAM | — | chunk × rows | +1 full DRAM crossing of x | — |
 | single_core | **rejected** — Phase 0 must be multi-core; R1/R2 fill the grid | — | — | — | — |
-| R3 wide_combine (per-row owner gathers its rows' k partials, combines + finalizes, returns inv_rms to all k members) | **implemented (Refinement 2)** for WIDTH / BLOCK_SHARDED, used for every sharded k > 1 (`K_SYM_MAX_SHARDED = 1`: measured 2.2× over the symmetric all-gather on tall BLOCK shards, flat on 1-tile-row shards). Row r of a block → owner member r % k; uniform `ceil(rows/k)·k` gathered pages per member per block (lockstep slot addressing); faces 0/2 payload both ways; return by unicast (multicast return and the row-partial/transpose payload of catalog `tensix_all_reduce` are the next levers). Interleaved W split stays R2 (k ≤ 8). | sharded `k > 1` | same | cross-core: k partials into each owner + k inv_rms tiles back per owned row | — |
+| R3 wide_combine (per-row owner gathers its rows' k partials, combines + finalizes, returns inv_rms to all k members) | **implemented (Refinement 2)** for WIDTH / BLOCK_SHARDED, used for every sharded k > 1 (`K_SYM_MAX_SHARDED = 1`: measured 2.2× over the symmetric all-gather on tall BLOCK shards, flat on 1-tile-row shards). Row r of a block → owner member r % k; uniform `ceil(rows/k)·k` gathered pages per member per block (lockstep slot addressing); faces 0/2 payload both ways; return by unicast (multicast return and the row-partial/transpose payload of catalog `tensix_all_reduce` are the next levers). Interleaved: used for k > 8 (Refinement 5). | sharded `k > 1`, interleaved `k > 8` | same | cross-core: k partials into each owner + k inv_rms tiles back per owned row | — |
 | gamma_broadcast (one injector reads gamma, `ttnn.Mcast` to the group) | **deferred** — catalog `shared_input_reuse` (2): a resident window with r = window/x-per-core ≤ 0.125 measured 0.96–1.03×; here r ≤ 1/32. Reachable: cb_gamma is already a resident program-lifetime CB with one producer (reader); the Mcast channel only replaces its DRAM read. | — | — | gamma read once instead of G/k times | — |
 | HEIGHT_SHARDED resident | **landed in Refinement 4** (k = 1 case of the R2 shard-resident path; gamma multicast k = 1; streamed-gamma / RM chunk-cap fallbacks for wide W — see l1_ledger.md) — placement refinement (Phase 0 SUPPORTED is INTERLEAVED). Knob-turn on R1: core-assignment = shard spec, block = whole shard, cb_x backed on the shard (`ttnn.cb_descriptor_from_sharded_tensor`, zero-copy, no NoC re-read), cb_out backed on the output shard. | `memory_layout == HEIGHT_SHARDED` | shard rows × tensor_w_tiles | input/output never cross DRAM (already in L1) | — |
 | WIDTH / BLOCK_SHARDED (k from the shard grid) | **implemented (Refinement 2)**: members, slices and NoC coordinates from the shard spec (orientation-aware; WIDTH groups may span grid rows); block = the resident shard; TILE cb_x / cb_out backed on the shards (zero-copy); RM stick shards copied locally into the tilize staging; combine = R3 owner topology. | `memory_layout ∈ {WIDTH, BLOCK}_SHARDED` | shard | x / out never cross DRAM; R3 cross-core | — |
@@ -168,7 +168,7 @@ Named memory boundary: DRAM. Minimum = x read once, out written once, gamma read
 
 ```
 G         = grid_x * grid_y                    # device.compute_with_storage_grid_size()
-K_CAP     = min(8, grid_x)
+K_CAP     = min(K_CAP_MAX, grid_x * grid_y)     # Refinement 5 (was min(8, grid_x)); see _choose_k / _occ_cost
 budget    = L1 bytes available to CBs per Tensix core (device L1 size − allocator base)
 footprint(k, block_row_tiles, x_block_depth)  = expression in l1_ledger.md
 slice(k)  = ceil(tensor_w_tiles / k);  k := ceil(tensor_w_tiles / slice(k))   # normalize: no empty member
@@ -180,7 +180,10 @@ if 8 * tensor_row_tiles <= G and tensor_w_tiles >= 8:
     if layout == ROW_MAJOR: k_occ = min(k_occ, max(1, (W * elem_bytes) // 512))
 k = normalize(max(k_fit, k_occ))
 
-groups_per_grid_row = grid_x // k ; num_groups = groups_per_grid_row * grid_y
+# Refinements 3 + 5: k_occ above is superseded by _choose_k(): the k >= k_fit minimizing _occ_cost =
+#   rows_per_group * (slice + COMBINE_TILE_COST) [+ ceil(rows/k) * k * OWNER_MEMBER_COST for k > 8],
+#   candidates while slice >= 4 tiles (RM: pieces >= 512 B) and the owner's gathered CB fits L1.
+groups_per_grid_row = grid_x // k ; num_groups = groups_per_grid_row * grid_y   # k > grid_x: (grid_x*grid_y) // k, row-major
 split tensor_row_tiles over min(num_groups, tensor_row_tiles) groups → core_row_tiles (2 classes)
 if footprint(k, max core_row_tiles, 1) <= budget:
     block_row_tiles = max core_row_tiles ; x_block_depth = 1      # whole assignment, one block

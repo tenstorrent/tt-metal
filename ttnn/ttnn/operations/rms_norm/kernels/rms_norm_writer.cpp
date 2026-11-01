@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// rms_norm writer (BRISC / NoC1): load_gamma_slice (once) + exchange_partials_block (k > 1) + store_block.
+// rms_norm writer (BRISC / NoC1): GammaSliceLoad (once) + exchange_partials_block (k > 1) + store_block.
+// Per block (k > 1): exchange_send -> exchange_recv_partials -> [block 0: finish the gamma load] -> exchange_recv_inv.
 //
-// load_gamma_slice — this member's W slice of gamma into cb_gamma, "expanded" so every row of tile j holds
+// GammaSliceLoad — this member's W slice of gamma into cb_gamma, "expanded" so every row of tile j holds
 //   gamma[32j .. 32j+31] (lets pass 2 multiply with a plain DEST-reuse mul). Loaded here, not on the reader,
 //   so the x stream starts at once on every Tensix core; compute waits for it only before its first pass 2.
 //   RM gamma  : one contiguous read of the slice into tile 0's area, RISC-V scatter of the 2 x 16-datum
@@ -19,6 +20,11 @@
 //               re-loaded in G-tile chunks through a 2-chunk ring (always G pages pushed, so a chunk never wraps
 //               the ring); pass 2 consumes one chunk per G-tile window.
 //
+// Gamma timing (Refinement 5): k == 1 / multicast gamma / blocks > GAMMA_AFTER_SEND_MAX_ROWS tile-rows — the load
+//   runs at kernel start. Per-core load with short blocks (gamma_after_send) — the DRAM reads are issued at kernel
+//   start; the barrier + expand run only after block 0's partials are out and the owner duties are done.
+// Signal fence (signal_after_flush): every semaphore increment that publishes data writes follows a write flush,
+//   not a barrier (same NoC + VC + destination => in-order delivery); the barrier at kernel exit retires the acks.
 // exchange_partials_block — symmetric unicast all-gather, one round per block:
 //   every member m writes its block_rows column-0 partial tiles into slot (r*k + m) of EVERY member's
 //   cb_gathered_sumsq (its own included), barriers, then bumps each member's arrival semaphore by 1.
@@ -27,7 +33,8 @@
 //   blocks: a peer can only reach block b+2 after consuming my partial of b+1, which I send only after my
 //   compute has popped gathered(b) (exchange(b+1) follows store(b) in this kernel).
 //   The semaphore is monotonic: block b is complete at k*(b+1) arrivals; it is never reset.
-// exchange_partials_block — owner topology (combine_owner, k > K_SYM_MAX_*; WIDTH / BLOCK_SHARDED):
+// exchange_partials_block — owner topology (combine_owner, k > K_SYM_MAX_*; interleaved k > 8, WIDTH / BLOCK_SHARDED;
+//   interleaved groups with k > grid_x span grid rows — every peer is addressed by its own RT (x, y) pair):
 //   tile-row r of the block is owned by member r % k. Every member writes its partial of row r into slot
 //   ((r / k) * k + m) of the owner's cb_gathered_sumsq and bumps the owner's arrival semaphore once per row;
 //   every member reserves/pushes the same ceil(rows / k) * k gathered pages per block (lockstep slot base).
@@ -81,7 +88,14 @@ constexpr bool gamma_is_tile = get_compile_time_arg_val(18) != 0;
 // Shared-exponent section ahead of the datums in one gamma tile: 64 B for bfloat8_b (one exponent byte per
 // 16-datum face row, face-major), 0 for float32 / bfloat16. Datums (bfp8: mantissa bytes) follow in face order.
 constexpr uint32_t gamma_exp_bytes = get_compile_time_arg_val(19);
-constexpr auto out_args = TensorAccessorArgs<20>();
+// k > 1: load the resident gamma slice after block 0's partials are sent (else at kernel start).
+constexpr bool gamma_after_send = get_compile_time_arg_val(20) != 0;
+// Signal fence: before a semaphore increment, wait only until the preceding data writes have LEFT this core
+// (flush) instead of for their completion acks (barrier). Safe: the writes and noc_semaphore_inc travel on the
+// same NoC and the same unicast-write VC to the same destination, so they arrive in program order. The
+// outstanding acks are retired once by the write barrier at kernel exit.
+constexpr bool signal_after_flush = get_compile_time_arg_val(21) != 0;
+constexpr auto out_args = TensorAccessorArgs<22>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_DIM = 32;
@@ -134,12 +148,16 @@ FORCE_INLINE void expand_gamma_rows(uint32_t base, uint32_t num_tiles) {
     noc_async_read_barrier();
 }
 
-// Fill `base` (cb_gamma's write pointer) with this member's expanded gamma slice; the caller owns the CB
-// reserve/push. gamma_col0 / gamma_cols: first global column and column count of the slice (RM gamma). The
-// slice start need not be tile- or 64 B-aligned (RM shards are 16 B granular): the read starts at the 64 B-
-// aligned offset below it and the scatter skips the lead bytes.
+constexpr uint32_t GAMMA_READ_ALIGN = 64;  // BH DRAM read alignment (also >= one 16-datum face row)
+
+// RM gamma: bytes of lead-in below the 64 B-aligned read start of the slice.
+FORCE_INLINE uint32_t gamma_rm_lead(uint32_t gamma_col0) {
+    return (gamma_col0 * gamma_elem_bytes) & (GAMMA_READ_ALIGN - 1);
+}
+
+// issue_gamma_reads: the slice's row-0 DRAM reads into `base` (no barrier — finish_gamma_slice waits for them).
 template <typename Accessor>
-FORCE_INLINE void fill_gamma_slice(
+FORCE_INLINE void issue_gamma_reads(
     const Accessor& g_acc,
     uint32_t base,
     uint32_t w_tile_start,
@@ -147,23 +165,28 @@ FORCE_INLINE void fill_gamma_slice(
     uint32_t gamma_col0,
     uint32_t gamma_cols) {
     constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
-    constexpr uint32_t row_read_bytes = 64;  // >= one 16-datum face row; BH DRAM read alignment
     if constexpr (gamma_is_tile) {
         // Per tile, two 64 B-aligned reads: [exponent section (bfp only) + face 0 row 0], [face 1 row 0].
         constexpr uint32_t d0 = gamma_exp_bytes;
         for (uint32_t j = 0; j < core_w_tiles; ++j) {
             const uint32_t tile = base + j * g_tile_bytes;
-            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, 0), tile, d0 + row_read_bytes);
+            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, 0), tile, d0 + GAMMA_READ_ALIGN);
             noc_async_read(
-                g_acc.get_noc_addr(w_tile_start + j, d0 + face_bytes), tile + d0 + face_bytes, row_read_bytes);
+                g_acc.get_noc_addr(w_tile_start + j, d0 + face_bytes), tile + d0 + face_bytes, GAMMA_READ_ALIGN);
         }
-        noc_async_read_barrier();
     } else {
-        constexpr uint32_t read_align = 64;  // BH DRAM read alignment
         const uint32_t byte0 = gamma_col0 * gamma_elem_bytes;
-        const uint32_t lead = byte0 & (read_align - 1);
+        const uint32_t lead = gamma_rm_lead(gamma_col0);
         noc_async_read(g_acc.get_noc_addr(0, byte0 - lead), base, lead + gamma_cols * gamma_elem_bytes);
-        noc_async_read_barrier();
+    }
+}
+
+// finish_gamma_slice: wait for the row-0 reads, (RM) scatter row 0 into the tile faces, expand rows 1..31.
+FORCE_INLINE void finish_gamma_slice(uint32_t base, uint32_t core_w_tiles, uint32_t gamma_col0) {
+    noc_async_read_barrier();
+    if constexpr (!gamma_is_tile) {
+        constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
+        const uint32_t lead = gamma_rm_lead(gamma_col0);
         // Scatter row 0: datums [32j, 32j+16) -> tile j face 0 row 0, [32j+16, 32j+32) -> face 1 row 0.
         constexpr uint32_t words_per_face_row = FACE_DIM * gamma_elem_bytes / sizeof(uint32_t);
         for (uint32_t jj = core_w_tiles; jj > 0; --jj) {
@@ -185,43 +208,84 @@ FORCE_INLINE void fill_gamma_slice(
     }
     expand_gamma_rows(base, core_w_tiles);
 }
+
+// Fill `base` (cb_gamma's write pointer) with this member's expanded gamma slice; the caller owns the CB
+// reserve/push. gamma_col0 / gamma_cols: first global column and column count of the slice (RM gamma). The
+// slice start need not be tile- or 64 B-aligned (RM shards are 16 B granular): the read starts at the 64 B-
+// aligned offset below it and the scatter skips the lead bytes.
+template <typename Accessor>
+FORCE_INLINE void fill_gamma_slice(
+    const Accessor& g_acc,
+    uint32_t base,
+    uint32_t w_tile_start,
+    uint32_t core_w_tiles,
+    uint32_t gamma_col0,
+    uint32_t gamma_cols) {
+    issue_gamma_reads(g_acc, base, w_tile_start, core_w_tiles, gamma_col0, gamma_cols);
+    finish_gamma_slice(base, core_w_tiles, gamma_col0);
+}
 #endif
 
 #ifdef RMS_HAS_GAMMA
-// load_gamma_slice: this member's expanded gamma slice into cb_gamma (program lifetime; compute first needs it
+// GammaSliceLoad: this member's expanded gamma slice into cb_gamma (program lifetime; compute first needs it
 // at pass 2, so this overlaps the reader's x stream and pass 1).
 //   RMS_GAMMA_MCAST (interleaved): the Tensix cores sharing a W slice form one multicast group (host Mcast);
 //     its sender reads + expands the slice once and multicasts the expanded tiles to the group — the slice is
 //     read from DRAM once per W slice instead of once per Tensix core. One-shot (no handshake): cb_gamma is
 //     written once per launch and nothing else touches its L1.
 //   otherwise: every Tensix core reads + expands its own slice.
-template <typename Accessor>
-FORCE_INLINE void load_gamma_slice(
-    const Accessor& g_acc,
-    uint32_t w_tile_start,
-    uint32_t core_w_tiles,
-    uint32_t push_tiles,
-    uint32_t col0,
-    uint32_t cols) {
-    cb_reserve_back(cb_gamma, push_tiles);
-    const uint32_t base = get_write_ptr(cb_gamma);
+//   Split in two so the DRAM reads can be in flight while the writer serves the combine:
+//   begin() reserves cb_gamma and issues this core's row-0 reads (per-core load, or the multicast sender);
+//   end() waits for them, expands, multicasts (sender) / receives (receiver) and pushes. load() = both.
 #ifdef RMS_GAMMA_MCAST
-    constexpr auto gamma_mcast = dataflow_kernel_lib::McastArgs<
-        get_named_compile_time_arg_val("gamma_mcast_ct_offset"),
-        get_named_compile_time_arg_val("gamma_mcast_rt_offset")>();
-    Noc noc;
-    // optional_*: a W slice owned by a single Tensix core (one row-group) has a sender and no receivers.
-    if (auto sender = gamma_mcast.optional_sender(noc)) {
-        fill_gamma_slice(g_acc, base, w_tile_start, core_w_tiles, col0, cols);
-        sender->send(base, base, core_w_tiles * g_tile_bytes);  // zero fan-out: src == dst, no transfer
-    } else if (auto receiver = gamma_mcast.optional_receiver(noc)) {
-        receiver->receive();
-    }
-#else
-    fill_gamma_slice(g_acc, base, w_tile_start, core_w_tiles, col0, cols);
+constexpr auto gamma_mcast = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("gamma_mcast_ct_offset"),
+    get_named_compile_time_arg_val("gamma_mcast_rt_offset")>();
 #endif
-    cb_push_back(cb_gamma, push_tiles);
-}
+
+template <typename Accessor>
+struct GammaSliceLoad {
+    const Accessor& g_acc;
+    uint32_t w_tile_start;
+    uint32_t core_w_tiles;
+    uint32_t push_tiles;
+    uint32_t col0;
+    uint32_t cols;
+    uint32_t base = 0;
+
+    // This core reads the slice from DRAM itself (per-core load, or the slice group's multicast sender).
+    FORCE_INLINE bool reads_dram() const {
+#ifdef RMS_GAMMA_MCAST
+        return gamma_mcast.can_send();
+#else
+        return true;
+#endif
+    }
+
+    FORCE_INLINE void begin() {
+        cb_reserve_back(cb_gamma, push_tiles);
+        base = get_write_ptr(cb_gamma);
+        if (reads_dram()) {
+            issue_gamma_reads(g_acc, base, w_tile_start, core_w_tiles, col0, cols);
+        }
+    }
+
+    FORCE_INLINE void end() {
+#ifdef RMS_GAMMA_MCAST
+        Noc noc;
+        // optional_*: a W slice owned by a single Tensix core (one row-group) has a sender and no receivers.
+        if (auto sender = gamma_mcast.optional_sender(noc)) {
+            finish_gamma_slice(base, core_w_tiles, col0);
+            sender->send(base, base, core_w_tiles * g_tile_bytes);  // zero fan-out: src == dst, no transfer
+        } else if (auto receiver = gamma_mcast.optional_receiver(noc)) {
+            receiver->receive();
+        }
+#else
+        finish_gamma_slice(base, core_w_tiles, col0);
+#endif
+        cb_push_back(cb_gamma, push_tiles);
+    }
+};
 #endif
 
 #ifdef RMS_GAMMA_CHUNK
@@ -266,62 +330,111 @@ FORCE_INLINE uint64_t peer_addr(uint32_t peer, uint32_t l1_addr) {
         l1_addr);
 }
 
-// Owner topology, one block: partials -> row owners, owners combine (compute), inv_rms -> every member.
-FORCE_INLINE void exchange_via_owners(
-    uint32_t rows,
-    uint32_t member_idx,
-    uint32_t sem_addr,
-    uint32_t sem_inv_addr,
-    uint32_t tile_bytes,
-    uint32_t& partials_expected,
-    uint32_t& inv_expected) {
-    constexpr uint32_t k = w_split_cores;
-    const uint32_t slots = ((rows + k - 1) / k) * k;
-    // ---- partial of row r -> slot (r / k) * k + m of owner r % k ----
-    cb_wait_front(cb_partial_sumsq, rows);
-    cb_reserve_back(cb_gathered_sumsq, slots);
-    const uint32_t slot_base = get_write_ptr(cb_gathered_sumsq);
-    const uint32_t src = get_read_ptr(cb_partial_sumsq);
-    for (uint32_t r = 0; r < rows; ++r) {
-        const uint32_t owner = r % k;
-        const uint32_t slot = (r / k) * k + member_idx;
-        send_acc_tile(src + r * tile_bytes, peer_addr(owner, slot_base + slot * tile_bytes), tile_bytes);
+FORCE_INLINE void fence_before_signal() {
+    if constexpr (signal_after_flush) {
+        noc_async_writes_flushed();
+    } else {
+        noc_async_write_barrier();
     }
-    noc_async_write_barrier();
-    const uint32_t n_owners = rows < k ? rows : k;
-    for (uint32_t o = 0; o < n_owners; ++o) {
-        noc_semaphore_inc(peer_addr(o, sem_addr), (rows - o + k - 1) / k);
+}
+
+// Exchange state carried across blocks (k > 1). The semaphores are monotonic: never reset.
+struct ExchangeState {
+    uint32_t member_idx;
+    uint32_t sem_addr;
+    uint32_t sem_inv_addr;
+    uint32_t tile_bytes;
+    uint32_t slot_base;  // this block's cb_gathered_sumsq slot base (reserved by the send half)
+    uint32_t partials_expected;
+    uint32_t inv_expected;
+};
+
+FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx) {
+    constexpr uint32_t k = w_split_cores;
+    return member_idx < rows ? (rows - member_idx + k - 1) / k : 0;
+}
+
+// exchange send half: this member's partials of the block out to their receivers (no cross-core wait).
+//   symmetric: slot (r*k + m) of EVERY member's cb_gathered_sumsq; owner: slot (r/k)*k + m of row r's owner r % k.
+// The gathered slots are reserved here (the slot base is this core's own write pointer — lockstep on all members).
+FORCE_INLINE void exchange_send(uint32_t rows, ExchangeState& st) {
+    constexpr uint32_t k = w_split_cores;
+    const uint32_t tb = st.tile_bytes;
+    cb_wait_front(cb_partial_sumsq, rows);
+    const uint32_t src = get_read_ptr(cb_partial_sumsq);
+    if constexpr (combine_owner) {
+        cb_reserve_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+        st.slot_base = get_write_ptr(cb_gathered_sumsq);
+        for (uint32_t r = 0; r < rows; ++r) {
+            const uint32_t slot = (r / k) * k + st.member_idx;
+            send_acc_tile(src + r * tb, peer_addr(r % k, st.slot_base + slot * tb), tb);
+        }
+        fence_before_signal();
+        const uint32_t n_owners = rows < k ? rows : k;
+        for (uint32_t o = 0; o < n_owners; ++o) {
+            noc_semaphore_inc(peer_addr(o, st.sem_addr), (rows - o + k - 1) / k);
+        }
+    } else {
+        cb_reserve_back(cb_gathered_sumsq, k * rows);
+        st.slot_base = get_write_ptr(cb_gathered_sumsq);
+        for (uint32_t m = 0; m < k; ++m) {
+            for (uint32_t r = 0; r < rows; ++r) {
+                send_acc_tile(src + r * tb, peer_addr(m, st.slot_base + (r * k + st.member_idx) * tb), tb);
+            }
+        }
+        fence_before_signal();
+        for (uint32_t m = 0; m < k; ++m) {
+            noc_semaphore_inc(peer_addr(m, st.sem_addr), 1);
+        }
     }
     cb_pop_front(cb_partial_sumsq, rows);
-    const uint32_t owned = member_idx < rows ? (rows - member_idx + k - 1) / k : 0;
-    partials_expected += owned * k;
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), partials_expected);
-    cb_push_back(cb_gathered_sumsq, slots);
+}
 
-    // ---- inv_rms of owned row r -> slot r of every member's cb_inv_rms ----
-    cb_reserve_back(cb_inv_rms, rows);
-    const uint32_t inv_base = get_write_ptr(cb_inv_rms);
-    if (owned > 0) {
-        // One owned tile at a time from the CB front: members own different row counts per block, so the
-        // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
-        for (uint32_t j = 0; j < owned; ++j) {
-            const uint32_t r = j * k + member_idx;
-            cb_wait_front(cb_inv_owned, 1);
-            const uint32_t inv_src = get_read_ptr(cb_inv_owned);
-            for (uint32_t m = 0; m < k; ++m) {
-                send_acc_tile(inv_src, peer_addr(m, inv_base + r * tile_bytes), tile_bytes);
+// exchange receive, part 1: wait for this member's gathered partials -> cb_gathered_sumsq (compute combines);
+//   owner topology: then return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
+FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
+    constexpr uint32_t k = w_split_cores;
+    if constexpr (combine_owner) {
+        const uint32_t tb = st.tile_bytes;
+        const uint32_t owned = owned_rows(rows, st.member_idx);
+        st.partials_expected += owned * k;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+        cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+
+        cb_reserve_back(cb_inv_rms, rows);
+        const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+        if (owned > 0) {
+            // One owned tile at a time from the CB front: members own different row counts per block, so the
+            // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
+            for (uint32_t j = 0; j < owned; ++j) {
+                const uint32_t r = j * k + st.member_idx;
+                cb_wait_front(cb_inv_owned, 1);
+                const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+                for (uint32_t m = 0; m < k; ++m) {
+                    send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
+                }
+                noc_async_writes_flushed();
+                cb_pop_front(cb_inv_owned, 1);
             }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_inv_owned, 1);
+            fence_before_signal();
+            for (uint32_t m = 0; m < k; ++m) {
+                noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
+            }
         }
-        noc_async_write_barrier();
-        for (uint32_t m = 0; m < k; ++m) {
-            noc_semaphore_inc(peer_addr(m, sem_inv_addr), owned);
-        }
+    } else {
+        st.partials_expected += k;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+        cb_push_back(cb_gathered_sumsq, k * rows);
     }
-    inv_expected += rows;
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_inv_addr), inv_expected);
-    cb_push_back(cb_inv_rms, rows);
+}
+
+// exchange receive, part 2 (owner topology): wait for every row's inv_rms of the block -> cb_inv_rms.
+FORCE_INLINE void exchange_recv_inv(uint32_t rows, ExchangeState& st) {
+    if constexpr (combine_owner) {
+        st.inv_expected += rows;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
+        cb_push_back(cb_inv_rms, rows);
+    }
 }
 
 void kernel_main() {
@@ -348,32 +461,53 @@ void kernel_main() {
 #else
     const uint32_t norm_w = core_w_tiles;
 #endif
-#elif defined(RMS_HAS_GAMMA)
-    {
-        const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
-#ifdef RMS_RM
-        const uint32_t gamma_push_tiles = chunks_this * rm_chunk_w_tiles;
-#else
-        const uint32_t gamma_push_tiles = core_w_tiles;
 #endif
-        load_gamma_slice(g_acc, w_tile_start, core_w_tiles, gamma_push_tiles, col0, valid_cols);
+    // Resident gamma slice (once per program). k == 1, multicast gamma, or !gamma_after_send: loaded at kernel start,
+    // overlapping the reader's x stream and pass 1. Per-core load with k > 1 and gamma_after_send: only the DRAM reads
+    // are issued at kernel start;
+    // the barrier + expand (+ multicast) run after block 0's partials have left (symmetric) / after this member's
+    // owner duties — the combine's critical path (partials out, owner combine + inv_rms return) no longer waits
+    // on the gamma expand, which instead overlaps the wait for the other members.
+#if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
+    const auto g_res_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
+#ifdef RMS_RM
+    const uint32_t gamma_push_tiles = chunks_this * rm_chunk_w_tiles;
+#else
+    const uint32_t gamma_push_tiles = core_w_tiles;
+#endif
+    GammaSliceLoad<decltype(g_res_acc)> gamma_res{
+        g_res_acc, w_tile_start, core_w_tiles, gamma_push_tiles, col0, valid_cols};
+    gamma_res.begin();
+#ifdef RMS_GAMMA_MCAST
+    // Multicast: receivers wait on the sender, so a late sender would stall its whole slice group — keep it early.
+    constexpr bool gamma_late = false;
+#else
+    constexpr bool gamma_late = gamma_after_send && w_split_cores > 1;
+#endif
+    if constexpr (!gamma_late) {
+        gamma_res.end();
     }
+    auto finish_resident_gamma = [&](uint32_t blk) {
+        if constexpr (gamma_late) {
+            if (blk == 0) {
+                gamma_res.end();
+            }
+        }
+    };
+#else
+    auto finish_resident_gamma = [](uint32_t) {};
 #endif
 
 #ifndef RMS_SHARDED
     const auto out_acc = TensorAccessor(out_args, out_addr, out_page_bytes);
 #endif
 
-    [[maybe_unused]] uint32_t sem_addr = 0;
-    [[maybe_unused]] uint32_t sem_inv_addr = 0;
-    [[maybe_unused]] uint32_t partial_tile_bytes = 0;
-    [[maybe_unused]] uint32_t partials_expected = 0;
-    [[maybe_unused]] uint32_t inv_expected = 0;
+    [[maybe_unused]] ExchangeState xs{member_idx, 0, 0, 0, 0, 0, 0};
     if constexpr (w_split_cores > 1) {
-        sem_addr = get_semaphore(sem_id);
-        partial_tile_bytes = get_tile_size(cb_partial_sumsq);
+        xs.sem_addr = get_semaphore(sem_id);
+        xs.tile_bytes = get_tile_size(cb_partial_sumsq);
         if constexpr (combine_owner) {
-            sem_inv_addr = get_semaphore(sem_inv_id);
+            xs.sem_inv_addr = get_semaphore(sem_inv_id);
         }
     }
 
@@ -381,30 +515,11 @@ void kernel_main() {
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
 
-        if constexpr (w_split_cores > 1 && combine_owner) {
-            exchange_via_owners(
-                rows, member_idx, sem_addr, sem_inv_addr, partial_tile_bytes, partials_expected, inv_expected);
-        } else if constexpr (w_split_cores > 1) {
-            // ---- exchange_partials_block ----
-            cb_wait_front(cb_partial_sumsq, rows);
-            cb_reserve_back(cb_gathered_sumsq, w_split_cores * rows);
-            const uint32_t slot_base = get_write_ptr(cb_gathered_sumsq);
-            const uint32_t src = get_read_ptr(cb_partial_sumsq);
-            for (uint32_t m = 0; m < w_split_cores; ++m) {
-                for (uint32_t r = 0; r < rows; ++r) {
-                    send_acc_tile(
-                        src + r * partial_tile_bytes,
-                        peer_addr(m, slot_base + (r * w_split_cores + member_idx) * partial_tile_bytes),
-                        partial_tile_bytes);
-                }
-            }
-            noc_async_write_barrier();
-            for (uint32_t m = 0; m < w_split_cores; ++m) {
-                noc_semaphore_inc(peer_addr(m, sem_addr), 1);
-            }
-            cb_pop_front(cb_partial_sumsq, rows);
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), w_split_cores * (blk + 1));
-            cb_push_back(cb_gathered_sumsq, w_split_cores * rows);
+        if constexpr (w_split_cores > 1) {
+            exchange_send(rows, xs);
+            exchange_recv_partials(rows, xs);
+            finish_resident_gamma(blk);
+            exchange_recv_inv(rows, xs);
         }
 
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)

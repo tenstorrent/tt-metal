@@ -71,7 +71,9 @@ CASES = [
     pytest.param((1, 1, 1024, 512), "column", id="k3_column_groups"),
     pytest.param((1, 1, 352, 1024), "per_core", id="k6_partial_row_fallback"),
     pytest.param((1, 1, 3200, 256), "single", id="k1_single_group_partial_row"),
-    pytest.param((1, 1, 96, 4096), "column", id="k8_one_group_per_column"),
+    pytest.param((1, 1, 96, 1024), "column", id="k8_one_group_per_column"),
+    # Refinement 5: k = 16 > grid_x -> groups span grid rows, a slice's Tensix cores are not one column
+    pytest.param((1, 1, 96, 4096), "per_core", id="k16_spanning_rows_per_core"),
     pytest.param((1, 1, 32, 2048), "column", id="k8_single_core_slices"),
     pytest.param((2, 1, 200, 1500), None, id="non_aligned_w_h"),
 ]
