@@ -189,8 +189,21 @@ def _down_decode_progcfg(n, dtype=None):
 class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
-    def __init__(self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None, use_gateup_agmm=True):
+    def __init__(
+        self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None, use_gateup_agmm=True, layer_num=None
+    ):
         self.device = mesh_device
+        # BONSAI_NATIVE=pq2_0: exact-ternary decode MLP straight from the PQ2_0 GGUF (bonsai2/native/a3);
+        # the dense MLP weights are not loaded. Single chip, decode only.
+        self.native = None
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and getattr(args, "num_devices", 1) == 1 and layer_num is not None:
+            from models.demos.blackhole.bonsai2.native.a3.mlp import TernaryMLP, shared_for
+
+            cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_mlp")
+            os.makedirs(cache, exist_ok=True)
+            self.native = TernaryMLP(shared_for(mesh_device), layer_num, cache)
+            self.args, self.tt_ccl, self.num_devices = args, tt_ccl, 1
+            return
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
@@ -227,6 +240,12 @@ class Qwen36MLP:
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
         if self.num_devices > 1:
             return self._forward_tp(x)
+        if self.native is not None:
+            T = x.shape[1] if len(x.shape) >= 3 else 1
+            assert T <= 1, "BONSAI_NATIVE=pq2_0 MLP is decode-only"
+            if x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
+                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            return self.native.forward(x)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
