@@ -27,7 +27,8 @@ PERF_CASES = [case for case in LOOSE_CASES if "achievable_ns" in case.get("extra
 def _knob_overrides(monkeypatch):
     for item in filter(None, os.environ.get("LN_KNOBS", "").split(",")):
         knob, value = item.split("=")
-        monkeypatch.setattr(descriptor, knob, type(getattr(descriptor, knob))(int(value)))
+        cast = bool if isinstance(getattr(descriptor, knob), bool) else int
+        monkeypatch.setattr(descriptor, knob, cast(int(value)))
 
 
 IDS = [

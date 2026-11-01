@@ -133,30 +133,30 @@ ALWI void row_stats_block(uint32_t rows, DataflowBuffer& centered, DataflowBuffe
     }
 }
 
-// One stats window: tiles [col0, col0 + G) of `row` at the z front (waited cumulatively, not popped).
+// One stats window: tiles [col0, col0 + window_tiles) of `row` at the z front (waited cumulatively, not popped).
 // DEST 0 accumulates S1 (pairwise acc add), DEST 1 S2 (acc mul) when one_pass. A row's first window starts
-// from a fresh (zero) DEST; later ones reload the raw sums from cb_stat_partial. Odd G occurs only as
-// G = Wt (single window per row): its first tile seeds DEST 0 by copy.
+// from a fresh (zero) DEST; later ones reload the raw sums from cb_stat_partial. An odd window occurs only
+// as the whole row (Wt): its first tile seeds DEST 0 by copy.
 template <
     uint32_t cb_z,
     uint32_t cb_stat_partial,
     uint32_t cb_row_mean,
     uint32_t cb_inv_std,
     uint32_t tensor_w_tiles,
-    uint32_t window_tiles,
     bool one_pass,
     uint32_t inv_w_bits,
     uint32_t epsilon_bits>
 ALWI void row_stats_window(
     uint32_t row,
     uint32_t col0,
+    uint32_t window_tiles,
     DataflowBuffer& z,
     DataflowBuffer& partial,
     DataflowBuffer& row_mean,
     DataflowBuffer& inv_std) {
     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
     constexpr uint32_t num_sums = one_pass ? 2 : 1;
-    static_assert(window_tiles % 2 == 0 || window_tiles == tensor_w_tiles, "odd windows only as one per row");
+    ASSERT(window_tiles % 2 == 0 || window_tiles == tensor_w_tiles);
     const uint32_t base = row * tensor_w_tiles + col0;
     const bool first = col0 == 0;
     const bool last = col0 + window_tiles == tensor_w_tiles;
@@ -174,7 +174,7 @@ ALWI void row_stats_window(
         }
         reconfig_data_format_srca(cb_stat_partial, cb_z);
         partial.pop_front(num_sums);
-    } else if constexpr (window_tiles % 2 != 0) {
+    } else if (window_tiles % 2 != 0) {
         copy_init(cb_z);
         copy_tile(cb_z, base, 0);
         tile = 1;
@@ -269,14 +269,27 @@ void kernel_main() {
     constexpr uint32_t stats_window_tiles = get_compile_time_arg_val(15);
     constexpr bool one_pass = get_compile_time_arg_val(16) != 0;
     constexpr uint32_t cb_stat_partial = get_compile_time_arg_val(17);
-    // stream_normalize (one_pass only): normalize + affine per stats window through two G-page chunk CBs.
+    // stream_normalize (one_pass only): the per-window normalize + affine path is compiled in (two G-page
+    // chunk CBs allocated).
     constexpr bool stream_normalize = get_compile_time_arg_val(18) != 0;
     constexpr uint32_t cb_chunk_a = get_compile_time_arg_val(19);
     constexpr uint32_t cb_chunk_b = get_compile_time_arg_val(20);
     static_assert(!stream_normalize || one_pass, "per-window normalize needs inv_std before centering");
     static_assert(tensor_w_tiles % stats_window_tiles == 0, "a stats window never straddles rows");
+    // Leading tile-rows per core whose stats stream per window; later rows take one window per row (no
+    // partial round trips).
+    constexpr uint32_t streamed_rows = get_compile_time_arg_val(21);
+    // one_pass with a residual stores d = (x - x[:, 0]) + res instead of z: shifted by each row's first element,
+    // so the stats operands stay O(std) and SrcA / SrcB reading the fp32 work page at different precisions
+    // cannot bias E[d^2] - E[d]^2 (unshifted, |mean| = 100 drove the variance negative). Centering subtracts
+    // mean(d), so the output is unchanged.
+    constexpr uint32_t cb_row_shift = get_compile_time_arg_val(22);
+    constexpr bool shifted = one_pass && has_residual;
 
     const uint32_t core_row_tiles = get_arg_val<uint32_t>(0);
+    // Per core: the host picks which cores take the per-window normalize (the work pair is allocated whenever
+    // any core runs the whole-row passes).
+    const bool per_window_normalize = stream_normalize && get_arg_val<uint32_t>(1) != 0;
 
     using namespace compute_kernel_lib;
 
@@ -300,6 +313,7 @@ void kernel_main() {
     DataflowBuffer stat_partial(cb_stat_partial);
     [[maybe_unused]] DataflowBuffer chunk_a(cb_chunk_a);
     [[maybe_unused]] DataflowBuffer chunk_b(cb_chunk_b);
+    [[maybe_unused]] DataflowBuffer row_shift(cb_row_shift);
     DataflowBuffer output_tiles(cb_output_tiles);
     DataflowBuffer& z_tiles = has_residual ? work_a : input_tiles;
 
@@ -312,10 +326,33 @@ void kernel_main() {
         // residual_add_block + row_stats_window, interleaved per window so the stats run as tiles land
         {
             MaybeDeviceZoneScope("compute_add_and_stats");
-            const auto window_shape = IterationShape::grid(1, stats_window_tiles).block_size(dest_lanes);
+            const uint32_t window = block_row < streamed_rows ? stats_window_tiles : tensor_w_tiles;
+            const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
             for (uint32_t row = 0; row < rows; ++row) {
-                for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += stats_window_tiles) {
-                    if constexpr (has_residual) {
+                if constexpr (shifted) {
+                    // The row's first x tile (front of the input CB): column 0 is each row's shift.
+                    copy<input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::None), output(cb_row_shift)>(
+                        IterationShape::one_tile(), input_tiles, row_shift);
+                }
+                for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += window) {
+                    if constexpr (shifted) {
+                        eltwise_chain(
+                            window_shape,
+                            BinaryFpu<
+                                BinaryFpuOp::Sub,
+                                lane_input(cb_input_tiles),
+                                input(
+                                    cb_row_shift,
+                                    BroadcastDim::Col,
+                                    WaitPolicy::Upfront,
+                                    PopPolicy::None,
+                                    InputTileMapping::Col)>{input_tiles, row_shift},
+                            DestReuseBinary<
+                                BinaryFpuOp::Add,
+                                lane_input(cb_residual_tiles),
+                                DestReuseType::DEST_TO_SRCA>{residual_tiles},
+                            PackTile<lane_output(cb_row_work_a)>{work_a});
+                    } else if constexpr (has_residual) {
                         add<lane_input(cb_input_tiles), lane_input(cb_residual_tiles), lane_output(cb_row_work_a)>(
                             window_shape, input_tiles, residual_tiles, work_a);
                     }
@@ -325,67 +362,76 @@ void kernel_main() {
                         cb_row_mean,
                         cb_inv_std,
                         tensor_w_tiles,
-                        stats_window_tiles,
                         one_pass,
                         inv_w_bits,
-                        epsilon_bits>(row, col0, z_tiles, stat_partial, row_mean, inv_std);
+                        epsilon_bits>(row, col0, window, z_tiles, stat_partial, row_mean, inv_std);
+                }
+                if constexpr (shifted) {
+                    row_shift.pop_front(1);
                 }
             }
         }
 
-        if constexpr (stream_normalize) {
-            // normalize -> affine per window, so the writer starts at the row's first window. Each pass
-            // moves one window through a G-page chunk CB; the work alias pair cannot carry it (its ids
-            // must move whole blocks).
-            MaybeDeviceZoneScope("compute_stream_normalize");
-            const auto window_shape = IterationShape::grid(1, stats_window_tiles).block_size(dest_lanes);
-            constexpr auto col_stat = [](uint32_t cb) {
-                return input(
-                    cb,
-                    BroadcastDim::Col,
-                    WaitPolicy::Upfront,
-                    PopPolicy::None,
-                    InputTileMapping::Col,
-                    DataFormatReconfig::Enabled,
-                    TileAddressing::Offset);
-            };
-            constexpr auto affine_row = [](uint32_t cb) {
-                return input(
-                    cb,
-                    BroadcastDim::Row,
-                    WaitPolicy::Upfront,
-                    PopPolicy::None,
-                    InputTileMapping::Row,
-                    DataFormatReconfig::Enabled,
-                    TileAddressing::Offset);
-            };
-            gamma_tiles.wait_front(tensor_w_tiles);
-            beta_tiles.wait_front(tensor_w_tiles);
-            for (uint32_t row = 0; row < rows; ++row) {
-                for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += stats_window_tiles) {
-                    eltwise_chain(
-                        window_shape,
-                        BinaryFpu<BinaryFpuOp::Sub, lane_input(cb_z), col_stat(cb_row_mean)>{z_tiles, row_mean, 0, row},
-                        PackTile<lane_output(cb_chunk_a)>{chunk_a});
-                    eltwise_chain(
-                        window_shape,
-                        BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_a), col_stat(cb_inv_std)>{
-                            chunk_a, inv_std, 0, row},
-                        PackTile<lane_output(cb_chunk_b)>{chunk_b});
-                    eltwise_chain(
-                        window_shape,
-                        BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_b, same_work_fmt), affine_row(cb_gamma_tiles)>{
-                            chunk_b, gamma_tiles, 0, col0},
-                        PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
-                    eltwise_chain(
-                        window_shape,
-                        BinaryFpu<BinaryFpuOp::Add, lane_input(cb_chunk_a, same_work_fmt), affine_row(cb_beta_tiles)>{
-                            chunk_a, beta_tiles, 0, col0},
-                        PackTile<lane_output(cb_output_tiles)>{output_tiles});
+        if (per_window_normalize) {
+            if constexpr (stream_normalize) {
+                // normalize -> affine per window, so the writer starts at the row's first window. Each pass
+                // moves one window through a G-page chunk CB; the work alias pair cannot carry it (its ids
+                // must move whole blocks).
+                MaybeDeviceZoneScope("compute_stream_normalize");
+                const auto window_shape = IterationShape::grid(1, stats_window_tiles).block_size(dest_lanes);
+                constexpr auto col_stat = [](uint32_t cb) {
+                    return input(
+                        cb,
+                        BroadcastDim::Col,
+                        WaitPolicy::Upfront,
+                        PopPolicy::None,
+                        InputTileMapping::Col,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Offset);
+                };
+                constexpr auto affine_row = [](uint32_t cb) {
+                    return input(
+                        cb,
+                        BroadcastDim::Row,
+                        WaitPolicy::Upfront,
+                        PopPolicy::None,
+                        InputTileMapping::Row,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Offset);
+                };
+                gamma_tiles.wait_front(tensor_w_tiles);
+                beta_tiles.wait_front(tensor_w_tiles);
+                for (uint32_t row = 0; row < rows; ++row) {
+                    for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += stats_window_tiles) {
+                        eltwise_chain(
+                            window_shape,
+                            BinaryFpu<BinaryFpuOp::Sub, lane_input(cb_z), col_stat(cb_row_mean)>{
+                                z_tiles, row_mean, 0, row},
+                            PackTile<lane_output(cb_chunk_a)>{chunk_a});
+                        eltwise_chain(
+                            window_shape,
+                            BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_a), col_stat(cb_inv_std)>{
+                                chunk_a, inv_std, 0, row},
+                            PackTile<lane_output(cb_chunk_b)>{chunk_b});
+                        eltwise_chain(
+                            window_shape,
+                            BinaryFpu<
+                                BinaryFpuOp::Mul,
+                                lane_input(cb_chunk_b, same_work_fmt),
+                                affine_row(cb_gamma_tiles)>{chunk_b, gamma_tiles, 0, col0},
+                            PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
+                        eltwise_chain(
+                            window_shape,
+                            BinaryFpu<
+                                BinaryFpuOp::Add,
+                                lane_input(cb_chunk_a, same_work_fmt),
+                                affine_row(cb_beta_tiles)>{chunk_a, beta_tiles, 0, col0},
+                            PackTile<lane_output(cb_output_tiles)>{output_tiles});
+                    }
                 }
+                row_mean.pop_front(rows);
+                inv_std.pop_front(rows);
             }
-            row_mean.pop_front(rows);
-            inv_std.pop_front(rows);
         } else {
             // center_block
             {

@@ -35,6 +35,8 @@ CASES = [
     pytest.param((7, 1, 3200, W), DRAM, True, id="7x3200_dram_residual_multi_block"),
     pytest.param((7, 1, 3200, W), DRAM, False, id="7x3200_dram_no_residual_multi_block"),
     pytest.param((3, 1, 500, W), DRAM, True, id="3x500_h_non_aligned"),
+    pytest.param((5, 1, 1024, W), L1, False, id="5x1024_l1_no_residual_streamed_multi_block"),
+    pytest.param((11, 1, 640, W), DRAM, True, id="11x640_dram_balanced_multi_block"),
 ]
 
 
@@ -50,6 +52,12 @@ def test_stream_knobs(device, monkeypatch, knobs, shape, buf, with_residual):
 COMPUTE_KNOBS = {
     "one_dest_lane": dict(COMPUTE_DEST_LANES=1),
     "three_dest_lanes": dict(COMPUTE_DEST_LANES=3),
+    # Row-statistics knobs (Refinement 3).
+    "resident_two_pass": dict(STREAM_ROW_STATS=False),
+    "streamed_mean_two_pass": dict(ONE_PASS_VARIANCE=False),
+    "first_block_streamed": dict(STREAMED_BLOCKS=1),
+    "whole_row_normalize": dict(STREAM_NORMALIZE=False),
+    "heavy_core_window_normalize": dict(STREAM_NORMALIZE_UNBALANCED=True),
 }
 
 

@@ -35,16 +35,22 @@ OUT_DEPTH = 1
 # cycles). A DEST-reuse fused normalize/affine pass measured slower under fp32 DEST in Refinement 2
 # and again in Perf 1, and was removed.
 COMPUTE_DEST_LANES = 4
-# Row statistics (Refinement 3). STREAM_ROW_STATS accumulates the row sums per stats window as the reader's
-# chunks land instead of after the whole row; off, the window is the whole row. ONE_PASS_VARIANCE carries
-# the sum of squares in the same windows (var = E[z^2] - mean^2) and drops the centered sum-of-squares pass;
-# gated to fp32 DEST + HiFi4, where z * z is exact and accumulates in fp32. Elsewhere the variance stays
-# two-pass over the centered row.
+# Row statistics (Refinement 3, BH p100a). STREAM_ROW_STATS accumulates the row sums per stats window as the
+# reader's chunks land and, with ONE_PASS_VARIANCE, the sum of squares too (var = E[d^2] - E[d]^2, no centered
+# sum-of-squares pass). Streaming is gated to fp32 DEST + HiFi4 (one-pass precision: z * z exact, fp32
+# accumulation; the streamed mean alone never measured a win) and to the split classes where it wins
+# (_stream_row_stats); elsewhere the row is waited whole and the variance stays two-pass.
 STREAM_ROW_STATS = True
 ONE_PASS_VARIANCE = True
+# Leading blocks per core whose stats stream (None: all). Later blocks mostly land under the previous block's
+# compute; streaming them costs ~1 us per resident row in window round trips, yet 1 measured slower on
+# focus1 (36.3 vs 35.9 us) because the first row's tail still waits on reads.
+STREAMED_BLOCKS = None
 # STREAM_NORMALIZE (one-pass only): center, normalize, scale and shift run per stats window, so the writer
-# starts at the row's first window instead of during the last whole-row pass.
+# starts at the row's first window instead of during the last whole-row pass. Balanced splits only unless
+# STREAM_NORMALIZE_UNBALANCED, which gives it to the heaviest cores (measured slower: focus1 37.1, focus2 ~51 us).
 STREAM_NORMALIZE = True
+STREAM_NORMALIZE_UNBALANCED = False
 L1_HEADROOM_BYTES = 64 * 1024
 
 CB_INPUT_TILES = 0
@@ -59,6 +65,7 @@ CB_INV_STD = 8
 CB_AFFINE_SCRATCH = 9  # reader-private landing block of the gamma/beta multicast
 CB_CHUNK_A = 10  # stream_normalize: one window between per-window passes
 CB_CHUNK_B = 11
+CB_ROW_SHIFT = 12  # one_pass + residual: the row's first x tile, column 0 = each row's shift
 CB_OUTPUT_TILES = 16
 NUM_CIRCULAR_BUFFERS = 64
 
@@ -84,7 +91,8 @@ class Blocking:
     residual_on_writer: bool
     stats_window_tiles: int  # G: tiles per row-stats window, a multiple of C or Wt
     one_pass: bool  # one-pass variance (sum and sum of squares in the stats windows)
-    stream_normalize: bool  # normalize + affine per stats window (one_pass only)
+    stream_normalize: bool  # per-window normalize + affine compiled in (one_pass only)
+    stream_normalize_min_rows: int  # cores owning at least this many tile-rows take it
     all_cores: object
     assignment: tuple  # ((core, row_tile_start, core_row_tiles), ...)
 
@@ -101,7 +109,7 @@ def _affine_scratch_bytes(Wt, affine_is_tile):
     return 2 * Wt * entry_bytes
 
 
-def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass, stream_normalize):
+def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass, stream_normalize, whole_row_passes):
     """Page count per CB: the single source for both the L1 footprint and the allocation (l1_ledger.md)."""
     pages = {
         CB_INPUT_TILES: in_depth * R * Wt,
@@ -113,13 +121,15 @@ def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass, st
     }
     if has_residual:
         pages[CB_RESIDUAL_TILES] = in_depth * R * Wt
-    if has_residual or not stream_normalize:
+    if has_residual or whole_row_passes:
         pages[CB_ROW_WORK_A] = R * Wt  # z, or the whole-row passes; alias group with CB_ROW_WORK_B
     if stream_normalize:
         pages[CB_CHUNK_A] = stats_window_tiles
         pages[CB_CHUNK_B] = stats_window_tiles
     if stats_window_tiles < Wt:
         pages[CB_STAT_PARTIAL] = 2 if one_pass else 1
+    if one_pass and has_residual:
+        pages[CB_ROW_SHIFT] = 1
     return pages
 
 
@@ -129,6 +139,7 @@ def _cb_page_formats(fp32_dest_acc_en):
     work = (ttnn.tile_size(work_dtype), work_dtype)
     return {
         CB_INPUT_TILES: io,
+        CB_ROW_SHIFT: io,
         CB_RESIDUAL_TILES: io,
         CB_GAMMA_TILES: io,
         CB_BETA_TILES: io,
@@ -165,20 +176,43 @@ def _io_chunk_tiles(Wt):
     return max(c for c in range(1, min(Wt, IO_CHUNK_TARGET_TILES) + 1) if Wt % c == 0)
 
 
-def _stats_window_tiles(Wt, C):
+def _is_balanced(assignment):
+    return len({rows for _, _, rows in assignment}) == 1
+
+
+def _stream_row_stats(input_tensor, assignment, *, has_residual, compute_kernel_config):
+    """Streamed one-pass stats where they win. On an unbalanced split the heavy cores set the end:
+    - DRAM input: light cores finishing sooner write into the heavy cores' next-row DRAM reads
+      (focus2 median 47.6 -> 48.9 us);
+    - residual: the shifted residual add (an extra DEST-reuse pass per tile) costs more on the heavy cores'
+      resident second row than streaming saves on the first (focus1 36.5 -> 36.7..37.9 us).
+    Balanced splits stream (8x384 38.6 -> 36.1, 3x500 24.9 -> 22.2 us)."""
+    if not STREAM_ROW_STATS or not _one_pass_capable(compute_kernel_config):
+        return False
+    dram_input = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+    return _is_balanced(assignment) or not (has_residual or dram_input)
+
+
+def _stats_window_tiles(Wt, C, streamed):
     """Smallest even multiple of the reader chunk C dividing Wt (windows pair their tiles); Wt when odd or off."""
-    if not STREAM_ROW_STATS:
+    if not streamed:
         return Wt
     if C % 2 == 0:
         return C
     return 2 * C if Wt % 2 == 0 else Wt
 
 
-def _one_pass(compute_kernel_config):
+def _stream_normalize_min_rows(assignment):
+    """Fewest tile-rows of a core that streams normalize: every core on a balanced split; on an unbalanced one
+    none (or the heaviest under STREAM_NORMALIZE_UNBALANCED). With every core streaming, the light cores'
+    earlier writes land on the heavy cores' next-row reads (focus1 36.2 -> 41 us)."""
+    heaviest = max(rows for _, _, rows in assignment)
+    return heaviest if _is_balanced(assignment) or STREAM_NORMALIZE_UNBALANCED else heaviest + 1
+
+
+def _one_pass_capable(compute_kernel_config):
     return (
-        ONE_PASS_VARIANCE
-        and bool(compute_kernel_config.fp32_dest_acc_en)
-        and compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi4
+        bool(compute_kernel_config.fp32_dest_acc_en) and compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi4
     )
 
 
@@ -192,17 +226,22 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
     """Single source of every block knob (R, C, G, in_depth, stream knobs). None when R1's predicate fails."""
     has_residual = residual is not None
     fp32_dest_acc_en = bool(compute_kernel_config.fp32_dest_acc_en)
-    one_pass = _one_pass(compute_kernel_config)
-    stream_normalize = STREAM_NORMALIZE and one_pass
     shape = list(input_tensor.shape)
     if shape[-1] % TILE != 0:
         return None
     Wt = shape[-1] // TILE
     C = _io_chunk_tiles(Wt)
-    G = _stats_window_tiles(Wt, C)
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     all_cores, assignment, core_row_tiles_max = _split_rows(device, tensor_row_tiles(shape))
+    streamed = _stream_row_stats(
+        input_tensor, assignment, has_residual=has_residual, compute_kernel_config=compute_kernel_config
+    )
+    G = _stats_window_tiles(Wt, C, streamed)
+    one_pass = ONE_PASS_VARIANCE and streamed
+    stream_min_rows = _stream_normalize_min_rows(assignment)
+    stream_normalize = STREAM_NORMALIZE and one_pass and any(rows >= stream_min_rows for _, _, rows in assignment)
+    whole_row_passes = not stream_normalize or any(rows < stream_min_rows for _, _, rows in assignment)
 
     formats = _cb_page_formats(fp32_dest_acc_en)
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank - L1_HEADROOM_BYTES
@@ -219,6 +258,7 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
             stats_window_tiles=G,
             one_pass=one_pass,
             stream_normalize=stream_normalize,
+            whole_row_passes=whole_row_passes,
         )
         return _footprint(pages, formats) + _affine_scratch_bytes(Wt, affine_is_tile=True) <= budget
 
@@ -240,6 +280,7 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
         stats_window_tiles=G,
         one_pass=one_pass,
         stream_normalize=stream_normalize,
+        stream_normalize_min_rows=stream_min_rows,
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -271,6 +312,13 @@ def _core_nocs(blocking, grid_y):
     # one its multicast was validated on (a swapped injector hung the writer's write barrier).
     nocs[-1] = (0, 1)
     return nocs
+
+
+def _streamed_rows(blocking):
+    """Leading tile-rows per core whose stats stream (STREAMED_BLOCKS whole blocks, or every row)."""
+    if STREAMED_BLOCKS is None:
+        return max(rows for _, _, rows in blocking.assignment)
+    return STREAMED_BLOCKS * blocking.block_row_tiles
 
 
 def _compute_config(requested, blocking):
@@ -320,6 +368,8 @@ def _cb_descriptors(blocking):
         stats_window_tiles=blocking.stats_window_tiles,
         one_pass=blocking.one_pass,
         stream_normalize=blocking.stream_normalize,
+        whole_row_passes=not blocking.stream_normalize
+        or any(rows < blocking.stream_normalize_min_rows for _, _, rows in blocking.assignment),
     )
     formats = _cb_page_formats(blocking.fp32_dest_acc_en)
 
@@ -424,6 +474,8 @@ def create_program_descriptor(
         int(blocking.stream_normalize),
         CB_CHUNK_A,
         CB_CHUNK_B,
+        _streamed_rows(blocking),
+        CB_ROW_SHIFT,
     ]
 
     compute_rt = ttnn.RuntimeArgs()
@@ -450,7 +502,7 @@ def create_program_descriptor(
             rotation,
         ]
         writer_rt[core.x][core.y] = [out_addr, row_tile_start, core_row_tiles, rotation, res_addr]
-        compute_rt[core.x][core.y] = [core_row_tiles]
+        compute_rt[core.x][core.y] = [core_row_tiles, int(core_row_tiles >= blocking.stream_normalize_min_rows)]
 
     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
     kernels = []

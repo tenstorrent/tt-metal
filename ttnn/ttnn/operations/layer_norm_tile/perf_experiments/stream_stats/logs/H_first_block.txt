@@ -1,0 +1,26 @@
+/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_19_21_13/ops_perf_results_2026_11_01_19_21_13.csv
+focus1            36.5 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+focus2            51.2 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+focus3            34.5 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+allL1_res         24.7 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+L1_nores          21.2 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+8x384             36.4 us  cores   96  in0 8[8]x384[384] DEV_5_DRAM_INTERLEAVED
+32x32             19.5 us  cores   32  in0 32[32]x32[32] DEV_5_DRAM_INTERLEAVED
+affTILE           50.7 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+g_focus1_bf16     36.4 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+g_3x500           21.1 us  cores   48  in0 3[3]x512[500] DEV_5_L1_INTERLEAVED
+g_64x17           22.1 us  cores   64  in0 64[64]x32[17] DEV_5_DRAM_INTERLEAVED
+g_2x512           14.1 us  cores   32  in0 2[2]x512[512] DEV_5_L1_INTERLEAVED
+/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_19_21_28/ops_perf_results_2026_11_01_19_21_28.csv
+focus1            36.2 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+focus2            51.0 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+focus3            34.5 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+allL1_res         23.7 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+L1_nores          21.2 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+8x384             36.1 us  cores   96  in0 8[8]x384[384] DEV_5_DRAM_INTERLEAVED
+32x32             19.4 us  cores   32  in0 32[32]x32[32] DEV_5_DRAM_INTERLEAVED
+affTILE           51.9 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+g_focus1_bf16     37.1 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+g_3x500           21.4 us  cores   48  in0 3[3]x512[500] DEV_5_L1_INTERLEAVED
+g_64x17           21.9 us  cores   64  in0 64[64]x32[17] DEV_5_DRAM_INTERLEAVED
+g_2x512           14.0 us  cores   32  in0 2[2]x512[512] DEV_5_L1_INTERLEAVED
