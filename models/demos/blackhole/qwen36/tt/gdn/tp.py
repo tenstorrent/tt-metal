@@ -26,6 +26,7 @@ def _dense_wdtype(default):
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
+    l2_norm_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
@@ -46,6 +47,29 @@ def _replace(old, new):
 def _softplus_add(a, bias):
     """g-gate: softplus(a + bias) fused into one op (softplus as a post-activation on the add)."""
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
+
+
+def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
+    """QWEN36_1C_GDN_TRIM: fused_recurrent_gated_delta_rule_ttnn (high_precision) with two ops fewer.
+
+    l2norm(x) = rms_norm(x) * K^-0.5; for q that factor folds into the op's own query scale (max rel diff
+    6e-8). g arrives fp32 from its producer, so its typecast goes. k keeps its multiply: as an rms_norm
+    gamma the K^-0.5 is applied at lower precision (3.6e-4 max diff, measured).
+    """
+    K = q.shape[-1]
+    f32 = ttnn.float32
+    qn = ttnn.rms_norm(ttnn.typecast(q, f32), epsilon=1e-6 / K)
+    kn = l2_norm_ttnn(ttnn.typecast(k, f32), dim=-1)
+    return ttnn.transformer.fused_recurrent_gated_delta_rule(
+        qn,
+        kn,
+        ttnn.typecast(v, f32),
+        g,
+        ttnn.typecast(beta, f32),
+        scale=scale * K**-0.5,
+        output_final_state=True,
+        **op_kwargs,
+    )
 
 
 def _silu_mul(x, z, memory_config, dtype=None):
@@ -407,6 +431,7 @@ class TPGatedDeltaNet:
             and self.Dk == self.Dv == 128
             and os.environ.get("QWEN36_1C_CONV_HM") == "1"
         )
+        self._gdn_trim = self._inplace_rec_state and os.environ.get("QWEN36_1C_GDN_TRIM") == "1"
         self._conv_state_shape = (
             (1, self.qkv_dim_tp // 128, 128) if self._conv_hm else (1, self.B, self.qkv_dim_tp)
         )
@@ -1590,7 +1615,12 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
+        g = ttnn.multiply(
+            tw["neg_exp_A"],
+            _softplus_add(a, tw["dt_bias"]),
+            memory_config=_L1,
+            **({"dtype": ttnn.float32} if self._gdn_trim else {}),
+        )
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
@@ -1612,7 +1642,19 @@ class TPGatedDeltaNet:
             # per_token=false (per_token || last is true either way) -- see test_gdn_ring_inplace.py for
             # the output- and state-identical check.
             rec_in_place = self._inplace_rec_state and B == Bmax
-            if rec_in_place:
+            if rec_in_place and self._gdn_trim and os.environ.get("QWEN35_GDN_DECODE_BF16") != "1":
+                o, new_rec = fused_recurrent_trim(
+                    q,
+                    k,
+                    v,
+                    beta,
+                    g,
+                    self.scale,
+                    initial_state=ttnn.reshape(self.rec_state, (B * Nv, Dk, Dv)),  # metadata view
+                    initial_state_block_idx=self._ensure_rec_ring_idx(B * Nv),
+                    output_per_token_state=True,
+                )
+            elif rec_in_place:
                 o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
                     q,
                     k,
