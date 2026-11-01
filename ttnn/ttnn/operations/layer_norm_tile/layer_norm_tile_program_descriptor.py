@@ -184,6 +184,31 @@ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
     )
 
 
+def _core_nocs(blocking, grid_y):
+    """(reader_noc, writer_noc) per assignment entry; the kernels address through noc_index, so this is host-only.
+
+    Under all-core load NoC0 reads have a y-gradient (BH p100a: first-row read ~25 us at the top row vs
+    ~7.5 us at the bottom) and NoC1 carries every write. While most cores own one row, the heavy
+    (larger-share) cores read on the otherwise idle NoC1 and the bottom half of the grid, whose reads
+    finish first, writes on NoC0 (Perf 1: 8x512 focus 46.4 -> 36.9 us). Carve-out: when most cores own
+    >= 2 rows, writes of row k overlap NoC0 reads of row k+1 and the swap measured +10%.
+    """
+    base = [(0, 1)] * len(blocking.assignment)
+    rows = [core_row_tiles for _, _, core_row_tiles in blocking.assignment]
+    if 2 * rows.count(1) <= len(rows):
+        return base
+    heavy = max(rows) if len(set(rows)) > 1 else None
+    nocs = []
+    for core, _, core_row_tiles in blocking.assignment:
+        reader_noc = 1 if core_row_tiles == heavy else 0
+        writer_noc = 0 if 2 * core.y >= grid_y else 1
+        if blocking.residual_on_writer and reader_noc == writer_noc:
+            # Both RISCs read here, and both use read cmd buf 1: they need different NoCs. Writer choice wins.
+            reader_noc = 1 - writer_noc
+        nocs.append((reader_noc, writer_noc))
+    return nocs
+
+
 def _float_bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
@@ -295,16 +320,20 @@ def create_program_descriptor(
         COMPUTE_DEST_LANES,
     ]
 
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
+    groups = {}  # (reader_noc, writer_noc) -> (cores, reader_rt, writer_rt)
     in_addr = input_tensor.buffer_address()
     res_addr = residual.buffer_address() if has_residual else 0
     gamma_addr = gamma.buffer_address()
     beta_addr = beta.buffer_address()
     out_addr = output_tensor.buffer_address()
+    nocs = _core_nocs(blocking, input_tensor.device().compute_with_storage_grid_size().y)
     for core_idx, (core, row_tile_start, core_row_tiles) in enumerate(blocking.assignment):
         rotation = core_idx % C if blocking.bank_stagger else 0
+        group_cores, reader_rt, writer_rt = groups.setdefault(
+            nocs[core_idx], ([], ttnn.RuntimeArgs(), ttnn.RuntimeArgs())
+        )
+        group_cores.append(core)
         reader_rt[core.x][core.y] = [
             in_addr,
             res_addr,
@@ -317,27 +346,37 @@ def create_program_descriptor(
         writer_rt[core.x][core.y] = [out_addr, row_tile_start, core_row_tiles, rotation, res_addr]
         compute_rt[core.x][core.y] = [core_row_tiles]
 
-    kernels = [
-        ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "layer_norm_tile_reader.cpp"),
-            core_ranges=cores,
-            compile_time_args=reader_ct_args,
-            runtime_args=reader_rt,
-            config=ttnn.ReaderConfigDescriptor(),
-        ),
-        ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "layer_norm_tile_writer.cpp"),
-            core_ranges=cores,
-            compile_time_args=writer_ct_args,
-            runtime_args=writer_rt,
-            config=ttnn.WriterConfigDescriptor(),
-        ),
+    noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+    kernels = []
+    for (reader_noc, writer_noc), (group_cores, reader_rt, writer_rt) in groups.items():
+        ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in group_cores])
+        kernels += [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "layer_norm_tile_reader.cpp"),
+                core_ranges=ranges,
+                compile_time_args=reader_ct_args,
+                runtime_args=reader_rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=noc_enum[reader_noc]
+                ),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "layer_norm_tile_writer.cpp"),
+                core_ranges=ranges,
+                compile_time_args=writer_ct_args,
+                runtime_args=writer_rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=noc_enum[writer_noc]
+                ),
+            ),
+        ]
+    kernels.append(
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "layer_norm_tile_compute.cpp"),
             core_ranges=cores,
             compile_time_args=compute_ct_args,
             runtime_args=compute_rt,
             config=compute_kernel_config,
-        ),
-    ]
+        )
+    )
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=_cb_descriptors(blocking))
