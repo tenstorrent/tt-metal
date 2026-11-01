@@ -49,6 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapte
 
 TEST_VARIANTS["glm_5_3"] = GLM53Adapter()
 
+from models.demos.deepseek_v3_d_p.utils.hf_download import download_layers, resolve_hf_snapshot_dir
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     download_infinitebench_subset,
@@ -501,7 +502,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
         Path to the downloaded model directory
     """
     try:
-        from huggingface_hub import snapshot_download
+        import huggingface_hub  # noqa: F401
     except ImportError:
         logger.error("huggingface_hub is not installed. Install it with: pip install huggingface_hub")
         raise
@@ -510,83 +511,8 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
     logger.info(f"Cache directory: {cache_dir}")
     logger.info(f"Note: Only downloading files needed for layer {layer_idx} to minimize download size")
 
-    # Create cache directory
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        # Download essential files + index
-        logger.info("Step 1/2: Downloading configuration and index files...")
-        allow_patterns = [
-            "config.json",
-            "*.safetensors.index.json",
-            "generation_config.json",
-            "tokenizer*",
-            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
-        ]
-
-        # Add custom model code files (needed for trust_remote_code=True)
-        allow_patterns.extend(
-            [
-                "configuration_deepseek.py",
-                "modeling_deepseek.py",
-                "*.py",  # Include all Python files for custom model code
-            ]
-        )
-
-        # First download just the index to figure out which shards we need
-        index_dir = snapshot_download(
-            repo_id=variant.hf_repo_id,
-            cache_dir=str(cache_dir),
-            allow_patterns=allow_patterns,
-            ignore_patterns=["*.safetensors"],  # Don't download weight files yet
-        )
-
-        logger.info(f"✓ Configuration downloaded to: {index_dir}")
-
-        # Systematically determine which shards are needed based on the index
-        index_path = Path(index_dir) / "model.safetensors.index.json"
-        with open(index_path, "r") as f:
-            index_data = json.load(f)
-
-        weight_map = index_data.get("weight_map", {})
-        required_shards = set()
-
-        # Find shards for embeddings
-        for key, shard_file in weight_map.items():
-            if "embed_tokens" in key:
-                required_shards.add(shard_file)
-
-        # Find shards for the requested layers
-        for layer_id in range(layer_idx, layer_idx + num_layers):
-            for key, shard_file in weight_map.items():
-                if f"model.layers.{layer_id}." in key:
-                    required_shards.add(shard_file)
-
-        # Convert shard filenames to patterns
-        shard_patterns = []
-        for shard_file in sorted(required_shards):
-            # Extract shard number from filename like "model-00001-of-000163.safetensors"
-            shard_num = shard_file.split("-")[1]
-            shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
-
-        logger.info(
-            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings..."
-        )
-        logger.info(
-            f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
-        )
-        estimated_size_gb = len(required_shards) * 0.28  # Approximate 280MB per shard
-        logger.info(f"Estimated download size: ~{estimated_size_gb:.1f}GB")
-
-        model_dir = snapshot_download(
-            repo_id=variant.hf_repo_id,
-            cache_dir=str(cache_dir),
-            allow_patterns=allow_patterns + shard_patterns,
-        )
-
-        logger.success(f"✓ Model weights downloaded successfully!")
-        logger.info(f"Model location: {model_dir}")
-        return Path(model_dir)
+        return download_layers(variant.hf_repo_id, cache_dir, range(layer_idx, layer_idx + num_layers))
 
     except Exception as e:
         logger.error(f"Failed to download model: {e}")
@@ -594,27 +520,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
         raise
 
 
-def _resolve_hf_snapshot_dir(path: Path) -> Path:
-    """If `path` is an HF hub-cache repo root (``models--org--name/`` with a ``snapshots/`` subdir),
-    return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
-    safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
-
-    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.3``) or a plain
-    checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
-    """
-    if (path / "model.safetensors.index.json").exists():
-        return path
-    snaps = path / "snapshots"
-    if snaps.is_dir():
-        ref = path / "refs" / "main"
-        if ref.is_file():
-            cand = snaps / ref.read_text().strip()
-            if (cand / "model.safetensors.index.json").exists():
-                return cand
-        cands = [d for d in snaps.iterdir() if d.is_dir() and (d / "model.safetensors.index.json").exists()]
-        if cands:
-            return max(cands, key=lambda d: d.stat().st_mtime)
-    return path
+_resolve_hf_snapshot_dir = resolve_hf_snapshot_dir
 
 
 def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
