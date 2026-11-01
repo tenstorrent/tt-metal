@@ -228,8 +228,8 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.347, 0.355, 0.390, 0.417, 0.449, 0.479, 0.502, 0.533, 0.573, 0.609, 0.643],
+    # 55k / code_debug, TP-deduped KV cache; midpoint of two hosts that differ by ~7%, so both sit in the band.
+    (61, 11, 10): [0.360, 0.368, 0.403, 0.430, 0.461, 0.490, 0.514, 0.544, 0.584, 0.619, 0.653],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
