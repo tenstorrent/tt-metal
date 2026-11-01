@@ -143,6 +143,7 @@ from ..reference.spec_decode import (
     plan_verify_passes,
     planned_drafts,
 )
+from .common import fabric_config
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
@@ -408,7 +409,7 @@ class MiMoV2ForCausalLM:
         "supports_chunked_prefill": True,
         "supports_prefix_caching": True,
         "folds_dp_into_lanes": True,
-        "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
+        "fabric_config": fabric_config(),
         # Device sampling: the decode trace's greedy token or DeviceSampler's draw (module docstring). Its candidates
         # are each chip's CANDIDATES_PER_CHIP largest logits, which bound top_k and stand in for the vocabulary when
         # a top_p < 1 row sets no top_k; a row with neither (pure temperature sampling) samples on host.

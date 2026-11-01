@@ -27,6 +27,20 @@ import ttnn
 
 TILE = ttnn.TILE_SIZE
 
+# Fabric packet payload (bytes): 8704 (8 BFP8 tiles; the default is 4352) lets FabricRowGather send a reduce core's
+# four bf16 tiles as one packet; MIMO_FABRIC_PAYLOAD=0 keeps the default.
+FABRIC_PAYLOAD = int(os.environ.get("MIMO_FABRIC_PAYLOAD", "8704"))
+
+
+def fabric_config(config=ttnn.FabricConfig.FABRIC_1D_RING):
+    """ttnn.set_fabric_config keyword arguments: ``config`` with FABRIC_PAYLOAD."""
+    kwargs = {"config": config}
+    if FABRIC_PAYLOAD:
+        router = ttnn.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = FABRIC_PAYLOAD
+        kwargs["router_config"] = router
+    return kwargs
+
 
 class MeshPlan:
     """TP on ``tp_axis`` of a (sub)mesh. For a 1x8 replica ``dp == 1``; a 4x8 parent has ``dp == 4``."""

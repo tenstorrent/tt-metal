@@ -21,6 +21,7 @@ import glob
 import os
 import statistics
 import time
+import zlib
 from types import SimpleNamespace
 
 os.environ.setdefault("MIMO_PREFILL_BATCH", "0")
@@ -35,6 +36,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS
 from models.experimental.mimo_v2_6_flash.tests.perf.vllm_adapter_prefill import SWA_RING, vllm_kv_layout
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import BLOCK_SIZE, MiMoV2ForCausalLM
+from models.experimental.mimo_v2_6_flash.tt.common import fabric_config
 
 CORPUS = "ttnn/cpp/ttnn/operations/**/*.[hc]pp"
 # Under tracy (TT_METAL_DEVICE_PROFILER=1) the device's profiler buffer is read after every step, on the row's
@@ -156,7 +158,7 @@ def main():
                 tables[g][u, :global_blocks] = 1 + u * per_request + torch.arange(global_blocks, dtype=torch.int32)
     layer_tables = [tables[g] for g in groups]
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    ttnn.set_fabric_config(**fabric_config())
     mesh = ttnn.open_mesh_device(
         ttnn.MeshShape(1, 8),
         l1_small_size=65536,
@@ -207,6 +209,7 @@ def main():
             pos = getattr(main, "_pos", [a.ctx] * users)
             tok = getattr(main, "_tok", list(last))
             times, per_step_tokens = [], []
+            emitted = [[] for _ in range(n)]  # each request's committed tokens (the run's digest)
             if plain:
                 for s in range(a.steps):
                     tokens = torch.zeros(rows, 1, dtype=torch.int32)
@@ -222,6 +225,7 @@ def main():
                         read_profiler(model, keep=s >= a.warm)
                     for r in range(n):
                         tok[r], pos[r] = int(logits[r, 0].argmax()), pos[r] + 1
+                        emitted[r].append(tok[r])
                     per_step_tokens.append(1.0)
                 mode = "plain"
             else:
@@ -278,6 +282,7 @@ def main():
                         c = int(counts[r])
                         tok[r], pos[r] = int(ids[r, c - 1]), pos[r] + c
                         got.append(c)
+                        emitted[r] += [int(x) for x in ids[r, :c]]
                     counts[n:] = 1
                     per_step_tokens.append(sum(got) / n)
                 mode = f"spec{k}"
@@ -289,6 +294,9 @@ def main():
                 f"users={n} mode={mode} step_ms={1e3 * med:.2f} mean={1e3 * statistics.mean(t):.2f} "
                 f"tokens_per_step={tps:.2f} tok_s={tps / statistics.mean(t):.1f}"
             )
+            # Greedy: the same arithmetic commits the same tokens (compare runs of two builds).
+            digest = [f"{zlib.crc32(str(e).encode()):08x}:{len(e)}" for e in emitted]
+            say(f"users={n} mode={mode} tokens {' '.join(digest)}")
         if a.breakdown:
             breakdown(model.models[0])
         if PERF_JSON:

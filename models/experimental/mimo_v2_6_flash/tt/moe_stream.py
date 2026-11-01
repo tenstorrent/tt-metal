@@ -1006,7 +1006,7 @@ class ReduceExpand:
         assert compact.shape[-1] == self.compact_width
         phase = fabric.next_phase()
         kernels, cbs, semaphores = self._norm_kernels(
-            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase)
+            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase), fabric=fabric
         )
         # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
         cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1035,9 +1035,10 @@ class ReduceExpand:
         ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
         return out, norm_out
 
-    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None):
+    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None, fabric=None):
         """Kernels, CBs and semaphores of the fused reduce + residual + RMSNorm on the bank cores. The chips' copies
-        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the fabric gather buffer."""
+        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the gather buffer of
+        ``fabric`` (its FabricRowGather)."""
         assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
         assert gamma.shape[-1] == self.compact_width
         cores = len(self.cores)
@@ -1079,6 +1080,7 @@ class ReduceExpand:
             sem_id,
             self.rows,
             self.gather_tiles,
+            fabric.chip_packets if fabric is not None else 0,
         ]
         writer_ct = [
             self.cb_sum,
@@ -1111,6 +1113,7 @@ class ReduceExpand:
             fp32_bits(1.0 / self.hidden),
             fp32_bits(eps),
             self.gather_tiles,
+            int(fabric is not None and fabric.whole),
         ]
         reader = ttnn.KernelDescriptor(
             kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_reader{'' if gathered is not None else '_fabric'}.cpp",
@@ -1168,6 +1171,10 @@ class FabricRowGather:
         assert self.tiles_per_core in (2, 4) and len(self.cores) * self.tiles_per_core == self.compact_tiles
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
+        # One packet per (core, chip) when the fabric's packets hold a core's tiles (fabric_config's router_config,
+        # generator_vllm), the gather buffer then chip-major; else a packet per two tiles, tile-major.
+        self.whole = ttnn.get_tt_fabric_max_payload_size_bytes() >= self.tiles_per_core * tile_bytes
+        self.chip_packets = 1 if self.whole else self.tiles_per_core // 2
         self.phase_tiles = self.tiles_per_core * self.chips
         self.phase_bytes = self.phase_tiles * tile_bytes
         rows = self.PHASES * self.phase_tiles * TILE
@@ -1241,7 +1248,18 @@ class FabricRowGather:
                         kernel_source=f"{KERNEL_DIR}/fabric_gather_send.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=transport,
-                        compile_time_args=[cb, rng, per_link, self.tiles_per_core, self.chips, local, 1, 0, wait_count],
+                        compile_time_args=[
+                            cb,
+                            rng,
+                            per_link,
+                            self.tiles_per_core,
+                            self.chips,
+                            local,
+                            1,
+                            0,
+                            wait_count,
+                            int(self.whole),
+                        ],
                         runtime_args=rt,
                         config=config,
                     )

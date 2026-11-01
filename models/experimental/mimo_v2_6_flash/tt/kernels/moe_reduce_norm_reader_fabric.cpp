@@ -24,6 +24,8 @@ void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(10);
     constexpr uint32_t rows = get_compile_time_arg_val(11);          // user rows per block: 4 or 8
     constexpr uint32_t gather_tiles = get_compile_time_arg_val(12);  // tiles of every core's partial rows
+    // Semaphore increments per chip: one per packet (fabric_gather_send.cpp: two tiles each, or all of them).
+    constexpr uint32_t chip_packets = get_compile_time_arg_val(13);
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t fp32_tile_bytes = 4096;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
@@ -68,7 +70,7 @@ void kernel_main() {
     cb_push_back(cb_const, 2);
 
     volatile tt_l1_ptr uint32_t* gather_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
-    noc_semaphore_wait(gather_sem, chips * ((tiles + 1) / 2));  // one increment per packet of two tiles
+    noc_semaphore_wait(gather_sem, chips * chip_packets);
     noc_semaphore_set(gather_sem, 0);
     cb_reserve_back(cb_in, tiles * chips);
     cb_push_back(cb_in, tiles * chips);
