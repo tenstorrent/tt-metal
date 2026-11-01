@@ -63,8 +63,9 @@ class SCARebatchPlan:
         inverse_index: One gather index per contribution slot, each selecting the camera row that
             feeds a query. Slots a query does not fill point at a padded row.
         count: Camera-contributor count with shape ``[batch_size, num_queries, 1]``.
-        num_valid_queries: Valid row count of each camera row block, in ``row_mask`` order. MSDA computes
-            only these rows; the padding past them is masked by ``row_mask``.
+        num_valid_queries: ``(batch_size * num_cams,)`` uint32 device tensor, the valid row count of
+            each camera row block in ``row_mask`` order. MSDA computes only these rows, reading the
+            counts on device; the padding past them is masked by ``row_mask``.
         is_empty: Whether the visibility mask contains no valid query-camera pairs.
     """
 
@@ -74,7 +75,7 @@ class SCARebatchPlan:
     row_mask: Optional[ttnn.Tensor]
     inverse_index: tuple[ttnn.Tensor, ...]
     count: Optional[ttnn.Tensor]
-    num_valid_queries: tuple[int, ...] = ()
+    num_valid_queries: Optional[ttnn.Tensor] = None
     is_empty: bool = False
 
 
@@ -102,9 +103,10 @@ class SCARebatchPlanner:
 
     The visibility mask stays on device: a cumulative sum places each camera's visible queries in
     its row block and a scatter compacts their IDs there. The host reads back only the per-camera
-    visible counts and the most cameras any query is seen by: they size the plan and give MSDA its
-    exact row counts. Capacity is the largest count seen so far times ``headroom``, rounded up, so a
-    frame that sees a few more queries than the last keeps the plan's shapes.
+    visible counts and the most cameras any query is seen by, and only to size the plan. MSDA takes its
+    exact row counts from a device tensor, so a captured trace follows them from frame to frame.
+    Capacity is the largest count seen so far times ``headroom``, rounded up, so a frame that sees a
+    few more queries than the last keeps the plan's shapes.
 
     Attributes:
         capacity: Visible queries per camera the plan holds; each camera's block has
@@ -218,7 +220,7 @@ class SCARebatchPlanner:
         num_cams, bs, num_queries, num_depth_levels = tuple(reference_points_cam.shape)[:4]
         seen_by, visible, visible_count = visibility.seen_by, visibility.visible, visibility.visible_count
 
-        # The only readback: these size the plan's tensors and MSDA's computed rows.
+        # The only readback: these size the plan's tensors. MSDA reads its row counts on device.
         ttnn.event_synchronize(visibility.counts_ready)
         host_count, host_max_cameras = visibility.host_counts
         num_visible = ttnn.to_torch(host_count).flatten().round().to(torch.int64)
@@ -297,6 +299,9 @@ class SCARebatchPlanner:
             num_valid = ttnn.repeat(num_valid, ttnn.Shape((bs, 1, 1, 1)))
         row_mask = ttnn.lt(constants["rows"], ttnn.reshape(num_valid, (bs * num_cams, 1, 1)))
         row_mask = ttnn.typecast(row_mask, ttnn.bfloat16)
+        # Sums of 0/1 in float32, so exact; MSDA reads them as one uint32 row-major page.
+        num_valid_queries = ttnn.typecast(ttnn.reshape(num_valid, (1, bs * num_cams)), ttnn.uint32)
+        num_valid_queries = ttnn.reshape(ttnn.to_layout(num_valid_queries, ttnn.ROW_MAJOR_LAYOUT), (bs * num_cams,))
 
         count = ttnn.clamp(ttnn.sum(seen_by, dim=0, keepdim=True), min=1.0)
         count = ttnn.reshape(count, (bs, num_queries, 1))
@@ -308,7 +313,7 @@ class SCARebatchPlanner:
             row_mask=row_mask,
             inverse_index=tuple(inverse_index),
             count=count,
-            num_valid_queries=tuple(num_visible.tolist()) * bs,
+            num_valid_queries=num_valid_queries,
         )
 
 
@@ -489,7 +494,7 @@ class TTSpatialCrossAttention:
             query=queries_batched,
             value=value_reshaped,
             reference_points=reference_points_batched,
-            num_valid_queries=rebatch_plan.num_valid_queries,
+            num_valid_queries_tensor=rebatch_plan.num_valid_queries,
             **kwargs,
         )
 
