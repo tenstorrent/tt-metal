@@ -26,7 +26,13 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 3. Touch the device only through `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, in the foreground. Never run
    `pytest`, `python -m pytest`, or `python` on device code directly, and never run `tt-smi -r`. The orchestrator
    reads your command log, and a direct call fails the step. Set `PYTHONPATH=$PWD` (the shell's value points at
-   another checkout). `BRINGUP_SPEC` is already set.
+   another checkout). `BRINGUP_SPEC` is already set. A device run that may take longer than ~9 minutes (a model load,
+   a profile, a gate unit) never runs under `timeout` or as a background task of your tool call: your call's time
+   limit would kill it, the safe runner then marks every card dirty and the next run resets the whole box (F238;
+   FIX.16, P.22, FIX.19). Start it detached and wait in short calls:
+   `python -m models.demos.common.bringup.devjob start <name> -- scripts/run_safe_pytest.sh ...`, then
+   `python -m models.demos.common.bringup.devjob wait <name>` (rc of the run, or 75 = still running: call it again),
+   `devjob tail <name>` for its log. Never kill a device job, one of yours or another's; one device job at a time.
 4. Always use 2D fabric. Open meshes with `ttnn.FabricConfig.FABRIC_2D` (the spec's `box.device_params` does this for
    the gates), and configure CCLs, dispatch and combine for 2D fabric. Never open a device, or write a test or a
    module, with `FABRIC_1D` or `FABRIC_1D_RING`.
