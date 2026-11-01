@@ -243,6 +243,27 @@ class Qwen36MLP:
         )
 
     def forward(self, x, mode=None):
+        # BONSAI_PF_TIME=1 (debug): synchronized wall time of the first 124 prefill MLP calls, i.e. the eager
+        # warmup pass (traced_4k: 64 x 2048-row chunk + 64 x tail) before any trace capture.
+        if os.environ.get("BONSAI_PF_TIME") and x.shape[-2] > 32 and Qwen36MLP._pf_n < 124:
+            import time as _t
+
+            ttnn.synchronize_device(self.device)
+            t0 = _t.perf_counter()
+            y = self._forward(x, mode)
+            ttnn.synchronize_device(self.device)
+            Qwen36MLP._pf_t.setdefault(x.shape[-2], []).append((_t.perf_counter() - t0) * 1e3)
+            Qwen36MLP._pf_n += 1
+            if Qwen36MLP._pf_n == 124:
+                for k, v in Qwen36MLP._pf_t.items():
+                    print(f"PFTIME native={self.native is not None} S={k} n={len(v)} median {sorted(v)[len(v) // 2]:.3f} ms "
+                          f"sum {sum(v):.1f} ms", flush=True)
+            return y
+        return self._forward(x, mode)
+
+    _pf_n, _pf_t = 0, {}
+
+    def _forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
         if self.num_devices > 1:
