@@ -1,0 +1,65 @@
+{
+ "metrics": {
+  "ack_blocks_checked": {
+   "t": "2026-11-01T09:18:44",
+   "value": 800
+  },
+  "acks_early": {
+   "t": "2026-11-01T09:18:43",
+   "value": 0
+  },
+  "contract_checks_failed": {
+   "t": "2026-11-01T09:19:14",
+   "value": 0
+  },
+  "contract_state_exact_engram_tail": {
+   "t": "2026-11-01T09:19:14",
+   "value": 1
+  },
+  "pcc_contract_state_compress_partial": {
+   "t": "2026-11-01T09:19:14",
+   "value": 1.0
+  },
+  "pcc_contract_state_compress_partial_limit": {
+   "t": "2026-11-01T09:19:14",
+   "value": 1.0
+  },
+  "pcc_contract_state_window_kv": {
+   "t": "2026-11-01T09:19:14",
+   "value": 0.971989754722735
+  },
+  "pcc_contract_state_window_kv_limit": {
+   "t": "2026-11-01T09:19:14",
+   "value": 0.9434091107889953
+  },
+  "pcc_producer_kv_compress_kv": {
+   "t": "2026-11-01T09:19:12",
+   "value": 0.9763241600456427
+  },
+  "pcc_producer_kv_compress_kv_limit": {
+   "t": "2026-11-01T09:19:12",
+   "value": 0.9370253860868574
+  },
+  "pcc_producer_kv_index_k": {
+   "t": "2026-11-01T09:19:12",
+   "value": 0.9904889755590439
+  },
+  "pcc_producer_kv_index_k_limit": {
+   "t": "2026-11-01T09:19:12",
+   "value": 0.9465270239140948
+  },
+  "pcc_producer_kv_window_kv": {
+   "t": "2026-11-01T09:19:12",
+   "value": 0.971989754722733
+  },
+  "pcc_producer_kv_window_kv_limit": {
+   "t": "2026-11-01T09:19:12",
+   "value": 0.9434091107889953
+  },
+  "smoke_runner_ok": {
+   "t": "2026-11-01T09:55:13",
+   "value": 1
+  }
+ },
+ "task": "K.1R"
+}
