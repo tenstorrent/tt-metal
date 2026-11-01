@@ -4298,6 +4298,7 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
         c.stat_reads = false;
         variants.emplace_back("dram-move-nostat-nostatreads", c);
     }
+    const bool profile = std::getenv("TRANSPORT_PROFILE") != nullptr;
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     std::printf("transport bench: median of 5 enqueues; per pass = (x%u - x1) / %u\n", repeats, repeats - 1u);
     std::printf("%-6s %-3s %-4s %-7s %-32s %12s %12s %12s\n", "C", "Bt", "d", "groups", "variant", "x1 us", "xR us", "per pass us");
@@ -4315,6 +4316,14 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
             cfg.repeats = 1;
             double once = 0.0;
             run_transport(s.C, ref, s.w, s.h, s.Bt, s.groups, cfg, &once, /* read_back */ false);
+            // TRANSPORT_PROFILE: one-pass launches only, and the device is
+            // closed at the end so that the device profiler writes its zones
+            // (see DISABLED_ProfileTheRelay).
+            if (profile) {
+                std::printf("%-6u %-3u %-4u %-7u %-32s %12.1f\n", s.C, s.Bt, s.d, s.groups, name.c_str(), once * 1e6);
+                std::fflush(stdout);
+                continue;
+            }
             cfg.repeats = repeats;
             double many = 0.0;
             run_transport(s.C, ref, s.w, s.h, s.Bt, s.groups, cfg, &many, /* read_back */ false);
@@ -4324,5 +4333,8 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
                 many * 1e6, per_pass * 1e6);
             std::fflush(stdout);
         }
+    }
+    if (profile) {
+        ttml::autograd::ctx().close_device();
     }
 }

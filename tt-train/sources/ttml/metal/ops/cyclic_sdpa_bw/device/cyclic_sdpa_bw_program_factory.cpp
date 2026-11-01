@@ -311,6 +311,12 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     if (!args.use_barrier) {
         sync_defines["ENDPOINT_SYNC"] = "1";
     }
+    // Each NoC routes in one direction only (NoC 0 towards +x, +y; NoC 1
+    // towards -x, -y), so a hop to a grid neighbour on the wrong NoC goes
+    // round the torus. The relay chooses the NoC per hop; both data movement
+    // kernels therefore run in dynamic NoC mode, where either may use either.
+    sync_defines["DIRECTIONAL_NOC"] = "1";
+    constexpr auto kNocMode = NOC_MODE::DM_DYNAMIC_NOC;
     // The unmasked schedule: every block pair live, 2T timesteps in two
     // passes. All three kernels need it, since it changes the timestep count
     // and which pair each core takes; the compute kernel additionally stops
@@ -355,6 +361,7 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
+            .noc_mode = kNocMode,
             .compile_args = reader_args,
             .defines = sync_defines});
 
@@ -372,6 +379,7 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
+            .noc_mode = kNocMode,
             .compile_args = writer_args,
             .defines = sync_defines});
 
