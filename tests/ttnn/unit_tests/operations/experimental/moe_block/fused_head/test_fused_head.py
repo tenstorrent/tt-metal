@@ -8,11 +8,12 @@ and its host cost a call. A Galaxy (the cases' mesh); skipped without one or wit
 
     MOE_BLOCK_REFS=/data/mstaletovic/jobs/port/refs pytest tests/ttnn/unit_tests/operations/experimental/moe_block/fused_head/test_fused_head.py
 
-Compared per chip, bit for bit: rows, route, the combine plan (counts, regions, token_index, table, plan) and the
-chip's own slots of the dispatch buffer xbuf (the head writes only those; a latent model's, the latent rows, by PCC);
-not the latent output (with the dispatch prep the head never writes it: the latent rows go to xbuf). The shared expert's
-output se by PCC >= SE_PCC (it differs from the reference's in its last bits - TODO: find why; the C++ op is the closer
-to an exact HiFi2 model of the matmuls). Run to run, every output bit-identical (test_fused_head_deterministic)."""
+Compared per chip, bit for bit: the shared expert's output se, rows, route, the combine plan (counts, regions,
+token_index, table, plan) and the chip's own slots of the dispatch buffer xbuf (the head writes only those; a latent
+model's are the latent rows); not the latent output (with the dispatch prep the head never writes it: the latent rows go
+to xbuf). The cases' bf8 weights are on the bf8 grid (dump_ref_fused_head.py): the reference's fp32 -> bf16 -> bf8
+upload and this op's fp32 -> bf8 packing give the same device weights. Run to run, every output bit-identical
+(test_fused_head_deterministic)."""
 
 import importlib.util
 import os
@@ -38,7 +39,6 @@ def _harness():
 hz = _harness()
 CASES = hz.list_cases("fused_head") if os.environ.get("MOE_BLOCK_REFS") else []
 pytestmark = pytest.mark.skipif(not CASES, reason="no fused_head reference cases (set MOE_BLOCK_REFS)")
-SE_PCC = 0.9995  # (glm53: 0.99990 at the least chip)
 
 # (E, K, H, I, shared I, shared activation, score, route scale, latent): the reference's MoEModels
 MODELS = {
@@ -150,10 +150,7 @@ def test_fused_head_bit_exact(case):
         got[(r, c)]["xbuf_own"] = t.reshape(-1, t.shape[-1])[me * S : (me + 1) * S]
         exp = ref[(r, c)]["xbuf"]
         want[(r, c)] = dict(ref[(r, c)], xbuf_own=exp.reshape(-1, exp.shape[-1])[me * S : (me + 1) * S])
-    # (a latent model's xbuf rows are the latent projection: by PCC, as se; else x's rows, bit for bit)
-    close = ["se", "xbuf_own"] if out.latent is not None else ["se"]
-    hz.assert_bit_exact(got, want, [n for n in names + ["xbuf_own"] if n not in close])
-    hz.assert_pcc(got, want, close, SE_PCC)
+    hz.assert_bit_exact(got, want, names + ["xbuf_own"])
 
 
 def test_fused_head_deterministic(case):

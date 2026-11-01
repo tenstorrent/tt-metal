@@ -11,8 +11,10 @@ Each case (op "fused_head", case "<model>-<R>x<C>-c<chunk>-uniform-s<seed>"): th
 (FusedHead.plan with the planner's accumulators, deterministic router, the DRAM fallback allowed), run once on x
 from the seed. Saved per chip: input x [1, 1, S/SP, H/TP]; outputs se (the shared expert's reduced output), rows (the
 owners' joint routing rows), xbuf (the dispatch buffer: only this chip's owned slots are the head's), route, latent
-(K3), and the routing plan tensors counts / regions / token_index / table / plan. The weights are not saved: the
-test rebuilds them from the seed with weights_of() below (torch's generator, as the reference's random_weights).
+(K3), and the routing plan tensors counts / regions / token_index / table / plan; the weights in weights.pt.
+The shared expert's and the latent down's weights are put on the bf8 grid first (ref_harness.bf8_grid): the
+reference uploads them through ttnn.from_torch, which rounds fp32 to bf16 before packing a sharded bf8 tensor, the C++
+op packs fp32 straight to bf8 - values already on the grid come out the same bits both ways (the C++ op's packing).
 The planned layout and accumulators go into meta.json (config) so the C++ test plans the same head."""
 
 import argparse
@@ -35,11 +37,18 @@ def _harness():
     return mod
 
 
-def weights_of(model, seed):
-    """The reference's test weights (models/demos/moe_block/tests/test_moe_block.py random_weights)."""
+def weights_of(model, seed, hz=None):
+    """The reference's test weights (models/demos/moe_block/tests/test_moe_block.py random_weights), the bf8 ones
+    (the shared expert's gate_up [2 Is, H] / down [H, Is], the latent down [Hr, H]) on the bf8 grid along their
+    output dim (dim 0) when hz (ref_harness) is given."""
     from models.demos.moe_block.tests.test_moe_block import random_weights
 
-    return random_weights(model, seed)
+    w = random_weights(model, seed)
+    if hz is not None:
+        for d, k in ((w.shared, "gate_up"), (w.shared, "down"), (w.latent, "down")):
+            if d is not None and k in d:
+                d[k] = hz.bf8_grid(d[k], dim=0)
+    return w
 
 
 def x_of(T, H, seed):
@@ -55,7 +64,7 @@ def dump(mesh, R, C, name, chunk, seed, A, hz, fabric):
     dtypes = MoEDtypes()
     fit = FusedHead.plan(g, model, dtypes, mesh=mesh, accumulators=A)
     assert fit.ok, fit.why
-    w = weights_of(model, seed)
+    w = weights_of(model, seed, hz)
     # (the free L1 the head's build planned on - HeadSE3 refits on the device's: the C++ op is given the same)
     from models.demos.moe_block.tt import se_engine3
 

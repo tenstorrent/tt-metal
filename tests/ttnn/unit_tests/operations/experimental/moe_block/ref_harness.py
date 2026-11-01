@@ -168,6 +168,32 @@ def assert_pcc(actual: dict, expected: dict, names: list[str], pcc: float):
     assert not bad, "not close:\n" + "\n".join(bad)
 
 
+def bf8_grid(w: torch.Tensor, dim: int = 0) -> torch.Tensor:
+    """fp32 w with every value replaced by its bfloat8_b value, as the host packer encodes fp32 straight to bf8
+    (bfp_simd.hpp row_scalar): groups of 16 consecutive values along dim (a tile face row: a weight [out, in] stored
+    as [in, out] tiles groups along out, dim 0) share their largest exponent; each significand is shifted to it,
+    rounded to 7 bits (ties to even, the shifted-out bits dropped first) and saturated.
+
+    The result is a fixed point of both packing paths: its values have at most 7 significant bits, so bf16 holds them
+    exactly and ttnn.from_torch's bf16 host buffer for a sharded bf8 target (py_to_tt_tensor.cpp compute_host_dtype)
+    leaves them as they are; packing them again gives them back. A reference dump uploads such weights, the C++ op's
+    test packs the same values from fp32: the device weights are the same bits on both sides."""
+    t = w.float().movedim(dim, -1).contiguous()
+    assert t.shape[-1] % 16 == 0, f"bf8_grid: {t.shape[-1]} values along dim {dim} is not whole groups of 16"
+    u = t.view(torch.int32).reshape(-1, 16).to(torch.int64) & 0xFFFFFFFF
+    exp = (u >> 23) & 0xFF
+    shared = exp.amax(1, keepdim=True)
+    diff = shared - exp
+    m = ((u & 0x7FFFFF) | 0x800000) >> diff.clamp(max=31)
+    m = torch.where(diff >= 32, torch.zeros_like(m), m)
+    shift = 24 - 7
+    m = (m + ((1 << (shift - 1)) - 1) + ((m >> shift) & 1)) >> shift
+    m = torch.where(exp == 0, torch.zeros_like(m), m.clamp(max=(1 << 7) - 1))
+    sign = torch.where((u >> 31) == 1, -1.0, 1.0).double()
+    out = sign * m.double() * torch.pow(2.0, (shared - 127 - 6).double())
+    return out.float().reshape(t.shape).movedim(-1, dim).contiguous()
+
+
 def _bits(t: torch.Tensor) -> torch.Tensor:
     views = {torch.float32: torch.int32, torch.bfloat16: torch.int16, torch.float16: torch.int16}
     return t.view(views[t.dtype]) if t.dtype in views else t

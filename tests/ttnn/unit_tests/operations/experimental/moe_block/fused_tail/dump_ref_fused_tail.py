@@ -16,6 +16,8 @@ Per case: the TP group is the mesh row (cluster_axis 1), rows = chunk / SP a mes
     [1, 1, rows, H / TP];
   * K3 (TailEngine): y_own [1, 1, S, Hr] ROW_MAJOR, shared_expert [1, 1, rows, H / TP] TILE, W_up [H, Hr] and the
     norm weight [Hr] (fp32, in weights.pt next to the chips: the same on every chip) -> output [1, 1, rows, H / TP].
+    The norm weight is a power of two and W_up diag(g) on the bf8 grid: the C++ op's fp32 -> bf8 packing and the
+    reference's fp32 -> bf16 -> bf8 one give the same device weights.
 The tail's inputs are not routed (no combine_snap applies): seeded normal rows, as the reference's own tests use. Each
 case runs the reference twice on the same inputs and checks the two outputs agree before saving.
 """
@@ -29,7 +31,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ref_harness
 
 import ttnn  # noqa: E402
-from ref_harness import case_dir, from_mesh, save_case  # noqa: E402
+from ref_harness import bf8_grid, case_dir, from_mesh, save_case  # noqa: E402
 
 OP = "fused_tail"
 # model -> its key in moe_block.MODELS; a case is "<model>_<R>x<C>_c<chunk>"
@@ -82,7 +84,12 @@ def run_case(mesh, case, model_key, chunk, fabric, payload, root):
     else:
         Hr = m.latent_dim
         w_up = torch.randn(H, Hr, generator=g) * 0.02
-        gn = 1.0 + torch.randn(Hr, generator=g) * 0.1
+        # (both sides fold the norm weight into W_up in fp32, W' = W_up diag(g); the reference then uploads W' through
+        # ttnn.from_torch, which rounds it to bf16 before packing a sharded bf8 tensor, the C++ op packs it from fp32.
+        # g a power of two and W' on the bf8 grid (ref_harness.bf8_grid, along H: W'^T's [Hr, Ho] tiles group along
+        # Ho) make W' = (W' / g) g exact in fp32 and a fixed point of both packings: the same device bits)
+        gn = torch.pow(2.0, torch.randint(-1, 2, (Hr,), generator=g).float())  # (0.5, 1 or 2)
+        w_up = bf8_grid(w_up * gn, dim=0) / gn
         y = torch.randn(R, C, S, Hr, generator=g).to(torch.bfloat16)
         se = (torch.randn(R, C, rows, Ho, generator=g) * 0.5).to(torch.bfloat16)
         yt, st = put(y, ttnn.ROW_MAJOR_LAYOUT), put(se, ttnn.TILE_LAYOUT)
