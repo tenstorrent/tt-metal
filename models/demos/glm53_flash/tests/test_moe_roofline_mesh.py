@@ -61,6 +61,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (  # noqa: E402
     expert_dispatch_golden_ep,
 )
 from models.demos.glm53_flash.custom_ops.glu_split.op import GluSplit  # noqa: E402
+from models.demos.glm53_flash.custom_ops.region_plan.op import RegionPlan  # noqa: E402
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk  # noqa: E402
 from models.demos.glm53_flash.tests.custom_ops.test_expert_dispatch import DOWN_READERS, GROUPS  # noqa: E402
 from models.demos.glm53_flash.tests.custom_ops.test_expert_dispatch import upload as upload_random_experts  # noqa: E402
@@ -175,6 +176,51 @@ def test_glu_split_chip0(mesh_device, T, I):
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
     assert torch.equal(ttnn.to_torch(out2)[0, 0], got)
+    ttnn.release_trace(mesh_device, tid)
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("T", [2048, 16384], ids=["slab-2048", "chunk-16384"])
+def test_region_plan_chip0(mesh_device, T):
+    """``RegionPlan`` (the regions prefill path's bookkeeping as one kernel) vs the exact golden of the ttnn chain on
+    the 8x4's shapes (E = 288, 72 local experts of column 1, k = 8): counts / offsets / pos / loc bit-identical, the
+    warmed wall, trace replay."""
+    E, E_loc, k = 288, 72, 8
+    g = torch.Generator().manual_seed(T)
+    ids_host = torch.randint(0, E, (T, k), generator=g)
+    gidx_host = torch.arange(E_loc, 2 * E_loc)
+    max_buf = -(-(T * k + E_loc * 32) // 32) * 32
+    counts_g, offsets_g, pos_g, loc_g = RegionPlan.golden(ids_host, gidx_host, E, max_buf)
+    ids = ttnn.from_torch(
+        ids_host.reshape(1, T * k).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+    gidx = ttnn.from_torch(
+        gidx_host.reshape(1, E_loc).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+    op = RegionPlan(mesh_device)
+    outs = op.allocate_outputs(T, k, E)
+    op(ids, gidx, *outs, max_buf=max_buf, E=E, T=T, k=k)
+    counts, offsets, pos, loc = (ttnn.to_torch(t) for t in outs)
+    assert torch.equal(counts.reshape(-1).long(), counts_g), (counts.reshape(-1)[:8], counts_g[:8])
+    assert torch.equal(offsets.reshape(-1).long(), offsets_g)
+    assert torch.equal(pos.reshape(T, k).long(), pos_g), (pos.reshape(T, k)[:2], pos_g[:2])
+    assert torch.equal(loc[0, 0].float(), loc_g)
+    ttnn.synchronize_device(mesh_device)
+    best = 1e9
+    for _ in range(3):
+        t0 = time.perf_counter()
+        op(ids, gidx, *outs, max_buf=max_buf, E=E, T=T, k=k)
+        ttnn.synchronize_device(mesh_device)
+        best = min(best, time.perf_counter() - t0)
+    logger.info(
+        f"region_plan T={T} k={k} E_loc={E_loc}: {best * 1e3:.2f} ms warmed (single core); local picks {int(loc_g.sum())} of {T * k}"
+    )
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op(ids, gidx, *outs, max_buf=max_buf, E=E, T=T, k=k)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    assert torch.equal(ttnn.to_torch(outs[2]).reshape(T, k).long(), pos_g)
     ttnn.release_trace(mesh_device, tid)
 
 
