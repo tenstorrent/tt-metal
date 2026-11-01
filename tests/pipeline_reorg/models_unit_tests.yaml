@@ -1010,7 +1010,7 @@
       timeout: 25
       tier: 2
     bh_p150:
-      timeout: 20
+      timeout: 30
       tier: 2
   owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models
