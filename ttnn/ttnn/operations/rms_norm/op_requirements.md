@@ -80,7 +80,7 @@ Use the relevant entries of `ttnn/ttnn/operations/examples/master.md`. No SUPPOR
 
 **Outcome**: (BH p150b, perf config, device ns) (a) per-core-cost W split `_choose_k`: (640,6144) 99 683 → 45 884, (640,7168) 116 090 → 52 039, (1024,1024) 22 710 → 15 226. (b) ablation showed the binding stage was the reader's serial per-core gamma load (131 µs of 771 µs at (8192,7168)), not overlap. Gamma moved to the writer and multicast once per W slice (`GAMMA_MCAST`): (8192,7168) 771 298 → 628 756, (7168,1024) 90 816 → 77 611, (8192,2304) 235 847 → 194 893. The overlap knob `OVERLAP_BLOCKS` is built and parked at 1 (2 measured 630 → 673 µs). Writer unit / depth measured flat. Every guard shape (interleaved TILE/RM, sharded WIDTH/BLOCK) is faster. Now: k = 1 prefill is DRAM-write-bound: compute stubbed = same time; write-only 438 µs (268 GB/s) vs read-only 313 µs at (8192,7168). Next: split output writes across both NoCs (needs a second output CB and a compute pack split, a scheme change). Mid tile-row cells serialize read → pass 1 → write inside each Tensix core (45.9 vs ≈ 37 µs ceiling). Next: stream pass 1 per W chunk. Neither was attempted here: both are restructurings beyond this knob-turn heading.
 
-### [ ] Refinement 4 — HEIGHT_SHARDED: consume the resident row shard in place
+### [x] Refinement 4 — HEIGHT_SHARDED: consume the resident row shard in place
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]` (input and output sharded with the same spec; TILE and ROW_MAJOR; all alignments), natively on the shard. Unlocks the 561 cells blocked only by this value (+652 with Refinement 1) and the HEIGHT resilience / padding-poison cases.
 

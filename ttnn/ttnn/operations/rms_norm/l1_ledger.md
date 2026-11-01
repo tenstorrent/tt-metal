@@ -26,7 +26,7 @@ would carry no extra bits while doubling packer/unpacker/NoC bytes and L1.
 | `cb_x_rm` (RM only) | `rm_in_depth · rm_chunk_w_tiles` (= 2·chunk) | `rm_chunk_w_tiles` (one 32-stick × chunk piece being tilized) | `{row: streams → 1 tile-row, W: streams → rm_chunk_w_tiles}` | input dtype (Float16_b / Float32 — raw input, not an accumulation) | reader | compute | per (tile-row, chunk) | none: live concurrently with `cb_out_rm` (reader of block b+1 runs while the writer drains block b); capacity 2× live set = double buffering (reader one chunk ahead) |
 | `cb_x` | TILE: `x_block_depth · block_row_tiles · slice_w_tiles`; RM: `block_row_tiles · core_w_tiles_padded` (x_block_depth = 1) | `block_rows_this · core_w_tiles` (whole block resident across pass 1 and pass 2); with lookahead two blocks | `{row: spans → block_row_tiles, W: spans → core_w_tiles (≤ slice_w_tiles)}` | input dtype (raw input) | reader (TILE) / compute tilize (RM) | compute | load → end of `normalize_block` | none: live through every compute phase of the block; capacity > live set only by `x_block_depth = 2` (next block in flight / lookahead) and, for the last W member, `slice_w_tiles − core_w_tiles` (one capacity value for all cores) |
 | `cb_x_alt` (implementation, TILE only, `x_block_depth == 2`) | `block_row_tiles · x_row_pitch` | the other block of the depth-2 pair | as `cb_x` | input dtype | reader | compute | blocks of odd parity | none: this IS the second half of `cb_x`'s depth-2 budget, split into its own CB because indexed CB reads cannot wrap a ring (LLK `cb_access_within_bounds`) and the combine lookahead reads block b+1 while block b is resident. Footprint unchanged: `d·b·S_x·T_in` total. |
-| `cb_gamma` | `slice_w_tiles` (RM: padded) | `core_w_tiles` | `{row: absent (gamma has no row extent; reused by every row), W: spans → core_w_tiles}` | gamma dtype (Float16_b / Float32 — raw weight) | writer (R3; was reader) | compute | program | none: program lifetime, read by every block's `normalize_block` |
+| `cb_gamma` | resident: `slice_w_tiles` (RM: padded); streamed (R4, `gamma_chunk = G > 0`): `GAMMA_STREAM_DEPTH · G` (= 2·G; RM: G = `rm_chunk_w_tiles`) | resident: `core_w_tiles`; streamed: one G-tile chunk (the next one in flight) | `{row: absent (gamma has no row extent; reused by every row), W: spans → core_w_tiles}` | gamma dtype (Float16_b / Float32 — raw weight) | writer (R3; was reader) | compute | program | none: program lifetime, read by every block's `normalize_block` |
 | `cb_sumsq_tiles` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away (DEST accumulation)}` | T_acc format: Float32 / Float16_b per `fp32_dest_acc_en` (DEST accumulation result) | compute | compute | pass 1 → collapse | not with `cb_inv_rms` / `cb_partial_sumsq`: the collapse reduce reads this CB while writing those (concurrent). Same size and format as `cb_inv_rms`; in R2 their lifetimes are disjoint, but R1 overlaps them, and the saving is `block_row_tiles·4 KB` (< 1% of the footprint) — one design for both regimes kept |
 | `cb_partial_sumsq` (k > 1) | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away}` | T_acc format | compute | writer | collapse → exchange (the gathered NoC payload follows `get_tile_size`) | not with `cb_sumsq_tiles` (concurrent in the collapse); not with `cb_gathered_sumsq` (peers write into that one at any time during the previous block) |
 | `cb_gathered_sumsq` (k > 1) | symmetric: `gather_depth · w_split_cores · block_row_tiles` (`gather_depth` = 1 when every core runs one block, else 2 — Refinement 2); owner topology: `ceil(block_row_tiles / k) · k` | symmetric: `w_split_cores · block_rows_this` (one block); capacity 2× only for multi-block = mechanism cap (lockstep slot reuse). Owner: k partials per owned row, uniform count per member (lockstep) | `{row: spans → block_row_tiles, W: reduced to one partial per member → w_split_cores}` | T_acc format | writer (+ peer NoC writes landing in its reserved slot) | compute | exchange → combine | none: remote writes may land at any time during the previous block, so no other buffer may occupy these bytes |
@@ -63,6 +63,33 @@ Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime. 
   `ceil(b/k)·k` gathered + `ceil(b/k)` owned pages, i.e. ≈ `b + k` instead of the symmetric `k·b`
   (k = 128, b = 1: 128 pages, vs. 256 pages for the depth-2 symmetric all-gather).
 
+### Refinement 4 — HEIGHT_SHARDED placement (k = 1) and the wide-W fallbacks
+
+- **Placement**: one shard row per Tensix core in the shard grid's walk order (`_ordered_shard_cores`, ROW_MAJOR /
+  COL_MAJOR, multi-range grids from `auto_shard_config`: full grid rows + a partial last row), k = 1, no combine
+  CBs, no semaphores. TILE: `cb_x` / `cb_out` backed on the shards exactly as in R2 (zero-copy, not in the budget);
+  RM: local stick copy into `cb_x_rm` + tilize, untilized pieces copied back into the local output shard.
+- **Gamma**: every Tensix core needs the whole gamma, so the R3 k = 1 multicast (`GAMMA_MCAST_SHARDED_K1`) applies
+  — one DRAM read of gamma per launch. Measured BH p150b, perf config (bf16, 16-bit DEST, HiFi2), per-core load →
+  multicast: TILE (4096,4096) 92.6 → 54.8 µs, (8192,1024) 29.0 → 20.0 µs, (7136,736) 20.8 → 14.8 µs; RM 106.8 → 79.7,
+  32.9 → 27.2, 24.2 → 19.7 µs; (99991,64) flat (2-tile gamma).
+- **Wide W beside two resident shards** (HEIGHT holds whole rows, so no W split can relieve L1): the budget left
+  after the input + output shards can be < the resident gamma (TILE W = 8192 bf16: 412 KB left, gamma 512 KB) or
+  < the RM tilized row + gamma + three C-sized staging CBs. Regimes, in preference order (`_sharded_plan_candidates`):
+  1. resident gamma, RM chunk cap 32 (default; every shape that fit before R4 keeps it);
+  2. TILE: gamma streamed — `cb_gamma` = 2 chunks of the largest G ≤ 16 that fits; the writer re-streams gamma per
+     block (whole block's chunks at once — the shard-backed `cb_out` never blocks compute);
+  3. RM: per halved chunk cap C: resident gamma, then streamed gamma with G = C (pass 2 already walks C-tile
+     windows). The writer prefetches `GAMMA_STREAM_DEPTH` chunks per block and refills chunk c + depth after
+     draining chunk c's sticks — pushing all chunks first deadlocks (compute blocks on `cb_out_rm`, the writer on
+     the gamma ring). The tilized x row (`cb_x`) stays resident: x is still read from the shard once per pass pair.
+  Streamed gamma costs one gamma read per (block, Tensix core) instead of one multicast per launch; only cells
+  that did not fit at all take it. Golden HEIGHT probe (843 shape × layout × dtype × gamma configs): 54 did not
+  fit before the fallbacks, 0 after. 18 more are unbuildable by construction (fp32 TILE W = 8192: a 1 MB input
+  shard + a 1 MB output shard exceed L1; the golden harness skips them).
+- **Data movement (HEIGHT)**: x and out cross DRAM **0** times; gamma once per launch (multicast), or once per
+  block per Tensix core when streamed. No cross-core x/partial traffic.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
@@ -72,7 +99,8 @@ Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime. 
 | `core_w_tiles` | `≤ slice_w_tiles`; ≥ 1 | k normalization `k = ceil(tensor_w_tiles / slice_w_tiles)` |
 | `core_w_tiles_padded` | `ceil(core_w_tiles / rm_chunk_w_tiles) · rm_chunk_w_tiles < core_w_tiles + chunks` | balanced chunking |
 | `w_split_cores` (k) | interleaved `1 ≤ k ≤ K_CAP = min(8, grid_x)`; sharded k = shard columns (≤ grid cores, up to 128 on BH) | clamp in `select_blocking()`; `select_sharded_blocking()` from the shard spec |
-| `rm_chunk_w_tiles` | `≤ 32` | balanced chunk formula |
+| `rm_chunk_w_tiles` | `≤ rm_chunk_cap` (32; sharded RM halves the cap 32→16→…→1 until one tile-row fits — R4) | balanced chunk formula `_rm_chunk(slice_w, cap)` |
+| `gamma_chunk` (G) | 0 (resident) or `1 ≤ G ≤ 16` (TILE) / `G = rm_chunk_w_tiles` (RM) | sharded only: `_sharded_plan_candidates()` — first regime whose one-tile-row plan fits (resident gamma preferred) |
 | `x_block_depth` | ∈ {1, 2} | 2 iff `num_blocks_this_core > 1` and it fits; RM: 1 |
 | `out_depth`, `rm_in_depth` | 2 | constants (Phase 0) |
 | `out_unit_tiles` | `min(slice_w_tiles, 16)` | constant cap |

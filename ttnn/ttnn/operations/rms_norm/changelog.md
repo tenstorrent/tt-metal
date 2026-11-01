@@ -146,3 +146,46 @@
   - `ttnn.Mcast` cuts receivers into equal consecutive groups, which drove the column grouping and the per-core fallback.
   - A W slice held by a single Tensix core has no receivers: the plain `receiver()` fails a static_assert. Fixed with `optional_sender` / `optional_receiver`.
 - **Tests added**: `test_rms_norm_gamma_share.py` (19 cases). It covers every `_gamma_mcast_groups` regime: k = 1 with a partial grid row, k > 1 column groups, k > 1 per-core fallback, and single-core slices. Each runs across TILE / ROW_MAJOR input, TILE / RM gamma, bf16 / fp32 / bf8b gamma, and a non-aligned W / H tail. It asserts the regime chosen on the 13×10 grid. `perf_r3_rms_norm.py` is the profiling probe (no `test_` prefix, not collected). Unit directory: 259/259 green.
+
+## Refinement 4 — HEIGHT_SHARDED: consume the resident row shard in place
+- Date: 2026-11-01
+- What was done:
+  - **HEIGHT as the k = 1 case of Refinement 2's shard-resident path.** `select_sharded_blocking()` maps shard row g to the g-th Tensix core of the shard grid in its orientation. That covers multi-range grids (full grid rows + a partial last row from `auto_shard_config`) and the ragged last shard. k = 1, so there are no combine CBs or semaphores.
+    - TILE: `cb_x` / `cb_out` are backed on the input / output shards (zero-copy, never re-read through a TensorAccessor). The W tail is masked in compute, so the caller's shard is never written.
+    - RM: resident sticks are copied locally into the tilize staging; the untilized pieces are copied back into the local output shard.
+    - `is_sharded_wb()` became `is_sharded()`. `SUPPORTED["memory_layout"]` gains `HEIGHT_SHARDED`.
+    - Reused: shard-backed CBs, reader/writer/compute sharded branches (unchanged), owner-combine-free k = 1 compute path. Added: the HEIGHT core walk (≈ 12 lines).
+  - **Gamma multicast for sharded k = 1** (`GAMMA_MCAST_SHARDED_K1`, default on). Every Tensix core of a HEIGHT program needs the whole gamma, so Refinement 3's one-group multicast applies: one DRAM read per launch instead of one per Tensix core. Measured BH p150b, perf config (bf16, `fp32_dest_acc_en=False`, HiFi2), device kernel ns, per-core load → multicast:
+    - TILE (4096,4096): 92 633 → 54 770
+    - TILE (8192,1024): 28 956 → 19 993
+    - TILE (7136,736): 20 847 → 14 793
+    - RM (4096,4096): 106 812 → 79 687
+    - RM (8192,1024): 32 941 → 27 225
+    - RM (7136,736): 24 182 → 19 679
+    - (99991,64) TILE / RM: flat (gamma is 2 tiles)
+  - **Wide-W L1 fallbacks (sharded only, preference order in `_sharded_plan_candidates`).** HEIGHT holds whole rows beside two resident shards, so a W split cannot relieve L1. A no-dispatch probe over the 843 golden HEIGHT configs (shape × layout × dtype × gamma) found 54 whose one-tile-row plan did not fit.
+    - (a) Default: resident gamma, RM chunk cap 32. Every shape that fit before keeps this path.
+    - (b) TILE: gamma streamed through a 2-chunk ring (`cb_gamma` = 2·G, the largest G ≤ 16 that fits). The writer re-streams it per block; compute normalizes in G-tile windows (`normalize_window` gained a gamma-offset argument).
+    - (c) RM: halve the chunk cap C (the staging / `cb_out` / untilize CBs scale with C). At each C, try resident gamma first, then gamma streamed with G = C. The writer prefetches `GAMMA_STREAM_DEPTH` chunks and refills chunk c + depth after draining chunk c's sticks.
+    - Result: 54 → 0 configs that do not fit.
+    - 18 configs remain unbuildable by construction: fp32 TILE at W = 8192 needs a 1 MB input shard plus a 1 MB output shard of the same spec, which exceeds L1. The golden harness skips them.
+    - Knobs: `GAMMA_STREAM_CHUNK_CAP`, `GAMMA_STREAM_DEPTH`, `GAMMA_STREAM_FORCE_CHUNK` (test hook), `PlanOpts.gamma_chunk`, `PlanOpts.rm_chunk_cap`.
+- Accuracy achieved: PCC ≥ 0.999 (rtol / atol not gated; PCC-only tests) on every HEIGHT unit case:
+  - TILE / RM; aligned, W- and H-non-aligned, poisoned padding
+  - fp32 / bf16 / bf8b; with and without gamma
+  - shapes (1,1,256,512), (2,4,128,512), (1,1,8192,1024), (7136,736), (99991,64), (100,5120), (1,1,32,8192), (1,1,160,11008)
+  - Perf config: PCC 0.999983–0.999985.
+- Golden test progress (targeted slices):
+  - every HEIGHT `test_op_loose` cell: 92/94 on the first pass. The 2 failures were the RM (·,11008) L1 class; they are green after fallback (c).
+  - HEIGHT cartesian + loose for the widest shapes (1x1x32x8192, 1x1x160x11008, 1x224x11008, *32x4096, 128x8192): 187 passed, 45 xfailed (EXCLUSIONS), 0 failed.
+- Issues encountered:
+  - The resident gamma / RM tilized row did not fit beside two resident wide shards (fixed by the fallbacks above).
+  - A deadlock in the RM streamed-gamma design was avoided by construction: pushing a whole block's gamma chunks before draining `cb_out_rm` blocks both kernels once a block has ≥ 3 tile-rows and > 2 chunks. It is pinned by a test with 8 tile-rows × 4 chunks per shard.
+- Tests added (`test_rms_norm_sharded.py`):
+  - HEIGHT added to every WIDTH/BLOCK parametrization (non-aligned, poisoned padding, RM, fp32 / no gamma, bf8b + RM gamma).
+  - `test_height` (7 shapes × TILE/RM, perf config), `test_height_rm_tile_gamma`.
+  - `test_height_streamed_gamma` (wide W, TILE/RM).
+  - `test_forced_streamed_gamma` (TILE: multi-block, W tail, owner combine, ragged column gap tiles).
+  - `test_forced_streamed_gamma_rm` (RM: G = C, 8 tile-rows × 4 chunks, H tail, k > 1).
+  - `perf_r4_rms_norm.py`: profiling probe (no `test_` prefix).
+  - Unit directory: 307 passed, 3 skipped.
