@@ -60,10 +60,18 @@ class TernaryLinear:
         return out
 
 
+# Sites that passed their e2e gate; each joins in its own commit.
+VALIDATED = {"mlp"}
+WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "lm_head"}
+
+
 def sites():
-    """BONSAI_NATIVE_SITES: comma list of the projections that run exact-ternary (default: all wired)."""
-    v = os.environ.get("BONSAI_NATIVE_SITES", "all")
-    return {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head"} if v == "all" else set(v.split(","))
+    """BONSAI_NATIVE_SITES: comma list of the projections that run exact-ternary ("all" = every wired
+    site); unset = the validated ones."""
+    v = os.environ.get("BONSAI_NATIVE_SITES")
+    if v is None:
+        return VALIDATED
+    return WIRED if v == "all" else set(v.split(","))
 
 
 def gdn_in_rows(shared: Shared, layer: int):
