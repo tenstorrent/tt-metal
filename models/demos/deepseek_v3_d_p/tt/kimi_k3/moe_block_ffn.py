@@ -374,13 +374,22 @@ class TtK3MoEBlockFfn:
             res = block.resources
             t0 = time.time()
             cached = None if self.host_sd is not None else self._load_head_cache(block)
+            fut, pool = None, None
+            if cached is None and self.host_sd is None:
+                # (the checkpoint read + dequant on a thread while the routed experts' tensorbins load: ~9 s of a K3
+                # layer's ~50 s hidden behind the NFS-bound reads)
+                from concurrent.futures import ThreadPoolExecutor
+
+                pool = ThreadPoolExecutor(max_workers=1)
+                fut = pool.submit(host_weights, self.mesh, self.dims, self.layer_idx, self.hf_config)
+            gidx, w_gu, w_d = self._routed_host(block) if self.host_sd is not None else self._routed(block)
+            t1 = time.time()
             if cached is not None:
                 head, w_up = cached
             else:
-                if self.host_sd is not None:
-                    w = self._host_sd_weights()
-                else:
-                    w = host_weights(self.mesh, self.dims, self.layer_idx, self.hf_config)
+                w = self._host_sd_weights() if self.host_sd is not None else fut.result()
+                if pool is not None:
+                    pool.shutdown()
                 host = lambda k: ttnn.from_torch(w[k], dtype=ttnn.float32)  # noqa: E731
                 head = mb.prepare_fused_head_weights(
                     host("gate"),
@@ -397,13 +406,13 @@ class TtK3MoEBlockFfn:
                 w_up = None
                 if "latent_up" in w:
                     w_up = mb.prepare_fused_tail_weights(host("latent_up"), host("latent_norm"), resources=res)
+                del w
                 if self.host_sd is None:
                     self._save_head_cache(block, head, w_up)
-            t1 = time.time()
-            gidx, w_gu, w_d = self._routed_host(block) if self.host_sd is not None else self._routed(block)
             self.weights = MoEBlockWeights(head=head, expert_ids=gidx, gate_up=w_gu, down=w_d, w_up=w_up)
             logger.info(
-                f"MoE block layer {self.layer_idx}: checkpoint weights {t1 - t0:.0f} s, routed {time.time() - t1:.0f} s"
+                f"MoE block layer {self.layer_idx}: routed {t1 - t0:.0f} s (the checkpoint read alongside), then the "
+                f"head / tail weights {time.time() - t1:.0f} s; {time.time() - t0:.0f} s in all"
             )
         return self.weights
 
