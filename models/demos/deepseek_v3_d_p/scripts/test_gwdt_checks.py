@@ -964,3 +964,72 @@ def test_hang_triage_matches_common_sh():
     sh = (Path(__file__).parent / "common.sh").read_text()
     assert re.search(r'^HANG_TRIAGE="(.*)"$', sh, re.M).group(1) == HANG_TRIAGE
     assert "--run=dump_op_window --op-window=" in HANG_TRIAGE and "--run=check_noc_status" in HANG_TRIAGE
+
+
+def _smi_chip(bus, **telem):
+    base = {"ENABLED_GDDR": "0xff", "GDDR_UNCORR_ERRS": "0x0"}
+    base.update({f"GDDR_{k}_{k + 1}_CORR_ERRS": "0x0" for k in (0, 2, 4, 6)})
+    return {"board_info": {"bus_id": bus}, "smbus_telem": {**base, **telem}}
+
+
+def test_gddr_edc_decodes_instance_bank_and_direction():
+    from gwdt_checks import GddrEdc, gddr_edc
+
+    snap = {
+        "device_info": [
+            _smi_chip("0000:81:00.0"),
+            # instance 5 corrected writes 26 (bits 24-31), instance 4 corrected reads 3 (bits 0-7)
+            _smi_chip("0000:c7:00.0", GDDR_4_5_CORR_ERRS="0x1a000003"),
+            # instance 0 disabled, so instance 3 is bank 2; uncorrected write on instance 3 is bit 7
+            _smi_chip("0000:87:00.0", ENABLED_GDDR="0xfe", GDDR_UNCORR_ERRS="0x80"),
+        ]
+    }
+    assert gddr_edc(snap) == [
+        GddrEdc("0000:c7:00.0", 4, 4, 3, 0, 0, 0),
+        GddrEdc("0000:c7:00.0", 5, 5, 0, 26, 0, 0),
+        GddrEdc("0000:87:00.0", 3, 2, 0, 0, 0, 1),
+    ]
+
+
+def test_umd_metal_ids():
+    from gwdt_checks import umd_metal_ids
+
+    line = "UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 3, 2] and remote chip ids {}"
+    assert umd_metal_ids(line) == {0: 0, 1: 1, 3: 2, 2: 3}
+    assert umd_metal_ids("nothing") == {}
+
+
+def test_gddr_result_warns_on_corrected_and_fails_on_uncorrected():
+    from gwdt_checks import GddrEdc, gddr_result
+
+    corr = ("tt-smi.json", GddrEdc("0000:c7:00.0", 5, 5, 0, 26, 0, 0))
+    r = gddr_result(Result(Status.PASS, "1 passed"), [corr], {"0000:c7:00.0": 30})
+    assert r.status == Status.WARN and r.reason == "1 passed; corrected GDDR EDC on 1 instance(s)"
+    assert r.details == ["dev 30 (c7:00.0) GDDR 5 / bank 5: corrected rd/wr 0/26, uncorrected rd/wr 0/0 [tt-smi.json]"]
+    uncorr = ("tt-smi_02.json", GddrEdc("0000:87:00.0", 3, 3, 0, 0, 1, 0))
+    assert gddr_result(Result(Status.PASS), [corr, uncorr], {}).status == Status.FAIL
+    assert gddr_result(Result(Status.HANG, "triage x"), [corr], {}).status == Status.HANG
+    assert gddr_result(Result(Status.PASS, "ok"), [], {}) == Result(Status.PASS, "ok")
+
+
+def test_run_all_folds_smi_gddr_into_step(tmp_path, monkeypatch):
+    import json
+
+    import gwdt_steps
+    from gwdt_steps import Ctx, Step, run_all
+
+    def run(ctx, state):
+        d = tmp_path / "matmul" / "minimal"
+        d.mkdir(parents=True)
+        (d / "log_01").write_text("UMD | Opening local chip ids/PCIe ids: {0, 1}/[1, 0] and remote chip ids {}\n")
+        chip = _smi_chip("0000:c7:00.0", GDDR_4_5_CORR_ERRS="0x1a000000")
+        (d / "tt-smi.json").write_text(json.dumps({"device_info": [chip]}))
+        return Result(Status.PASS, "1 passed")
+
+    monkeypatch.setattr(gwdt_steps, "pcie_buses", lambda: {"0000:c7:00.0": 0})
+    step = Step("matmul:minimal", "minimal", "matmul", None, True, run)
+    run_all([step], Ctx(tmp_path, tmp_path, False), set(), lambda s: None)
+    assert step.state.result.status == Status.WARN
+    assert step.state.result.details == [
+        "dev 1 (c7:00.0) GDDR 5 / bank 5: corrected rd/wr 0/26, uncorrected rd/wr 0/0 [tt-smi.json]"
+    ]

@@ -278,6 +278,77 @@ def dram_health(db: Path) -> Result:
     return Result(Status.PASS, f"{len(rows)} GDDR instances, {len(corrected)} with corrected EDC", corrected)
 
 
+@dataclass
+class GddrEdc:
+    bus: str
+    instance: int
+    bank: int
+    corr_rd: int
+    corr_wr: int
+    uncorr_rd: int
+    uncorr_wr: int
+
+
+def _telem(t: dict, key: str) -> int:
+    v = t.get(key, 0)
+    return int(v, 16) if isinstance(v, str) else int(v or 0)
+
+
+def gddr_edc(snapshot: dict) -> list[GddrEdc]:
+    """Non-zero GDDR EDC counters per chip and GDDR instance from a tt-smi snapshot, decoded as in tt-triage
+    check_dram_health: GDDR_<2k>_<2k+1>_CORR_ERRS packs rd/wr bytes for instance 2k in bits 0-15 and 2k+1 in 16-31;
+    GDDR_UNCORR_ERRS has an rd/wr bit pair per instance. The bank counts only enabled instances. The counters clear on
+    reset, so a snapshot right after a step holds exactly that step's errors."""
+    out = []
+    for chip in snapshot.get("device_info") or []:
+        t = chip.get("smbus_telem", {})
+        enabled, uncorr, bank = _telem(t, "ENABLED_GDDR") & 0xFF, _telem(t, "GDDR_UNCORR_ERRS"), 0
+        for i in range(8):
+            if not (enabled >> i) & 1:
+                continue
+            word, shift = _telem(t, f"GDDR_{i & ~1}_{i | 1}_CORR_ERRS"), 16 if i % 2 else 0
+            e = GddrEdc(
+                chip.get("board_info", {}).get("bus_id", "?"),
+                i,
+                bank,
+                (word >> shift) & 0xFF,
+                (word >> (shift + 8)) & 0xFF,
+                (uncorr >> (2 * i)) & 1,
+                (uncorr >> (2 * i + 1)) & 1,
+            )
+            if e.corr_rd or e.corr_wr or e.uncorr_rd or e.uncorr_wr:
+                out.append(e)
+            bank += 1
+    return out
+
+
+def umd_metal_ids(log_text: str) -> dict[int, int]:
+    """PCIe (/dev/tenstorrent) index -> metal device id, from UMD's 'Opening local chip ids/PCIe ids' line."""
+    m = re.search(r"Opening local chip ids/PCIe ids: \{([\d, ]*)\}/\[([\d, ]*)\]", log_text)
+    if not m:
+        return {}
+    metal, pcie = ([int(x) for x in g.split(",") if x.strip()] for g in m.groups())
+    return dict(zip(pcie, metal))
+
+
+def gddr_result(r: Result, found: list[tuple[str, GddrEdc]], metal_by_bus: dict[str, int]) -> Result:
+    """Fold tt-smi GDDR EDC into a step result: uncorrected fails, corrected warns; a worse status is kept."""
+    if not found:
+        return r
+    lines = []
+    for snap, e in found:
+        dev = metal_by_bus.get(e.bus)
+        lines.append(
+            f"dev {dev if dev is not None else '?'} ({e.bus.removeprefix('0000:')}) GDDR {e.instance} / bank {e.bank}: "
+            f"corrected rd/wr {e.corr_rd}/{e.corr_wr}, uncorrected rd/wr {e.uncorr_rd}/{e.uncorr_wr} [{snap}]"
+        )
+    uncorrected = any(e.uncorr_rd or e.uncorr_wr for _, e in found)
+    worse = Status.FAIL if uncorrected else Status.WARN
+    status = worse if r.status in (Status.PASS, Status.WARN) else r.status
+    reason = f"{'uncorrected' if uncorrected else 'corrected'} GDDR EDC on {len(found)} instance(s)"
+    return Result(status, f"{r.reason}; {reason}" if r.reason else reason, r.details + lines)
+
+
 def fabric_results(log_text: str) -> dict[str, bool]:
     found = re.findall(r"^(PASSED|FAILED) \S*test_fabric_opens\[(\w+)\]", log_text, re.MULTILINE)
     return {name: verdict == "PASSED" for verdict, name in found}

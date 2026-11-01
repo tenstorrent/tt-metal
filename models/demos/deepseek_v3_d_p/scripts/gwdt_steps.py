@@ -21,6 +21,8 @@ from gwdt_checks import (
     didt_bad_devices,
     dram_health,
     fabric_results,
+    gddr_edc,
+    gddr_result,
     missing_node_ids,
     mla_determinism_reps,
     read_tail,
@@ -29,6 +31,7 @@ from gwdt_checks import (
     stress_result,
     sweep_bad_devices,
     sweep_skipped_windows,
+    umd_metal_ids,
     write_ack_result,
 )
 
@@ -207,6 +210,42 @@ RESET_TRIES = 3
 def retry_path(log: Path, n: int) -> Path:
     """Retries of one reset sit next to it: reset.log, reset.retry2.log; log_01, log_01.retry2."""
     return log if n == 1 else log.with_name(f"{log.stem}.retry{n}{log.suffix}")
+
+
+def pcie_buses() -> dict[str, int]:
+    """PCIe bus id (0000:c7:00.0) -> /dev/tenstorrent index, from sysfs."""
+    out = {}
+    for dev in Path("/sys/class/tenstorrent").glob("tenstorrent!*"):
+        try:
+            out[(dev / "device").resolve().name] = int(dev.name.split("!")[1])
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def check_gddr(ctx: Ctx, step: Step) -> None:
+    """Every tt-smi snapshot a step saved: corrected GDDR EDC warns, uncorrected fails, reported per metal device,
+    GDDR instance and bank. Metal ids come from UMD's PCIe-id line in the step's own logs."""
+    # mtimes come from the kernel's coarse clock and can trail time.time() by a tick; the slack only needs to stay
+    # under one step's runtime.
+    d, since = step_dir(ctx, step.key), (step.state.start or 0) - 2
+    snaps = sorted(p for p in d.rglob("tt-smi*.json") if p.stat().st_mtime >= since)
+    found = []
+    for snap in snaps:
+        try:
+            found += [(str(snap.relative_to(d)), e) for e in gddr_edc(json.loads(snap.read_text()))]
+        except (OSError, ValueError):
+            continue
+    if not found:
+        return
+    metal_by_pcie: dict[int, int] = {}
+    # The step's own logs first; mcast-ack's per-chip runs do not print the line, so then any log in the run.
+    for log in [*sorted(d.rglob("log_*")), *sorted(ctx.run_dir.rglob("log_*"))]:
+        with open(log, errors="replace") as f:
+            if metal_by_pcie := umd_metal_ids(f.read(1 << 16)):
+                break
+    metal_by_bus = {bus: metal_by_pcie[i] for bus, i in pcie_buses().items() if i in metal_by_pcie}
+    step.state.result = gddr_result(step.state.result, found, metal_by_bus)
 
 
 def reset(ctx: Ctx, log: Path, state: State) -> Result | None:
@@ -687,6 +726,11 @@ def run_all(steps: list[Step], ctx: Ctx, skip: set[str], on_update: Callable[[St
                 s.result = step.run(ctx, s)
             except Exception as e:
                 s.result = Result(Status.FAIL, f"{type(e).__name__}: {e}")
+            if not ctx.mode_co:
+                try:
+                    check_gddr(ctx, step)
+                except Exception as e:
+                    s.result.details.append(f"GDDR check skipped: {type(e).__name__}: {e}")
             s.end = time.time()
             if s.result.status in (Status.FAIL, Status.HANG):
                 if step.group == "gate" and step.blocking:
