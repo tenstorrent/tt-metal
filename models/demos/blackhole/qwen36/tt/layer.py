@@ -180,13 +180,22 @@ class Qwen36DecoderLayer:
 
         if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
             # Exact-ternary projections from the PQ2_0 GGUF (bonsai2/native/a3), decode only.
-            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, gdn_in_rows, sites
+            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, attn_qkv_rows, gdn_in_rows, sites
             from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
 
             _sh = shared_for(mesh_device)
             _cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_linear")
             os.makedirs(_cache, exist_ok=True)
             if self.is_full_attention and isinstance(self.attention, Qwen36GatedAttention):
+                if "attn_qkv" in sites() and self.attention.weights.fused_qkv is not None:
+                    import dataclasses
+
+                    self.attention.weights = dataclasses.replace(
+                        self.attention.weights,
+                        fused_qkv=TernaryLinear(
+                            _sh, f"blk.{layer_num}.attn_qkv_fused", _cache, rows=attn_qkv_rows(_sh, layer_num)
+                        ),
+                    )
                 if "attn_o" in sites():
                     import dataclasses
 
@@ -210,7 +219,7 @@ class Qwen36DecoderLayer:
                     self.attention._native_ab = ttnn.as_tensor(
                         _ab,
                         preprocess=lambda t: t.T.contiguous(),
-                        dtype=ttnn.bfloat8_b,
+                        dtype=ttnn.bfloat16,  # a/b are BF16 in the GGUF: kept exact
                         layout=ttnn.TILE_LAYOUT,
                         device=mesh_device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,

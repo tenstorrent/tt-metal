@@ -692,7 +692,24 @@ class TPGatedDeltaNet:
             qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz), memory_config=_proj_mc)
             z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az), memory_config=_proj_mc)
             ttnn.deallocate(qkvz)
-            ab = ttnn.linear(x, self._native_ab, compute_kernel_config=self.cfg, memory_config=_proj_mc)
+            # a|b is N = 3 tiles: ttnn's auto config takes 113 us on 3 cores; in0_block_w=40 takes 12.8 (bench/a3_ab.py)
+            ab = ttnn.linear(
+                x,
+                self._native_ab,
+                compute_kernel_config=self.cfg,
+                memory_config=_proj_mc,
+                program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(self._native_ab.shape[-1] // 32, 1),
+                    in0_block_w=40,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=1,
+                    per_core_N=1,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                ),
+            )
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=_proj_mc)
             b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=_proj_mc)
             ttnn.deallocate(ab)
