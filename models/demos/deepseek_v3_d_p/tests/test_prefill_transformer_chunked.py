@@ -94,7 +94,37 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
-GLM_L1_SMALL_SIZE = 1536
+# (GLM_L1_SMALL: room for the MoE block's persistent words too, PERSIST_L1=small)
+GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", "1536"))
+
+
+def _glm_payload():
+    """GLM's TtMoe payload; MOE_IMPL=block: at least the MoE block combine's (2 x 6144 + 32 B, 64-B aligned)."""
+    payload = moe_fabric_payload(GLM53Config)
+    if os.environ.get("MOE_IMPL") == "block":
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import fabric_payload
+
+        payload = max(payload, fabric_payload(GLM53Config.EMB_SIZE))
+    return payload
+
+
+def _k3_device_params():
+    """K3's fabric (K3_FABRIC=torus_xy: the XY torus); K3_MOE_IMPL=block also opens it with the payload the MoE block's
+    combine needs (2 x 3584 + 32 B) and K3_L1_SMALL (room for its persistent words with PERSIST_L1=small)."""
+    payload = moe_fabric_payload(KimiK3Config)
+    if os.environ.get("K3_MOE_IMPL") == "block":
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import fabric_payload
+
+        payload = fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
+    extra = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY} if os.environ.get("K3_FABRIC") == "torus_xy" else {}
+    return fabric2d_device_params(
+        fabric_payload_size=payload,
+        l1_small_size=int(os.environ.get("K3_L1_SMALL", KimiK3Config.L1_SMALL_SIZE)),
+        trace_region_size=256 * 1024 * 1024,
+        **extra,
+    )
+
+
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -1322,7 +1352,7 @@ def test_kimi_prefill_transformer_chunked_padded(
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
             # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1580,7 +1610,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1596,7 +1626,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -2240,8 +2270,10 @@ def run_chunked_transformer_updated(
 
         trace_controller = SubDeviceTraceController(mesh_device)
         transformer.set_trace_controller(trace_controller)
-        _fwd_meta()  # warm/compile the metadata-variant programs before recording
-        ttnn.synchronize_device(mesh_device)
+        # warm/compile the metadata-variant programs before recording (PREFILL_TRACE_WARMUPS=n: n passes)
+        for _ in range(int(os.environ.get("PREFILL_TRACE_WARMUPS", "1"))):
+            _fwd_meta()
+            ttnn.synchronize_device(mesh_device)
 
         trace_controller.begin_capture()
         _fwd_meta()
@@ -2897,11 +2929,7 @@ def test_kimi_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(KimiK3Config),
-                l1_small_size=KimiK3Config.L1_SMALL_SIZE,
-                trace_region_size=256 * 1024 * 1024,
-            ),
+            _k3_device_params(),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
@@ -3041,7 +3069,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -3053,9 +3081,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         # since TORUS_XY always prefers the snake. Not comparable to the torus leg (all axes go Linear).
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM_L1_SMALL_SIZE
-            ),
+            fabric2d_device_params(fabric_payload_size=_glm_payload(), l1_small_size=GLM_L1_SMALL_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
@@ -3340,9 +3366,9 @@ def run_chunked_transformer_padded_trace(
             assert_threshold=LAYER_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
             # Sparse models are gated at FULL depth (assert_full_depth): their deep-layer KV is the
             # product under test, and GATED_LAYER_DEPTH would leave every layer past 10 unasserted.
-            assert_layer_depth=None
-            if assert_full_depth
-            else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+            assert_layer_depth=(
+                None if assert_full_depth else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None)
+            ),
             tp_shard_kv=kv_dedup,
         )
         # REQUIRED on the sparse path, not best-effort: GLM has two device caches and checking only the

@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""flat_gather (models/demos/moe_block/tt/flat_gather.py) against the C++ flat op's own weight prep
+(flat_routed_expert_weights.flat_weight_regions + bank_sharded), GLM-5.3's flat layout (8 experts a chip):
+
+* test_flat_gather_layout: host only once the plan is made - the face map applied to float matrices equals the weight
+  prep's packed pages, value for value.
+* test_flat_gather_device: the device gather from bfp4 sources equals bank_sharded of the same weights, bit for bit.
+
+The plan needs the 8x4 Galaxy (programmable DRAM cores); both skip elsewhere."""
+
+import os
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.moe_block.tt.flat_gather import _pages, emulate_gather, flat_face_map, flat_weights_module, gather
+
+R, C = 8, 4
+H, I, E, NG, CHUNK = 6144, 2048, 8, 256, 5120
+MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
+
+
+@pytest.fixture(scope="module")
+def mesh():
+    if not MOCK and ttnn.get_num_devices() < R * C:
+        pytest.skip(f"needs a {R}x{C} Galaxy or the mock Galaxy")
+    m = ttnn.open_mesh_device(ttnn.MeshShape(R, C))
+    if not ttnn.experimental.moe_block.FlatDriscSenders.supported(m):  # (the plan needs programmable DRAM cores)
+        ttnn.close_mesh_device(m)
+        pytest.skip("the flat plan needs programmable DRAM cores (the mock Galaxy has none)")
+    yield m
+    ttnn.close_mesh_device(m)
+
+
+def _lay(mesh):
+    mb = ttnn.experimental.moe_block
+    layout = mb.FlatLayoutOptions(rows_hint=round(CHUNK * 8 / NG), x_helpers=1)
+    return mb.flat_routed_expert_plan(mesh, H, I, E, NG, CHUNK, weights_bf8=False, pin=1, layout=layout).as_dict()
+
+
+def _weights(seed=0):
+    g = torch.Generator().manual_seed(seed)
+    r = lambda *s: torch.randn(*s, generator=g)  # noqa: E731
+    return [(r(H, I), r(H, I), r(I, H)) for _ in range(E)]
+
+
+def test_flat_gather_layout(mesh):
+    lay = _lay(mesh)
+    fm = flat_face_map(H, I, E, lay)
+    W = _weights()
+    regions, dregs = flat_weights_module().flat_weight_regions(W, lay)
+    srcs = [m_ for w in W for m_ in w]
+    for name, regs in (("w_gu", regions), ("w_d", dregs)):
+        want = _pages(regs, lay["banks"])
+        got = emulate_gather(srcs, fm[name])
+        assert torch.equal(got, want), f"{name}: {int((got != want).sum())} values differ"
+
+
+def test_flat_gather_device(mesh):
+    fw = flat_weights_module()
+    lay = _lay(mesh)
+    fm = flat_face_map(H, I, E, lay)
+    W = [tuple(m_.to(torch.bfloat16) for m_ in w) for w in _weights(1)]
+    dt = ttnn.bfloat4_b
+    rep = ttnn.ReplicateTensorToMesh(mesh)
+    srcs = [
+        ttnn.from_torch(m_.reshape(1, 1, *m_.shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+        for w in W
+        for m_ in w
+    ]
+    regions, dregs = fw.flat_weight_regions(W, lay)
+    banks = lay["banks"]
+    for name, regs in (("w_gu", regions), ("w_d", dregs)):
+        want = fw.bank_sharded([regs], banks, dt, mesh, replicate=True)
+        dst = fw.uninitialized_bank_sharded(len(regs), regs[0].shape[0], banks, dt, mesh)
+        gather(mesh, srcs, fm[name], dst)
+        a = ttnn.to_torch(ttnn.get_device_tensors(dst)[0])
+        b = ttnn.to_torch(ttnn.get_device_tensors(want)[0])
+        assert torch.equal(a, b), f"{name}: {int((a != b).sum())} values differ from the weight prep"
+        ttnn.deallocate(dst)
+        ttnn.deallocate(want)
