@@ -29,3 +29,48 @@
 - **Golden test progress** (targeted slice, 968 cells: every INTERLEAVED `test_op` cell of 1x1x32x64 / 1x1x32x8192 (W-split) / 2x1x100x47 (non-aligned), plus all 104 INTERLEAVED `test_op_loose` cells with fp32_dest_acc_en=False, i.e. the LLM perf profiles and resilience cases): 236 passed, 36 xfailed (exactly the `{float32, False}` EXCLUSION cells), 696 skipped (INVALID), 0 failed.
 - **Issues encountered**: `Tensor.element_size()` raises for bfloat8_b. A `static_assert` inside an `if constexpr` of a non-template function fired on non-bfp gamma; it is hoisted and made conditional.
 - **Tests added**: `test_rms_norm_numeric_config.py` (41 cases): 16-bit DEST × {bf16, bf8b} × {no gamma, bf16 gamma, bf8b TILE gamma} across the R1 / R2-occupancy / R2-fit regimes; bf8b with fp32 DEST and mixed gamma dtypes; the perf-profile config (bf16, False, HiFi2, TILE gamma, PCC ≥ 0.9995) incl. the multi-block depth-2 shape; and the bf8b non-aligned refusal. Phase 0 acceptance + debug + precision-baseline: 145/145 green.
+
+## Refinement 2 — WIDTH_SHARDED + BLOCK_SHARDED: shard-resident blocks + a cross-core combine that scales with the shard grid
+- **Date**: 2026-11-01
+- **What was done**:
+  - `SUPPORTED["memory_layout"]` += `WIDTH_SHARDED`, `BLOCK_SHARDED` (input and output share the shard spec; TILE and ROW_MAJOR; all alignments). `validate()` accepts a sharded output only if it equals the input's memory config, and refuses DRAM-sharded inputs. `EXCLUSIONS` += ROW_MAJOR × {WIDTH, BLOCK} × TILE gamma, mirroring feature_spec INVALID: an RM shard's W slice starts at a 16 B granule, not a tile edge.
+  - **Work split from the shard spec** (`select_sharded_blocking()`): one group per shard row (BLOCK) or one group (WIDTH). k = shard columns, up to 128 on the BH 13×10 grid. Member → core comes from the shard grid in its orientation, so WIDTH groups span grid rows. Ragged last shard row/column (`Split.PAD`) owns only its valid tile-rows / W tiles. Block = the resident shard, sub-blocked along rows only when the CB plan does not fit the L1 left by the two shards. The b-solve is shared with the interleaved path (`_solve_rows()`).
+  - **Zero-copy TILE**: `cb_x` and `cb_out` are backed on the input and output shards (`ttnn.cb_descriptor_from_sharded_tensor`). The reader only publishes the shard's tile-rows. Compute packs straight into the output shard, and the writer only waits/pops per block. No accessor touches a local shard (empty `TensorAccessorArgs` on the sharded path).
+  - **W tail without mutating the caller's shard**: the tail member's reader emits a 0/1 row mask (`prepare_reduce_mask`, `cb_tail_mask`). Compute collapses x² of the full W tiles into the reduce `Accumulate` CB (`cb_sumsq_acc`), then folds the tail tile's x² in with `ReducePartialScaler::only_partial()` and finalizes on that last chunk. Covers the poisoned-padding cases.
+  - **ROW_MAJOR stick shards** (16 B-granular widths, any height): per tile-row, the valid stick pieces are copied locally (own-L1 NoC reads) into the existing `cb_x_rm` tilize staging and zero-filled to the tile edge. The writer copies the untilized pieces back into the local output shard. Nothing is gathered across Tensix cores.
+  - **Scalable combine (design R3)**: a per-row owner topology. Tile-row r goes to member r % k, which gathers the k partials, combines and finalizes them (`cb_inv_owned`), and returns inv_rms into every member's `cb_inv_rms` (second semaphore). Every member pushes `ceil(rows/k)·k` gathered pages per block (lockstep slots). L1 per member ≈ b + k pages instead of the symmetric 2·k·b. Owned inv tiles are returned one at a time from the CB front, because members own different counts per block. Partial and inv payloads ship faces 0/2 only (`PARTIAL_FACES_ONLY`, interleaved R2 too). The symmetric all-gather needs a 2-block `cb_gathered` only when a core runs more than one block.
+  - **Topology knob, measured**: `K_SYM_MAX_INTERLEAVED = 8` (catalog; unchanged), `K_SYM_MAX_SHARDED = 1` (owner topology for every sharded k > 1). BH p150b, bf16, HiFi2, 16-bit DEST:
+    - BLOCK (7168,1024) [736,128] 8×10: 70 820 → 32 258 ns
+    - BLOCK (8192,1024) [1024,128] 8×8: 96 694 → 42 749 ns
+    - BLOCK (640,7168): 30 004 → 29 035 ns
+    - 1-tile-row WIDTH cases: flat (≤ 1 %)
+  - RM gamma slice load generalized to an element offset that is not 64 B-aligned (aligned-down read + lead skip).
+  - Reused: the whole compute pipeline (Σx² chain, collapse/combine reduce, fused normalize chain, tilize/untilize), the RM chunking, the gamma loader, the interleaved b-solve and the R2 writer exchange. Added: the sharded blocking, 3 CBs (`cb_inv_owned`, `cb_sumsq_acc`, `cb_tail_mask`), the owner exchange in the writer, the local shard copy (RM) and publish (TILE) branches in the reader/writer, and the masked-tail collapse.
+- **Accuracy achieved**: every case meets its gate. bf16 PCC ≥ 0.999 (HiFi4) and ≥ 0.9995 (perf-profile config: HiFi2, 16-bit DEST) on the 9 pinned perf geometries. fp32 PCC ≥ 0.999. bfloat8_b PCC ≥ 0.99 against the device-quantized input. The input shard is bit-identical after every call (asserted).
+- **Device time (sharded perf profiles, BH p150b, ns, vs feature_spec `achievable_ns` at 1350 MHz)**:
+  - WIDTH (32,1024) 8 Tensix cores: 5 733 vs 4 110
+  - WIDTH (32,2304) 9 Tensix cores: 7 533 vs 4 617
+  - WIDTH (32,5120) 32 Tensix cores: 8 663 vs 5 267
+  - WIDTH (32,7168) 28 Tensix cores: 9 621 vs 5 481
+  - BLOCK (640,6144) 90 Tensix cores: 22 031 vs 19 039
+  - BLOCK (640,7168) 70 Tensix cores: 29 035 vs 21 669
+  - BLOCK (7168,1024) 80 Tensix cores: 32 258 vs 18 871
+  - BLOCK (8192,1024) 64 Tensix cores: 42 749 vs 25 640
+  - BLOCK (7168,2048) 11×10: produced no profiler row in this run, so not measured.
+  - Finding: on tall shards (few W tiles, many tile-rows) per-tile-row SFPU work dominates — the within-tile collapse and a full-tile rsqrt finalize. The next levers are the design's "Finalize SFPU scope" lamp (rsqrt on column 0 only, catalog `sfpu_tile_scope`), then the catalog `tensix_all_reduce` per-row-vector payload (row partial + multicast return for k ≥ 12) on the decode WIDTH cases.
+- **Golden test progress** (targeted slices, BH p150b):
+  - Every WIDTH/BLOCK `test_op_loose` cell (pinned perf geometries, resilience, padding-poison): 192 passed, 3 skipped `INFEASIBLE_L1` (harness-side: the input or output shard does not fit L1; uncharged).
+  - WIDTH/BLOCK `test_op` cells of 7 shapes (1x1x32x8192, 2x1x100x47, 4x8x47x256, 1x1x2048x256, 32x17, 4x1x512x512, 1x1x50x128) together with the loose cells: 642 passed, 126 xfailed (EXCLUSION cells), 0 failed.
+  - INTERLEAVED representatives (shared code changed): 94 passed, 24 xfailed, 0 failed.
+- **Issues encountered**:
+  - In the owner topology, members own different row counts per block, so `cb_inv_owned`'s read pointer is not block-aligned. A multi-tile linear walk from `get_read_ptr` returned wrong inv_rms on multi-block shards ((7136,736) WIDTH, (1,1,4064,160) RM WIDTH). Fixed by returning owned tiles one at a time from the CB front.
+  - `ReduceDim` needs `ckernel::` in a dataflow kernel.
+- **Tests added**: `test_rms_norm_sharded.py` (54 cases):
+  - WIDTH TILE at k = 1 / 2 / 64 / 128 (owner, groups spanning grid rows) and BLOCK TILE
+  - non-aligned W/H, and poisoned padding on both schemes
+  - ROW_MAJOR stick shards, fp32 / no gamma, bfloat8_b with RM gamma
+  - the 8 pinned perf geometries at the perf-profile config
+  - owner-combine multi-block regressions
+  - every case asserts the caller's input shard is unchanged
+
+  Prior-phase acceptance + debug + numeric-config + precision-baseline: 186/186 green.

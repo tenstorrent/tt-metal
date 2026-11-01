@@ -46,7 +46,7 @@
 
 **Done when**: `bfloat8_b` ∈ `SUPPORTED["dtype"]` and `SUPPORTED["gamma_dtype"]`, `False` ∈ `SUPPORTED["fp32_dest_acc_en"]`; every golden cell whose only gap was one of these values passes (INTERLEAVED); no supported_fail / xpass_drift / xfail_wrong_mode; Phase 0 acceptance + debug + precision-baseline tests still green.
 
-### [ ] Refinement 2 — WIDTH_SHARDED + BLOCK_SHARDED: shard-resident blocks + a cross-core combine that scales with the shard grid
+### [x] Refinement 2 — WIDTH_SHARDED + BLOCK_SHARDED: shard-resident blocks + a cross-core combine that scales with the shard grid
 
 **Goal**: add `ttnn.TensorMemoryLayout.WIDTH_SHARDED` and `ttnn.TensorMemoryLayout.BLOCK_SHARDED` to `SUPPORTED["memory_layout"]` (input and output sharded with the same spec; both `Layout`s, all alignments) natively: each Tensix core consumes its resident shard in place and the per-row Σx² partials are combined across every Tensix core holding a slice of the same rows. Unlocks the 586 + 586 cells blocked only by these values (1172 more once Refinement 1 lands) plus the sharded perf profiles and resilience cases.
 
@@ -64,6 +64,8 @@
 - Golden `infeasible_skipped` cells (shard geometry vs device L1, harness-side) are uncharged and need nothing.
 
 **Done when**: `WIDTH_SHARDED` and `BLOCK_SHARDED` ∈ `SUPPORTED["memory_layout"]`; every golden cell (cartesian, pinned-geometry perf profiles, resilience and padding-poison cases) whose only gap was one of these values passes, for TILE and ROW_MAJOR; the dataflow reads each core's own shard zero-copy (no accessor re-read); no loud verifier category; prior phases green.
+
+**Landed**: both values in SUPPORTED (TILE + ROW_MAJOR, all alignments). Golden WIDTH/BLOCK slice: 642 pass / 126 xfail (exclusions) / 0 fail; all 192 sharded loose cells pass (+3 harness `INFEASIBLE_L1`). TILE cb_x / cb_out are backed on the shards; RM stick shards are copied locally into the tilize staging (16 B-granular shard widths are not a tile-page layout). The combine is the R3 owner topology for every sharded k > 1 (measured 2.2× over the all-gather on tall BLOCK shards). Remaining sharded headroom vs `achievable_ns` (tall BLOCK 32.3 vs 18.9 µs, decode WIDTH 5.7–9.6 vs 4.1–5.5 µs) is per-tile-row SFPU work (full-tile rsqrt finalize + within-tile collapse) — see changelog; next levers: finalize SFPU scope, row-partial + multicast return.
 
 ### [ ] Refinement 3 — Speed up the large interleaved cells: fill the grid at mid tile-row counts, overlap the one-block prefill
 

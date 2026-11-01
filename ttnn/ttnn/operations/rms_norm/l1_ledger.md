@@ -29,12 +29,39 @@ would carry no extra bits while doubling packer/unpacker/NoC bytes and L1.
 | `cb_gamma` | `slice_w_tiles` (RM: padded) | `core_w_tiles` | `{row: absent (gamma has no row extent; reused by every row), W: spans → core_w_tiles}` | gamma dtype (Float16_b / Float32 — raw weight) | reader | compute | program | none: program lifetime, read by every block's `normalize_block` |
 | `cb_sumsq_tiles` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away (DEST accumulation)}` | T_acc format: Float32 / Float16_b per `fp32_dest_acc_en` (DEST accumulation result) | compute | compute | pass 1 → collapse | not with `cb_inv_rms` / `cb_partial_sumsq`: the collapse reduce reads this CB while writing those (concurrent). Same size and format as `cb_inv_rms`; in R2 their lifetimes are disjoint, but R1 overlaps them, and the saving is `block_row_tiles·4 KB` (< 1% of the footprint) — one design for both regimes kept |
 | `cb_partial_sumsq` (k > 1) | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away}` | T_acc format | compute | writer | collapse → exchange (the gathered NoC payload follows `get_tile_size`) | not with `cb_sumsq_tiles` (concurrent in the collapse); not with `cb_gathered_sumsq` (peers write into that one at any time during the previous block) |
-| `cb_gathered_sumsq` (k > 1) | `2 · w_split_cores · block_row_tiles` | `w_split_cores · block_rows_this` (one block); capacity 2× = mechanism cap (lockstep slot reuse) | `{row: spans → block_row_tiles, W: reduced to one partial per member → w_split_cores}` | T_acc format | writer (+ peer NoC writes landing in its reserved slot) | compute | exchange → combine | none: remote writes may land at any time during the previous block, so no other buffer may occupy these bytes |
+| `cb_gathered_sumsq` (k > 1) | symmetric: `gather_depth · w_split_cores · block_row_tiles` (`gather_depth` = 1 when every core runs one block, else 2 — Refinement 2); owner topology: `ceil(block_row_tiles / k) · k` | symmetric: `w_split_cores · block_rows_this` (one block); capacity 2× only for multi-block = mechanism cap (lockstep slot reuse). Owner: k partials per owned row, uniform count per member (lockstep) | `{row: spans → block_row_tiles, W: reduced to one partial per member → w_split_cores}` | T_acc format | writer (+ peer NoC writes landing in its reserved slot) | compute | exchange → combine | none: remote writes may land at any time during the previous block, so no other buffer may occupy these bytes |
 | `cb_inv_rms` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: absent (broadcast along W)}` | T_acc format (finalize result in DEST) | compute | compute | finalize → end of `normalize_block` | not with `cb_sumsq_tiles` (see that row) |
 | `cb_out` | TILE: `out_depth · out_unit_tiles` (= 2·min(slice_w_tiles, 16)); RM: `block_row_tiles · rm_chunk_w_tiles` | TILE: ≥ 1 tile (streaming window); RM: `block_rows_this · rm_chunk_w_tiles` (pass 2 of one chunk column completes before untilize, same thread) | TILE `{row: streams → 1 tile, W: streams → 1 tile}`; RM `{row: spans → block_row_tiles, W: streams → rm_chunk_w_tiles}` | output dtype (terminal pack to the output format, not an intermediate) | compute | writer (TILE) / compute (RM) | per tile / per chunk | TILE: none, live with every other per-block CB; capacity > live set = double buffering for the writer. RM: not with `cb_x_rm` (concurrent across the reader/compute pipeline) |
 | `cb_out_rm` (RM only) | `out_depth · rm_chunk_w_tiles` | `rm_chunk_w_tiles` | `{row: streams → 1 tile-row, W: streams → rm_chunk_w_tiles}` | output dtype | compute | writer | per (tile-row, chunk) | not with `cb_x_rm` (concurrent); capacity 2× = writer double buffering |
 
-Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime.
+| `cb_inv_owned` (owner topology only — sharded k > 1) | `ceil(block_row_tiles / k)` | `owned_rows_this` (≤ capacity) | `{row: spans → rows owned by this member (row r → member r % k), W: absent}` | T_acc format (finalize result) | compute (combine) | writer (returns each tile to all k members' `cb_inv_rms`) | combine → return | not with `cb_inv_rms`: remote owners write into `cb_inv_rms` while this member's own combine output is still being sent; members own different counts per block, so the writer reads it one tile at a time from the front (no linear multi-tile walk across the ring end) |
+| `cb_sumsq_acc` (sharded TILE, W % 32 ≠ 0) | `block_row_tiles` | `block_rows_this` (only on the member owning the W tail) | `{row: spans → block_row_tiles, W: reduced away}` | T_acc format (raw sum, reduce `Accumulate` CB) | compute (collapse, non-last chunk) | compute (collapse, last chunk) | between the two collapse calls of one block | not with `cb_sumsq_tiles` (the second collapse reads both at once); not with `cb_partial_sumsq` / `cb_inv_rms` (the second collapse writes those while reading this) |
+| `cb_tail_mask` (sharded TILE, W % 32 ≠ 0) | 1 | 1 (tail member only) | `{row: absent, W: the tail tile's valid columns}` | T_acc format (Float16_b / Float32 — the mask formats `prepare_reduce_mask` accepts; matches the masked operand) | reader (`prepare_reduce_mask`) | compute (collapse `only_partial()`; popped once at kernel end) | program | none: program lifetime, read on every block |
+
+Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime. Semaphore `sem_inv_arrived`
+(owner topology only): one 4-byte word, program lifetime.
+
+### Refinement 2 — WIDTH_SHARDED / BLOCK_SHARDED placement
+
+- **`cb_x` (TILE)**: backed on the input shard (`ttnn.cb_descriptor_from_sharded_tensor`, zero-copy). Its
+  capacity is the shard (`shard_tile_rows · shard_w_tiles` pages) and it is NOT in the CB budget: the shard is
+  a tensor buffer allocated top-down, and `cb_l1_budget()` already measures the free region below it.
+  `x_row_pitch` = shard width in tiles. The reader only publishes the valid tile-rows (one reserve/push); the
+  caller's shard is never written (the W tail is masked in compute via `cb_tail_mask` + `cb_sumsq_acc`
+  instead of the interleaved path's in-place zero fill). `cb_x_alt` is never declared (x_block_depth = 1).
+- **`cb_out` (TILE)**: backed on the output shard. Compute packs straight into it, one shard row (`x_row_pitch`
+  tiles) per tile-row; the writer only waits/pops per block. Padding tiles of a ragged last shard column are
+  normalized as don't-care (their output lands in shard padding).
+- **ROW_MAJOR shards**: shard widths are 16 B-granular (8 bf16 datums), not tile-aligned, so a stick shard is
+  not a tilize-ready page layout. The reader copies each tile-row's valid stick pieces locally (own-L1 NoC
+  reads — no accessor, no cross-core traffic) into the existing `cb_x_rm` staging, zero-fills to the tile edge
+  (W tail + shard padding), and the writer copies the untilized pieces back into the local output shard.
+  CB inventory = the interleaved RM rows (`cb_x_rm`, `cb_x`, `cb_out`, `cb_out_rm`).
+- **Block**: the whole shard (`block_row_tiles` = shard tile-rows), sub-blocked along rows only when the
+  CB plan (above, minus the shard-backed CBs) does not fit the free L1 left by the input + output shards.
+- **Combine (sharded)**: owner topology for every k > 1 (`K_SYM_MAX_SHARDED = 1`). L1 per member:
+  `ceil(b/k)·k` gathered + `ceil(b/k)` owned pages, i.e. ≈ `b + k` instead of the symmetric `k·b`
+  (k = 128, b = 1: 128 pages, vs. 256 pages for the depth-2 symmetric all-gather).
 
 ## Symbol table
 
@@ -44,7 +71,7 @@ Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime.
 | `slice_w_tiles` | `ceil(tensor_w_tiles / w_split_cores)`; `footprint(k, 1, 1) ≤ budget` | `k_fit` (smallest k ≤ K_CAP that fits); RuntimeError otherwise |
 | `core_w_tiles` | `≤ slice_w_tiles`; ≥ 1 | k normalization `k = ceil(tensor_w_tiles / slice_w_tiles)` |
 | `core_w_tiles_padded` | `ceil(core_w_tiles / rm_chunk_w_tiles) · rm_chunk_w_tiles < core_w_tiles + chunks` | balanced chunking |
-| `w_split_cores` (k) | `1 ≤ k ≤ K_CAP = min(8, grid_x)` | clamp in `select_blocking()` |
+| `w_split_cores` (k) | interleaved `1 ≤ k ≤ K_CAP = min(8, grid_x)`; sharded k = shard columns (≤ grid cores, up to 128 on BH) | clamp in `select_blocking()`; `select_sharded_blocking()` from the shard spec |
 | `rm_chunk_w_tiles` | `≤ 32` | balanced chunk formula |
 | `x_block_depth` | ∈ {1, 2} | 2 iff `num_blocks_this_core > 1` and it fits; RM: 1 |
 | `out_depth`, `rm_in_depth` | 2 | constants (Phase 0) |
@@ -79,7 +106,10 @@ Chosen split: row-groups over the full grid × W split k (k = 1 in R1).
 | x | 1 | cb_x keeps the whole block (row × W share) resident across pass 1 and pass 2 | 0 |
 | out | 1 | written once from cb_out / cb_out_rm | 0 |
 | gamma | `G/k` copies of the W slice (RM: W·elem_bytes per group; TILE gamma: tensor_w_tiles · 128 B per group, row 0 only) | gamma is reuse-shared along the row split; each core reads its slice once and keeps it for the program | 0 |
-| sumsq partials (k > 1 only) | 0 | never leave L1 | per block per group: k² · block_rows_this · 4 KB unicast + k² semaphore increments |
+| sumsq partials (k > 1 only) | 0 | never leave L1 | symmetric (interleaved): per block per group k² · block_rows_this partials; owner topology (sharded): k · block_rows_this partials in + k · block_rows_this inv_rms tiles back. Payload per tile: faces 0 and 2 only (half a tile — column 0 lives there; `PARTIAL_FACES_ONLY`) |
+
+Sharded (Refinement 2): x and out cross DRAM **0** times (resident shards, consumed and produced in place);
+gamma is read once per member (its W slice). NoC: owner gather + return, 2 · k · tile-rows half-tiles per group.
 
 Totals per launch: DRAM ≈ `2 · |x|` + `(G/k) · W · elem_bytes` (gamma, ≤ 1/32 of x per row-group);
 NoC (R2 only) ≈ `k² · tensor_row_tiles · 4 KB`.
