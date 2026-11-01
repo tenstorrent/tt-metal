@@ -155,8 +155,7 @@ class Qwen38Model:
             packer_l1_acc=True,
         )
         rope = Qwen3_5TextRotaryEmbedding(self.config)
-        positions = torch.arange(self.context)[None, None].expand(3, 1, -1)
-        cc, ss = rope(torch.empty(1, self.context, 1, dtype=torch.bfloat16), positions)
+        cc, ss = rope(torch.empty(1, self.context, 1, dtype=torch.bfloat16), torch.arange(self.context)[None])
         self.cos_table, self.sin_table = [self.upload(v.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for v in (cc, ss)]
         self.rotary_width = cc.shape[-1]
         logger.info("Qwen3.8 model loaded")
