@@ -8,6 +8,7 @@ program-cache hit. Needs the case's mesh and fabric (Galaxy 8x4, FABRIC_2D_TORUS
 """
 
 import importlib.util
+import json
 import time
 from pathlib import Path
 
@@ -38,6 +39,21 @@ mb = ttnn.experimental.moe_block
 CASES = harness.list_cases(OP)
 
 
+def _device_params(case):
+    """The case's fabric (meta.json): the block's payload - a row and its trailer in one packet."""
+    cfg = json.loads((harness.case_dir(OP, case) / "meta.json").read_text())["config"] if case != "none" else {}
+    params = dict(fabric_config=getattr(ttnn.FabricConfig, cfg.get("fabric_config", "FABRIC_2D_TORUS_XY")))
+    if "fabric_payload_bytes" in cfg:
+        router = ttnn._ttnn.fabric.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = cfg["fabric_payload_bytes"]
+        params.update(fabric_router_config=router, reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT)
+    return params
+
+
+def _params(cases):
+    return [pytest.param((8, 4), _device_params(c), c, id=c) for c in cases]
+
+
 class _Call:
     """One case on the mesh: the resources, the layer's flat expert (its weights regenerated from the dump's seed) and
     the op's inputs; call() runs the op."""
@@ -51,16 +67,18 @@ class _Call:
             num_experts=cfg["E"], top_k=cfg["K"], emb_dim=cfg["Hr"], routed_expert_hidden_dim=cfg["I"]
         )
         conf = mb.MoEBlockConfig(chunk_tokens=cfg["chunk_tokens"], combine_snap=cfg["combine_snap"])
-        self.res = mb.MoEBlockResources.create(mesh_device, dims, conf)
+        self.res = mb.MoEBlockResources(mesh_device, dims, conf)
         Hr, I, E = cfg["Hr"], cfg["I"], cfg["E"]
         EPC = E // N
         g = torch.Generator().manual_seed(meta["seed"])
         r = lambda *s: torch.randn(*s, generator=g) * 0.02  # noqa: E731  (dump_ref_routed_experts_combine's order)
         gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
-        per_dev = [[(r(Hr, I), r(Hr, I), r(I, Hr)) for _ in gl] for gl in gids]
+        local = [(r(Hr, I), r(Hr, I), r(I, Hr)) for _ in range(EPC)]  # (every chip the same local experts)
+        layout = weights_py.flat_layout(cfg.get("flat_layout"))
         self.layer = weights_py.FlatRoutedExpert(
-            mesh_device, per_dev, m=cfg["m"], H=Hr, I=I, gids=gids, n_global=E, act=cfg["activation"], pin=1
-        )
+            mesh_device, [local] * N, m=cfg["m"], H=Hr, I=I, gids=gids, n_global=E, act=cfg["activation"], pin=1,
+            layout=layout,
+        )  # fmt: skip
         rm = lambda name, dt: harness.to_mesh(ref, name, mesh_device, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT)  # noqa
         self.args = [
             rm("xg", ttnn.bfloat16),
@@ -78,7 +96,12 @@ class _Call:
         combine.n_acc = cfg["n_acc"]
         combine.mode = mb.CombineMode.AccOnPorts if cfg["acc_on_ports"] else mb.CombineMode.PortsApart
         combine.arena_bytes = cfg["arena_bytes"]
-        self.kw = dict(max_tokens_per_expert=cfg["m"], activation=weights_py.ACTS[cfg["activation"]], combine=combine)
+        self.kw = dict(
+            max_tokens_per_expert=cfg["m"],
+            activation=weights_py.ACTS[cfg["activation"]],
+            layout=layout,
+            combine=combine,
+        )
 
     def call(self, arena=None):
         return mb.routed_experts_combine(*self.args, arena=arena, **self.kw)
@@ -89,7 +112,7 @@ class _Call:
         rows_cap = int(self.ref[(0, 0)]["table"].shape[-2]) * 32
         return mb.routed_experts_combine_arena_spec(
             self.res, rows_cap=rows_cap, max_tokens_per_expert=cfg["m"], activation=self.kw["activation"],
-            combine=self.kw["combine"],
+            layout=self.kw["layout"], combine=self.kw["combine"],
         )  # fmt: skip
 
     def close(self):
@@ -120,10 +143,10 @@ def _case(mesh_device, case):
     return meta, ref
 
 
-@pytest.mark.parametrize("case", CASES or ["none"])
-@pytest.mark.parametrize("device_params", [dict(fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY)], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_routed_experts_combine(mesh_device, case):
+@pytest.mark.parametrize(
+    "mesh_device, device_params, case", _params(CASES or ["none"]), indirect=["mesh_device", "device_params"]
+)
+def test_routed_experts_combine(mesh_device, device_params, case):
     meta, ref = _case(mesh_device, case)
     run = _Call(mesh_device, meta, ref)
     try:
@@ -139,10 +162,10 @@ def test_routed_experts_combine(mesh_device, case):
         run.close()
 
 
-@pytest.mark.parametrize("case", CASES[:1] or ["none"])
-@pytest.mark.parametrize("device_params", [dict(fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY)], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_routed_experts_combine_host_time(mesh_device, case):
+@pytest.mark.parametrize(
+    "mesh_device, device_params, case", _params(CASES[:1] or ["none"]), indirect=["mesh_device", "device_params"]
+)
+def test_routed_experts_combine_host_time(mesh_device, device_params, case):
     """us a call on a program-cache hit (host until the call returns, untraced, back to back after a warm-up): compare
     with the Python reference's experts + combine launch (k3 _experts_combine)."""
     meta, ref = _case(mesh_device, case)

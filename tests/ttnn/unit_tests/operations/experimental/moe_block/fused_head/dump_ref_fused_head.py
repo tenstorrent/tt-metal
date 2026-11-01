@@ -146,14 +146,16 @@ def main():
     a = ap.parse_args()
     R, C = (int(v) for v in a.mesh.split("x"))
     hz = _harness()
-    ttnn.set_fabric_config(getattr(ttnn.FabricConfig, a.fabric))
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(R, C))
-    try:
-        for name in a.models.split(","):
+    # (a fresh mesh a model, as the block builds its head on a fresh device: a previous model's head keeps its
+    # persistent L1 - K3's least arena, 1199 KB, does not fit in what GLM-5.3's head leaves, 1192 KB)
+    for name in a.models.split(","):
+        ttnn.set_fabric_config(getattr(ttnn.FabricConfig, a.fabric))
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(R, C), l1_small_size=0)  # (as the block tests)
+        try:
             dump(mesh, R, C, name, a.chunk, a.seed, a.accumulators, hz, a.fabric)
-    finally:
-        ttnn.close_mesh_device(mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        finally:
+            ttnn.close_mesh_device(mesh)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 if __name__ == "__main__":
