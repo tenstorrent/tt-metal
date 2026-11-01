@@ -108,6 +108,9 @@ OWNER_MEMBER_COST = 0.4  # owner combine: per gathered partial on the owner (add
 # (perf config): (8192,7168) 630 -> 673 us, (7168,1024) 76 -> 81 us — the k = 1 prefill shapes are DRAM-write-
 # bound (compute stubbed: same time; write-only 438 vs read-only 313 us at 8192x7168), so 1 stays the default.
 OVERLAP_BLOCKS = 1
+# Perf-probe ablation defines (never set by the op): e.g. ("RMS_ABLATE_EMPTY", "RMS_ABLATE_DM",
+# "CKL_ELTWISE_CHAIN_SKIP_COMPUTE"). Stubs a stage's payload, keeps its synchronization (/perf-measure).
+PERF_ABLATE = ()
 
 
 def _f32_bits(v: float) -> int:
@@ -732,6 +735,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         defines.append(("RMS_SHARDED", "1"))
     if opts.mask_tail:
         defines.append(("RMS_MASK_TAIL", "1"))
+    defines.extend((name, "1") for name in PERF_ABLATE)
     gamma_groups = None
     if opts.gamma_chunk:
         defines.append(("RMS_GAMMA_CHUNK", str(opts.gamma_chunk)))  # streamed gamma: per-core chunk ring, no mcast

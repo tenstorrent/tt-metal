@@ -41,6 +41,7 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #ifdef RMS_RM
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -74,7 +75,11 @@ struct FinalizeInvRms {
 // base_col / width: the tile-column window of the block walked (sharded W tail: full tiles, then the tail).
 template <uint32_t cb_x_blk>
 ALWI void sum_squares_block(uint32_t rows, uint32_t base_col, uint32_t width) {
-    cb_wait_front(cb_x_blk, rows * x_row_pitch);
+    {
+        MaybeDeviceZoneScope("cmp_wait_x");  // starved on the reader (interleaved) / tilize (RM)
+        cb_wait_front(cb_x_blk, rows * x_row_pitch);
+    }
+    MaybeDeviceZoneScope("cmp_pass1");  // sum x^2 (DEST-accumulated), one pack per tile-row
     constexpr auto x_in = input(
         cb_x_blk,
         WaitPolicy::None,
@@ -105,6 +110,7 @@ ALWI void collapse_sumsq_block(
     PostOp post_op,
     AccumulateT acc = AccumulateT{},
     ReducePartialScaler partial = ReducePartialScaler::none()) {
+    MaybeDeviceZoneScope("cmp_collapse");  // within-tile row collapse [+ finalize]
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -122,6 +128,11 @@ ALWI void collapse_sumsq_block(
 // ---- combine_partials_block: sum the k gathered column-0 partials per tile-row + finalize ----
 template <uint32_t out_cb = cb_inv_rms>
 ALWI void combine_partials_block(uint32_t rows, FinalizeInvRms finalize) {
+    {
+        MaybeDeviceZoneScope("cmp_wait_gathered");  // starved on the partial exchange (writer / peers)
+        cb_wait_front(cb_gathered_sumsq, rows * w_split_cores);
+    }
+    MaybeDeviceZoneScope("cmp_combine");
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -198,6 +209,7 @@ ALWI void tilize_row(uint32_t chunks_this) {
 // tilize_x_block: tilize init/uninit once per block (InitOnly / Neither / UninitOnly across tile-rows); each
 // tile-row is padded to x_row_pitch pages (gap pages pushed unwritten — only the last W member has a gap).
 ALWI void tilize_x_block(uint32_t rows, uint32_t chunks_this) {
+    MaybeDeviceZoneScope("cmp_tilize");  // occupancy: includes the waits on the reader's stick pieces
     const uint32_t gap = x_row_pitch - chunks_this * rm_chunk_w_tiles;
     for (uint32_t r = 0; r < rows; ++r) {
         if (rows == 1) {
@@ -275,10 +287,19 @@ ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms final
 // wait is a no-op after the first block — gamma is popped only at kernel exit).
 template <uint32_t cb_x_blk>
 ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[maybe_unused]] uint32_t gamma_tiles) {
-    cb_wait_front(cb_inv_rms, rows);
+    {
+        MaybeDeviceZoneScope("cmp_wait_inv");  // owner combine: inv_rms returned by the row owners (writer)
+        cb_wait_front(cb_inv_rms, rows);
+    }
 #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
-    cb_wait_front(cb_gamma, gamma_tiles);
+    {
+        MaybeDeviceZoneScope("cmp_wait_gamma");  // resident gamma slice (writer load / multicast)
+        cb_wait_front(cb_gamma, gamma_tiles);
+    }
 #endif
+    // occupancy: pass 2 (+ RM untilize) incl. back-pressure from the writer on cb_out / cb_out_rm and, when
+    // gamma is streamed, the per-chunk gamma waits
+    MaybeDeviceZoneScope("cmp_pass2");
 #ifdef RMS_RM
     for (uint32_t c = 0; c < chunks_this; ++c) {
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
@@ -309,6 +330,9 @@ ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[may
 }
 
 void kernel_main() {
+#ifdef RMS_ABLATE_EMPTY  // perf probes only: fixed-cost floor (see the reader)
+    return;
+#endif
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(1);
     const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(2);

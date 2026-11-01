@@ -59,6 +59,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #ifdef RMS_GAMMA_MCAST
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #endif
@@ -263,6 +264,7 @@ struct GammaSliceLoad {
     }
 
     FORCE_INLINE void begin() {
+        MaybeDeviceZoneScope("wr_gamma_issue");
         cb_reserve_back(cb_gamma, push_tiles);
         base = get_write_ptr(cb_gamma);
         if (reads_dram()) {
@@ -271,6 +273,7 @@ struct GammaSliceLoad {
     }
 
     FORCE_INLINE void end() {
+        MaybeDeviceZoneScope("wr_gamma_finish");  // barrier + expand (+ multicast send / receive wait)
 #ifdef RMS_GAMMA_MCAST
         Noc noc;
         // optional_*: a W slice owned by a single Tensix core (one row-group) has a sender and no receivers.
@@ -360,7 +363,11 @@ FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx) {
 FORCE_INLINE void exchange_send(uint32_t rows, ExchangeState& st) {
     constexpr uint32_t k = w_split_cores;
     const uint32_t tb = st.tile_bytes;
-    cb_wait_front(cb_partial_sumsq, rows);
+    {
+        MaybeDeviceZoneScope("wr_wait_partial");  // starved on compute's pass 1 + collapse
+        cb_wait_front(cb_partial_sumsq, rows);
+    }
+    MaybeDeviceZoneScope("wr_xchg_send");
     const uint32_t src = get_read_ptr(cb_partial_sumsq);
     if constexpr (combine_owner) {
         cb_reserve_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
@@ -398,8 +405,12 @@ FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
         const uint32_t tb = st.tile_bytes;
         const uint32_t owned = owned_rows(rows, st.member_idx);
         st.partials_expected += owned * k;
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+        {
+            MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+        }
         cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+        MaybeDeviceZoneScope("wr_inv_return");  // occupancy: waits on compute's owner combine + k-way return
 
         cb_reserve_back(cb_inv_rms, rows);
         const uint32_t inv_base = get_write_ptr(cb_inv_rms);
@@ -423,7 +434,10 @@ FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
         }
     } else {
         st.partials_expected += k;
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+        {
+            MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+        }
         cb_push_back(cb_gathered_sumsq, k * rows);
     }
 }
@@ -432,12 +446,25 @@ FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
 FORCE_INLINE void exchange_recv_inv(uint32_t rows, ExchangeState& st) {
     if constexpr (combine_owner) {
         st.inv_expected += rows;
+        MaybeDeviceZoneScope("wr_wait_inv");  // rendezvous: every owner's inv_rms return
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
         cb_push_back(cb_inv_rms, rows);
     }
 }
 
+// Perf ablation hooks (perf probes only; never set by the op): RMS_ABLATE_EMPTY returns at once (fixed-cost
+// floor of the same program on the same Tensix cores); RMS_ABLATE_DM drops the interleaved TILE x / out NoC
+// payload but keeps every CB handshake and barrier.
+#ifdef RMS_ABLATE_DM
+constexpr bool ablate_dm = true;
+#else
+constexpr bool ablate_dm = false;
+#endif
+
 void kernel_main() {
+#ifdef RMS_ABLATE_EMPTY
+    return;
+#endif
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
     const uint32_t num_blocks = get_arg_val<uint32_t>(2);
@@ -532,11 +559,15 @@ void kernel_main() {
 #else
         constexpr uint32_t gamma_prefetch = 0xFFFFFFFF;
 #endif
-        for (uint32_t i = 0, c0 = 0; i < gamma_prefetch && c0 < norm_w; ++i, c0 += gamma_chunk) {
-            stream_gamma_chunk(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, c0);
+        {
+            MaybeDeviceZoneScope("wr_gamma_stream");  // occupancy: chunk loads + back-pressure on the ring
+            for (uint32_t i = 0, c0 = 0; i < gamma_prefetch && c0 < norm_w; ++i, c0 += gamma_chunk) {
+                stream_gamma_chunk(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, c0);
+            }
         }
 #endif
         // ---- store_block ----
+        MaybeDeviceZoneScope("wr_store");  // occupancy: waits on pass 2 output + issue/flush of the writes
 #if defined(RMS_SHARDED) && defined(RMS_RM)
         constexpr uint32_t chunk_row_bytes = rm_chunk_w_tiles * TILE_DIM * elem_bytes;
         for (uint32_t c = 0; c < chunks_this; ++c) {
@@ -609,7 +640,10 @@ void kernel_main() {
                 cb_wait_front(cb_out, n);
                 const uint32_t l1 = get_read_ptr(cb_out);
                 for (uint32_t i = 0; i < n; ++i) {
-                    noc_async_write(l1 + i * out_page_bytes, out_acc.get_noc_addr(first_tile + j0 + i), out_page_bytes);
+                    if constexpr (!ablate_dm) {
+                        noc_async_write(
+                            l1 + i * out_page_bytes, out_acc.get_noc_addr(first_tile + j0 + i), out_page_bytes);
+                    }
                 }
                 noc_async_writes_flushed();
                 cb_pop_front(cb_out, n);

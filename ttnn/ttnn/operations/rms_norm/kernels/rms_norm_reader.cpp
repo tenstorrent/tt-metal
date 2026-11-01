@@ -24,6 +24,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #ifdef RMS_MASK_TAIL
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #endif
@@ -79,7 +80,19 @@ FORCE_INLINE void zero_w_tail_of_tile(const Noc& noc, const CircularBuffer& cb, 
     }
 }
 
+// Perf ablation hooks (perf probes only; never set by the op): RMS_ABLATE_EMPTY returns at once (fixed-cost
+// floor of the same program on the same Tensix cores); RMS_ABLATE_DM drops the interleaved TILE x / out NoC
+// payload but keeps every CB handshake and barrier.
+#ifdef RMS_ABLATE_DM
+constexpr bool ablate_dm = true;
+#else
+constexpr bool ablate_dm = false;
+#endif
+
 void kernel_main() {
+#ifdef RMS_ABLATE_EMPTY
+    return;
+#endif
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);  // first global tile-row of this core's group
     const uint32_t num_blocks = get_arg_val<uint32_t>(2);
@@ -109,6 +122,7 @@ void kernel_main() {
     constexpr uint32_t tile_row_bytes = TILE_DIM * elem_bytes;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+        MaybeDeviceZoneScope("rd_block");  // occupancy: local stick copies + back-pressure on cb_x_rm
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t s0 = (blk * block_row_tiles + r) * TILE_DIM;  // first stick of the tile-row in the shard
             const uint32_t nsticks = (valid_sticks - s0) < TILE_DIM ? (valid_sticks - s0) : TILE_DIM;
@@ -148,6 +162,7 @@ void kernel_main() {
     constexpr uint32_t tile_row_bytes = TILE_DIM * elem_bytes;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+        MaybeDeviceZoneScope("rd_block");  // occupancy: stick reads + back-pressure on cb_x_rm
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t t = row_start + blk * block_row_tiles + r;
             const uint32_t image = t / image_row_tiles;
@@ -194,14 +209,20 @@ void kernel_main() {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
         const uint32_t cb_id = (x_block_depth == 2 && (blk & 1)) ? cb_x_alt : cb_x;
         CircularBuffer cb(cb_id);
-        cb_reserve_back(cb_id, rows * x_row_pitch);
+        {
+            MaybeDeviceZoneScope("rd_reserve");  // back-pressure: compute still holds this x buffer
+            cb_reserve_back(cb_id, rows * x_row_pitch);
+        }
+        MaybeDeviceZoneScope("rd_read");  // issue + one barrier per tile-row (+ W-tail zero fill)
         const uint32_t base = get_write_ptr(cb_id);
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t t = row_start + blk * block_row_tiles + r;
             const uint32_t first_tile = t * tensor_w_tiles + w_tile_start;
             const uint32_t row_off = r * x_row_pitch * tile_bytes;
             for (uint32_t j = 0; j < core_w_tiles; ++j) {
-                noc_async_read(x_acc.get_noc_addr(first_tile + j), base + row_off + j * tile_bytes, tile_bytes);
+                if constexpr (!ablate_dm) {
+                    noc_async_read(x_acc.get_noc_addr(first_tile + j), base + row_off + j * tile_bytes, tile_bytes);
+                }
             }
             noc_async_read_barrier();
             if (owns_w_tail) {
