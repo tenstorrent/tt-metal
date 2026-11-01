@@ -330,8 +330,21 @@ Tests, in order:
    into the pick gather (read the kernel's bf8 tiles for the pick rows, write bf16 rows: 5.5 ms -> 0). Target
    ~40 ms per layer at 16 K tokens (kernel 6 + glue ~34) against 119-168 today: the MoE share of the 16 K chunk
    at 1 M from 4.2-5.5 s to ~1.5 s, the chunk from 7.6 s to ~4.5 s, a lone 1 M prefill from 505 s to ~300 s.
-   The existing fabric `dispatch` path (the d_p all-to-all ops building the region buffers in-kernel) is measured
-   next on the block as the possible shortcut.
+   Results 2026-11-01 08:00-09:00: (a) the fabric `dispatch` path HANGS on the (2,4) block (FABRIC_2D, the
+   row-major dispatch) and left two chips of rows 4-5 needing a reset: not a shortcut, never on the 8x4. (b) The
+   sub-chunk knob at 1 M: 7.63 s (2048) -> 7.18 s (4096) -> 7.17 s (8192), 4096 fits (2.93 GiB free): the 1 M
+   profile's candidate `GLM53_REGIONS_T=4096` (served TTFT confirmation pending). (c) `custom_ops/row_gather`
+   (a multi-core NoC row gather) measured SLOWER than `ttnn.embedding`, which already runs at 355-372 GB/s on one
+   chip (224-264 GB/s for the custom op): reverted; the "region gather 27 ms" and "pick gather 18 ms" stages bundle
+   the untilize of x, the slot scatter and random reads over the 1.1 GB output table, not a slow gather. (d)
+   `custom_ops/region_plan` (one single-core kernel: counts, tile-aligned offsets, every pick's slot, the local
+   mask tile) is bit-identical to the chain and takes 1.2 / 8.6 ms at T = 2048 / 16384 against the chain's
+   6.2 / 35 ms; wired behind `GLM53_REGIONS_PLAN=kernel`, the 8x4 stage deltas and the chunk gain follow the reset.
+   Remaining glue after it at 16 K: the bf8 TILE -> bf16 ROW_MAJOR relayout of the output table (10.5 ms,
+   DRAM-bound at ~210 GB/s: a hard term while the pick gather needs rows), the pick gather over the 1.1 GB table
+   (random 8 KB reads) and the region gather; a fused pick-gather + weighted-sum op would drop the 1 GB `comb`
+   round trip (~7 ms). Expected per layer at 16 K with the plan kernel and rt4096: ~85 ms (-25 %), i.e. the chunk
+   ~6.3 s; the 3-4x structural lever stays the EP-style prefill (section 2.5.1.1 options).
 
 Risks:
 
