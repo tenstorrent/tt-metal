@@ -5,34 +5,49 @@
 """The DSpark drafter on the mesh (speculative decode): the checkpoint's three ``mtp.*`` stages run as one
 draft call on the decode tile.
 
-The reference (``reference/deepseek_v41/model.py`` ``Transformer.forward_spec`` at ``start_pos = p > 0``): stage 0
-projects the target's tap ``main_hidden(p)`` (the hc-mean block inputs of layers 37-39, concatenated) to ``main_x``
-and every stage writes ``main_kv = QDQ(RoPE_p(kv_norm(wkv(main_x))))`` into its window ring at slot ``p % 128``; the
-draft block ``[x[p], noise x 4]`` at positions ``p + 1 .. p + 5`` then runs the three stages (each the backbone block's
+The reference (``reference/deepseek_v41/model.py`` ``Transformer.forward_spec`` at ``start_pos = p > 0``):
+stage 0
+projects the target's tap ``main_hidden(p)`` (the hc-mean block inputs of layers 37-39, concatenated) to
+``main_x``
+and every stage writes ``main_kv = QDQ(RoPE_p(kv_norm(wkv(main_x))))`` into its window ring at slot ``p %
+128``; the
+draft block ``[x[p], noise x 4]`` at positions ``p + 1 .. p + 5`` then runs the three stages (each the
+backbone block's
 shape: mHC, a ratio-0 attention whose keys are the ring's ``min(128, p + 1)`` slots plus the block's own rows,
 non-causal, with the sink; a 128-expert top-3 MoE with one shared expert), the last stage's ``norm``, the tied
 head on the five rows, and the Markov loop (``forward_head``: row ``i``'s logits plus ``markov_head(out[i])``,
 ``out[i + 1] = argmax``).
 
 Device mapping: the stages are built from the backbone's modules on the
-32-row decode tile replicated on every mesh row, as ``tt/v41/decode.py`` runs one token: ``TtV41Attention`` places
-the projections (bfp8, TP), ``TtV41HyperConnections`` the mHC, ``TtDistributedRmsNorm`` the norms, ``TtV41Moe`` (at
-the drafter's expert count, EP-32: four experts a chip a stage, in the drafter's own cache directory) the MoE, built
-sequentially as the decode MoEs are; ``TtV41DSpark`` (the prefill seeder) owns ``main_proj`` / ``main_norm`` and the
-stages' bf16 ``wkv`` / ``kv_norm`` for the ring write. Each stage keeps one ``[1, 1, 128 + 32, 512]`` bf16 row-major
+32-row decode tile replicated on every mesh row, as ``tt/v41/decode.py`` runs one token: ``TtV41Attention``
+places
+the projections (bfp8, TP), ``TtV41HyperConnections`` the mHC, ``TtDistributedRmsNorm`` the norms,
+``TtV41Moe`` (at
+the drafter's expert count, EP-32: four experts a chip a stage, in the drafter's own cache directory) the MoE,
+built
+sequentially as the decode MoEs are; ``TtV41DSpark`` (the prefill seeder) owns ``main_proj`` / ``main_norm``
+and the
+stages' bf16 ``wkv`` / ``kv_norm`` for the ring write. Each stage keeps one ``[1, 1, 128 + 32, 512]`` bf16
+row-major
 KV buffer: rows ``[0, 128)`` are the slot's ring (the prefill seeding's ``new_rings`` values joined in), rows
-``[128, 160)`` the block's keys, written each call; the attention's index rows list the valid ring slots, then rows
-``128 .. 128 + block``, then the sentinel. Rows 5 to 31 of the tile are noise-token rows at later positions whose
+``[128, 160)`` the block's keys, written each call; the attention's index rows list the valid ring slots, then
+rows
+``128 .. 128 + block``, then the sentinel. Rows 5 to 31 of the tile are noise-token rows at later positions
+whose
 outputs are never read (every op is row-local or masked by the per-row index rows).
 
 The tied embedding and head are the backbone's device modules (``TtV41Embedding``, ``TtV41Head`` with the last
-stage's ``norm``); the Markov loop runs in the graph (``V41_DSPARK_MARKOV=device``) or on the host from the five
+stage's ``norm``); the Markov loop runs in the graph (``V41_DSPARK_MARKOV=device``) or on the host from the
+five
 rows' logits (``draft`` returns them; one readback of ``5 x vocab`` fp32 per call).
 
-With ``ring_slots`` above 128 the rings are position-based as the verify decoder's window rings (a position's slot
-is ``position % ring_slots``; ``tt/v41/spec_verify.py``): the verify step then writes every verify row's tap into
+With ``ring_slots`` above 128 the rings are position-based as the verify decoder's window rings (a position's
+slot
+is ``position % ring_slots``; ``tt/v41/spec_verify.py``): the verify step then writes every verify row's tap
+into
 the rings and runs the drafter inside its own capture on every accept outcome's block (``fused_draft``: block
-``a`` is ``[argmax(row a), noise x 4]`` at positions ``p + a + 1 ..`` with its index rows bounded to ``p + a``;
+``a`` is ``[argmax(row a), noise x 4]`` at positions ``p + a + 1 ..`` with its index rows bounded to ``p +
+a``;
 ``(K + 1) x 5`` rows of one tile), so a round has one replay and one readback.
 """
 
@@ -92,19 +107,24 @@ from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceCo
 
 KV_ROWS = RING + ROWS  # a stage's KV buffer at the default ring: the ring, then the block tile
 INDEX_WIDTH = -(-(RING + DSPARK_BLOCK_SIZE) // TOPK_ALIGN) * TOPK_ALIGN  # 160: the index rows' width
-# V41_DSPARK_MOE=prefill: the plain TtMoe routing on the 64-row repeated tile whatever the decode flags say (the
+# V41_DSPARK_MOE=prefill: the plain TtMoe routing on the 64-row repeated tile whatever the decode flags say
+# (the
 # decode routing kernels were written for the backbone's 384 experts); the default follows tt/v41/decode.py
 DSPARK_MOE = os.environ.get("V41_DSPARK_MOE", "decode")
 assert DSPARK_MOE in ("decode", "prefill"), DSPARK_MOE
-# V41_DSPARK_MARKOV=host: the Markov loop on the host from the five logits rows (the reference's fp32 arithmetic);
+# V41_DSPARK_MARKOV=host: the Markov loop on the host from the five logits rows (the reference's fp32
+# arithmetic);
 # device (default): in the graph, each row's bias from the Markov tables on device and its argmax through the
 # sampler's top-32-per-chip path (bf16 candidates, as the target's own argmax)
 DSPARK_MARKOV = os.environ.get("V41_DSPARK_MARKOV", "device")
 assert DSPARK_MARKOV in ("device", "host"), DSPARK_MARKOV
-# V41_DSPARK_HOST_INPUTS=one (default): the standalone call's per-rank inputs (token, ring index, tap selector,
-# index rows, the two RoPE pairs) travel as one uint32 row-major page per rank, uploaded with one copy and unpacked
+# V41_DSPARK_HOST_INPUTS=one (default): the standalone call's per-rank inputs (token, ring index, tap
+# selector,
+# index rows, the two RoPE pairs) travel as one uint32 row-major page per rank, uploaded with one copy and
+# unpacked
 # inside the call's graph (after the step's ``StepPacker`` "one" mode: every mesh ``from_torch``
-# and every copy costs 0.2 to 0.4 ms whatever its size, and the call had nine and ten); split: one host tensor and
+# and every copy costs 0.2 to 0.4 ms whatever its size, and the call had nine and ten); split: one host tensor
+# and
 # one copy per input, as before. A host tap (the single-block tests) keeps the split path.
 DSPARK_HOST_INPUTS = os.environ.get("V41_DSPARK_HOST_INPUTS", "one")
 assert DSPARK_HOST_INPUTS in ("one", "split"), DSPARK_HOST_INPUTS
@@ -174,8 +194,10 @@ class TtDSparkStage:
 
     def _moe(self, weights: dict, cache_dir: Path, dtype) -> TtV41Moe:
         """The stage's ``TtV41Moe`` on ``moe_rows`` rows a chip, shared expert and dispatch in sequence (as
-        ``TtV41Decoder._decode_moe``), the routed experts converted into (or loaded from) ``cache_dir`` under the
-        ``layer_<40 + stage>`` prefix; the decode routing / tail / shared-expert installs follow the backbone's flags.
+        ``TtV41Decoder._decode_moe``), the routed experts converted into (or loaded from) ``cache_dir`` under
+        the
+        ``layer_<40 + stage>`` prefix; the decode routing / tail / shared-expert installs follow the
+        backbone's flags.
         """
         build_moe = TtPrefillBlock._build_moe
 
@@ -215,7 +237,8 @@ class TtDSparkStage:
         return ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
 
     def forward_attention(self, x, cos, sin, index_rows):
-        """``x`` [1, 1, ROWS, hidden/tp] bf16 (after attn_norm), the block rows' RoPE ``cos`` / ``sin`` and the index
+        """``x`` [1, 1, ROWS, hidden/tp] bf16 (after attn_norm), the block rows' RoPE ``cos`` / ``sin`` and
+        the index
         rows [1, 1, ROWS, INDEX_WIDTH] -> [1, 1, ROWS, hidden/tp] bf16. Writes the block's keys at rows
         [ring_slots, ring_slots + ROWS) of the stage's KV buffer."""
         attn = self.attn
@@ -265,12 +288,17 @@ class TtDSparkDrafter:
         ring_slots: int = RING,
         users: int = 1,
     ):
-        """``ckpt``: the ``V41Checkpoint`` the ``mtp.*`` tensors are read from; ``embedding``: the backbone's device
-        embedding (tied); ``head_weight``: the tied ``head.weight`` (the head is built here with the last stage's
+        """``ckpt``: the ``V41Checkpoint`` the ``mtp.*`` tensors are read from; ``embedding``: the backbone's
+        device
+        embedding (tied); ``head_weight``: the tied ``head.weight`` (the head is built here with the last
+        stage's
         ``norm``), or ``shared_head``: the backbone's ``TtV41Head``, whose projection is reused under the last
-        stage's norm (no second copy of the 330 MB a chip); ``cache_root``: ``TT_V41_WEIGHT_CACHE`` (the drafter's
-        directory is ``dspark_cache_dir`` under it); ``stages``: how many stages to build (tests; default all).
-        ``trace``: ``run`` captures the draft call after ``warmup`` eager calls and replays it. ``ring_slots``: the
+        stage's norm (no second copy of the 330 MB a chip); ``cache_root``: ``TT_V41_WEIGHT_CACHE`` (the
+        drafter's
+        directory is ``dspark_cache_dir`` under it); ``stages``: how many stages to build (tests; default
+        all).
+        ``trace``: ``run`` captures the draft call after ``warmup`` eager calls and replays it.
+        ``ring_slots``: the
         stages' ring slots (128: the reference's ``p % 128``; more: position-based, the module docstring).
         ``users``: rings a chip, one per slot of the rank (the standalone call then proposes
         for up to ``users`` slots at once, ``run_blocks``; ``tt/v41/dspark_blocks.py`` has the row layout)."""
@@ -304,7 +332,8 @@ class TtDSparkDrafter:
         self._eager_out = None
         self._pending = None  # a replay issued by ``run_blocks(wait=False)`` and not yet waited for
         self.last: dict = {}
-        # V41_DECODE_INPUT_TIMING=1 (as the decoders): ``last["items"]`` holds the standalone call's host time per
+        # V41_DECODE_INPUT_TIMING=1 (as the decoders): ``last["items"]`` holds the standalone call's host time
+        # per
         # item (ms): the inputs (``in.*``), the staging (``stage.*``), the call (``run.*``) and the readback
         self.input_timing = os.environ.get("V41_DECODE_INPUT_TIMING", "0") == "1"
         self.items: dict = {}
@@ -334,7 +363,8 @@ class TtDSparkDrafter:
             )
             complete_layer(self.cache_dir, layer)
             if k == config.NUM_DSPARK_LAYERS - 1:
-                # the Markov tables for the host loop: the embedding rows bf16, the head as fp32 once (the reference's
+                # the Markov tables for the host loop: the embedding rows bf16, the head as fp32 once (the
+                # reference's
                 # ``F.linear(embed.float(), head)`` with a bf16-valued head; a per-call conversion was 75 ms)
                 self.markov = {
                     "embed": weights["markov"]["embed"].detach().to(torch.bfloat16),
@@ -359,9 +389,12 @@ class TtDSparkDrafter:
                     self._block_mask(i, blocks)
 
     def _markov_device_tables(self, markov: dict) -> None:
-        """The Markov tables on device (``V41_DSPARK_MARKOV=device``): ``embed`` ``[vocab, 256]`` bf16 row-major
-        replicated (one ``ttnn.embedding`` of a token), ``head`` transposed ``[1, 1, 256, vocab / tp]`` bf16 tiled,
-        column-parallel over TP as the tied head; the row masks, the vocabulary offsets and the sampler's constants
+        """The Markov tables on device (``V41_DSPARK_MARKOV=device``): ``embed`` ``[vocab, 256]`` bf16
+        row-major
+        replicated (one ``ttnn.embedding`` of a token), ``head`` transposed ``[1, 1, 256, vocab / tp]`` bf16
+        tiled,
+        column-parallel over TP as the tied head; the row masks, the vocabulary offsets and the sampler's
+        constants
         (top-1: the argmax) of the in-graph loop (``_markov_device``)."""
         mesh, shape = self.mesh_device, tuple(self.mesh_device.shape)
         vocab = self.config.VOCAB_SIZE
@@ -416,8 +449,10 @@ class TtDSparkDrafter:
         self.seeded = True
 
     def _argmax_rows(self, logits):
-        """Every row's argmax over the full vocabulary from ``logits`` [1, 1, ROWS, vocab / tp] fp32 per chip (not
-        consumed): the sampler's path (top-32 bf16 per chip, gathered over TP, top-1) -> [1, 1, 1, ROWS] uint32."""
+        """Every row's argmax over the full vocabulary from ``logits`` [1, 1, ROWS, vocab / tp] fp32 per chip
+        (not
+        consumed): the sampler's path (top-32 bf16 per chip, gathered over TP, top-1) -> [1, 1, 1, ROWS]
+        uint32."""
         ccl = self.stages[0].attn.ccl
         values, indices = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), 32, dim=-1, largest=True, sorted=True)
         indices = ttnn.add(ttnn.typecast(indices, ttnn.int32), self.vocab_offsets)
@@ -426,7 +461,8 @@ class TtDSparkDrafter:
         return ttnn.sampling(values, indices, self.sample_k, self.sample_p, self.sample_temp)
 
     def _block_mask(self, i: int, blocks: int):
-        """``[1, 1, ROWS, 1]`` fp32: 1 at rows ``5 a + i`` for ``a < blocks`` (the rows whose Markov bias is row
+        """``[1, 1, ROWS, 1]`` fp32: 1 at rows ``5 a + i`` for ``a < blocks`` (the rows whose Markov bias is
+        row
         ``i``'s of their block)."""
         key = ("mask", i, blocks)
         if key not in self._consts:
@@ -442,10 +478,14 @@ class TtDSparkDrafter:
         return ttnn.reshape(ttnn.concat([self.zero_id, body], dim=3), (1, 1, ROWS))
 
     def _markov_device(self, logits, tokens, blocks: int = 1):
-        """The reference's ``forward_head`` loop in the graph on ``blocks`` candidate blocks of the tile (block ``a``
-        at rows ``5 a .. 5 a + 4``): iteration ``i`` adds ``markov_head(out[i])`` to row ``5 a + i`` of every block
-        and takes its argmax (``out[i + 1]``); ``tokens`` ``[1, 1, ROWS]`` uint32 (row ``5 a`` the block's first
-        token ``out[0]``) -> the drafts ``[1, 1, 1, ROWS]`` uint32 row-major, row ``5 a + i`` block ``a``'s draft
+        """The reference's ``forward_head`` loop in the graph on ``blocks`` candidate blocks of the tile
+        (block ``a``
+        at rows ``5 a .. 5 a + 4``): iteration ``i`` adds ``markov_head(out[i])`` to row ``5 a + i`` of every
+        block
+        and takes its argmax (``out[i + 1]``); ``tokens`` ``[1, 1, ROWS]`` uint32 (row ``5 a`` the block's
+        first
+        token ``out[0]``) -> the drafts ``[1, 1, 1, ROWS]`` uint32 row-major, row ``5 a + i`` block ``a``'s
+        draft
         ``i + 1`` (the later iterations touch other rows only, so every row's argmax is final in the last)."""
         self._seed_sampler()
         tok = tokens
@@ -482,11 +522,15 @@ class TtDSparkDrafter:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    # --- host inputs ---------------------------------------------------------------------------------------------
+    # --- host inputs
+    # ---------------------------------------------------------------------------------------------
     def tap_rows(self, main_hidden: torch.Tensor) -> torch.Tensor:
-        """The host tap ``[n_taps * hidden]`` (the reference's ``main_hidden`` row) -> ``[1, 1, ROWS, n_taps * hidden]``
-        in (chip, tap, j) column order, the row on every tile row: sharded over TP on dim 3 it gives chip ``t`` the
-        local concatenation ``[tap_0 slice t | tap_1 slice t | ...]`` that ``TtV41DSpark.main_proj`` multiplies."""
+        """The host tap ``[n_taps * hidden]`` (the reference's ``main_hidden`` row) -> ``[1, 1, ROWS, n_taps *
+        hidden]``
+        in (chip, tap, j) column order, the row on every tile row: sharded over TP on dim 3 it gives chip
+        ``t`` the
+        local concatenation ``[tap_0 slice t | tap_1 slice t | ...]`` that ``TtV41DSpark.main_proj``
+        multiplies."""
         n_taps, hidden = len(self.config.DSPARK_TARGET_LAYER_IDS), self.config.EMB_SIZE
         t = main_hidden.detach().to(torch.bfloat16).reshape(n_taps, self.tp, hidden // self.tp).transpose(0, 1)
         return t.reshape(1, 1, 1, n_taps * hidden).expand(1, 1, ROWS, -1).contiguous()
@@ -494,10 +538,13 @@ class TtDSparkDrafter:
     def host_inputs(
         self, token: int, main_hidden: torch.Tensor | None, position: int, write: bool | None = None, tap_row: int = 0
     ) -> dict:
-        """The draft call's host tensors at ``position`` = the reference's ``start_pos`` ``p``: the tap is position
-        ``p``'s (its ``main_kv`` goes to ring slot ``p % 128``), ``token`` is the target's output at ``p`` (``x[p + 1]``,
+        """The draft call's host tensors at ``position`` = the reference's ``start_pos`` ``p``: the tap is
+        position
+        ``p``'s (its ``main_kv`` goes to ring slot ``p % 128``), ``token`` is the target's output at ``p``
+        (``x[p + 1]``,
         the block's first row at position ``p + 1``), the other rows noise at ``p + 2 ..``."""
-        # no tap: the first call after a prefill (whose seeding wrote the slot; no ring write), or (``write``) a
+        # no tap: the first call after a prefill (whose seeding wrote the slot; no ring write), or (``write``)
+        # a
         # device tap copied over the host one by ``stage``
         if write is None:
             write = main_hidden is not None
@@ -505,10 +552,14 @@ class TtDSparkDrafter:
         return self.host_inputs_blocks([[entry]] * self.sp, main_hidden)
 
     def host_inputs_blocks(self, entries_by_rank: list[list[dict]], main_hidden: torch.Tensor | None = None) -> dict:
-        """The draft call's host tensors for up to ``users`` blocks a rank (``tt/v41/dspark_blocks.py``: an entry
-        is a slot's ``user``, ``token``, ``position`` ``p`` and the ``taps`` to write, ``(tap row, position)``),
-        one list per rank (``sp`` of them; a rank's slice sharded to its chips): row ``5 a`` of the tile is block
-        ``a``'s first token at ``p + 1``, rows ``5 a + i`` carry its slot's tap writes. ``main_hidden``: a host tap
+        """The draft call's host tensors for up to ``users`` blocks a rank (``tt/v41/dspark_blocks.py``: an
+        entry
+        is a slot's ``user``, ``token``, ``position`` ``p`` and the ``taps`` to write, ``(tap row,
+        position)``),
+        one list per rank (``sp`` of them; a rank's slice sharded to its chips): row ``5 a`` of the tile is
+        block
+        ``a``'s first token at ``p + 1``, rows ``5 a + i`` carry its slot's tap writes. ``main_hidden``: a
+        host tap
         on every row (the single-block tests; the served and harness calls select the verify step's tap tile
         through ``sel``, ``stage(tap32=)``). Sets ``blocks`` (the count every rank must share)."""
         cfg, sp = self.config, self.sp
@@ -526,16 +577,20 @@ class TtDSparkDrafter:
         inputs = {} if packed else {"token": self._per_rank(t["ids"].view(sp, 1, ROWS), ttnn.uint32, rm)}
         tick("token")
         if main_hidden is None:
-            # no host tap (the served and harness calls select the step's tap tile on device): the zero tap, one
-            # host tensor for the drafter's life; ``stage`` copies it once and skips it while the buffer holds it
+            # no host tap (the served and harness calls select the step's tap tile on device): the zero tap,
+            # one
+            # host tensor for the drafter's life; ``stage`` copies it once and skips it while the buffer holds
+            # it
             if self._zero_tap is None:
                 self._zero_tap = self._host_tap(torch.zeros(len(cfg.DSPARK_TARGET_LAYER_IDS) * cfg.EMB_SIZE))
             inputs["tap"] = self._zero_tap
         else:
             inputs["tap"] = self._host_tap(main_hidden)
         tick("tap")
-        # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile row):
-        # ``sel @ tap32`` puts the selected tap row on each writing row (one nonzero term a row: exact); without
+        # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile
+        # row):
+        # ``sel @ tap32`` puts the selected tap row on each writing row (one nonzero term a row: exact);
+        # without
         # a device tile the host tap is used (use_tap32 0)
         inputs["use_tap32"] = self._use_tap32(False)
         main = cos_sin(cfg, False, t["main_pos"].flatten())
@@ -543,6 +598,9 @@ class TtDSparkDrafter:
         tick("rope")
         if packed:
             inputs[ONE] = self._pack_one(t, main, block)
+            inputs["rope_main"] = tuple(
+                self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.float32, ttnn.TILE_LAYOUT) for r in main
+            )
             tick("pack")
             return inputs
         inputs["sel"] = self._per_rank(t["sel"].view(sp, 1, ROWS, ROWS), ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -559,9 +617,13 @@ class TtDSparkDrafter:
         tick("index")
         return inputs
 
-    # the packed page's columns (uint32 each): token [ROWS], ring_idx [ROWS], sel [ROWS * ROWS] (bf16 bits << 16),
-    # index [ROWS * INDEX_WIDTH], rope_main cos, sin [ROWS * rope_dim] each (fp32 bits), rope_block cos, sin
-    # [ROWS * rope_dim] each (bf16 bits << 16)
+    # the packed page's columns (uint32 each): token [ROWS], ring_idx [ROWS], sel [ROWS * ROWS] (bf16 bits <<
+    # 16),
+    # index [ROWS * INDEX_WIDTH], rope_block cos, sin [ROWS * rope_dim] each (bf16 bits << 16). The fp32 main
+    # RoPE
+    # pair stays two host-tiled tensors: tilized on device from fp32 bits it was not bit-exact (a draft
+    # differed
+    # and the served acceptance fell 2 to 4 %)
     def _one_layout(self) -> dict[str, tuple[int, int]]:
         if not hasattr(self, "_one_cols"):
             rope = self.config.QK_ROPE_HEAD_DIM
@@ -570,8 +632,6 @@ class TtDSparkDrafter:
                 ("ring_idx", ROWS),
                 ("sel", ROWS * ROWS),
                 ("index_rows", ROWS * INDEX_WIDTH),
-                ("main_cos", ROWS * rope),
-                ("main_sin", ROWS * rope),
                 ("block_cos", ROWS * rope),
                 ("block_sin", ROWS * rope),
             ]
@@ -587,8 +647,10 @@ class TtDSparkDrafter:
         return t.to(torch.bfloat16).contiguous().view(torch.int16).to(torch.int32) << 16
 
     def _pack_one(self, t: dict, main: tuple, block: tuple):
-        """The ranks' inputs (``dspark_blocks.mesh_inputs``'s tensors, the RoPE pairs ``[1, 1, sp * ROWS, rope_dim]``
-        fp32) -> the one host page per rank, ``[1, 1, 1, width]`` uint32 on every chip of the rank
+        """The ranks' inputs (``dspark_blocks.mesh_inputs``'s tensors, the RoPE pairs ``[1, 1, sp * ROWS,
+        rope_dim]``
+        fp32; the main pair is not packed, ``host_inputs_blocks``) -> the one host page per rank, ``[1, 1, 1,
+        width]`` uint32 on every chip of the rank
         (``from_host_shards``; the host rows reused)."""
         sp, tp = self.sp, self.tp
         cols = self._one_layout()
@@ -603,9 +665,6 @@ class TtDSparkDrafter:
         host[:, 0, 0, lo:hi] = self._bf16_bits(t["sel"]).view(sp, ROWS * ROWS)
         lo, hi = cols["index_rows"]
         host[:, 0, 0, lo:hi] = t["index"].view(sp, ROWS * INDEX_WIDTH)
-        for name, r in zip(("main_cos", "main_sin"), main):
-            lo, hi = cols[name]
-            host[:, 0, 0, lo:hi] = r.contiguous().view(torch.int32).view(sp, -1)
         for name, r in zip(("block_cos", "block_sin"), block):
             lo, hi = cols[name]
             host[:, 0, 0, lo:hi] = self._bf16_bits(r).view(sp, -1)
@@ -617,8 +676,9 @@ class TtDSparkDrafter:
 
     def _unpack_one(self, one) -> dict:
         """The page on device -> the graph's tensors as the split path keys them (a dozen tiny ops inside the
-        capture): the integer rows sliced, ``sel`` and the block RoPE bitcast to fp32, typecast to bf16 (exact: the
-        low half is zero) and tilized, the main RoPE bitcast to fp32 and tilized, the index rows reshaped."""
+        capture): the integer rows sliced, ``sel`` and the block RoPE bitcast to fp32, typecast to bf16
+        (exact: the
+        low half is zero) and tilized, the index rows reshaped."""
         cols = self._one_layout()
         rope = self.config.QK_ROPE_HEAD_DIM
 
@@ -633,10 +693,6 @@ class TtDSparkDrafter:
         }
         sel = ttnn.typecast(ttnn.bitcast(part("sel", (1, 1, ROWS, ROWS)), ttnn.float32), ttnn.bfloat16)
         out["sel"] = ttnn.tilize(sel)
-        out["rope_main"] = tuple(
-            ttnn.to_layout(ttnn.bitcast(part(name, (1, 1, ROWS, rope)), ttnn.float32), ttnn.TILE_LAYOUT)
-            for name in ("main_cos", "main_sin")
-        )
         out["rope_block"] = tuple(
             ttnn.tilize(ttnn.typecast(ttnn.bitcast(part(name, (1, 1, ROWS, rope)), ttnn.float32), ttnn.bfloat16))
             for name in ("block_cos", "block_sin")
@@ -644,7 +700,8 @@ class TtDSparkDrafter:
         return out
 
     def _host_tap(self, main_hidden: torch.Tensor):
-        """``tap_rows(main_hidden)`` as the host tensor of the ``tap`` buffer (sharded over TP on its columns)."""
+        """``tap_rows(main_hidden)`` as the host tensor of the ``tap`` buffer (sharded over TP on its
+        columns)."""
         return ttnn.from_torch(
             self.tap_rows(main_hidden),
             dtype=ttnn.bfloat16,
@@ -669,9 +726,12 @@ class TtDSparkDrafter:
         )
 
     def tap_rows_from_streams(self, streams: list, row: int):
-        """The device tap of tile row ``row`` from the target's block input streams of the tap layers (``streams``:
-        per tap layer ``[1, 1, ROWS, hc * hidden/tp]`` fp32 per chip, the outputs of the blocks before them) ->
-        ``[1, 1, ROWS, n_taps * hidden/tp]`` bf16 tiled per chip, the row on every tile row (``write_main_kv``'s
+        """The device tap of tile row ``row`` from the target's block input streams of the tap layers
+        (``streams``:
+        per tap layer ``[1, 1, ROWS, hc * hidden/tp]`` fp32 per chip, the outputs of the blocks before them)
+        ->
+        ``[1, 1, ROWS, n_taps * hidden/tp]`` bf16 tiled per chip, the row on every tile row
+        (``write_main_kv``'s
         ``tap``): the chip-major order of ``tap_rows`` is what the per-chip concatenation already is."""
         assert len(streams) == len(self.config.DSPARK_TARGET_LAYER_IDS)
         taps = ttnn.concat([self.seeder.tap(x) for x in streams], dim=3)  # [1, 1, ROWS, n_taps * hidden/tp] bf16
@@ -683,9 +743,12 @@ class TtDSparkDrafter:
         return out
 
     def stage(self, inputs: dict, tap=None, tap32=None) -> None:
-        """Copy the host inputs of ``host_inputs`` into the fixed device buffers (allocated by the first call);
-        ``tap``: a device tap (``tap_rows_from_streams``) copied over the host one; ``tap32``: the target step's
-        tap tile of every row (``TtV41VerifyDecoder.taps``), copied into its buffer and selected by ``sel`` in the
+        """Copy the host inputs of ``host_inputs`` into the fixed device buffers (allocated by the first
+        call);
+        ``tap``: a device tap (``tap_rows_from_streams``) copied over the host one; ``tap32``: the target
+        step's
+        tap tile of every row (``TtV41VerifyDecoder.taps``), copied into its buffer and selected by ``sel`` in
+        the
         graph (``use_tap32`` set to 1)."""
         if tap32 is not None:
             inputs = dict(inputs, use_tap32=self._use_tap32(True))
@@ -699,7 +762,8 @@ class TtDSparkDrafter:
         else:
             if tap32 is not None:
                 # the device copy first: a device op ahead of the host write (the page's
-                # write took 0.3 ms in most rounds and 2.3 to 3.1 in some, as if waiting for the dispatch to wake)
+                # write took 0.3 ms in most rounds and 2.3 to 3.1 in some, as if waiting for the dispatch to
+                # wake)
                 ttnn.copy(tap32, self.buffers["tap32"])
                 tap32 = None
                 tick("tap32")
@@ -737,7 +801,8 @@ class TtDSparkDrafter:
             ttnn.deallocate(logits)
             self.gathered = self.gather_sp is not None
             if self.gathered:
-                # as ``DeviceSampler.gather``: the row on every tile row, tilized, gathered over SP (a gathered
+                # as ``DeviceSampler.gather``: the row on every tile row, tilized, gathered over SP (a
+                # gathered
                 # 128-byte row-major row arrives on the other ranks' chips as stale memory)
                 tile = ttnn.to_layout(ttnn.concat([ids] * ROWS, dim=2), ttnn.TILE_LAYOUT)
                 return self.gather_sp(tile, dim=2)  # [1, 1, sp * ROWS, ROWS] uint32 tiled
@@ -759,7 +824,8 @@ class TtDSparkDrafter:
         return [ids[1:].tolist()]
 
     def read_ranks(self, out) -> list[list[list[int]]]:
-        """Every rank's blocks' drafts from the call's output (``run_blocks``'s ``out``): rank ``r`` -> block ``a``
+        """Every rank's blocks' drafts from the call's output (``run_blocks``'s ``out``): rank ``r`` -> block
+        ``a``
         -> its five drafts (the TP chips of a rank hold the same row; the first is read)."""
         assert DSPARK_MARKOV == "device"
         tick = self._tick("read")
@@ -792,15 +858,18 @@ class TtDSparkDrafter:
     def run(self, token: int) -> list[int]:
         """One draft call on the staged buffers (one block) -> the five drafts (``token`` the block's first
         token, for the host loop): eager, or (``trace``) captured after ``warmup`` eager calls and replayed.
-        ``last`` keeps the mode and times (``device_s``: the call to a synchronize; ``read_s``: the readback and
+        ``last`` keeps the mode and times (``device_s``: the call to a synchronize; ``read_s``: the readback
+        and
         any host loop)."""
         return self.run_blocks([token])[0]
 
     def run_blocks(self, tokens: list[int], read: bool = True, wait: bool = True) -> list[list[int]]:
         """One draft call on the staged buffers (``host_inputs_blocks``: ``blocks`` blocks a rank) -> rank 0's
-        blocks' drafts, five each (``tokens``: the blocks' first tokens, for the host loop). The capture is per
+        blocks' drafts, five each (``tokens``: the blocks' first tokens, for the host loop). The capture is
+        per
         block count. ``read=False``: no readback; ``out`` is the call's output tensor (``read_ranks``).
-        ``wait=False`` (a replay): return once the replay is issued, with the device still running it; ``wait``
+        ``wait=False`` (a replay): return once the replay is issued, with the device still running it;
+        ``wait``
         then waits for it (the caller does host work in between)."""
         assert len(tokens) == self.blocks, (len(tokens), self.blocks)
         assert self._pending is None, "a draft call is still running: call wait() first"
@@ -889,8 +958,10 @@ class TtDSparkDrafter:
         """User ``user``'s ring rows (``[u ring_slots, u ring_slots + 128)`` of every stage's KV buffer) from
         device rings ``[1, 1, 128, head_dim]`` bf16 row-major (a prefill state's ``dspark_rings``: slot
         ``q % 128`` holds position ``q`` of the last 128 before ``start``); with position-based rings
-        (``ring_slots > 128``) each row goes to the user's slot ``q % ring_slots`` (``start`` required). On every
-        rank (the rings are replicated), or (``rank``) on that mesh row alone: the served join of one slot, whose
+        (``ring_slots > 128``) each row goes to the user's slot ``q % ring_slots`` (``start`` required). On
+        every
+        rank (the rings are replicated), or (``rank``) on that mesh row alone: the served join of one slot,
+        whose
         user index the other rows' slots share."""
         assert 0 <= user < self.users, (user, self.users)
         base = user * self.ring_slots
@@ -926,10 +997,13 @@ class TtDSparkDrafter:
             )
         return out
 
-    # --- the ring write (the decode half of the seeding) ---------------------------------------------------------
+    # --- the ring write (the decode half of the seeding)
+    # ---------------------------------------------------------
     def write_main_kv(self, inputs: dict):
-        """stage 0's ``main_x`` from the tap rows, every stage's ``main_kv`` into its ring at ``ring_idx`` (row 0 of the
-        tile; the other rows' index is the sentinel). Returns ``main_x`` [1, 1, ROWS, hidden] bf16 replicated."""
+        """stage 0's ``main_x`` from the tap rows, every stage's ``main_kv`` into its ring at ``ring_idx``
+        (row 0 of the
+        tile; the other rows' index is the sentinel). Returns ``main_x`` [1, 1, ROWS, hidden] bf16
+        replicated."""
         s = self.seeder
         tap = inputs["tap"]
         if "tap32" in inputs:  # the target step's tap tile: row ``sel`` on every row, or the host tap (use_tap32 0)
@@ -939,7 +1013,8 @@ class TtDSparkDrafter:
         return self._write_main_kv(tap, inputs["rope_main"], inputs["ring_idx"], ROWS)
 
     def _write_main_kv(self, tap, rope_main: tuple, ring_idx, rows: int):
-        """``tap`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (every row its own), ``rope_main`` the fp32 pair of every
+        """``tap`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (every row its own), ``rope_main`` the fp32 pair of
+        every
         row's position, ``ring_idx`` [1, 1, 1, ROWS] uint32 (the slot of each of the first ``rows`` rows, the
         sentinel for no write) -> ``main_x``; every stage's ring written at the index."""
         s = self.seeder
@@ -956,7 +1031,8 @@ class TtDSparkDrafter:
             ttnn.deallocate(kv)
         return main_x
 
-    # --- the fused call (inside the verify step's capture) -------------------------------------------------------
+    # --- the fused call (inside the verify step's capture)
+    # -------------------------------------------------------
     def _noise_run(self, n: int):
         key = ("noise", n)
         if key not in self._consts:
@@ -966,8 +1042,10 @@ class TtDSparkDrafter:
         return self._consts[key]
 
     def block_tokens(self, ids, rows: tuple):
-        """``ids`` [1, 1, 1, ROWS] uint32 row-major (the verify step's argmax per tile row; ``rows[a]`` verify row
-        ``a``'s) -> the block tile [1, 1, ROWS] uint32: row ``5 a`` = ``ids[rows[a]]`` for ``a < len(rows)``, the
+        """``ids`` [1, 1, 1, ROWS] uint32 row-major (the verify step's argmax per tile row; ``rows[a]`` verify
+        row
+        ``a``'s) -> the block tile [1, 1, ROWS] uint32: row ``5 a`` = ``ids[rows[a]]`` for ``a < len(rows)``,
+        the
         noise token elsewhere."""
         blocks = len(rows)
         parts = []
@@ -981,10 +1059,14 @@ class TtDSparkDrafter:
 
     def block_index_rows(self, wslots, rows: tuple, ring_base: int = 0):
         """``wslots`` [1, 1, ROWS, 128] fp32 tiled (the verify step's window slots per tile row: the slots of
-        positions ``p + j - 127 .. p + j`` of verify row ``j`` at tile row ``rows[j]``) -> the fused call's index
-        rows [1, 1, ROWS, INDEX_WIDTH] uint32 row-major: row ``5 a + i`` lists verify row ``a``'s window (the ring
-        slots of positions ``<= p + a``, offset by ``ring_base``: the user's ring with rings per slot), then its
-        block's five rows ``block_base + 5 a ..``, then the sentinel; the rows past the blocks block 0's window
+        positions ``p + j - 127 .. p + j`` of verify row ``j`` at tile row ``rows[j]``) -> the fused call's
+        index
+        rows [1, 1, ROWS, INDEX_WIDTH] uint32 row-major: row ``5 a + i`` lists verify row ``a``'s window (the
+        ring
+        slots of positions ``<= p + a``, offset by ``ring_base``: the user's ring with rings per slot), then
+        its
+        block's five rows ``block_base + 5 a ..``, then the sentinel; the rows past the blocks block 0's
+        window
         alone."""
         blocks = len(rows)
         key = ("index", tuple(rows))
@@ -1010,7 +1092,8 @@ class TtDSparkDrafter:
 
     def prepare_fused(self, layouts: list) -> None:
         """Allocate the fused call's constants for every row layout in ``layouts`` (tuples of tile rows: the
-        verify rows a block takes) before any capture (a persistent tensor allocated after a capture may sit in
+        verify rows a block takes) before any capture (a persistent tensor allocated after a capture may sit
+        in
         that capture's freed intermediates)."""
         for rows in layouts:
             blocks = len(rows)
@@ -1023,13 +1106,19 @@ class TtDSparkDrafter:
 
     def fused_draft(self, taps, ids, inputs: dict, rows: tuple, user: int = 0):
         """The draft call inside the verify step's graph (``TtV41VerifyDecoder._forward``), after the sampler:
-        ``taps`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (tile row ``rows[j]`` the tap of verify row ``j`` at position
-        ``p + j``), ``ids`` the rows' argmaxes, ``inputs`` the step's unpacked inputs (``dring``: the ring row of
-        every verify row (the user's ring with rings per slot), the sentinel elsewhere; ``dmain``: the fp32 RoPE
-        pair of every row's position; ``dblock``: the bf16 pair of the block rows' positions, row ``5 a + i`` at
+        ``taps`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (tile row ``rows[j]`` the tap of verify row ``j`` at
+        position
+        ``p + j``), ``ids`` the rows' argmaxes, ``inputs`` the step's unpacked inputs (``dring``: the ring row
+        of
+        every verify row (the user's ring with rings per slot), the sentinel elsewhere; ``dmain``: the fp32
+        RoPE
+        pair of every row's position; ``dblock``: the bf16 pair of the block rows' positions, row ``5 a + i``
+        at
         ``p + a + 1 + i``; ``wslots``), ``user`` the live slot's user index (its ring with rings per slot)
-        -> the drafts of every accept outcome ``a < len(rows)`` [1, 1, 1, ROWS] uint32 row-major (row ``5 a + i``
-        the ``i + 1``-th draft after accepting ``a``). Every verify row's tap reaches the rings (a rejected row's
+        -> the drafts of every accept outcome ``a < len(rows)`` [1, 1, 1, ROWS] uint32 row-major (row ``5 a +
+        i``
+        the ``i + 1``-th draft after accepting ``a``). Every verify row's tap reaches the rings (a rejected
+        row's
         write sits past the frontier and is rewritten when its position is really processed)."""
         assert DSPARK_MARKOV == "device", "the fused draft call keeps the Markov loop in the graph"
         assert self.ring_slots > RING, "the fused draft call needs position-based rings (ring_slots > 128)"
@@ -1044,9 +1133,11 @@ class TtDSparkDrafter:
         ttnn.deallocate(logits)
         return drafts
 
-    # --- the draft block ---------------------------------------------------------------------------------------
+    # --- the draft block
+    # ---------------------------------------------------------------------------------------
     def forward_block(self, inputs: dict, on_stage=None):
-        """The block through the stages -> the final collapsed stream [1, 1, ROWS, hidden/tp] bf16 (before the last
+        """The block through the stages -> the final collapsed stream [1, 1, ROWS, hidden/tp] bf16 (before the
+        last
         stage's norm). ``on_stage(k, streams)`` after each stage (acceptance)."""
         cos, sin = inputs["rope_block"]
         h = self.embedding(inputs["token"])
@@ -1064,7 +1155,8 @@ class TtDSparkDrafter:
         return ttnn.typecast(self.stages[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
 
     def draft(self, inputs: dict, on_stage=None):
-        """One draft call on device inputs: the ring writes (every row with a ring index), the block, the head ->
+        """One draft call on device inputs: the ring writes (every row with a ring index), the block, the head
+        ->
         (logits tile [1, 1, ROWS, vocab/tp] fp32 per chip (row j the block's row j), main_x)."""
         main_x = self.write_main_kv(inputs)
         final = self.forward_block(inputs, on_stage)
@@ -1072,18 +1164,23 @@ class TtDSparkDrafter:
         return logits, main_x
 
     def draft_ids(self, inputs: dict, on_stage=None, blocks: int = 1):
-        """``draft`` followed by the device Markov loop on ``blocks`` blocks -> (the drafts [1, 1, 1, ROWS] uint32
-        on device, row ``5 a + i`` block ``a``'s draft ``i + 1``; the logits tile before the biases; main_x)."""
+        """``draft`` followed by the device Markov loop on ``blocks`` blocks -> (the drafts [1, 1, 1, ROWS]
+        uint32
+        on device, row ``5 a + i`` block ``a``'s draft ``i + 1``; the logits tile before the biases;
+        main_x)."""
         logits, main_x = self.draft(inputs, on_stage)
         return self._markov_device(logits, inputs["token"], blocks), logits, main_x
 
     def logits_rows(self, logits, rows: int = DSPARK_BLOCK_SIZE) -> torch.Tensor:
-        """The block's first ``rows`` rows of the logits tile on the host, ``[rows, vocab]`` fp32 (``scored_rows``:
-        the device untilizes and slices the rows, the host reads ``rows`` instead of 32; consumes ``logits``)."""
+        """The block's first ``rows`` rows of the logits tile on the host, ``[rows, vocab]`` fp32
+        (``scored_rows``:
+        the device untilizes and slices the rows, the host reads ``rows`` instead of 32; consumes
+        ``logits``)."""
         return self.head._tile_to_host(self.head.scored_rows(logits, 0, rows), 0)
 
     def markov_loop(self, token: int, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """The reference's ``forward_head`` loop on the host: ``logits`` [block, vocab] fp32 (modified in place:
+        """The reference's ``forward_head`` loop on the host: ``logits`` [block, vocab] fp32 (modified in
+        place:
         row ``i`` plus ``markov_head(out[i])``), ``out[0] = token``, ``out[i + 1] = argmax(row i)``; greedy.
         Returns (output ids [block + 1], the biased logits)."""
         embed, head = self.markov["embed"], self.markov["head"]
