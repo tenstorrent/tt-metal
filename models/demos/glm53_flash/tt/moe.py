@@ -1799,9 +1799,12 @@ class TtRoutedExperts(LightweightModule):
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
 
-    # ---------------------------------------------- GLM53_REGIONS_PLAN=kernel (custom_ops/region_plan)
+    # ---------------------------------------------- GLM53_REGIONS_PLAN (custom_ops/region_plan; "chain" = the ttnn chain)
     def _plan_serves(self) -> bool:
-        return os.environ.get("GLM53_REGIONS_PLAN", "chain") == "kernel"
+        """The region bookkeeping as one kernel (the default since 2026-11-01: bit-identical to the chain, 1.2 / 8.6 ms
+        at 2048 / 16 K tokens against 6.2 / 35 ms; served c1 1 M TTFT 494.8 -> 443.0 s); ``GLM53_REGIONS_PLAN=chain``
+        keeps the ttnn chain (the A/B reference)."""
+        return os.environ.get("GLM53_REGIONS_PLAN", "kernel") == "kernel"
 
     def _region_plan(self, idx: ttnn.Tensor, max_buf: int, T: int, k: int):
         """The regions bookkeeping through ``RegionPlan``: ``idx`` [1,1,T,k] fp32 TILE (the router's top-k ids) ->
