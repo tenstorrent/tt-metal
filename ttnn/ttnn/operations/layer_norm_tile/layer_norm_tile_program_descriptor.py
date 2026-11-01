@@ -22,7 +22,7 @@ IO_CHUNK_TARGET_TILES = 8
 # Stream knobs (Refinement 1, measured on BH p100a). READ_TRID_DEPTH > 1 slowed L1-sourced rows and
 # left DRAM rows flat; WRITE_CHUNKS_PER_FLUSH and BANK_STAGGER were flat (7 DRAM banks already
 # spread the 24 * t row starts). All three are parked at their trivial settings.
-READ_TRID_DEPTH = 1  # chunks kept in flight on the read trid ring, <= 15
+READ_TRID_DEPTH = 1  # chunks kept in flight on the read trid ring, <= 14 (the affine scatter uses id depth + 1)
 WRITE_CHUNKS_PER_FLUSH = 1  # output chunks issued per flush + pop
 BANK_STAGGER = False  # rotate each core's in-chunk tile order by its core index
 # split_reader: the residual stream moves to the writer RISC, on the NoC opposite the reader's. Gated to
@@ -180,17 +180,20 @@ def _is_balanced(assignment):
     return len({rows for _, _, rows in assignment}) == 1
 
 
-def _stream_row_stats(input_tensor, assignment, *, has_residual, compute_kernel_config):
+def _stream_row_stats(input_tensor, assignment, *, residual, compute_kernel_config):
     """Streamed one-pass stats where they win. On an unbalanced split the heavy cores set the end:
     - DRAM input: light cores finishing sooner write into the heavy cores' next-row DRAM reads
       (focus2 median 47.6 -> 48.9 us);
     - residual: the shifted residual add (an extra DEST-reuse pass per tile) costs more on the heavy cores'
       resident second row than streaming saves on the first (focus1 36.5 -> 36.7..37.9 us).
-    Balanced splits stream (8x384 38.6 -> 36.1, 3x500 24.9 -> 22.2 us)."""
+    Balanced splits stream (8x384 38.6 -> 36.1, 3x500 24.9 -> 22.2 us), except with the residual in L1: its
+    reads finish early, so the shifted add's extra pass is not paid back (2x512 all L1 14.7 -> 14.9 us)."""
     if not STREAM_ROW_STATS or not _one_pass_capable(compute_kernel_config):
         return False
     dram_input = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
-    return _is_balanced(assignment) or not (has_residual or dram_input)
+    if residual is not None:
+        return _is_balanced(assignment) and residual.memory_config().buffer_type == ttnn.BufferType.DRAM
+    return _is_balanced(assignment) or not dram_input
 
 
 def _stats_window_tiles(Wt, C, streamed):
@@ -235,7 +238,7 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
     grid = device.compute_with_storage_grid_size()
     all_cores, assignment, core_row_tiles_max = _split_rows(device, tensor_row_tiles(shape))
     streamed = _stream_row_stats(
-        input_tensor, assignment, has_residual=has_residual, compute_kernel_config=compute_kernel_config
+        input_tensor, assignment, residual=residual, compute_kernel_config=compute_kernel_config
     )
     G = _stats_window_tiles(Wt, C, streamed)
     one_pass = ONE_PASS_VARIANCE and streamed

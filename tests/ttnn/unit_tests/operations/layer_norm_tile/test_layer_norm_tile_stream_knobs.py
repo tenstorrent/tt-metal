@@ -26,7 +26,7 @@ KNOBS = {
     "split_trid3_flush3_stagger": dict(
         READ_TRID_DEPTH=3, WRITE_CHUNKS_PER_FLUSH=3, BANK_STAGGER=True, RESIDUAL_ON_WRITER=True
     ),
-    "split_trid15_flush15": dict(READ_TRID_DEPTH=15, WRITE_CHUNKS_PER_FLUSH=15, RESIDUAL_ON_WRITER=True),
+    "split_trid14_flush15": dict(READ_TRID_DEPTH=14, WRITE_CHUNKS_PER_FLUSH=15, RESIDUAL_ON_WRITER=True),
 }
 
 CASES = [

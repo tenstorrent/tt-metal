@@ -117,5 +117,6 @@ def test_widths(device, width, math_fidelity):
     shape = (4, 1, 256, width)
     x = torch.randn(shape).to(torch.bfloat16)
     res = torch.randn(shape).to(torch.bfloat16)
-    expected, actual, _ = run(device, x, res, buf=L1, math_fidelity=math_fidelity)
+    # DRAM residual on a balanced split (32 rows, 32 cores): the streamed path under HiFi4.
+    expected, actual, _ = run(device, x, res, buf=DRAM, math_fidelity=math_fidelity)
     assert compute_pcc(actual, expected) >= 0.995
