@@ -232,7 +232,18 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
 #endif
 // Returns whether this block takes the W offset path (out_tile is its tile offset). The first block of an output after another output packs as before: the base is
 // programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
+// Blocks of fewer tiles keep the plain block: the W setup (destination and stride writes, about 45 cycles once per output) is not paid back by the few calls' gain.
+#ifndef LLK_PACK_W_MIN_TILES
+#define LLK_PACK_W_MIN_TILES 5
+#endif
 inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
+    if (ntiles < LLK_PACK_W_MIN_TILES) {
+        if (pack_w_last != output_id) {
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            pack_w_last = output_id;
+        }
+        return false;
+    }
     if (pack_w_last != output_id) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         pack_w_last = output_id;
@@ -357,9 +368,12 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         return;
     }
 #ifdef LLK_PACK_W_OFFSET
-    // The first block after an init is the plain block, which packs Float32 tiles of a 4 or 5 tile block slower than the per-tile pack; the next block programs the W offset.
-    if (ntiles <= 5 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && pack_w_last != output_id) {
-        pack_w_last = output_id;
+    // The plain block packs Float32 tiles of a 4 or 5 tile block slower than the per-tile pack: 4 tiles always, 5 tiles for the first block of an output (the next one takes the W offset).
+    if (ntiles <= 5 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && (ntiles == 4 || pack_w_last != output_id)) {
+        if (pack_w_last != output_id) {
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            pack_w_last = output_id;
+        }
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
