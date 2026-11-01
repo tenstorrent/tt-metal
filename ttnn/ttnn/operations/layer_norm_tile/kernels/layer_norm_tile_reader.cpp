@@ -106,12 +106,16 @@ void kernel_main() {
         const uint32_t num_chunks = rows * tensor_w_tiles / io_chunk_tiles;
 
         // Whole-block reserve: the CB holds a whole number of blocks, so the block is contiguous.
-        input_tiles.reserve_back(rows * tensor_w_tiles);
-        const uint32_t input_base = input_tiles.get_write_ptr();
+        uint32_t input_base = 0;
         uint32_t residual_base = 0;
-        if constexpr (read_residual) {
-            residual_tiles.reserve_back(rows * tensor_w_tiles);
-            residual_base = residual_tiles.get_write_ptr();
+        {
+            MaybeDeviceZoneScope("reader_reserve");
+            input_tiles.reserve_back(rows * tensor_w_tiles);
+            input_base = input_tiles.get_write_ptr();
+            if constexpr (read_residual) {
+                residual_tiles.reserve_back(rows * tensor_w_tiles);
+                residual_base = residual_tiles.get_write_ptr();
+            }
         }
 
         auto issue = [&](uint32_t chunk) {
@@ -135,9 +139,13 @@ void kernel_main() {
                 residual_tiles.push_back(io_chunk_tiles);
             }
         };
-        layer_norm_tile::read_block_chunks<read_trid_depth>(noc, num_chunks, issue, retire);
+        {
+            MaybeDeviceZoneScope("reader_block");
+            layer_norm_tile::read_block_chunks<read_trid_depth>(noc, num_chunks, issue, retire);
+        }
 
         if (affine_pending) {
+            MaybeDeviceZoneScope("reader_affine");
             noc_async_read_barrier();
             if constexpr (!affine_is_tile) {
                 finish_affine(gamma_tiles);

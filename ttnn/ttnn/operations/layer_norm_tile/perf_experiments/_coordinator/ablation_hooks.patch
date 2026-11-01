@@ -1,0 +1,82 @@
+--- kernels/layer_norm_tile_stream.hpp	2026-11-01 15:58:28.091747178 +0000
++++ kernels/layer_norm_tile_stream.hpp	2026-11-01 15:58:28.075747277 +0000
+@@ -32,6 +32,9 @@
+ // One chunk of `chunk_tiles` consecutive pages between DRAM/L1 pages and contiguous local L1.
+ template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+ FORCE_INLINE void read_chunk(const Accessor& accessor, uint32_t first_page, uint32_t l1_addr, uint32_t rotation) {
++#ifdef LN_ABLATE_READ
++    return;
++#endif
+     for_each_rotated(chunk_tiles, rotation, [&](uint32_t tile) {
+         noc_async_read(accessor.get_noc_addr(first_page + tile), l1_addr + tile * tile_bytes, tile_bytes);
+     });
+@@ -39,6 +42,9 @@
+ 
+ template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+ FORCE_INLINE void write_chunk(const Accessor& accessor, uint32_t first_page, uint32_t l1_addr, uint32_t rotation) {
++#ifdef LN_ABLATE_WRITE
++    return;
++#endif
+     for_each_rotated(chunk_tiles, rotation, [&](uint32_t tile) {
+         noc_async_write(l1_addr + tile * tile_bytes, accessor.get_noc_addr(first_page + tile), tile_bytes);
+     });
+--- kernels/layer_norm_tile_compute.cpp	2026-11-01 15:58:28.091747178 +0000
++++ kernels/layer_norm_tile_compute.cpp	2026-11-01 15:58:28.075747277 +0000
+@@ -204,6 +204,21 @@
+         const auto block_shape = IterationShape::grid(rows, tensor_w_tiles);
+         // Streaming passes take `dest_lanes` tiles per DEST acquire (one CB handshake per group).
+         const auto lane_shape = IterationShape::grid(rows, tensor_w_tiles).block_size(dest_lanes);
++#ifdef LN_ABLATE_COMPUTE
++        input_tiles.wait_front(rows * tensor_w_tiles);
++        input_tiles.pop_front(rows * tensor_w_tiles);
++        if constexpr (has_residual) {
++            residual_tiles.wait_front(rows * tensor_w_tiles);
++            residual_tiles.pop_front(rows * tensor_w_tiles);
++        }
++        gamma_tiles.wait_front(tensor_w_tiles);
++        beta_tiles.wait_front(tensor_w_tiles);
++        for (uint32_t t = 0; t < rows * tensor_w_tiles; t += 4) {
++            output_tiles.reserve_back(4);
++            output_tiles.push_back(4);
++        }
++        continue;
++#endif
+ 
+         // residual_add_block
+         if constexpr (has_residual) {
+--- layer_norm_tile_program_descriptor.py	2026-11-01 15:58:28.091747178 +0000
++++ /tmp/ln_abl/layer_norm_tile_program_descriptor.py	2026-11-01 15:58:28.075747277 +0000
+@@ -317,12 +317,17 @@
+         writer_rt[core.x][core.y] = [out_addr, row_tile_start, core_row_tiles, rotation, res_addr]
+         compute_rt[core.x][core.y] = [core_row_tiles]
+ 
++    import os  # TEMP ablation hook (uncommitted)
++
++    _abl = [x for x in os.environ.get("LN_ABLATE", "").split(",") if x]
++    _defs = [("LN_ABLATE_" + x.upper(), "1") for x in _abl]
+     kernels = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "layer_norm_tile_reader.cpp"),
+             core_ranges=cores,
+             compile_time_args=reader_ct_args,
+             runtime_args=reader_rt,
++            defines=_defs,
+             config=ttnn.ReaderConfigDescriptor(),
+         ),
+         ttnn.KernelDescriptor(
+@@ -330,6 +335,7 @@
+             core_ranges=cores,
+             compile_time_args=writer_ct_args,
+             runtime_args=writer_rt,
++            defines=_defs,
+             config=ttnn.WriterConfigDescriptor(),
+         ),
+         ttnn.KernelDescriptor(
+@@ -337,6 +343,7 @@
+             core_ranges=cores,
+             compile_time_args=compute_ct_args,
+             runtime_args=compute_rt,
++            defines=_defs,
+             config=compute_kernel_config,
+         ),
+     ]

@@ -48,6 +48,7 @@ void kernel_main() {
     };
 
     auto load_residual = [&](uint32_t block_row) {
+        MaybeDeviceZoneScope("writer_residual_block");
         const uint32_t rows = block_rows(block_row);
         const uint32_t first_page = (row_tile_start + block_row) * tensor_w_tiles;
         residual_tiles.reserve_back(rows * tensor_w_tiles);
@@ -66,6 +67,7 @@ void kernel_main() {
     };
 
     auto store_block = [&](uint32_t block_row) {
+        MaybeDeviceZoneScope("writer_store_block");
         const uint32_t first_page = (row_tile_start + block_row) * tensor_w_tiles;
         const uint32_t num_chunks = block_rows(block_row) * tensor_w_tiles / io_chunk_tiles;
         for (uint32_t group = 0; group < num_chunks; group += write_chunks_per_flush) {
@@ -99,5 +101,8 @@ void kernel_main() {
         }
         store_block(block_row);
     }
-    noc_async_write_barrier();
+    {
+        MaybeDeviceZoneScope("writer_final_barrier");
+        noc_async_write_barrier();
+    }
 }

@@ -34,6 +34,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 
@@ -206,50 +207,68 @@ void kernel_main() {
 
         // residual_add_block
         if constexpr (has_residual) {
+            MaybeDeviceZoneScope("compute_residual_add");
             add<lane_input(cb_input_tiles), lane_input(cb_residual_tiles), lane_output(cb_row_work_a)>(
                 lane_shape, input_tiles, residual_tiles, work_a);
         }
 
         // row_mean_block (source left resident for center_block)
-        reduce_mean<
-            ReduceDim::REDUCE_ROW,
-            cb_z,
-            cb_gamma_tiles,
-            cb_row_mean,
-            ReduceInputPolicy::WaitUpfrontNoPop,
-            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Fast,
-            ReduceAlgorithm::AccumulateViaAdd>(ReduceInputBlockShape::of(rows, tensor_w_tiles), width);
+        {
+            MaybeDeviceZoneScope("compute_wait_z");
+            z_tiles.wait_front(rows * tensor_w_tiles);
+        }
+        {
+            MaybeDeviceZoneScope("compute_row_mean");
+            reduce_mean<
+                ReduceDim::REDUCE_ROW,
+                cb_z,
+                cb_gamma_tiles,
+                cb_row_mean,
+                ReduceInputPolicy::WaitUpfrontNoPop,
+                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast,
+                ReduceAlgorithm::AccumulateViaAdd>(ReduceInputBlockShape::of(rows, tensor_w_tiles), width);
+        }
 
         // center_block
-        sub<lane_input(cb_z),
-            input(cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-            lane_output(cb_row_work_b)>(lane_shape, z_tiles, row_mean, work_b);
+        {
+            MaybeDeviceZoneScope("compute_center");
+            sub<lane_input(cb_z),
+                input(cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                lane_output(cb_row_work_b)>(lane_shape, z_tiles, row_mean, work_b);
+        }
 
         // row_sumsq_block (c stays resident for normalize_block)
-        work_b.wait_front(rows * tensor_w_tiles);
-        eltwise_chain(block_shape, SquareAccumulate{work_b, work_b}, SumsqPack{row_sumsq});
+        {
+            MaybeDeviceZoneScope("compute_row_sumsq");
+            work_b.wait_front(rows * tensor_w_tiles);
+            eltwise_chain(block_shape, SquareAccumulate{work_b, work_b}, SumsqPack{row_sumsq});
+        }
 
         // row_inv_std_block
-        reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            cb_row_sumsq,
-            cb_gamma_tiles,
-            cb_inv_std,
-            ReduceInputPolicy::BulkWaitBulkPop,
-            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Fast,
-            ReduceAlgorithm::AccumulateViaAdd,
-            ReduceWithinTile::Collapse>(
-            ReduceInputBlockShape::of(rows, 1),
-            ReduceInputMemoryLayout::contiguous(),
-            NoAccumulation{},
-            finalize_inv_std);
+        {
+            MaybeDeviceZoneScope("compute_inv_std");
+            reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                cb_row_sumsq,
+                cb_gamma_tiles,
+                cb_inv_std,
+                ReduceInputPolicy::BulkWaitBulkPop,
+                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast,
+                ReduceAlgorithm::AccumulateViaAdd,
+                ReduceWithinTile::Collapse>(
+                ReduceInputBlockShape::of(rows, 1),
+                ReduceInputMemoryLayout::contiguous(),
+                NoAccumulation{},
+                finalize_inv_std);
+        }
 
         if constexpr (fuse_normalize_affine) {
             gamma_tiles.wait_front(tensor_w_tiles);
             beta_tiles.wait_front(tensor_w_tiles);
+            MaybeDeviceZoneScope("compute_normalize_affine");
             normalize_affine_block<
                 cb_row_work_b,
                 cb_inv_std,
@@ -259,25 +278,40 @@ void kernel_main() {
                 tensor_w_tiles>(rows, work_b, inv_std, output_tiles);
         } else {
             // normalize_block
-            mul<lane_input(cb_row_work_b),
-                input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
+            {
+                MaybeDeviceZoneScope("compute_normalize");
+                mul<lane_input(cb_row_work_b),
+                    input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                    lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
+            }
+            {
+                MaybeDeviceZoneScope("compute_wait_affine");
+                gamma_tiles.wait_front(tensor_w_tiles);
+                beta_tiles.wait_front(tensor_w_tiles);
+            }
 
             // affine_scale_block
-            mul<lane_input(cb_row_work_a, same_work_fmt),
-                input(cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
+            {
+                MaybeDeviceZoneScope("compute_affine_scale");
+                mul<lane_input(cb_row_work_a, same_work_fmt),
+                    input(
+                        cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                    lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
+            }
 
             // affine_shift_block
-            add<lane_input(cb_row_work_b, same_work_fmt),
-                input(
-                    cb_beta_tiles,
-                    BroadcastDim::Row,
-                    WaitPolicy::Upfront,
-                    PopPolicy::None,
-                    InputTileMapping::Row,
-                    same_work_fmt),
-                lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
+            {
+                MaybeDeviceZoneScope("compute_affine_shift");
+                add<lane_input(cb_row_work_b, same_work_fmt),
+                    input(
+                        cb_beta_tiles,
+                        BroadcastDim::Row,
+                        WaitPolicy::Upfront,
+                        PopPolicy::None,
+                        InputTileMapping::Row,
+                        same_work_fmt),
+                    lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
+            }
         }
     }
 
