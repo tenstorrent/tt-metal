@@ -60,7 +60,7 @@ void bind_update_cache_for_token_(nb::module_& mod) {
 
         Args:
             cache (ttnn.Tensor): the cache tensor to be written to.
-            token (ttnn.Tensor): the token tensor to be written to the cache.
+            input (ttnn.Tensor): the token tensor to be written to the cache.
             update_index (int): the index into the cache tensor.
             batch_offset (int): the batch_offset into the cache tensor.
 
@@ -89,16 +89,17 @@ void bind_update_cache(nb::module_& mod) {
         Args:
             * :attr:`cache` (ttnn.Tensor): The cache tensor to be written to.
             * :attr:`input` (ttnn.Tensor): The token tensor to be written to the cache.
-            * :attr:`update_index` (int): The index into the cache tensor.
+            * :attr:`update_idx` (int): The index into the cache tensor.
             * :attr:`batch_offset` (int): The batch_offset into the cache tensor. Default = 0 .
 
         Keyword Args:
             * :attr:`compute_kernel_config` Optional[DeviceComputeKernelConfig]
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.update_cache(tensor1, tensor2, update_index)
+            >>> cache = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> token = ttnn.from_torch(torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> update_idx = 5
+            >>> output = ttnn.update_cache(cache, token, update_idx)
 
     )doc";
 

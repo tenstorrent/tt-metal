@@ -22,7 +22,7 @@ void bind_concat(nb::module_& mod) {
     const auto* doc = R"doc(
 
         Args:
-            input_tensor (List of ttnn.Tensor): the input tensors.
+            tensors (List of ttnn.Tensor): the input tensors.
             dim (number): the concatenating dimension.
 
         Keyword Args:

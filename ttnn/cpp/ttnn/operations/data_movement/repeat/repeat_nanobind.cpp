@@ -23,7 +23,7 @@ void bind_repeat(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            repetition_vector (SmallVector): The number of repetitions for each dimension.
+            repeat_dims (SmallVector): The number of repetitions for each dimension.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
