@@ -60,6 +60,14 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--trace-region-size", type=int, default=256 << 20, help="Device trace region in bytes, with --trace"
     )
+    parser.add_argument(
+        "--num-command-queues",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="With --trace, 2 loads, converts and uploads each frame's images, the upload on a second command "
+        "queue, while the previous frame runs; the latencies then measure that pipeline (see demo/README.md)",
+    )
     parser.add_argument("--output-dir", default="bevformer_demo_output")
     return parser.parse_args(argv)
 
@@ -298,10 +306,13 @@ def run_demo(args):
         f"BEVFormer {config.variant}: {args.num_frames} output frames plus one preparation frame; "
         f"checkpoint={args.checkpoint}, dataset={args.dataset_format}"
     )
+    if args.num_command_queues == 2 and not args.trace:
+        raise ValueError("--num-command-queues 2 requires --trace")
     device = ttnn.open_device(
         device_id=args.device_id,
         l1_small_size=32 * 1024,
         trace_region_size=args.trace_region_size if args.trace else 0,
+        num_command_queues=args.num_command_queues,
     )
     results, device_latencies, end_to_end_latencies = [], [], []
     traced = None
@@ -348,14 +359,36 @@ def run_demo(args):
                 prepared,
                 prev_bev,
                 score_threshold=args.score_threshold,
+                num_command_queues=args.num_command_queues,
             )
             logger.info(f"Traces captured in {traced.captures[0] * 1e3:.1f} ms")
 
+        def host_image(images):
+            return to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # Pipelined, frame N + 1's images are loaded, converted and uploaded while frame N runs on
+        # device, so a frame's end-to-end latency is the interval since the previous frame finished.
+        pipelined = args.num_command_queues == 2
+        frame_end = time.perf_counter()
+        if pipelined:
+            pending = load_frame(1)
+            traced.upload(host_image(pending[0]))
         for index in range(1, frame_count):
-            end_to_end_start = time.perf_counter()
-            images, metas, token = load_frame(index)
-            if traced is not None:
-                traced.upload(to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))
+            if pipelined:
+                images, metas, token = pending
+                device_start = time.perf_counter()
+                outputs = traced(metas)
+                if index + 1 < frame_count:
+                    pending = load_frame(index + 1)
+                    traced.upload(host_image(pending[0]))
+                # Reading the detections back waits for this frame only, not for the next upload.
+                compacted = tt_model.get_bboxes(*outputs)[0]
+                device_latency = time.perf_counter() - device_start
+                end_to_end_start = frame_end
+            elif traced is not None:
+                end_to_end_start = time.perf_counter()
+                images, metas, token = load_frame(index)
+                traced.upload(host_image(images))
                 # As in eager, the images' upload is outside the timed region and the compaction,
                 # which reads the detections back, inside it.
                 ttnn.synchronize_device(device)
@@ -364,6 +397,8 @@ def run_demo(args):
                 ttnn.synchronize_device(device)
                 device_latency = time.perf_counter() - device_start
             else:
+                end_to_end_start = time.perf_counter()
+                images, metas, token = load_frame(index)
                 tt_image = to_conv_layout(images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
                 # Preparing the frame projects the cameras on device and queues their visible counts' readback.
@@ -398,6 +433,9 @@ def run_demo(args):
                 f"frame {index - 1:03d} token={token}: {len(detections)} detections, "
                 f"device {device_latency * 1e3:.1f} ms, end-to-end {end_to_end_latency * 1e3:.1f} ms"
             )
+            # The demo's own bookkeeping above stays out of the next pipelined interval, as it stays
+            # out of every window when not pipelined.
+            frame_end = time.perf_counter()
     finally:
         if traced is not None:
             traced.release()
@@ -414,7 +452,7 @@ def run_demo(args):
         "score_threshold": parameter_model.bbox_coder.score_threshold,
         "preparation_frame": first_token,
         "num_frames": len(results),
-        "execution": "trace" if args.trace else "eager",
+        "execution": ("trace" if args.trace else "eager") + ("_2cq_pipelined" if args.num_command_queues == 2 else ""),
         **_latency_summary(device_latencies, end_to_end_latencies),
     }
     if traced is not None:

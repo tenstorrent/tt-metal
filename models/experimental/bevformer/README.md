@@ -104,8 +104,9 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer
 ```
 
 - `test_bevformer_trace.py`: the detector replayed from traces against the same detector run live,
-  frame by frame: replays at changing counts, a frame no camera sees, and the plan grown both within
-  a frame and between frames, each followed by a recapture.
+  frame by frame, with one and with two command queues: replays at changing counts, a frame no
+  camera sees, and the plan grown both within a frame and between frames, each followed by a
+  recapture.
 
 ## Project Structure
 

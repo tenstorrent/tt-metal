@@ -67,15 +67,27 @@ def _host_image(images):
 
 
 def _to_torch(tensors):
-    return [ttnn.to_torch(t).float() for t in tensors]
+    return [ttnn.to_torch(t, cq_id=0).float() for t in tensors]
+
+
+def _device_params(num_command_queues, timeout_s):
+    params = {"l1_small_size": 32 * 1024, "trace_region_size": TRACE_REGION_SIZE}
+    params["num_command_queues"] = num_command_queues
+    return pytest.param(params, id=f"{num_command_queues}cq", marks=pytest.mark.timeout(timeout_s))
 
 
 @torch.no_grad()
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32 * 1024, "trace_region_size": TRACE_REGION_SIZE}], indirect=True
-)
-def test_bevformer_trace_matches_live(device, reset_seeds):
+# Measured on base with a cold kernel cache: 1 CQ about 180 s; 2 CQs about 900 s, compiling every
+# kernel again for the smaller grid two queues leave.
+@pytest.mark.parametrize("device_params", [_device_params(1, 1200), _device_params(2, 2400)], indirect=True)
+def test_bevformer_trace_matches_live(device, device_params, reset_seeds):
+    """Every frame's images are uploaded before the previous frame's detections are read, as a
+    pipelined caller does, and nothing synchronizes the input queue: the detections are read on
+    the ops queue alone. With two command queues the upload thus overlaps the previous frame and
+    races the next frame's copy out of the staging buffer, which only the runner's events order.
+    A race test cannot force the losing interleaving, so a missing event shows as a flaky failure,
+    not a certain one."""
+    num_command_queues = device_params["num_command_queues"]
     generator = torch.Generator().manual_seed(0)
     torch_model = build_reference_bevformer((BEV_H, BEV_W))
     images = [random_image_batch(generator=generator) for _ in range(NUM_FRAMES)]
@@ -98,7 +110,9 @@ def test_bevformer_trace_matches_live(device, reset_seeds):
         frame, prev_bev, _ = live_frame(i, frame, prev_bev)
     # The live pass sized the planner for every frame, so only GROWTH_FRAME and RESERVE_FRAME grow it.
     planner = tt_model.planner
-    runner = TTBEVFormerTrace(tt_model, device, _host_image(images[0]), frame, prev_bev)
+    runner = TTBEVFormerTrace(
+        tt_model, device, _host_image(images[0]), frame, prev_bev, num_command_queues=num_command_queues
+    )
     size = planner.size
 
     def grow():
@@ -115,14 +129,16 @@ def test_bevformer_trace_matches_live(device, reset_seeds):
 
     replayed_addresses = set()
     try:
+        runner.upload(_host_image(images[LIVE_FRAMES]))
         for i in range(LIVE_FRAMES, NUM_FRAMES):
             # GROWTH_FRAME grows between its counts' readback and its plan, RESERVE_FRAME before it starts.
             planner.size = size_and_grow if i == GROWTH_FRAME else size
             if i == RESERVE_FRAME:
                 grow()
-            runner.upload(_host_image(images[i]))
             outputs = runner(frames[i])
-            ttnn.synchronize_device(device)
+            if i + 1 < NUM_FRAMES:
+                runner.upload(_host_image(images[i + 1]))
+            # Blocking reads on the ops queue; the input queue's upload may still run.
             got = _to_torch((*outputs, runner.prev_bev))
             if i not in (GROWTH_FRAME, RESERVE_FRAME):
                 replayed_addresses.add(tuple(t.buffer_address() for t in outputs))

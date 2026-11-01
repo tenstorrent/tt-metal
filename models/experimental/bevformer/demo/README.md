@@ -51,6 +51,21 @@ Tracing removes the host's op dispatch from the frame. It helps where dispatch, 
 work, bounds the frame: in ten-frame synthetic runs on a BH P100, tiny's device path drops by about
 a third, while small's and base's change by 1 to 2 percent.
 
+`--num-command-queues 2`, with `--trace`, pipelines the frames: right after frame N is queued, the
+host loads and converts frame N + 1's images and uploads them on a second command queue while frame
+N still runs. Frame N + 1's metas are still turned into its device inputs when it is queued. Both
+latencies change meaning:
+
+* `end_to_end_latency_ms` is the interval between two frames' detections, the throughput a stream
+  sees. The first frame's interval also covers its own images' load and upload.
+* `device_latency_ms` spans this frame's replay and readback and, in between, the next frame's
+  image load, conversion and upload. It exceeds the device path when the host is the slower side,
+  so compare device paths without pipelining.
+
+In the same runs, against eager, pipelining shortens the median end-to-end interval by about 1.7x on
+tiny, 1.8x on small and 1.9x on base. Two command queues also take worker cores for dispatch, which slows base's device
+path by about 4 percent. Two command queues have been run on Blackhole only.
+
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
@@ -305,6 +320,7 @@ upload, and the cameras' projection on device), the TT model forward, device-sid
 detections' readback and host compaction, and synchronization. With `--trace` the same work runs
 from the traces, and a frame that outgrows the plan runs live; its recapture is not included.
 `end_to_end_latency_ms` additionally includes image loading, preprocessing and the images' upload.
+With `--num-command-queues 2` both measure the pipeline instead; see the traced run above.
 
 The `summary` object contains:
 
@@ -326,14 +342,16 @@ The `summary` object contains:
 | `p50_device_latency_ms` | Median device latency sample. |
 | `mean_end_to_end_latency_ms` | Arithmetic mean of end-to-end samples. |
 | `p50_end_to_end_latency_ms` | Median end-to-end latency sample. |
-| `execution` | `eager`, or `trace` with `--trace`. |
-| `device_fps` | Estimated steady-state device-path throughput: `1000 / mean_device_latency_ms`. |
+| `execution` | `eager`; `trace` with `--trace`; `trace_2cq_pipelined` with `--num-command-queues 2`. |
+| `device_fps` | `1000 / mean_device_latency_ms`: the device path's throughput, except with `--num-command-queues 2`. |
 | `end_to_end_fps` | `1000 / mean_end_to_end_latency_ms`. |
 | `trace_capture_ms` | With `--trace` only: the first capture's time, then one per growth of the plan. |
 
 The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
 every measured frame. It excludes image loading, preprocessing, the images' upload, the unmeasured
-preparation frame, cold-start warmup and trace captures; it includes the detections' readback.
+preparation frame, cold-start warmup and trace captures; it includes the detections' readback. With
+`--num-command-queues 2` it includes the next frame's image load, conversion and upload instead,
+and is not a device-path figure.
 
 ## Visualize detections
 
