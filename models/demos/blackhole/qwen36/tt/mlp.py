@@ -9,6 +9,8 @@ reduce-scatters on meshes with a dim-1 shape (e.g. P150x4), fracturing hidden.
 import os
 from dataclasses import dataclass
 
+from loguru import logger
+
 import ttnn
 
 
@@ -154,11 +156,26 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
 
     # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy) unless the all-bfp4 experiment is on.
     _down_dtype = ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else ttnn.bfloat8_b
-    return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
-        w2=load("down_proj", _down_dtype),
-        w3=load("up_proj", ttnn.bfloat4_b),
-    )
+    w1, w3 = load("gate_proj", ttnn.bfloat4_b), load("up_proj", ttnn.bfloat4_b)
+    if _mlp_dramshard_1c():
+        # Re-lay the cached interleaved weights out width-sharded over the DRAM banks (no new cache files;
+        # the cache keeps one interleaved copy and as_tensor ignores a sharded memcfg on reload).
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        w1, w3 = (_to_dram_sharded(w, tpc.create_dram_sharded_mem_config(w.shape[-2], w.shape[-1])) for w in (w1, w3))
+    return MLPWeights(w1=w1, w2=load("down_proj", _down_dtype), w3=w3)
+
+
+def _mlp_dramshard_1c():
+    """QWEN36_1C_MLP_DRAMSHARD=1: single-chip decode gate/up as DRAM-sharded matmuls (weights width-sharded
+    over the DRAM banks, x width-sharded in L1), the config Agent A measured at 133 us vs 170 in-layer (bfp4)."""
+    return os.environ.get("QWEN36_1C_MLP_DRAMSHARD") == "1"
+
+
+def _to_dram_sharded(w, memcfg):
+    ws = ttnn.to_memory_config(w, memcfg)
+    ttnn.deallocate(w)
+    return ws
 
 
 def _down_decode_progcfg(n, dtype=None):
@@ -221,6 +238,27 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        self._dramshard_1c = self.num_devices == 1 and _mlp_dramshard_1c()
+        if self._dramshard_1c:
+            from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+            k, n = self.weights.w1.shape[-2], self.weights.w1.shape[-1]
+            # x on the same 32-core width shard the sharded decode norm produces, so no reshard is needed.
+            self._act_shard_1c = tpc.create_activation_shard_config(k)
+            pc = tpc.create_dram_sharded_matmul_program_config(1, k, n)
+            workers = int(os.environ.get("QWEN36_1C_MLP_DRAMSHARD_WORKERS", "2"))
+
+            def dpc(act):
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=pc.in0_block_w,
+                    per_core_M=pc.per_core_M,
+                    per_core_N=pc.per_core_N,
+                    fused_activation=act,
+                    num_workers_per_dram_bank=workers,
+                )
+
+            self._w1_dpc = dpc(ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))
+            self._w3_dpc = dpc(None)
 
     def forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
@@ -231,11 +269,27 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
+        if self._dramshard_1c and T <= 1:
+            x_sh = x if x.memory_config() == self._act_shard_1c else ttnn.to_memory_config(x, self._act_shard_1c)
+            if not getattr(Qwen36MLP, "_dramshard_logged", False):
+                Qwen36MLP._dramshard_logged = True
+                logger.info(f"QWEN36_1C_MLP_DRAMSHARD: x reshard {'skipped' if x_sh is x else 'needed'}: {x.memory_config()}")
+            shmc = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            w1_out = ttnn.linear(x_sh, w.w1, compute_kernel_config=ckc, program_config=self._w1_dpc, memory_config=shmc)
+            w3_out = ttnn.linear(x_sh, w.w3, compute_kernel_config=ckc, program_config=self._w3_dpc, memory_config=shmc)
+            if x_sh is not x:
+                ttnn.deallocate(x_sh)
+            hidden_sh = ttnn.mul(w1_out, w3_out, memory_config=w1_out.memory_config())
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+            hidden = ttnn.sharded_to_interleaved(hidden_sh, mc)
+            ttnn.deallocate(hidden_sh)
+        else:
+            w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
         down_pc = None
         if (
             T > 1
