@@ -362,9 +362,9 @@ def table_rows(exp: V41KvExport, cfg, *, slot: int, prompt_tokens: int | None = 
                 for w in range(0, n_rows // 2, TILE):
                     yield "csa_unified", L, c * half + RING // 2 + w, ent, exp.ent_batch(slot, src), c * S2 + w
                 if r.index_source == L:
-                    half_i = split_half("index_k", r.compress_ratio, exp.max_seq_len)
+                    # one half per layer (the ring's kv_migration.split_half is per layer; the engine's ranges are per layer)
                     for w in range(0, n_rows // 2, TILE):
-                        yield "index_k", L, c * half_i + w, idx, exp.ent_batch(slot, src), c * S2 + w
+                        yield "index_k", L, c * half + w, idx, exp.ent_batch(slot, src), c * S2 + w
             continue
         for p in range(0, RING, TILE):
             if L <= cfg.first_decoder_layer or exp.decoder:
