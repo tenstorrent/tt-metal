@@ -302,3 +302,14 @@ Tests: `tests/test_serving_prefix_cache_host.py` (`test_wave_members_snapshot_pe
 the ring / host-store per-row sections, the dims and planner counts); device: `tests/test_serving_prefix_cache_mesh.py`
 on the (2,4) block (both stores, the ring one entry larger) and a served 8 x 20 K burst in two rounds on the 8x4
 (round 2 must log `[glm53-apc] hit: ... snapshot at 16384`).
+
+Served check (8 x 19 988-token needle prompts in two rounds on the 8x4, 2026-11-01 18:58): round 1 prefilled as one
+wave of 8 (TTFT 69 s each) and left a snapshot at 16 384 on every row; round 2 restored 5 of the 8 at 16 384 and
+prefilled [16 384, 19 988) as waves (TTFT 23.7 s for the first three), texts identical across rounds. The other 3
+were scheduled from 0: vLLM's scheduler confirms a hit (`confirm_prefix_cache_hit`) before the previous step's
+finished requests reach `release_request`, so a repeat arriving as its predecessor finishes finds its slot still
+live at confirm time. The confirmer now answers optimistically for a live matching slot (`lookup(include_live=True)`):
+by the time `prefill_forward` runs the slot is retained; one still live then downgrades to a prefill from 0, what a
+refusal would have cost. Cost note: a hit's restore from the HOST store (the 1 M profile) takes ~4.2 s (34 layers
+of per-chip row writes, serial per hit): 32 x 1 M repeats restore in ~2.5 min before their continuation waves,
+against 4 h 39 min of prefill; a batched write-back is the next saving.

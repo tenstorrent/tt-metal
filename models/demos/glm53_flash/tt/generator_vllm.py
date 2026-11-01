@@ -2758,7 +2758,12 @@ class GLM53FlashForCausalLM:
         """The tokens of a cached prefix the adapter will honour (the plugin proposal of
         doc/serving/prefix_caching.md s.5 calls this from the scheduler before it commits vLLM's hit): the snapshot
         position of the best retained slot holding ``prompt_token_ids[:num_computed_tokens]`` (``mm_items``:
-        ``(identifier, offset, length, modality)`` per multimodal item), 0 when nothing resident serves it."""
+        ``(identifier, offset, length, modality)`` per multimodal item), 0 when nothing resident serves it.
+        A LIVE slot holding the prefix counts too (optimistically): the scheduler confirms before the previous
+        step's finished requests reach ``release_request``, so a repeat that arrives as its predecessor finishes
+        (the 8 x 20 K burst's round 2, served 2026-11-01: 3 of 8 scheduled from 0) finds its slot still live here
+        and retained by the time ``prefill_forward`` runs; a slot still live then downgrades the request to a
+        prefill from 0 (what a refusal here would have cost anyway)."""
         if self.apc is None or num_computed_tokens <= 0:
             return 0
         from models.demos.glm53_flash.tt.vllm_config import MMSpan
@@ -2768,7 +2773,8 @@ class GLM53FlashForCausalLM:
             for ident, off, ln, mod in mm_items
         ]
         ids = torch.as_tensor(list(prompt_token_ids), dtype=torch.int32)
-        hit = self.apc.lookup(ids, spans, int(num_computed_tokens))
+        n = int(num_computed_tokens)
+        hit = self.apc.lookup(ids, spans, n) or self.apc.lookup(ids, spans, n, include_live=True)
         return 0 if hit is None else int(hit.position)
 
     # ================================================================================= helpers

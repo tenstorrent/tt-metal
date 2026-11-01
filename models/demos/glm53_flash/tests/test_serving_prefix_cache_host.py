@@ -1082,8 +1082,12 @@ def test_confirm_prefix_cache_hit_returns_the_resume_position():
     for p in range(300, 320):
         apc.record_decode(0, 0, p, 50 + p)
     apc.plan_snapshot(0, 0, 320, "decode")
-    apc.release(0, 0)
     prompt = apc.content(0, 0).tokens[:340].tolist()
+    # the slot is still live (its request finishes this step; the scheduler confirms before the release reaches the
+    # model): the confirmer answers optimistically, the forward downgrades if the slot is still live then
+    assert a.confirm_prefix_cache_hit(prompt, [("img-1", 10, 20, "image")], 320) == 320
+    assert apc.lookup(torch.tensor(prompt, dtype=torch.int32), [MMSpan(10, 20, "image", "img-1")], 320) is None
+    apc.release(0, 0)
     assert a.confirm_prefix_cache_hit(prompt, [("img-1", 10, 20, "image")], 320) == 320
     assert a.confirm_prefix_cache_hit(prompt, [("img-2", 10, 20, "image")], 320) == 0
     assert a.confirm_prefix_cache_hit(prompt, [(None, 10, 20, "image")], 320) == 0

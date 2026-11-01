@@ -1156,13 +1156,18 @@ class SlotPrefixCache:
                     c.clear()
         return out
 
-    def lookup(self, ids: torch.Tensor, spans: Sequence[MMSpan], n: int) -> PrefixHit | None:
+    def lookup(
+        self, ids: torch.Tensor, spans: Sequence[MMSpan], n: int, include_live: bool = False
+    ) -> PrefixHit | None:
         """The slot to continue a request whose first ``n`` tokens vLLM found cached: a retained slot whose content
         equals ``ids[:n]`` (multimodal spans by identifier) with a snapshot at or below ``n``; the highest snapshot
-        position wins, then the most recently used slot. None = the hit cannot be served (prefill from 0)."""
+        position wins, then the most recently used slot. None = the hit cannot be served (prefill from 0).
+        ``include_live``: a live slot counts too (the confirmer's optimistic answer: the scheduler confirms a hit
+        before the previous step's finished requests reach ``release_request``, so the slot a repeat would continue
+        is still live at that moment; the forward downgrades the request if it is still live then)."""
         best = None
         for c in self._content.values():
-            if not c.retained or not c.matches(ids, spans, n):
+            if not (c.retained or (include_live and c.length > 0)) or not c.matches(ids, spans, n):
                 continue
             snap = c.best_snapshot(n, self.hit_align)
             if snap is None:
