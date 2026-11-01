@@ -381,10 +381,10 @@ def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, sc
 KERNEL_V2 = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_v2_kernel.cpp"
 
 
-def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: bool = True):
+def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: bool = True, n_real: int = 0):
     """cache=False when x8 is a fresh allocation: a cached descriptor would re-bind a freed buffer."""
     if not cache:
-        ttnn.generic_op([x8, w, s, out], _v2_prog(x8, w, s, out, workers, gu, k))
+        ttnn.generic_op([x8, w, s, out], _v2_prog(x8, w, s, out, workers, gu, k, n_real))
         return out
     """x8: masked_input_buffer filled by prep(). w/s: from weights_for_device().
     out: L1 interleaved, [.., 32, N] 32x32 tiles (row 0 written, rest zero) or [1, 1, 1, N] 1x32 tiles.
@@ -393,12 +393,13 @@ def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: 
     if key not in _progs:
         if len(_progs) > 256:  # outputs are fresh allocations, so keys churn; descriptors don't bind them
             _progs.clear()
-        _progs[key] = _v2_prog(x8, w, s, out, workers, gu, k)
+        _progs[key] = _v2_prog(x8, w, s, out, workers, gu, k, n_real)
     ttnn.generic_op([x8, w, s, out], _progs[key])
     return out
 
 
-def _v2_prog(x8, w, s, out, workers, gu, k):
+def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
+    """n_real: output tiles past this index are padding columns of w and are not written."""
     device = x8.device()
     k = k or x8.memory_config().shard_spec.shape[1]  # x8 may be wider (one buffer serves every K)
     kt = k // 32
@@ -459,7 +460,7 @@ def _v2_prog(x8, w, s, out, workers, gu, k):
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[(c, [w.buffer_address() + i * cols_per_core * kt * tile_bytes]) for c, _, i in workers],
             brisc_args=[(c, [s.buffer_address() + i * cols_per_core * s_tiles * 4096, out.buffer_address(),
-                             col0(b, i) * pcn]) for c, b, i in workers],
+                             col0(b, i) * pcn, n_real // 32 or (1 << 30)]) for c, b, i in workers],
         ),
     )
     return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)

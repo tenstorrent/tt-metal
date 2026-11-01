@@ -38,7 +38,7 @@ class Shared:
         self.gguf = read_gguf(gguf_path)
         self.had = BlockHadamard.from_metadata(self.gguf.kv)
         self.workers = a3.worker_cores(device, WPB)
-        self.m = {k: a3.hadamard_tensor(device, self.had, k) for k in (5120, 17408)}
+        self.m = {k: a3.hadamard_tensor(device, self.had, k) for k in (5120, 6144, 17408)}
         # h in DRAM: an L1-interleaved buffer would sit on every core, (0, 0) included (see a3.AVOID).
         self.h = ttnn.from_torch(torch.zeros(1, 1, 1, 17408), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                                  tile=ttnn.Tile([1, 32]), device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
