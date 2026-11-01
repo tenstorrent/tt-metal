@@ -22,7 +22,8 @@ constexpr uint32_t kDerivedActiveRingIterMask = 5;
 constexpr uint32_t kDerivedGlobalNPartialCol = 6;
 constexpr uint32_t kDerivedLogicalLt = 7;
 constexpr uint32_t kDerivedJointLPartialCol = 8;
-constexpr uint32_t kDerivedSlotCount = 9;
+constexpr uint32_t kDerivedGatherSliceRows = 9;  // metadata path: the fused gather's slice rows, narrowed on device
+constexpr uint32_t kDerivedSlotCount = 10;
 
 // Common-runtime-arg layout: the metadata block (when present) precedes the logical-length pair.
 // slot_id addr, num_layers, layer_idx, batch count, kv_actual_isl addr

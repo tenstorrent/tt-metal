@@ -174,6 +174,7 @@ void kernel_main() {
     uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] uint32_t gather_slice_rows = get_arg_val<uint32_t>(argidx++);
     const uint32_t static_mcast_q_count = get_arg_val<uint32_t>(argidx++);
 
     // Rotated Q split: first runtime arg past the scalars above. Captured here because argidx is
@@ -242,6 +243,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // Interleaved ring steps (ring_joint_ksplit.hpp).
     constexpr bool ring_interleave = get_named_compile_time_arg_val("ring_interleave") == 1;
+    constexpr bool slice_readiness = get_named_compile_time_arg_val("slice_readiness") == 1;
     // Segmented accumulation: each ring iteration accumulates into a fresh sum and output (its max seeded from the
     // long-term state), merged into the long-term state (the restore CBs) afterwards, so no bf16 running sum spans
     // more than one shard's K chunks. A single running sum over a long prefix loses the late chunks' contribution.
@@ -279,6 +281,8 @@ void kernel_main() {
     // Largest valid K chunk count over the ring iterations: a slice is non-empty on some iteration iff it is non-empty
     // at the largest count, so the reducer knows which senders have state.
     [[maybe_unused]] uint32_t ksplit_max_valid = 0;
+    // Bands below the reducer's that had K chunks in some ring step (dense K split): the senders whose state follows.
+    [[maybe_unused]] uint32_t ksplit_sender_bands_with_work = 0;
     // Only sdpa_ring_v2 decodes the rotated schedule; the sdpa_ring branch below would keep using
     // global_q_start/global_q_end and silently desync from the reader and writer. The host pairs
     // latent-V with streaming compute, but only via a chain of implications, so pin it here.
@@ -306,6 +310,8 @@ void kernel_main() {
                 ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedQPostWrapStartTile);
             kv_pad_q_valid_tile_count =
                 ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedQValidTileCount);
+            gather_slice_rows =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedGatherSliceRows);
         }
         active_ring_iter_mask =
             ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedActiveRingIterMask);
@@ -588,8 +594,20 @@ void kernel_main() {
                     chunk_size_t,
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
+                // The gather's split of this slice for this device (the reader's readiness_num_chunks).
+                const uint32_t split_chunks = slice_readiness ? ttnn::ring_attention_all_gather::readiness_split_chunks(
+                                                                    gather_slice_rows,
+                                                                    dense_causal_skip ? q_local_padded_Nt : 0,
+                                                                    ring_id > ring_index,
+                                                                    Sk_chunk_t)
+                                                              : num_valid;
                 const ring_joint::KSplitRange band_range =
-                    ring_joint::ksplit_range(num_valid, step_band, ksplit_count, ring_id);
+                    ring_joint::ksplit_band_range(split_chunks, num_valid, step_band, ksplit_count, ring_id);
+                for (uint32_t band = 0; band + 1 < ksplit_count; ++band) {
+                    if (!ring_joint::ksplit_band_range(split_chunks, num_valid, band, ksplit_count, ring_id).empty()) {
+                        ksplit_sender_bands_with_work |= 1u << band;
+                    }
+                }
                 ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
                 if constexpr (donation) {
                     if (step - (donated_steps & 0xFF) < (donated_steps >> 8)) {
@@ -1004,9 +1022,9 @@ void kernel_main() {
             // discarded.
             for (uint32_t sender = 0; reducer && sender + 1 < ksplit_count; ++sender) {
                 const bool sender_has_state =
-                    !(has_sliding_window ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
-                                         : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count))
-                         .empty();
+                    has_sliding_window
+                        ? !ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count).empty()
+                        : ((ksplit_sender_bands_with_work >> sender) & 1u) != 0;
                 if (!sender_has_state) {
                     discard_incoming();
                     continue;

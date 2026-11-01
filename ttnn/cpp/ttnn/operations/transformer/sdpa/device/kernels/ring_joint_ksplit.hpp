@@ -66,6 +66,22 @@ inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t
         ttnn::ring_attention_all_gather::band_begin(num_valid, split_count, split_idx + 1, ring_id)};
 }
 
+// Band split_idx of ring_id's slice as the gather splits it into split_chunks (its readiness bands), clipped to the
+// num_valid chunks this core's causal mask keeps; valid chunks past the split stay with the last band, which holds the
+// diagonal. With slice readiness the receiver's valid count can differ from the gather's split by a few chunks (a KV
+// pad rotation moves the causal end), so cutting the bands where the gather cut them keeps each band's chunks in the
+// readiness parts the band reads first.
+inline KSplitRange ksplit_band_range(
+    uint32_t split_chunks, uint32_t num_valid, uint32_t split_idx, uint32_t split_count, uint32_t ring_id) {
+    KSplitRange r = ksplit_range(split_chunks, split_idx, split_count, ring_id);
+    r.begin = r.begin < num_valid ? r.begin : num_valid;
+    r.end = split_idx + 1 == split_count || r.end > num_valid ? num_valid : r.end;
+    if (r.end < r.begin) {
+        r.end = r.begin;
+    }
+    return r;
+}
+
 // Sliding split of a (head, Q chunk) unit's work plan. A plan shorter than two chunks per band (the first window of the
 // sequence) stays whole on the reducer, the band that holds the diagonal chunk.
 inline KSplitRange sliding_ksplit_range(uint32_t num_items, uint32_t split_idx, uint32_t split_count) {

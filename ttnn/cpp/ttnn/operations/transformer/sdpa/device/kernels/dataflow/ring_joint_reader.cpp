@@ -696,6 +696,7 @@ void kernel_main() {
                 d[ring_joint::kDerivedQPreWrapTileCount] = qmap.q_pre_wrap_tile_count;
                 d[ring_joint::kDerivedQPostWrapStartTile] = qmap.q_post_wrap_start_tile;
                 d[ring_joint::kDerivedQValidTileCount] = qmap.q_valid_tile_count;
+                d[ring_joint::kDerivedGatherSliceRows] = gather_slice_rows;
             }
             d[ring_joint::kDerivedActiveRingIterMask] = active_ring_iter_mask;
             if constexpr (has_logical_n_tensor) {
@@ -1030,6 +1031,14 @@ void kernel_main() {
 
         // K split: this core's slice of the iteration's local K chunks, as compute derives it. Idle cores in a split
         // row use the row's index too, since they must skip exactly the chunks the row's multicast skips.
+        // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
+        // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
+        // early only if the sender sent it before that part's marker.
+        [[maybe_unused]] const uint32_t readiness_num_chunks =
+            slice_readiness
+                ? ttnn::ring_attention_all_gather::readiness_split_chunks(
+                      gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t)
+                : 0;
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
         if constexpr (ksplit_enabled) {
             const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
@@ -1039,8 +1048,8 @@ void kernel_main() {
                 chunk_size_t,
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
-            const ring_joint::KSplitRange band_range =
-                ring_joint::ksplit_range(num_valid, step_band, ksplit_count, ring_id);
+            const ring_joint::KSplitRange band_range = ring_joint::ksplit_band_range(
+                slice_readiness ? readiness_num_chunks : num_valid, num_valid, step_band, ksplit_count, ring_id);
             ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
             if constexpr (donation) {
                 // The home's whole row group skips this slot together, so its multicast skips it too.
@@ -1049,15 +1058,6 @@ void kernel_main() {
                 }
             }
         }
-        // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
-        // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
-        // early only if the sender sent it before that part's marker.
-        [[maybe_unused]] const uint32_t readiness_num_chunks =
-            slice_readiness
-                ? ttnn::ring_attention_all_gather::readiness_split_chunks(
-                      gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t)
-                : 0;
-
         // In causal balanced case processing KV received from other devices:
         //
         // We will have two logical chunks of the input sequence, logical indexes are:

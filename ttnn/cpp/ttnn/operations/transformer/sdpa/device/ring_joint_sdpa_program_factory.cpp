@@ -116,8 +116,8 @@ struct RingJointScalarBlocks {
     std::array<uint32_t, 7> reader;
     // logical_nt, active ring-iteration mask, single-valid-K-chunk mask.
     std::array<uint32_t, 3> writer;
-    // logical_nt, KV-pad Q mapping (as the reader's), active ring-iteration mask.
-    std::array<uint32_t, 6> compute;
+    // logical_nt, KV-pad Q mapping (as the reader's), active ring-iteration mask, the fused gather's slice rows.
+    std::array<uint32_t, 7> compute;
 };
 
 struct RingWritePlan {
@@ -683,7 +683,8 @@ RingJointScalarBlocks ring_joint_scalar_blocks(
              q_mapping.q_pre_wrap_tile_count,
              q_mapping.q_post_wrap_start_tile,
              q_mapping.q_valid_tile_count,
-             masks.active_ring_iter_mask},
+             masks.active_ring_iter_mask,
+             fused_gather_slice_rows(args, tensor_args)},
     };
 }
 
