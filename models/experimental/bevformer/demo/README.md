@@ -40,15 +40,15 @@ python -m models.experimental.bevformer.demo.demo \
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
-`326b4e8aa4b28500e875d2503f3bb88cc6ecf904`. The generated `detections.json` artifacts contain
+`3b8fca3a8f2cd15e069414a6fb2712d5f403c99e`. The generated `detections.json` artifacts contain
 these recorded results for ten measured frames. Each row used the corresponding bundled local
 `config/bevformer_<variant>.json` file shown in the commands above:
 
 | Variant | BEV size | Encoder layers | Device-path mean (ms) | Device-path p50 (ms) | E2E mean (ms) | E2E p50 (ms) | Device FPS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 138.6 | 138.2 | 306.9 | 305.9 | 7.21 |
-| small | 150 | 3 | 563.0 | 514.4 | 1145.8 | 1103.1 | 1.78 |
-| base | 200 | 6 | 1227.4 | 1222.5 | 2148.0 | 2124.6 | 0.81 |
+| tiny | 50 | 3 | 134.3 | 133.1 | 297.6 | 273.9 | 7.45 |
+| small | 150 | 3 | 521.2 | 507.2 | 1112.5 | 1077.4 | 1.92 |
+| base | 200 | 6 | 1149.4 | 1149.6 | 2165.7 | 2161.8 | 0.87 |
 
 These values come from one ten-frame smoke run per variant and validate end-to-end execution only.
 No repeated-run statistics were collected, so they are not statistically characterized benchmark

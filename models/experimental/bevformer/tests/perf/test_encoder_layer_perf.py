@@ -54,12 +54,14 @@ def _head_sha():
 
 @torch.no_grad()
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("config_name", ["nuscenes_base"])
+# Each upstream model at its own BEV grid; base also at 100x100.
 @pytest.mark.parametrize(
-    "bev_size",
+    "config_name, bev_size",
     [
-        pytest.param((100, 100), id="bev_100x100"),
-        pytest.param((200, 200), id="bev_200x200"),
+        pytest.param("nuscenes_base", (100, 100), id="bev_100x100-nuscenes_base"),
+        pytest.param("nuscenes_base", (200, 200), id="bev_200x200-nuscenes_base"),
+        pytest.param("nuscenes_small_upstream", (150, 150), id="bev_150x150-nuscenes_small_upstream"),
+        pytest.param("nuscenes_tiny_upstream", (50, 50), id="bev_50x50-nuscenes_tiny_upstream"),
     ],
 )
 @pytest.mark.parametrize("batch_size", [1])
