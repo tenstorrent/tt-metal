@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi-K3 AttnRes performance on Galaxy: a boundary layer and an ordinary layer, end to end, traced and untraced.
+"""Kimi-K3 AttnRes performance: a boundary layer and an ordinary layer, end to end, traced and untraced.
+
+Galaxy (SP8xTP4) runs K3's prefill chunk and is gated. LoudBox (SP2xTP4) and QuietBox (SP2xTP2) run the same walk
+on the 640 rows per chip that Galaxy runs, over a 1280-token chunk: LoudBox at Galaxy's TP width, so every per-chip
+shape matches and only the SP axis is shorter; QuietBox at half of it, the narrowest TP that AttnRes allows. They
+report without gating until they have CI references.
 
 The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies), with the sealed snapshots the
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
@@ -54,7 +59,11 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     random_hidden,
     random_queries,
 )
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, tp_axis_is_wrapped
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    tp_axis_is_wrapped,
+)
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
@@ -75,6 +84,9 @@ _SAMPLES = 5
 _WALL_SAMPLES = 30
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
+_LOUDBOX_PERF_SKU = "bh_loudbox"
+_QUIETBOX_PERF_SKU = "bh_quietbox"
+_GALAXY = "SP8xTP4"
 # Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power): the median of runs
 # 41112791430, 41117934062 and 41130107396 (2026-10-30), on bh-glx-120-d08u08, -d06u02 and -d09u02. Traced held
 # within 0.4% across the three boxes (boundary 1716-1722, ordinary 140.4-141.2); untraced within 1.5% on the
@@ -83,13 +95,65 @@ _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 # bh-glx-120-b07u02 measures the traced boundary layer 6% high, so a run there may need
 # ATTN_RES_PERF_REPORT_ONLY=1. Those runs ended the walk in `handoff`, whose add the boundary layer then carried;
 # it now ends in `discard`, so the boundary references sit high by that add until re-baselined.
-_REFERENCE_E2E_US = {
+_GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 1720.0, "ordinary": 141.0},
     "untraced": {"boundary": 4620.0, "ordinary": 323.0},
 }
+# LoudBox and QuietBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
+# gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
+_PERF_REFERENCE_E2E_US = {
+    _LOUDBOX_PERF_SKU: {},
+    _QUIETBOX_PERF_SKU: {},
+}
+# LoudBox SP2xTP4 and QuietBox SP2xTP2 have no CI references yet: they report but are not gated.
+_REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP2xTP2")
 _MARGIN = {"traced": 0.05, "untraced": 0.10}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
+
+
+def _perf_reference_e2e_us(layout: str, mode: str) -> dict[str, float]:
+    """Return each layer's end-to-end reference (us) for a gated layout, on the ATTN_RES_PERF_SKU it opts in to."""
+    if layout == _GALAXY:
+        return _GALAXY_REFERENCE_E2E_US[mode]
+    skus = sorted(sku for sku, references in _PERF_REFERENCE_E2E_US.items() if layout in references)
+    if not skus:
+        raise ValueError(f"{layout} has no end-to-end reference")
+    sku = os.environ.get("ATTN_RES_PERF_SKU")
+    if sku not in skus:
+        raise ValueError(f"set ATTN_RES_PERF_SKU to one of {skus} to opt in to this hardware-specific performance gate")
+    return _PERF_REFERENCE_E2E_US[sku][layout][mode]
+
+
+def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
+    lower = reference_us * (1.0 - margin)
+    upper = reference_us * (1.0 + margin)
+    assert lower <= measured_us <= upper, (
+        f"{what} {measured_us:.1f} us is outside performance range "
+        f"[{lower:.1f}, {upper:.1f}] us "
+        f"(reference {reference_us:.1f} us ± {margin:.0%})"
+    )
+
+
+@pytest.mark.parametrize("mode", ["traced", "untraced"])
+def test_attn_res_performance_uses_two_sided_margin(mode, monkeypatch, expect_error) -> None:
+    # The Galaxy gate needs no ATTN_RES_PERF_SKU opt-in.
+    monkeypatch.delenv("ATTN_RES_PERF_SKU", raising=False)
+    margin = _MARGIN[mode]
+    for layer, reference_us in _perf_reference_e2e_us(_GALAXY, mode).items():
+        _assert_within_margin(layer, reference_us * (1 - 0.99 * margin), reference_us, margin)
+        _assert_within_margin(layer, reference_us * (1 + 0.99 * margin), reference_us, margin)
+        with expect_error(AssertionError, "outside performance range"):
+            _assert_within_margin(layer, reference_us * (0.99 - margin), reference_us, margin)
+        with expect_error(AssertionError, "outside performance range"):
+            _assert_within_margin(layer, reference_us * (1.01 + margin), reference_us, margin)
+
+
+@pytest.mark.parametrize("layout", _REPORT_ONLY_LAYOUTS)
+def test_attn_res_report_only_layouts_have_no_reference(layout, expect_error) -> None:
+    # A reference added for a report-only layout would never gate: drop the layout from _REPORT_ONLY_LAYOUTS.
+    with expect_error(ValueError, "has no end-to-end reference"):
+        _perf_reference_e2e_us(layout, "traced")
 
 
 def _op_name(kernel_sources) -> str:
@@ -189,26 +253,48 @@ def _log_ops(name, programs):
         logger.info(f"  {ns / 1e3:8.1f} us  x{count:<3d} {op}")
 
 
+_TRACE_REGION_SIZE = 128 * 1024 * 1024
+
+
 @pytest.mark.parametrize("mode", ["traced", "untraced"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=128 * 1024 * 1024, **EXACT_BOX),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
-        )
+        ),
+        # Unwrapped 2D, the fabric the AttnRes model suite runs on these boxes. AttnRes takes its route from the
+        # opened fabric and has no 1D coverage, so these do not follow KDA's 1D.
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP2xTP4-fabric-2d",
+        ),
+        pytest.param(
+            (2, 2),
+            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="SP2xTP2-fabric-2d",
+        ),
     ],
     indirect=True,
 )
 def test_attn_res_layer_perf(mesh_device, device_params, mode):
-    """Gate the AttnRes end-to-end time of a boundary layer and an ordinary layer, and report their device time."""
-    require_high_power("kimi_k3 AttnRes perf")
-    require_realtime_profiler("the AttnRes device-time report")
+    """Gate the AttnRes end-to-end time of a boundary layer and an ordinary layer on LoudBox, QuietBox and Galaxy,
+    and report their device time."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    layout = f"SP{op.sp_factor}xTP{op.tp_factor}"
+    report_only = layout in _REPORT_ONLY_LAYOUTS
+    if layout == _GALAXY:
+        require_high_power(f"kimi_k3 AttnRes {layout} perf")
+    # Before measuring, so a gated run without its SKU opt-in fails fast.
+    references = None if report_only else _perf_reference_e2e_us(layout, mode)
+    require_realtime_profiler("the AttnRes device-time report")
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
-    assert (num_tokens, op.tp_factor) == (5120, 4), "must run Galaxy's K3 prefill chunk"
 
     rng = generator(0)
     q_pre = [op.to_query(q) for q in random_queries(rng, RANK_LAYERS)]
@@ -290,22 +376,20 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     _log_ops("boundary", median_layers[0])
     _log_ops("ordinary", median_layers[1])
 
-    references, margin = _REFERENCE_E2E_US[mode], _MARGIN[mode]
+    margin = _MARGIN[mode]
+    fabric = ttnn.get_fabric_config().name
     logger.info(
         f"AttnRes layers {LAYER}-{LAYER + ORDINARY_LAYERS} (S = {INHERITED_SNAPSHOTS} -> {INHERITED_SNAPSHOTS + 1}), "
-        f"{num_tokens} tokens, SP8xTP4 torus-XY, {mode}:"
+        f"{num_tokens} tokens, {layout} {fabric}, {mode}:"
     )
-    failures = []
+    within_band = {}
     for name, label in zip(LAYERS, (f"layer {LAYER}", f"mean of {LAYER + 1}-{LAYER + ORDINARY_LAYERS}")):
-        reference = references[name]
-        lower, upper = reference * (1 - margin), reference * (1 + margin)
-        ok = lower <= e2e_us[name] <= upper
-        logger.info(
-            f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
-            f"   ref {reference:9.1f} ±{margin:.0%}  {'ok' if ok else 'OUT OF BAND'}"
-        )
-        if not ok:
-            failures.append(f"{name} layer e2e {e2e_us[name]:.1f} us outside [{lower:.1f}, {upper:.1f}] us")
+        line = f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
+        if references is not None:
+            reference = references[name]
+            within_band[name] = abs(e2e_us[name] - reference) <= reference * margin
+            line += f"   ref {reference:9.1f} ±{margin:.0%}  {'ok' if within_band[name] else 'OUT OF BAND'}"
+        logger.info(line)
         logger.info(f"    device {device_us[name]:9.1f} us   (sum of slowest-chip program windows)")
     logger.info(
         "  host clock medians: "
@@ -315,7 +399,8 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
 
     result = {
         "mode": mode,
-        "fabric_config": ttnn.get_fabric_config().name,
+        "layout": layout,
+        "fabric_config": fabric,
         "mesh": list(mesh_device.shape),
         "tokens": num_tokens,
         "first_layer": LAYER,
@@ -329,11 +414,18 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
         "margin_pct": margin * 100.0,
     }
     print("ATTN_RES_PERF=" + json.dumps(result, sort_keys=True))
-    gated = not _REPORT_ONLY and tp_axis_is_wrapped(mesh_device)
+    tp_wrapped = layout != _GALAXY or tp_axis_is_wrapped(mesh_device)
+    gated = not report_only and not _REPORT_ONLY and tp_wrapped
     emit_perf_metrics(
-        f"kimi_k3_attn_res_layer_{mode}_SP8xTP4",
-        f"Kimi-K3 AttnRes layer perf ({mode}, SP8xTP4)",
-        {**result, "gated": gated, "within_band": not failures if gated else None},
+        f"kimi_k3_attn_res_layer_{mode}_{layout}",
+        f"Kimi-K3 AttnRes layer perf ({mode}, {layout})",
+        {**result, "gated": gated, "within_band": all(within_band.values()) if gated else None},
     )
-    if gated:
-        assert not failures, f"AttnRes {mode}:\n  " + "\n  ".join(failures)
+    if report_only:
+        return
+    if _REPORT_ONLY:
+        pytest.skip("ATTN_RES_PERF_REPORT_ONLY=1; not gating")
+    if not tp_wrapped:
+        pytest.skip(f"TP axis not wrapped: the {layout} references assume the TP ring")
+    for name in LAYERS:
+        _assert_within_margin(f"{layout} {mode} {name} layer e2e", e2e_us[name], references[name], margin)
