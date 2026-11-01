@@ -747,7 +747,10 @@ class BlockIndex:
         blk = row.blocks.get(key)
         if blk is not None and copy is not None:
             self._touch(row, blk, halos=False)
-            return None
+            # the receiving row already holds this block (e.g. the shared system prompt published by another request) but possibly WITHOUT the halo the donor's tip carries: add it
+            # (the halo-only path below), else ``xrow_finish`` finds the tip without a halo and the request recomputes from 0
+            if not (want_halo and (blk.halo_a < 0 or (copy[1] and blk.halo_b < 0))):
+                return None
         if blk is not None:  # dup: only halos can be added
             self._touch(row, blk, halos=want_halo)
             self.counters["dup_commits"] += 1
@@ -758,17 +761,17 @@ class BlockIndex:
                 ha = self._alloc_halo_a(ri)
                 if ha < 0:
                     return None
-            if full and blk.halo_b >= 0 and blk.b_zone > z_new and blk.halo_pins == 0:
+            if copy is None and full and blk.halo_b >= 0 and blk.b_zone > z_new and blk.halo_pins == 0:
                 self._drop_halo_b(
                     ri, blk, "zone"
                 )  # B written by a prompt whose zone started later is valid for fewer prompts: replace it
-            if full and blk.halo_b < 0 and (blk.halo_a >= 0 or ha >= 0):
+            if (full if copy is None else bool(copy[1])) and blk.halo_b < 0 and (blk.halo_a >= 0 or ha >= 0):
                 hb = self._alloc_halo_b(ri)
             if ha < 0 and hb < 0:
                 return None
             blk.refs += 1  # (protects the block until finish/abort)
             req.held.append(blk)
-            cp = ChunkPlan(req_id, ri, i, -1, ha, hb, full, True, blk, zone=z_new)
+            cp = ChunkPlan(req_id, ri, i, -1, ha, hb, full, True, blk, zone=z_new if copy is None else int(copy[2]))
             req.cps.append(cp)
             return cp
         if key in row.pending:

@@ -162,3 +162,30 @@ def test_a_failed_copy_is_reported_and_leaves_a_consistent_index():
     idx.release("o0")
     idx.release("o1")
     idx.check()
+
+
+def test_receiving_row_has_the_block_without_the_donors_tip_halo():
+    """the shared-system-prompt case seen on the server (3 of 111 copies failed with 'a receiving block is missing', all at the same 5632 token hit): the receiving row already holds the
+    blocks of the hit (published by an earlier request that ended elsewhere, so the block at the hit end has NO halo there) while the donor's tip carries one. The copy must add the halo.
+    """
+    idx = mk(users_per_row=2, halo_thin=4)
+    t = toks(11, 5700)
+    # row 1 (users 2, 3): an earlier request over the same first 4608 tokens but a longer, different tail -> block 9 exists on row 1 without a halo (not its tip)
+    t_other = np.concatenate([t[:5632], toks(12, 3000)])
+    donor(idx, "early", t_other, user=2)
+    # row 0 (users 0, 1): the donor over t: its tip (block 9, 4608 tokens) has the halos
+    donor(idx, "d", t, user=0)
+    idx.bind("o0", 0, user=0)
+    idx.bind("o1", 0, user=1)  # row 0 has no free user
+    idx.bind("o2", 0, user=2)  # one user of row 1 busy, one free
+    t2 = np.concatenate([t[:5632], toks(13, 2000)])
+    p = idx.plan_hit("new", t2, len(t2))
+    assert p.xrow_src == 0 and p.row == 1 and p.hit_tokens == 5632
+    idx.bind("new", p.hit_tokens)
+    new = copy_in(idx, "new", t2, len(t2), p)
+    assert new is not None and new.hit_tokens == 5632 and new.halo_a >= 0
+    assert idx.counters["xrow_failed"] == 0
+    idx.release("new")
+    for r in ("o0", "o1", "o2"):
+        idx.release(r)
+    idx.check()
