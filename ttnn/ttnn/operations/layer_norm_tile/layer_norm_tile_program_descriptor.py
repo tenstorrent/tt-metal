@@ -30,6 +30,13 @@ BANK_STAGGER = False  # rotate each core's in-chunk tile order by its core index
 # and ~1.5 us on a 32-core grid.
 RESIDUAL_ON_WRITER = True
 OUT_DEPTH = 1
+# Compute knobs (Refinement 2, BH p100a). FUSE_NORMALIZE_AFFINE runs normalize, gamma scale and beta
+# shift as one DEST-reuse pass; it measured ~7.4k math cycles per 24-tile row against ~6.2k for the
+# three passes (the dest-reuse moves and per-group re-inits cost more than the fp32 round trips), so
+# it is parked. COMPUTE_DEST_LANES is the tiles per DEST acquire on the streaming passes, clamped on
+# device to DEST capacity; 4 cut center 1.6k -> 0.9k and the affine passes 6.1k -> 5.0k cycles.
+FUSE_NORMALIZE_AFFINE = False
+COMPUTE_DEST_LANES = 4
 L1_HEADROOM_BYTES = 64 * 1024
 
 CB_INPUT_TILES = 0
@@ -284,6 +291,8 @@ def create_program_descriptor(
         width,
         _float_bits(1.0 / width),
         _float_bits(epsilon),
+        int(FUSE_NORMALIZE_AFFINE),
+        COMPUTE_DEST_LANES,
     ]
 
     reader_rt = ttnn.RuntimeArgs()

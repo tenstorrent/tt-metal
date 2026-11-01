@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Correctness of the reader/writer stream knobs away from their shipped settings.
+"""Correctness of the stream and compute knobs away from their shipped settings.
 
 The knobs are module constants in layer_norm_tile_program_descriptor; each case overrides them so
 the trid ring, grouped writer flush, bank stagger and split_reader paths stay covered even while
@@ -37,5 +37,21 @@ CASES = [
 @pytest.mark.parametrize("shape,buf,with_residual", CASES)
 def test_stream_knobs(device, monkeypatch, knobs, shape, buf, with_residual):
     for name, value in KNOBS[knobs].items():
+        monkeypatch.setattr(descriptor, name, value)
+    run_and_check(device, shape, with_residual=with_residual, input_buf=buf, output_buf=buf)
+
+
+# Compute knobs (Refinement 2): the parked fused normalize/affine pass and single-lane passes.
+COMPUTE_KNOBS = {
+    "fused_affine": dict(FUSE_NORMALIZE_AFFINE=True),
+    "one_dest_lane": dict(COMPUTE_DEST_LANES=1),
+    "three_dest_lanes": dict(COMPUTE_DEST_LANES=3),
+}
+
+
+@pytest.mark.parametrize("knobs", list(COMPUTE_KNOBS), ids=list(COMPUTE_KNOBS))
+@pytest.mark.parametrize("shape,buf,with_residual", CASES)
+def test_compute_knobs(device, monkeypatch, knobs, shape, buf, with_residual):
+    for name, value in COMPUTE_KNOBS[knobs].items():
         monkeypatch.setattr(descriptor, name, value)
     run_and_check(device, shape, with_residual=with_residual, input_buf=buf, output_buf=buf)
