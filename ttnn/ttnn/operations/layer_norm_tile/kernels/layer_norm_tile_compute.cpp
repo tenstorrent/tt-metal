@@ -1,22 +1,26 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// layer_norm compute. Per block of R_b tile-rows, per row, per G-tile stats window (G = stats_chunk_tiles,
-// a whole number of the reader's C-tile chunks, or Wt):
+// layer_norm compute. Per block of R_b tile-rows, per row, per stats window (stats_window_tiles: a whole number
+// of the reader's C-tile chunks when streamed, else the whole row Wt):
 //   residual_add_block : z = x + res                         -> work_a   (HAS_RESIDUAL)
+//                        shifted (one_pass + residual): d = (x - x[:, 0]) + res instead
 //   row_stats_window   : as the window's tiles land, S1 += z (and S2 += z * z when one_pass) in DEST;
 //                        between windows the raw sums ride cb_stat_partial (fp32 tagged UnpackToDestFp32,
 //                        lossless reload). Last window of the row: row collapse, then
 //                        mean = S1 / W                         -> row_mean
 //                        inv_std = rsqrt(S2 / W - mean^2 + eps) -> inv_std  (one_pass only)
+//   then either the whole-row passes:
 //   center_block       : c = z - mean (col bcast)            -> work_b
 //   row_stats_block    : (two-pass only) S = sum_w c * c, collapse, rsqrt(S / W + eps) -> inv_std
 //   normalize_block    : c * inv_std (col bcast)             -> work_a
 //   affine_scale_block : * gamma (row bcast)                 -> work_b
 //   affine_shift_block : + beta (row bcast)                  -> output
+//   or, on cores the host picks (one_pass only), the same four passes per stats window through chunk_a /
+//   chunk_b, so the writer starts at the row's first window.
 //
-// work_a / work_b alias one allocation; every phase after the stats moves whole blocks through each id so
-// page i of one is page i of the other. The source of z stays resident (not popped) until center_block.
+// work_a / work_b alias one allocation; every whole-row phase moves whole blocks through each id so page i of
+// one is page i of the other. The source of z stays resident (not popped) until centering.
 //
 // row_stats_window / row_stats_block use raw LLK. reduce() reads a resident block only after waiting all
 // of it, or pops what it streams; neither keeps z resident while accumulating it chunk by chunk as the
@@ -24,8 +28,10 @@
 // accumulation has no post-accumulation hook, so collapsing and finalizing inside the accumulating window
 // needs the window written out by hand.
 //
-// one_pass (host-gated to fp32 DEST + HiFi4): z is read through SrcA at TF32, z * z is exact under HiFi4
-// and accumulates in fp32 DEST, so S2 / W - mean^2 keeps ~1e-3 absolute error at |mean| ~ 100, std 1.
+// one_pass (host-gated to fp32 DEST + HiFi4): products are exact under HiFi4 and accumulate in fp32 DEST.
+// Without a residual z = x is bf16-exact in SrcA and SrcB. A residual z read from the fp32 work page reaches
+// SrcA and SrcB at different reduced precisions, which biased S2 against S1 enough to drive the variance
+// negative at |mean| = 100; the per-row shift keeps the operands O(std) and removes that bias.
 
 #include <cstdint>
 

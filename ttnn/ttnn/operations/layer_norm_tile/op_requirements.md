@@ -78,7 +78,7 @@ No SUPPORTED change.
 
 **Outcome**: device kernel us, baseline (3 runs) -> after (2 runs): flagged #1 47.3-48.3 -> 46.0-46.1, 8x512 all L1 30.6-31.8 -> 27.6-28.3 (stock 43.3), 8x512 L1 no-residual 27.7-29.9 -> 27.8-28.8 (flat inside noise, stock 34.5), all DRAM 51.5-51.9 -> 51.6-51.9, DRAM no-residual 40.5-40.9 -> 40.4-40.5, 8x384 all DRAM 43.7-44.0 -> 42.7-42.9, 32x32 23.0-23.2 -> 21.9-22.1, affine TILE DRAM 77.5-79.2 -> 75.7-76.3. Per-row math cycles (8x512 L1 no-residual, second block): center 1.6k -> 0.9k, inv_std 2.2k -> 1.5k, normalize+affine 6.1k -> 5.0k; mean 0.9k and sumsq 2.0k unchanged. Shipped: DEST-lane blocking on the streaming passes (`COMPUTE_DEST_LANES` = 4, PerBlockSize lifecycles), `VectorMode::C` on the inv_std SFPU post-op, reconfig dropped on work_a/work_b and gamma/beta boundaries (measured null, kept: format provably constant). Parked: `FUSE_NORMALIZE_AFFINE` (one dest-reuse pass with ROW-broadcast gamma/beta, correct, ~7.4k vs 6.2k cycles: dest-reuse moves and per-group re-inits cost more than the fp32 round trips); `MIN_BLOCKS_PER_CORE` = 1 re-measured on the new compute and still loses 2-6 us (flagged #1 52.0). Remaining bottleneck: on the L1 no-residual row the first block waits ~8.7 us for its row (mean phase cannot start until the whole row is resident) and the 2-row cores then run two serial ~7 us compute blocks; the remaining per-row compute is HiFi4 fp32 FPU passes at ~80 cycles/tile. Next lever would be streaming the mean accumulation as chunks land (overlap the read with the first reduction) or a cheaper sumsq pass; not built here because both restructure the reduce helper's input policy rather than turn an exposed knob.
 
-### [ ] Refinement 3 — Stream row statistics while chunks land, then stream normalize + write
+### [x] Refinement 3 — Stream row statistics while chunks land, then stream normalize + write
 
 **Type**: perf
 
@@ -100,6 +100,8 @@ Levers:
 - flagged #2 and #3 do not regress.
 - Golden 545/545.
 - No regression on the guard set.
+
+**Outcome**: device kernel us, base -> after (BH p100a, medians of 5-8): flagged #1 36.5 -> 36.45 (flat, target not met), #2 47.6 -> 47.15, #3 34.0 -> 34.15; balanced rows 8x384 38.6 -> 36.3, 32x32 21.4 -> 19.7, 3x500 24.9 -> 21.9, 64x17 24.4 -> 22.2; L1 no-residual 22.6 -> 21.9. Built: streamed one-pass row stats (`row_stats_window`, partial sums via an UnpackToDestFp32 CB), a per-row shift on the residual add (unshifted one-pass with a residual went negative-variance at |mean| = 100), and per-window normalize + affine. Gated by measurement to balanced splits (residual from DRAM) and unbalanced L1 inputs without a residual; flagged #1/#2/#3 keep the base path. Why #1 does not move: streaming cut the 2-row cores' first-row tail by ~5 us, but the end then sits on one-row cores' ~10 us output write tail (DRAM writes at 200-290 GB/s after 28 us). Earlier light-core writes stretch the heavy cores' row-1 reads (residual 5.6 -> 16 us under per-window normalize; focus2 +1.3 us under streaming). The shifted add's extra DEST-reuse pass costs more on the heavy cores' resident row 1 than streaming saves (37.9 us). Next: Refinement 4's half-band split removes the heavy/light imbalance this lever collides with. Re-test the streamed path there (ungate it on unbalanced splits); it already wins on every balanced split measured. Not tried here: cutting the per-window pack-drain overhead (~1 us/row) with packer L1 accumulation of the partial sums.
 
 ### [ ] Refinement 4 — Half-tile (16-row) band work split: balance 128 rows on 110 cores
 
