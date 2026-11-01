@@ -22,7 +22,6 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from tt_py_test_utils_common.utility_functions import is_watcher_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -159,8 +158,6 @@ def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, d
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tensor_type, dtype):
     torch.manual_seed(0)
-    if is_watcher_enabled() and two_stage is False:
-        pytest.skip("Skipping test with watcher enabled, see github issue #37259")
 
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
