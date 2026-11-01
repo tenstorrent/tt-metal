@@ -795,6 +795,75 @@ def test_sdpa_sliding_window_fp32_dest_partial_q_chunk(device, s, sliding_window
         assert passed, f"rows {start}-{end}: {pcc}"
 
 
+@pytest.mark.parametrize(
+    "grid_x, grid_y, q_chunk_size, k_chunk_size",
+    (
+        (4, 3, 256, 128),
+        (3, 3, 256, 128),
+        (4, 4, 256, 64),
+        (4, 4, 256, 128),
+        (4, 3, 128, 128),
+    ),
+    ids=["4x3_q256_k128", "3x3_q256_k128", "4x4_q256_k64", "4x4_q256_k128", "4x3_q128_k128"],
+)
+def test_sdpa_sliding_window_fp32_dest_short_sequence(device, grid_x, grid_y, q_chunk_size, k_chunk_size):
+    """Causal sliding window with FP32 DEST when S is shorter than one Q chunk (#61489).
+
+    S 64 with q_chunk 256 is a single partial Q chunk, so cores owning more than one (batch, head) pair reuse the
+    previous pair's mask rows. The window is wider than S, so only causality is applied.
+    """
+    torch.manual_seed(0)
+    b, nh, nkv, s, d = 1, 16, 2, 64, 32
+    scale = 0.125
+    sliding_window = 1000
+
+    def exact_bf16(*shape):
+        return (torch.randint(-16, 16, shape).float() / 8).to(torch.bfloat16)
+
+    Q = exact_bf16(b, nh, s, d)
+    K = exact_bf16(b, nkv, s, d)
+    V = exact_bf16(b, nkv, s, d)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_out = ttnn.transformer.scaled_dot_product_attention(
+        ttnn.from_torch(Q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(K, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(V, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        is_causal=True,
+        sliding_window_size=sliding_window,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_out = ttnn.to_torch(tt_out).to(torch.float64)
+
+    Qf = Q.to(torch.float64)
+    Kf = K.to(torch.float64).repeat_interleave(nh // nkv, dim=1)
+    Vf = V.to(torch.float64).repeat_interleave(nh // nkv, dim=1)
+    scores = torch.matmul(Qf, Kf.transpose(-2, -1)) * scale
+    i = torch.arange(s)[:, None]
+    j = torch.arange(s)[None, :]
+    allowed = (j <= i) & (i - j < sliding_window)
+    scores = scores.masked_fill(~allowed, torch.finfo(torch.float64).min)
+    ref = torch.matmul(torch.softmax(scores, dim=-1), Vf)
+
+    diff = (tt_out - ref).abs()
+    tol = 0.05 + 0.03 * ref.abs()
+    assert (diff <= tol).all(), f"grid {grid_x}x{grid_y} q{q_chunk_size} k{k_chunk_size}: max diff {diff.max().item()}"
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
