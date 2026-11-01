@@ -1594,6 +1594,7 @@ first token identical in every run), each with the per-chunk DRAM log where note
 | plan kernel | 4096 | copy | OOM at chunk 57 | largest free block 133.4 MiB |
 | plan kernel | 2048 | paged op | 484.8 s | 139 MiB, no 1 GiB transient |
 | plan kernel | 4096 | paged op | **456.9 s** | 127 MiB, no 1 GiB transient |
+| plan kernel | 4096 | paged op, KDA snapshot ring on device (1 entry) | **434.1 s** | 102 MiB, the ring's 22 MiB per bank taken |
 
 The components: the region-plan kernel −52 s; the 4096 sub-chunk −22..28 s; the paged sparse op +42 s on the
 sequence-parallel slab path (its gathered K rows cost ~70 ms per DSA layer per 16 K chunk against the stock op over
@@ -1601,7 +1602,11 @@ the contiguous copy: the next attention item). The copy path's best point (443 s
 largest-block limit at the end of the prompt, which is how the plan-kernel + 4096 run died, so the 1 M profile's
 defaults are the memory-safe column: the plan kernel (the code default), the paged keys and the 4096 sub-chunk (both
 in the TIS catalog). Without the 1 GiB copy the planner no longer reserves it and the KDA snapshot ring fits on
-device at 1 M (the served check of that runs next: hit restores in milliseconds instead of the host store's 4.2 s).
+device at 1 M once the live fit uses the measured warm-up allowance (`GLM53_VLLM_APC_WARMUP_ALLOWANCE_MIB=400`: the
+warm-ups grow the resident set by ~880 MiB of which the 512 MiB trace region is already in the reserve). With the ring
+the needle served in 434.1 s: the host store had been saving a snapshot at every 16 K chunk end (a hit-aligned
+position: 34 layers x 32 chips read to the host, ~350 ms per chunk, ~23 s per 1 M prefill), a cost every earlier
+row carried; hit restores now take milliseconds instead of 4.2 s.
 
 ### 2026-11-01 18:10: the 32 x 1 M repeat miss: the wave path never snapshotted, and the ring ops were mesh-wide (fixed, host-tested; device stages queued)
 
