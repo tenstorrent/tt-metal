@@ -47,7 +47,9 @@ class TernaryLinear:
     def forward(self, x, out_mem=None):
         sh = self.sh
         x_in = x
-        if x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
+        if x.dtype != ttnn.bfloat16:  # prep reads bf16 rows; the GDN out-proj input is fp32
+            x = ttnn.typecast(x, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        elif x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
         a3.prep(x, sh.m[self.k], x8, sh.workers, src_tile32=True)
