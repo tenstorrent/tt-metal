@@ -366,10 +366,10 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         if (llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile)) {
             _llk_pack_block_w_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles);
         } else {
-            _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(start_tile_index, pack_tile_addr, ntiles);
+            _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>>(start_tile_index, pack_tile_addr, ntiles);
         }
 #else
-        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(
+        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>>(
             start_tile_index, pack_tile_addr, ntiles);
 #endif
     } else if (dense_small && llk_pack_block_is_dense(output_id)) {
@@ -392,11 +392,11 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         if (llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
             _llk_pack_block_closed_w_mop_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles, get_output_num_faces(output_id));
         } else {
-            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_dest>(
+            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
                 start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
         }
 #else
-        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_dest>(
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
             start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
 #endif
     } else {
