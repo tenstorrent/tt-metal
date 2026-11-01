@@ -845,6 +845,44 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/tests
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/reference
+- id: FIX.21
+  title: 'FORMAT_ATTRIBUTION: CPU attribution of the device''s accuracy gap to DeepSeek''s reference, one format at a time'
+  gate: []
+  status: placed
+  placed: '2026-11-01T17:30:00'
+  t: '2026-11-01T17:30:00'
+  text: 'OWNER 2026-11-01: CPU attribution of the device''s accuracy gap, NO DEVICE (device false; the box needs a reboot
+    before any device job). FIX.20 measured the device''s logit KL vs the native golden at 2.1-2.2x DeepSeek''s reference
+    (numerics official: bf16 + its fp8 / fp4 quantizers), and the per-layer err_* shares say the same (median 0.70, device
+    / official error ~1.4-1.8x). Find WHICH of the device''s format and precision choices cause it. No change to tt/ (the
+    shipped model); work only in reference/ and tests/bringup/. (1) Add to the CPU reference (reference/ds41_ref.py, next
+    to numerics native / official) a device-format emulation with one switch per site, each either ''official'' (the reference''s
+    own quantizer and dtype) or ''device'' (what tt/settings.py ships): read tt/settings.py and the tt/ code for the sites;
+    at least EXPERTS (bfloat4_b weights, shared exponent per 16 of a tile row, EXPERTS_PRECISION / EXPERTS_IMPL, vs the reference''s
+    fp4 e2m1 per 32), the shared expert''s format, INDEX_K_FORMAT / INDEX_Q_FORMAT (bfp4 vs fp4 e2m1 per 32; DS41-150), CKV_FORMAT
+    (compressed KV bfp4_rows), WINDOW_KV_FORMAT (bfp8_tiles vs e4m3), ENGRAM table (bfp8), the matmul fidelity (MATMUL_FIDELITY
+    / ATTN_FIDELITY HiFi2: emulate its mantissa truncation of the operands as the ttnn docs and the repo''s existing fidelity
+    notes say; say exactly how), the bf16 accumulations (COMBINE_ACC, FP32_ACC off where off, bf16 cross-chip sums), BF16_ACTIVATIONS,
+    NORM dtypes. Reuse the repo''s existing bfp packers (tt/ckv_codec.py, tt/engram_bfp8.py, tests/test_bfp_packer_rounding.py)
+    for the exact device rounding; do not invent a format. (2) VALIDATE the emulation before any attribution: all sites ''device''
+    must reproduce the device''s own errors on layers 0-9 (results/P.26.json side ''old'' and results/FIX.20.json: err_layer_L00..L09
+    and the err_state_* of those layers, rung s10240 or last as you run it) within +-25 % per metric, median within +-15 %.
+    If it does not, find what the emulation misses before going on and say what it is; a CPU model that does not match the
+    device attributes nothing. (3) Attribution on layers 0-9 (chained, as the ladder runs them, on a golden chunk with its
+    golden prefix; pick the rung and say why; CPU cost matters, say how long each run took): (a) all-device; (b) leave-one-out:
+    all-device with ONE site set back to official, for every site; (c) add-one: official with ONE site set to device, for
+    every site; (d) official. Against the native golden, per run: err_layer_L00..L09, the err_state_* of those layers, and
+    gap_closed_<site> = (err_all_device - err_leave_one_out) / (err_all_device - err_official) at L09 (and the median over
+    L00..L09). Interactions: if the leave-one-out shares sum far from 1, say which sites interact. (4) If one or two sites
+    close most of the gap: run (a) and all-device-minus-those-sites over all 40 layers at rung last''s chunk and the FIX.20
+    KL (tests/bringup/test_logit_kl.py''s metric, reusing its cached official final_norm) to show what it buys at the tokens;
+    only if it fits in about 3 CPU hours, otherwise say what it would cost. Write the test as models/demos/deepseek_v41_flash_d_p/reference/test_format_attribution.py;
+    record metrics emu_match_median (median over layers 0-9 of err_emu / err_device), emu_match_worst, sites, gap_closed_<site>,
+    addone_<site>, and err_*_L09 per run. Long CPU jobs through devjob (start / wait), never killed; cap CPU to half the cores,
+    nice 19 (BRINGUP_CPU_THREADS); no device, no fork suites. Report: a table per site (what the device does vs the reference,
+    gap closed at L09 leave-one-out and add-one, the device-time cost of switching it if known from tt/settings.py''s notes)
+    and a recommendation: which site to A/B on the device first. NO fixed accuracy numbers as limits (F138); the +-25 % match
+    is a check of the emulation, not of the model.'
 classified:
   L.smoke:
     kind: framework
