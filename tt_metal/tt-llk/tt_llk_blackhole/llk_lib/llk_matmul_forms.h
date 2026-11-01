@@ -1197,6 +1197,7 @@ inline constexpr matmul_pack_llkx_cell matmul_pack_llkx_per_tile_cells[] = {
     {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 2, 2},
     {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 2},
     {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float16, DataFormat::Bfp8, 1, 8, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 1, 3},
     {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp2_b, 2, 1, 0},
     {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 2},
     {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 3},
