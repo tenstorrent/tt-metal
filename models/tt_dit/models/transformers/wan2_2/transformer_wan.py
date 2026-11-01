@@ -27,10 +27,9 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.mochi import get_rot_transformation_mat
-from ....utils.padding import pad_vision_seq_parallel
+from ....utils.padding import pad_vision_seq_parallel, torch_pad
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor, from_torch, unflatten
-from ....utils.tracing import traced_function
 from .attention_wan import WanAttention
 
 
@@ -165,7 +164,7 @@ class WanTransformerBlock(Module):
         spatial_1BND: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
         temb_1BTD: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
@@ -175,7 +174,7 @@ class WanTransformerBlock(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
         temb_1BTD: replicated on SP, fractured D on TP
-        N: logical sequence length of the spatial input
+        N: logical sequence length of the spatial input, as an int or a uint32 device tensor
         rope_cos_BANH: fractured N on SP, A (num_heads) on TP
         rope_sin_BANH: fractured N on SP, A (num_heads) on TP
         trans_mat: replicated on SP, replicated D on TP
@@ -396,13 +395,25 @@ class WanTransformer3DModel(Module):
         # Torch fallbacks
         self.rope.load_state_dict(pop_substate(state, "rope"))
 
-    def get_rope_features(self, hidden_states):
-        if tuple(hidden_states.shape) not in self.cached_rope_features:
-            rope_features = self.prepare_rope_features(hidden_states)
-            self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
-        return self.cached_rope_features[tuple(hidden_states.shape)]
+    def get_rope_features(self, hidden_states, padded_n: int | None = None):
+        key = (tuple(hidden_states.shape), padded_n)
+        if key not in self.cached_rope_features:
+            self.cached_rope_features[key] = self.prepare_rope_features(hidden_states, padded_n)
+        return self.cached_rope_features[key]
 
-    def prepare_rope_features(self, hidden_states):
+    def pad_sequence(self, t: torch.Tensor, padded_n: int | None = None) -> torch.Tensor:
+        """Pads dim 2, the spatial sequence, to ``padded_n``, or by default to the smallest length
+        sequence parallelism can split into whole tiles."""
+        if padded_n is None:
+            return pad_vision_seq_parallel(t, num_devices=self.parallel_config.sequence_parallel.factor)
+
+        divisor = ttnn.TILE_SIZE * self.parallel_config.sequence_parallel.factor
+        if padded_n % divisor != 0 or padded_n < t.shape[2]:
+            msg = f"padded sequence length {padded_n} must be a multiple of {divisor} and at least {t.shape[2]}"
+            raise ValueError(msg)
+        return torch_pad(t, padded_n - t.shape[2], dim=2)
+
+    def prepare_rope_features(self, hidden_states, padded_n: int | None = None):
         """
         Given video input, compute RoPE features.
         Return tensors on device.
@@ -411,15 +422,8 @@ class WanTransformer3DModel(Module):
         rope_cos, rope_sin = self.rope(hidden_states)
 
         # Convert to TT tensors with proper sharding
-        rope_cos_1HND = rope_cos.permute(0, 2, 1, 3)
-        rope_sin_1HND = rope_sin.permute(0, 2, 1, 3)
-
-        rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
-        )
-        rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
-        )
+        rope_cos_1HND = self.pad_sequence(rope_cos.permute(0, 2, 1, 3), padded_n)
+        rope_sin_1HND = self.pad_sequence(rope_sin.permute(0, 2, 1, 3), padded_n)
 
         trans_mat = get_rot_transformation_mat()
 
@@ -470,7 +474,7 @@ class WanTransformer3DModel(Module):
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
-    def preprocess_spatial_input_host(self, spatial):
+    def preprocess_spatial_input_host(self, spatial, padded_n: int | None = None):
         B, C, F, H, W = spatial.shape
         logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
         assert B == 1, "Batch size must be 1"
@@ -483,7 +487,7 @@ class WanTransformer3DModel(Module):
         spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
 
-        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
+        spatial = self.pad_sequence(spatial, padded_n)
         logger.info(f"spatial input after padding: {spatial.shape}")
 
         return spatial, N
@@ -656,15 +660,13 @@ class WanTransformer3DModel(Module):
 
         return spatial_1BNI
 
-    # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
-    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def combined_step(
         self,
         do_classifier_free_guidance: bool,
         spatial_1BNI: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
         negative_prompt_1BLP: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
@@ -723,7 +725,7 @@ class WanTransformer3DModel(Module):
         spatial_1BND: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
         timestep_proj_1BTD: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
@@ -747,9 +749,10 @@ class WanTransformer3DModel(Module):
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         timestep: ttnn.Tensor,
         prev_fn_residual_1BND: ttnn.Tensor,
+        valid_11N1: ttnn.Tensor | None = None,
         *,
         num_fn_blocks: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -766,6 +769,9 @@ class WanTransformer3DModel(Module):
         (accumulated on device; the ~0.1% rounding is irrelevant for thresholding) and are packed
         into one tensor so the host needs a single readback. ``spatial_1BND`` is a private copy,
         safe to hold across the following ``cache_body`` call.
+
+        ``valid_11N1`` is 1 on the rows of the sequence and 0 on its padding. Multiplied into
+        ``fn_residual``, it keeps the padding out of both sums.
         """
         temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
 
@@ -786,6 +792,8 @@ class WanTransformer3DModel(Module):
 
         fn_residual_1BND = ttnn.subtract(spatial_1BND, spatial_0_1BND)
         ttnn.deallocate(spatial_0_1BND)
+        if valid_11N1 is not None:
+            fn_residual_1BND = ttnn.multiply(fn_residual_1BND, valid_11N1)
 
         diff_1BND = ttnn.abs(ttnn.subtract(fn_residual_1BND, prev_fn_residual_1BND))
         diff_sum_1B11 = ttnn.sum(diff_1BND, dim=[2, 3], keepdim=True)
@@ -802,7 +810,7 @@ class WanTransformer3DModel(Module):
         spatial_1BND: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
         timestep_proj_1BTD: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
@@ -834,7 +842,7 @@ class WanTransformer3DModel(Module):
         prompt_1BLP: ttnn.Tensor,
         temb_11BD: ttnn.Tensor,
         timestep_proj_1BTD: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,

@@ -14,7 +14,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include "tt_metal/third_party/umd/device/api/umd/device/types/xy_pair.hpp"
 #include "tt_stl/assert.hpp"
 #include "hostdev/profiler_common.h"
 

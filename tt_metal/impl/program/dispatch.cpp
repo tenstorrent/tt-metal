@@ -15,7 +15,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
-#include <tt_align.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>

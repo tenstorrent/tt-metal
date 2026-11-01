@@ -33,8 +33,8 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     generate_quasar_srcs_format_dest_acc_combinations,
+    max_dest_tiles,
     parametrize,
     runtime,
 )
@@ -83,8 +83,7 @@ def _matmul_output_fits_dest(
     dest_sync: DestSync,
 ) -> bool:
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
     return matmul_dims.output_tile_cnt <= max_tiles
 
 
