@@ -781,11 +781,12 @@ _PACK_DENSE_CELLS = {
     ('LoFi', 'B8', 'F32', 'F32', 1, 3, 1): 1,
     ('LoFi', 'B8', 'F32', 'F32', 1, 3, 3): 0,
     ('LoFi', 'B8', 'F32', 'F32', 1, 3, 4): 0,
+    ('LoFi', 'B8', 'F32', 'F32', 1, 4, 1): 0,
     ('LoFi', 'B8', 'F32', 'F32', 1, 4, 4): 0,
     ('LoFi', 'B8', 'F32', 'F32', 4, 1, 4): 0,
 }
 # (fidelity, output, A, B, rt, ct, throttle) of matmul_pack_llkx_plain_block_cells: the plain block run in place of the closed block
-_PACK_LLKX_PLAIN_BLOCK = frozenset({('LoFi', 'B8x', 'F16', 'B8x', 1, 4, 0)})
+_PACK_LLKX_PLAIN_BLOCK = frozenset({('LoFi', 'B8x', 'F16', 'B8x', 1, 4, 0), ('LoFi', 'B8', 'F16b', 'B4', 2, 4, 2)})
 
 
 def matmul_pack_form(

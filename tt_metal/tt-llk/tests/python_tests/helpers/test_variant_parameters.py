@@ -517,7 +517,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
     def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False, several_blocks: bool = False) -> list:
         keys = MATMUL_FORM_KEYS._for_block(formats, kt_dim, ct_dim, rt_dim, math_fidelity, dest_sync, dest_acc, unfuse_one_tile, throttle, sections, in0_r_dim, unfuse_cells, several_blocks)
         # a Bfp8_b pack below HiFi3 (the unfused post cells) reads slower without the half-sync flip's base write (the bound phase moves): the kernels keep it
-        keep = formats.output_format == DataFormat.Bfp8_b and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
+        from helpers.matmul_prod_keys import keep_flip_write
+
+        keep = keep_flip_write(
+            math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format, rt_dim, ct_dim, kt_dim, throttle
+        )
         for k in keys:
             k.keep_flip = keep
             k.in0, k.in1 = formats.input_format_B, formats.input_format

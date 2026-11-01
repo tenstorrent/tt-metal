@@ -409,6 +409,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 #else
                 [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
                 #endif
+                #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_BLOCK)
+                // the keep rule of the LLK (llk_matmul_forms.h): the python define is set only where the rule keeps the write (the modules also clear it for the blocks that keep main's form)
+                static_assert(
+                    ckernel::matmul_keep_flip_write(
+                        MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_BLOCK_ACC, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, MATMUL_BLOCK_RT, MATMUL_BLOCK_CT, MATMUL_BLOCK_KT,
+                        MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB) ||
+#ifdef MATMUL_KEEP_FLIP_WRITE
+                        false,
+#else
+                        true,
+#endif
+                    "the python keep_flip_write keeps a write that matmul_keep_flip_write drops");
+                #endif
                 #if defined(MATMUL_KEEP_FLIP_WRITE)
                     [[maybe_unused]] constexpr bool next_op_sets_base = false;
 #else

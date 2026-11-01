@@ -217,7 +217,7 @@ def main() -> int:
         py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0") + ("1" if grid_main_flip_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
     print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::3].count('1')} python {py[0::3].count('1')}; separate post: C++ {cpp[1::3].count('1')} python {py[1::3].count('1')}; main flip: C++ {cpp[2::3].count('1')} python {py[2::3].count('1')}; {bad} differ")
-    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") or check_forced() or check_dense_pack() else 0
+    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") or check_cell_table("keep flip off table", "_KEEP_FLIP_OFF_ROWS", "matmul_keep_flip_off", "matmul_keep_flip_off_cells") or check_forced() or check_dense_pack() else 0
 
 
 if __name__ == "__main__":

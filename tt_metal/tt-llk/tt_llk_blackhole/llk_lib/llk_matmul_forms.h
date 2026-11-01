@@ -79,7 +79,11 @@ constexpr char matmul_default_form()
                         : out_format == DataFormat::Bfp8_b  ? 3
                         : out_format == DataFormat::Bfp4_b  ? 4
                                                             : -1;
-    if constexpr (out_format == DataFormat::Bfp2_b)
+    if constexpr (kt_per_section == 0)
+    {
+        return '.'; // main's form, also for the output formats that key a forced form below
+    }
+    else if constexpr (out_format == DataFormat::Bfp2_b)
     {
         return 'h'; // forced forms (matmul_forced_form_cells): block float 2 bit formats are not matmul outputs
     }
@@ -1330,6 +1334,7 @@ inline constexpr matmul_pack_dense_cell matmul_pack_dense_cells[] = {
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 1, 1},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 3, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 1, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 4, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 4, 0},
 };
@@ -1351,6 +1356,7 @@ constexpr int matmul_pack_dense_form(const MathFidelity fidelity, const std::uin
 // Cells of the LLK-only space where the closed block pack of a block float output reads behind the plain block run (any K and accumulate)
 inline constexpr matmul_pack_llkx_cell matmul_pack_llkx_plain_block_cells[] = {
     {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Bfp8, 1, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 4, 2},
 };
 
 constexpr bool matmul_pack_llkx_plain_block(const MathFidelity fidelity, const DataFormat out, const DataFormat in_a, const DataFormat in_b, const std::uint32_t rt, const std::uint32_t ct,
@@ -1413,6 +1419,34 @@ constexpr bool matmul_end_fold_off(const MathFidelity fidelity, const bool half_
         }
     }
     return false;
+}
+
+// Cells where the half sync DEST flip drops its base write (the next op sets it) instead of keeping it, which the keep rule below applies to every Bfp8_b output at LoFi and HiFi2: the
+// 2x4 block of a Float16_b in1 against a Bfp4_b in0 at throttle 2 reads 0.5 cycles faster without the write.
+inline constexpr matmul_grid_main_cell matmul_keep_flip_off_cells[] = {
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 4, 8, 2, false, 1},
+};
+
+constexpr bool matmul_keep_flip_off(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                    const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_keep_flip_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether the half sync DEST flip of a block keeps its base write (tile_regs_commit keep_flip_write): a Bfp8_b output below HiFi3 reads slower without it, except the cells above.
+constexpr bool matmul_keep_flip_write(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                      const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    return out == DataFormat::Bfp8_b && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2) &&
+           !matmul_keep_flip_off(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kt, throttle, l1_acc, nb);
 }
 
 // matmul_half_end_fold for a block whose shape is known: the cells of matmul_end_fold_off_cells skip the fold.
@@ -1537,9 +1571,7 @@ struct matmul_forced_form_cell
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
-    // LoFi, 16-bit DEST, one DEST section, to Bfp8_b over 8 k steps: a 2x4 block of a Float16_b in1 against a Bfp4_b in0 (static throttle 2) reads 0.6 cycles behind main on the table's
-    // form and 0.14 over with the hoisted tile form; a 1x8 block against a Float32 in0 (static throttle 3) reads 0.28 behind and 0.38 ahead
-    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 4, 2, true, 'h', false, 1, 2, true},
+    // LoFi, 16-bit DEST, one DEST section, a 1x8 block of a Float16_b in1 against a Float32 in0 over 8 k steps to Bfp8_b (static throttle 3): the table's form reads 0.28 cycles behind main, the hoisted tile form 0.38 ahead
     {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 8, 8, 1, true, 'h', false, 1, 1, true},
     // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles behind main at half sync
     // and 10 at full sync (the 1x6 and 1x8 blocks gain from it); the hoisted rows form reads 4.9 cycles ahead of main at half sync and 37 at full sync

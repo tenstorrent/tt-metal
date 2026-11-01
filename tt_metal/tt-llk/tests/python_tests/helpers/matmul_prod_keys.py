@@ -662,6 +662,22 @@ def end_fold_off_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, 
     return key in _END_FOLD_OFF
 
 
+# Half sync cells whose DEST flip drops the base write that the keep rule keeps for Bfp8_b outputs at LoFi and HiFi2 (matmul_keep_flip_off_cells)
+_KEEP_FLIP_OFF_ROWS = (('LoFi', True, False, 'F16b', 'B4', 'B8', 2, 4, 8, 2, False, 1),)
+_KEEP_FLIP_OFF = frozenset(_KEEP_FLIP_OFF_ROWS)
+
+
+def keep_flip_write(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:
+    """matmul_keep_flip_write of llk_matmul_forms.h: whether the half sync DEST flip keeps its base write."""
+    if out != DataFormat.Bfp8_b or fidelity not in (MathFidelity.LoFi, MathFidelity.HiFi2):
+        return False
+    try:
+        key = (fidelity.name, half_sync, fp32_acc, _SHORT[in1], _SHORT[in0], _SHORT[out], rt, ct, kb, throttle, bool(l1_acc), nb)
+    except KeyError:
+        return True
+    return key not in _KEEP_FLIP_OFF
+
+
 # Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write
 _MAIN_FLIP_ROWS = (
     ('LoFi', True, False, 'F32', 'B4', 'B4', 1, 7, 8, 0, False, 1),
