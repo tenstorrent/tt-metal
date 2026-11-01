@@ -19,6 +19,8 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_metadata.hpp"
 #include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -309,6 +311,29 @@ void kernel_main() {
     // re-derive logical_nt / logical_lt / the ring masks from them.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(41) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(42) == 1;
+    // Slot 43: V is a batch-1 tensor (e.g. per-head V unrolled from the latent cache for this chunk) beside an
+    // indexed K cache, so V reads always come from batch 0 rather than the K cache slot.
+    constexpr bool v_single_slot = get_compile_time_arg_val(43) == 1;
+    // Slots 44-48, expanded K: Q is DHt_qk tiles wide while K (the latent) keeps DHt; the reader also pushes this
+    // core's rows of its head's W_UK (kexp_nope_tiles x kexp_latent_tiles tiles per head) into cb_wuk alongside the Q
+    // push. Without it DHt_qk == DHt.
+    constexpr bool k_expand = get_compile_time_arg_val(44) == 1;
+    constexpr uint32_t DHt_qk = get_compile_time_arg_val(45);
+    constexpr uint32_t wuk_tiles = get_compile_time_arg_val(46);
+    constexpr uint32_t kexp_latent_tiles = get_compile_time_arg_val(47);
+    constexpr uint32_t kexp_nope_tiles = get_compile_time_arg_val(48);
+    // Slots 49-50, expanded-K head pairs: the two cores of a (K-split band, head) each expand kexp_own_rows of the
+    // no-PE tile rows per K chunk; this reader sends its compute's rows to the peer's cb_kexp_peer and hands the peer's
+    // rows to its compute, synchronized by the credit and data semaphores.
+    constexpr uint32_t kexp_credit_sem = get_compile_time_arg_val(49);
+    constexpr uint32_t kexp_data_sem = get_compile_time_arg_val(50);
+    constexpr uint32_t kexp_own_rows = kexp_nope_tiles / 2;
+    static_assert(!k_expand || wuk_tiles == kexp_own_rows * kexp_latent_tiles);
+    // The op validates [c_kv | k_pe] latent K and [q_nope | q_pe] Q with matching PE widths, so Q has exactly
+    // kexp_nope_tiles tile rows more than the latent's PE part (compute's count).
+    static_assert(!k_expand || DHt_qk + kexp_latent_tiles == DHt + kexp_nope_tiles, "expanded K: Q / latent K widths");
+    // The expanded-K peer exchange runs only beside a separate V (the device op rejects latent V with k_expand).
+    static_assert(!k_expand || !v_shares_k_buffer, "expanded K needs a separate per-head V");
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     // Live joint tail in tiles; equals the compile-time value unless logical_l arrives as a tensor.
     uint32_t logical_lt = logical_lt_compile;
@@ -322,9 +347,9 @@ void kernel_main() {
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
     // Slots 33-35 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt), 36-39 the rank
-    // mapping, slot 40 the bounded sliding KV slab count, and 41-42 the logical-length transport flags, so
-    // the tensor accessors start at slot 43.
-    constexpr uint32_t kFirstAccessorArgOffset = 43;
+    // mapping, slot 40 the bounded sliding KV slab count, 41-42 the logical-length transport flags, 43
+    // v_single_slot and 44-50 the expanded-K scalars, so the tensor accessors start at slot 51.
+    constexpr uint32_t kFirstAccessorArgOffset = 51;
     constexpr auto q_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -426,9 +451,11 @@ void kernel_main() {
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++)};
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        true, /* wait_for_op_signal */
-        argidx);
+    // Rows of K the fused gather sends from each device's slice, as the host bounds it (re-applied per dispatch with
+    // logical_nt); the metadata path narrows it below exactly as the gather does on device. Slice readiness only.
+    uint32_t gather_slice_rows = get_arg_val<uint32_t>(argidx++);
+    constexpr bool slice_readiness = get_named_compile_time_arg_val("slice_readiness") == 1;
+    RingSDPAOpReceiverT<slice_readiness> fused_op_receiver(true /* wait_for_op_signal */, argidx);
 
     // Rotated Q split: first runtime arg past the fused-op signaler block. Captured here because
     // argidx is final at this point; the compile-time sizes are derived below with the other CT args.
@@ -505,19 +532,32 @@ void kernel_main() {
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_wuk = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_kexp_own = get_compile_time_arg_val(cb_arg_offset + 6);
+    constexpr uint32_t cb_kexp_peer = get_compile_time_arg_val(cb_arg_offset + 7);
 
     // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling.
     // Per active ordinal the factory sends [remainder_start, group_has_remainder].
     // global_q_start/end describe the fixed base range when rotation is enabled.
-    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
-    // read it from there rather than tracking a per-kernel index into the block above.
-    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr uint32_t rotated_max_slots = get_named_compile_time_arg_val("rotated_max_slots");
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
+    // Interleaved ring steps (ring_joint_ksplit.hpp).
+    constexpr bool ring_interleave = get_named_compile_time_arg_val("ring_interleave") == 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
+    static_assert(!ring_interleave || (ksplit_enabled && slice_readiness));
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
+    // Expanded K: [W_UK address, rank, peer physical x, peer physical y] are the last runtime args, after the K-split
+    // band. Head pairs never run the rotated split (the host refuses it).
+    static_assert(!k_expand || !rotated_q_split_enabled);
+    [[maybe_unused]] const uint32_t wuk_arg_idx = rotated_args_base + (ksplit_enabled ? 1 : 0);
+    [[maybe_unused]] const uint32_t wuk_addr = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx) : 0;
+    [[maybe_unused]] const uint32_t kexp_rank = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 1) : 0;
+    [[maybe_unused]] const uint32_t kexp_peer_x = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 2) : 0;
+    [[maybe_unused]] const uint32_t kexp_peer_y = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 3) : 0;
+    [[maybe_unused]] uint32_t kexp_exchanged = 0;  // cumulative: semaphores count up and are reset by the launch
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
@@ -560,6 +600,10 @@ void kernel_main() {
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+            gather_slice_rows = std::min(
+                gather_slice_rows,
+                ring_attention_all_gather::compute_gather_valid_Ht(
+                    kv_actual_isl, q_local_padded_Nt, ring_size, get_named_compile_time_arg_val("gather_cache_tiles")));
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
@@ -771,7 +815,7 @@ void kernel_main() {
     const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
     // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
     const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
-    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt_qk);
     // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
@@ -784,13 +828,14 @@ void kernel_main() {
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
     // Joint Q addressing: per-device shard (Lt_local rows). Equals Lt on the replicated path
     // (Lt_local == Lt when joint is not sharded), so this is bit-identical there.
-    const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt);
+    const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt_qk);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
-    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, v_row_Wt);
+    const auto input_v_tile_logical =
+        TensorTileShape(v_single_slot ? 1 : kv_batch_dim, NHV, kv_local_padded_Nt, v_row_Wt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
     const auto gathered_v_input_tile_logical =
         TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, v_row_Wt);
@@ -864,7 +909,19 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration: its ID and slice direction come from its
+    // first step, the only one that advances the sequencer. A revisit is always within the iteration's pair, whose
+    // members differ in parity.
+    uint32_t step_ring_ids[2];
+    uint32_t step_dirs[2];
+    uint32_t ring_dir = 0;
+    const uint32_t sdpa_steps =
+        ring_interleave ? ring_joint::interleaved_step_count(sdpa_ring_iterations) : sdpa_ring_iterations;
+    for (uint32_t step = 0; step < sdpa_steps; ++step) {
+        const ring_joint::InterleavedStep istep = ring_interleave
+                                                      ? ring_joint::interleaved_step(step, sdpa_ring_iterations)
+                                                      : ring_joint::InterleavedStep{step, 0, 1};
+        const uint32_t ring_iter = istep.ring_iter;
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
         ring_joint::PackedKVSourceReadiness packed_readiness;
@@ -889,12 +946,21 @@ void kernel_main() {
             packed_sources || has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
-        const uint32_t ring_id =
-            packed_sources ? packed_source_ids[0]
-            : has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+        uint32_t ring_id;
+        if (packed_sources) {
+            ring_id = packed_source_ids[0];
+        } else if (has_sliding_window) {
+            ring_id = ring_index;
+        } else if (istep.piece == 0) {
+            ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            ring_dir = fused_op_receiver.last_dir;
+            step_ring_ids[ring_iter & 1] = ring_id;
+            step_dirs[ring_iter & 1] = ring_dir;
+        } else {
+            ring_id = step_ring_ids[ring_iter & 1];
+            ring_dir = step_dirs[ring_iter & 1];
+        }
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
@@ -905,7 +971,8 @@ void kernel_main() {
         // balanced Q chunks whose final iteration takes the normalize-only path.
         const bool is_last_ring_iter =
             has_sliding_window || (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                                  : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
+                                                  : is_last_active_ring_iter(active_ring_iter_mask, ring_iter) &&
+                                                        istep.piece + 1 == istep.pieces);
         // Iterate over KV blocks gathered on ring.
         // Sharded joint: the fused all-gather delivers one remote L/P shard per ring iteration (local
         // slice is read from the local joint tensor, same as spatial). Each shard is available right
@@ -934,8 +1001,18 @@ void kernel_main() {
                 chunk_size_t,
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
-            ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
+            const ring_joint::KSplitRange band_range =
+                ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
+            ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
         }
+        // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
+        // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
+        // early only if the sender sent it before that part's marker.
+        [[maybe_unused]] const uint32_t readiness_num_chunks =
+            slice_readiness
+                ? ttnn::ring_attention_all_gather::readiness_split_chunks(
+                      gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t)
+                : 0;
 
         // In causal balanced case processing KV received from other devices:
         //
@@ -1068,12 +1145,12 @@ void kernel_main() {
             }
 
             // Default to local Q tensor; override below for joint Q when applicable.
-            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt_qk);
             uint32_t q_end_seq_tile = q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
                     const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt_qk);
                     // Lt_local: per-device joint-Q shard tile count (== Lt on the replicated path).
                     // joint_q is a local tensor starting at row 0; the mesh tensor tracks which global
                     // prompt slice this device owns, so no ring_id offset is added here.
@@ -1222,6 +1299,15 @@ void kernel_main() {
                 const bool joint_chunk_is_local =
                     has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
 
+                if constexpr (slice_readiness) {
+                    if (!source_is_local) {
+                        fused_op_receiver.wait_part(
+                            ring_dir,
+                            ttnn::ring_attention_all_gather::readiness_part_of(
+                                source_k_chunk, readiness_num_chunks, ksplit_count, ring_id));
+                    }
+                }
+
                 if (packed_sources) {
                     // A chunk can span several sources. Wait through its last
                     // member before either a local read or chain receive; later
@@ -1362,7 +1448,7 @@ void kernel_main() {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                                 const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                                 const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt_qk);
                                 read_block(
                                     q_gen,
                                     q_sub_slice,
@@ -1385,6 +1471,30 @@ void kernel_main() {
                     };
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                         is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
+                    if constexpr (k_expand) {
+                        // This Q chunk's head's W_UK, kexp_nope_tiles x kexp_latent_tiles tiles: same lifetime as Q
+                        // (compute pops both together). Only this core's rows of W_UK: rows
+                        // [rank * own_rows, (rank + 1) * own_rows), stored latent-column-major (tile (r, d) at
+                        // d * own_rows + r) so the expansion's matmul block reads a latent column's W_UK rows as
+                        // adjacent tiles.
+                        constexpr uint32_t wuk_tile_bytes = get_tile_size(cb_wuk);
+                        const InterleavedAddrGenFast<true> wuk_gen = {
+                            .bank_base_address = wuk_addr,
+                            .page_size = wuk_tile_bytes,
+                            .data_format = get_dataformat(cb_wuk)};
+                        cb_reserve_back(cb_wuk, wuk_tiles);
+                        const uint32_t wuk_write_ptr = get_write_ptr(cb_wuk);
+                        for (uint32_t t = 0; t < wuk_tiles; ++t) {
+                            const uint32_t r = t / kexp_latent_tiles;
+                            const uint32_t d = t % kexp_latent_tiles;
+                            noc_async_read_tile(
+                                nq * kexp_nope_tiles * kexp_latent_tiles + kexp_rank * wuk_tiles + t,
+                                wuk_gen,
+                                wuk_write_ptr + (d * kexp_own_rows + r) * wuk_tile_bytes);
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_wuk, wuk_tiles);
+                    }
                     q_pushed = true;
                 }
                 first_k_for_q = false;
@@ -1428,7 +1538,12 @@ void kernel_main() {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(
-                        k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
+                        v_single_slot ? 0 : k_slice.d0,
+                        nv,
+                        k_slice.d2_start,
+                        k_slice.d2_end,
+                        v_col_offset_t,
+                        v_col_offset_t + vDHt);
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
@@ -1473,6 +1588,35 @@ void kernel_main() {
 
                     // Make V available to compute.
                     cb_v.push_back(v_cb_entry_tiles);
+
+                    if constexpr (k_expand) {
+                        // Exchange this K chunk's expanded rows with the peer. Both cores of the pair walk the same
+                        // K chunks and pushes / pops these CBs identically, so the peer's receive slot for this chunk
+                        // sits at the same address as this core's own. Credit first (this core's slot is free), so
+                        // neither core waits on the other in a cycle.
+                        constexpr uint32_t kexp_tiles = kexp_own_rows * Sk_chunk_t;
+                        constexpr uint32_t kexp_bytes = kexp_tiles * k_tile_bytes;
+                        const uint32_t credit_addr = get_semaphore(kexp_credit_sem);
+                        const uint32_t data_addr = get_semaphore(kexp_data_sem);
+                        // Order matters beyond this exchange: compute's QK reads this core's half straight from
+                        // cb_kexp_own without waiting on it, and is safe only because this push of the peer's half
+                        // follows the wait for that half below (the QK waits for cb_kexp_peer).
+                        cb_reserve_back(cb_kexp_peer, kexp_tiles);
+                        const uint32_t slot_addr = get_write_ptr(cb_kexp_peer);
+                        noc_semaphore_inc(get_noc_addr(kexp_peer_x, kexp_peer_y, credit_addr), 1);
+                        cb_wait_front(cb_kexp_own, kexp_tiles);
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_addr), kexp_exchanged + 1);
+                        noc_async_write(
+                            get_read_ptr(cb_kexp_own), get_noc_addr(kexp_peer_x, kexp_peer_y, slot_addr), kexp_bytes);
+                        noc_async_write_barrier();
+                        noc_semaphore_inc(get_noc_addr(kexp_peer_x, kexp_peer_y, data_addr), 1);
+                        cb_pop_front(cb_kexp_own, kexp_tiles);
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_addr), kexp_exchanged + 1);
+                        cb_push_back(cb_kexp_peer, kexp_tiles);
+                        ++kexp_exchanged;
+                    }
                 }
             }
         }
@@ -1498,4 +1642,8 @@ void kernel_main() {
         }
     }
     synchronize_halo();
+    if constexpr (k_expand) {
+        // The exchange's semaphore increments are non-posted atomics: flush them before the kernel exits.
+        noc_async_atomic_barrier();
+    }
 }

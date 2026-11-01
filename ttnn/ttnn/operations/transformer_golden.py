@@ -1175,7 +1175,9 @@ def _ring_runtime_cache_selection(
                 f"KV cache batch index {cache_batch_idx} is outside cache batch size {input_tensor_k.shape[0]}"
             )
         input_tensor_k = input_tensor_k[cache_batch_idx : cache_batch_idx + 1]
-        input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
+        # A batch-1 V beside an indexed K cache (V unrolled for this chunk) is read from batch 0, as the op does.
+        if input_tensor_v.shape[0] != 1:
+            input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
 
     return input_tensor_k, input_tensor_v, actual_kv_length
 
@@ -1290,6 +1292,7 @@ def _ring_joint_golden(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
+    k_expand_weight=None,
     **_execution_options,
 ):
     import torch
@@ -1330,6 +1333,10 @@ def _ring_joint_golden(
     input_tensor_v = input_tensor_v[..., :logical_n, :]
     input_length = input_tensor_q.shape[-2]
     has_joint = joint_tensor_q is not None and joint_tensor_q.shape[-2] > 0
+    if k_expand_weight is not None:
+        if has_joint:
+            raise NotImplementedError("k_expand_weight with joint tensors is not supported by the op")
+        input_tensor_k = _expand_mla_k(input_tensor_k, k_expand_weight)
     if has_joint:
         logical_l = int(_scalar(logical_l, joint_tensor_q.shape[-2])) or joint_tensor_q.shape[-2]
         joint_tensor_q = joint_tensor_q[..., :logical_l, :]
@@ -1361,6 +1368,22 @@ def _ring_joint_golden(
     )
     joint_output = output[..., input_length:, :] if has_joint else output[..., :0, :]
     return output[..., :input_length, :], joint_output, stats
+
+
+def _expand_mla_k(latent_k, k_expand_weight):
+    """MLA expanded K: the shared latent K [B, 1, N, latent + pe] becomes per-head K_h = [c_kv @ W_UK_h^T | k_pe]
+    [B, NH, N, nope + pe], with W_UK [1, NH, nope, latent] (wkv_b1 as stored); the PE columns are shared by all heads.
+    """
+    import torch
+
+    if latent_k.shape[1] != 1:
+        raise ValueError(f"k_expand_weight expects one shared latent K head, got {latent_k.shape[1]}")
+    latent = k_expand_weight.shape[-1]
+    weight = k_expand_weight.to(torch.float32)
+    c_kv = latent_k[..., :latent].to(torch.float32)
+    k_nope = torch.einsum("bknl,hdl->bhnd", c_kv, weight[0])
+    k_pe = latent_k[..., latent:].to(torch.float32).expand(-1, weight.shape[1], -1, -1)
+    return torch.cat([k_nope, k_pe], dim=-1).to(latent_k.dtype)
 
 
 def ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):

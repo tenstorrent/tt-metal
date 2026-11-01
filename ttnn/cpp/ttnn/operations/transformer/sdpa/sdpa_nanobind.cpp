@@ -63,7 +63,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    const std::optional<ttnn::Tensor>& k_expand_weight) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -105,7 +106,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        k_expand_weight);
     return outputs;
 }
 
@@ -659,7 +661,8 @@ void bind_sdpa(nb::module_& mod) {
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
-            joint_strategy (str): Strategy for joint attention. Must be "rear".
+            joint_strategy (str): Strategy for joint attention. Only "rear" is supported. Defaults to "rear";
+                ignored without joint tensors.
             logical_n (int or ttnn.Tensor): The logical sequence length N before sharding across devices.
                 A single-valued int32/uint32 device tensor is read on-device each dispatch, so one captured
                 trace can replay at different lengths (rewrite the tensor between replays). Not supported
@@ -735,6 +738,11 @@ void bind_sdpa(nb::module_& mod) {
                 rows in the tiles past it are not written and hold unspecified values. Same one-element
                 UINT32 contract as slot_id; requires the metadata path (slot_id / kv_actual_isl_tensor on
                 chunked-shaped prefill) and no sliding window. Defaults to None.
+            k_expand_weight (ttnn.Tensor, optional): MLA expanded K. W_UK per head, [1 x nqh x nope x latent] TILE
+                DRAM (wkv_b1 as stored, e.g. [1 x nqh x 128 x 512]). K stays the shared latent [c_kv | k_pe]; each
+                core expands K per head in the kernel, K_h = [c_kv @ W_UK_h^T | k_pe], so Q is un-absorbed
+                [q_nope | q_pe] and QK runs nope + rope wide. nope / 64 must be a power of two (whole tile rows per
+                head-pair core). Requires one shared K head and a separate per-head V.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -774,7 +782,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("persistent_output_buffer_k").noconvert(),
         nb::arg("persistent_output_buffer_v").noconvert(),
-        nb::arg("joint_strategy"),
+        nb::arg("joint_strategy") = "rear",
         nb::arg("logical_n"),
         nb::arg("logical_l") = 0,
         nb::arg("program_config").noconvert(),
@@ -803,7 +811,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("kv_valid_end_tensor").noconvert() = nb::none());
+        nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
+        nb::arg("k_expand_weight").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
