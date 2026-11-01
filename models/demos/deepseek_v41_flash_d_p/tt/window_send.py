@@ -22,13 +22,18 @@ the same layer only, and a whole chunk later at the earliest: in the model every
 next write after the receiver's attention read of the last one (the region is per layer). Built once per (mesh, page
 geometry); dispatched prepared (ttnn.bringup.prepare_program / run_prepared, OV-23): only the region's and the tail's
 addresses change between calls (io tensors [region, tail]).
+
+WINDOW_KV_FORMAT=bf16_tiles (P.26): the same send on a bf16 ROW_MAJOR region (one 1 KiB row a page): the carry is
+128 pages (``carry_pages``), read B pages (B x 1 KiB <= 16 KiB) a NoC barrier into L1 before their packets go out
+(``BATCH``; 1 for the 18496 B bfloat8_b block pages: the P.18 loop as it was).
 """
 
 from __future__ import annotations
 
 import ttnn
 
-PAGES = 4  # 128 rows: the window's carry
+PAGES = 4  # 128 rows: the window's carry (bfloat8_b block pages)
+BATCH_BYTES = 16384  # bf16_tiles (P.26): L1 bytes of the pages read before their packets go out
 
 _KERNEL = r"""
 #include <cstdint>
@@ -44,7 +49,9 @@ constexpr uint32_t SEG = get_compile_time_arg_val(1);   // bytes a packet (whole
 constexpr uint32_t NSEG = get_compile_time_arg_val(2);  // packets a page
 constexpr uint32_t NP = get_compile_time_arg_val(3);    // pages sent
 constexpr uint32_t P0 = get_compile_time_arg_val(4);    // the region's first page sent (its last NP pages)
-constexpr auto r_args = TensorAccessorArgs<5>();
+constexpr uint32_t B = get_compile_time_arg_val(5);     // pages read a NoC barrier (BATCH; 1 when NSEG > 1)
+constexpr uint32_t SLOT = (SEG + 63) & ~63u;            // L1 bytes a page's packet takes in the buffer
+constexpr auto r_args = TensorAccessorArgs<6>();
 constexpr auto t_args = TensorAccessorArgs<r_args.next_compile_time_args_offset()>();
 
 inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
@@ -76,33 +83,44 @@ void kernel_main() {
     const uint64_t arrival = get_noc_addr(px, py, sem);
     constexpr uint32_t total = NP * NSEG;
     uint32_t k = 0;
-    for (uint32_t p = 0; p < NP; ++p) {
+    for (uint32_t p0 = 0; p0 < NP; p0 += B) {
+        const uint32_t nb = (NP - p0) < B ? (NP - p0) : B;
         for (uint32_t s = 0; s < NSEG; ++s) {
             const uint32_t off = s * SEG;
             const uint32_t bytes = (PAGE - off) < SEG ? (PAGE - off) : SEG;
-            const uint64_t src = last ? T.get_noc_addr(p, off) : R.get_noc_addr(P0 + p, off);
-            noc_async_read(src, buf, bytes);
-            noc_async_read_barrier();
-            const uint64_t dst = R.get_noc_addr(p, off);  // the receiver's region (same buffer address)
-            if (++k == total) {
-                hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, arrival, 1, true}, bytes);
-            } else {
-                hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+            for (uint32_t i = 0; i < nb; ++i) {
+                const uint32_t p = p0 + i;
+                const uint64_t src = last ? T.get_noc_addr(p, off) : R.get_noc_addr(P0 + p, off);
+                noc_async_read(src, buf + i * SLOT, bytes);
             }
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(buf, bytes, reinterpret_cast<uint32_t>(hdr));
-            noc_async_writes_flushed();  // the payload and the header left L1 before the next read reuses them
+            noc_async_read_barrier();
+            for (uint32_t i = 0; i < nb; ++i) {
+                const uint64_t dst = R.get_noc_addr(p0 + i, off);  // the receiver's region (same buffer address)
+                if (++k == total) {
+                    hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, arrival, 1, true}, bytes);
+                } else {
+                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                }
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(buf + i * SLOT, bytes, reinterpret_cast<uint32_t>(hdr));
+                noc_async_writes_flushed();  // the header left L1 before the next packet rewrites it
+            }
         }
     }
     conn.close();
     if (last) {  // my last NP pages are chip 0's carry of the next chunk
-        for (uint32_t p = 0; p < NP; ++p) {
+        for (uint32_t p0 = 0; p0 < NP; p0 += B) {
+            const uint32_t nb = (NP - p0) < B ? (NP - p0) : B;
             for (uint32_t s = 0; s < NSEG; ++s) {
                 const uint32_t off = s * SEG;
                 const uint32_t bytes = (PAGE - off) < SEG ? (PAGE - off) : SEG;
-                noc_async_read(R.get_noc_addr(P0 + p, off), buf, bytes);
+                for (uint32_t i = 0; i < nb; ++i) {
+                    noc_async_read(R.get_noc_addr(P0 + p0 + i, off), buf + i * SLOT, bytes);
+                }
                 noc_async_read_barrier();
-                noc_async_write(buf, T.get_noc_addr(p, off), bytes);
+                for (uint32_t i = 0; i < nb; ++i) {
+                    noc_async_write(buf + i * SLOT, T.get_noc_addr(p0 + i, off), bytes);
+                }
                 noc_async_write_barrier();
             }
         }
@@ -137,12 +155,13 @@ def segments(page_bytes: int, payload: int) -> tuple[int, int]:
 
 class WindowSend:
     """The neighbour send of every window layer on one mesh (module docstring). ``__call__(region, tail)``: region
-    [1, 1, pages, page_bytes] uint8 ROW_MAJOR DRAM (the layer's per-chip region), tail [1, 1, 4, page_bytes] (the
-    slot's kept tail of that layer, read and written on the last chip only)."""
+    [1, 1, pages, page_bytes] uint8 ROW_MAJOR DRAM (the layer's per-chip region), tail [1, 1, carry_pages,
+    page_bytes] (the slot's kept tail of that layer, read and written on the last chip only). bf16_tiles (P.26): a
+    bf16 region [1, 1, rows, 512], one row a page (page_bytes 1024, carry_pages 128): shapes checked in bytes."""
 
     CORE = (0, 0)
 
-    def __init__(self, mesh, pages: int, page_bytes: int):
+    def __init__(self, mesh, pages: int, page_bytes: int, carry_pages: int = PAGES):
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan
         from ttnn.bringup.combine_rf.sparse_combine_l1 import route
 
@@ -150,9 +169,12 @@ class WindowSend:
         R, C = tuple(mesh.shape)
         self.n = R * C
         assert self.n > 1, "the window send needs at least two chips"
-        assert pages >= 2 * PAGES, f"a region of {pages} pages: the carry needs a chip's own rows >= 128"
-        self.p0 = pages - PAGES
+        self.carry = carry_pages
+        assert pages >= 2 * carry_pages, f"a region of {pages} pages: the carry needs a chip's own rows >= 128"
+        self.p0 = pages - carry_pages
         self.seg, self.nseg = segments(page_bytes, int(ttnn.get_tt_fabric_max_payload_size_bytes()))
+        slot = -(-self.seg // 64) * 64
+        self.batch = max(1, min(carry_pages, BATCH_BYTES // slot)) if self.nseg == 1 else 1
         torus = _torus(mesh)
         chips, _, (wrap_x, wrap_y) = mesh_plan(mesh, 1, torus)
         cc = ttnn.CoreCoord(*self.CORE)
@@ -162,7 +184,7 @@ class WindowSend:
         sem_addr = int(ttnn.get_global_semaphore_address(self.sem))
         v = mesh.worker_core_from_logical_core(cc)
         node = lambda ch: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))  # noqa: E731
-        self._ct = [self.page_bytes, self.seg, self.nseg, PAGES, self.p0]
+        self._ct = [self.page_bytes, self.seg, self.nseg, carry_pages, self.p0, self.batch]
         self._chips = {}  # q: (program, runtime args without the io addresses, cores)
         self.routes = {}
         for q in range(self.n):
@@ -175,9 +197,9 @@ class WindowSend:
             prog = ttnn.ProgramDescriptor()
             prog.cbs = [
                 ttnn.CBDescriptor(
-                    total_size=self.seg + 64,
+                    total_size=self.batch * slot + 64,
                     core_ranges=crs,
-                    format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, self.seg + 64)],
+                    format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, self.batch * slot + 64)],
                 )
             ]
             dn = node(dst)
@@ -214,9 +236,14 @@ class WindowSend:
             md[rng] = prog
         return md
 
+    @staticmethod
+    def _geom(t: ttnn.Tensor) -> list[int]:
+        """[pages, bytes a page] of a ROW_MAJOR tensor (one last-dim row a page)."""
+        return [int(t.shape[-2]), int(t.shape[-1]) * (2 if t.dtype == ttnn.bfloat16 else 1)]
+
     def __call__(self, region: ttnn.Tensor, tail: ttnn.Tensor) -> None:
-        assert list(region.shape)[-2:] == [self.pages, self.page_bytes], (region.shape, self.pages)
-        assert list(tail.shape)[-2:] == [PAGES, self.page_bytes], tail.shape
+        assert self._geom(region) == [self.pages, self.page_bytes], (region.shape, self.pages)
+        assert self._geom(tail) == [self.carry, self.page_bytes], tail.shape
         io = [region, tail]
         if self._pp is None:
             self._pp = ttnn.bringup.prepare_program(self._build(region, tail), io)

@@ -1267,3 +1267,14 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   record err_* / err_*_official next to the window-KV PCC checks, ungated): ab_mode full, ab_rungs [last],
   ab_positions 51200 / 512000, gate = ladder last + profile + acks + runner contract (the A/B runs both contract tests on
   both sides). X.3 deps += P.26. Leak ~222 GiB before the run (reboot at ~250; this A/B ~10-15 GiB). Run --until P.26.
+- OWNER: queue a token-level check after P.26: FIX.20 LOGIT_KL (held; at release set its gate to test_logit_kl.py and --until FIX.20): device vs official reference, both vs the native golden, KL / top-1 / NLL on s10240 chunk 1 and rung last, limit calib^2 x the official's KL.
+- 14:20 P.26 A/B (bf16_tiles vs bfp8_tiles, same tree): device +2.6 / +3.8 ms, wall +3.7 / +5.8 ms a chunk at 50k / 500k;
+  window region 11.8 vs 6.7 MB a chip; window_kv L24-32 worst share 0.79 vs 0.91; worst overall 0.90 (topk L08) vs 0.91;
+  median 0.67 vs 0.71; final hidden / top-5 unchanged; tt-d-gen's 0.99 last block L35 / L38 passes with bf16 (bfp8 0.9891 /
+  0.9899, waived). Contract window KV in rel L2 (bf16 side): device / official L14 0.206 / 0.175, L20 0.209 / 0.184.
+  My error: P.26 gated acks_early / contract_checks_failed (test_contract.py metrics, not in its gate): removed.
+- 14:50 P.26 ACCEPTED by the overseer under the owner's word (a switch to see what 16 bits buy, the shipped default stays
+  8-bit). The agent made bf16_tiles the default (the perf-pick brief template says the change is the default; framework
+  F241 to fix: a switch-only pick). FIX.20 placed by hand in tasks.yaml (deps P.26; gate ladder last + test_logit_kl.py,
+  kl_mean_* <= limit): its agent first sets the default back to bfp8_tiles, then the KL check (device both formats).
+  overseer.yaml FIX.20 marked placed. Also fixed an unescaped quote I had put in overseer.yaml's FIX.20 text. Run --until FIX.20.

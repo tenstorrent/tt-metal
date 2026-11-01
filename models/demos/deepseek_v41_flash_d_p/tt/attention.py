@@ -117,9 +117,24 @@ def window_bfp8() -> bool:
 
 
 def window_region() -> bool:
-    """WINDOW_KV_FORMAT=bfp8_tiles (P.18): each chip's own window region [carry 128 | its q_rows rows] as bfloat8_b
-    tile rows (``TtWindowAttention.region``), the carry by one neighbour send (tt/window_send.py)."""
-    return settings.get("WINDOW_KV_FORMAT") == "bfp8_tiles"
+    """WINDOW_KV_FORMAT=bfp8_tiles (P.18) or bf16_tiles (P.26): each chip's own window region [carry 128 | its q_rows
+    rows] (``TtWindowAttention.region``), the carry by one neighbour send (tt/window_send.py)."""
+    return settings.get("WINDOW_KV_FORMAT") in ("bfp8_tiles", "bf16_tiles")
+
+
+def region_bf16() -> bool:
+    """WINDOW_KV_FORMAT=bf16_tiles (P.26, owner 2026-11-01): the per-chip region kept in bfloat16, no rounding step:
+    [1, 1, 128 + q_rows, 512] bf16 ROW_MAJOR (one page a row), the carry sent as 128 row pages, read by sparse_sdpa as
+    bf16 rows."""
+    return settings.get("WINDOW_KV_FORMAT") == "bf16_tiles"
+
+
+def region_geometry() -> tuple[int, int, int]:
+    """(pages a region row block of 32 rows has, bytes a page, pages of the 128-row carry) of the per-chip region:
+    bfp8_tiles one 32-row block page; bf16_tiles one row a page."""
+    if region_bf16():
+        return 32, 512 * 2, WINDOW
+    return 1, WINDOW_BLOCK_BYTES, WINDOW // 32
 
 
 SENTINEL = -1  # uploaded as int32 -1, read through uint32: 0xFFFFFFFF, sparse_sdpa's "no key"
@@ -225,7 +240,8 @@ class WindowTables:
             if g.n > 1:
                 from .window_send import WindowSend
 
-                self.send = WindowSend(mesh, self.region_pages(), WINDOW_BLOCK_BYTES)
+                per, page, carry = region_geometry()
+                self.send = WindowSend(mesh, self.region_pages() * per, page, carry)
         if pack_before_gather() and g.sp > 1:
             ns = sorted({n for n in (g.w, g.w // 2) if n % 32 == 0 and g.w % n == 0})
             for n in ns:
@@ -430,9 +446,11 @@ class TtWindowCache:
         # chip 0's region, [1, 1, 4, WINDOW_BLOCK_BYTES] uint8, and the start it is the carry of (None: not valid)
         self.rtail, self.rtail_end = None, None
         if window_region():
+            _, page, carry = region_geometry()  # (bf16_tiles, P.26: [1, 1, 128, 512] bf16 rows)
+            bf = region_bf16()
             self.rtail = ttnn.zeros(
-                [1, 1, WINDOW // 32, WINDOW_BLOCK_BYTES],
-                dtype=ttnn.uint8,
+                [1, 1, carry, page // 2 if bf else page],
+                dtype=ttnn.bfloat16 if bf else ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh,
                 memory_config=DRAM,
@@ -771,9 +789,10 @@ class TtWindowAttention:
         if window_region():
             assert self.INTERLEAVED, "WINDOW_KV_FORMAT=bfp8_tiles reads the rows as stored (ATTN_GLUE=on)"
             assert tables.send is not None, "WINDOW_KV_FORMAT=bfp8_tiles needs a mesh of more than one chip"
+            bf = region_bf16()  # (bf16_tiles, P.26: the region's rows as bf16, one row a page)
             self.region = ttnn.zeros(
-                [1, 1, tables.region_pages(), WINDOW_BLOCK_BYTES],
-                dtype=ttnn.uint8,
+                [1, 1, tables.region_pages() * 32, 512] if bf else [1, 1, tables.region_pages(), WINDOW_BLOCK_BYTES],
+                dtype=ttnn.bfloat16 if bf else ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh,
                 memory_config=DRAM,
@@ -1014,22 +1033,29 @@ class TtWindowAttention:
             dealloc(kv_rm)
         # 2. the chip's own rows -> region rows [128, 128 + q_rows) (pad rows zero, as the served rows)
         om = tables.mask_chip(own, end - start)
-        ttnn.bringup.ckv_bfp4(
-            om,
-            self.region,
-            WINDOW,
-            dtype=ttnn.bfloat8_b,
-            blocks=True,
-            memory_config=DRAM,
-            prepared=prepared,
-            compact=True,
-            max_grid=max_grid(),
-        )
+        bf = self.region.dtype == ttnn.bfloat16
+        if bf:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16 rows as they are (no rounding step)
+            orm = to_rm(om, memory_config=DRAM)
+            self._put_rows(orm, self.region, WINDOW)
+            dealloc(orm)
+        else:
+            ttnn.bringup.ckv_bfp4(
+                om,
+                self.region,
+                WINDOW,
+                dtype=ttnn.bfloat8_b,
+                blocks=True,
+                memory_config=DRAM,
+                prepared=prepared,
+                compact=True,
+                max_grid=max_grid(),
+            )
         if om is not own:
             dealloc(om)
         if own is not kv:
             dealloc(own)
         # 3. chip 0's carry: the kept tail, or the served rows packed into it (start 0: no carry is read)
+        ct = None
         if cache.rtail_end != start and start > 0:
             owner = cache.carry_owner(start)
             if owner is not None and owner[0] == g.n - 1:
@@ -1040,13 +1066,20 @@ class TtWindowAttention:
                     loc + WINDOW,
                     host_alloc.out(self.mesh, "attn.carry_rows", [1, 1, WINDOW, 512], ttnn.bfloat16, rm16),
                 )
-                ct = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
+                if bf:  # (bf16_tiles: the rows into the kept tail as they are)
+                    self._put_rows(sl, cache.rtail, 0)
+                else:
+                    ct = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
                 dealloc(sl)
             else:
                 carry = cache.carry(start)
-                ct = ttnn.to_layout(carry, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(carry))
+                if bf:
+                    self._put_rows(carry, cache.rtail, 0)
+                else:
+                    ct = ttnn.to_layout(carry, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(carry))
                 if carry is not tables.zero_carry:
                     dealloc(carry)
+        if ct is not None:
             ttnn.bringup.ckv_bfp4(
                 ct,
                 cache.rtail,
@@ -1062,6 +1095,13 @@ class TtWindowAttention:
         # 4. the neighbour send; the last chip keeps its own last rows: the next chunk's carry when this one is whole
         tables.send(self.region, cache.rtail)
         cache.rtail_end = end if end == start + g.chunk else None
+
+    @staticmethod
+    def _put_rows(rows_rm: ttnn.Tensor, dst: ttnn.Tensor, row0: int) -> None:
+        """WINDOW_KV_FORMAT=bf16_tiles (P.26): bf16 ROW_MAJOR rows [1, 1, n, 512] (not consumed) at row0 of ``dst`` (the
+        region or the kept tail, bf16 ROW_MAJOR), as they are."""
+        n, w = int(rows_rm.shape[-2]), int(rows_rm.shape[-1])
+        ttnn.bringup.slice_write(rows_rm, dst, [0, 0, row0, 0], [1, 1, row0 + n, w], [1, 1, 1, 1], max_grid=max_grid())
 
     def _put_blocks(self, rows_tile: ttnn.Tensor, row0: int, prefix: ttnn.Tensor | None = None) -> None:
         """WINDOW_KV_FORMAT=bfp8_blocks: bf16 TILE rows (replicated, not consumed) at row0 of the window blocks,
@@ -1298,6 +1338,20 @@ class TtWindowAttention:
                 kv_window=window,
                 max_grid=max_grid(),
             )
+        if table is self.region:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16 region rows; the fork for max_grid
+            # (rule 18: the source's program with every fork option off, its cores inside the cap)
+            return ttnn.bringup.sparse_sdpa(
+                q_rm,
+                table,
+                index,
+                self.d,
+                kv_format=ttnn.bringup.SparseKVFormat.BF16,
+                scale=1.0,
+                k_chunk_size=SDPA_K_CHUNK,
+                compute_kernel_config=self.ckc,
+                attention_sink=self.sink,
+                max_grid=max_grid(),
+            )
         return ttnn.transformer.sparse_sdpa(
             q_rm,
             table,
@@ -1486,7 +1540,8 @@ class TtWindowAttention:
         end = start + s if end is None else int(end)
         cos, sin = self._rope_rows(start, s)
         index = self.tables.index[g.start_class(start)]
-        if self.region is not None:  # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the chip's own region, ROW_BFP8
+        if self.region is not None:  # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the chip's own region, ROW_BFP8 (bf16_tiles,
+            # P.26: bf16 rows)
             self._window_region(kv, start, end, cache)
             table, index = self.region, self.tables.region_index[g.start_class(start)]
         elif self.win8:  # WINDOW_KV_FORMAT=bfp8_blocks: the window blocks, read as kv_format ROW_BFP8

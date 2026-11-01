@@ -2321,8 +2321,51 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 260
-      acks_early: == 0
-      contract_checks_failed: == 0
+- id: FIX.20
+  title: 'LOGIT_KL: token-level accuracy, device vs DeepSeek''s reference, both against the full-precision truth'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.26
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/reference
+  brief:
+    details: 'FIRST (owner 2026-11-01): set WINDOW_KV_FORMAT''s default back to bfp8_tiles in tt/settings.py (P.26 made bf16_tiles
+      the default by the perf-pick convention; the owner wanted a switch only, the shipped window KV stays 8-bit; say so in
+      the setting''s text); that is the only model change. THEN: OWNER 2026-11-01: does the device''s ~1.4-1.8x of DeepSeek''s
+      hidden-state error (err_* shares 0.70 median, 0.91 worst) matter for the tokens? Measure it at the output, no other
+      model change. The goldens (golden_full/galaxy_8x4, native fp32) keep final_norm [5120, 5120] and tokens [5120] for every
+      chunk (model.safetensors); logits = final_norm @ the lm head (129280 vocab; CPU in row blocks, fp32). Write models/demos/deepseek_v41_flash_d_p/tests/bringup/test_logit_kl.py:
+      for (a) rung s10240 chunk 1 (positions 5120-10239, from 0) and (b) rung last (s56320''s last chunk, 51200-56319, prefix
+      from the golden as the ladder runs it): (1) the device''s final_norm for all 5120 positions at the shipped settings
+      (one device run per rung, as test_ladder runs it); (2) DeepSeek''s reference at numerics official (bf16, its fp8 / fp4
+      quantizers) on the same chunk with the same golden prefix (CPU; cache it next to the golden as <rung>-official/final_norm.safetensors
+      with a content hash, so it is made once; say how long it took). Against the native golden, for x in {device, official},
+      per position: KL(p_golden || p_x), top-1 agreement, top-5 overlap, and the next-token NLL on the real text (tokens shifted
+      by one) for golden, device and official. Record metrics kl_mean_<rung>, kl_p99_<rung>, top1_agree_<rung>, nll_<rung>
+      for device, and the same with suffix _official; the limit kl_mean_<rung>_limit = e2e.calib^2 x the official''s kl_mean
+      (KL ~ rel^2, as F135''s PCC convention; no fixed number, F138); gate metrics kl_mean_* <= limit. The rest recorded,
+      not gated. Long CPU or device jobs through devjob (start / wait), never killed; agent rules 18 / 19; one device process
+      at a time; no fork regression suites. Run the device side twice per rung: the shipped default and DS41_WINDOW_KV_FORMAT=bf16_tiles
+      (P.26''s switch; metrics with suffix _wkv16, recorded, not gated), so the window-KV format is also judged at the tokens.
+      Report a table: device (both formats) vs official for both rungs, and the 20 worst positions (token, KL, golden top-1
+      vs device top-1).'
+    gate_tasks:
+    - P.26
+  gate:
+    cmd: BRINGUP_TASK=P.26 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_logit_kl.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      kl_mean_s10240: <= limit
+      kl_mean_last: <= limit
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -2342,6 +2385,7 @@ tasks:
   - P.23
   - P.24
   - P.26
+  - FIX.20
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh

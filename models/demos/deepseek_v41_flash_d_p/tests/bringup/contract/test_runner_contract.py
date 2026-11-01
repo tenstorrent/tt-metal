@@ -26,7 +26,8 @@ own code (tt-d-gen tools/launch_harness/tables.py, kv_manager/tools/kv_dump_comp
   - each slot's final [0, end) of every served cache vs the golden, kv_dump_compare per-channel PCC >= max(0.93 server,
     calib x the reference's drift); a dumped layer's window KV over every position of the range against the official
     reference's drift on the same rows and channel (caches.GoldenKV(window="drift"), FIX.19); pad rows of each slot's
-    last record zero
+    last record zero. P.26 (owner 2026-11-01, never gated): every window-KV check also records its relative L2 error,
+    and the official reference's on the same rows where it has them (metrics err_runner_wkv_* / *_official)
   - slot A after turn 1 vs the golden; its reused prefix [0, resident) byte-identical at the end; its last block
     [resident, turn 1) PCC >= 0.99 (validation.py:55-61 comparison_ranges)
   - the pulled-back chunk: rows below its start unchanged, layer 0's window_kv rewritten with the same bytes
@@ -305,6 +306,7 @@ def kv_checks(
                 x, _ = C.valid_and_pad(a, cfg, layer, prefix, t1)
                 y, _ = C.valid_and_pad(finals[(slot_a, cfg["name"])], cfg, layer, prefix, t1)
                 fails += C.pcc_failures(kvc, cfg, y, x, layer, R.LAST_BLOCK_PCC, f"slot {slot_a} last block")
+                gk.note_err("lastblock", cfg, layer, y, x, f"slot {slot_a} last block")  # P.26, never gated
             f = C.bytes_equal(a, finals[(slot_a, cfg["name"])], cfg, cfg["layers"], 0, prefix)
             fails += [f"slot {slot_a} reused prefix [0, {prefix}) changed after turn 1: {x}" for x in f]
             if cfg["name"] == C.CONFIG_ORDER[0]:  # the server's bytecmp on the same range
@@ -334,6 +336,8 @@ def kv_checks(
     fails += gk.coverage_failures(C.served_configs(layers), "golden")
     log(f"golden comparison per config and mode: {gk.coverage_summary()}")
     log(f"window KV of the dumped layers, worst range per channel (device pcc vs limit): {gk.drift_summary()}")
+    # P.26 (owner 2026-11-01): the relative L2 error next to every window-KV PCC check, recorded, never gated
+    log(f"window KV relative error, worst per check kind / layer / channel: {gk.record_errors('runner')}")
     return fails
 
 

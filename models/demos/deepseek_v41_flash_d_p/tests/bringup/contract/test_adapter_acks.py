@@ -19,7 +19,9 @@ through the table over UMD, as the KV Manager does. Pass:
   - at each ack: the chunk's rows of every cache the layer owns vs the golden (caches.golden_failures: every row of the
     compressed caches; a dumped layer's window KV over every position of the range, per channel against calib x the
     official reference's drift on the same rows (caches.GoldenKV(window="drift"), FIX.19, owner 2026-11-01; it
-    replaces decision B's last 128 rows vs the ring's drift); another layer's window KV at the positions its ring
+    replaces decision B's last 128 rows vs the ring's drift; P.26: every window-KV check also records its relative L2
+    error, and the official reference's on the same rows where it has them, as metrics err_acks_wkv_* /
+    err_acks_wkv_*_official, never gated); another layer's window KV at the positions its ring
     snapshots hold; every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.93), the pad
     rows of the last record zero; the same records re-read after the chunk returns and the mesh syncs hold the same
     bytes (an ack before the KV is in DRAM ships stale KV: K-71)
@@ -136,6 +138,7 @@ def test_adapter_acks(mesh_device, tmp_path):
             a, _ = C.valid_and_pad(first, cfg, layer, prefix, t1)
             b, _ = C.valid_and_pad(final, cfg, layer, prefix, t1)
             fails += C.pcc_failures(kvc, cfg, b, a, layer, R.LAST_BLOCK_PCC, f"slot 0 last block [{prefix}, {t1})")
+            gk.note_err("lastblock", cfg, layer, b, a, f"slot 0 last block [{prefix}, {t1})")  # P.26, never gated
     if reader.replica_mismatch:
         fails.append(
             f"device-group replicas differ at {len(reader.replica_mismatch)} records: {reader.replica_mismatch[:3]}"
@@ -143,5 +146,9 @@ def test_adapter_acks(mesh_device, tmp_path):
     fails += gk.coverage_failures(cfgs, "golden")
     print(f"[adapter acks] golden comparison per config and mode: {gk.coverage_summary()}")
     print(f"[adapter acks] window KV of the dumped layers, worst range per channel: {gk.drift_summary()}")
+    # P.26 (owner 2026-11-01): the relative L2 error next to every window-KV PCC check, recorded, never gated
+    print(
+        f"[adapter acks] window KV relative error, worst per check kind / layer / channel: {gk.record_errors('acks')}"
+    )
     print(f"[adapter acks] layers {layers}, configs {[c['name'] for c in cfgs]}: {len(fails)} failures")
     assert not fails, "\n".join(fails[:40])

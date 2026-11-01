@@ -133,6 +133,11 @@ class GoldenKV:
         self.window = window
         self._official = None
         self.drift_log = []  # (what, layer, channel, device pcc, limit, official pcc) of every "drift" comparison
+        # P.26 (owner 2026-11-01, diagnostics, never gated): next to every window-KV PCC check the relative L2 error
+        # ||device - ref|| / ||ref|| per channel, and where the reference is the golden and the official reference has
+        # the rows (official_kv.py: the dumped layers), its relative error on the same rows:
+        # (kind, layer, channel, device err, official err or None, what, rows)
+        self.err_log = []
         from models.demos.common.bringup.reference.golden import Golden
 
         s = R._spec()
@@ -247,6 +252,55 @@ class GoldenKV:
             out[name] = (max(R.PREFILL_GOLDEN_PCC, E.pcc_limit({"k": e}, "k")), e["pcc"])
         return out
 
+    def official_rows(self, layer: int, lo_tok: int, hi_tok: int) -> torch.Tensor | None:
+        """The official reference's window KV of positions [lo_tok, hi_tok) (official_kv.py), None without it."""
+        from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import official_kv
+
+        if self._official is None:
+            try:
+                self._official = official_kv.load(self.g)
+            except (FileNotFoundError, ValueError) as e:  # (diagnostics only: the drift mode's limits need it)
+                print(f"[P.26 diagnostics] no official window KV: {e}")
+                self._official = {}
+        t = self._official.get(layer)
+        return None if t is None else t[lo_tok:hi_tok].float()
+
+    def note_err(
+        self, kind: str, cfg: dict, layer: int, got: np.ndarray, want: np.ndarray, what: str, official=None
+    ) -> None:
+        """P.26 diagnostics (never gated): the relative L2 error of ``got`` vs ``want`` per channel (kv_dump_compare's
+        nope / pe split), and of ``official`` (rows on the same positions as ``want``, or None) vs ``want``."""
+        if cfg["kind"] != "window" or got.shape != want.shape or not got.size:
+            return
+        off = None if official is None else np.asarray(official, dtype=np.float32)
+        for ch, a, b in channels(cfg, want.shape[1]):
+            w = want[:, a:b]
+            dev = rel_err(got[:, a:b], w)
+            oe = rel_err(off[:, a:b], w) if off is not None and off.shape == want.shape else None
+            self.err_log.append((kind, layer, ch, dev, oe, what, int(want.shape[0])))
+
+    def record_errors(self, test: str) -> str:
+        """P.26: per (kind, layer, channel) the largest device relative error of the test's window-KV checks as metric
+        ``err_<test>_wkv_<kind>_L<ll>_<channel>`` and the official reference's on the same rows as ``..._official``
+        (recorded, never gated: no limit, no threshold). Returns a one-line summary."""
+        from models.demos.common.bringup.core import metrics
+
+        worst = {}
+        for kind, layer, ch, dev, oe, what, n in self.err_log:
+            k = (kind, layer, ch)
+            if k not in worst or dev > worst[k][0]:
+                worst[k] = (dev, oe, what, n)
+        parts = []
+        for (kind, layer, ch), (dev, oe, what, n) in sorted(worst.items()):
+            name = f"err_{test}_wkv_{kind}_L{layer:02d}_{ch}"
+            metrics.record(name, dev, what=what, rows=n)
+            txt = f"{kind} L{layer:02d} {ch} {dev:.5f}"
+            if oe is not None:
+                metrics.record(name + "_official", oe, what=what, rows=n)
+                txt += f" (official {oe:.5f})"
+            parts.append(txt)
+        return "; ".join(parts)
+
     def note(self, cfg: dict, layer: int, mode: str, n: int) -> None:
         c = self.coverage.setdefault((cfg["name"], layer), {})
         c[mode] = c.get(mode, 0) + int(n)
@@ -281,6 +335,20 @@ class GoldenKV:
             for mode, n in modes.items():
                 by.setdefault(f"{name}:{mode}", []).append(f"{layer}({n})")
         return "; ".join(f"{k} layers(rows) {' '.join(v)}" for k, v in by.items())
+
+
+def channels(cfg: dict, width: int) -> list[tuple[str, int, int]]:
+    """kv_dump_compare.tensor_pcc's channels of a config: ("all", 0, width) or nope / pe split at cfg["split"]."""
+    split = cfg["split"]
+    return [("all", 0, width)] if not split else [("nope", 0, split), ("pe", split, width)]
+
+
+def rel_err(got: np.ndarray, want: np.ndarray) -> float:
+    """||got - want|| / ||want|| in float64 (0 when both are zero, inf when only want is)."""
+    g, w = np.asarray(got, dtype=np.float64), np.asarray(want, dtype=np.float64)
+    den = float(np.linalg.norm(w))
+    num = float(np.linalg.norm(g - w))
+    return num / den if den > 0 else (0.0 if num == 0 else float("inf"))
 
 
 # ---------------------------------------------------------------- records
@@ -340,6 +408,7 @@ def golden_failures(kvc, gk: GoldenKV, cfg: dict, got: np.ndarray, layer: int, l
         if got.shape != want.shape:
             return [f"{what}: {cfg['name']} layer {layer}: shape {got.shape} vs golden {want.shape}"]
         lim = gk.limits(kvc, cfg, layer, lo, hi)
+        gk.note_err("drift", cfg, layer, got, want, what, gk.official_rows(layer, lo, hi))  # P.26 (never gated)
         out = []
         for f in kvc.tensor_pcc(got.astype(np.float32), want.astype(np.float32), layer, 0.0, cfg["split"]):
             thr, off = lim[f["channel"]]
@@ -352,11 +421,17 @@ def golden_failures(kvc, gk: GoldenKV, cfg: dict, got: np.ndarray, layer: int, l
         return out
     if mode == "full":
         gk.note(cfg, layer, mode, want.shape[0])
+        if cfg["kind"] == "window":  # P.26 diagnostics (never gated)
+            off = gk.official_rows(layer, lo, hi) if gk.dumped(layer) else None
+            gk.note_err("full", cfg, layer, got, want, what, off)
         return pcc_failures(kvc, cfg, got, want, layer, thr, what)
     a, b = rows_of(cfg, lo, hi)
     if got.shape[0] != b - a:
         return [f"{what}: {cfg['name']} layer {layer}: {got.shape[0]} rows, expected {b - a}"]
     gk.note(cfg, layer, mode, len(idx))
+    # P.26 diagnostics (never gated): the official reference's rows exist only for the dumped layers (official_kv.py)
+    off = gk.official_rows(layer, lo, hi)[idx] if gk.dumped(layer) and len(idx) else None
+    gk.note_err("ring" if not gk.dumped(layer) else "last", cfg, layer, got[idx], want, what, off)
     return pcc_failures(kvc, cfg, got[idx], want, layer, thr, f"{what} ({mode} {len(idx)} rows)")
 
 
