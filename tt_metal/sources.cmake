@@ -125,6 +125,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
     api/tt-metalium/experimental/byte_based_tensor_transfers.hpp
     api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
+    api/tt-metalium/experimental/host_bfp_conversion.hpp
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp
     api/tt-metalium/experimental/tensor_prefetcher.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
@@ -163,6 +164,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
     api/internal/graph_function_abort.hpp
+    api/internal/l1_ecc_halt.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp

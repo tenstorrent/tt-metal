@@ -20,6 +20,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/packet_header_types.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 
 namespace tt::tt_fabric {
@@ -76,27 +77,6 @@ uint32_t FabricContext::get_max_2d_action_map_bytes_from_topology(const ControlP
     return max_bytes;
 }
 
-uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const {
-    // Precondition: max_hops validated by compute_packet_specifications()
-
-    // Base routing word supports 16 hops; extension words add 16 hops each
-    // ExtensionWords=0: 1-16 hops (48B header)
-    // ExtensionWords=1: 17-32 hops (64B header)
-
-    return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
-}
-
-// Precondition: required_route_bytes is validated by compute_packet_specifications().
-uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const {
-    for (const auto& tier : ROUTING_2D_HEADER_TIERS) {
-        if (required_route_bytes <= tier.max_action_map_bytes) {
-            return tier.route_buffer_size;
-        }
-    }
-
-    return Limits::MAX_2D_ACTION_MAP_BYTES;
-}
-
 void FabricContext::compute_packet_specifications(
     const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch) {
     // Query topology to determine optimal header sizes
@@ -142,6 +122,9 @@ void FabricContext::compute_packet_specifications(
             max_1d_hops_,
             Limits::MAX_1D_HOPS);
 
+        static_assert(
+            compute_1d_pkt_hdr_extension_words(Limits::MAX_1D_HOPS) <= PKT_HDR_1D_EXTENSION_WORDS.back(),
+            "a 1D header must have enough extension words for the most hops the memory map allows");
         routing_1d_extension_words_ = compute_1d_pkt_hdr_extension_words(max_1d_hops_);
     }
 
@@ -162,53 +145,26 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
+        case tt::tt_fabric::FabricConfig::MGD_DEFAULT:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
 }
 
-size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
-    // Use explicit template instantiation for compile-time type safety
-    switch (extension_words) {
-        case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
-        case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
-        case 2: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<2>);
-        case 3: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<3>);
-        default: TT_THROW("Unsupported extension words: {}", extension_words);
-    }
-}
-
-size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
-    // Use explicit template instantiation for compile-time type safety
-    // Only max-capacity tiers per header size (20, 36, 52, 68) to avoid switch bloat
-    switch (route_buffer_size) {
-        case 20: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<20>);  // 80B header, max capacity
-        case 36: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<36>);  // 96B header, max capacity
-        case 52: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<52>);  // 112B header, max capacity
-        case Limits::MAX_2D_ACTION_MAP_BYTES:
-            return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<Limits::MAX_2D_ACTION_MAP_BYTES>);
-        default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
-    }
-}
-
-size_t FabricContext::get_udm_header_size(uint32_t route_buffer_size) const {
-    // UDM header = base 2D header + UDM control fields
-    return get_2d_header_size(route_buffer_size) + sizeof(tt::tt_fabric::UDMControlFields);
-}
-
 size_t FabricContext::compute_packet_header_size_bytes(const ControlPlane& control_plane) const {
-    bool udm_enabled = control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    const PacketHeaderConfig config{
+        .is_2d = is_2D_routing_enabled_,
+        .extension_words = routing_1d_extension_words_,
+        .route_buffer_size = routing_2d_buffer_size_};
+    const size_t header_size =
+        visit_packet_header_type(config, []<typename Header>(std::type_identity<Header>) { return sizeof(Header); });
 
-    if (udm_enabled) {
+    if (control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED) {
         TT_FATAL(is_2D_routing_enabled_, "UDM mode only supports 2D routing");
-        return get_udm_header_size(routing_2d_buffer_size_);
+        // The UDM header is the 2D header followed by its control fields
+        return header_size + sizeof(tt::tt_fabric::UDMControlFields);
     }
-
-    if (is_2D_routing_enabled_) {
-        return get_2d_header_size(routing_2d_buffer_size_);
-    }
-
-    return get_1d_header_size(routing_1d_extension_words_);
+    return header_size;
 }
 
 size_t FabricContext::compute_max_payload_size_bytes(const tt_metal::Hal& hal, tt::ARCH arch) const {

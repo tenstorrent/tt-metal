@@ -14,7 +14,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <numeric>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -117,13 +116,6 @@ bool check_connection_requested(
 [[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
-
-struct MeshFabricConfigObservation {
-    MeshId mesh_id;
-    uint32_t rank;
-    uint32_t mesh_host_rank;
-    FabricConfig fabric_config;
-};
 
 }  // namespace
 
@@ -320,78 +312,13 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 }
 
-LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
-    // When unset, use UNSET sentinel value.
-    const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
-    const MeshHostRankId host_rank = (host_rank_str == nullptr)
-                                         ? MESH_HOST_RANK_UNSET
-                                         : MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
-
-    // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
-    // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    if (mesh_id_str == nullptr) {
-        const auto& ctx = this->distributed_context_.get();
-        TT_FATAL(
-            *ctx.size() == 1 && *ctx.rank() == 0,
-            "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
-        const auto all_mesh_ids = this->mesh_graph_->get_all_mesh_ids();
-        std::vector<MeshId> local_mesh_ids;
-        local_mesh_ids.reserve(all_mesh_ids.size());
-        for (const auto& mesh_id : all_mesh_ids) {
-            // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
-            const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
-            TT_FATAL(
-                host_ranks.size() == 1 && *host_ranks.values().front() == 0,
-                "Mesh {} has {} host ranks, expected 1",
-                *mesh_id,
-                host_ranks.size());
-            local_mesh_ids.push_back(mesh_id);
-        }
-        TT_FATAL(!local_mesh_ids.empty(), "No local meshes found.");
-        return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = MeshHostRankId{0}};
-    }
-
-    // Otherwise, use the value from the environment variable.
-    auto local_mesh_binding = LocalMeshBinding{
-        .mesh_ids = {MeshId{static_cast<unsigned int>(std::stoi(mesh_id_str))}}, .host_rank = host_rank};
-
-    log_debug(
-        tt::LogDistributed,
-        "Local mesh binding: mesh_id: {}, host_rank: {}",
-        local_mesh_binding.mesh_ids[0],
-        local_mesh_binding.host_rank);
-
-    // Validate the local mesh binding exists in the mesh graph descriptor
-    const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
-    TT_FATAL(
-        std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) != mesh_ids.end(),
-        "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
-        *local_mesh_binding.mesh_ids[0]);
-
-    // Validate host rank (only if mesh_id is valid)
-    const auto& host_ranks = this->mesh_graph_->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
-    if (host_rank_str == nullptr) {
-        local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
-    } else {
-        TT_FATAL(
-            std::find(host_ranks.begin(), host_ranks.end(), local_mesh_binding.host_rank) != host_ranks.end(),
-            "Invalid TT_MESH_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor",
-            *local_mesh_binding.host_rank);
-    }
-
-    return local_mesh_binding;
-}
-
 void ControlPlane::initialize_distributed_contexts() {
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (*global_context->size() == 1) {
         host_local_context_ = global_context;
-        std::transform(
-            local_mesh_binding_.mesh_ids.begin(),
-            local_mesh_binding_.mesh_ids.end(),
-            std::inserter(distributed_contexts_, distributed_contexts_.end()),
-            [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
+        for (const auto& mesh_id : this->owned_mesh_ids()) {
+            distributed_contexts_.emplace(mesh_id, global_context);
+        }
         return;
     }
 
@@ -409,30 +336,28 @@ void ControlPlane::initialize_distributed_contexts() {
         }
     }
 
-    // Create a sub-context for each mesh-host-rank pair.
-    for (const auto local_mesh_id : local_mesh_binding_.mesh_ids) {
-        auto mesh_host_ranks = mpi_ranks_.find(local_mesh_id);
-        TT_FATAL(mesh_host_ranks != mpi_ranks_.end(), "Mesh {} not found in mpi_ranks.", local_mesh_id);
-        if (mesh_host_ranks->second.size() == 1) {
-            distributed_contexts_.emplace(local_mesh_id, host_local_context_);
-        } else {
-            std::vector<int> mpi_neighbors;
-            mpi_neighbors.reserve(mesh_host_ranks->second.size());
-            // Sort mesh_host_ranks->second for deterministic iteration across hosts
-            std::vector<std::pair<MeshHostRankId, tt::tt_metal::distributed::multihost::Rank>> sorted_host_ranks(
-                mesh_host_ranks->second.begin(), mesh_host_ranks->second.end());
-            std::sort(sorted_host_ranks.begin(), sorted_host_ranks.end(), [](const auto& a, const auto& b) {
-                return a.first.get() < b.first.get();
-            });
-            std::transform(
-                sorted_host_ranks.begin(),
-                sorted_host_ranks.end(),
-                std::back_inserter(mpi_neighbors),
-                [](const auto& p) { return p.second.get(); });
-            std::sort(mpi_neighbors.begin(), mpi_neighbors.end());
-            distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
-        }
+    // Create the sub-context for the local mesh's host ranks.
+    const auto local_mesh_id = config_.mesh_id;
+    auto mesh_host_ranks = mpi_ranks_.find(local_mesh_id);
+    TT_FATAL(mesh_host_ranks != mpi_ranks_.end(), "Mesh {} not found in mpi_ranks.", local_mesh_id);
+    if (mesh_host_ranks->second.size() == 1) {
+        distributed_contexts_.emplace(local_mesh_id, host_local_context_);
+        return;
     }
+    std::vector<int> mpi_neighbors;
+    mpi_neighbors.reserve(mesh_host_ranks->second.size());
+    // Sort mesh_host_ranks->second for deterministic iteration across hosts
+    std::vector<std::pair<MeshHostRankId, tt::tt_metal::distributed::multihost::Rank>> sorted_host_ranks(
+        mesh_host_ranks->second.begin(), mesh_host_ranks->second.end());
+    std::sort(sorted_host_ranks.begin(), sorted_host_ranks.end(), [](const auto& a, const auto& b) {
+        return a.first.get() < b.first.get();
+    });
+    std::transform(
+        sorted_host_ranks.begin(), sorted_host_ranks.end(), std::back_inserter(mpi_neighbors), [](const auto& p) {
+            return p.second.get();
+        });
+    std::sort(mpi_neighbors.begin(), mpi_neighbors.end());
+    distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
@@ -472,21 +397,37 @@ void ControlPlane::init_control_plane(
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
-    auto fabric_config = this->get_fabric_config();
 
     // Number of hosts
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
-    // Create mesh_graph first
-    this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
+    const MeshGraphDescriptor mgd(std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
+
+    // Resolve MGD_DEFAULT to this mesh's declared default before gathering, so every peer sees a concrete config.
+    if (config_.fabric_config == FabricConfig::MGD_DEFAULT) {
+        config_.fabric_config = mgd.default_fabric_config_from_dim_types(config_.mesh_id);
+    }
+
+    // Gather every rank's FabricConfigDescriptor once (reused by validate_fabric_config_compatibility()), then build
+    // each mesh's config from it. This is what lets the fabric config differ per mesh while every rank still builds an
+    // identical mesh graph.
+    this->gather_fabric_config_descriptors();
+    std::map<MeshId, FabricConfig> per_mesh_fabric_config;
+    for (const auto& descriptor : gathered_fabric_configs_) {
+        per_mesh_fabric_config[descriptor.mesh_id] = descriptor.fabric_config;
+    }
+    this->mesh_graph_ = std::make_unique<MeshGraph>(mgd, per_mesh_fabric_config, cluster.is_ubb_galaxy());
     this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd = tt::tt_metal::run_physical_system_discovery(
         *driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+
+    // Validate this process's own binding (invalid TT_MESH_ID / TT_MESH_HOST_RANK reports first), then check every
+    // rank's binding and fabric settings, before any inter-mesh setup or router launch.
+    this->validate_fabric_config_compatibility();
 
     // Before the mapper: when a factory descriptor is configured, that is what the mesh is placed on.
     this->ingest_factory_system_descriptor();
@@ -503,7 +444,8 @@ void ControlPlane::init_control_plane(
             this->distributed_context_.get(),
             *this->mesh_graph_,
             this->descriptor_to_map_on(),
-            this->local_mesh_binding_,
+            config_.mesh_id,
+            config_.host_rank,
             logical_mesh_chip_id_to_physical_chip_id_mapping->get(),
             topology_mapping_timeout,
             this->physical_system_descriptor_.get());
@@ -546,7 +488,8 @@ void ControlPlane::init_control_plane(
             this->distributed_context_.get(),
             *this->mesh_graph_,
             this->descriptor_to_map_on(),
-            this->local_mesh_binding_,
+            config_.mesh_id,
+            config_.host_rank,
             pinning_groups,
             topology_mapping_timeout,
             this->physical_system_descriptor_.get());
@@ -577,10 +520,6 @@ void ControlPlane::init_control_plane(
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
-
-    // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
-    // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_across_ranks();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -615,6 +554,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
+    // MGD_DEFAULT is allowed: it is resolved below from the mesh graph auto-discovery generates.
 
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
@@ -641,10 +581,21 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Reliability mode is obtained from MetalContext inside the function
     this->mesh_graph_ = std::make_unique<tt::tt_fabric::MeshGraph>(
         tt::tt_fabric::TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-            this->cluster_.get(), this->descriptor_to_map_on(), this->fabric_config_, this->fabric_reliability_mode_));
+            this->cluster_.get(),
+            this->descriptor_to_map_on(),
+            this->config_.fabric_config,
+            this->config_.reliability_mode));
     this->validate_system_health_against_mesh_graph_policy();
 
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    // Validate this process's binding against the just-generated mesh graph. Single-host, so there are no peer
+    // descriptors and validate_fabric_config_compatibility() runs only its local-binding checks.
+    this->validate_fabric_config_compatibility();
+
+    // Resolve MGD_DEFAULT from the descriptor auto-discovery just generated.
+    if (config_.fabric_config == FabricConfig::MGD_DEFAULT && this->mesh_graph_->has_mesh_graph_descriptor()) {
+        config_.fabric_config =
+            this->mesh_graph_->get_mesh_graph_descriptor().default_fabric_config_from_dim_types(config_.mesh_id);
+    }
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -676,7 +627,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
         this->distributed_context_.get(),
         *this->mesh_graph_,
         this->descriptor_to_map_on(),
-        this->local_mesh_binding_,
+        config_.mesh_id,
+        config_.host_rank,
         pinning_groups,
         topology_mapping_timeout,
         this->physical_system_descriptor_.get());
@@ -705,10 +657,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
-
-    // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
-    // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_across_ranks();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -743,22 +691,8 @@ ControlPlane::ControlPlane(
     const ::tt::llrt::RunTimeOptions& rtoptions,
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-    FabricConfig fabric_config,
-    FabricReliabilityMode fabric_reliability_mode,
-    FabricTensixConfig fabric_tensix_config,
-    FabricUDMMode fabric_udm_mode,
-    FabricRouterConfig fabric_router_config,
-    FabricManagerMode fabric_manager) :
-    cluster_(cluster),
-    rtoptions_(rtoptions),
-    hal_(hal),
-    distributed_context_(distributed_context),
-    fabric_config_(fabric_config),
-    fabric_reliability_mode_(fabric_reliability_mode),
-    fabric_tensix_config_(fabric_tensix_config),
-    fabric_udm_mode_(fabric_udm_mode),
-    fabric_router_config_(fabric_router_config),
-    fabric_manager_(fabric_manager) {
+    const tt_metal::FabricConfigDescriptor& config) :
+    cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane_auto_discovery();
     initialize_fabric_context();
 }
@@ -769,22 +703,8 @@ ControlPlane::ControlPlane(
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
-    FabricConfig fabric_config,
-    FabricReliabilityMode fabric_reliability_mode,
-    FabricTensixConfig fabric_tensix_config,
-    FabricUDMMode fabric_udm_mode,
-    FabricRouterConfig fabric_router_config,
-    FabricManagerMode fabric_manager) :
-    cluster_(cluster),
-    rtoptions_(rtoptions),
-    hal_(hal),
-    distributed_context_(distributed_context),
-    fabric_config_(fabric_config),
-    fabric_reliability_mode_(fabric_reliability_mode),
-    fabric_tensix_config_(fabric_tensix_config),
-    fabric_udm_mode_(fabric_udm_mode),
-    fabric_router_config_(fabric_router_config),
-    fabric_manager_(fabric_manager) {
+    const tt_metal::FabricConfigDescriptor& config) :
+    cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
     initialize_fabric_context();
 }
@@ -796,147 +716,218 @@ ControlPlane::ControlPlane(
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-    FabricConfig fabric_config,
-    FabricReliabilityMode fabric_reliability_mode,
-    FabricTensixConfig fabric_tensix_config,
-    FabricUDMMode fabric_udm_mode,
-    FabricRouterConfig fabric_router_config,
-    FabricManagerMode fabric_manager) :
-    cluster_(cluster),
-    rtoptions_(rtoptions),
-    hal_(hal),
-    distributed_context_(distributed_context),
-    fabric_config_(fabric_config),
-    fabric_reliability_mode_(fabric_reliability_mode),
-    fabric_tensix_config_(fabric_tensix_config),
-    fabric_udm_mode_(fabric_udm_mode),
-    fabric_router_config_(fabric_router_config),
-    fabric_manager_(fabric_manager) {
+    const tt_metal::FabricConfigDescriptor& config) :
+    cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     initialize_fabric_context();
 }
 
-void ControlPlane::validate_fabric_config_across_ranks() {
-    using tt::tt_metal::distributed::multihost::ReduceOp;
+void ControlPlane::gather_fabric_config_descriptors() {
+    // Gather every rank's FabricConfigDescriptor (raw bytes, indexed by sending rank). Every rank takes part, including
+    // DISABLED ones, so the collective stays symmetric and DISABLED is cross-checked in the validate step.
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
-    const auto rank = static_cast<uint32_t>(*distributed_context.rank());
-
-    // Source the local mesh ids and per-mesh host rank from the topology mapper (the actual mapped
-    // values) rather than from local_mesh_binding_, whose host_rank can be MESH_HOST_RANK_UNSET when a
-    // rank binding omits mesh_host_rank -- the topology mapper derives it from the mesh graph.
-    // See get_local_host_rank_id_binding().
-    const auto local_mesh_ids = this->get_local_mesh_id_bindings();
-    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found for FabricConfig validation");
-
-    static_assert(
-        std::is_trivially_copyable_v<MeshFabricConfigObservation>,
-        "MeshFabricConfigObservation is exchanged as raw bytes between ranks");
-
-    uint32_t local_binding_count = static_cast<uint32_t>(local_mesh_ids.size());
-    uint32_t max_binding_count = 0;
-    distributed_context.all_reduce(
-        ttsl::Span<uint32_t>(&local_binding_count, 1), ttsl::Span<uint32_t>(&max_binding_count, 1), ReduceOp::MAX);
-
-    std::vector<MeshFabricConfigObservation> local_observations(max_binding_count);
-    for (uint32_t i = 0; i < local_binding_count; ++i) {
-        const auto mesh_host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[i]);
-        TT_FATAL(
-            mesh_host_rank.has_value(),
-            "Could not determine local host rank for mesh {} from the topology mapper",
-            *local_mesh_ids[i]);
-        local_observations[i] = MeshFabricConfigObservation{
-            .mesh_id = local_mesh_ids[i],
-            .rank = rank,
-            .mesh_host_rank = *mesh_host_rank.value(),
-            .fabric_config = this->fabric_config_};
-    }
-
-    std::vector<uint32_t> binding_counts(world_size);
+    gathered_fabric_configs_.assign(world_size, tt_metal::FabricConfigDescriptor{});
     distributed_context.all_gather(
-        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_binding_count), sizeof(uint32_t)),
-        ttsl::as_writable_bytes(ttsl::Span<uint32_t>{binding_counts.data(), binding_counts.size()}));
+        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{&this->config_, 1}),
+        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{
+            gathered_fabric_configs_.data(), gathered_fabric_configs_.size()}));
+}
 
-    std::vector<MeshFabricConfigObservation> gathered_observations(world_size * max_binding_count);
+void ControlPlane::validate_fabric_config_compatibility() {
+    const auto& distributed_context = this->distributed_context_.get();
+
+    // Validate this process's own mesh binding against the built mesh graph first, so an invalid TT_MESH_ID /
+    // TT_MESH_HOST_RANK reports its specific diagnostic before any cross-rank checks. Runs on every init path.
+    {
+        const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
+        TT_FATAL(
+            std::find(mesh_ids.begin(), mesh_ids.end(), config_.mesh_id) != mesh_ids.end(),
+            "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
+            *config_.mesh_id);
+        // An unset host rank is left for the topology mapper to resolve.
+        if (config_.host_rank != MESH_HOST_RANK_UNSET) {
+            const auto& host_ranks = this->mesh_graph_->get_host_ranks(config_.mesh_id).values();
+            TT_FATAL(
+                std::find(host_ranks.begin(), host_ranks.end(), config_.host_rank) != host_ranks.end(),
+                "Invalid TT_MESH_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor",
+                *config_.host_rank);
+        }
+    }
+
+    // Cross-rank checks reuse the descriptors gathered once in gather_fabric_config_descriptors(); no second
+    // all_gather. The single-host auto-discovery path never gathers, so it stops here after validating its own binding.
+    if (gathered_fabric_configs_.empty()) {
+        return;
+    }
+
+    const auto world_size = static_cast<uint32_t>(*distributed_context.size());
+    TT_FATAL(
+        gathered_fabric_configs_.size() == world_size,
+        "validate_fabric_config_compatibility: fabric config descriptors were not gathered first");
+    const auto& configs = gathered_fabric_configs_;
+
+    // Fabric DISABLED must be unanimous: a mix where some ranks disabled fabric and others kept it live would route
+    // into dead peers. Every rank sees the same gathered configs, so this fatals identically everywhere.
+    const bool any_disabled = std::any_of(
+        configs.begin(), configs.end(), [](const auto& c) { return c.fabric_config == FabricConfig::DISABLED; });
+    if (any_disabled) {
+        std::string observed_states;
+        for (uint32_t rank = 0; rank < world_size; ++rank) {
+            observed_states +=
+                fmt::format("\n  rank={}, fabric_config={}", rank, enchantum::to_string(configs[rank].fabric_config));
+        }
+        for (uint32_t rank = 0; rank < world_size; ++rank) {
+            TT_FATAL(
+                configs[rank].fabric_config == FabricConfig::DISABLED,
+                "Fabric must be DISABLED on every rank or none, but rank {} has {} while another rank is DISABLED. "
+                "Observed:{}",
+                rank,
+                enchantum::to_string(configs[rank].fabric_config),
+                observed_states);
+        }
+    }
+
+    // vc2 / mesh pass-through come from rtoptions, not FabricConfigDescriptor; bit 0 = vc2, bit 1 = pass-through.
+    const auto& rtoptions = this->rtoptions_.get();
+    uint8_t local_channel_flags =
+        (rtoptions.get_enable_fabric_vc2() ? 1u : 0u) | (rtoptions.get_enable_fabric_mesh_pass_through() ? 2u : 0u);
+    std::vector<uint8_t> channel_flags(world_size);
     distributed_context.all_gather(
-        ttsl::Span<std::byte>(
-            reinterpret_cast<std::byte*>(local_observations.data()),
-            local_observations.size() * sizeof(MeshFabricConfigObservation)),
-        ttsl::as_writable_bytes(
-            ttsl::Span<MeshFabricConfigObservation>{gathered_observations.data(), gathered_observations.size()}));
-
-    std::vector<MeshFabricConfigObservation> observations;
-    observations.reserve(std::accumulate(binding_counts.begin(), binding_counts.end(), static_cast<uint32_t>(0)));
-    for (uint32_t gathered_rank = 0; gathered_rank < world_size; ++gathered_rank) {
-        const uint32_t count = binding_counts[gathered_rank];
-        TT_FATAL(
-            count > 0 && count <= max_binding_count,
-            "Invalid mesh-binding count {} received from rank {}",
-            count,
-            gathered_rank);
-        const auto rank_offset = static_cast<size_t>(gathered_rank) * max_binding_count;
-        observations.insert(
-            observations.end(),
-            gathered_observations.begin() + rank_offset,
-            gathered_observations.begin() + rank_offset + count);
-    }
-
-    std::string observed_values;
-    for (const auto& observation : observations) {
-        TT_FATAL(
-            observation.mesh_host_rank != *MESH_HOST_RANK_UNSET,
-            "mesh_host_rank must be set for all gathered observations (rank {}, mesh {})",
-            observation.rank,
-            *observation.mesh_id);
-        observed_values += fmt::format(
-            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
-            *observation.mesh_id,
-            observation.mesh_host_rank,
-            observation.rank,
-            enchantum::to_string(observation.fabric_config));
-    }
-
-    const auto reference_config = observations.front().fabric_config;
-    const bool all_ranks_agree = std::all_of(observations.begin(), observations.end(), [reference_config](const auto& o) {
-        return o.fabric_config == reference_config;
-    });
+        ttsl::as_writable_bytes(ttsl::Span<uint8_t>{&local_channel_flags, 1}),
+        ttsl::as_writable_bytes(ttsl::Span<uint8_t>{channel_flags.data(), channel_flags.size()}));
 
     const auto& mesh_graph_desc_path = this->mesh_graph_->get_mesh_graph_descriptor_path();
-    const std::string mesh_graph_path = mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string()
-                                                                          : std::string("<auto-discovered>");
-    TT_FATAL(
-        all_ranks_agree,
-        "FabricConfig must match across all ranks before control-plane and fabric initialization. MGD path: {}. "
-        "Observed:{}\nFuture support may allow different configs per mesh, but 1D and 2D configs cannot be mixed, "
-        "mesh host ranks within a big mesh must still align, and 1D meshes cannot be multi-mesh.",
-        mesh_graph_path,
-        observed_values);
+    const std::string mesh_graph_path =
+        mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string() : std::string("<auto-discovered>");
 
-    const auto mesh_count = this->mesh_graph_->get_mesh_ids().size();
-    const bool is_1d_fabric = reference_config == FabricConfig::FABRIC_1D || reference_config == FabricConfig::FABRIC_1D_RING;
-    const bool is_multi_mesh = mesh_count > 1;
-    TT_FATAL(
-        !is_1d_fabric || !is_multi_mesh,
-        "FabricConfig {} is not supported when more than one mesh is present (mesh_count={}, MGD path: {}). "
-        "Future support may allow different configs per mesh, but 1D and 2D configs cannot be mixed, mesh host "
-        "ranks within a big mesh must still align, and 1D meshes cannot be multi-mesh.",
-        enchantum::to_string(reference_config),
-        mesh_count,
-        mesh_graph_path);
+    std::string observed_values;
+    for (uint32_t rank = 0; rank < world_size; ++rank) {
+        const auto& c = configs[rank];
+        observed_values += fmt::format(
+            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
+            *c.mesh_id,
+            *c.host_rank,
+            rank,
+            enchantum::to_string(c.fabric_config));
+    }
 
-    this->validated_fabric_config_ = this->fabric_config_;
+    // Each process owns exactly one mesh (its mesh_id / host_rank). Every rank checks every binding, so an invalid
+    // one fails the same way everywhere.
+    log_debug(tt::LogDistributed, "Local mesh binding: mesh_id: {}, host_rank: {}", config_.mesh_id, config_.host_rank);
+    const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
+    for (uint32_t rank = 0; rank < world_size; ++rank) {
+        const auto& c = configs[rank];
+        TT_FATAL(
+            std::find(mesh_ids.begin(), mesh_ids.end(), c.mesh_id) != mesh_ids.end(),
+            "Invalid mesh_id: rank {} is bound to mesh_id {}, which is not in the mesh graph descriptor. MGD path: "
+            "{}. Observed:{}",
+            rank,
+            *c.mesh_id,
+            mesh_graph_path,
+            observed_values);
+        // An unset host rank (TT_MESH_HOST_RANK not provided) is resolved from the topology mapper, not validated here.
+        if (c.host_rank != MESH_HOST_RANK_UNSET) {
+            const auto& host_ranks = this->mesh_graph_->get_host_ranks(c.mesh_id).values();
+            TT_FATAL(
+                std::find(host_ranks.begin(), host_ranks.end(), c.host_rank) != host_ranks.end(),
+                "Invalid host_rank: rank {} is bound to host_rank {}, which is not in mesh {} of the mesh graph "
+                "descriptor. MGD path: {}. Observed:{}",
+                rank,
+                *c.host_rank,
+                *c.mesh_id,
+                mesh_graph_path,
+                observed_values);
+        }
+    }
+
+    // Every rank owning a given mesh must report the same config; different meshes may differ.
+    std::map<MeshId, FabricConfig> per_mesh_config;
+    for (const auto& c : configs) {
+        const auto [it, inserted] = per_mesh_config.try_emplace(c.mesh_id, c.fabric_config);
+        TT_FATAL(
+            inserted || it->second == c.fabric_config,
+            "FabricConfig must match across all ranks of a mesh, but mesh {} has ranks reporting both {} and {}. "
+            "MGD path: {}. Observed:{}",
+            *c.mesh_id,
+            enchantum::to_string(it->second),
+            enchantum::to_string(c.fabric_config),
+            mesh_graph_path,
+            observed_values);
+    }
+
+    // Every FabricConfigDescriptor setting except fabric_config, mesh_id and host_rank must be identical on every rank:
+    // vc2 / mesh_pass_through / max_payload pick the per-VC buffer table, so a disagreement silently stalls the fabric.
+    auto payload_str = [](const tt_metal::FabricConfigDescriptor& c) {
+        return c.router_config.max_packet_payload_size_bytes.has_value()
+                   ? std::to_string(*c.router_config.max_packet_payload_size_bytes)
+                   : std::string("<default>");
+    };
+    auto planes_str = [](const tt_metal::FabricConfigDescriptor& c) {
+        return c.num_routing_planes.has_value() ? std::to_string(*c.num_routing_planes) : std::string("<default>");
+    };
+    auto flag_str = [](uint8_t flags, uint8_t bit) { return std::string((flags & bit) != 0 ? "true" : "false"); };
+    const auto& ref = configs.front();
+    const uint8_t ref_flags = channel_flags.front();
+    for (uint32_t rank = 0; rank < world_size; ++rank) {
+        const auto& c = configs[rank];
+        const uint8_t flags = channel_flags[rank];
+        std::string mismatches;
+        auto check = [&](const char* name, bool equal, const std::string& value, const std::string& ref_value) {
+            if (!equal) {
+                mismatches += fmt::format("\n  {}: rank {} has {}, rank 0 has {}", name, rank, value, ref_value);
+            }
+        };
+        check(
+            "reliability_mode",
+            c.reliability_mode == ref.reliability_mode,
+            std::string(enchantum::to_string(c.reliability_mode)),
+            std::string(enchantum::to_string(ref.reliability_mode)));
+        check("num_routing_planes", c.num_routing_planes == ref.num_routing_planes, planes_str(c), planes_str(ref));
+        check(
+            "fabric_tensix_config",
+            c.fabric_tensix_config == ref.fabric_tensix_config,
+            std::string(enchantum::to_string(c.fabric_tensix_config)),
+            std::string(enchantum::to_string(ref.fabric_tensix_config)));
+        check(
+            "fabric_udm_mode",
+            c.fabric_udm_mode == ref.fabric_udm_mode,
+            std::string(enchantum::to_string(c.fabric_udm_mode)),
+            std::string(enchantum::to_string(ref.fabric_udm_mode)));
+        check(
+            "fabric_manager",
+            c.fabric_manager == ref.fabric_manager,
+            std::string(enchantum::to_string(c.fabric_manager)),
+            std::string(enchantum::to_string(ref.fabric_manager)));
+        check(
+            "max_packet_payload_size_bytes",
+            c.router_config.max_packet_payload_size_bytes == ref.router_config.max_packet_payload_size_bytes,
+            payload_str(c),
+            payload_str(ref));
+        check("enable_fabric_vc2", (flags & 1u) == (ref_flags & 1u), flag_str(flags, 1u), flag_str(ref_flags, 1u));
+        check(
+            "enable_fabric_mesh_pass_through",
+            (flags & 2u) == (ref_flags & 2u),
+            flag_str(flags, 2u),
+            flag_str(ref_flags, 2u));
+        TT_FATAL(
+            mismatches.empty(),
+            "Fabric settings other than fabric_config, mesh_id and host_rank must be identical on every rank, but "
+            "rank {} (mesh {}) differs from rank 0 (mesh {}):{}\nMGD path: {}.",
+            rank,
+            *c.mesh_id,
+            *ref.mesh_id,
+            mismatches,
+            mesh_graph_path);
+    }
 }
 
 void ControlPlane::initialize_fabric_context() {
-    // Defensive check for callers that drive Fabric initialization directly: the config the routers are
-    // about to be built with must be the one all ranks agreed on.
-    TT_FATAL(
-        this->validated_fabric_config_.has_value() && *this->validated_fabric_config_ == this->fabric_config_,
-        "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
-        enchantum::to_string(this->fabric_config_));
-    if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
-        this->fabric_context_ =
-            std::make_unique<FabricContext>(*this, hal_, cluster_, rtoptions_, fabric_config_, fabric_router_config_);
+    // config_.fabric_config is the one every rank agreed on (validate_fabric_config_compatibility() already fataled
+    // on disagreement), so the routers are built directly from it.
+    if (tt::tt_fabric::is_tt_fabric_config(config_.fabric_config)) {
+        this->fabric_context_ = std::make_unique<FabricContext>(
+            *this, hal_, cluster_, rtoptions_, config_.fabric_config, config_.router_config);
     }
 }
 
@@ -1014,13 +1005,14 @@ void ControlPlane::construct_link_health_after_intermesh() {
     if (this->fsd_physical_system_descriptor_ == nullptr) {
         return;
     }
-    this->link_health_ = std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
+    this->link_health_ =
+        std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
     this->check_fsd_compatibility_and_downed_fraction();
     this->confirm_local_downed_links();
 }
 
 void ControlPlane::validate_system_health_against_mesh_graph_policy() const {
-    if (this->fabric_reliability_mode_ != tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
+    if (this->config_.reliability_mode != tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         return;
     }
     // STRICT-vs-RELAXED semantics govern how factory-descriptor holes are classified. Without a
@@ -1065,7 +1057,7 @@ void ControlPlane::check_fsd_compatibility_and_downed_fraction() {
 
     // STRICT system health rejects every factory cable the live descriptor is missing, intra or inter,
     // including one the mesh graph filed as unused. Relaxed system health keeps those records.
-    if (this->fabric_reliability_mode_ == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE &&
+    if (this->config_.reliability_mode == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE &&
         downed > 0) {
         std::size_t intra = 0;
         std::size_t inter = 0;
@@ -1154,7 +1146,9 @@ const std::vector<experimental::LinkInfo>& ControlPlane::get_unused_downed_links
     return this->link_health_ == nullptr ? kNone : this->link_health_->get_unused_downed_links();
 }
 
-const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
+const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const {
+    return this->locally_unhealthy_;
+}
 
 void ControlPlane::refresh_connectivity_diff() {
     if (this->link_health_ == nullptr) {
@@ -1167,9 +1161,7 @@ void ControlPlane::refresh_connectivity_diff() {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     this->refreshed_live_descriptor_ =
         std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(tt::tt_metal::run_physical_system_discovery(
-            *this->cluster_.get().get_cluster_desc(),
-            distributed_context,
-            this->rtoptions_.get().get_target_device()));
+            *this->cluster_.get().get_cluster_desc(), distributed_context, this->rtoptions_.get().get_target_device()));
     this->link_health_->refresh(nullptr, this->refreshed_live_descriptor_.get());
     // refresh() clears the unused-plane classification; reapply the routing-plane snapshot so holes
     // already classified as unused do not silently reactivate.
@@ -1674,7 +1666,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     bool connections_exist = connected_chips_and_eth_cores.contains(physical_connected_chip_id);
                     TT_FATAL(
                         connections_exist || this->has_factory_descriptor() ||
-                            fabric_reliability_mode_ !=
+                            config_.reliability_mode !=
                                 tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                         "Expected connections to exist for M{}D{} to D{}",
                         mesh_id,
@@ -1694,14 +1686,15 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     }
 
                     const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
-                    if (fabric_reliability_mode_ ==
+                    if (config_.reliability_mode ==
                         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
                         if (this->has_factory_descriptor() &&
                             connected_eth_cores.size() < edge.connected_chip_ids.size()) {
                             log_warning(
                                 tt::LogFabric,
                                 "STRICT + FSD: skipping fatal on short connection, {} of {} eth link(s) from "
-                                "physical chip {} to physical chip {}. FSD in use -- recording in experimental::LinkHealth, "
+                                "physical chip {} to physical chip {}. FSD in use -- recording in "
+                                "experimental::LinkHealth, "
                                 "not fatal.",
                                 connected_eth_cores.size(),
                                 edge.connected_chip_ids.size(),
@@ -1748,8 +1741,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             // machine all use that name.
                             auto neighbor_host_rank =
                                 physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.dst_exit_node);
-                            const auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{
-                                static_cast<int>(neighbor_host_rank)};
+                            const auto neighbor_rank =
+                                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
                             if (!this->global_logical_bindings_.contains(neighbor_rank)) {
                                 continue;
                             }
@@ -1772,7 +1765,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     }
 
     this->initialize_dynamic_routing_plane_counts(
-        intra_mesh_connectivity, this->fabric_config_, this->fabric_reliability_mode_);
+        intra_mesh_connectivity, this->config_.fabric_config, this->config_.reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
@@ -3259,12 +3252,17 @@ void sort_intermesh_exit_peer_fabric_node_id_pairs(
 }
 }  // namespace
 
+std::vector<MeshId> ControlPlane::owned_mesh_ids() const {
+    if (*this->distributed_context_.get().size() == 1) {
+        return this->mesh_graph_->get_all_mesh_ids();
+    }
+    return {config_.mesh_id};
+}
+
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
-    const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
     std::vector<MeshId> local_mesh_ids;
-    local_mesh_ids.reserve(mesh_id_bindings.size());
-    for (const auto& mesh_id : mesh_id_bindings) {
+    for (const auto& mesh_id : this->owned_mesh_ids()) {
         if (std::find(user_mesh_ids.begin(), user_mesh_ids.end(), mesh_id) != user_mesh_ids.end()) {
             local_mesh_ids.push_back(mesh_id);
         }
@@ -3275,7 +3273,7 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
 
 MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const {
     // TODO: Change mesh id to use topology mapper as well please
-    // Get host rank from topology mapper based on current host instead of using local_mesh_binding
+    // Get host rank from topology mapper based on current host instead of using config_.host_rank
     // This ensures we use the actual mapped host rank rather than potentially UNSET values
     // Use the first local mesh ID to get the host rank
     const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
@@ -3302,8 +3300,8 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
 }
 
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
-    const auto& local_mesh_ids = local_mesh_binding_.mesh_ids;
-    return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    const auto owned = this->owned_mesh_ids();
+    return std::find(owned.begin(), owned.end(), mesh_id) != owned.end();
 }
 
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_distributed_context(
@@ -3499,7 +3497,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 
     // Create RouterPortDirectionsData from local data
     RouterPortDirectionsData local_data;
-    local_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+    local_data.local_mesh_id = config_.mesh_id;
     local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
     local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
 
@@ -3607,7 +3605,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     AnnotatedIntermeshConnections intermesh_connections;
 
     auto generate_mapping_locally_ = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
-                                     (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
+                                     (this->mesh_graph_->get_host_ranks(config_.mesh_id).size() == 1);
 
     auto get_num_requested_intermesh_connections = [&]() -> size_t {
         const auto& mesh_graph = *this->mesh_graph_;
@@ -3675,7 +3673,7 @@ std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes
     bool strict_binding,
     const std::unordered_set<FabricNodeId>& requested_exit_nodes,
     uint32_t neighbor_mpi_rank) {
-    const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
+    const auto my_mesh_id = config_.mesh_id;
     const auto my_rank = physical_system_descriptor_->get_local_mpi_rank();
     auto exit_nodes_for_rank = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
     std::erase_if(exit_nodes_for_rank, [&](const auto& exit_node) {
@@ -3763,7 +3761,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
     const auto& my_host = physical_system_descriptor_->my_host_name();
     const auto my_rank = physical_system_descriptor_->get_local_mpi_rank();
-    const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
+    const auto my_mesh_id = config_.mesh_id;
 
     TT_FATAL(
         requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
@@ -3794,8 +3792,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
         if (!this->global_logical_bindings_.contains(neighbor_rank)) {
             continue;
         }
-        sorted_neighbors.emplace_back(
-            this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
+        sorted_neighbors.emplace_back(this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
     }
     std::sort(sorted_neighbors.begin(), sorted_neighbors.end(), [](const auto& a, const auto& b) {
         if (*std::get<0>(a) != *std::get<0>(b)) {
@@ -4509,7 +4506,7 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
     }
     this->forward_intermesh_connections_from_controller(intermesh_connections);
 
-    const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
+    const auto my_mesh_id = config_.mesh_id;
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
     // Rank-0 pairing picks final logical port_ids (Z/NESW may differ from local proposals). To bind each
@@ -4642,7 +4639,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         return (1 << *src_mesh_id) | (1 << *dst_mesh_id);
     };
 
-    for (const auto& local_mesh_id : local_mesh_binding_.mesh_ids) {
+    for (const auto local_mesh_id : this->owned_mesh_ids()) {
         const auto& mesh_edges = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*local_mesh_id);
 
         std::unordered_set<FabricNodeId> exit_nodes;

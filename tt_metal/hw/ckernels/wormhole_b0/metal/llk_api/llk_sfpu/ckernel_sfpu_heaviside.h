@@ -34,15 +34,8 @@ inline void heaviside_init() {
 // fuses any of them there.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(std::uint32_t value) {
-    // heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise.
-    //
-    // Raw SFPU body, 8 instructions per row, three stores: an unpredicated store of `value` to
-    // every lane; then 1.0 to the lanes with (bits & 0x7fffffff) != 0, so -0.0 keeps `value`;
-    // then 0.0 to those of them whose sign bit is set, which SFPSETCC LT0 narrows to (SFPSETCC
-    // only writes the flags of enabled lanes). The dispatch is on the sign bit rather than a float
-    // compare, so a NaN with a clear sign bit is 1.0 and with a set one 0.0. Device coverage of
-    // those classes, bit-exact: test_vif_equiv_sweep.py's test_equiv_float_nonfinite (+-inf, NaN)
-    // and test_equiv_signed_zero (-0.0, +0.0).
+    // heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise; the row
+    // dispatches on the sign bit, so +NaN gives 1.0 and -NaN 0.0.
     _sfpu_load_imm32_(p_sfpu::LREG4, value);
 
 #pragma GCC unroll 8
