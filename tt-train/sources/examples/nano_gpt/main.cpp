@@ -488,8 +488,11 @@ int main(int argc, char **argv) {
     }
 
     // enable fabric config for 3-tier architecture, tp, ddp, cp
-    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp ||
-        device_config.enable_cp) {
+    // (not for a one-chip mesh, which fabric refuses: context parallelism on
+    // one chip is a ring of one and needs no links)
+    if ((multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp ||
+         device_config.enable_cp) &&
+        num_devices > 1) {
         fmt::print("Enabling fabric\n");
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
         // Validate that config mesh_shape matches physical mesh shape
