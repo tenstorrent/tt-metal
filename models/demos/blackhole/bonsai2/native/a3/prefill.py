@@ -117,11 +117,26 @@ def rotator(shared):
     return _rot[id(shared)]
 
 
+def wide_pc(s: int, k: int, n: int):
+    """2D mcast config for the wide prefill matmuls at S > 512 on the 8x10 prefill grid: whole per-core N
+    in one out block, out_block_h=1, in0_block_w=4. [2048,5120]@[5120,17408] bfp8: 3.80 ms vs 12.12 ms with
+    ttnn's auto config (sweep_gate.py, chip 3). None (auto) for short S, where auto wins (0.30 vs 0.54 ms at 128)."""
+    gx, gy = 8, 10
+    pcn = -(-n // 32 // gx)
+    if s <= 512 or (k // 32) % 4 or pcn > 68:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy), in0_block_w=4, out_subblock_h=1,
+        out_subblock_w=max(d for d in (1, 2, 4) if pcn % d == 0), out_block_h=1, out_block_w=pcn,
+        per_core_M=-(-s // 32 // gy), per_core_N=pcn, transpose_mcast=False, fused_activation=None, fuse_batch=False)
+
+
 def prefill_linear(tl, x, mem=ttnn.DRAM_MEMORY_CONFIG, program_config=None):
     """Prefill for any a3.linear.TernaryLinear site: x [.., S, K] -> [1, 1, S, N] bf16."""
     xr = rotator(tl.sh)(x)
     wd = dequant(tl.w, tl.s, tl.k, tl.n)
-    y = ttnn.linear(xr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=program_config)
+    pc = program_config or wide_pc(xr.shape[-2], tl.k, tl.n)
+    y = ttnn.linear(xr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
     ttnn.deallocate(wd)
     ttnn.deallocate(xr)
     return ttnn.reshape(y, list(x.shape)[:-1] + [tl.n])
@@ -134,11 +149,12 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
     k, h = x.shape[-1], mlp.w_d.shape[-2]  # w_d is [K=hidden, N=dim]
     xr = rot(x)
     wg, wu = dequant(mlp.w_gu, mlp.s_gu, k, h, gu=True)
-    g = ttnn.linear(xr, wg, activation="silu", compute_kernel_config=_LOFI, memory_config=mem)
-    u = ttnn.linear(xr, wu, compute_kernel_config=_LOFI, memory_config=mem)
+    pc = wide_pc(xr.shape[-2], k, h)
+    g = ttnn.linear(xr, wg, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
+    u = ttnn.linear(xr, wu, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
     for t in (wg, wu, xr):
         ttnn.deallocate(t)
-    hid = ttnn.mul(g, u, memory_config=mem)
+    hid = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mem)
     ttnn.deallocate(g)
     ttnn.deallocate(u)
     hr = rot(hid)

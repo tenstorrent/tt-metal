@@ -32,8 +32,9 @@ void kernel_main() {
                 noc_async_write(l1, get_noc_addr((G * 32 + q * 8 + t) * out_nt + oc, og), otb);
                 l1 += otb;
             }
-            noc_async_write_barrier();
+            noc_async_writes_flushed();  // L1 free to reuse; acks are collected once at the end
             cb_pop_front(cb_out, 8);
         }
     }
+    noc_async_write_barrier();
 }
