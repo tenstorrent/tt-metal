@@ -31,7 +31,7 @@
 - **Compute config**: caller's `compute_kernel_config` passed as-is (default HiFi4 + fp32_dest_acc_en + exact SFPU); `math_fidelity` / `math_approx_mode` honored
 - **Golden baseline**: 737 supported_pass / 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode; 6180 xfail_expected (all refinement candidates below), 33900 invalid_skipped (per verifier CLI, BH p150b 13×10)
 
-### [ ] Refinement 1 — Numerical configurability: bfloat8_b + fp32_dest_acc_en=False
+### [x] Refinement 1 — Numerical configurability: bfloat8_b + fp32_dest_acc_en=False
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`, and `False` to `SUPPORTED["fp32_dest_acc_en"]` (for bfloat16 and bfloat8_b inputs; `{float32, False}` stays an EXCLUSION). Intermediate CB formats follow the DEST width. This unlocks the 822 cells blocked only by `fp32_dest_acc_en=False`, the 240 blocked only by bfloat8_b, and every LLM perf profile in `feature_spec.LOOSE_CASES` (`_perf_case`: bf16, `fp32_dest_acc_en=False`, HiFi2, TILE input, TILE gamma, soft PCC 0.9995) and resilience case at INTERLEAVED — the cells Refinement 3 measures and optimizes.
 

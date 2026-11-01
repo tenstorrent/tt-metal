@@ -7,7 +7,9 @@
 // every row of tile j holds gamma[32j .. 32j+31] (lets pass 2 multiply with a plain DEST-reuse mul).
 //   RM gamma  : one contiguous read of the slice into tile 0's area, RISC-V scatter of the 2 x 16-datum
 //               row-0 pieces per tile (descending j, so the staging bytes are consumed before overwritten).
-//   TILE gamma: per tile, face 0 row 0 and face 1 row 0 straight from DRAM (64 B reads).
+//   TILE gamma: per tile, face 0 row 0 and face 1 row 0 straight from DRAM (64 B reads; a bfloat8_b tile's
+//               64 B exponent section rides along with the first read and is re-patterned so every face
+//               row carries row 0's shared exponent).
 //   Both      : rows 1..15 of faces 0/1 and faces 2/3 are replicated by local NoC copies (doubling, one
 //               barrier per stage) — no RISC-V whole-tile store loop.
 // Per block: load_x_block
@@ -39,7 +41,10 @@ constexpr uint32_t elem_bytes = get_compile_time_arg_val(8);
 constexpr uint32_t gamma_elem_bytes = get_compile_time_arg_val(9);
 constexpr bool gamma_is_tile = get_compile_time_arg_val(10) != 0;
 constexpr uint32_t x_block_depth = get_compile_time_arg_val(11);
-constexpr auto x_args = TensorAccessorArgs<12>();
+// Shared-exponent section ahead of the datums in one gamma tile: 64 B for bfloat8_b (one exponent byte per
+// 16-datum face row, face-major), 0 for float32 / bfloat16. Datums (bfp8: mantissa bytes) follow in face order.
+constexpr uint32_t gamma_exp_bytes = get_compile_time_arg_val(12);
+constexpr auto x_args = TensorAccessorArgs<13>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_DIM = 32;
@@ -81,21 +86,46 @@ FORCE_INLINE void zero_w_tail_of_tile(const Noc& noc, const CircularBuffer& cb, 
 
 #ifdef RMS_HAS_GAMMA
 // Replicate row 0 of faces 0/1 of `num_tiles` gamma tiles into every row of every face (local NoC copies).
+constexpr uint32_t g_tile_bytes = gamma_exp_bytes + TILE_DIM * TILE_DIM * gamma_elem_bytes;
+
+// Block-float gamma: every face row of tile j must carry row 0's shared exponent — faces 0/2 take face 0
+// row 0's, faces 1/3 face 1 row 0's. 16 word stores per tile (the pattern, not a whole-tile fill).
+FORCE_INLINE void expand_gamma_exponents(uint32_t base, uint32_t num_tiles) {
+    static_assert(
+        gamma_exp_bytes == 0 || gamma_exp_bytes == 4 * FACE_DIM, "bfp gamma: expected one exponent byte per face row");
+    if constexpr (gamma_exp_bytes > 0) {
+        constexpr uint32_t words_per_face = FACE_DIM / sizeof(uint32_t);
+        for (uint32_t j = 0; j < num_tiles; ++j) {
+            volatile tt_l1_ptr uint8_t* exp8 = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base + j * g_tile_bytes);
+            volatile tt_l1_ptr uint32_t* exp32 =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes);
+            const uint32_t e_left = exp8[0] * 0x01010101u;          // face 0 row 0
+            const uint32_t e_right = exp8[FACE_DIM] * 0x01010101u;  // face 1 row 0
+            for (uint32_t w = 0; w < words_per_face; ++w) {
+                exp32[0 * words_per_face + w] = e_left;
+                exp32[1 * words_per_face + w] = e_right;
+                exp32[2 * words_per_face + w] = e_left;
+                exp32[3 * words_per_face + w] = e_right;
+            }
+        }
+    }
+}
+
 FORCE_INLINE void expand_gamma_rows(uint32_t base, uint32_t num_tiles) {
-    constexpr uint32_t g_tile_bytes = TILE_DIM * TILE_DIM * gamma_elem_bytes;
     constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
     constexpr uint32_t face_row_bytes = FACE_DIM * gamma_elem_bytes;
+    expand_gamma_exponents(base, num_tiles);
     for (uint32_t rows = 1; rows < FACE_DIM; rows <<= 1) {
         const uint32_t bytes = rows * face_row_bytes;
         for (uint32_t j = 0; j < num_tiles; ++j) {
-            const uint32_t tile = base + j * g_tile_bytes;
+            const uint32_t tile = base + j * g_tile_bytes + gamma_exp_bytes;
             noc_async_read(get_noc_addr(tile), tile + bytes, bytes);                            // face 0
             noc_async_read(get_noc_addr(tile + face_bytes), tile + face_bytes + bytes, bytes);  // face 1
         }
         noc_async_read_barrier();
     }
     for (uint32_t j = 0; j < num_tiles; ++j) {  // faces 0,1 -> faces 2,3 (rows 16..31)
-        const uint32_t tile = base + j * g_tile_bytes;
+        const uint32_t tile = base + j * g_tile_bytes + gamma_exp_bytes;
         noc_async_read(get_noc_addr(tile), tile + 2 * face_bytes, 2 * face_bytes);
     }
     noc_async_read_barrier();
@@ -104,16 +134,18 @@ FORCE_INLINE void expand_gamma_rows(uint32_t base, uint32_t num_tiles) {
 template <typename Accessor>
 FORCE_INLINE void load_gamma_slice(
     const Accessor& g_acc, uint32_t w_tile_start, uint32_t core_w_tiles, uint32_t gamma_push_tiles) {
-    constexpr uint32_t g_tile_bytes = TILE_DIM * TILE_DIM * gamma_elem_bytes;
     constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
     constexpr uint32_t row_read_bytes = 64;  // >= one 16-datum face row; BH DRAM read alignment
     cb_reserve_back(cb_gamma, gamma_push_tiles);
     const uint32_t base = get_write_ptr(cb_gamma);
     if constexpr (gamma_is_tile) {
+        // Per tile, two 64 B-aligned reads: [exponent section (bfp only) + face 0 row 0], [face 1 row 0].
+        constexpr uint32_t d0 = gamma_exp_bytes;
         for (uint32_t j = 0; j < core_w_tiles; ++j) {
             const uint32_t tile = base + j * g_tile_bytes;
-            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, 0), tile, row_read_bytes);
-            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, face_bytes), tile + face_bytes, row_read_bytes);
+            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, 0), tile, d0 + row_read_bytes);
+            noc_async_read(
+                g_acc.get_noc_addr(w_tile_start + j, d0 + face_bytes), tile + d0 + face_bytes, row_read_bytes);
         }
         noc_async_read_barrier();
     } else {

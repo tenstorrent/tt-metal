@@ -105,12 +105,21 @@ class Blocking:
     footprint: int
 
 
+def acc_dtype(fp32_dest_acc_en: bool):
+    """Format of every DEST-written intermediate CB (sumsq / partial / gathered / inv_rms).
+
+    Follows the DEST width: with 16-bit DEST the value is already rounded before pack_tile(), so a Float32
+    page would carry no extra bits while doubling packer/unpacker/NoC bytes and L1.
+    """
+    return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+
+
 class _Sizes:
-    def __init__(self, x_dtype, gamma_dtype, is_rm, has_gamma):
+    def __init__(self, x_dtype, gamma_dtype, is_rm, has_gamma, fp32_dest_acc_en):
         self.T_in = ttnn.tile_size(x_dtype)
         self.T_out = self.T_in
         self.T_g = ttnn.tile_size(gamma_dtype) if has_gamma else 0
-        self.T32 = ttnn.tile_size(ttnn.float32)
+        self.T_acc = ttnn.tile_size(acc_dtype(fp32_dest_acc_en))
         self.is_rm = is_rm
         self.has_gamma = has_gamma
 
@@ -143,16 +152,16 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int) -> dict:
         c, pitch = 1, slice_w
     plan = {
         CB_X: (b * pitch, sz.T_in),  # resident x block
-        CB_SUMSQ: (b, sz.T32),
-        CB_INV_RMS: (b, sz.T32),
+        CB_SUMSQ: (b, sz.T_acc),
+        CB_INV_RMS: (b, sz.T_acc),
     }
     if d == 2:
         plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
     if sz.has_gamma:
         plan[CB_GAMMA] = (pitch, sz.T_g)
     if k > 1:
-        plan[CB_PARTIAL] = (b, sz.T32)
-        plan[CB_GATHERED] = (2 * k * b, sz.T32)  # 2 blocks: lockstep slot-reuse mechanism cap
+        plan[CB_PARTIAL] = (b, sz.T_acc)
+        plan[CB_GATHERED] = (2 * k * b, sz.T_acc)  # 2 blocks: lockstep slot-reuse mechanism cap
     if sz.is_rm:
         plan[CB_X_RM] = (RM_IN_DEPTH * c, sz.T_in)
         plan[CB_OUT] = (b * c, sz.T_out)  # spans one chunk column of the block (untilize input)
@@ -251,6 +260,20 @@ def cb_l1_budget(device) -> int:
     return min(allocated) if allocated else int(view.total_bytes_per_bank)
 
 
+def _datum_bytes(tensor) -> int:
+    """Bytes per datum in L1 (bfloat8_b: one mantissa byte — Tensor.element_size() throws for block-float)."""
+    return 1 if tensor.dtype == ttnn.bfloat8_b else tensor.element_size()
+
+
+def _bfp_exp_section_bytes(dtype, elem_bytes: int) -> int:
+    """Bytes of shared-exponent section ahead of the datums in one tile of `dtype` (0 for plain formats).
+
+    A bfloat8_b tile is [one exponent byte per 16-datum face row (64 B)][one mantissa byte per datum]; the
+    datum area is TILE*TILE*elem_bytes, so the section is whatever the tile size holds beyond it.
+    """
+    return ttnn.tile_size(dtype) - TILE * TILE * elem_bytes
+
+
 def _cb(index, pages, page_size, dtype, core_ranges):
     return ttnn.CBDescriptor(
         total_size=pages * page_size,
@@ -266,9 +289,11 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     has_gamma = gamma is not None
     x_dtype = input_tensor.dtype
     g_dtype = gamma.dtype if has_gamma else x_dtype
-    sz = _Sizes(x_dtype, g_dtype, is_rm, has_gamma)
-    elem_bytes = input_tensor.element_size()
-    g_elem_bytes = gamma.element_size() if has_gamma else elem_bytes
+    fp32_dest = bool(compute_kernel_config.fp32_dest_acc_en)
+    t_acc = acc_dtype(fp32_dest)
+    sz = _Sizes(x_dtype, g_dtype, is_rm, has_gamma, fp32_dest)
+    elem_bytes = _datum_bytes(input_tensor)
+    g_elem_bytes = _datum_bytes(gamma) if has_gamma else elem_bytes
     gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
 
     grid = device.compute_with_storage_grid_size()
@@ -295,10 +320,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         CB_X: x_dtype,
         CB_X_ALT: x_dtype,
         CB_GAMMA: g_dtype,
-        CB_SUMSQ: ttnn.float32,
-        CB_PARTIAL: ttnn.float32,
-        CB_GATHERED: ttnn.float32,
-        CB_INV_RMS: ttnn.float32,
+        CB_SUMSQ: t_acc,
+        CB_PARTIAL: t_acc,
+        CB_GATHERED: t_acc,
+        CB_INV_RMS: t_acc,
         CB_X_RM: x_dtype,
         CB_OUT: x_dtype,
         CB_OUT_RM: x_dtype,
@@ -330,6 +355,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         g_elem_bytes,
         1 if gamma_is_tile else 0,
         d,
+        _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(

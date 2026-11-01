@@ -4,8 +4,10 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axe
 → Blocking Model): **row** (extent `block_row_tiles`) and **W** (extent = the core's whole share
 `core_w_tiles`; RM pads it to `core_w_tiles_padded`). `rm_chunk_w_tiles` is a streaming quantum
 along W, not a block extent. Page sizes: T_in / T_out / T_g = tile bytes (bytes) of the input /
-output / gamma dtype (bf16 2048 B, fp32 4096 B); T32 = 4096 B (Float32 tile).
-`fp32_dest_acc_en = True` in Phase 0, so every compute-to-compute intermediate is a Float32 page.
+output / gamma dtype (bf16 2048 B, fp32 4096 B, bfloat8_b 1088 B); T_acc = tile bytes of the DEST-width
+intermediate format (`acc_dtype()`): Float32 (4096 B) when `fp32_dest_acc_en = True`, Float16_b (2048 B)
+when False (Refinement 1) — with 16-bit DEST the value is rounded before `pack_tile()`, so a Float32 page
+would carry no extra bits while doubling packer/unpacker/NoC bytes and L1.
 
 ## Inventory decisions (before any solve)
 
@@ -25,10 +27,10 @@ output / gamma dtype (bf16 2048 B, fp32 4096 B); T32 = 4096 B (Float32 tile).
 | `cb_x` | TILE: `x_block_depth · block_row_tiles · slice_w_tiles`; RM: `block_row_tiles · core_w_tiles_padded` (x_block_depth = 1) | `block_rows_this · core_w_tiles` (whole block resident across pass 1 and pass 2); with lookahead two blocks | `{row: spans → block_row_tiles, W: spans → core_w_tiles (≤ slice_w_tiles)}` | input dtype (raw input) | reader (TILE) / compute tilize (RM) | compute | load → end of `normalize_block` | none: live through every compute phase of the block; capacity > live set only by `x_block_depth = 2` (next block in flight / lookahead) and, for the last W member, `slice_w_tiles − core_w_tiles` (one capacity value for all cores) |
 | `cb_x_alt` (implementation, TILE only, `x_block_depth == 2`) | `block_row_tiles · x_row_pitch` | the other block of the depth-2 pair | as `cb_x` | input dtype | reader | compute | blocks of odd parity | none: this IS the second half of `cb_x`'s depth-2 budget, split into its own CB because indexed CB reads cannot wrap a ring (LLK `cb_access_within_bounds`) and the combine lookahead reads block b+1 while block b is resident. Footprint unchanged: `d·b·S_x·T_in` total. |
 | `cb_gamma` | `slice_w_tiles` (RM: padded) | `core_w_tiles` | `{row: absent (gamma has no row extent; reused by every row), W: spans → core_w_tiles}` | gamma dtype (Float16_b / Float32 — raw weight) | reader | compute | program | none: program lifetime, read by every block's `normalize_block` |
-| `cb_sumsq_tiles` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away (DEST accumulation)}` | Float32 (fp32 DEST accumulation result) | compute | compute | pass 1 → collapse | not with `cb_inv_rms` / `cb_partial_sumsq`: the collapse reduce reads this CB while writing those (concurrent). Same size and format as `cb_inv_rms`; in R2 their lifetimes are disjoint, but R1 overlaps them, and the saving is `block_row_tiles·4 KB` (< 1% of the footprint) — one design for both regimes kept |
-| `cb_partial_sumsq` (k > 1) | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away}` | Float32 | compute | writer | collapse → exchange | not with `cb_sumsq_tiles` (concurrent in the collapse); not with `cb_gathered_sumsq` (peers write into that one at any time during the previous block) |
-| `cb_gathered_sumsq` (k > 1) | `2 · w_split_cores · block_row_tiles` | `w_split_cores · block_rows_this` (one block); capacity 2× = mechanism cap (lockstep slot reuse) | `{row: spans → block_row_tiles, W: reduced to one partial per member → w_split_cores}` | Float32 | writer (+ peer NoC writes landing in its reserved slot) | compute | exchange → combine | none: remote writes may land at any time during the previous block, so no other buffer may occupy these bytes |
-| `cb_inv_rms` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: absent (broadcast along W)}` | Float32 (finalize result in fp32 DEST) | compute | compute | finalize → end of `normalize_block` | not with `cb_sumsq_tiles` (see that row) |
+| `cb_sumsq_tiles` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away (DEST accumulation)}` | T_acc format: Float32 / Float16_b per `fp32_dest_acc_en` (DEST accumulation result) | compute | compute | pass 1 → collapse | not with `cb_inv_rms` / `cb_partial_sumsq`: the collapse reduce reads this CB while writing those (concurrent). Same size and format as `cb_inv_rms`; in R2 their lifetimes are disjoint, but R1 overlaps them, and the saving is `block_row_tiles·4 KB` (< 1% of the footprint) — one design for both regimes kept |
+| `cb_partial_sumsq` (k > 1) | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away}` | T_acc format | compute | writer | collapse → exchange (the gathered NoC payload follows `get_tile_size`) | not with `cb_sumsq_tiles` (concurrent in the collapse); not with `cb_gathered_sumsq` (peers write into that one at any time during the previous block) |
+| `cb_gathered_sumsq` (k > 1) | `2 · w_split_cores · block_row_tiles` | `w_split_cores · block_rows_this` (one block); capacity 2× = mechanism cap (lockstep slot reuse) | `{row: spans → block_row_tiles, W: reduced to one partial per member → w_split_cores}` | T_acc format | writer (+ peer NoC writes landing in its reserved slot) | compute | exchange → combine | none: remote writes may land at any time during the previous block, so no other buffer may occupy these bytes |
+| `cb_inv_rms` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: absent (broadcast along W)}` | T_acc format (finalize result in DEST) | compute | compute | finalize → end of `normalize_block` | not with `cb_sumsq_tiles` (see that row) |
 | `cb_out` | TILE: `out_depth · out_unit_tiles` (= 2·min(slice_w_tiles, 16)); RM: `block_row_tiles · rm_chunk_w_tiles` | TILE: ≥ 1 tile (streaming window); RM: `block_rows_this · rm_chunk_w_tiles` (pass 2 of one chunk column completes before untilize, same thread) | TILE `{row: streams → 1 tile, W: streams → 1 tile}`; RM `{row: spans → block_row_tiles, W: streams → rm_chunk_w_tiles}` | output dtype (terminal pack to the output format, not an intermediate) | compute | writer (TILE) / compute (RM) | per tile / per chunk | TILE: none, live with every other per-block CB; capacity > live set = double buffering for the writer. RM: not with `cb_x_rm` (concurrent across the reader/compute pipeline) |
 | `cb_out_rm` (RM only) | `out_depth · rm_chunk_w_tiles` | `rm_chunk_w_tiles` | `{row: streams → 1 tile-row, W: streams → rm_chunk_w_tiles}` | output dtype | compute | writer | per (tile-row, chunk) | not with `cb_x_rm` (concurrent); capacity 2× = writer double buffering |
 
@@ -55,9 +57,9 @@ Semaphore `sem_partials_arrived` (k > 1): one 4-byte L1 word, program lifetime.
 footprint(k, b, d) =
     d · b · S_x · T_in                                  # cb_x          (scales with block_row_tiles, slice, depth)
   + has_gamma · S_x · T_g                               # cb_gamma      (scales with slice only)
-  + b · T32                                             # cb_sumsq_tiles
-  + b · T32                                             # cb_inv_rms
-  + [k > 1] · (b · T32 + 2 · k · b · T32)               # cb_partial_sumsq + cb_gathered_sumsq (scale with k·b)
+  + b · T_acc                                             # cb_sumsq_tiles
+  + b · T_acc                                             # cb_inv_rms
+  + [k > 1] · (b · T_acc + 2 · k · b · T_acc)               # cb_partial_sumsq + cb_gathered_sumsq (scale with k·b)
   + TILE: 2 · min(slice_w_tiles, 16) · T_out            # cb_out (bounded constant)
   + RM:   2 · C · T_in + b · C · T_out + 2 · C · T_out  # cb_x_rm, cb_out, cb_out_rm (C = rm_chunk_w_tiles ≤ 32)
 where S_x = slice_w_tiles (TILE) or slice_w_tiles padded to a multiple of C (RM).

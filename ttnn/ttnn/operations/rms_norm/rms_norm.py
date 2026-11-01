@@ -78,13 +78,13 @@ def tag_gamma_layout(gamma):
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
@@ -97,6 +97,13 @@ SUPPORTED = {
 EXCLUSIONS = [
     # Precision convention: fp32 input requires fp32 DEST accumulation (natively rejected).
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # bfloat8_b is block-quantized (16-datum shared exponents): no ROW_MAJOR form, and the reader's W-tail
+    # zero fill / padded reduce is element-addressed — mirrors feature_spec INVALID so translated tests that
+    # do not consult INVALID get a native refusal instead of an unsupported path.
+    {"dtype": ttnn.bfloat8_b, "layout": ttnn.ROW_MAJOR_LAYOUT},
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+    {"gamma_dtype": ttnn.bfloat8_b, "gamma_layout": ttnn.ROW_MAJOR_LAYOUT},
 ]
 
 
