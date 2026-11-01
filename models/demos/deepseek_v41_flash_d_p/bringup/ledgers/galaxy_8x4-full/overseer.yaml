@@ -229,6 +229,150 @@ notes:
     by hand.'
   closed: '2026-10-29T16:49:14'
   why_closed: FIX.13 closed by hand (records)
+- id: OV-23
+  tasks:
+  - P.*
+  - FIX.*
+  - X.*
+  status: open
+  t: '2026-10-29T20:22:07'
+  text: 'OWNER 2026-10-29: no Python-built op stays non-prepared. Any op whose program is built in Python (ttnn.generic_op
+    / a ProgramDescriptor, the ttnn.bringup Python forks) that you add or touch must dispatch through the prepared path
+    (ttnn.bringup.prepare_program / run_prepared, as ckv_bfp4 / bfp_round prepared=True and P.7): built once per shape and
+    memory config, addresses patched per call, outputs reused where possible; measure its host time per call. Report any
+    such op you call that is not prepared.'
+- id: OV-24
+  tasks:
+  - P.16
+  status: open
+  t: '2026-10-30T09:19:29'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 09:20: stop the fork regression suites now; the 8x4''s time is too
+    expensive for them (task F.1 runs every fork''s full suite once at the end). Your code and the on/off census are done
+    (host -13.5 ms in the four forks, wall ~333 -> ~306 ms). Next attempt: do NOT run any fork regression or unit suite;
+    only finish the records (BREADCRUMBS, known_issues incl. the ''eval'' package import errors in the rms_norm / mhc golden
+    tests, knowledge-use report) and stop, so the orchestrator runs the A/B.'
+- id: OV-25
+  tasks:
+  - P.*
+  - FIX.*
+  status: open
+  t: '2026-10-30T09:19:30'
+  text: 'OWNER 2026-10-30: do not run fork regression / unit suites on the 8x4 in a perf or fix step (the machine is too
+    expensive for it); run only the new tests you add for your change and the model-level checks. Task F.1 runs every fork''s
+    full suite once at the end.'
+- id: OV-26
+  tasks:
+  - P.17
+  status: open
+  t: '2026-10-30T13:28:47'
+  text: 'The overseer stopped attempt 2 (perf): F231 (framework): the settings check charged the drop''s own new environment
+    knobs (combine_rf: SPC_*, persist_l1, sparse_all_gather_2d) to you; the overseer fixes the check to count lines that
+    come verbatim from the source branch as the import''s. Do NOT convert or mark them: take the drop as is, rebuild, sanity-check,
+    and stop.'
+- id: OV-27
+  tasks:
+  - P.19
+  - P.20
+  status: open
+  t: '2026-10-30T14:58:14'
+  text: 'OWNER 2026-10-30 15:00, how to sweep: (1) CAPTURE on the 8x4 (the model run gives every call''s shape, dtypes,
+    compute config and free L1), at BOTH 51200 and 512000 (BRINGUP_POS), and diff the two call lists: dense matmul shapes
+    should not depend on the context; report any that do. Keep the capture you already have on disk (generated/ds41_p23,
+    /scratch/dnijemcevic/p19), do not redo it. (2) SWEEP on single cards, NOT on the 8x4 mesh: a matmul is per chip (same
+    shard shape on every chip, no traffic between chips), so one card gives its kernel time; give test_matmul_sweep a shard
+    option (e.g. P23_SHARD=i/N) and run N processes in parallel with scripts/run_safe_pytest.sh --device auto (one card
+    each, per-card locks), then merge the jsons. Hold every candidate to the grid and L1 view the capture recorded (a single
+    card may expose a different grid than in the mesh). (3) Tune the full 5120-token chunk''s calls; other chunk lengths
+    (the last partial chunk, resumed chunks) keep today''s rule (fallback). P.20 the same with the SP=8 capture.'
+- id: OV-28
+  tasks:
+  - P.19
+  status: open
+  t: '2026-10-30T14:58:52'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 15:00: sweep on single cards in parallel, not on the 8x4 mesh; see
+    the open note OV-27. Your capture is on disk: reuse it.'
+- id: OV-29
+  tasks:
+  - P.20
+  status: open
+  t: '2026-10-30T15:12:13'
+  text: 'Sweep on ALL 32 cards (P23_SHARD=i/32, run_safe_pytest --device auto each): P.19 used 12 shards (under 3 min);
+    the host has room (12 processes: load ~20-25 of 64 cores).'
+- id: OV-30
+  tasks:
+  - P.19
+  - P.20
+  status: closed
+  t: '2026-10-30T15:26:06'
+  text: 'OWNER 2026-10-30 15:40, Galaxy power limit (agent rule 18): no op may run on more than 110 Tensix cores of a chip
+    (the PSU trips on di/dt). Add the setting MAX_WORKER_CORES (default 110 on this box; one place, tt/settings.py), cap
+    every matmul config of tt/mm_configs (today''s rule AND the galaxy table) to a grid of at most that many cores (e.g.
+    11 x 10), and re-sweep within the cap on single cards (minutes). Today''s capture shows engram_kv on 120 cores and attn.wq_b
+    on 114: both must come down. Report each call''s cores before / after.'
+  closed: '2026-10-30T15:26:13'
+  why_closed: 'OWNER 15:42: P.19 / P.20 A/Bs run at 120 cores (consistent comparison); the 110-core cap and the re-tune
+    are a separate fix job after P.20'
+- id: OV-31
+  tasks:
+  - P.20
+  status: open
+  t: '2026-10-30T15:26:27'
+  text: 'OWNER 15:42: for THIS pick keep today''s core grids (up to 120 cores, as P.19 measured) so SP=8 and SP=32 compare
+    like for like; do not apply agent rule 18''s 110-core cap here. The cap and the re-tune are a held fix job after P.20
+    (GALAXY_CORE_CAP).'
+- id: OV-32
+  tasks:
+  - FIX.15
+  status: open
+  t: '2026-10-31T00:58:46'
+  text: 'The overseer stopped attempt 1 (overseer): overseer: P.20''s rejected changes were still in the tree; the reject
+    is applied first, then FIX.15 restarts on a clean tree'
+- id: OV-33
+  tasks:
+  - FIX.15
+  status: open
+  t: '2026-10-31T02:09:32'
+  text: 'The overseer stopped attempt 2 (overseer): overseer: box problem (card 0 reset alone, mesh discovery fails); a
+    board reset is the owner''s call, never triggered through the runner''s dirty flag. Stopped for a box check.'
+- id: OV-34
+  tasks:
+  - FIX.15
+  status: open
+  t: '2026-10-31T05:06:23'
+  text: 'Box reset by the owner 2026-10-31 ~05:05 after attempt 2''s single-card probe hung and the safe runner reset card
+    0 alone (the 8x4 mesh then failed to open). Agent rule 19 now holds: NO single-card device job (no --device N|auto,
+    no tt-probe --device): run every probe, the per-op core audit and the capped matmul re-sweep inside 8x4 mesh runs (scripts/run_safe_pytest.sh
+    / tt-probe.sh without --device). Never trigger a reset (no tt-smi -r, no /tmp/tt-device-*.dirty, no provoked run): a
+    box that does not open is a stop. Your edits from attempt 2 are in the tree: check them first.'
+- id: OV-35
+  tasks:
+  - P.*
+  - FIX.*
+  - X.*
+  status: closed
+  t: '2026-10-31T07:43:25'
+  text: 'Update known_issues DS41-175 (FIX.15 found it out of date): a single-card sweep on a Galaxy is only allowed with
+    the owner''s yes or on another box (agent rule 19: a hung single-card job gets a single-card reset that breaks the 8x4
+    mesh; 2026-10-31 FIX.15 attempt 2). Keep the fabric detail, change the recommendation.'
+  closed: '2026-10-31T09:20:50'
+  why_closed: P.18 updated DS41-175 (single-card sweeps only with the owner's yes or on another box)
+- id: OV-36
+  tasks:
+  - P.21
+  status: closed
+  t: '2026-10-31T10:30:53'
+  text: 'The overseer stopped attempt 1 (perf): overseer: FIX.16 (the profile measures the consecutive-chunk path) must
+    run before P.21 (owner: fix the profile measurement first); P.21 restarts after it'
+  closed: '2026-10-31T10:31:12'
+  why_closed: P.21 now depends on FIX.16 (tasks.yaml)
+- id: OV-37
+  tasks:
+  - K.1R
+  status: open
+  t: '2026-11-01T00:49:42'
+  text: 'The overseer stopped attempt 1 (fix): overseer: test_adapter_acks misses by rounding (layer 20 window_kv last-window
+    PCC 0.98947 vs 0.98957; layers 35 / 38 last block vs a FIXED 0.99) - the DS41-141 class, not a model bug; no precision
+    chase. The overseer runs the remaining units and brings the acks to the owner.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -555,6 +699,152 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   released: '2026-10-29T15:36:21'
   placed: '2026-10-29T16:02:40'
+- id: FIX.14
+  title: 'Integrate the 2x2''s lowbit phase 2 at full size: window KV bfloat8_b blocks, index K / Q bfloat4_b (merged 1f45dcccf1c)'
+  gate:
+  - P.10
+  status: placed
+  t: '2026-10-29T16:49:50'
+  text: 'OWNER DECISION 2026-10-29 13:00; the 2x2 marked READY FOR GALAXY (df92663a019, merged in 1f45dcccf1c, no host C++
+    change so no ttnn rebuild). Defaults now on: WINDOW_KV_FORMAT=bfp8_blocks, INDEX_K_FORMAT=bfp4, INDEX_Q_FORMAT=bfp4
+    (bf16 = the path before); the served caches stay bf16 (contract unchanged; they must hold the rounded values attention
+    reads). Do: run the gate (P.10''s units) on the 8x4; anything that breaks at 8x4 sizes (SP=32 / 160 rows a chip, 40
+    layers, the window carry, the per-chip index slabs) is fixed in the forks / tt behind the same behaviour, keeping the
+    2x2 working (derive from shapes, no box literals). Measure on vs off (env WINDOW_KV_FORMAT=bf16 INDEX_K_FORMAT=bf16
+    INDEX_Q_FORMAT=bf16 = off): per-chip DRAM of the window and index tables at 1,044,480 tokens (plan numbers), window
+    / index ring or gather bytes, sparse_sdpa and indexer score per call, the new writes (ckv_bfp4 blocks, bfp_round) per
+    call, attention / indexer / device / wall per chunk from the plain profile (rung last). Accuracy: every ladder metric
+    against its limit. KNOWN, OWNER-ACCEPTED on the 2x2 at 16:50 (2x2 spec tests.waivers indexer and state.topk_idx, F226):
+    the reference''s own fp4 selection error moves the top-k state (2x2: L14 0.185 vs 0.165) and the indexer step; if the
+    8x4 misses exactly those (err_state_topk_idx_* or the indexer step) and nothing else, STOP and report the numbers per
+    layer - the overseer adds the owner''s waivers to this spec; never loosen a limit, never raise precision above the reference.
+    Any other miss is a bug to find. DS41-141''s unit waiver (L20 window_kv last-window PCC >= 0.985) may stop matching
+    once the window is bfloat8_b: report the new value, do not touch the waiver.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  placed: '2026-10-29T16:50:05'
+- id: FIX.15
+  title: 'GALAXY_CORE_CAP: no op on more than 110 Tensix cores of a chip (PSU di/dt), then re-tune'
+  gate:
+  - P.17
+  - K.1
+  status: placed
+  t: '2026-10-30T15:26:27'
+  text: 'OWNER 2026-10-30 15:40 (agent rule 18): the Galaxy''s power supply trips when a chip''s current rises too fast
+    (di/dt); no op may run on more than 110 of a chip''s 120 Tensix cores. Do: (1) add the setting MAX_WORKER_CORES (default
+    110 on Galaxy boxes, the full grid elsewhere; one place, tt/settings.py) and pass it to every op that picks a core grid;
+    (2) audit EVERY op the model runs on the 8x4 for its core count (the device profiler''s per-op core counts, or each
+    op''s program config / grid): matmul configs (tt/mm_configs: today''s rule and the galaxy table; today engram_kv uses
+    120 cores, attn.wq_b 114), the bring-up forks (ckv_bfp4 / bfp_round compact, rms_norm, mhc_pre / mhc_post, rotary_embedding_indexed,
+    sparse_sdpa, indexer_score, topk_large_indices, fabric_all_gather, combine_rf), the MoE block (fused head, se_engine3,
+    flat_routed_expert, tail, routing exchange), attention, CCL workers; (3) cap each over-limit op to at most MAX_WORKER_CORES
+    via its own option (fork ops: an option, default today''s grid), and re-sweep the capped matmul calls on single cards
+    (run_safe_pytest --device auto, P23_SHARD over all 32 cards); (4) report per op: cores before / after and its device
+    time before / after, and the chunk''s device time and warm wall at 51200 and 512000. No fork regression suites (task
+    F.1).'
+  hold: 'after P.20''s decision (owner 15:42: the P.19 / P.20 A/Bs run at 120 cores first)'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  - ttnn/ttnn/bringup
+  - models/demos/moe_block
+  released: '2026-10-31T00:58:34'
+  placed: '2026-10-31T00:58:35'
+- id: FIX.16
+  title: 'STEADY_STATE_PROFILE: the profile''s timed runs take the consecutive-chunk path (model hook steady_state)'
+  gate:
+  - P.17
+  status: placed
+  t: '2026-10-31T10:10:07'
+  text: 'OWNER 2026-10-31: every profile and wall run repeats the same chunk, so the window carry is rebuilt each time (attention.py
+    ~1011: slice 1760x512 + to_layout 128x512 + ckv_bfp4 when the tail''s next start != start; 120 calls, 1.21 ms device
+    / 16.3 ms host a chunk) although consecutive serving chunks skip it: the measured wall overstates serving by ~11 ms.
+    The framework now calls model.steady_state(start) (if the device model has it) right before each TIMED run (warm wall,
+    cProfile, the profiled run; never before an accuracy run). Implement steady_state(start) on the DS41 device model: make
+    the next run at start take exactly the path a chunk following a whole previous chunk takes (e.g. mark every layer''s
+    window tail / tail blocks as ending at start, keeping the buffers it would hold). Values may differ from a real previous
+    chunk (timing only), nothing else may change. Check with the profile that the carry rebuild ops are gone from the timed
+    run and nothing else changed (op counts per section). No fork regression suites.'
+  hold: the framework hook F236 (testing/profile.py calls model.steady_state(start) before every timed run), installed by
+    the overseer after P.18 commits
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  released: '2026-10-31T10:30:17'
+  placed: '2026-10-31T10:30:28'
+- id: FIX.18
+  title: 'OWN_ROWS_KV_MARGIN: find what in P.23 moves the window KV of layers 20 / 35 / 38, fix it without raising precision'
+  gate:
+  - K.1
+  status: placed
+  t: '2026-11-01T02:09:37'
+  text: 'Since P.23 (OWN_ROWS, e3e75423c18) K.1''s test_adapter_acks and test_runner_contract fail on three window-KV read-back
+    checks: 0_window_kv layer 20 last-window nope PCC 0.98947 < 0.98957 (calibrated limit), layers 35 / 38 last block [2496,
+    2536) 0.98910 / 0.98994 < 0.99 (tt-d-gen''s validation threshold, server_rules LAST_BLOCK_PCC). With DS41_OWN_ROWS=off
+    the same acks test passes (overseer diagnosis, /scratch/dnijemcevic/diag_acks). P.23 was meant to change only summation
+    orders (mHC and norm statistics as full-length fp32 sums on one chip), which should not be less accurate, so look for
+    what else moves: the engram projection''s rearranged columns, the head''s all-to-all into the fused head''s x buffer,
+    the fused tail''s local mode, the norms. Locate it op by op: OWN_ROWS on vs off on the same input (device dumps of the
+    window KV / layer inputs for layers 19-21 and 34-38), and the CPU reference at the device''s formats (agent rule 14).
+    Fix the cause in the OWN_ROWS path; do not raise any precision above the reference''s, do not touch the contract tests
+    or their limits, keep OWN_ROWS''s speed (report device / wall a chunk at 51200 before / after). If the cause is a genuine
+    one-rounding difference with no lower-precision choice behind it, stop and report the evidence (it becomes the owner''s
+    waiver). Agent rules 18 / 19; no fork regression suites.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/moe_block
+  - models/demos/deepseek_v41_flash_d_p/tests
+  placed: '2026-11-01T02:09:47'
+- id: FIX.19
+  title: 'CONTRACT_WINDOW_DRIFT: the layer-20 window-KV contract check judged over every position, not one 128-row window'
+  gate:
+  - K.1
+  status: placed
+  t: '2026-11-01T07:37:45'
+  text: 'OWNER 2026-11-01 (approves changing the frozen contract tests for this): test_adapter_acks and test_runner_contract
+    judge layer 20''s window KV on ONE 128-row window (the last 128 rows of the 2536-token prompt) against a limit from
+    the reference''s drift on a different window (the golden''s final ring, DS41-125 decision B). FIX.18 (DS41-192) measured
+    the device''s PCC over all 286 windows: it varies by +-0.004 from window to window, ten times the margin the check decides
+    on, so the result depends on which window is checked. Change the check to compare like with like over many samples:
+    the window KV error over every position of the range (or the median over all 128-row windows) against calib x the reference''s
+    drift over the SAME positions (official numerics vs the native golden; e2e.calib). First look for the drift data in
+    the existing golden dumps (window KV per layer / ring snapshots, DS41-124); if layer 20''s window KV at those positions
+    is not dumped, produce it with the CPU reference (official numerics at the reference''s shipped dtype) and say how long
+    it took. Keep every other check as it is (the layers 35 / 38 last-block check against tt-d-gen''s fixed 0.99 is the
+    server''s own rule: leave it, it stays waived). Then the layer-20 part of tests.unit_waivers in the spec can go: say
+    so in your report (the overseer removes it). No limit may become a fixed number (F138); no fork regression suites.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/tt/runners
+  placed: '2026-11-01T07:38:16'
+- id: FIX.20
+  title: 'LOGIT_KL: token-level accuracy, device vs DeepSeek''s reference, both against the full-precision truth'
+  gate:
+  - K.1
+  status: placed
+  placed: '2026-11-01T14:50:00'
+  t: '2026-11-01T11:31:26'
+  text: 'FIRST (owner 2026-11-01): set WINDOW_KV_FORMAT''s default back to bfp8_tiles in tt/settings.py (P.26 made bf16_tiles the default by the perf-pick convention; the owner wanted a switch only, the shipped window KV stays 8-bit; say so in the setting''s text); that is the only model change. THEN: OWNER 2026-11-01: does the device''s ~1.4-1.8x of DeepSeek''s hidden-state error (err_* shares 0.70 median, 0.91
+    worst) matter for the tokens? Measure it at the output, no other model change. The goldens (golden_full/galaxy_8x4, native
+    fp32) keep final_norm [5120, 5120] and tokens [5120] for every chunk (model.safetensors); logits = final_norm @ the
+    lm head (129280 vocab; CPU in row blocks, fp32). Write models/demos/deepseek_v41_flash_d_p/tests/bringup/test_logit_kl.py:
+    for (a) rung s10240 chunk 1 (positions 5120-10239, from 0) and (b) rung last (s56320''s last chunk, 51200-56319, prefix
+    from the golden as the ladder runs it): (1) the device''s final_norm for all 5120 positions at the shipped settings
+    (one device run per rung, as test_ladder runs it); (2) DeepSeek''s reference at numerics official (bf16, its fp8 / fp4
+    quantizers) on the same chunk with the same golden prefix (CPU; cache it next to the golden as <rung>-official/final_norm.safetensors
+    with a content hash, so it is made once; say how long it took). Against the native golden, for x in {device, official},
+    per position: KL(p_golden || p_x), top-1 agreement, top-5 overlap, and the next-token NLL on the real text (tokens shifted
+    by one) for golden, device and official. Record metrics kl_mean_<rung>, kl_p99_<rung>, top1_agree_<rung>, nll_<rung>
+    for device, and the same with suffix _official; the limit kl_mean_<rung>_limit = e2e.calib^2 x the official''s kl_mean
+    (KL ~ rel^2, as F135''s PCC convention; no fixed number, F138); gate metrics kl_mean_* <= limit. The rest recorded,
+    not gated. Long CPU or device jobs through devjob (start / wait), never killed; agent rules 18 / 19; one device process
+    at a time; no fork regression suites. Run the device side twice per rung: the shipped default and DS41_WINDOW_KV_FORMAT=bf16_tiles (P.26''s switch; metrics with suffix _wkv16, recorded, not gated), so the window-KV format is also judged at the tokens. Report a table: device (both formats) vs official for both rungs, and the 20 worst positions
+    (token, KL, golden top-1 vs device top-1).'
+  hold: P.26 decided; overseer sets the gate to test_logit_kl.py
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/reference
 classified:
   L.smoke:
     kind: framework
