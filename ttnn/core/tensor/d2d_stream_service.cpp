@@ -177,7 +177,24 @@ struct SegmentPlan {
     uint32_t payload_size;
     uint32_t dtype;
     uint32_t layout;
+    // Hash of the per-shard logical and padded shape: 2x3 and 3x2 tiles share every field above.
+    uint32_t shape_hash;
 };
+
+uint32_t hash_shard_shape(const tt::tt_metal::TensorSpec& spec) {
+    uint32_t h = 2166136261u;  // FNV-1a
+    const auto mix = [&h](uint32_t v) {
+        h ^= v;
+        h *= 16777619u;
+    };
+    for (const auto* shape : {&spec.logical_shape(), &spec.padded_shape()}) {
+        mix(static_cast<uint32_t>(shape->rank()));
+        for (size_t d = 0; d < shape->rank(); ++d) {
+            mix(static_cast<uint32_t>((*shape)[d]));
+        }
+    }
+    return h;
+}
 
 // Looks up `core` on `mesh`. Fails if the chip has no PCIe device of its own.
 PCIeCoreLocation resolve_pcie_core(distributed::MeshDevice& mesh, const distributed::MeshCoreCoord& core) {
@@ -276,9 +293,9 @@ std::vector<uint32_t> swap_words(
 // identical SocketConnection list and the sender can target the receiver's DRAM
 // tensors directly. The segment count goes first, alone, because it sizes the main
 // payload: [socket_page_size, num_socket_pages, metadata_size_bytes,
-// share_fabric_links, relay, (page_size, num_pages, payload_size, dtype, layout) per segment,
+// share_fabric_links, relay, (page_size, num_pages, payload_size, dtype, layout, shape_hash) per segment,
 // then per coord in `coords` order x, y, addr per segment]. The fingerprint fields catch a
-// peer whose socket config, relay mode or per-segment page geometry / dtype / layout differs before
+// peer whose socket config, relay mode or per-segment page geometry / dtype / layout / shape differs before
 // the fabric hangs or the data is silently reinterpreted.
 ExchangedEndpoint exchange_service_cores(
     const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
@@ -303,7 +320,7 @@ ExchangedEndpoint exchange_service_cores(
         peer_num_segments);
 
     constexpr uint32_t kNumFixedFields = 5;
-    constexpr uint32_t kWordsPerSegment = 5;
+    constexpr uint32_t kWordsPerSegment = 6;
     const uint32_t num_fingerprint_words = kNumFixedFields + (kWordsPerSegment * num_segments);
     const uint32_t words_per_coord = 2 + num_segments;
     std::vector<uint32_t> out;
@@ -319,6 +336,7 @@ ExchangedEndpoint exchange_service_cores(
         out.push_back(seg.payload_size);
         out.push_back(seg.dtype);
         out.push_back(seg.layout);
+        out.push_back(seg.shape_hash);
     }
     for (const auto& c : coords) {
         const auto core = local_cores.at(c);
@@ -336,8 +354,8 @@ ExchangedEndpoint exchange_service_cores(
     TT_FATAL(
         fingerprint(in) == fingerprint(out),
         "D2DStreamService: peer chunk-plan mismatch — local [socket_page_size, num_socket_pages, "
-        "metadata_size_bytes, share_fabric_links, relay, (page_size, num_pages, payload_size, dtype, layout) per tensor] = "
-        "{} vs peer {}; "
+        "metadata_size_bytes, share_fabric_links, relay, "
+        "(page_size, num_pages, payload_size, dtype, layout, shape_hash) per tensor] = {} vs peer {}; "
         "sender and receiver must use the same global_spec, mapper, extra_tensors, fifo_size, metadata_size_bytes, "
         "share_fabric_links, and relay (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)",
         fingerprint(out),
@@ -498,7 +516,8 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const std::vector<Tens
             .num_pages = static_cast<uint32_t>(buf->num_pages()),
             .payload_size = static_cast<uint32_t>(buf->page_size()),
             .dtype = static_cast<uint32_t>(backings[i].dtype()),
-            .layout = static_cast<uint32_t>(backings[i].layout())});
+            .layout = static_cast<uint32_t>(backings[i].layout()),
+            .shape_hash = hash_shard_shape(backings[i].tensor_spec())});
     }
     const uint32_t tensor_page_size = segments.front().page_size;
     const uint32_t tensor_num_pages = segments.front().num_pages;
@@ -1281,6 +1300,8 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
         coord);
     return it->second;
 }
+
+uint32_t D2DStreamServiceSender::get_metadata_size_bytes() const { return impl_->metadata_size_bytes; }
 
 void D2DStreamServiceSender::wait_for_fabric_links() {
     TT_FATAL(

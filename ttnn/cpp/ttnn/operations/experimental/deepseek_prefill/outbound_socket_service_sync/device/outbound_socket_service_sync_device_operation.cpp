@@ -34,6 +34,11 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         "copies it "
         "page-for-page)");
     TT_FATAL(args.page_size > 0 && args.num_pages > 0, "outbound_socket_service_sync: backing tensor has no pages");
+    // The writer runs on the backing's mesh and reads every input by address, so a tensor on
+    // another mesh would read unrelated memory.
+    TT_FATAL(
+        input.device() == backing.device(),
+        "outbound_socket_service_sync: input tensor must be on the sender backing's mesh device");
     TT_FATAL(
         !args.data_ready_addrs.empty() && args.service_core_x.size() == args.data_ready_addrs.size() &&
             args.service_core_y.size() == args.data_ready_addrs.size(),
@@ -57,8 +62,6 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             extra_input.tensor_spec() == extra_backing.tensor_spec(),
             "outbound_socket_service_sync: input tensor {} spec must match the sender backing per-shard spec",
             i + 1);
-        // The writer runs on the backing's mesh and reads the input by address, so an input on
-        // another mesh would read unrelated memory.
         TT_FATAL(
             extra_input.device() == backing.device(),
             "outbound_socket_service_sync: input tensor {} must be on the sender backing's mesh device",
@@ -92,6 +95,9 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor_args.metadata.has_value() && tensor_args.metadata->is_allocated(),
             "outbound_socket_service_sync: metadata_size_bytes > 0 requires an allocated metadata tensor");
+        TT_FATAL(
+            tensor_args.metadata->device() == backing.device(),
+            "outbound_socket_service_sync: metadata tensor must be on the sender backing's mesh device");
         TT_FATAL(
             args.metadata_addrs.size() == args.data_ready_addrs.size(),
             "outbound_socket_service_sync: per-coord metadata addresses are inconsistent");
@@ -175,6 +181,21 @@ ttnn::Tensor outbound_socket_service_sync_impl(
     attrs.metadata_size_bytes =
         metadata.has_value() ? static_cast<uint32_t>(metadata->logical_shape()[-1] * sizeof(uint32_t)) : 0;
     attrs.metadata_only = metadata_only;
+    if (metadata.has_value()) {
+        // The service sized its metadata buffer (D2D) or ring slot (D2H) for its configured size,
+        // so a larger blob would overrun the neighbouring L1.
+        uint32_t service_metadata_size_bytes = 0;
+        if constexpr (std::is_same_v<ServiceT, ttnn::D2DStreamServiceSender>) {
+            service_metadata_size_bytes = service.get_metadata_size_bytes();
+        } else {
+            service_metadata_size_bytes = static_cast<uint32_t>(service.metadata_size_bytes());
+        }
+        TT_FATAL(
+            attrs.metadata_size_bytes <= service_metadata_size_bytes,
+            "outbound_socket_service_sync: metadata ({} B) exceeds the service's configured metadata_size_bytes ({})",
+            attrs.metadata_size_bytes,
+            service_metadata_size_bytes);
+    }
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
     const bool has_metadata = attrs.metadata_size_bytes > 0;

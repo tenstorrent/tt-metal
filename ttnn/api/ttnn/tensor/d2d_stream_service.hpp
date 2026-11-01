@@ -249,6 +249,9 @@ public:
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
+    // Echo of Config::metadata_size_bytes (0 = metadata disabled).
+    uint32_t get_metadata_size_bytes() const;
+
     // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
     // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
     // link ownership between this service and the model-graph ops on the same links:
