@@ -39,9 +39,6 @@ class Shared:
         self.had = BlockHadamard.from_metadata(self.gguf.kv)
         self.workers = a3.worker_cores(device, WPB)
         self.m = {k: a3.hadamard_tensor(device, self.had, k) for k in (5120, 6144, 17408)}
-        # h in DRAM: an L1-interleaved buffer would sit on every core, (0, 0) included (see a3.AVOID).
-        self.h = ttnn.from_torch(torch.zeros(1, 1, 1, 17408), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                                 tile=ttnn.Tile([1, 32]), device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class TernaryMLP:
@@ -68,10 +65,15 @@ class TernaryMLP:
         # every core and clashes with the model's large-CB ops (the final norm on core (0, 0)).
         x8 = a3.masked_input_buffer(sh.device, sh.workers, 5120)
         a3.prep(x, sh.m[5120], x8, sh.workers, src_tile32=True)
-        a3.ternary_linear(x8, self.w_gu, self.s_gu, sh.h, sh.workers, gu=True, cache=False)
+        # h per call in L1 (a persistent L1 buffer would clash; DRAM made the next prep 20 -> 30 us)
+        h = ttnn.allocate_tensor_on_device(ttnn.TensorSpec(ttnn.Shape([1, 1, 1, 17408]), ttnn.bfloat16,
+                                                           ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.Tile([1, 32])),
+                                           sh.device)
+        a3.ternary_linear(x8, self.w_gu, self.s_gu, h, sh.workers, gu=True, cache=False)
         ttnn.deallocate(x8)
         x8 = a3.masked_input_buffer(sh.device, sh.workers, 17408)
-        a3.prep(sh.h, sh.m[17408], x8, sh.workers, src_tile32=False)
+        a3.prep(h, sh.m[17408], x8, sh.workers, src_tile32=False)
+        ttnn.deallocate(h)
         out = ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,  # residual-stream logical shape
                                              sh.device, ttnn.L1_MEMORY_CONFIG)
         a3.ternary_linear(x8, self.w_d, self.s_d, out, sh.workers, gu=False, cache=False)
