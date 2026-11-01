@@ -276,7 +276,28 @@ TEST_F(UnitMeshFixture, DMTensixTest1xDFB1Sx1SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-// Host-only: validates Quasar L1 packing (96B header + per-hart blobs + producer-ready region).
+// A DM hart's init entry is an 8B control prefix followed by its LocalDFBInterface image; these read
+// the fields the tests check (layout in dataflow_buffer_config.h, dfb_write_dm_image_entry).
+static uint16_t dm_entry_u16(const uint8_t* entry, uint32_t off) {
+    uint16_t v = 0;
+    std::memcpy(&v, entry + off, sizeof(v));
+    return v;
+}
+static uint32_t dm_entry_u32(const uint8_t* entry, uint32_t off) {
+    uint32_t v = 0;
+    std::memcpy(&v, entry + off, sizeof(v));
+    return v;
+}
+constexpr uint32_t kDmEntryFlagsOff = 2;
+constexpr uint32_t kDmEntryCapacityOff = 4;
+constexpr uint32_t kDmEntryBytesOff = 7;
+constexpr uint32_t kDmImageEntrySizeOff = DFB_IFACE_IMAGE_CTRL_BYTES + 0;
+constexpr uint32_t kDmImageNumTcsOff = DFB_IFACE_IMAGE_CTRL_BYTES + DFB_DM_IFACE_NUM_TCS_BYTE_OFF;
+constexpr uint32_t kDmImageBlockSizeOff = DFB_IFACE_IMAGE_CTRL_BYTES + 22;
+constexpr uint32_t kDmImageSplitTcOff = DFB_IFACE_IMAGE_CTRL_BYTES + 24;
+constexpr uint32_t kDmImageJumpOff = DFB_IFACE_IMAGE_CTRL_BYTES + 28;
+
+// Host-only: validates Quasar L1 packing (120B header + per-hart blobs + producer-ready region).
 TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -309,64 +330,59 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
     EXPECT_EQ(ghdr->num_dfbs, 1u);
-    EXPECT_EQ(sizeof(dfb_global_header_t), 96u);  // new 96B header
-    EXPECT_EQ(dfb_config_header_size(), 96u);
+    EXPECT_EQ(sizeof(dfb_global_header_t), 120u);
+    EXPECT_EQ(dfb_config_header_size(), 120u);
 
-    // Header is at offset 0; DM1 blob starts immediately after.
-    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, dfb_config_header_size());
+    // Header is at offset 0; the DM1 blob starts on the next cache line, its slot array one line later.
+    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, 128u);
+    EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, 192u);
     EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
-    // No implicit sync → has_dm0_isr=0, dm0_isr_blob_region_size=0.
+    // No implicit sync → no DM0 ISR blob, and dm0_packed is 0.
     EXPECT_EQ(experimental::dfb::detail::dm0_isr_blob_region_size(dfbs), 0u);
     EXPECT_EQ(ghdr->has_dm0_isr, 0u);
     EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
-    EXPECT_EQ(sizeof(dfb_dm0_isr_txn_threshold_t), 4u);
+    EXPECT_EQ(ghdr->dm0_packed, 0u);
 
-    // hart_blob_offset[] must be set for the two participating harts (0=producer, 4=consumer).
-    EXPECT_GT(ghdr->hart_blob_offset[0], 0u);
-    EXPECT_GT(ghdr->hart_blob_offset[4], 0u);
-    // Non-participating harts must also have a valid (minimal) blob offset.
+    // Every hart, participating or not, gets a blob of whole cache lines; only harts 0 (producer) and
+    // 4 (consumer) have an entry, and only the producer publishes a signal.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-        EXPECT_GT(ghdr->hart_blob_offset[h], 0u) << "hart " << static_cast<int>(h);
+        SCOPED_TRACE("hart " + std::to_string(h));
+        const dfb_hart_desc_t& desc = ghdr->hart_desc[h];
+        EXPECT_EQ(desc.num_entries, (h == 0 || h == 4) ? 1u : 0u);
+        EXPECT_EQ(desc.flags, h == 0 ? DFB_HART_DESC_FLAG_PRODUCER : 0u);
+        EXPECT_GT(desc.blob_start, 0u);
+        EXPECT_EQ(desc.blob_start % 64u, 0u);
+        EXPECT_GT(desc.blob_len, 0u);
+        EXPECT_EQ(desc.blob_len % 64u, 0u);
+        EXPECT_EQ(desc.signal_region_off, ghdr->dfb_signal_region_off);
     }
 
-    // Signal region: per-producer byte slots (zeroed) then dfb_expected_signal[NUM_DFBS].
+    // Signal region: per-hart byte slots (zeroed) then dfb_expected_signal[NUM_DFBS].
     EXPECT_GT(ghdr->dfb_signal_region_off, 0u);
     EXPECT_LT(static_cast<size_t>(ghdr->dfb_signal_region_off), nbytes);
-    // Slot for producer 0 of DFB 0 must be zero (not yet written by producer at runtime).
-    constexpr uint32_t kMaxProd = ::dfb::MAX_PRODUCERS_PER_DFB;
-    EXPECT_EQ(buf[ghdr->dfb_signal_region_off + 0 * kMaxProd + 0], 0u);
-    // dfb_expected_signal[0] must be 1 (single producer, bit 0).
-    constexpr uint32_t kExpectedOff = ::dfb::NUM_DFBS * kMaxProd;
+    // Producer hart 0's slot must be zero (not yet written by the producer at runtime).
+    EXPECT_EQ(buf[ghdr->dfb_signal_region_off + 0], 0u);
+    // dfb_expected_signal[0] is the mask of producing harts: hart 0 only.
+    constexpr uint32_t kExpectedOff = ::dfb::NUM_DFBS * ::dfb::MAX_PRODUCERS_PER_DFB;
     const auto* dfb_expected = reinterpret_cast<const uint32_t*>(
         buf.data() + ghdr->dfb_signal_region_off + kExpectedOff);
     EXPECT_EQ(dfb_expected[0], 1u);
 
-    // DFB 0 init entry for hart 0 (producer): participation_mask bit set, one init entry.
-    EXPECT_EQ(ghdr->participation_mask[0], 1u);
-    const auto* entry0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        buf.data() + ghdr->hart_blob_offset[0]);
-    EXPECT_EQ(entry0->logical_dfb_id, 0u);
-    EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
-    EXPECT_EQ(entry0->entry_size, 1024u);
-    EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
-    EXPECT_EQ(entry0->split_tc, 0u);   // STRIDED producer: nothing to split
-    EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
+    // Hart 0 (DM producer): one DM entry for DFB 0 with a single tile counter.
+    const uint8_t* entry0 = buf.data() + ghdr->hart_desc[0].blob_start;
+    EXPECT_EQ(dm_entry_u16(entry0, 0), 0u);  // iface_byte_off = logical DFB 0 * sizeof(LocalDFBInterface)
+    EXPECT_NE(entry0[kDmEntryFlagsOff] & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(dm_entry_u16(entry0, kDmEntryCapacityOff), 16u);  // STRIDED 1P1C: capacity == num_entries
+    EXPECT_EQ(entry0[kDmImageNumTcsOff], 1u);
+    EXPECT_EQ(entry0[kDmEntryBytesOff], 56u);  // 8 ctrl + 32 scalars + 16 per TC
+    EXPECT_EQ(dm_entry_u32(entry0, kDmImageEntrySizeOff), 1024u);
+    EXPECT_EQ(dm_entry_u16(entry0, kDmImageSplitTcOff), 0u);  // STRIDED producer: nothing to split
 
-    // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
-    EXPECT_EQ(ghdr->participation_mask[4], 1u);
-    const auto* entry4 = reinterpret_cast<const dfb_hart_init_entry_t*>(
-        buf.data() + ghdr->hart_blob_offset[4]);
-    EXPECT_EQ(entry4->logical_dfb_id, 0u);
-    EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
-    EXPECT_EQ(entry4->capacity, 0u);  // consumers leave capacity 0; producers program the TC
-    EXPECT_EQ(dfb_read_init_entry_producer_signal_bit(reinterpret_cast<const uint8_t*>(entry4), true), 0xFFu);
-
-    // participation_mask drives device init entry count; non-participating harts are zero.
-    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-        if (h != 0 && h != 4) {
-            EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
-        }
-    }
+    // Hart 4 (DM consumer): no IS_PRODUCER flag, and consumers leave capacity 0.
+    const uint8_t* entry4 = buf.data() + ghdr->hart_desc[4].blob_start;
+    EXPECT_EQ(dm_entry_u16(entry4, 0), 0u);
+    EXPECT_EQ(entry4[kDmEntryFlagsOff] & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(dm_entry_u16(entry4, kDmEntryCapacityOff), 0u);
 
     experimental::dfb::detail::verify_dfb_global_header_participation(*ghdr, dfbs);
     experimental::dfb::detail::verify_dfb_hart_blobs(
@@ -440,7 +456,8 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
         ASSERT_GT(nbytes, 0u);
         const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
 
-        // One DFB, so each participating hart's blob starts with this DFB's entry.
+        // One DFB, so each participating hart's blob starts with this DFB's entry. Every participant
+        // here is a DM hart, whose entry is a control prefix + LocalDFBInterface image.
         for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
             const bool is_producer = (c.config.producer_risc_mask >> h) & 1u;
             const bool is_consumer = (c.config.consumer_risc_mask >> h) & 1u;
@@ -448,11 +465,14 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
                 continue;
             }
             SCOPED_TRACE("hart " + std::to_string(h));
-            const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(buf.data() + ghdr->hart_blob_offset[h]);
-            EXPECT_EQ((entry->flags & DFB_HART_FLAG_IS_PRODUCER) != 0, is_producer);
-            EXPECT_EQ(entry->block_size, bs);
-            EXPECT_EQ(entry->split_tc, is_producer ? c.producer_split_tc : c.consumer_split_tc);
-            EXPECT_EQ(entry->entries_to_jump, is_producer ? c.producer_jump : c.consumer_jump);
+            const uint8_t* entry = buf.data() + ghdr->hart_desc[h].blob_start;
+            EXPECT_EQ((entry[kDmEntryFlagsOff] & DFB_HART_FLAG_IS_PRODUCER) != 0, is_producer);
+            EXPECT_EQ(dm_entry_u16(entry, kDmImageBlockSizeOff), bs);
+            EXPECT_EQ(dm_entry_u16(entry, kDmImageSplitTcOff), is_producer ? c.producer_split_tc : c.consumer_split_tc);
+            // A DM cursor is a byte address, so the image carries the jump in bytes.
+            EXPECT_EQ(
+                dm_entry_u32(entry, kDmImageJumpOff),
+                (is_producer ? c.producer_jump : c.consumer_jump) * c.config.entry_size);
         }
     }
 }
@@ -507,34 +527,35 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     EXPECT_EQ(dm0_core_hdr->producer_txn_id_mask, expected_prod_mask);
     EXPECT_EQ(dm0_core_hdr->consumer_txn_id_mask, expected_cons_mask);
 
-    const uint32_t txn_hw_off = ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t);
-    const uint32_t txn_hw_bytes = dm0_isr_txn_hw_pool_byte_size(expected_prod_mask, expected_cons_mask);
-    const uint32_t desc_pool_bytes = dm0_isr_txn_desc_pool_byte_size(expected_prod_mask, expected_cons_mask);
-    // DM0 blob ends before hart blobs; verify txn pool + desc pool fits inside the DM0 blob region.
-    EXPECT_EQ(txn_hw_off + txn_hw_bytes + desc_pool_bytes,
-              ghdr->dm0_isr_blob_offset + dm0_region);
+    // DM0's prologue word must agree with the blob it describes.
+    EXPECT_EQ(dfb_dm0_packed_blob_offset(ghdr->dm0_packed), ghdr->dm0_isr_blob_offset);
+    EXPECT_EQ(dfb_dm0_packed_producer_mask(ghdr->dm0_packed), expected_prod_mask);
+    EXPECT_EQ(dfb_dm0_packed_consumer_mask(ghdr->dm0_packed), expected_cons_mask);
 
-    const auto* txn_threshold_table =
-        reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + txn_hw_off);
-    const uint32_t all_mask = expected_prod_mask | expected_cons_mask;
-    // Pools hold one slot per used txn id, so the threshold for an id lives at its dense slot.
+    // The descriptor pool starts one cache line into the DM0 blob and fills the rest of its region.
+    const uint32_t desc_pool_off = ghdr->dm0_isr_blob_offset + DFB_DM0_CACHED_PAYLOAD_OFFSET;
     EXPECT_EQ(
-        txn_hw_bytes,
-        dm0_isr_txn_slot_count(expected_prod_mask, expected_cons_mask) * sizeof(dfb_dm0_isr_txn_threshold_t));
+        desc_pool_off + dm0_isr_txn_desc_pool_byte_size(expected_prod_mask, expected_cons_mask),
+        ghdr->dm0_isr_blob_offset + dm0_region);
+
+    // One slot per used txn id, in ascending id order, each slot dm0_packed's stride wide with the
+    // CMDBUF threshold in its last byte.
+    const uint32_t stride = dfb_dm0_packed_desc_stride(ghdr->dm0_packed);
+    const uint32_t threshold_off = dfb_dm0_desc_threshold_offset(stride);
+    const uint32_t all_mask = expected_prod_mask | expected_cons_mask;
+    const auto threshold_of = [&](uint32_t txn_id) {
+        return buf[desc_pool_off + dm0_isr_txn_slot_index(all_mask, txn_id) * stride + threshold_off];
+    };
     uint32_t pending = expected_prod_mask;
     while (pending) {
         const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
-        EXPECT_EQ(
-            txn_threshold_table[dm0_isr_txn_slot_index(all_mask, txn_id)].threshold,
-            dfbs[0]->producer_txn_descriptor.num_entries_to_process_threshold);
+        EXPECT_EQ(threshold_of(txn_id), dfbs[0]->producer_txn_descriptor.num_entries_to_process_threshold);
         pending &= (pending - 1u);
     }
     pending = expected_cons_mask;
     while (pending) {
         const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
-        EXPECT_EQ(
-            txn_threshold_table[dm0_isr_txn_slot_index(all_mask, txn_id)].threshold,
-            dfbs[0]->consumer_txn_descriptor.num_entries_to_process_threshold);
+        EXPECT_EQ(threshold_of(txn_id), dfbs[0]->consumer_txn_descriptor.num_entries_to_process_threshold);
         pending &= (pending - 1u);
     }
 }
