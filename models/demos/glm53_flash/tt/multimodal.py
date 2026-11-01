@@ -253,6 +253,31 @@ def vision_pad_patches(n_patches: int, bucket: int = VISION_PATCH_BUCKET) -> int
     return max(bucket, -(-int(n_patches) // bucket) * bucket) + TILE
 
 
+def split_window_bands(
+    pixel_values: torch.Tensor, row: torch.Tensor, max_patches: int, merge: int = 2
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """An oversized window ``(1, h, w)`` (``pixel_values`` [h*w, D] in the processor's merge-block order: whole
+    block rows of ``merge`` patch rows are contiguous) as row bands of at most ``max_patches`` patches, every band a
+    whole number of merge-block rows: ``[(pixels, [1, hb, w]), ...]``. A single block row wider than the cap cannot
+    be banded (``ValueError``)."""
+    _, h, w = (int(v) for v in row.reshape(-1).tolist())
+    n = int(pixel_values.shape[0])
+    if n != h * w:
+        raise ValueError(f"window {h}x{w} vs {n} patches")
+    if h * w <= max_patches:
+        return [(pixel_values, row.reshape(1, 3))]
+    block_rows = (max_patches // (merge * w)) * merge  # patch rows per band
+    if block_rows <= 0:
+        raise ValueError(f"a vision window {h}x{w} cannot be banded under the {max_patches}-patch tower call cap")
+    bands = []
+    off = 0
+    for r0 in range(0, h, block_rows):
+        hb = min(block_rows, h - r0)
+        bands.append((pixel_values[off : off + hb * w], torch.tensor([[1, hb, w]], dtype=row.dtype)))
+        off += hb * w
+    return bands
+
+
 def _tower_call(
     tower: TtVisionTower, pixel_values: torch.Tensor, grid_rows: torch.Tensor, pad_to: int | None = None
 ) -> list[torch.Tensor]:
@@ -298,7 +323,19 @@ def vision_features(
     for i, (_, pv, row) in enumerate(windows):
         n = int(pv.shape[0])
         if n > max_patches:
-            raise ValueError(f"a vision window of {n} patches exceeds the {max_patches}-patch tower call cap")
+            # the window exceeds the tower call cap (the HF processor's max_pixels is normally bound to it): run it as
+            # row bands of at most ``max_patches`` patches, each its own window (rotary positions restart per band:
+            # a degraded encoding of an oversized image, never a dead engine; 2026-11-01 shield release 41269302644)
+            bands = split_window_bands(pv, row, max_patches)
+            logger.warning(
+                f"vision window of {n} patches exceeds the {max_patches}-patch tower call cap: encoded as "
+                f"{len(bands)} row bands (positions restart per band)"
+            )
+            feats = [
+                _tower_call(tower, bpv, brow, pad_to=vision_pad_patches(int(bpv.shape[0])))[0] for bpv, brow in bands
+            ]
+            per_window[i] = torch.cat(feats, dim=0)
+            continue
         per_window[i] = _tower_call(tower, pv, grid_flat[i : i + 1], pad_to=vision_pad_patches(n))[0]
     out: list[torch.Tensor] = []
     for k, it in enumerate(items):

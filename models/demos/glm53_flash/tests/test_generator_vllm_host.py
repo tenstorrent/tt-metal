@@ -1413,3 +1413,24 @@ def test_kv_accounting_hooks():
 def test_zz_no_ttnn_was_imported_by_the_suite():
     """Runs last (file order): every adapter path the fake model exercised stayed off ttnn."""
     assert "ttnn" not in sys.modules
+
+
+def test_vision_window_bands(expect_error):
+    """An oversized image window is encoded as row bands under the tower call cap (multimodal.split_window_bands):
+    whole merge-block rows per band, the patches partitioned in order, a window inside the cap untouched, a block row
+    wider than the cap refused."""
+    import torch
+
+    from models.demos.glm53_flash.tt.multimodal import split_window_bands
+
+    h, w, D = 36, 44, 7  # 1584 patches (the shield release's MMMU image) against a 1024-patch cap
+    pv = torch.arange(h * w * D, dtype=torch.float32).reshape(h * w, D)
+    row = torch.tensor([[1, h, w]], dtype=torch.int64)
+    bands = split_window_bands(pv, row, 1024)
+    hbs = [int(r[0, 1]) for _, r in bands]
+    assert hbs == [22, 14] and all(hb % 2 == 0 for hb in hbs), hbs
+    assert all(int(r[0, 2]) == w and hb * w <= 1024 for (_, r), hb in zip(bands, hbs))
+    assert torch.equal(torch.cat([b for b, _ in bands]), pv)
+    assert split_window_bands(pv[: 32 * 32], torch.tensor([[1, 32, 32]]), 1024)[0][0].shape[0] == 1024
+    with expect_error(ValueError):
+        split_window_bands(pv, row, 64)  # one block row (2 x 44 = 88 patches) exceeds the cap
