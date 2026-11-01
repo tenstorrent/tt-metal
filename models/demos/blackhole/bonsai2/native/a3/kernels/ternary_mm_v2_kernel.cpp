@@ -15,7 +15,8 @@
 //     (tm_out_tile32=1, what the model's residual add expects).
 //
 // Runtime args, per core:
-//   NCRISC: w_addr          BRISC: s_addr, out_addr, out_tile0 (first output tile of this core)
+//   NCRISC: w_addr          BRISC: s_addr, out_addr, out_tile0 (first output tile of this core),
+//                                  out_tiles (real output tiles; the rest are padding columns)
 
 #include "../../../../../deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
 #include "../../../../../deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
@@ -163,6 +164,7 @@ void kernel_main() {
         constexpr bool out_is_dram = get_named_compile_time_arg_val("tm_out_is_dram") == 1;
         const InterleavedAddrGen<out_is_dram> og{.bank_base_address = get_arg_val<uint32_t>(1), .page_size = out_page};
         const uint32_t out_tile0 = get_arg_val<uint32_t>(2);
+        const uint32_t out_tiles = get_arg_val<uint32_t>(3);  // tiles past this are padding columns
         // out_tile32: a zeroed 2 KB staging tile; each output overwrites row 0 (face 0/1 row 0) only
         constexpr uint32_t cb_stage = 5;
         uint32_t stage = 0;
@@ -176,6 +178,10 @@ void kernel_main() {
         }
         auto write_out = [&](uint32_t n) {
             cb_wait_front(cb_out, 1);
+            if (out_tile0 + n >= out_tiles) {
+                cb_pop_front(cb_out, 1);
+                return;
+            }
             const uint32_t src = get_read_ptr(cb_out);
             if constexpr (out_tile32) {
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
