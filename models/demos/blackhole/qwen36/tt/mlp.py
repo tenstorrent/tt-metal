@@ -257,8 +257,11 @@ class Qwen36MLP:
                     num_workers_per_dram_bank=workers,
                 )
 
-            self._w1_dpc = dpc(ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))
-            self._w3_dpc = dpc(None)
+            # SiLU is NOT fused into the w1 matmul: there it acts on the fp32 accumulator, while the 1D path
+            # applies it to the bf16 output, and that alone moved top-1 93.55 -> 92.97. It rides on the
+            # gate*up mul instead (input_tensor_a_activations), bit-exact with the 1D path
+            # (test_mlp_dramshard_equiv.py) and no extra op.
+            self._w1_dpc = self._w3_dpc = dpc(None)
 
     def forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
@@ -279,7 +282,12 @@ class Qwen36MLP:
             w3_out = ttnn.linear(x_sh, w.w3, compute_kernel_config=ckc, program_config=self._w3_dpc, memory_config=shmc)
             if x_sh is not x:
                 ttnn.deallocate(x_sh)
-            hidden_sh = ttnn.mul(w1_out, w3_out, memory_config=w1_out.memory_config())
+            hidden_sh = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=w1_out.memory_config(),
+            )
             ttnn.deallocate(w1_out)
             ttnn.deallocate(w3_out)
             hidden = ttnn.sharded_to_interleaved(hidden_sh, mc)
