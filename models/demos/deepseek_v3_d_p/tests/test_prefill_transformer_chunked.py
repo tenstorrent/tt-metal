@@ -94,8 +94,9 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
-# (GLM_L1_SMALL: room for the MoE block's persistent words too, PERSIST_L1=small)
-GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", "1536"))
+# (MOE_IMPL=block: room for the MoE block's persistent words and semaphores, which live in L1_SMALL - its first call
+# logs the total; GLM_L1_SMALL overrides)
+GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", "5888" if os.environ.get("MOE_IMPL") == "block" else "1536"))
 
 
 def _glm_payload():
@@ -110,7 +111,8 @@ def _glm_payload():
 
 def _k3_device_params():
     """K3's fabric (K3_FABRIC=torus_xy: the XY torus); K3_MOE_IMPL=block also opens it with the payload the MoE block's
-    combine needs (2 x 3584 + 32 B) and K3_L1_SMALL (room for its persistent words with PERSIST_L1=small)."""
+    combine needs (2 x 3584 + 32 B) and L1_SMALL room for its persistent words and semaphores (K3_L1_SMALL overrides).
+    """
     payload = moe_fabric_payload(KimiK3Config)
     if os.environ.get("K3_MOE_IMPL") == "block":
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import fabric_payload
@@ -119,7 +121,11 @@ def _k3_device_params():
     extra = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY} if os.environ.get("K3_FABRIC") == "torus_xy" else {}
     return fabric2d_device_params(
         fabric_payload_size=payload,
-        l1_small_size=int(os.environ.get("K3_L1_SMALL", KimiK3Config.L1_SMALL_SIZE)),
+        l1_small_size=int(
+            os.environ.get(
+                "K3_L1_SMALL", 5888 if os.environ.get("K3_MOE_IMPL") == "block" else KimiK3Config.L1_SMALL_SIZE
+            )
+        ),
         trace_region_size=256 * 1024 * 1024,
         **extra,
     )

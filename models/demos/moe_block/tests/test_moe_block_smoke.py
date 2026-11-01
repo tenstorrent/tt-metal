@@ -60,7 +60,7 @@ def mesh():
     if not MOCK and ttnn.get_num_devices() < R * C:
         pytest.skip(f"needs a {R}x{C} Galaxy or the mock Galaxy")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
-    m = ttnn.open_mesh_device(ttnn.MeshShape(R, C))
+    m = ttnn.open_mesh_device(ttnn.MeshShape(R, C), l1_small_size=5888)  # (the block's words and semaphores)
     yield m
     ttnn.close_mesh_device(m)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -74,7 +74,9 @@ def test_moe_block_smoke(mesh):
     dims = _glm53()
     E, H, I, Is, N = dims.num_experts, dims.emb_dim, dims.routed_expert_hidden_dim, 2048, R * C
     dtypes = mb.MoEDtypes()
-    res = mb.MoEBlockResources(mesh, dims, mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2), dtypes)
+    res = mb.MoEBlockResources(
+        mesh, dims, mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2, persist_l1_small=True), dtypes
+    )
     try:
         block = MoEBlock(mesh, res, dtypes=dtypes, accumulators=ACCUMULATORS, activation=fw.ACTS["silu"])
         host = lambda *s: ttnn.from_torch(torch.zeros(*s), dtype=ttnn.float32)

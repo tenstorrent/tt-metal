@@ -32,9 +32,6 @@ class MoEBlockWeights:
     w_up: Optional[ttnn.Tensor] = None
 
 
-TOP_HOLE_BYTES = 32 * 1024  # (a core: room for the ops' persistent L1 words, see MoEBlock.__init__)
-
-
 class MoEBlock:
     """One MoE block on ``mesh_device``. ``resources``: the block's MoEBlockResources on it; ``dtypes``: MoEDtypes;
     ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it);
@@ -58,6 +55,10 @@ class MoEBlock:
         l1_free: Optional[int] = None,
     ):
         mb = ttnn.experimental.moe_block
+        # (the ops' persistent words and semaphores live across calls: in L1_SMALL, where no other program's circular
+        # buffers go - in plain L1 the model's programs between two MoE layers overwrote them. Open the mesh with an
+        # l1_small_size that holds them: l1_small_bytes after the first call.)
+        assert resources.config.persist_l1_small, "MoEBlock: create its resources with persist_l1_small=True"
         self.mb, self.mesh_device, self.resources, self.dtypes = mb, mesh_device, resources, dtypes
         self.accumulators, self.l1_free = accumulators, l1_free
         chunk, dims = resources.config.chunk_tokens, resources.dims
@@ -73,23 +74,6 @@ class MoEBlock:
             layout=layout,
             combine=self.combine,
         )
-        # (a hole at the top of L1 for the persistent words the ops create at their first call: made with the arena
-        # allocated, they would otherwise land below it - low in L1, where the model's other programs' circular
-        # buffers go. TODO: the ops create every persistent L1 slot in moe_block_arena_spec, before any arena.)
-        grid = mesh_device.compute_with_storage_grid_size()
-        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-        rows = TOP_HOLE_BYTES // 64
-        top = ttnn.TensorSpec(
-            ttnn.Shape([grid.x * grid.y * rows, 32]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(cores, (rows, 32), ttnn.ShardOrientation.ROW_MAJOR),
-            ),
-        )
-        self._top_hole = ttnn.allocate_tensor_on_device(top, mesh_device)
         # (plans the head and the combine once; every forward allocates this spec at the same L1 address)
         self.arena_spec = mb.moe_block_arena_spec(
             resources, dtypes=dtypes, accumulators=accumulators, l1_free=l1_free, **self.expert_kw
@@ -100,9 +84,7 @@ class MoEBlock:
         """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's)."""
         mb = self.mb
         arena = ttnn.allocate_tensor_on_device(self.arena_spec, self.mesh_device)
-        if self._top_hole is not None:  # (the first call: the ops' persistent words go in the hole above the arena)
-            ttnn.deallocate(self._top_hole)
-            self._top_hole = None
+        self.arena_address = int(arena.buffer_address())
         head = mb.fused_head(
             x,
             weights.head,
@@ -112,6 +94,7 @@ class MoEBlock:
             l1_free=self.l1_free,
             arena=arena,
         )
+        self.last_head = head  # (its persistent outputs: a model's checks read the routing rows)
         if self.in_program_dispatch:  # (the dispatch is the combine's first phase: it fills xbuf from route)
             dispatched, route = head.xbuf, head.route
         else:
@@ -133,3 +116,8 @@ class MoEBlock:
         )
         ttnn.deallocate(arena)
         return mb.fused_tail(y_own, head.se, resources=self.resources, w_up=weights.w_up)
+
+
+def l1_small_bytes(mesh_device) -> int:
+    """L1_SMALL allocated a bank on mesh_device (after a block's first call: its persistent words and semaphores)."""
+    return int(ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_allocated_per_bank)
