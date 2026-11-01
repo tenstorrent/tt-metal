@@ -1,1 +1,2 @@
 {"event":"hypothesis","detail":"RM multi-call tilize: reconfig after fast_tilize_init corrupts later calls; TILE writer batch straddles cb_out ring end","ts":"2026-11-01T14:32:11+00:00"}
+{"event":"test_run","result":"pass","detail":"125/125 acceptance+debug, --dev and production","ts":"2026-11-01T14:36:49+00:00"}

@@ -12,7 +12,9 @@
 //   compute has popped gathered(b) (exchange(b+1) follows store(b) in this kernel).
 //   The semaphore is monotonic: block b is complete at k*(b+1) arrivals; it is never reset.
 // store_block
-//   TILE: per tile-row, in units of <= out_unit_tiles tiles: wait, write, flush, pop.
+//   TILE: per tile-row, in units of <= out_unit_tiles tiles: wait, write, flush, pop. A unit is also clamped
+//         to the cb_out ring end (tracked in out_ring_pos) — its pages are read linearly from the read pointer,
+//         and core_w_tiles need not be a multiple of out_unit_tiles.
 //   RM  : chunk-major (matches compute's per-chunk untilize): per (chunk, tile-row) one stick-piece write
 //         per valid stick; full chunks through write_sticks_after_untilize, the ragged chunk raw.
 
@@ -34,7 +36,8 @@ constexpr uint32_t elem_bytes = get_compile_time_arg_val(6);
 constexpr uint32_t w_split_cores = get_compile_time_arg_val(7);
 constexpr uint32_t out_unit_tiles = get_compile_time_arg_val(8);
 constexpr uint32_t sem_id = get_compile_time_arg_val(9);
-constexpr auto out_args = TensorAccessorArgs<10>();
+constexpr uint32_t out_cb_pages = get_compile_time_arg_val(10);  // cb_out capacity (TILE: out_depth * out_unit)
+constexpr auto out_args = TensorAccessorArgs<11>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NOC_XY_ARG_BASE = 9;
@@ -59,6 +62,7 @@ void kernel_main() {
         partial_tile_bytes = get_tile_size(cb_partial_sumsq);
     }
 
+    [[maybe_unused]] uint32_t out_ring_pos = 0;  // TILE: cb_out page position of the read pointer
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
 
@@ -125,8 +129,9 @@ void kernel_main() {
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t t = row_start + blk * block_row_tiles + r;
             const uint32_t first_tile = t * tensor_w_tiles + w_tile_start;
-            for (uint32_t j0 = 0; j0 < core_w_tiles; j0 += out_unit_tiles) {
-                const uint32_t n = (core_w_tiles - j0) < out_unit_tiles ? (core_w_tiles - j0) : out_unit_tiles;
+            for (uint32_t j0 = 0; j0 < core_w_tiles;) {
+                uint32_t n = (core_w_tiles - j0) < out_unit_tiles ? (core_w_tiles - j0) : out_unit_tiles;
+                n = (out_cb_pages - out_ring_pos) < n ? (out_cb_pages - out_ring_pos) : n;
                 cb_wait_front(cb_out, n);
                 const uint32_t l1 = get_read_ptr(cb_out);
                 for (uint32_t i = 0; i < n; ++i) {
@@ -134,6 +139,8 @@ void kernel_main() {
                 }
                 noc_async_writes_flushed();
                 cb_pop_front(cb_out, n);
+                j0 += n;
+                out_ring_pos = (out_ring_pos + n == out_cb_pages) ? 0 : out_ring_pos + n;
             }
         }
 #endif

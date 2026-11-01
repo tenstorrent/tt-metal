@@ -157,35 +157,37 @@ ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width) {
 }
 
 #ifdef RMS_RM
+// One tilize call per tile-row: chunks_this blocks of width C (each waits C stick-piece pages of cb_x_rm and
+// pushes C tiles into cb_x). The data-format reconfig runs only on the call that also inits: a reconfig issued
+// after fast_tilize_init clobbers the fast-tilize unpack config (later tile-rows come out with rows 1..31 zero).
 template <tilize_config::InitUninitMode mode>
-ALWI void tilize_chunk() {
+ALWI void tilize_row(uint32_t chunks_this) {
+    constexpr bool inits =
+        mode == tilize_config::InitUninitMode::InitAndUninit || mode == tilize_config::InitUninitMode::InitOnly;
     tilize<
         rm_chunk_w_tiles,
         cb_x_rm,
         cb_x,
         mode,
         tilize_config::WaitMode::WaitBlock,
-        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-        tilize_config::Fp32Mode::Fast>(1);
+        inits ? tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
+              : tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        tilize_config::Fp32Mode::Fast>(chunks_this);
 }
 
-// tilize_x_block: rows x chunks_this calls of tilize<C>(1), init/uninit once per block; each tile-row is
-// padded to x_row_pitch pages (gap pages pushed unwritten — only the last W member has a gap).
+// tilize_x_block: tilize init/uninit once per block (InitOnly / Neither / UninitOnly across tile-rows); each
+// tile-row is padded to x_row_pitch pages (gap pages pushed unwritten — only the last W member has a gap).
 ALWI void tilize_x_block(uint32_t rows, uint32_t chunks_this) {
-    const uint32_t n = rows * chunks_this;
     const uint32_t gap = x_row_pitch - chunks_this * rm_chunk_w_tiles;
-    uint32_t i = 0;
     for (uint32_t r = 0; r < rows; ++r) {
-        for (uint32_t c = 0; c < chunks_this; ++c, ++i) {
-            if (n == 1) {
-                tilize_chunk<tilize_config::InitUninitMode::InitAndUninit>();
-            } else if (i == 0) {
-                tilize_chunk<tilize_config::InitUninitMode::InitOnly>();
-            } else if (i + 1 == n) {
-                tilize_chunk<tilize_config::InitUninitMode::UninitOnly>();
-            } else {
-                tilize_chunk<tilize_config::InitUninitMode::Neither>();
-            }
+        if (rows == 1) {
+            tilize_row<tilize_config::InitUninitMode::InitAndUninit>(chunks_this);
+        } else if (r == 0) {
+            tilize_row<tilize_config::InitUninitMode::InitOnly>(chunks_this);
+        } else if (r + 1 == rows) {
+            tilize_row<tilize_config::InitUninitMode::UninitOnly>(chunks_this);
+        } else {
+            tilize_row<tilize_config::InitUninitMode::Neither>(chunks_this);
         }
         if (gap > 0) {
             cb_reserve_back(cb_x, gap);

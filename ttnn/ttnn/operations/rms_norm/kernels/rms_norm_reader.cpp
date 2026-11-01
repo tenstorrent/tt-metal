@@ -236,7 +236,9 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             if (owns_w_tail) {
-                zero_w_tail_of_tile(noc, cb, row_off + (core_w_tiles - 1) * tile_bytes);
+                // Offset relative to the CB's CURRENT write pointer, which has advanced by the r rows pushed so far.
+                const uint32_t tail_tile_addr = base + row_off + (core_w_tiles - 1) * tile_bytes;
+                zero_w_tail_of_tile(noc, cb, tail_tile_addr - cb.get_write_ptr());
             }
             cb_push_back(cb_id, x_row_pitch);
         }

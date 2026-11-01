@@ -253,6 +253,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
 
     # ---- circular buffers (identical list on every active core: peers address cb_gathered by our address) ----
     T_in, T_g, T32 = sz.T_in, sz.T_g, sz.T32
+    out_cb_pages = (b * C) if is_rm else (OUT_DEPTH * blk.out_unit_tiles)
     cbs = [
         _cb(CB_X, b * pitch, T_in, x_dtype, core_ranges),
         _cb(CB_SUMSQ, b, T32, ttnn.float32, core_ranges),
@@ -267,10 +268,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         cbs.append(_cb(CB_GATHERED, 2 * k * b, T32, ttnn.float32, core_ranges))
     if is_rm:
         cbs.append(_cb(CB_X_RM, RM_IN_DEPTH * C, T_in, x_dtype, core_ranges))
-        cbs.append(_cb(CB_OUT, b * C, T_in, x_dtype, core_ranges))
+        cbs.append(_cb(CB_OUT, out_cb_pages, T_in, x_dtype, core_ranges))
         cbs.append(_cb(CB_OUT_RM, OUT_DEPTH * C, T_in, x_dtype, core_ranges))
     else:
-        cbs.append(_cb(CB_OUT, OUT_DEPTH * blk.out_unit_tiles, T_in, x_dtype, core_ranges))
+        cbs.append(_cb(CB_OUT, out_cb_pages, T_in, x_dtype, core_ranges))
 
     defines = []
     if is_rm:
@@ -312,6 +313,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         k,
         blk.out_unit_tiles,
         SEM_PARTIALS_ARRIVED,
+        out_cb_pages,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
