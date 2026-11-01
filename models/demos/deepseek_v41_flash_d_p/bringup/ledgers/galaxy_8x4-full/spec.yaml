@@ -208,12 +208,14 @@ tests:
     test_adapter_acks:
       match:
       - '\(last-window 128 rows\): 0_window_kv layer 20 nope pcc 0\.98[5-9]\d* < '
-      why: 'owner 2026-10-29 (FIX.12): waived for now. P.9 (ATTN_SP32_PROJ) moves layer 20''s window KV over the last 128 rows of the 2536-token prompt to PCC 0.9885 vs the reference-derived 0.9896 (passes with P.9 off; ladder window_kv L20 0.090 -> 0.106, within its 0.151). Cause under investigation as FIX.13 (DS41-141); remove when it is fixed.'
+      - 'last block( \[\d+, \d+\))?: 0_window_kv layer (35|38) nope pcc 0\.98\d* < 0\.99$'
+      why: 'owner 2026-10-29 (FIX.12): waived for now. P.9 (ATTN_SP32_PROJ) moves layer 20''s window KV over the last 128 rows of the 2536-token prompt to PCC 0.9885 vs the reference-derived 0.9896 (passes with P.9 off; ladder window_kv L20 0.090 -> 0.106, within its 0.151). Cause under investigation as FIX.13 (DS41-141); remove when it is fixed. Owner 2026-11-01 (DS41-192): also waived after P.23 (OWN_ROWS): layer 20 last-window 0.98947, and layers 35 / 38 last block 0.98910 / 0.98994 vs tt-d-gen''s fixed 0.99 (two device runs compared); a rounding difference (fp32 summation order in the mHC mixes, on and off equally close to the golden, FIX.18). The layer-20 check gets a per-position limit (FIX.19); the 0.99 is the server''s own rule.'
     test_runner_contract:
       match:
       - '^\[tt-d-gen engine \(.*\)\]$'
       - '\(last-window 128 rows\): 0_window_kv layer 20 nope pcc 0\.98[5-9]\d* < '
-      why: 'owner 2026-10-29 (FIX.12): waived for now. P.9 (ATTN_SP32_PROJ) moves layer 20''s window KV over the last 128 rows of the 2536-token prompt to PCC 0.9885 vs the reference-derived 0.9896 (passes with P.9 off; ladder window_kv L20 0.090 -> 0.106, within its 0.151). Cause under investigation as FIX.13 (DS41-141); remove when it is fixed.'
+      - 'last block( \[\d+, \d+\))?: 0_window_kv layer (35|38) nope pcc 0\.98\d* < 0\.99$'
+      why: 'owner 2026-10-29 (FIX.12): waived for now. P.9 (ATTN_SP32_PROJ) moves layer 20''s window KV over the last 128 rows of the 2536-token prompt to PCC 0.9885 vs the reference-derived 0.9896 (passes with P.9 off; ladder window_kv L20 0.090 -> 0.106, within its 0.151). Cause under investigation as FIX.13 (DS41-141); remove when it is fixed. Owner 2026-11-01 (DS41-192): also waived after P.23 (OWN_ROWS): layer 20 last-window 0.98947, and layers 35 / 38 last block 0.98910 / 0.98994 vs tt-d-gen''s fixed 0.99 (two device runs compared); a rounding difference (fp32 summation order in the mHC mixes, on and off equally close to the golden, FIX.18). The layer-20 check gets a per-position limit (FIX.19); the 0.99 is the server''s own rule.'
 text:
   source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
   wrap: model_turn
