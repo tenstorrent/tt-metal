@@ -11,7 +11,7 @@
 //
 // Plus dedicated tests for the special dtypes whose to_layout behavior is not a generic conversion:
 // BFLOAT8_B / BFLOAT4_B are no-ops, FP8_E4M3 is ROW_MAJOR-only (throws when asked to tilize), and the MX
-// formats are TILE-only (throw when asked to row-major-ize).
+// formats and BFLOAT2_B are TILE-only (throw when asked to row-major-ize).
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -295,6 +295,29 @@ INSTANTIATE_TEST_SUITE_P(
     HostTensorToLayoutMx,
     ::testing::ValuesIn(::test_utils::kMxDataTypes),
     ::test_utils::dtype_param_name);
+
+// BFLOAT2_B is TILE-only like MX: unlike BFLOAT8_B/BFLOAT4_B (see G2), asking for ROW_MAJOR is a hard error, and
+// asking for TILE returns the packed tiles unchanged.
+TEST(HostTensorToLayout, Bfloat2BToRowMajorThrows) {
+    const Shape shape{32, 32};
+    const auto data = make_ramp<float>(shape.volume());
+    const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::BFLOAT2_B, Layout::TILE));
+
+    EXPECT_ANY_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
+}
+
+TEST(HostTensorToLayout, Bfloat2BToTileIsNoOp) {
+    const Shape shape{32, 32};
+    const auto data = make_ramp<float>(shape.volume());
+    const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::BFLOAT2_B, Layout::TILE));
+
+    const auto result = to_layout(source, Layout::TILE);
+
+    EXPECT_EQ(result.tensor_spec(), source.tensor_spec());
+    EXPECT_THAT(
+        host_buffer::get_as<uint32_t>(result),
+        ::testing::Pointwise(::testing::Eq(), host_buffer::get_as<uint32_t>(source)));
+}
 
 }  // namespace
 }  // namespace tt::tt_metal
