@@ -17,9 +17,10 @@ through the table over UMD, as the KV Manager does. Pass:
   - acks: one per served layer per chunk, in layer order, naming the chunk (slot_id, actual_start, actual_end) the
     engine passed (prefill_reader.cpp:121-160: the k-th ack of a chunk migrates layer k)
   - at each ack: the chunk's rows of every cache the layer owns vs the golden (caches.golden_failures: every row of the
-    compressed caches; a dumped layer's window KV on the last min(128, hi - lo) positions of the range, the ring the
-    limit's drift measures (owner decision B, 2026-10-27); another layer's window KV at the positions its ring
-    snapshots hold; every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.97), the pad
+    compressed caches; a dumped layer's window KV over every position of the range, per channel against calib x the
+    official reference's drift on the same rows (caches.GoldenKV(window="drift"), FIX.19, owner 2026-11-01; it
+    replaces decision B's last 128 rows vs the ring's drift); another layer's window KV at the positions its ring
+    snapshots hold; every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.93), the pad
     rows of the last record zero; the same records re-read after the chunk returns and the mesh syncs hold the same
     bytes (an ack before the KV is in DRAM ships stale KV: K-71)
   - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, 960) byte-identical to what turn 1's
@@ -47,7 +48,7 @@ def test_adapter_acks(mesh_device, tmp_path):
 
     R.self_check()
     _, kvc, _ = R.harness()
-    gk = C.GoldenKV(window="last")  # OV-16, owner decision B: window KV on the drift's ring positions
+    gk = C.GoldenKV(window="drift")  # FIX.19 (owner 2026-11-01): every position vs the official drift on the same rows
     tokens = gk.tokens().numpy()
     thr = R.state_threshold()
     layers = C.served_prefix()
@@ -141,5 +142,6 @@ def test_adapter_acks(mesh_device, tmp_path):
         )
     fails += gk.coverage_failures(cfgs, "golden")
     print(f"[adapter acks] golden comparison per config and mode: {gk.coverage_summary()}")
+    print(f"[adapter acks] window KV of the dumped layers, worst range per channel: {gk.drift_summary()}")
     print(f"[adapter acks] layers {layers}, configs {[c['name'] for c in cfgs]}: {len(fails)} failures")
     assert not fails, "\n".join(fails[:40])

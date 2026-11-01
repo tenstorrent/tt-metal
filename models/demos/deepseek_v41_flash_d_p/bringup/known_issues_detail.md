@@ -404,3 +404,65 @@ ATTN_SP32_PROJ=off.
 
 Verdict: honest rounding (DS41-125's limit-vs-position gap), no bug. No code change; the waiver stays for the owner
 (options as before: keep the waiver, or a per-position drift for the contract's window-KV limit).
+
+## P.23 OWN_ROWS tips the acks / runner-contract window-KV checks by rounding, not a bug
+(DS41-192, FIX.18 overseer fix, galaxy 8x4, code 3a1a390acd8 = P.23..FIX.17.) K.1R's test_adapter_acks and
+test_runner_contract failed three checks with OWN_ROWS=on and passed with OWN_ROWS=off (overseer, /scratch/dnijemcevic/diag_acks).
+Device probes (scripts/tt-probe.sh --mesh, DS41_OWN_ROWS=on / off, the contract's 2536-token prompt with the PAD tail;
+scripts, dumps and logs in /scratch/dnijemcevic/fix18/: probe.py, probe_moe.py, probe_fu.py, ana.py, ana_fu.py) reproduce
+every failing value to the digit: L20 0.98947 (off 0.99195); L35 0.98910 (off 0.99857); L38 0.98994 (off 0.99651).
+
+1. Per step, golden input (layers 0-3, 14, 20; the golden's "in" through the device layer): on and off are equally far
+   from the golden at every step (L00 experts 0.06047 / 0.06029, L03 out 0.03071 / 0.03027, L20 wkv 0.00804 / 0.00804,
+   L20 out 0.02468 / 0.02467). attn_collapse, attn_norm, attention and the window KV are bit-identical on vs off.
+2. First difference: attn_hc's mixes ([S, 24] fp32: hc_fn^T over the whole 4H row on one chip vs TP partials added in
+   mesh order): 96-99 % of entries differ, at most 1.6e-5 abs / 2.3e-4 rel. attn_residual's bf16 streams then differ at
+   0.13-0.20 % of the elements (one bf16 rounding flipped), ffn_norm's bf16 output at 3.3 %. Neither order is more precise
+   (attn_hc vs golden 0.00052 / 0.00052 at L00).
+3. MoE block alone (golden ffn_norm, bf16) through the OWN_ROWS path (owners a2a into the fused head's x, the local
+   fused tail) vs the column split: bit-identical, layers 0-3, deterministic over 2 runs. The engram columns and the
+   norms only move bytes or sum in fp32.
+4. Chain (layers 0-20, start 0): L20 window KV over every position: on 0.1836, off 0.1842 vs the golden. Per TP
+   column, the same to the third digit (L20 on 0.205 / 0.177 / 0.175 / 0.175, off 0.212 / 0.175 / 0.180 / 0.165): no
+   position or chip pattern. 286 sliding 128-row windows (ends 256..2536, step 8), L20 nope PCC: on - off mean +0.0005,
+   std 0.0040, on worse in 156; below 0.98957: on 192, off 186; the failing window is the 16th percentile of on - off.
+5. Follow-up (the acks sequence: [0, 2536), then [2496, 6072) on the same state, keep_history=False): rows
+   [2496, 2536) of the first chunk vs the follow-up, window-KV rel per layer: L01-L16 on = off (0.003-0.07), L17-L38 on
+   larger (L35 0.142 vs 0.048). Against the golden the recomputed rows are as accurate as the first ones in both modes
+   (L20 on c0 / c2 0.0868 / 0.0848, off 0.0929 / 0.0946; L24 on 0.1342 / 0.1354, off 0.1282 / 0.1291). The "last block"
+   check compares two device runs, each about 0.13 off the golden. Their mutual distance is one sample of that spread.
+
+Verdict: a genuine one-rounding difference (the fp32 summation order of the mHC mixes and the norm statistics), with no
+lower-precision choice behind it. It is amplified chaotically over depth, as P.9 was (DS41-141). No code changed. The
+owner's options are as before: a waiver for these checks, or a per-position drift for the contract's window-KV limit
+(DS41-125). The 0.99 last-block rule is tt-d-gen's own, and its limit is not tied to the noise floor.
+
+## The contract's window-KV limit must come from the official drift on the checked rows, not the ring
+(DS41-193, FIX.19 overseer fix, owner 2026-11-01; closes the DS41-125 / DS41-141 / DS41-192 gap for the dumped layers.)
+The acks / runner-contract tests compared a dumped layer's window KV on the last 128 rows of each range against
+calib^2 x the drift of the final ring (positions 10112-10239 of s10240). FIX.19 produced the official reference's
+window KV at every position (CPU, numerics official, bf16, layers 0-24 resident, both 5120-token chunks: 530.5 +
+557.8 s = 1096 s; `tests/bringup/contract/official_kv.py`, file `<golden dir>-official/window_kv.safetensors`). Its last
+128 rows reproduce drift-s10240's state_window_kv_L20 / L21 exactly (pcc 0.99739 / 0.99716, rel 0.0722 / 0.0754).
+
+Official vs native golden, nope PCC (pe in the test output):
+
+| layer | [0, 2536) | [0, 6072) | [0, 10144) | ring |
+|---|---|---|---|---|
+| L00 | 0.99952 | 0.99951 | 0.99951 | 0.99952 |
+| L03 | 0.99799 | 0.99821 | 0.99826 | 0.99850 |
+| L14 | 0.98458 | 0.98930 | 0.99078 | 0.99380 |
+| L20 | 0.98311 | 0.98998 | 0.99234 | 0.99660 |
+| L21 | 0.98778 | 0.99223 | 0.99363 | 0.99648 |
+| L24 | 0.98386 | 0.98969 | 0.99145 | 0.99525 |
+
+The reference's own error grows towards the start of the prompt, as the device's does (DS41-125). The FIX.18 device dumps
+(L20, OWN_ROWS on / off, prompt [0, 2536)), each against the new limit on the same rows:
+- [0, 2536): nope 0.97809 / 0.97794 vs limit 0.93244 (official 0.98311); pe 0.99310 / 0.99309 vs 0.97721
+- last 128 rows: nope 0.98947 / 0.99195 vs 0.96765 (official 0.99191); pe 0.99690 / 0.99783 vs 0.98952
+- 286 sliding windows, nope median 0.98761 (std 0.0151); the official median is 0.98926 (std 0.0128). The device's window
+  PCC tracks the reference's own (correlation 0.95).
+The device sits about as far from the golden as the reference at its own precision. Before, the limit was a different
+window's margin. Check: `caches.GoldenKV(window="drift")`, `GoldenKV.limits` (drift._float_entry per channel,
+e2e_limits.pcc_limit, floor R.PREFILL_GOLDEN_PCC); a noise input fails (pcc ~0). Analysis:
+/scratch/dnijemcevic/fix19/predict.py, predict.log.

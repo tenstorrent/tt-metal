@@ -1200,6 +1200,84 @@ tasks:
       from the timed run and nothing else changed (op counts per section). No fork regression suites.'
     gate_tasks:
     - P.17
+- id: FIX.19
+  title: 'CONTRACT_WINDOW_DRIFT: the layer-20 window-KV contract check judged over every position, not one 128-row window'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/tt/runners
+  brief:
+    details: 'OWNER 2026-11-01 (approves changing the frozen contract tests for this): test_adapter_acks and test_runner_contract
+      judge layer 20''s window KV on ONE 128-row window (the last 128 rows of the 2536-token prompt) against a limit from
+      the reference''s drift on a different window (the golden''s final ring, DS41-125 decision B). FIX.18 (DS41-192) measured
+      the device''s PCC over all 286 windows: it varies by +-0.004 from window to window, ten times the margin the check decides
+      on, so the result depends on which window is checked. Change the check to compare like with like over many samples:
+      the window KV error over every position of the range (or the median over all 128-row windows) against calib x the reference''s
+      drift over the SAME positions (official numerics vs the native golden; e2e.calib). First look for the drift data in
+      the existing golden dumps (window KV per layer / ring snapshots, DS41-124); if layer 20''s window KV at those positions
+      is not dumped, produce it with the CPU reference (official numerics at the reference''s shipped dtype) and say how long
+      it took. Keep every other check as it is (the layers 35 / 38 last-block check against tt-d-gen''s fixed 0.99 is the
+      server''s own rule: leave it, it stays waived). Then the layer-20 part of tests.unit_waivers in the spec can go: say
+      so in your report (the overseer removes it). No limit may become a fixed number (F138); no fork regression suites.'
+    gate_tasks:
+    - K.1
+- id: FIX.18
+  title: 'OWN_ROWS_KV_MARGIN: find what in P.23 moves the window KV of layers 20 / 35 / 38, fix it without raising precision'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - K.1
+  - FIX.19
+  gate:
+    cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/moe_block
+  - models/demos/deepseek_v41_flash_d_p/tests
+  brief:
+    details: 'Since P.23 (OWN_ROWS, e3e75423c18) K.1''s test_adapter_acks and test_runner_contract fail on three window-KV
+      read-back checks: 0_window_kv layer 20 last-window nope PCC 0.98947 < 0.98957 (calibrated limit), layers 35 / 38 last
+      block [2496, 2536) 0.98910 / 0.98994 < 0.99 (tt-d-gen''s validation threshold, server_rules LAST_BLOCK_PCC). With DS41_OWN_ROWS=off
+      the same acks test passes (overseer diagnosis, /scratch/dnijemcevic/diag_acks). P.23 was meant to change only summation
+      orders (mHC and norm statistics as full-length fp32 sums on one chip), which should not be less accurate, so look for
+      what else moves: the engram projection''s rearranged columns, the head''s all-to-all into the fused head''s x buffer,
+      the fused tail''s local mode, the norms. Locate it op by op: OWN_ROWS on vs off on the same input (device dumps of the
+      window KV / layer inputs for layers 19-21 and 34-38), and the CPU reference at the device''s formats (agent rule 14).
+      Fix the cause in the OWN_ROWS path; do not raise any precision above the reference''s, do not touch the contract tests
+      or their limits, keep OWN_ROWS''s speed (report device / wall a chunk at 51200 before / after). If the cause is a genuine
+      one-rounding difference with no lower-precision choice behind it, stop and report the evidence (it becomes the owner''s
+      waiver). Agent rules 18 / 19; no fork regression suites.'
+    gate_tasks:
+    - K.1
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1211,6 +1289,7 @@ tasks:
   - FIX.14
   - FIX.15
   - FIX.16
+  - FIX.18
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -2061,12 +2140,12 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-31: opportunity #10 (deferred by P.21): compressor _pool (12 element-wise ops + 4 slices on
-      320x512 fp32 a layer) and engram _gate_math (~27 ops on 640x4 / 640x32) as one small fork kernel each (the engram
-      one may fit mhc_pre_xing_pack''s engram mode); ~95 launches a chunk, ~0.4 ms device / ~8.5 ms host (report
-      /scratch/dnijemcevic/opportunities/report.md #10). Setting TINY_KERNELS (on / off). Same numerics as the op chain
-      (fp32 where it is fp32). Agent rules 18 / 19; forks first; add tests for the fork you add; no fork regression
-      suites; do not profile the model (the orchestrator measures off vs on).'
+    details: 'OWNER 2026-10-31: opportunity #10 (deferred by P.21): compressor _pool (12 element-wise ops + 4 slices on 320x512
+      fp32 a layer) and engram _gate_math (~27 ops on 640x4 / 640x32) as one small fork kernel each (the engram one may fit
+      mhc_pre_xing_pack''s engram mode); ~95 launches a chunk, ~0.4 ms device / ~8.5 ms host (report /scratch/dnijemcevic/opportunities/report.md
+      #10). Setting TINY_KERNELS (on / off). Same numerics as the op chain (fp32 where it is fp32). Agent rules 18 / 19; forks
+      first; add tests for the fork you add; no fork regression suites; do not profile the model (the orchestrator measures
+      off vs on).'
   ab:
     env:
       TINY_KERNELS: 'off'
@@ -2098,16 +2177,15 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/perf
   brief:
-    details: 'OWNER 2026-10-31: FIX.15 capped every op at 110 Tensix cores (agent rule 18; device +3.4 ms a chunk) and
-      P.21-P.24 changed several matmul inputs (dtypes, layouts, own rows): re-tune. Capture every dense matmul call at
-      the shipped settings (test_matmul_sweep.py -k capture, DS41_ENGRAM_TABLE=resident) and sweep every distinct call
-      (P23_MIN_MS=0) with every candidate held to at most MAX_WORKER_CORES (110) cores and the L1 the model leaves.
-      Agent rule 19: the sweep runs inside 8x4 MESH runs (scripts/run_safe_pytest.sh without --device, one process at a
-      time; long runs as background jobs you wait for), never on single cards. Put the winners in a new MATMUL_CONFIG
-      value galaxy110 (today''s galaxy stays as it is); the same acceptance per candidate as P.19 (deterministic,
-      bit-identical to auto or within its last bf16 rounding, error vs float64 not worse). Report per call: cores and
-      ms a call before / after, calls a chunk. Do not profile the model (the orchestrator measures galaxy vs galaxy110
-      at 51200 and 512000). No fork regression suites.'
+    details: 'OWNER 2026-10-31: FIX.15 capped every op at 110 Tensix cores (agent rule 18; device +3.4 ms a chunk) and P.21-P.24
+      changed several matmul inputs (dtypes, layouts, own rows): re-tune. Capture every dense matmul call at the shipped settings
+      (test_matmul_sweep.py -k capture, DS41_ENGRAM_TABLE=resident) and sweep every distinct call (P23_MIN_MS=0) with every
+      candidate held to at most MAX_WORKER_CORES (110) cores and the L1 the model leaves. Agent rule 19: the sweep runs inside
+      8x4 MESH runs (scripts/run_safe_pytest.sh without --device, one process at a time; long runs as background jobs you
+      wait for), never on single cards. Put the winners in a new MATMUL_CONFIG value galaxy110 (today''s galaxy stays as it
+      is); the same acceptance per candidate as P.19 (deterministic, bit-identical to auto or within its last bf16 rounding,
+      error vs float64 not worse). Report per call: cores and ms a call before / after, calls a chunk. Do not profile the
+      model (the orchestrator measures galaxy vs galaxy110 at 51200 and 512000). No fork regression suites.'
   ab:
     env:
       MATMUL_CONFIG: galaxy
@@ -2136,8 +2214,8 @@ tasks:
   deps:
   - P.25
   gate:
-    cmd: BRINGUP_TASK=P.17 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && BRINGUP_TASK=P.17
-      DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_TASK=P.17 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.17 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2152,20 +2230,23 @@ tasks:
   - models/demos/moe_block
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-31 (best effort, configurable): add the setting DEEP_LAYERS = all | tail, DEFAULT all (today''s model, unchanged: the tt-d-gen
-      main contract and our tests need every layer''s full history). With tail: every chunk runs layers 0-19 in full plus layer 20 (the last KV source:
-      its compressed rows and index keys must cover the whole history); layers 21-39 are skipped for normal chunks; the model keeps a rolling buffer of
-      layer 20''s output for the last 20*127+1 = 2541 positions (plus what the window carry needs), and when the prompt ends (the runner / harness signals
-      the last chunk; do not require the prompt length in advance) one TAIL PASS runs layers 21-39 on those rows as a short chunk padded to a tile-aligned
-      length on all 32 chips (e.g. 3072 = 96 rows a chip), with each layer''s window carry for the tail start. Result: layers 0-20 complete, layers 21-39
-      exact windows for the tail (they have no compressed rows of their own), the last token''s final hidden / logits. Rows of layers 21-39 outside the
-      tail are not computed (their served window rows stay unwritten in tail mode). Check: (1) the gate (default all) passes unchanged; (2) a test of your
-      own in models/demos/deepseek_v41_flash_d_p/tests (e.g. tests/perf/test_deep_tail.py) runs the profile rung''s prompt in tail mode and compares with
-      the golden: every layer 0-20, layers 21-39 on the tail rows, the final hidden and top-5, all within the same limits the ladder uses; (3) measure,
-      one device job at a time (long ones as background jobs you wait for; agent rules 18 / 19): a normal chunk at 51200 and 512000 in tail mode vs all
-      (test_profile.py with BRINGUP_POS, DS41_DEEP_LAYERS=tail / all), and the tail pass''s own time; report per-chunk device / wall and the tail pass,
-      and the resulting prompt tok/s for 128k, 512k and 1M (the estimate script /scratch/dnijemcevic/opportunities/prefill_tps.py has the arithmetic). No
-      fork regression suites.'
+    details: 'OWNER 2026-10-31 (best effort, configurable): add the setting DEEP_LAYERS = all | tail, DEFAULT all (today''s
+      model, unchanged: the tt-d-gen main contract and our tests need every layer''s full history). With tail: every chunk
+      runs layers 0-19 in full plus layer 20 (the last KV source: its compressed rows and index keys must cover the whole
+      history); layers 21-39 are skipped for normal chunks; the model keeps a rolling buffer of layer 20''s output for the
+      last 20*127+1 = 2541 positions (plus what the window carry needs), and when the prompt ends (the runner / harness signals
+      the last chunk; do not require the prompt length in advance) one TAIL PASS runs layers 21-39 on those rows as a short
+      chunk padded to a tile-aligned length on all 32 chips (e.g. 3072 = 96 rows a chip), with each layer''s window carry
+      for the tail start. Result: layers 0-20 complete, layers 21-39 exact windows for the tail (they have no compressed rows
+      of their own), the last token''s final hidden / logits. Rows of layers 21-39 outside the tail are not computed (their
+      served window rows stay unwritten in tail mode). Check: (1) the gate (default all) passes unchanged; (2) a test of your
+      own in models/demos/deepseek_v41_flash_d_p/tests (e.g. tests/perf/test_deep_tail.py) runs the profile rung''s prompt
+      in tail mode and compares with the golden: every layer 0-20, layers 21-39 on the tail rows, the final hidden and top-5,
+      all within the same limits the ladder uses; (3) measure, one device job at a time (long ones as background jobs you
+      wait for; agent rules 18 / 19): a normal chunk at 51200 and 512000 in tail mode vs all (test_profile.py with BRINGUP_POS,
+      DS41_DEEP_LAYERS=tail / all), and the tail pass''s own time; report per-chunk device / wall and the tail pass, and the
+      resulting prompt tok/s for 128k, 512k and 1M (the estimate script /scratch/dnijemcevic/opportunities/prefill_tps.py
+      has the arithmetic). No fork regression suites.'
     gate_tasks:
     - P.17
 - id: K.1R
@@ -2178,10 +2259,11 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
-      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh --run-all --no-precompile
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
     metrics:
       contract_checks_failed: == 0
       acks_early: == 0
