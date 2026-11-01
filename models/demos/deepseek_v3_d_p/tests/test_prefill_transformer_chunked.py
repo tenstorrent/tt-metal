@@ -66,6 +66,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import MOE_BLOCK_L1_SMALL, moe_block_enabled, moe_block_fabric_payload
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -94,18 +95,18 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
-# (MOE_IMPL=block: room for the MoE block's persistent words and semaphores, which live in L1_SMALL - its first call
-# logs the total; GLM_L1_SMALL overrides)
-GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", "5888" if os.environ.get("MOE_IMPL") == "block" else "1536"))
+# GLM-5.3's MoE is the MoE block by default (tt/moe_impl.py; MOE_IMPL=ttmoe for TtMoe): room for its persistent words
+# and semaphores, which live in L1_SMALL (its first call logs the total), and a fabric payload holding one combine row.
+# GLM_L1_SMALL overrides.
+GLM_MOE_BLOCK = moe_block_enabled(GLM53Config)
+GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", MOE_BLOCK_L1_SMALL if GLM_MOE_BLOCK else 1536))
 
 
 def _glm_payload():
-    """GLM's TtMoe payload; MOE_IMPL=block: at least the MoE block combine's (2 x 6144 + 32 B, 64-B aligned)."""
+    """GLM's TtMoe payload; with the MoE block at least its combine's (2 x 6144 + 32 B, 64-B aligned)."""
     payload = moe_fabric_payload(GLM53Config)
-    if os.environ.get("MOE_IMPL") == "block":
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import fabric_payload
-
-        payload = max(payload, fabric_payload(GLM53Config.EMB_SIZE))
+    if GLM_MOE_BLOCK:
+        payload = max(payload, moe_block_fabric_payload(GLM53Config.EMB_SIZE))
     return payload
 
 
@@ -278,11 +279,19 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
-    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
-    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
-}
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = (
+    {
+        # C++ MoE block (ttnn.experimental.moe_block), held Galaxy b09u02 2026-11-01; recentre from the first CI run.
+        (78, 11, 10): [0.293, 0.292, 0.298, 0.297, 0.300, 0.303, 0.299, 0.302, 0.307, 0.310, 0.315],
+    }
+    if GLM_MOE_BLOCK
+    else {
+        # TtMoe (MOE_IMPL=ttmoe). Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826:
+        # high_bw_all_gather's fabric program takes every chunk 1.4-2.7% under the previous centre (CI run
+        # 39456857459 / job 118751643362).
+        (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
+    }
+)
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN

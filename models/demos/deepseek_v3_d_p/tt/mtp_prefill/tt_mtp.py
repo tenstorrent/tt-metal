@@ -279,7 +279,7 @@ class TtMTPModule(LightweightModule):
             topology=topology,
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
-            **block_kwargs,
+            **{"moe_impl": "ttmoe", **block_kwargs},  # (the MTP layer stays on TtMoe: tt/moe_impl.py)
         )
 
         self.shared_head_norm = TtDistributedRmsNorm(

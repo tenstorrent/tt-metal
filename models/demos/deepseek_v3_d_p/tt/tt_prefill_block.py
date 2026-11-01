@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -283,6 +284,7 @@ class TtPrefillBlock(LightweightModule):
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
+        moe_impl: Optional[str] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -402,10 +404,10 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- FFN (MoE or dense) ---
-        # (MOE_IMPL=block: the MoE block's C++ ops - router, shared expert and routed experts in one call,
-        # tt/kimi_k3/moe_block_ffn.py; the gate / shared expert from the checkpoint, the routed experts from this
-        # cache's TtMoe tensorbins)
-        self.moe_block = self.is_moe and os.environ.get("MOE_IMPL") == "block"
+        # (the MoE block's C++ ops - router, shared expert and routed experts in one call, tt/kimi_k3/moe_block_ffn.py;
+        # the gate / shared expert from the checkpoint, the routed experts from this cache's TtMoe tensorbins):
+        # GLM-5.3's default, else MOE_IMPL=block / moe_impl="block" (tt/moe_impl.py)
+        self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
         if self.moe_block:
             from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
 

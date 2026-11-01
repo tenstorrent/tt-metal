@@ -356,7 +356,7 @@ def run_model(
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -756,6 +756,7 @@ def test_glm_prefill_block(
         f"[glm block {layer_type}] building TtPrefillBlock layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
     )
     block = TtPrefillBlock(
+        moe_impl="ttmoe",  # (TtMoe: tt/moe_impl.py)
         mesh_device=mesh_device,
         config=config,
         model_cfg=GLM53Config,
