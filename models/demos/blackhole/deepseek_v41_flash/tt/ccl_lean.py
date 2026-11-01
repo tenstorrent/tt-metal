@@ -104,3 +104,25 @@ def make_lean(mesh_config):
 def make_lean_sems(ccl):
     if os.environ.get("DSV41_CCL_LEAN", "1") != "0":
         sems(ccl)
+
+
+def moe_rs_min_enabled():
+    """DSV41_MOE_RS_MIN=1 (default off): the MoE reduce_scatter over the 8 mesh columns runs as reduce_scatter_minimal_async (one worker per link, Ring) on the lean semaphores
+    instead of the stock ``ttnn.reduce_scatter`` (Linear): 31 -> 17 us standalone at T=2..12, closer to the fp32 sum (tests/test_moe_chain_ccl_bench.py).
+    """
+    return os.environ.get("DSV41_MOE_RS_MIN", "0") == "1" and os.environ.get("DSV41_CCL_LEAN", "1") != "0"
+
+
+def reduce_scatter_lean(tensor, ccl_manager, cluster_axis=1, memory_config=None):
+    """[1,1,T,H] tile partial per device -> [1,1,T,H/cols] summed over the mesh row (dim 3), same layout as ``ttnn.reduce_scatter(tensor, dim=-1, cluster_axis=1)``."""
+    return ttnn.experimental.reduce_scatter_minimal_async(
+        tensor,
+        dim=3,
+        multi_device_global_semaphore=sems(ccl_manager).rs_sem(),
+        num_links=ccl_manager.num_links,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        topology=ccl_manager.topology,
+        cluster_axis=cluster_axis,
+        barrier_semaphore=sems(ccl_manager).barrier(),
+        num_workers_per_link=WORKERS,
+    )

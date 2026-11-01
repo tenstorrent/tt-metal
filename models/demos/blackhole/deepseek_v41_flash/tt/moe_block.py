@@ -24,6 +24,12 @@ from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
 
+_RS_CCL = [None]  # the CCLManager of the model (set by Layer): DSV41_MOE_RS_MIN=1 takes the lean semaphores from it
+
+
+def set_rs_ccl(ccl):
+    _RS_CCL[0] = ccl
+
 
 class _TailDecode(TTMoEDecode):
     """TTMoEDecode whose tilize + fast_reduce tail is one fused program (moe_tail.py) when T < 32; set DSV41_MOE_TAIL=0 for the stock path."""
@@ -86,7 +92,12 @@ class _TailDecode(TTMoEDecode):
             red2 = ttnn.add(red, self.fold, dtype=ttnn.bfloat16)
             ttnn.deallocate(red)
             red = red2
-        out = ttnn.reduce_scatter(red, **cfg.reduce_scatter.model_dump())
+        from models.demos.blackhole.deepseek_v41_flash.tt import ccl_lean
+
+        if ccl_lean.moe_rs_min_enabled() and _RS_CCL[0] is not None:
+            out = ccl_lean.reduce_scatter_lean(red, _RS_CCL[0], cluster_axis=cfg.reduce_scatter.cluster_axis)
+        else:
+            out = ttnn.reduce_scatter(red, **cfg.reduce_scatter.model_dump())
         ttnn.deallocate(red)
         return out
 

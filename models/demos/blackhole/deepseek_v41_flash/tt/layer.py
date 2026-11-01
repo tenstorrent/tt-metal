@@ -71,6 +71,9 @@ class DSV41Layer:
         self.mhc_ffn = DSV41MHC(mesh_device, *mhc_params["ffn"])
         _d("after mhc x2")
         self._bt("mhc x2")
+        from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import set_rs_ccl
+
+        set_rs_ccl(ccl)  # DSV41_MOE_RS_MIN=1: the MoE reduce_scatter uses the lean semaphores of this CCLManager
         self.moe = DSV41MoEBlock(
             mesh_device,
             moe_weights,

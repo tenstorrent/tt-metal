@@ -116,12 +116,12 @@ def test_batch_scaling(mesh_device, device_params):
     cache, steps, routes = {}, [], []
     orig = Model.decode_forward
 
-    def wrapped(self, tokens, current_pos, enable_trace=True, reload_inputs=True):
+    def wrapped(self, tokens, current_pos, enable_trace=True, reload_inputs=True, **kw):
         if MB.ROUTE_LOG is not None:
             MB.ROUTE_LOG.clear()
             MB.ROUTE_ON[0] = not enable_trace
         t = time.perf_counter()
-        o = orig(self, tokens, current_pos, enable_trace=enable_trace, reload_inputs=reload_inputs)
+        o = orig(self, tokens, current_pos, enable_trace=enable_trace, reload_inputs=reload_inputs, **kw)
         dt = time.perf_counter() - t
         MB.ROUTE_ON[0] = False
         steps.append((enable_trace, dt, current_pos.clone()))

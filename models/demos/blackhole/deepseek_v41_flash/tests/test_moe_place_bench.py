@@ -70,6 +70,15 @@ def build_state(md, mapping, W0, W1, W2):
 
 def build_dec(md, state, T):
     cfg, _ = DSV41MoEBlock._configs(md, T, ttnn.Topology.Linear, False)
+    if (
+        os.environ.get("MP_DRAM_IN") == "1"
+    ):  # glue experiment: dispatch reads its inputs from DRAM (no 3 x to_memory_config to L1)
+        cfg = cfg.model_copy(
+            update={
+                "dispatch_input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                "dispatch_input_expert_scores_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            }
+        )
     dec = DSV41MoEBlock._weightless_decode(md, cfg, None, expert_state=state)
     dec._mesh = md
     return dec
@@ -79,7 +88,12 @@ def load_routes(paths):
     arrs = []
     for p in paths:
         r = torch.load(p)
-        arrs.append(np.stack([np.stack([t.numpy() for t in st]) for st in r]).transpose(1, 0, 2, 3))  # [L, S, B, 6]
+        a = np.stack([np.stack([t.numpy() for t in st]) for st in r]).transpose(1, 0, 2, 3)  # [L, S, B, 6]
+        if (
+            os.environ.get("MP_UHALF") == "1"
+        ):  # held-out users: the second half of each file (sim2.py SPLITALL trains on the first half)
+            a = a[:, :, a.shape[2] // 2 :]
+        arrs.append(a)
     S = min(a.shape[1] for a in arrs)
     return np.concatenate([a[:, :S] for a in arrs], axis=2)
 
@@ -179,6 +193,15 @@ def test_moe_place_bench(mesh_device):
         assign = json.load(open(os.environ["MP_ASSIGN"]))[str(layers[0])]
     mapping = mapping_list(kind, assign)
     rep_rows = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(ROWS, COLS))
+    if os.environ.get("MP_RS_MIN") == "1":  # chain with the lean reduce_scatter (DSV41_MOE_RS_MIN=1)
+        from models.demos.blackhole.deepseek_v41_flash.tt import ccl_lean
+        from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import set_rs_ccl
+        from models.demos.gpt_oss.tt.ccl import CCLManager
+
+        os.environ["DSV41_MOE_RS_MIN"] = "1"
+        _ccl = CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+        ccl_lean.make_lean_sems(_ccl)
+        set_rs_ccl(_ccl)
     t0 = time.time()
     W0, W1, W2 = gen((NE, H, I), 1), gen((NE, H, I), 2), gen((NE, I, H), 3)
     print(f"MPLOG weights generated {time.time() - t0:.0f} s", flush=True)
@@ -224,8 +247,25 @@ def test_moe_place_bench(mesh_device):
         ids_dev = mk(ids0, True)
         dec = build_dec(md, state, T)
         fn = lambda d=dec: d.forward(x, sc, ids_dev, layer_id=0)
+        if os.environ.get("MP_NOWARM") != "1":
+            # DSV41MoEBlock.warmup(): leave a free hole under the persistent L1 allocations before the first compile so moe_compute's persistent semaphore lands at the top of L1
+            # (otherwise the L1 copies of the dispatch inputs overlap it: wrong results at T >= 4 in this harness)
+            nb = ttnn.get_memory_view(md, ttnn.BufferType.L1).num_banks
+            tile_row = lambda n: ttnn.empty(
+                [1, 1, 32, 32 * nb * n],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=md,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            hole, fence = tile_row(1), tile_row(2)
+            ttnn.deallocate(hole)
+            o_ = fn()
+            ttnn.synchronize_device(md)
+            ttnn.deallocate(o_)
+            ttnn.deallocate(fence)
         tr1, tr4 = capture(md, fn, 1), capture(md, fn, 4)
-        if os.environ.get("MP_PCC", "1") == "1" and ti == 0:
+        if os.environ.get("MP_PCC", "1") == "all" or (os.environ.get("MP_PCC", "1") == "1" and ti == 0):
             xh = torch.cat([ttnn.to_torch(ttnn.get_device_tensors(x)[r * COLS]) for r in range(ROWS)]).reshape(N, H)
             ref = golden(xh, ids0, sc_t, W0, W1, W2)
             o = fn()
@@ -238,8 +278,9 @@ def test_moe_place_bench(mesh_device):
                     y[r * T : (r + 1) * T, c * (H // COLS) : (c + 1) * (H // COLS)] = tt[:T]
             emit(dict(T=T, kind=kind, pcc=pcc(y, ref), ref_norm=float(ref.norm()), out_norm=float(y.norm())))
         for layer in layers:
+            lrng = np.random.default_rng(100 + T + 1000 * layer)  # same samples for every layout of the same (T, layer)
             for s in range(nsamp):
-                ids = sample_ids(routes[layer], T, rng)
+                ids = sample_ids(routes[layer], T, lrng)
                 ttnn.copy_host_to_device_tensor(mk(ids, False), ids_dev)
                 st = stats(ids, mapping)
                 t1 = run_us(md, tr1)
