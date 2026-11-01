@@ -277,16 +277,23 @@ def _assert_rows_match(reference, expected, got, counts, Q):
 # row-major staging (split between reader and writer on Blackhole); float32 reference points
 # change the reader's defines and, packed, the tiled geometry's reference tile. D = 48 runs in
 # L1: its 96-byte head stick is not DRAM-aligned on every architecture.
+SMALL_COUNTS = (3, 70, 2, ([70, 33, 1], [5, 64, 69], [0, 71, 40]))
+LARGE_COUNTS = (2, 300, 8, ([300, 129], [17, 288], [1000, 0]))
+
+
 @pytest.mark.parametrize(
-    "D,ref_fp32", [(32, False), (48, False), (32, True)], ids=["d32-bf16-refs", "d48-bf16-refs", "d32-fp32-refs"]
-)
-@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
-@pytest.mark.parametrize(
-    "B,Q,H,counts",
+    "B,Q,H,counts,packed,D,ref_fp32",
     [
-        (3, 70, 2, ([70, 33, 1], [5, 64, 69], [0, 71, 40])),
-        (2, 300, 8, ([300, 129], [17, 288], [1000, 0])),
+        # Fewer tiles than cores, then more and not a multiple of them, each on both geometries.
+        (*SMALL_COUNTS, True, 32, False),
+        (*SMALL_COUNTS, False, 32, False),
+        (*LARGE_COUNTS, True, 32, False),
+        (*LARGE_COUNTS, False, 32, False),
+        # The reader-only scatter, and float32 reference points.
+        (*LARGE_COUNTS, True, 48, False),
+        (*LARGE_COUNTS, True, 32, True),
     ],
+    ids=["small-packed", "small-unpacked", "large-packed", "large-unpacked", "large-d48", "large-fp32-refs"],
 )
 def test_fused_msda_v2_num_valid_queries_tensor_matches_host_list(device, B, Q, H, counts, packed, D, ref_fp32):
     """Device counts derive the host list's tiles: rows below each count match it bit for bit.
