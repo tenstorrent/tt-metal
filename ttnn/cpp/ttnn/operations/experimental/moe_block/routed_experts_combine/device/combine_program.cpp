@@ -840,22 +840,22 @@ CombineHandles add_combine_program(
 
 void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs) {
     using namespace combine_program_detail;
-    // (a source's args are rewritten only when its address moved: its first arg tells; the arena's CBs with it)
-    enum : uint8_t { Unknown, Same, Moved };
-    std::array<uint8_t, static_cast<size_t>(CombineBuf::Count)> state{};
-    for (const auto& p : h.patches) {
-        auto& st = state[static_cast<size_t>(p.buf)];
-        if (st == Same) {
-            continue;
+    // (a source's args - the arena's CBs with it - only when its address differs from the one they were last written
+    // with: CombineHandles::last)
+    std::array<bool, static_cast<size_t>(CombineBuf::Count)> moved{};
+    for (size_t b = 0; b < moved.size(); ++b) {
+        if (bufs.buf[b] != nullptr) {
+            const uint32_t a = addr_of(bufs, static_cast<CombineBuf>(b));
+            moved[b] = h.last[b] != a;
+            h.last[b] = a;
         }
-        auto& v = tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index];
-        const uint32_t want = addr_of(bufs, p.buf) + p.offset;
-        if (st == Unknown) {
-            st = v == want ? Same : Moved;
-        }
-        v = want;
     }
-    if (state[static_cast<size_t>(CombineBuf::Arena)] != Same) {
+    for (const auto& p : h.patches) {
+        if (moved[static_cast<size_t>(p.buf)]) {
+            tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index] = addr_of(bufs, p.buf) + p.offset;
+        }
+    }
+    if (moved[static_cast<size_t>(CombineBuf::Arena)]) {
         for (const auto& [cb, off] : h.arena_cbs) {
             tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb, *bufs[CombineBuf::Arena], off);
         }

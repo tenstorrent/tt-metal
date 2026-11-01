@@ -2776,7 +2776,7 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
 }
 
 void patch_head_program(tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers) {
-    // (grouped by source: the first arg of a source tells whether it moved)
+    // (grouped by source; a source's args only when its address differs from HeadPatches::last)
     const auto& args = patches.args;
     for (size_t i = 0; i < args.size();) {
         const uint16_t src = args[i].src;
@@ -2790,7 +2790,8 @@ void patch_head_program(tt::tt_metal::Program& program, const HeadPatches& patch
                                   : tt::tt_metal::GetRuntimeArgs(program, a.kernel, a.core);
             return data[a.index];
         };
-        if (value(args[i]) != addr + args[i].offset) {
+        if (patches.last[src] != addr) {
+            patches.last[src] = addr;
             for (size_t k = i; k < j; ++k) {
                 value(args[k]) = addr + args[k].offset;
             }

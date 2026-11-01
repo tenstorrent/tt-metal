@@ -755,22 +755,19 @@ void override_flat_routed_expert_addresses(
     addr[size_t(FlatAddr::Arena)] = t.arena.buffer()->address();
     addr[size_t(FlatAddr::Words)] = t.words.buffer()->address();
     addr[size_t(FlatAddr::TokenIndex)] = t.token_index ? t.token_index->buffer()->address() : 0;
-    // (a source's args are rewritten only when its address moved: its first arg tells; the arena's CBs with it)
-    enum : uint8_t { Unknown, Same, Moved };
-    std::array<uint8_t, static_cast<size_t>(FlatAddr::Count)> state{};
-    for (const auto& pa : handles.patches) {
-        auto& st = state[size_t(pa.src)];
-        if (st == Same) {
-            continue;
-        }
-        auto& v = GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index];
-        const uint32_t want = addr[size_t(pa.src)] + pa.offset;
-        if (st == Unknown) {
-            st = v == want ? Same : Moved;
-        }
-        v = want;
+    // (a source's args - the arena's CBs with it - only when its address differs from the one they were last written
+    // with: FlatProgramHandles::last)
+    std::array<bool, static_cast<size_t>(FlatAddr::Count)> moved{};
+    for (size_t s = 0; s < moved.size(); ++s) {
+        moved[s] = handles.last[s] != addr[s];
+        handles.last[s] = addr[s];
     }
-    if (state[size_t(FlatAddr::Arena)] != Same) {
+    for (const auto& pa : handles.patches) {
+        if (moved[size_t(pa.src)]) {
+            GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
+        }
+    }
+    if (moved[size_t(FlatAddr::Arena)]) {
         for (const auto& [cb, off] : handles.arena_cbs) {
             UpdateDynamicCircularBufferAddress(program, cb, *t.arena.buffer(), off);
         }

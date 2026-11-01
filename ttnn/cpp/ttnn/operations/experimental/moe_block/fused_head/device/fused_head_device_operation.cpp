@@ -163,6 +163,9 @@ tt::tt_metal::WorkloadDescriptor FusedHeadFactory::create_workload_descriptor(
     if (attrs.patches->chips.empty()) {
         attrs.patches->chips = std::move(patches);
     }
+    for (auto& chip : attrs.patches->chips) {  // (a new program: its args are this build's, not the last hit's)
+        chip.last = HeadPatches::unknown_addresses();
+    }
     return w;
 }
 

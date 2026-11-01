@@ -29,6 +29,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -62,6 +63,15 @@ struct FlatAddrPatch {
 // What add_flat_routed_expert_program leaves for the caller (keep it in the cached program's shared variables).
 struct FlatProgramHandles {
     std::vector<FlatAddrPatch> patches;
+    // The address each source's args were last written with (0xFFFFFFFF: unknown - the next hit writes them). A hit
+    // compares the source's address with it, never with an arg's current value: the framework's inferred buffer
+    // bindings (apply_resolved_bindings) may already have moved an arg that equals a buffer's address, leaving that
+    // source's offset args stale.
+    mutable std::array<uint32_t, static_cast<size_t>(FlatAddr::Count)> last = [] {
+        std::array<uint32_t, static_cast<size_t>(FlatAddr::Count)> a;
+        a.fill(0xFFFFFFFFu);
+        return a;
+    }();
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
     // config.cmb_rt: the y writer kernels / cores whose report args the combine overlap fills, in program order (a
     // writer's index in the combine's L1 hand-off)

@@ -141,9 +141,22 @@ struct CombinePatch {
     uint32_t offset;
 };
 
+inline constexpr uint32_t kUnpatched = 0xFFFFFFFFu;
+
+inline std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> filled_unpatched() {
+    std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> a;
+    a.fill(kUnpatched);
+    return a;
+}
+
 // What add_combine_program leaves for the caller (keep it with the cached program).
 struct CombineHandles {
     std::vector<CombinePatch> patches;
+    // The address each source's args were last written with (kUnpatched: unknown - the next hit writes them). A hit
+    // compares the source's address with it, never with an arg's current value: the framework's inferred buffer
+    // bindings (apply_resolved_bindings) may already have moved an arg that equals a buffer's address, leaving that
+    // source's offset args stale.
+    mutable std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> last = filled_unpatched();
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
     // The y writers' report (flat_program.hpp FlatCombineReport): the collector (virtual), its counts (arena offset),
     // and the L1 hand-off args (se_yrm.hpp SE_Y_L1): [nd, slot stride, table, words, writer index, gate x | y << 16,

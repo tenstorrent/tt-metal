@@ -136,6 +136,16 @@ struct HeadPatches {
     };
     std::vector<Arg> args;  // grouped by source
     std::vector<Cb> arena_cbs;
+    // The address each source's args were last written with (0xFFFFFFFF: unknown - the next hit writes them; reset
+    // whenever a program is built). A hit compares the source's address with it, never with an arg's current value:
+    // the framework's inferred buffer bindings (apply_resolved_bindings) may already have moved an arg that equals a
+    // buffer's address, leaving that source's offset args stale.
+    mutable std::array<uint32_t, kHeadMaxSrc> last = unknown_addresses();
+    static std::array<uint32_t, kHeadMaxSrc> unknown_addresses() {
+        std::array<uint32_t, kHeadMaxSrc> a;
+        a.fill(0xFFFFFFFFu);
+        return a;
+    }
 };
 
 class HeadModel;
