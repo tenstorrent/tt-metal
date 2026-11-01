@@ -119,26 +119,32 @@ void validate_matmul_in0_column_window(
         a_shape[-1]);
 }
 
-// Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
+// Bfloat4/Bfloat2 Tile Size: checks that a bfloat4 or bfloat2 input has each tile dim >= 4. Only A's height
 // and B's width are checked; the other two dims (A's width, B's height) are the K axis,
 // already forced to 32 by the Operand Basics check above, so they can't be < 4.
+// BFLOAT2_B uses the BFLOAT4_B minimum; smaller tiles have not been validated for it.
 void validate_matmul_bfloat4_tile_dims(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile) {
     constexpr uint32_t bfloat4_min_tile_height = 4;
-    if (input_tensor_a.dtype() == DataType::BFLOAT4_B) {
+    const auto is_sub_byte_bfp = [](DataType dtype) {
+        return dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT2_B;
+    };
+    if (is_sub_byte_bfp(input_tensor_a.dtype())) {
         TT_FATAL(
             in0_tile.get_height() >= bfloat4_min_tile_height,
-            "BFLOAT4_B matmul requires in0 tile height >= {} (got {})",
+            "{} matmul requires in0 tile height >= {} (got {})",
+            input_tensor_a.dtype(),
             bfloat4_min_tile_height,
             in0_tile.get_height());
     }
-    if (input_tensor_b.dtype() == DataType::BFLOAT4_B) {
+    if (is_sub_byte_bfp(input_tensor_b.dtype())) {
         TT_FATAL(
             in1_tile.get_width() >= bfloat4_min_tile_height,
-            "BFLOAT4_B matmul requires in1 tile width >= {} (got {})",
+            "{} matmul requires in1 tile width >= {} (got {})",
+            input_tensor_b.dtype(),
             bfloat4_min_tile_height,
             in1_tile.get_width());
     }
@@ -169,14 +175,13 @@ void validate_matmul_tiny_tile_constraints(
             in1_tile.get_width());
     }
 
-    // Bfp compressed in1 dtypes (BFLOAT8_B, BFLOAT4_B) on the 2D/1D mcast paths hang for
+    // Bfp compressed in1 dtypes (BFLOAT8_B, BFLOAT4_B, BFLOAT2_B) on the 2D/1D mcast paths hang for
     // tile_h < 16 — the LLK unpack/pack path for Bfp faces is not yet validated below
     // face_height 16 on these factories. The MatmulMultiCoreReuseProgramConfig path does
     // support smaller tile_h with Bfp dtypes, so this check is scoped to the mcast configs.
     // See #42927. This is a "not currently supported" throw, not a permanent fatal — it
     // should be removed when the underlying kernel limitation is resolved.
-    const bool in1_is_bfp =
-        (input_tensor_b.dtype() == DataType::BFLOAT8_B) || (input_tensor_b.dtype() == DataType::BFLOAT4_B);
+    const bool in1_is_bfp = is_block_float(input_tensor_b.dtype());
     const bool is_mcast_config =
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
@@ -3329,9 +3334,7 @@ MatmulParams create_matmul_attributes(
             parameters.user_core_coord->y);
     }
     const bool has_program_config = parameters.program_config.has_value();
-    bool are_inputs_low_precision_df =
-        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
-         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+    bool are_inputs_low_precision_df = is_block_float(input_tensor_a.dtype()) && is_block_float(input_tensor_b.dtype());
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
