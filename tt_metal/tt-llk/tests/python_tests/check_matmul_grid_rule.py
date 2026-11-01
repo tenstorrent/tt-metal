@@ -165,6 +165,36 @@ def check_forced() -> int:
     return bad
 
 
+def check_dense_pack() -> int:
+    """matmul_pack_form_k of the header against matmul_pack_form over the math only sweep's dense pages and the LLK-only sweep's blocks, the shapes of the dense and plain block cells and their neighbours."""
+    from itertools import product
+
+    from helpers.format_config import InputOutputFormat
+    from helpers.matmul_sweep import matmul_pack_form
+
+    fmts = ["B8x", "F16", "F16b", "F32", "B8"]
+    outs = ["B8x", "B8", "F16b", "F32"]
+    shapes = [(1, 3), (1, 4), (2, 4), (4, 2), (4, 1), (1, 2), (2, 2), (3, 1)]
+    cases = [(fi, sy, a, b, o, rt, ct, kt, th, dense) for fi, sy, a, b, o, (rt, ct), kt, th, dense in product(("LoFi", "HiFi2"), (0, 1), fmts, fmts, outs, shapes, (1, 3, 4, 8), (0, 3), (False, True))]
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "llk_defs.h").write_text(STUB)
+        (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
+        rows = ",\n".join("{MathFidelity::%s,%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%s}" % (fi, "true" if sy == 0 else "false", NAME[a], NAME[b], NAME[o], rt, ct, kt, th, "true" if dense else "false") for fi, sy, a, b, o, rt, ct, kt, th, dense in cases)
+        (Path(d) / "t.cpp").write_text(
+            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h;DataFormat a,b,o;int rt,ct,kt,th;bool dense;};\n'
+            f"static const R rows[]={{{rows}}};\nint main(){{for(const R& r:rows)putchar('0'+matmul_pack_form_k(r.f,r.h,r.th,r.kt,r.rt,r.ct,r.a,r.b,r.o,32,32,r.dense,false));}}\n"
+        )
+        subprocess.run(["g++", "-std=c++20", "-O1", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
+        cpp = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
+    py = "".join(
+        str(int(matmul_pack_form(InputOutputFormat(getattr(DataFormat, NAME[a]), getattr(DataFormat, NAME[o]), getattr(DataFormat, NAME[b])), DestSync.Half if sy == 0 else DestSync.Full, getattr(MathFidelity, fi), rt, ct, kt, throttle=th, dense_pages=dense)))
+        for fi, sy, a, b, o, rt, ct, kt, th, dense in cases
+    )
+    bad = sum(x != y for x, y in zip(cpp, py)) + (len(cpp) != len(py))
+    print(f"dense and plain block pack: {len(cases)} cases, forms {sorted(set(cpp))}, {bad} differ")
+    return bad
+
+
 def main() -> int:
     rows = [(*r, 1) for r in grid._grid()] + list(grid2._grid2())
     with tempfile.TemporaryDirectory() as d:
@@ -187,7 +217,7 @@ def main() -> int:
         py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0") + ("1" if grid_main_flip_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
     print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::3].count('1')} python {py[0::3].count('1')}; separate post: C++ {cpp[1::3].count('1')} python {py[1::3].count('1')}; main flip: C++ {cpp[2::3].count('1')} python {py[2::3].count('1')}; {bad} differ")
-    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") or check_forced() else 0
+    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") or check_forced() or check_dense_pack() else 0
 
 
 if __name__ == "__main__":

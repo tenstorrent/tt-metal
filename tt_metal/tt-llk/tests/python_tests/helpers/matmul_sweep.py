@@ -773,6 +773,21 @@ def _matmul_pack_form_ext(value, formats, dest_sync, math_fidelity, rt_dim, ct_d
     return value
 
 
+# (fidelity, output, A, B, rt, ct, kt) -> form: blocks of the math only sweep (dense_pages) that take the form of the cell (matmul_pack_dense_cells in llk_matmul_forms.h)
+_PACK_DENSE_CELLS = {
+    ('LoFi', 'B8', 'B8', 'B8', 4, 2, 4): 0,
+    ('LoFi', 'B8', 'F16b', 'F16b', 1, 4, 4): 0,
+    ('LoFi', 'B8', 'F16b', 'F16b', 2, 4, 4): 0,
+    ('LoFi', 'B8', 'F32', 'F32', 1, 3, 1): 1,
+    ('LoFi', 'B8', 'F32', 'F32', 1, 3, 3): 0,
+    ('LoFi', 'B8', 'F32', 'F32', 1, 3, 4): 0,
+    ('LoFi', 'B8', 'F32', 'F32', 1, 4, 4): 0,
+    ('LoFi', 'B8', 'F32', 'F32', 4, 1, 4): 0,
+}
+# (fidelity, output, A, B, rt, ct, throttle) of matmul_pack_llkx_plain_block_cells: the plain block run in place of the closed block
+_PACK_LLKX_PLAIN_BLOCK = frozenset({('LoFi', 'B8x', 'F16', 'B8x', 1, 4, 0)})
+
+
 def matmul_pack_form(
     formats: FormatConfig,
     dest_sync: DestSync,
@@ -789,6 +804,17 @@ def matmul_pack_form(
     """Output pack form of the Blackhole matmul kernels: the python mirror of matmul_pack_form_k in llk_matmul_forms.h (0 per tile, 1 one block run, 2 the closed block, 4 the dense run)."""
     value = _matmul_pack_form_value(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, in0_tile_r_dim, in1_tile_c_dim, throttle, dense_pages, l1_acc)
     value = _matmul_pack_form_ext(value, formats, dest_sync, math_fidelity, rt_dim, ct_dim, throttle, in0_tile_r_dim, in1_tile_c_dim, l1_acc)
+    if dense_pages and dest_sync == DestSync.Half and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and not l1_acc and throttle == 0:
+        dense = _PACK_DENSE_CELLS.get((math_fidelity.name, _PACK_SHORT[formats.output_format], _PACK_SHORT[formats.input_format], _PACK_SHORT[formats.input_format_B], rt_dim, ct_dim, kt_dim))
+        if dense is not None:
+            value = dense
+    elif (
+        value == 2
+        and not dense_pages
+        and dest_sync == DestSync.Half
+        and (math_fidelity.name, _PACK_SHORT[formats.output_format], _PACK_SHORT[formats.input_format], _PACK_SHORT[formats.input_format_B], rt_dim, ct_dim, throttle) in _PACK_LLKX_PLAIN_BLOCK
+    ):
+        value = 1
     return MatmulPackForm(
         value,
         (

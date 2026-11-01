@@ -1312,19 +1312,81 @@ constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool ha
     return (small || block_float_out) ? 2 : 1;
 }
 
+// Blocks of the math only sweep (dense_pages: the perf sweep of math without unpack) where the pack form of the table reads behind main's per-tile pack: the form of the cell instead
+// (0 per tile, 1 one block run), keyed on the operand and output formats, the block and the k steps (any accumulate).
+struct matmul_pack_dense_cell
+{
+    MathFidelity fidelity;
+    DataFormat out;
+    DataFormat in_a;
+    DataFormat in_b;
+    std::uint8_t rt, ct, kt;
+    std::uint8_t form;
+};
+inline constexpr matmul_pack_dense_cell matmul_pack_dense_cells[] = {
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 2, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 4, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 4, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 1, 1},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 3, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 4, 0},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 4, 0},
+};
+
+// -1 where the table's form stays
+constexpr int matmul_pack_dense_form(const MathFidelity fidelity, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct, const DataFormat in_a, const DataFormat in_b,
+                                     const DataFormat out)
+{
+    for (const matmul_pack_dense_cell& c : matmul_pack_dense_cells)
+    {
+        if (c.fidelity == fidelity && c.out == out && c.in_a == in_a && c.in_b == in_b && c.rt == rt && c.ct == ct && c.kt == kt)
+        {
+            return c.form;
+        }
+    }
+    return -1;
+}
+
+// Cells of the LLK-only space where the closed block pack of a block float output reads behind the plain block run (any K and accumulate)
+inline constexpr matmul_pack_llkx_cell matmul_pack_llkx_plain_block_cells[] = {
+    {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Bfp8, 1, 4, 0},
+};
+
+constexpr bool matmul_pack_llkx_plain_block(const MathFidelity fidelity, const DataFormat out, const DataFormat in_a, const DataFormat in_b, const std::uint32_t rt, const std::uint32_t ct,
+                                            const std::uint32_t throttle)
+{
+    for (const matmul_pack_llkx_cell& c : matmul_pack_llkx_plain_block_cells)
+    {
+        if (c.fidelity == fidelity && c.out == out && c.in_a == in_a && c.in_b == in_b && c.rt == rt && c.ct == ct && c.throttle == throttle)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The output pack form of a matmul block: matmul_pack_form_base_k, and for the blocks it leaves on the per-tile pack at half sync (two or more full tiles, throttle 0, 2 or 3, no packer L1 accumulate,
 // Float and block float formats) the block pack of the LLK-only sweep: the plain block run, the closed block for a block float output, except the cells of matmul_pack_llkx_per_tile_cells.
 constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
-    const int base = matmul_pack_form_base_k(fidelity, half_sync, throttle, kt, rt, ct, in_a, in_b, out, r0, c1, dense_pages, l1_acc);
-    if (base == 0 && half_sync && rt * ct >= 2 && r0 == 32 && c1 == 32 && !l1_acc && (throttle == 0 || throttle == 2 || throttle == 3) && matmul_pack_llkx_format(in_a) && matmul_pack_llkx_format(in_b) &&
+    if (dense_pages && half_sync && r0 == 32 && c1 == 32 && !l1_acc && throttle == 0)
+    {
+        const int dense = matmul_pack_dense_form(fidelity, kt, rt, ct, in_a, in_b, out);
+        if (dense >= 0)
+        {
+            return dense;
+        }
+    }
+    int form = matmul_pack_form_base_k(fidelity, half_sync, throttle, kt, rt, ct, in_a, in_b, out, r0, c1, dense_pages, l1_acc);
+    if (form == 0 && half_sync && rt * ct >= 2 && r0 == 32 && c1 == 32 && !l1_acc && (throttle == 0 || throttle == 2 || throttle == 3) && matmul_pack_llkx_format(in_a) && matmul_pack_llkx_format(in_b) &&
         matmul_pack_llkx_format(out) && matmul_pack_llkx_space(in_a, in_b, out, throttle) && !matmul_pack_llkx_per_tile(fidelity, out, in_a, in_b, rt, ct, throttle))
     {
-        return matmul_format_block_float(out) ? 2 : 1;
+        form = matmul_format_block_float(out) ? 2 : 1;
     }
-    return base;
+    return (form == 2 && half_sync && !dense_pages && matmul_pack_llkx_plain_block(fidelity, out, in_a, in_b, rt, ct, throttle)) ? 1 : form;
 }
 
 
@@ -1475,6 +1537,10 @@ struct matmul_forced_form_cell
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
+    // LoFi, 16-bit DEST, one DEST section, to Bfp8_b over 8 k steps: a 2x4 block of a Float16_b in1 against a Bfp4_b in0 (static throttle 2) reads 0.6 cycles behind main on the table's
+    // form and 0.14 over with the hoisted tile form; a 1x8 block against a Float32 in0 (static throttle 3) reads 0.28 behind and 0.38 ahead
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 4, 2, true, 'h', false, 1, 2, true},
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 8, 8, 1, true, 'h', false, 1, 1, true},
     // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles behind main at half sync
     // and 10 at full sync (the 1x6 and 1x8 blocks gain from it); the hoisted rows form reads 4.9 cycles ahead of main at half sync and 37 at full sync
     {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
