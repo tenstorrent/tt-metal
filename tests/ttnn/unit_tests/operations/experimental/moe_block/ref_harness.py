@@ -152,6 +152,22 @@ def assert_bit_exact(actual: dict, expected: dict, names: list[str] | None = Non
     assert not bad, "not bit-exact:\n" + "\n".join(bad)
 
 
+def assert_pcc(actual: dict, expected: dict, names: list[str], pcc: float):
+    """actual / expected: per_chip[(r, c)][name]. Every named tensor's Pearson correlation with the expected one at
+    least pcc on every chip (same shape and dtype)."""
+    bad = []
+    for ch in sorted(expected):
+        for name in names:
+            a, e = actual[ch][name], expected[ch][name]
+            if a.shape != e.shape or a.dtype != e.dtype:
+                bad.append(f"chip {ch} {name}: {a.dtype}{list(a.shape)} vs expected {e.dtype}{list(e.shape)}")
+                continue
+            got = torch.corrcoef(torch.stack([a.double().flatten(), e.double().flatten()]))[0, 1].item()
+            if not got >= pcc:
+                bad.append(f"chip {ch} {name}: PCC {got:.6f} < {pcc}")
+    assert not bad, "not close:\n" + "\n".join(bad)
+
+
 def _bits(t: torch.Tensor) -> torch.Tensor:
     views = {torch.float32: torch.int32, torch.bfloat16: torch.int16, torch.float16: torch.int16}
     return t.view(views[t.dtype]) if t.dtype in views else t
