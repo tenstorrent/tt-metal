@@ -819,10 +819,15 @@ inline void _llk_pack_block_dense_(
  * then no longer resets after each call. The write is faster per tile where the packer is the bound and slower where the pack thread's config
  * writes contend with the unpacker's (latency-bound matmul and eltwise kernels), so it is not the default.
  */
+template <bool bit31_set = false>
 inline void _llk_pack_rmw_dest_init_()
 {
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
-    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    // bit31_set: the full-sync _llk_pack_dest_init_ already set bit 31 and no pack program clears it.
+    if constexpr (!bit31_set)
+    {
+        TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    }
 }
 
 template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>

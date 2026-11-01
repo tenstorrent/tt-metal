@@ -69,7 +69,7 @@ inline void llk_pack_init_impl(
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
     if constexpr (llk_pack_rmw_tile<pack_mode>) {
-        _llk_pack_rmw_dest_init_();
+        _llk_pack_rmw_dest_init_<DST_SYNC_MODE == DstSync::SyncFull>();
     }
 }
 
