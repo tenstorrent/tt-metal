@@ -134,6 +134,8 @@ class DS41PrefillRuntime:
             lm_head=False,
             weight_cache=params.weight_cache_path,
         )
+        # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
+        assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"
         self.geo = WindowGeometry(mesh_device, c)
         from models.demos.common.bringup.testing.contract import gap_feed
 

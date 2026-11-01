@@ -5015,3 +5015,110 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   refusals, and the file's option-off cases).
 - No stock op added on the model path (F113): the model calls only the two forks.
 - Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.24`.
+
+## P.25 perf (galaxy 8x4, attempt 1, 2026-10-31): MM_RETUNE_CAP, every dense matmul re-swept within the 110-core cap (MATMUL_CONFIG=galaxy110)
+- **Switch**: MATMUL_CONFIG gains `galaxy110` (new default; tt/settings.py). galaxy110 = tt/mm_configs.GALAXY110 (12
+  entries, keyed by table_key at grid 11 x 10), the rule for any call not in it. `galaxy` (GALAXY, P.19 + FIX.15) is
+  unchanged. mm_configs: `table()` gives the mode's table; the program_config cache key carries the mode name.
+- **Capture** (8x4 mesh, `DS41_MATMUL_CONFIG=galaxy DS41_ENGRAM_TABLE=resident P23_TAG=p25 ... -k capture`,
+  7m38s): generated/ds41_p23/calls_p25.json, 187 calls, 12 distinct, 1357 KiB free L1 for CBs at every call (budget
+  1342 KiB), chunk out vs golden rel 0.75809. Against FIX.15's capture: 11 calls the same. One changed: hc.fn is now
+  [160, 20480] x [20480, 32] fp32 (P.23 OWN_ROWS: whole rows, stream-major; was [640, 5120]). The changed dtypes and
+  layouts of P.21-P.24 sit in the norms and RoPE chains feeding these matmuls. The matmul inputs' shapes and dtypes are
+  unchanged.
+- **Sweep** (8x4 MESH, agent rule 19; one process; `P23_CALLS=calls_p25.json P23_CURRENT=galaxy P23_MIN_MS=0
+  P23_FULL=1 ... -k "test_sweep and not card"`). Each candidate is held to tt/cores.worker_grid (11 x 10). New in
+  test_matmul_sweep.py:
+  - P23_CURRENT=galaxy: "current" (the before) = galaxy's config.
+  - A pick must name its grid with at most 110 cores, so auto and minimal's default grid are never picked.
+  - Per-config `cores` reported.
+  - P23_TAG / P23_NAME name the files.
+  - Wider candidates: minimal M / N blocks that divide the call's tiles (M5 for 160 rows, N10), and 1D in0 at
+    per_core_N up to twice the narrowest (other core counts).
+  - Run 1 (P.19 candidate set, _p25): 2m45s, no winner. Run 2 (wider set, _p25w): 12m56s, one winner.
+  - Acceptance as P.19: deterministic, within one bf16 rounding of auto, error vs float64 <= galaxy's x 1.01, > 1 %
+    faster. Every entry is bit-identical to auto (max |d| 0).
+- **Per call** (ms a call, device kernel time on the mesh; cores a chip; calls a chunk):
+  | site | shape (per chip) | calls | before (galaxy) | after (galaxy110) |
+  |---|---|---|---|---|
+  | attn.wo_a | 8x160x4096 x 8x4096x1024 bfp8 -> bfp8 | 40 | 0.2062, 55 (2D nofuse 11x5 bw32) | same |
+  | attn.wq_b | 160x1280 x 1280x32768 bfp8 -> bf16 | 40 | 0.1978, 103 (1D in0 pn10) | same |
+  | attn.wo_b | 160x8192 x 8192x5120 bfp8 -> bf16 | 40 | 0.1361, 80 (1D in0 pn2) | same |
+  | q_a | 160x5120 x 5120x1792 bfp8 -> bf16 | 40 | 0.0473, 56 (1D in0 pn1 bw16) | same |
+  | indexer.wq_b | 160x1280 x 1280x4096 bfp8 -> bf16 | 8 | 0.0285, 64 | same |
+  | indexer.weights_proj | 160x5120 x 5120x32 bf16 | 8 | 0.0169, 5 | same |
+  | engram_kv | 640x6144 x 6144x6400 bfp8 -> bf16 | 2 | 0.2295, 110 (minimal M4 K16 N8 sb1x4) | **0.2246, 110 (minimal M4 K8 N10 sb2x1)** |
+  | compressor | 160x5120 x 5120x1024 bf16 -> fp32 | 3 | 0.0430, 55 | same |
+  | compressor | 160x5120 x 5120x512 bf16 -> fp32 | 1 | 0.0297, 40 | same |
+  | compressor | 320x512 x 512x128 bf16 | 3 | 0.0042, 40 | same |
+  | compressor | 640x512 x 512x128 bf16 | 1 | 0.0067, 40 | same |
+  | hc.fn | 160x20480 bf16 x 20480x32 fp32 -> fp32 | 1 | 0.0888, 5 (rule: 2D 1x5) | same (now a table entry) |
+  Swept total 24.584 -> 24.574 ms a chunk (-0.010). No call runs over 110 cores. The 160-row projections are
+  weight-DRAM bound. minimal with M_block 5 is slower than 1D in0 (wq_b 0.215 vs 0.198, q_a 0.067 vs 0.047). More
+  cores at other per_core_N do not help (wq_b pn16 on 64 cores 0.216). DS41-191.
+- **Measured** (`measure --task P.25`, change on: MATMUL_CONFIG=galaxy110 ENGRAM_TABLE=resident, code 96d85e228ed6efec;
+  rc 0 on every part). quick: 102 limits pass (worst err_state_window_kv_L28 0.911, err_state_topk_idx_L08 0.901 of
+  the limit), L39 0.7581 (= P.24, bit-identical configs), host_transfers_per_layer 0, wall 193.5 ms (spread 11.7).
+  p51200: wall 202.5, device 169.55 ms (engram_kv 0.96). p512000: wall 227.5, device 208.14 (engram_kv 0.93).
+  P.24's change-on side (another run): device 169.67 / 208.34. The galaxy-vs-galaxy110 A/B is the orchestrator's;
+  expected difference ~0.01 ms a chunk, below run-to-run noise.
+- **Not done**: no memory-config change (DRAM-sharded weights would be the next matmul lever; out of a program-config
+  pick). No model profile (brief). No fork suites (OV-25).
+- OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
+- Re-run: see the test_matmul_sweep.py docstring (P.25 lines). Logs: /scratch/dnijemcevic/p25/{capture,sweep,sweep_w}.log;
+  generated/ds41_p23/sweep_p25w.json, galaxy_table_p25w.py. A/B: `python -m models.demos.common.bringup.orchestrator
+  measure --task P.25`.
+
+## FIX.17 overseer fix (galaxy 8x4, attempt 1, 2026-10-31): DEEP_LAYERS=all|tail (default all), layers 21-39 only on the prompt's tail
+- **Switch**: DEEP_LAYERS (tt/settings.py), default `all` = today's model, unchanged (the only code on the all path is
+  two set lookups in `TtDS41Model.layer`). `tail`:
+  - `TtDS41Model.__init__`: deep layers = the loaded layers above the last KV / candidate source (max(kv_sources,
+    cand_source) + 1 = 21, so 21-39); they must be consecutive with layer 20 loaded; tail_rows = (n_deep + 1) x
+    (window - 1) + 1 = 2541 (the owner's 20 x 127 + 1).
+  - Normal chunk: `layer(20)` runs as before, its output DevH (streams, pre and the mHC stats row for layer 21) goes to
+    `DS41DeviceState.keep_deep_input` (`deep_in` {start: (DevH, end)}, this chunk's and the previous one's; no copy) and
+    returns the `Skipped` marker; `layer(21..39)` return it unchanged (free of it is a no-op). Nothing of 21-39 runs.
+  - `tail_pass(state, end=None, on_layer=None)` (the caller signals the prompt's end; no length needed before): the
+    deep layers over the kept chunks holding [end - 2541, end): the last chunk, plus the previous one when the last holds
+    fewer than 2541 rows; each at its own chunk start through the normal block (every layer's window carry as its cache
+    holds it: zeros, or the previous tail chunk's kept tail; the top-k / candidate pools of layer 20 at that start;
+    ChunkMemo cleared before each). Returns layer 39's output of the last chunk; then `final_norm` / logits as usual.
+  - Serving keep_history=False: `put` keeps the previous chunk's top-k / pool too (the two-chunk tail reads them).
+  - tt/runners/adapter.py refuses DEEP_LAYERS=tail (the engine reads every layer's window KV).
+- **Not the owner's 3072-row chunk**: the tail runs as whole 5120-row chunks at their own starts. The model is built
+  for one chunk size (WindowTables, the load-time host_alloc / fork-output buffers, program configs, the top-k and
+  candidate stores keyed by chunk start, the window carry keyed by chunk end); a 3072-row pass would need a second
+  geometry of all of them and layer 20's pools re-split over 96 rows a chip. Cost: 1 chunk (75.7 ms at 51200) or 2 when
+  the last chunk holds < 2541 rows, about 0.1 s a prompt.
+- **Accuracy** (tests/perf/test_deep_tail.py, rung `last`, golden prefix of layers 0-20 only, layers 21-39 caches zero,
+  the ladder's drift limits): pass. Layers 0-20 over the chunk: rel 0.025-0.188, each within its limit (e.g. L20 0.165 /
+  0.252). Layers 21-39 over the tail rows [end - 2541, end): 0.138-0.165, L39 0.613 / 1.533 (ladder L39 0.758: DS41-188
+  rounding swing). Final hidden (tail rows) 0.191 / 0.242; top-1 1.000, top-5 1.000 (limit 0.994) over 188 sampled tail
+  rows, last token top-1 match; layers 0-20 states within limits (worst rel 0.202, worst index overlap 0.836).
+  Exactness: with a zero carry at chunk start s, layer 20 + k is exact for rows >= s + 127 k; the tail starts 2579 rows
+  into the chunk here, past 19 x 127 = 2413.
+- **Measured** (8x4, one job at a time, `DS41_ENGRAM_TABLE=resident`, test_profile.py with BRINGUP_POS, the gate's two
+  commands: clean wall median, then device from the rt profiler; results in /scratch/dnijemcevic/fix17):
+  | chunk at | all: wall / device ms | tail: wall / device ms |
+  |---|---|---|
+  | 51200 | 200.7 / 171.07 | 122.6 / 92.77 |
+  | 512000 | 228.3 / 207.56 | 128.0 / 105.02 |
+  Tail pass (layers 21-39, one 5120-row chunk, synced wall / rt device): 75.7 / 77.18 ms at 51200, 100.3 / 103.90 ms at
+  512000 (test_deep_tail.py, DEEP_TAIL_POS=512000 for the second). Programs warm in every run (cache 140 entries tail,
+  162 all; no misses in the timed runs).
+- **Prompt tok/s** (chunk walls linear in position between the two measured starts, extrapolated past 512000, plus the
+  tail pass at the end; as /scratch/dnijemcevic/opportunities/prefill_tps.py's arithmetic):
+  | prompt | all: wall s, tok/s | tail: wall s (tail pass), tok/s | x | device-only tok/s all -> tail |
+  |---|---|---|---|---|
+  | 128k (131072, 26 chunks, 1 tail chunk) | 5.24, 25023 | 3.27 (80 ms), 40067 | 1.60 | 29295 -> 52376 |
+  | 512k (524288, 103 chunks, 2 tail chunks) | 21.97, 23867 | 13.08 (201 ms), 40075 | 1.68 | 27120 -> 50711 |
+  | 1M (1044480, 204 chunks, 1 tail chunk) | 46.67, 22382 | 26.26 (128 ms), 39776 | 1.78 | 24595 -> 48355 |
+- Gotchas: keeping layer 20's DevH across chunks (no copy) did not add programs (F196 warm in 10 runs; DS41-146
+  addresses: no miss). to_host of the Skipped marker fails: a harness that reads layer 20's output in tail mode reads
+  `state.deep_in[start][0]`.
+- OV-3: nothing padded (whole chunks as the model runs them). OV-23: no Python-built op added or touched. OV-25: no fork
+  suite run.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_deep_tail.py` (DEEP_TAIL_POS=512000: timing only);
+  `DS41_DEEP_LAYERS=tail BRINGUP_POS=51200 BRINGUP_PROFILE_WALL=1 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`.
