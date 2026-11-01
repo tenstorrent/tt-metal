@@ -421,13 +421,7 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
 
 
 def _config_sites_in_function(fn, specs, helpers, post_init):
-    """(label, emitted fields) for the templates=/runtimes= lists this function builds.
-
-    Same three shapes as ``_param_fields_in_tree``, read inside one function
-    instead of over the whole file. The label is the kernel source the config
-    names, so a report says which kernel differs rather than which Python
-    function does; it falls back to the function's own name.
-    """
+    """(kernel label, emitted fields) for the templates=/runtimes= lists in one function."""
     fields, label = set(), None
 
     def add_list(list_node):
@@ -470,19 +464,7 @@ def _config_sites_in_function(fn, specs, helpers, post_init):
 def derive_perf_test_column_sets(quasar: bool = False) -> dict:
     """{perf_test_name -> {frozenset of fields: [labels]}}, one entry per test function.
 
-    ``derive_perf_test_schemas`` unions a file's columns before comparing it to
-    the catalog, which is right for the catalog and blind to the case where the
-    test functions inside one file do not agree. One file writes one CSV, so
-    disagreement there is the contamination ``helpers/perf/core.py`` raises on
-    teardown, and only a run on a board reaches it.
-
-    A source that backs more than one perf test is left out: its tests write one
-    CSV each, so its functions may differ on purpose, and which function serves
-    which test is not visible here. Leaving it out can only miss a difference.
-
-    Same static approximation as ``derive_perf_test_schemas``: params built
-    purely at runtime stay invisible, so a difference can be missed, never
-    invented.
+    Sources that back more than one perf test are skipped.
     """
     specs = class_field_specs()
     helpers = helper_returned_param_calls(specs)

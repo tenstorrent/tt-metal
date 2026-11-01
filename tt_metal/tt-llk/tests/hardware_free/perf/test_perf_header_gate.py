@@ -232,15 +232,6 @@ def test_test_name_aliases_reject_missing_and_stale_key():
 
 
 def _column_set_problems(column_sets) -> list:
-    """One line per file whose test functions do not all emit the same columns.
-
-    One perf test file writes one CSV. A test function that emits a column the
-    others do not leaves two column sets in that file, pandas NaN-fills the
-    gaps, and ``helpers/perf/core.py`` stops the run on teardown with
-    PerfSchemaError. That only happens on a board, in a measuring leg, after the
-    change has merged: the catalog gate above unions a file's columns, so it
-    cannot see the split.
-    """
     problems = []
     for name, groups in sorted(column_sets.items()):
         if len(groups) < 2:
@@ -264,10 +255,8 @@ def _assert_one_column_set_per_file(column_sets, arch):
         *problems,
         "",
         "One file writes one CSV, so every test function in it must emit the "
-        "same columns. Give the test functions that lack a parameter that "
-        "parameter with a neutral value, the way a kernel that does not read it "
-        "already carries the others. If two families genuinely need different "
-        "columns, split them into separate test files, one schema per file.",
+        "same columns. Add the missing parameter with a neutral value, or split "
+        "the file.",
     ]
     assert not problems, "\n".join(msg)
 

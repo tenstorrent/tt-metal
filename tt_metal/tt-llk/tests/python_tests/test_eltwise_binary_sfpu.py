@@ -2885,7 +2885,6 @@ def _run_sfpu_binary_bcast(
             LOOP_FACTOR(loop_factor),
             NUM_FACES(),
             ZERO_POINT(0),
-            # Unread by this kernel. Present so the report columns match sfpu_binary.
             OUT_ZERO_POINT(0),
         ],
         "variant_stimuli": StimuliConfig(
