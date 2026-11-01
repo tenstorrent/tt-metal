@@ -52,6 +52,14 @@ def _parse_args(argv=None):
     parser.add_argument("--score-threshold", type=float, help="Optional device-side detection score threshold")
     parser.add_argument("--seed", type=int, default=0, help="Synthetic input and weight seed")
     parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Replay each frame from traces (tt_bevformer_trace) instead of dispatching it op by op",
+    )
+    parser.add_argument(
+        "--trace-region-size", type=int, default=256 << 20, help="Device trace region in bytes, with --trace"
+    )
     parser.add_argument("--output-dir", default="bevformer_demo_output")
     return parser.parse_args(argv)
 
@@ -176,6 +184,7 @@ def _latency_summary(device_latencies, end_to_end_latencies):
         "mean_end_to_end_latency_ms": statistics.mean(end_to_end_latencies) * 1e3,
         "p50_end_to_end_latency_ms": statistics.median(end_to_end_latencies) * 1e3,
         "device_fps": 1.0 / mean_device_latency,
+        "end_to_end_fps": 1.0 / statistics.mean(end_to_end_latencies),
     }
 
 
@@ -232,6 +241,7 @@ def run_demo(args):
     )
     from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
     from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
+    from models.experimental.bevformer.tt.tt_bevformer_trace import TTBEVFormerTrace
 
     torch.manual_seed(args.seed)
     assert (config.num_cameras, config.can_bus_dims) == (NUM_CAMS, CAN_BUS_DIMS)
@@ -288,8 +298,13 @@ def run_demo(args):
         f"BEVFormer {config.variant}: {args.num_frames} output frames plus one preparation frame; "
         f"checkpoint={args.checkpoint}, dataset={args.dataset_format}"
     )
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32 * 1024)
+    device = ttnn.open_device(
+        device_id=args.device_id,
+        l1_small_size=32 * 1024,
+        trace_region_size=args.trace_region_size if args.trace else 0,
+    )
     results, device_latencies, end_to_end_latencies = [], [], []
+    traced = None
     try:
         hardware_metadata = _hardware_metadata(
             ttnn.get_arch_name(),
@@ -302,9 +317,7 @@ def run_demo(args):
         tt_model = TTBEVFormer(create_bevformer_parameters(parameter_model, first_batch, device), device)
 
         def detect_frame(cls_scores, bbox_preds):
-            scores, labels, _, boxes, valid = tt_model.detect(cls_scores, bbox_preds)
-            if args.score_threshold is not None:
-                valid = ttnn.logical_and(valid, ttnn.ge(scores, args.score_threshold))
+            scores, labels, _, boxes, valid = tt_model.detect(cls_scores, bbox_preds, args.score_threshold)
             return tt_model.get_bboxes(scores, labels, boxes, valid)
 
         tt_image = to_conv_layout(first_images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -326,22 +339,47 @@ def run_demo(args):
         del warm_outputs, warm_detections
         logger.info(f"Temporal warmup on frame {warm_token} completed outside measurements")
 
+        if args.trace:
+            # Takes over the preparation frame's BEV and the prepared frame's buffers.
+            traced = TTBEVFormerTrace(
+                tt_model,
+                device,
+                to_conv_layout(warm_images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+                prepared,
+                prev_bev,
+                score_threshold=args.score_threshold,
+            )
+            logger.info(f"Traces captured in {traced.captures[0] * 1e3:.1f} ms")
+
         for index in range(1, frame_count):
             end_to_end_start = time.perf_counter()
             images, metas, token = load_frame(index)
-            tt_image = to_conv_layout(images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            if traced is not None:
+                traced.upload(to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))
+                # As in eager, the images' upload is outside the timed region and the compaction,
+                # which reads the detections back, inside it.
+                ttnn.synchronize_device(device)
+                device_start = time.perf_counter()
+                compacted = tt_model.get_bboxes(*traced(metas))[0]
+                ttnn.synchronize_device(device)
+                device_latency = time.perf_counter() - device_start
+            else:
+                tt_image = to_conv_layout(images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-            # Preparing the frame projects the cameras on device and queues their visible counts' readback.
-            device_start = time.perf_counter()
-            prepared = tt_model.prepare_frame(metas, prepared)
-            cls_scores, bbox_preds, next_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
-            compacted = detect_frame(cls_scores, bbox_preds)
-            ttnn.synchronize_device(device)
-            ttnn.deallocate(tt_image)
-            device_latency = time.perf_counter() - device_start
-            compacted = compacted[0]
+                # Preparing the frame projects the cameras on device and queues their visible counts' readback.
+                device_start = time.perf_counter()
+                prepared = tt_model.prepare_frame(metas, prepared)
+                cls_scores, bbox_preds, next_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
+                compacted = detect_frame(cls_scores, bbox_preds)
+                ttnn.synchronize_device(device)
+                ttnn.deallocate(tt_image)
+                device_latency = time.perf_counter() - device_start
+                compacted = compacted[0]
+                prev_bev = next_bev
             end_to_end_latency = time.perf_counter() - end_to_end_start
-            prev_bev = next_bev
+            if traced is not None:
+                # After a frame that grew the plan, which ran live; timed apart in trace_capture_ms.
+                traced.capture_if_stale()
 
             sample_boxes, sample_scores, sample_labels = compacted
             detections = _serialize_detection(sample_boxes, sample_scores, sample_labels, config.class_names)
@@ -361,6 +399,8 @@ def run_demo(args):
                 f"device {device_latency * 1e3:.1f} ms, end-to-end {end_to_end_latency * 1e3:.1f} ms"
             )
     finally:
+        if traced is not None:
+            traced.release()
         ttnn.close_device(device)
 
     summary = {
@@ -374,12 +414,22 @@ def run_demo(args):
         "score_threshold": parameter_model.bbox_coder.score_threshold,
         "preparation_frame": first_token,
         "num_frames": len(results),
+        "execution": "trace" if args.trace else "eager",
         **_latency_summary(device_latencies, end_to_end_latencies),
     }
+    if traced is not None:
+        # The first capture, then one per growth of the spatial cross-attention's plan.
+        summary["trace_capture_ms"] = [seconds * 1e3 for seconds in traced.captures]
     output = {"summary": summary, "frames": results}
     output_path = output_dir / "detections.json"
     output_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     logger.info(f"Mean device latency: {summary['mean_device_latency_ms']:.1f} ms ({summary['device_fps']:.2f} FPS)")
+    logger.info(
+        f"Mean end-to-end latency: {summary['mean_end_to_end_latency_ms']:.1f} ms "
+        f"({summary['end_to_end_fps']:.2f} FPS)"
+    )
+    if traced is not None:
+        logger.info(f"Trace captures (ms): {', '.join(f'{ms:.1f}' for ms in summary['trace_capture_ms'])}")
     logger.info(
         f"P50 latency: device {summary['p50_device_latency_ms']:.1f} ms, "
         f"end-to-end {summary['p50_end_to_end_latency_ms']:.1f} ms"

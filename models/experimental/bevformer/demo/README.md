@@ -37,6 +37,20 @@ python -m models.experimental.bevformer.demo.demo \
 
 `--variant tiny|small|base` is a shorthand for the corresponding bundled config.
 
+### Traced run
+
+`--trace` replays each frame from traces instead of dispatching it op by op
+(`tt/tt_bevformer_trace.py`). The frame runs as three traces around the readback of the cameras'
+visible counts, which size the spatial cross-attention's plan. While the counts fit the plan's
+capacity, every frame replays; a frame that outgrows it runs live, and the traces are captured
+again after its latencies are taken. The summary records each capture's time in
+`trace_capture_ms`, apart from the frames' latencies. `--trace-region-size` sets the device's trace
+region, 256 MiB by default, which holds base's three traces.
+
+Tracing removes the host's op dispatch from the frame. It helps where dispatch, not the device's
+work, bounds the frame: in ten-frame synthetic runs on a BH P100, tiny's device path drops by about
+a third, while small's and base's change by 1 to 2 percent.
+
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
@@ -58,11 +72,10 @@ preparation frame, ten measured frames, the TT architecture and card, and the fu
 SHA. They do not record the firmware version or original command line.
 
 Compare runs by Device FPS. It covers the work the TT device does per frame and how the host feeds
-it. The rest of the end-to-end time is image decoding, preprocessing, host-to-device conversion and
-host box readback: it depends on the host's CPU, and a pipeline can overlap it with the device's
-work on the previous frame. In synthetic mode most of it is generating the random images. The
-table above includes the frame's preparation in the device-path window. Results recorded before
-that timing-window change are not directly comparable.
+it, up to the detections' readback and host compaction. The rest of the end-to-end time is image
+decoding, preprocessing and the images' upload: it depends on the host's CPU, and a pipeline can
+overlap it with the device's work on the previous frame. In synthetic mode most of it is
+generating the random images.
 
 ## Model configuration
 
@@ -288,9 +301,10 @@ the same stored images, while synthetic mode generates fresh deterministic rando
 modes, all reported latencies describe the already-compiled temporal execution path.
 
 `device_latency_ms` measures host wall-clock time around the frame's preparation (host inputs, their
-upload, and the cameras' projection on device), the TT model forward, device-side detection, synchronization, and input
-deallocation. `end_to_end_latency_ms` additionally includes
-image loading, preprocessing, transfer preparation, and host box readback.
+upload, and the cameras' projection on device), the TT model forward, device-side detection, the
+detections' readback and host compaction, and synchronization. With `--trace` the same work runs
+from the traces, and a frame that outgrows the plan runs live; its recapture is not included.
+`end_to_end_latency_ms` additionally includes image loading, preprocessing and the images' upload.
 
 The `summary` object contains:
 
@@ -312,11 +326,14 @@ The `summary` object contains:
 | `p50_device_latency_ms` | Median device latency sample. |
 | `mean_end_to_end_latency_ms` | Arithmetic mean of end-to-end samples. |
 | `p50_end_to_end_latency_ms` | Median end-to-end latency sample. |
+| `execution` | `eager`, or `trace` with `--trace`. |
 | `device_fps` | Estimated steady-state device-path throughput: `1000 / mean_device_latency_ms`. |
+| `end_to_end_fps` | `1000 / mean_end_to_end_latency_ms`. |
+| `trace_capture_ms` | With `--trace` only: the first capture's time, then one per growth of the plan. |
 
 The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
-every measured frame. It excludes image loading, preprocessing, host box readback, the unmeasured
-preparation frame and cold-start warmup.
+every measured frame. It excludes image loading, preprocessing, the images' upload, the unmeasured
+preparation frame, cold-start warmup and trace captures; it includes the detections' readback.
 
 ## Visualize detections
 

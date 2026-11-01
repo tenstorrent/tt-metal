@@ -79,8 +79,8 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
   from `config/bevformer_<variant>.json` when `model_config.py` is first imported. A normalized
   local config can instead be selected with `BEVFORMER_CONFIG=/path/to/config.json`. The backbone
   and FPN tests (`test_resnet.py`,
-  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py` and
-  the backbone and detector harnesses in `tests/perf/` run the selected variant;
+  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py`,
+  `test_bevformer_trace.py` and the backbone and detector harnesses in `tests/perf/` run the selected variant;
   `test_perception_transformer.py` keeps fixed BEV grids, and the other tests' `*_base` and `*_tiny`
   presets are fixed sizes.
 - `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
@@ -102,6 +102,10 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
+
+- `test_bevformer_trace.py`: the detector replayed from traces against the same detector run live,
+  frame by frame: replays at changing counts, a frame no camera sees, and the plan grown both within
+  a frame and between frames, each followed by a recapture.
 
 ## Project Structure
 
@@ -358,4 +362,5 @@ tt/model_preprocessing.py
 - BEV grid (base): 200x200, small 150x150, tiny 50x50; 900 object queries; up to 300 boxes per frame
 - Preparing a frame projects the cameras on device and reads back only their visible counts, which
   size the spatial cross-attention's rebatch plan; the plan's shapes follow a capacity that only
-  grows, and the detector runs live, not under a trace.
+  grows. `tt/tt_bevformer_trace.py` replays the detector from three traces around that readback,
+  capturing them again when the capacity grows (the demo's `--trace`).
