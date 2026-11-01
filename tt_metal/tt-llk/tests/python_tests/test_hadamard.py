@@ -91,6 +91,7 @@ def _config(
     formats=FORMATS,
     h16_tile_index=0,
     padding=None,
+    source="sources/hadamard_test.cpp",
 ):
     """One kernel variant. `inputs` is a [num_tiles, 128] tensor, one transform per row."""
     num_tiles = inputs.shape[0]
@@ -103,7 +104,7 @@ def _config(
     ]
 
     return TestConfig(
-        "sources/hadamard_test.cpp",
+        source,
         formats,
         templates=[
             HADAMARD(hadamard_normalize=normalize, h16_tile_index=h16_tile_index),
@@ -289,3 +290,31 @@ def test_hadamard_h128_dest_acc(num_tiles):
     )
 
     _assert_exact(device, inputs)
+
+
+@parametrize(
+    fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    normalize=[False, True],
+    num_tiles=[1, 3, 4, 5, 8],
+)
+def test_hadamard_h128_block(fidelity, normalize, num_tiles):
+    """The block form returns the per-vector form's bits."""
+    generator = torch.Generator().manual_seed(1000 + num_tiles)
+    exponents = torch.randint(-20, 21, (num_tiles, H128_LEN), generator=generator)
+    inputs = torch.randn(num_tiles, H128_LEN, generator=generator) * torch.pow(
+        2.0, exponents.float()
+    )
+    inputs = inputs.to(torch.bfloat16).to(torch.float32)
+
+    per_vector, block = _run(
+        _config(inputs, normalize=normalize, fidelity=fidelity),
+        _config(
+            inputs,
+            normalize=normalize,
+            fidelity=fidelity,
+            source="sources/hadamard_block_test.cpp",
+        ),
+    )
+    assert torch.equal(
+        block.view(torch.int32), per_vector.view(torch.int32)
+    ), f"block form differs from the per-vector form in {int((block != per_vector).any(dim=1).sum())} of {num_tiles} transforms"
