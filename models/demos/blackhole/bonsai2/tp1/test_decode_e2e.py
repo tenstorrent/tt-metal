@@ -79,10 +79,10 @@ def test_decode_e2e(mesh_device):
         return 100 * top1, 100 * top5_
 
     results = {
-        "flags": {
-            k: os.environ.get(k, "0")
-            for k in ("QWEN36_TP1_GDN", "QWEN36_1C_SHARDED_NORM", "QWEN36_1C_UNPAD_LOGITS", "QWEN36_1C_DOWN_PCFG")
-        },
+        # Every QWEN36_* variable that is SET, so each JSON stands on its own: a result is only
+        # interpretable next to the exact flags that produced it, and listing a fixed four silently
+        # mislabelled earlier runs (FUSED_QKV / OPROJ_1D / ALL_BFP4 appeared only in the log header).
+        "flags": {k: v for k, v in sorted(os.environ.items()) if k.startswith("QWEN36_")},
         "top1_top5_second_half": acc(scored),
         "top1_top5_all": acc(range(n)),
         "ms_per_token_median": 1e3 * statistics.median(step_s[WARMUP_STEPS:]),
