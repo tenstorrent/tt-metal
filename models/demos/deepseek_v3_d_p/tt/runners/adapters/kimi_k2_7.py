@@ -35,8 +35,9 @@ class KimiK27Adapter(MLAPrefillAdapter):
     dflash_golden_default = "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/dflash_27_context_kv_55k"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
-    # Routing consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.
-    l1_small_size = 768
+    # Routing consumes 512 B; the rest holds the MLA high-bandwidth-gather semaphores, the TP latent prefetch's
+    # ready / data-valid pair and the DFlash drafter's norm gather.
+    l1_small_size = 1024
     routing_use_l1_small_for_semaphores = True
 
     # The Kimi-K2.x DFlash drafter checkpoint ($DFLASH_HF_MODEL) targets THIS architecture: its

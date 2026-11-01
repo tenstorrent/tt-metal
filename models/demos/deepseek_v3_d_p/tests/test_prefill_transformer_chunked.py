@@ -66,6 +66,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7 import KimiK27Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -96,6 +97,9 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # sync with the glm_5_3 runner adapter.
 GLM_L1_SMALL_SIZE = 1536
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
+
+# Kimi-K2.7 rows: the kimi_k2_7 runner adapter's L1_SMALL carve-out.
+KIMI_K27_L1_SMALL_SIZE = KimiK27Adapter.l1_small_size
 
 
 def _resolve_trace_dir(variant) -> Path:
@@ -228,8 +232,8 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
+    # 55k / code_debug, TP-deduped KV cache with unrolled V and expanded K; medians over nine post-warmup iterations.
+    (61, 11, 10): [0.412, 0.418, 0.411, 0.411, 0.417, 0.420, 0.427, 0.445, 0.476, 0.493, 0.509],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -1263,7 +1267,7 @@ _PADDED_MODES = ["notrace", "traced"]
             # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(KimiK27Config),
-                l1_small_size=768,
+                l1_small_size=KIMI_K27_L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
@@ -1320,7 +1324,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores; GLM needs 1536, not Kimi-K2.7's 1024 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
@@ -2707,7 +2711,7 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
             (8, 4),
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(KimiK27Config),
-                l1_small_size=768,
+                l1_small_size=KIMI_K27_L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
@@ -2801,7 +2805,7 @@ def test_kimi_prefill_transformer_chunked_perf(
             (8, 4),
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(KimiK27Config),
-                l1_small_size=768,
+                l1_small_size=KIMI_K27_L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
