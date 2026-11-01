@@ -1698,33 +1698,46 @@ class TtRoutedExperts(LightweightModule):
         if T_pad != T:
             x, dense_w, idx, w = padded = [self._pad_rows(t, T_pad) for t in (x, dense_w, idx, w)]
         T_logical, T = T, T_pad
-        onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dense_w, 0.0), ttnn.float32), d["mask"])  # [1,1,T,E] fp32 0/1
-        counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)  # [1,1,1,E]
-        rank = ttnn.cumsum(onehot, dim=-2)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
-        aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(counts_f, TILE - 1), 1.0 / TILE)), float(TILE))
-        incl = ttnn.cumsum(aligned, dim=-1)
-        offsets_f = ttnn.subtract(incl, aligned)  # [1,1,1,E] exclusive, tile-aligned
         # region rows = every pick + up to 31 alignment rows per local expert, rounded up to a tile multiple (the
         # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320)
         max_buf = self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
-        # pos[t, e] = offsets[e] + rank[t, e] - 1 at the local picks; the non-local picks go to the dummy slot
-        # max_buf - 1, which no region reaches (the tile-aligned regions total at most T*k + E_loc*31 rows), so
-        # they never overwrite a region row (slot 0 is the first row of the first local expert's region)
-        pos_te = ttnn.add(
-            ttnn.multiply(ttnn.add(ttnn.subtract(rank, 1.0), offsets_f), onehot),
-            ttnn.multiply(ttnn.rsub(onehot, 1.0), float(max_buf - 1)),
-        )  # [1,1,T,E]
-        for t in (rank, aligned, incl):
-            ttnn.deallocate(t)
-        tick("bookkeeping")  # one-hot, counts, ranks, tile-aligned offsets, slot positions [T, E]
-        idx_u32 = ttnn.typecast(idx, ttnn.uint32)
-        pos_tk = ttnn.gather(pos_te, -1, idx_u32)  # [1,1,T,k] fp32: the region slot of every pick (dummy if not local)
-        loc_tk = ttnn.gather(onehot, -1, idx_u32)  # [1,1,T,k]: 1 at the local picks
-        ttnn.deallocate(pos_te)
-        ttnn.deallocate(onehot)
-        ttnn.deallocate(idx_u32)
-        pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
-        ttnn.deallocate(pos_tk)
+        if self._plan_serves():
+            # GLM53_REGIONS_PLAN=kernel: the bookkeeping as one kernel (custom_ops/region_plan): counts,
+            # tile-aligned offsets, the picks' slots and the local mask in 1.2 / 8.6 ms at T = 2048 / 16384
+            # (one core) against the one-hot / cumsum / gather chain below (6.2 / 35 ms, 2026-11-01)
+            counts, offsets, pos_rm, loc_tk = self._region_plan(idx, max_buf, T, k)
+            tick("bookkeeping")
+        else:
+            onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dense_w, 0.0), ttnn.float32), d["mask"])  # [1,1,T,E] fp32 0/1
+            counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)  # [1,1,1,E]
+            rank = ttnn.cumsum(onehot, dim=-2)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
+            aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(counts_f, TILE - 1), 1.0 / TILE)), float(TILE))
+            incl = ttnn.cumsum(aligned, dim=-1)
+            offsets_f = ttnn.subtract(incl, aligned)  # [1,1,1,E] exclusive, tile-aligned
+            # pos[t, e] = offsets[e] + rank[t, e] - 1 at the local picks; the non-local picks go to the dummy slot
+            # max_buf - 1, which no region reaches (the tile-aligned regions total at most T*k + E_loc*31 rows), so
+            # they never overwrite a region row (slot 0 is the first row of the first local expert's region)
+            pos_te = ttnn.add(
+                ttnn.multiply(ttnn.add(ttnn.subtract(rank, 1.0), offsets_f), onehot),
+                ttnn.multiply(ttnn.rsub(onehot, 1.0), float(max_buf - 1)),
+            )  # [1,1,T,E]
+            for t in (rank, aligned, incl):
+                ttnn.deallocate(t)
+            tick("bookkeeping")  # one-hot, counts, ranks, tile-aligned offsets, slot positions [T, E]
+            idx_u32 = ttnn.typecast(idx, ttnn.uint32)
+            pos_tk = ttnn.gather(
+                pos_te, -1, idx_u32
+            )  # [1,1,T,k] fp32: the region slot of every pick (dummy if not local)
+            loc_tk = ttnn.gather(onehot, -1, idx_u32)  # [1,1,T,k]: 1 at the local picks
+            ttnn.deallocate(pos_te)
+            ttnn.deallocate(onehot)
+            ttnn.deallocate(idx_u32)
+            pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
+            ttnn.deallocate(pos_tk)
+            counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
+            offsets = ttnn.reshape(ttnn.to_layout(ttnn.typecast(offsets_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
+            ttnn.deallocate(counts_f)
+            ttnn.deallocate(offsets_f)
         # slot -> token (the picks' slots are distinct; the non-local picks all land on the dummy slot)
         tick("pick_tables")  # the picks' slots / local flags [T, k]
         slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
@@ -1735,10 +1748,6 @@ class TtRoutedExperts(LightweightModule):
         )  # slot -> token scatter + the [max_buf, H] row gather  # [1, max_buf, H] bf16: the regions
         ttnn.deallocate(slot_src)
         ttnn.deallocate(x_rm)
-        counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
-        offsets = ttnn.reshape(ttnn.to_layout(ttnn.typecast(offsets_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
-        ttnn.deallocate(counts_f)
-        ttnn.deallocate(offsets_f)
         out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             ttnn.reshape(buf, [max_buf, H]),
             offsets,
@@ -1789,6 +1798,26 @@ class TtRoutedExperts(LightweightModule):
         if T_logical != T:
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
+
+    # ---------------------------------------------- GLM53_REGIONS_PLAN=kernel (custom_ops/region_plan)
+    def _plan_serves(self) -> bool:
+        return os.environ.get("GLM53_REGIONS_PLAN", "chain") == "kernel"
+
+    def _region_plan(self, idx: ttnn.Tensor, max_buf: int, T: int, k: int):
+        """The regions bookkeeping through ``RegionPlan``: ``idx`` [1,1,T,k] fp32 TILE (the router's top-k ids) ->
+        ``counts`` / ``offsets`` [1, E] uint32 ROW_MAJOR, ``pos_rm`` [1, T*k] uint32 ROW_MAJOR, ``loc_tk`` [1,1,T,k]
+        fp32 TILE: the same tensors the chain builds, allocated here as transients of the call."""
+        from models.demos.glm53_flash.custom_ops.region_plan.op import RegionPlan
+
+        if getattr(self, "_region_plan_op", None) is None:
+            self._region_plan_op = RegionPlan(self.device)
+        ids_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(idx, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
+        outs = self._region_plan_op.allocate_outputs(T, k, self.E)
+        counts, offsets, pos_rm, loc_tk = self._region_plan_op(
+            ids_rm, self._dispatch["gidx_rm"], *outs, max_buf=max_buf, E=self.E, T=T, k=k
+        )
+        ttnn.deallocate(ids_rm)
+        return counts, offsets, pos_rm, loc_tk
 
     def _iota_rows(self, T: int, k: int) -> ttnn.Tensor:
         """uint32 ROW_MAJOR [1, T*k] with value t at (t, j) (cached per geometry)."""
