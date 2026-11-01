@@ -1625,6 +1625,15 @@ chunk-end snapshot. Host suite: 20/20 (`test_serving_prefix_cache_host.py`, new 
 behind the served needles: the (2,4) block prefix-cache test on both stores and a served 8 x 20 K burst in two rounds
 (round 2 must hit at 16 384). Expected at 1 M: a repeat restores at 1 032 192 and prefills 6.5 K tokens instead of 1 M.
 
+Results (the same day): the block test 3/3 on both stores (hit prefill 117 ms device / 178 ms host against 236 ms
+from scratch). The served 8 x 19 988-token burst, two rounds: round 1 one wave of 8 (TTFT 67-69 s each) with a snapshot
+at 16 384 on every row; round 2 first restored 5/8 (3 requests scheduled from 0: vLLM confirms a hit before the
+previous step's finished requests reach `release_request`, fixed by the optimistic confirmer, `lookup(include_live)`),
+then 7/8 with the host store (TTFT 15-59 s: six serial 4.2 s restores), then 7/8 with the snapshot ring on device
+(restores 40 ms apart: TTFT 13.4 s for the first hit, 34.5 s for six in one call, round 2 complete in 42 s against 67 s
+cold), texts identical across rounds. The eighth request is scheduled from 0 by vLLM itself (num_computed 0 at its
+first scheduling, not the confirmer): open.
+
 ### 2026-11-01 17:38: the 1 M prefill chunk 7.66 -> 6.39 s: the region-plan kernel + the 4096-token expert sub-chunk
 
 The free-pass profile of the last 16 K chunk at 1 M (`test_mesh_prefill_profile`, 45 layers + head, prefix 1 032 192)
