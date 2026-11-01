@@ -25,7 +25,13 @@ def stub():
         raise Reached(C)
 
     return SimpleNamespace(
-        _geo={1024: {}, 512: {}}, max_len=8192, C=1024, n=4, _use=use, _check_trace_layout=lambda: None
+        _geo={1024: {}, 512: {}},
+        max_len=8192,
+        C=1024,
+        n=4,
+        _use=use,
+        _check_trace_layout=lambda: None,
+        is_long=lambda n_tokens, chunk: False,
     )
 
 
@@ -96,11 +102,13 @@ def test_a_tick_without_taps_does_no_tap_work():
     from qwen36_resident.prefill import pp_prefill as PP
 
     def pp(taps):
-        return SimpleNamespace(
+        ns = SimpleNamespace(
             n=4, C=128, block=64, blocks=32, scratch0=32, tap_ring=34, mesh=None, tap_cache={0: "ring"} if taps else {},
             ctrl="ctrl", cos="cos", sin="sin", fill_pt="fill", read_pt="read", cstart="cstart",
             tap_pt="tap_pt" if taps else None,
         )  # fmt: skip
+        ns._control_chips = lambda work: PP.PPPrefill._control_chips(ns, work)  # (_control builds on it)
+        return ns
 
     with patch.object(PP.ttnn, "ShardTensorToMesh", lambda mesh, dim: None), patch.object(
         PP.ttnn, "from_torch", lambda t, **kw: t
