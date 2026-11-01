@@ -395,6 +395,7 @@ void Hal::initialize_wh(
     this->virtualizes_non_worker_cores_ = false;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
+    this->num_dataflow_buffers_ = 32;  // limited by the 2KB TRISC local memory
     this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_WHB0;

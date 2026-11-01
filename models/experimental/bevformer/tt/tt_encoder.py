@@ -16,17 +16,10 @@ import torch
 from typing import Optional, List, Dict, Any
 
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
-from .tt_common import layer_norm
+from .tt_common import layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 from loguru import logger
 
@@ -158,11 +151,9 @@ class TTBEVFormerLayer:
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
         """
-        if use_signpost:
-            signpost(header="TTNN BEVFormerLayer Forward Start")
+        signpost(header="TTNN BEVFormerLayer Forward Start")
 
-        if use_signpost:
-            signpost(header="BEVLayer TSA Start")
+        signpost(header="BEVLayer TSA Start")
         # Combine current BEV with history for temporal modeling
         temp_query = self.temporal_self_attention(
             query=bev_query,
@@ -173,15 +164,13 @@ class TTBEVFormerLayer:
             **kwargs,
         )
 
-        if use_signpost:
-            signpost(header="BEVLayer TSA Complete")
+        signpost(header="BEVLayer TSA End")
 
         # Layer normalization (norm1)
         temp_query = layer_norm(temp_query, self.params.norm1)
         bev_query = temp_query
 
-        if use_signpost:
-            signpost(header="BEVLayer SCA Start")
+        signpost(header="BEVLayer SCA Start")
 
         # Spatial Cross-Attention
         spatial_query = self.spatial_cross_attention(
@@ -194,28 +183,24 @@ class TTBEVFormerLayer:
             **kwargs,
         )
 
-        if use_signpost:
-            signpost(header="BEVLayer SCA Complete")
+        signpost(header="BEVLayer SCA End")
 
         # Layer normalization (norm2)
         spatial_query = layer_norm(spatial_query, self.params.norm2)
         bev_query = spatial_query
 
-        if use_signpost:
-            signpost(header="BEVLayer FFN Start")
+        signpost(header="BEVLayer FFN Start")
 
         # Feed-Forward Network
         ffn_output = self._forward_ffn(bev_query)
 
-        if use_signpost:
-            signpost(header="BEVLayer FFN Complete")
+        signpost(header="BEVLayer FFN End")
 
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
         bev_query = layer_norm(ffn_output_with_residual, self.params.norm3)
 
-        if use_signpost:
-            signpost(header="TTNN BEVFormerLayer Forward End")
+        signpost(header="TTNN BEVFormerLayer Forward End")
 
         return bev_query
 
@@ -441,8 +426,7 @@ class TTBEVFormerEncoder:
             Final BEV features [B, num_queries, embed_dims]
             If return_intermediate=True, returns list of intermediate features.
         """
-        if use_signpost:
-            signpost(header="TTNN BEVFormerEncoder Forward Start")
+        signpost(header="TTNN BEVFormerEncoder Forward Start")
 
         output = bev_query
         intermediate = []
@@ -473,8 +457,7 @@ class TTBEVFormerEncoder:
                 f"spatial_shapes: {shapes.tolist()}, camera features shape: {camera_features.shape}"
             )
 
-        if use_signpost:
-            signpost(header="BEVEncoder Reference Points Generation Start")
+        signpost(header="BEVEncoder Reference Points Start")
 
         # Project the cached 3D reference points to camera coordinates.
         # These reference points define where each BEV query will sample features from camera views
@@ -523,8 +506,7 @@ class TTBEVFormerEncoder:
         # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
         rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
 
-        if use_signpost:
-            signpost(header="BEVEncoder Reference Points Complete")
+        signpost(header="BEVEncoder Reference Points End")
 
         # Every layer reads the same camera features, so SCA takes them batch-first and this
         # runs once per forward, not once per layer.
@@ -533,8 +515,7 @@ class TTBEVFormerEncoder:
 
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
-            if use_signpost:
-                signpost(header=f"BEVEncoder Layer {lid} Start")
+            signpost(header=f"BEVEncoder Layer {lid} Start")
 
             output = layer(
                 bev_query=output,
@@ -548,8 +529,7 @@ class TTBEVFormerEncoder:
                 bev_reference_points=bev_reference_points,
                 **kwargs,
             )
-            if use_signpost:
-                signpost(header=f"BEVEncoder Layer {lid} Complete")
+            signpost(header=f"BEVEncoder Layer {lid} End")
 
             if self.return_intermediate:
                 intermediate.append(output)
@@ -560,8 +540,7 @@ class TTBEVFormerEncoder:
         if camera_features is not None:
             ttnn.deallocate(camera_features)
 
-        if use_signpost:
-            signpost(header="TTNN BEVFormerEncoder Forward End")
+        signpost(header="TTNN BEVFormerEncoder Forward End")
 
         if self.return_intermediate:
             return intermediate

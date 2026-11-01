@@ -64,6 +64,17 @@ _ENV_CLEARED = (
 )
 
 
+def _set_module(patch, name, module):
+    """Install ``module`` as ``sys.modules[name]``, and under its ``models.tt_transformers`` alias too.
+
+    Code that still imports the old path would otherwise get whatever an earlier test cached under
+    the old name, and an entry the alias adds during the test would outlive ``patch``.
+    """
+    patch.setitem(sys.modules, name, module)
+    if name.startswith("models.ttt_compat."):
+        patch.setitem(sys.modules, "models.tt_transformers." + name[len("models.ttt_compat.") :], module)
+
+
 def _stub_runtime(patch):
     """Replace ``ttnn`` and the lower model modules for a host-only import."""
     patch.syspath_prepend(str(_ROOT))
@@ -186,7 +197,7 @@ def _stub_runtime(patch):
             # The boot-captured batched prefill buckets never admit the stubbed prefill (no bucket matches).
             "batched_prefill_trace_bucket": lambda batch, empty_slots, max_batch, padded_len: None,
         },
-        "models.tt_transformers.tt.common": {
+        "models.ttt_compat.tt.common": {
             "get_padded_prefill_len": _padded_length,
             **{
                 name: _unused
@@ -200,7 +211,7 @@ def _stub_runtime(patch):
                 )
             },
         },
-        "models.tt_transformers.tt.generator_vllm": {
+        "models.ttt_compat.tt.generator_vllm": {
             "HybridAttentionForCausalLM": type(
                 "HybridAttentionForCausalLM",
                 (),
@@ -219,7 +230,7 @@ def _stub_runtime(patch):
         "models.demos.gemma4.utils.general_utils": {"cast_host_for_ttnn": _unused, "get_cache_file_name": _unused},
     }
     for name, members in lower_modules.items():
-        patch.setitem(sys.modules, name, _module(name, **members))
+        _set_module(patch, name, _module(name, **members))
     try:
         importlib.import_module("loguru")
     except ImportError:
@@ -231,7 +242,7 @@ def _stub_runtime(patch):
     for name, (owner, attribute) in sampling_package._EXPORTS.items():
         if owner == ".generator":
             patch.setitem(sampling_package.__dict__, name, getattr(sampling, attribute))
-    _fresh_import(patch, "models.tt_transformers.tt.generator")
+    _set_module(patch, "models.ttt_compat.tt.generator", _fresh_import(patch, "models.ttt_compat.tt.generator"))
     try:
         importlib.import_module("vllm_tt_plugin.spec_decode")
     except ImportError:

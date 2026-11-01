@@ -20,7 +20,16 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotate_chunk_tokens
+from models.demos.common.prefill.prefill_chunk import (
+    SHUTDOWN_WORD,
+    PrefillChunk,
+    check_packed_forward_support,
+    metadata_size_bytes,
+    pack_forward_metadata,
+    pad_chunks,
+    sentinel_metadata,
+)
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     connect_layer_completion_channel,
     start_layer_completion_drain,
@@ -63,6 +72,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_NUM_LAYERS", model.get("num_layers"))
     sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
     sd("PREFILL_CHUNK_SIZE", model.get("chunk_size"))
+    sd("PREFILL_FORWARD_TOKENS_BUDGET", model.get("forward_tokens_budget"))
 
     transport = manifest.get("transport") or {}
     sd("PREFILL_SP", transport.get("sp"))
@@ -94,17 +104,20 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
-
-
-def _load_env_config() -> None:
+def _load_env_config(check_budget: bool = True) -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS
+    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    # Tokens per forward, a multiple of the chunk size; must match the runner's.
+    forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
+    assert not check_budget or (
+        forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
+    ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
+    FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
+    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
@@ -117,7 +130,8 @@ def _load_env_config() -> None:
     NUM_ACK_LAYERS = NUM_LAYERS
 
 
-_load_env_config()
+# At import the manifest may still set the chunk size; the entry points reload and check after applying it.
+_load_env_config(check_budget=False)
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -155,6 +169,47 @@ def _h2d_rows(tokens, actual_start: int = 0):
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
     tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
+
+
+def _h2d_forward_rows(chunks, starts):
+    """``[sp, 1, FORWARD_CHUNKS * CHUNK_SIZE / sp]`` rows of one packed forward: chip c gets slice c of every
+    chunk's rotated tokens, in chunk order (pack_forward_tokens). One chunk gives _h2d_rows."""
+    sp = GLOBAL_MESH_SHAPE[0]
+    assert all(len(t) == CHUNK_SIZE for t in chunks), f"every chunk is {CHUNK_SIZE} tokens"
+    tokens = pack_forward_tokens(chunks, starts, sp)
+    return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, len(tokens) // sp))
+
+
+class ChunkPush(NamedTuple):
+    slot_id: int
+    chunk_idx: int
+    actual_start: int
+    actual_end: int
+    actual_isl: int
+
+
+def _forward_payload(pushes: list, pool_of) -> tuple:
+    """(token rows, MTP rows, metadata) of one forward of ``pushes`` (at most FORWARD_CHUNKS chunks; the rest are
+    empty chunks). ``pool_of(slot_id)`` is that slot's token pool."""
+    if FORWARD_CHUNKS == 1:
+        (p,) = pushes
+        pool = pool_of(p.slot_id)
+        return (
+            _h2d_rows(_chunk_slice(pool, p.actual_start, p.actual_isl), p.actual_start),
+            _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
+            _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
+        )
+    chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
+    tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
+    tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
+    rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
+    return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
+
+
+def _shutdown_payload() -> tuple:
+    """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
+    rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
+    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
@@ -420,6 +475,7 @@ class ProducerConfig:
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
+    forward_chunks: int = 1
 
 
 def _config_from_env() -> ProducerConfig:
@@ -432,6 +488,14 @@ def _config_from_env() -> ProducerConfig:
     interleave = os.environ.get("PREFILL_PRODUCER_INTERLEAVE", "random")
     if interleave not in ("random", "round_robin"):
         raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
+    p_burst = float(os.environ.get("PREFILL_PRODUCER_P_BURST", "0.0"))
+    check_packed_forward_support(
+        FORWARD_CHUNKS, supports_packed_forward=ADAPTER.supports_packed_forward, mtp_levels=MTP_LEVELS
+    )
+    if FORWARD_CHUNKS > 1 and p_burst > 0:
+        raise ValueError(
+            "PREFILL_PRODUCER_P_BURST must be 0 with more than one chunk per forward (packing already bursts)"
+        )
 
     return ProducerConfig(
         num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
@@ -440,7 +504,7 @@ def _config_from_env() -> ProducerConfig:
         max_requests=int(os.environ.get("PREFILL_PRODUCER_MAX_REQUESTS", "1")),
         duration_s=float(os.environ.get("PREFILL_PRODUCER_DURATION_S", "inf")),
         p_gap=float(os.environ.get("PREFILL_PRODUCER_P_GAP", "0.0")),
-        p_burst=float(os.environ.get("PREFILL_PRODUCER_P_BURST", "0.0")),
+        p_burst=p_burst,
         gap_ms=(gap_lo, gap_hi),
         mid_chunk_end_prob=float(os.environ.get("PREFILL_PRODUCER_MID_END_PROB", "0.0")),
         seed=int(os.environ.get("PREFILL_PRODUCER_SEED", "1234")),
@@ -448,6 +512,7 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        forward_chunks=FORWARD_CHUNKS,
     )
 
 
@@ -503,10 +568,17 @@ class RunStats:
     push_ms: list
     completed: int
     wall_s: float
+    total_chunks: int = 0
 
 
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
+    """Push cfg's requests as forwards: ``push_fn(pushes) -> ms`` gets one forward's ChunkPush list, a single chunk
+    at forward_chunks == 1. Above that, each forward takes one run of consecutive chunks per slot (round-robin or
+    shuffled slot order) until it is full or no slot has chunks left; runs ending in a full chunk come first."""
     rng = rng if rng is not None else random.Random(cfg.seed)
+    forward_chunks = cfg.forward_chunks
+    assert forward_chunks >= 1, f"forward_chunks must be >= 1, got {forward_chunks}"
+    assert forward_chunks == 1 or cfg.p_burst == 0, "p_burst must be 0 with forward_chunks > 1"
     slots = [_Slot(i) for i in range(cfg.num_users)]
     resident: dict = {}
 
@@ -517,19 +589,21 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
     push_ms: list = []
     total_pushes = 0
+    total_chunks = 0
     completed = 0
     round_robin_cursor = -1
     start = now_fn()
 
-    def send_chunk(slot: _Slot) -> None:
-        nonlocal total_pushes, completed, next_req_id
-        chunk_idx = slot.next_chunk
+    def chunk_of(slot: _Slot, ahead: int = 0) -> ChunkPush:
+        chunk_idx = slot.next_chunk + ahead
         actual_start = slot.prefix_len + chunk_idx * CHUNK_SIZE
         actual_end = min(actual_start + CHUNK_SIZE, slot.actual_isl)
-        push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end, slot.actual_isl))
-        total_pushes += 1
+        return ChunkPush(slot.slot_id, chunk_idx, actual_start, actual_end, slot.actual_isl)
+
+    def advance(slot: _Slot, push: ChunkPush) -> None:
+        nonlocal completed, next_req_id
         slot.next_chunk += 1
-        resident[slot.slot_id] = _SlotFill(real_len=actual_end)
+        resident[slot.slot_id] = _SlotFill(real_len=push.actual_end)
         if slot.done:
             completed += 1
             if next_req_id < cfg.max_requests:
@@ -544,6 +618,42 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
                     _new_request(slot, next_req_id, cfg, rng)
                 next_req_id += 1
 
+    def send(runs: list) -> None:
+        nonlocal total_pushes, total_chunks
+        pushes = [push for _, run in runs for push in run]
+        push_ms.append(push_fn(pushes))
+        total_pushes += 1
+        total_chunks += len(pushes)
+        for slot, run in runs:
+            for push in run:
+                advance(slot, push)
+
+    def send_chunk(slot: _Slot) -> None:
+        send([(slot, [chunk_of(slot)])])
+
+    def packed_runs(active_slots: list) -> list:
+        nonlocal round_robin_cursor
+        if cfg.interleave == "round_robin":
+            order = [slots[(round_robin_cursor + 1 + i) % len(slots)] for i in range(len(slots))]
+            order = [s for s in order if not s.done]
+        else:
+            order = list(active_slots)
+            rng.shuffle(order)
+        # A forward can finish several requests; past max_requests the slots' initial requests stay unsent.
+        order = [s for s in order if s.req_id < cfg.max_requests]
+        runs = []
+        filled = 0
+        for slot in order:
+            if filled == forward_chunks:
+                break
+            take = min(slot.target_chunks - slot.next_chunk, forward_chunks - filled)
+            runs.append((slot, [chunk_of(slot, k) for k in range(take)]))
+            filled += take
+        if cfg.interleave == "round_robin":
+            round_robin_cursor = runs[-1][0].slot_id
+        runs.sort(key=lambda run: run[1][-1].actual_end < run[1][-1].actual_start + CHUNK_SIZE)
+        return runs
+
     while (now_fn() - start) < cfg.duration_s and completed < cfg.max_requests:
         active_slots = [s for s in slots if not s.done]
         if not active_slots:
@@ -552,6 +662,10 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         roll = rng.random()
         if roll < cfg.p_gap:
             sleep_fn(rng.uniform(*cfg.gap_ms) / 1000.0)
+            continue
+
+        if forward_chunks > 1:
+            send(packed_runs(active_slots))
             continue
 
         if cfg.interleave == "round_robin":
@@ -572,7 +686,12 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
             send_chunk(slot)
 
     return RunStats(
-        resident=resident, total_pushes=total_pushes, push_ms=push_ms, completed=completed, wall_s=now_fn() - start
+        resident=resident,
+        total_pushes=total_pushes,
+        push_ms=push_ms,
+        completed=completed,
+        wall_s=now_fn() - start,
+        total_chunks=total_chunks,
     )
 
 
@@ -1391,7 +1510,7 @@ def _verify_resident_slots(
                 read_config_slice=read_dflash_slice,
                 golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
-                rope_convention="interleaved",
+                rope_convention=ADAPTER.dflash_rope_convention,
             )
             if dflash_pcc is not None:
                 min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)
@@ -1624,19 +1743,13 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
-        pool = pools_by_trace[slot_traces[slot_id]]
-        tokens = _chunk_slice(pool, actual_start, actual_isl)
-        metadata = _pack_metadata(slot_id, actual_start, actual_end)
-        logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+    def push_forward(pushes: list) -> float:
+        for p in pushes:
+            logger.info(
+                f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
+            )
         push_start = time.perf_counter()
-        _push(
-            service,
-            payload_bytes,
-            _h2d_rows(tokens, actual_start),
-            _mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
-            metadata,
-        )
+        _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
 
     # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
@@ -1646,27 +1759,35 @@ def main() -> None:
         warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
         if warmup_chunks > 0:
             logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
-            for cidx in range(warmup_chunks):
-                push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+            warmup = [
+                ChunkPush(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+                for cidx in range(warmup_chunks)
+            ]
+            for i in range(0, warmup_chunks, FORWARD_CHUNKS):
+                push_forward(warmup[i : i + FORWARD_CHUNKS])
             service.barrier()
             wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
             logger.info("[producer] warmup complete; starting the measured request")
 
-        stats = run_schedule(cfg, push_fn=push_chunk)
+        stats = run_schedule(cfg, push_fn=push_forward)
         service.barrier()
         # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
         # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
-        expected_completions = chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes)
+        expected_completions = chunk_layers * (max(warmup_chunks, 0) + stats.total_chunks)
         received_completions = wait_for_layer_completions(drain, expected_completions)
     finally:
         if drain is not None:
             drain.stop()
 
     sorted_ms = sorted(stats.push_ms)
-    total_tokens = stats.total_pushes * CHUNK_SIZE
+    total_tokens = stats.total_chunks * CHUNK_SIZE
+    packing = ""
+    if FORWARD_CHUNKS > 1:
+        fill = stats.total_chunks / (stats.total_pushes * FORWARD_CHUNKS) if stats.total_pushes else 0.0
+        packing = f"chunks={stats.total_chunks} forward_chunks={FORWARD_CHUNKS} fill={fill:.2f} "
     logger.info(
         f"[producer] DONE wall={stats.wall_s:.1f}s pushes={stats.total_pushes} requests={stats.completed} "
-        f"tokens={total_tokens} throughput={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "
+        f"{packing}tokens={total_tokens} throughput={total_tokens / stats.wall_s if stats.wall_s else 0:.0f} tok/s "
         f"push_ms p50={_percentile(sorted_ms, 0.5):.1f} p90={_percentile(sorted_ms, 0.9):.1f} "
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
@@ -1697,11 +1818,10 @@ def main() -> None:
         verify_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        nwords = CHUNK_METADATA_SIZE_BYTES // 4
-        sentinel = struct.pack(f"<{nwords}i", *([-1] * nwords))
+        rows, mtp_rows, sentinel = _shutdown_payload()
         assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), sentinel)
+        _push(service, payload_bytes, rows, mtp_rows, sentinel)
         service.barrier()
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:

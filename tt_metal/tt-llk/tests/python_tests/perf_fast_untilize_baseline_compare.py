@@ -11,8 +11,8 @@ from fast_untilize_common import (
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.llk_params import DestAccumulation, PerfRunType
-from helpers.param_config import parametrize
+from helpers.llk_params import PerfRunType
+from helpers.param_config import max_dest_tiles, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -23,8 +23,7 @@ from helpers.test_variant_parameters import (
 
 
 def baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc):
-    max_dest_tiles = 4 if dest_acc == DestAccumulation.Yes else 8
-    for candidate in range(min(ct_dim, max_dest_tiles), 0, -1):
+    for candidate in range(min(ct_dim, max_dest_tiles(dest_acc)), 0, -1):
         if ct_dim % candidate == 0:
             return candidate
     return 1
