@@ -200,3 +200,45 @@ def test_height(device, shape, layout):
 def test_height_rm_tile_gamma(device):
     """HEIGHT shards hold whole rows, so a ROW_MAJOR input pairs with a TILE gamma (W-split RM shards cannot)."""
     _run(device, (1, 1, 333, 1000), HS, layout=ttnn.ROW_MAJOR_LAYOUT, gamma_layout=ttnn.TILE_LAYOUT)
+
+
+@pytest.mark.parametrize(
+    "shape,dtype,gamma_dtype,gamma_layout",
+    [
+        ((1, 1, 32, 8192), ttnn.bfloat16, ttnn.bfloat16, ttnn.TILE_LAYOUT),  # 512 KB shards: resident gamma OOM
+        ((1, 1, 32, 8192), ttnn.bfloat8_b, ttnn.float32, ttnn.TILE_LAYOUT),
+        ((1, 1, 32, 4096), ttnn.float32, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 1, 160, 11008), ttnn.bfloat16, ttnn.bfloat16, ttnn.TILE_LAYOUT),  # 704 KB shards, ~52 KB left for CBs
+    ],
+)
+def test_height_streamed_gamma(device, shape, dtype, gamma_dtype, gamma_layout):
+    """Wide-W HEIGHT cells whose expanded gamma cannot stay resident beside the two shards: gamma streams in chunks."""
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32)
+    W = shape[-1]
+    gamma_t = torch.randn(W, dtype=torch.float32)
+    g = ttnn.from_torch(gamma_t.reshape(1, 1, 1, W), dtype=gamma_dtype, layout=gamma_layout, device=device)
+    mc = auto_shard_config(list(shape), HS, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    out = rms_norm(xt, gamma=g, epsilon=1e-6, memory_config=mc)
+    exp = _ref(ttnn.to_torch(xt).float(), ttnn.to_torch(g).float().reshape(-1), 1e-6)
+    p = _pcc(ttnn.to_torch(out).float(), exp)
+    assert p >= (0.99 if dtype == ttnn.bfloat8_b else 0.999), p
+
+
+@pytest.mark.parametrize(
+    "shape,ml,chunk",
+    [
+        ((1, 1, 2048, 1024), HS, 5),  # several tile-rows per shard, ragged last chunk (32 = 6 * 5 + 2)
+        ((1, 1, 416, 1025), HS, 4),  # W tail (masked) + ragged chunk
+        ((1, 1, 1024, 1024), BS, 3),  # k > 1 owner combine + streamed gamma
+        ((1, 1, 64, 4095), WS, 2),  # ragged last shard column: gap tiles in the last chunk
+    ],
+)
+@pytest.mark.parametrize("gamma_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_forced_streamed_gamma(device, monkeypatch, shape, ml, chunk, gamma_layout):
+    """The streamed-gamma regime on shapes where resident gamma fits (forced): multi-block, tails, gaps, combine."""
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "GAMMA_STREAM_FORCE_CHUNK", chunk)
+    _run(device, shape, ml, gamma_layout=gamma_layout)

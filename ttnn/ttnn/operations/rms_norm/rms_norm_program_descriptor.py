@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import ttnn
@@ -68,8 +68,18 @@ K_SYM_MAX_SHARDED = 1
 # was a 131 us serial prefix of (8192,7168) (130 Tensix cores reading the same 224 gamma tiles, 2 x 64 B reads
 # each); measured 771 -> 630 us (8192,7168), 90.8 -> 76.3 us (7168,1024), (640,6144) k=6 51.9 -> 45.7 us.
 GAMMA_MCAST = True
+# Sharded k = 1 (HEIGHT, or a single shard column): every Tensix core holds the whole gamma, so the same one-group
+# multicast applies (one DRAM read of gamma per launch instead of one per Tensix core). WIDTH / BLOCK k > 1 keep the
+# per-core slice load (a shard grid column need not hold a single W slice).
+GAMMA_MCAST_SHARDED_K1 = True
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
 OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
+# Streamed gamma (fallback when the resident expanded gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
+# beside the two resident shards): gamma flows through a GAMMA_STREAM_DEPTH-chunk ring of <= GAMMA_STREAM_CHUNK_CAP
+# tiles, re-loaded per (block, chunk). The largest chunk that fits is chosen.
+GAMMA_STREAM_CHUNK_CAP = 16
+GAMMA_STREAM_DEPTH = 2
+GAMMA_STREAM_FORCE_CHUNK = 0  # > 0: stream gamma in chunks of this many tiles even when resident fits (test hook)
 RM_IN_DEPTH = 2  # cb_x_rm buffer depth
 OUT_UNIT_CAP = 16  # TILE writer batch (tiles per wait/flush/pop)
 RM_CHUNK_CAP = 32  # balanced RM streaming chunk cap (tiles)
@@ -163,6 +173,7 @@ class PlanOpts:
     owner_combine: bool = False  # k > K_SYM_MAX_*: per-row owner gather + return instead of the all-gather
     gather_depth: int = 2  # symmetric all-gather: blocks of cb_gathered (1 when every core runs one block)
     mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
+    gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
 
 
 def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> dict:
@@ -184,7 +195,7 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
         if d == 2:
             plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
     if sz.has_gamma:
-        plan[CB_GAMMA] = (pitch, sz.T_g)
+        plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk if opts.gamma_chunk else pitch, sz.T_g)
     if k > 1:
         plan[CB_PARTIAL] = (b, sz.T_acc)
         if opts.owner_combine:
@@ -270,7 +281,7 @@ def _solve_rows(
 
     def fits(b, d):
         single = b >= crt_max
-        o = PlanOpts(opts.shard_backed, opts.owner_combine, 1 if single else 2, opts.mask_tail)
+        o = PlanOpts(opts.shard_backed, opts.owner_combine, 1 if single else 2, opts.mask_tail, opts.gamma_chunk)
         return _plan_bytes(cb_plan(sz, k, slice_w, b, d, o)) <= budget, o
 
     if allow_depth2 and overlap_blocks > 1 and crt_max > 1:
@@ -290,6 +301,25 @@ def _solve_rows(
     if not ok:
         raise RuntimeError(f"rms_norm: one tile-row block does not fit L1 ({budget} B per core)")
     return 1, 1, o
+
+
+def _solve_rows_gamma_fallback(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
+    """_solve_rows with the resident gamma slice; if even one tile-row does not fit (TILE input with gamma), stream
+    gamma in the largest chunk G <= GAMMA_STREAM_CHUNK_CAP that fits. RM input keeps the resident plan (its binding
+    buffer is the tilized x row, not gamma)."""
+    streamable = sz.has_gamma and not sz.is_rm
+    if not (streamable and GAMMA_STREAM_FORCE_CHUNK):
+        try:
+            return _solve_rows(sz, k, slice_w, crt_max, budget, opts, allow_depth2=False)
+        except RuntimeError:
+            if not streamable:
+                raise
+    for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
+        try:
+            return _solve_rows(sz, k, slice_w, crt_max, budget, replace(opts, gamma_chunk=g), allow_depth2=False)
+        except RuntimeError:
+            continue
+    raise RuntimeError(f"rms_norm: one tile-row block does not fit L1 ({budget} B per core), even with streamed gamma")
 
 
 def _occ_cost(trt: int, tw: int, k: int, grid_x: int, grid_y: int) -> int:
@@ -491,7 +521,7 @@ def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int
         owner_combine=k > K_SYM_MAX_SHARDED,
         mask_tail=(not sz.is_rm) and geo.W % TILE != 0,
     )
-    b, d, opts = _solve_rows(sz, k, slice_w, crt_max, budget, base_opts, allow_depth2=False)
+    b, d, opts = _solve_rows_gamma_fallback(sz, k, slice_w, crt_max, budget, base_opts)
     return Blocking(
         k=k,
         slice_w_tiles=slice_w,
@@ -589,10 +619,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
 
     budget = cb_l1_budget(device)
+    grid = device.compute_with_storage_grid_size()
     if sharded:
         blk = select_sharded_blocking(geo, sz, input_tensor, budget)
     else:
-        grid = device.compute_with_storage_grid_size()
         blk = select_blocking(geo, sz, grid.x, grid.y, budget, elem_bytes)
     k, C, pitch = blk.k, blk.rm_chunk_w_tiles, blk.x_row_pitch
     b, d = blk.block_row_tiles, blk.x_block_depth
@@ -639,7 +669,9 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     if opts.mask_tail:
         defines.append(("RMS_MASK_TAIL", "1"))
     gamma_groups = None
-    if GAMMA_MCAST and has_gamma and not sharded:
+    if opts.gamma_chunk:
+        defines.append(("RMS_GAMMA_CHUNK", str(opts.gamma_chunk)))  # streamed gamma: per-core chunk ring, no mcast
+    elif has_gamma and (GAMMA_MCAST_SHARDED_K1 and k == 1 if sharded else GAMMA_MCAST):
         gamma_groups = _gamma_mcast_groups(blk, grid.x)
     gamma_mcast = gamma_groups is not None
     if gamma_mcast:

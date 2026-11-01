@@ -13,7 +13,11 @@
 //               row carries row 0's shared exponent).
 //   Both      : rows 1..15 of faces 0/1 and faces 2/3 are replicated by local NoC copies (doubling, one
 //               barrier per stage) — no RISC-V whole-tile store loop.
-//   Interleaved (RMS_GAMMA_MCAST): read + expanded once per W slice and multicast to the slice's group.
+//   Interleaved / sharded k = 1 (RMS_GAMMA_MCAST): read + expanded once per W slice and multicast to the slice's
+//               group.
+//   Streamed (RMS_GAMMA_CHUNK = G, fallback when the resident slice does not fit L1): per block, the slice is
+//               re-loaded in G-tile chunks through a 2-chunk ring (always G pages pushed, so a chunk never wraps
+//               the ring); pass 2 consumes one chunk per G-tile window.
 //
 // exchange_partials_block — symmetric unicast all-gather, one round per block:
 //   every member m writes its block_rows column-0 partial tiles into slot (r*k + m) of EVERY member's
@@ -220,6 +224,31 @@ FORCE_INLINE void load_gamma_slice(
 }
 #endif
 
+#ifdef RMS_GAMMA_CHUNK
+// stream_gamma_block: this block's gamma, chunk by chunk (pass 2 walks norm_w tiles per tile-row in G-tile windows).
+// Gap tiles past core_w_tiles (a ragged shard column's padding) are pushed unwritten — their output is don't-care.
+template <typename Accessor>
+FORCE_INLINE void stream_gamma_block(
+    const Accessor& g_acc,
+    uint32_t w_tile_start,
+    uint32_t core_w_tiles,
+    uint32_t norm_w,
+    uint32_t col0,
+    uint32_t valid_cols) {
+    constexpr uint32_t G = RMS_GAMMA_CHUNK;
+    for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
+        cb_reserve_back(cb_gamma, G);
+        if (c0 < core_w_tiles) {
+            const uint32_t valid = (core_w_tiles - c0) < G ? (core_w_tiles - c0) : G;
+            const uint32_t cols =
+                (valid_cols - c0 * TILE_DIM) < valid * TILE_DIM ? (valid_cols - c0 * TILE_DIM) : valid * TILE_DIM;
+            fill_gamma_slice(g_acc, get_write_ptr(cb_gamma), w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
+        }
+        cb_push_back(cb_gamma, G);
+    }
+}
+#endif
+
 // One partial / inv_rms tile to a peer: faces 0 and 2 (column 0) or the whole tile.
 FORCE_INLINE void send_acc_tile(uint32_t src, uint64_t dst, uint32_t tile_bytes) {
     if constexpr (partial_faces_only) {
@@ -311,7 +340,14 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t gamma_addr = get_arg_val<uint32_t>(11);
     [[maybe_unused]] const uint32_t col0 = get_arg_val<uint32_t>(12);  // first global column of the slice
 
-#ifdef RMS_HAS_GAMMA
+#if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+    const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
+#ifdef RMS_SHARDED
+    const uint32_t norm_w = x_row_pitch;  // sharded TILE: pass 2 walks the whole shard row
+#else
+    const uint32_t norm_w = core_w_tiles;
+#endif
+#elif defined(RMS_HAS_GAMMA)
     {
         const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
 #ifdef RMS_RM
@@ -370,6 +406,9 @@ void kernel_main() {
             cb_push_back(cb_gathered_sumsq, w_split_cores * rows);
         }
 
+#if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+        stream_gamma_block(g_acc, w_tile_start, core_w_tiles, norm_w, col0, valid_cols);
+#endif
         // ---- store_block ----
 #if defined(RMS_SHARDED) && defined(RMS_RM)
         constexpr uint32_t chunk_row_bytes = rm_chunk_w_tiles * TILE_DIM * elem_bytes;

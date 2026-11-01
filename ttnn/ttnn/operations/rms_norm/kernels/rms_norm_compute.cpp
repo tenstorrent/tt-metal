@@ -47,6 +47,10 @@
 #endif
 #include "rms_norm_common.hpp"
 
+#if defined(RMS_RM) && defined(RMS_GAMMA_CHUNK)
+#error "streamed gamma (RMS_GAMMA_CHUNK) is a TILE-input regime; RM pass 2 walks rm_chunk_w_tiles windows"
+#endif
+
 using namespace compute_kernel_lib;
 using namespace rms_norm_cb;
 
@@ -140,9 +144,10 @@ ALWI void combine_partials_block(uint32_t rows, FinalizeInvRms finalize) {
 }
 
 // ---- normalize_block: x * inv_rms (bcast Col) [* expanded gamma via DEST reuse] -> cb_out ----
-// base_col: first tile column of the window (RM: chunk start); width: tiles walked per tile-row.
+// base_col: first tile column of the window (RM: chunk start); width: tiles walked per tile-row;
+// gamma_col: cb_gamma page of the window's first column (resident: base_col; streamed chunk: 0).
 template <uint32_t cb_x_blk>
-ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width) {
+ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col) {
     constexpr auto x_in = input(
         cb_x_blk,
         WaitPolicy::None,
@@ -165,7 +170,7 @@ ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width) {
     eltwise_chain(
         IterationShape::grid(rows, width),
         XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
-        TimesGamma{base_col},
+        TimesGamma{gamma_col},
         PackTile<output(cb_out)>{});
 #else
     eltwise_chain(
@@ -275,17 +280,25 @@ ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms final
 template <uint32_t cb_x_blk>
 ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[maybe_unused]] uint32_t gamma_tiles) {
     cb_wait_front(cb_inv_rms, rows);
-#ifdef RMS_HAS_GAMMA
+#if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
     cb_wait_front(cb_gamma, gamma_tiles);
 #endif
-#ifdef RMS_RM
+#if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+    // Streamed gamma (TILE input only): one G-tile chunk per window, re-streamed by the writer every block.
+    constexpr uint32_t G = RMS_GAMMA_CHUNK;
+    for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
+        cb_wait_front(cb_gamma, G);
+        normalize_window<cb_x_blk>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0);
+        cb_pop_front(cb_gamma, G);
+    }
+#elif defined(RMS_RM)
     for (uint32_t c = 0; c < chunks_this; ++c) {
-        normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles);
+        normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, c * rm_chunk_w_tiles);
         // untilize init/uninit per chunk: the normalize chain between chunks reprograms unpack/math/pack.
         untilize<rm_chunk_w_tiles, cb_out, cb_out_rm>(rows);
     }
 #else
-    normalize_window<cb_x_blk>(rows, 0, norm_w);
+    normalize_window<cb_x_blk>(rows, 0, norm_w, 0);
 #endif
     cb_pop_front(cb_x_blk, rows * x_row_pitch);
     cb_pop_front(cb_inv_rms, rows);
@@ -367,7 +380,7 @@ void kernel_main() {
     }
 #endif
 
-#ifdef RMS_HAS_GAMMA
+#if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
     cb_pop_front(cb_gamma, gamma_tiles);
 #endif
 #ifdef RMS_MASK_TAIL
