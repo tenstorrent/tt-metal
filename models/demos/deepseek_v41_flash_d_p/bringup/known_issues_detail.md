@@ -572,7 +572,9 @@ BREADCRUMBS section of FIX.20 (overseer fix, 8x4, 2026-11-01); BREADCRUMBS.md is
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.tests.bringup.official_final_norm s10240 last`
   (only for a new golden); `gate FIX.20 --check --unit FIX.20`.
 
-## FIX.21 FORMAT_ATTRIBUTION: which device format makes the device's error larger than DeepSeek's reference
+## The device's extra error over DeepSeek's reference is its bfloat4_b routed-expert weights
+
+(FIX.21 FORMAT_ATTRIBUTION: which device format makes the device's error larger than DeepSeek's reference.)
 
 (BREADCRUMBS.md is 9 bytes under the 500 KB hook, DS41-194: this section is FIX.21's breadcrumb too.)
 
