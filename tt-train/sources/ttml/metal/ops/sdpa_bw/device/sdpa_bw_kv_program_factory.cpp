@@ -384,6 +384,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     const uint32_t block_size_q = get_block_size(qWt, 4U);
     const uint32_t block_size_v = get_block_size(vWt, 4U);
+    // Query rows per compute block (iteration 28): the chain chunk under CHAIN (whole chunks resident), 1 otherwise.
+    const uint32_t q_block = use_chain ? chain_chunk : 1U;
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -442,7 +444,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         kAttnWeightsTransposedCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
-        kSingleTileBuffer);
+        q_block);  // one block (iteration 28)
 
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
         program,
@@ -450,7 +452,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         kAttentionWeightsCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
-        kSingleTileBuffer);
+        q_block);  // one block (iteration 28)
 
     [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
         program,
@@ -466,7 +468,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         kGradScoresTransposedCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
-        kSingleTileBuffer);
+        q_block);  // one block (iteration 28)
 
     [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_14
         create_circular_buffer(
@@ -541,7 +543,9 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     }
     const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
+    // The VALID relay of iterations 15-25 was replaced by the counting receiver semaphore (iteration 26); its
+    // compile-arg slot stays at 0 so the argument indices after it are unchanged.
+    constexpr uint32_t chain_valid_sem = 0U;
     const uint32_t chain_received_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);   // reader -> writer
     const uint32_t chain_forwarded_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // writer -> reader
     if (head_split) {
@@ -632,7 +636,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             heads_per_group,     // 6: heads per group
             scaler,              // 7: scale factor
             minus_one,           // 8: mask transform constant
-            custom_inf           // 9: used to transform mask from 0/-1 to 0/-inf
+            custom_inf,          // 9: used to transform mask from 0/-1 to 0/-inf
+            q_block              // 10: query rows per compute block
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -658,7 +663,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             heads_per_group,            // 6: heads per group
             scaler,                     // 7: scale factor
             minus_one,                  // 8: mask transform constant
-            custom_inf                  // 9: used to transform mask from 0/-1 to 0/-inf
+            custom_inf,                 // 9: used to transform mask from 0/-1 to 0/-inf
+            q_block                     // 10: query rows per compute block
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -685,7 +691,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                 heads_per_group,            // 6: heads per group
                 scaler,                     // 7: scale factor
                 minus_one,                  // 8: mask transform constant
-                custom_inf                  // 9: used to transform mask from 0/-1 to 0/-inf
+                custom_inf,                 // 9: used to transform mask from 0/-1 to 0/-inf
+                q_block                     // 10: query rows per compute block
             };
 
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(

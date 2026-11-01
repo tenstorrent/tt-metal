@@ -1,0 +1,39 @@
+=== build _ttml 2026-11-01T16:53:16Z
+build rc=0
+=== sdpa check vs the iteration-26 baseline outputs 2026-11-01T16:53:26Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+ case q8 kv2 S1024 D128: wall us fw 108 fw+bw 431 bw 322
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dK: pcc 0.99999386 max|diff| 1.013e-01 differing 54850/262144
+    dV: pcc 0.99999672 max|diff| 6.387e-02 differing 160/262144
+ case q32 kv8 S1024 D128: wall us fw 336 fw+bw 1460 bw 1124
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/4194304
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/4194304
+    dK: pcc 0.99999860 max|diff| 1.562e-02 differing 220207/1048576
+    dV: pcc 1.00000000 max|diff| 7.812e-03 differing 116/1048576
+ case q8 kv8 S1024 D128: wall us fw 121 fw+bw 583 bw 462
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dK: pcc 0.99999445 max|diff| 8.691e-02 differing 197447/1048576
+    dV: pcc 0.83782755 max|diff| 2.111e+01 differing 482/1048576
+ case q4 kv1 S1024 D128: wall us fw 79 fw+bw 306 bw 226
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+    dK: pcc 0.99999859 max|diff| 1.562e-02 differing 27582/131072
+    dV: pcc 1.00000000 max|diff| 1.953e-03 differing 129/131072
+ case q8 kv2 S2048 D128: wall us fw 288 fw+bw 1256 bw 968
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/2097152
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/2097152
+    dK: pcc 0.99999870 max|diff| 3.125e-02 differing 110982/524288
+    dV: pcc 0.99999999 max|diff| 3.906e-03 differing 183/524288
+ case q6 kv2 S512 D64: wall us fw 49 fw+bw 159 bw 110
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/196608
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/196608
+    dK: pcc 0.99999855 max|diff| 1.562e-02 differing 13524/65536
+    dV: pcc 1.00000000 max|diff| 4.883e-04 differing 4/65536
+=== attention harness tests 2026-11-01T16:53:34Z
+tests rc=0
+======================= 4 passed, 44 deselected in 5.32s =======================
+=== done 2026-11-01T16:53:42Z

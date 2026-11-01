@@ -1,0 +1,39 @@
+=== build _ttml 2026-11-01T17:05:53Z
+build rc=0
+=== sdpa check vs the iteration-26 baseline outputs 2026-11-01T17:05:55Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+ case q8 kv2 S1024 D128: wall us fw 107 fw+bw 430 bw 323
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dK: pcc 0.99999869 max|diff| 1.562e-02 differing 54754/262144
+    dV: pcc 1.00000000 max|diff| 3.906e-03 differing 34/262144
+ case q32 kv8 S1024 D128: wall us fw 336 fw+bw 1450 bw 1114
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/4194304
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/4194304
+    dK: pcc 0.99999860 max|diff| 1.562e-02 differing 220277/1048576
+    dV: pcc 1.00000000 max|diff| 7.812e-03 differing 183/1048576
+ case q8 kv8 S1024 D128: wall us fw 118 fw+bw 583 bw 465
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dK: pcc 0.99999869 max|diff| 1.562e-02 differing 197261/1048576
+    dV: pcc 0.99999999 max|diff| 3.906e-03 differing 196/1048576
+ case q4 kv1 S1024 D128: wall us fw 79 fw+bw 304 bw 226
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+    dK: pcc 0.99999859 max|diff| 1.562e-02 differing 27510/131072
+    dV: pcc 1.00000000 max|diff| 1.953e-03 differing 18/131072
+ case q8 kv2 S2048 D128: wall us fw 288 fw+bw 1251 bw 963
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/2097152
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/2097152
+    dK: pcc 0.99999870 max|diff| 3.125e-02 differing 110908/524288
+    dV: pcc 1.00000000 max|diff| 3.906e-03 differing 81/524288
+ case q6 kv2 S512 D64: wall us fw 49 fw+bw 159 bw 110
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/196608
+    dQ: pcc 1.00000000 max|diff| 0.000e+00 differing 0/196608
+    dK: pcc 0.99999854 max|diff| 1.562e-02 differing 13573/65536
+    dV: pcc 1.00000000 max|diff| 1.869e-03 differing 62/65536
+=== attention harness tests 2026-11-01T17:06:02Z
+tests rc=0
+======================= 4 passed, 44 deselected in 5.19s =======================
+=== done 2026-11-01T17:06:10Z
