@@ -111,7 +111,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     for (size_t i = 0; i < num_devices; i++) {
         auto* device = devices_[i].get();
 
-        programs.push_back(Program());
+        programs.push_back(CreateProgram(*device));
         Program& program = programs.back();
 
         construct_program(program, *device, core);
@@ -167,7 +167,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         std::vector<Program> new_programs;
         for (size_t i = 0; i < num_devices; i++) {
             auto* device = devices_[i].get();
-            new_programs.push_back(Program());
+            new_programs.push_back(CreateProgram(*device));
             Program& program = new_programs.back();
             construct_program(program, *device, core);
         }

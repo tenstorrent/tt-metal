@@ -55,16 +55,16 @@ class TTBEVFormerHead:
 
         signpost(header="Head Decoder Start")
         hs, refined_points, box_codes = self.decoder(query, bev_embed, query_pos, reference_points, p.reg_branches)
-        signpost(header="Head Decoder Complete")
+        signpost(header="Head Decoder End")
         signpost(header="Head ClsBranches Start")
         all_cls_scores = ttnn.stack(
             [self._cls_branch(hs[lvl], branch) for lvl, branch in enumerate(p.cls_branches)], dim=0
         )
-        signpost(header="Head ClsBranches Complete")
+        signpost(header="Head ClsBranches End")
         signpost(header="Head BoxPreds Start")
 
         sources = {"centers": ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min), "codes": box_codes}
         all_bbox_preds = ttnn.concat([sources[source][..., channels] for source, channels in BOX_PRED_PIECES], dim=-1)
-        signpost(header="Head BoxPreds Complete")
+        signpost(header="Head BoxPreds End")
         signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds

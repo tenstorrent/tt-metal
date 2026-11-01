@@ -42,7 +42,7 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
+    max_dest_tiles,
 )
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -1481,10 +1481,9 @@ def _ulp_sweep_dims(
 
     Rounds up to a whole number of dest blocks (needed once the sweep spans more
     than one block) and caps at _MAX_SWEEP_TILES."""
-    capacity_divisor = (
-        2 if (dest_acc == DestAccumulation.Yes or stimuli_format.is_32_bit()) else 1
+    block_tiles = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or stimuli_format.is_32_bit(), dest_sync
     )
-    block_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     n = int(_enumerate_representable(stimuli_format, low, high).numel())
     tiles = max(1, math.ceil(n / _TILE_ELEMENTS))

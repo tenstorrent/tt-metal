@@ -14,7 +14,7 @@ namespace ckernel::sfpu {
 
 namespace detail {
 
-inline constexpr sfpi::UnpackSrcS srcs_reg{};
+inline constexpr sfpi::SrcSView<0> srcs_reg{};
 
 template <SfpuReg REG>
 sfpi_inline auto sfpu_operand_access(int index) {

@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <internal/l1_ecc_halt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -21,7 +22,8 @@
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "impl/threading/thread_pool.hpp"
@@ -72,7 +74,7 @@ void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
         return;
     }
 
-    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+    cluster.advance_device_execution(internal::get_device(*mesh_device, device_coord)->id());
 }
 
 }  // namespace
@@ -110,7 +112,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
                 p,
                 alloc_size,
                 static_cast<int>(mesh_device->impl().metal_env().get_cluster().get_numa_node_for_device(
-                    mesh_device->get_device(sender_core_.device_coord)->id())));
+                    internal::get_device(*mesh_device, sender_core_.device_coord)->id())));
         }
         aligned_ptr = p;
         host_buffer_ = std::shared_ptr<uint32_t[]>(
@@ -131,10 +133,11 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
+    const auto& noc_addr =
+        pinned_memory_->get_noc_addr(internal::get_device(*mesh_device, sender_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for D2H socket pinned memory.");
     TT_FATAL(
-        noc_addr.value().device_id == mesh_device->get_device(sender_core_.device_coord)->id(),
+        noc_addr.value().device_id == internal::get_device(*mesh_device, sender_core_.device_coord)->id(),
         "Pinned Memory used for D2H sockets must be mapped to the same device as the sender core. D2H Sockets cannot "
         "communicate with remote devices.");
 
@@ -154,7 +157,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
 #endif
     using_hugepage_ = true;
 
-    auto* device = mesh_device->get_device(sender_core_.device_coord);
+    auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
     auto device_id = device->id();
     auto& sysmem_mgr = device->sysmem_manager();
 
@@ -209,8 +212,9 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
-    auto* sender_device =
-        mesh_device->is_local(sender_core_.device_coord) ? mesh_device->get_device(sender_core_.device_coord) : nullptr;
+    auto* sender_device = mesh_device->is_local(sender_core_.device_coord)
+                              ? internal::get_device(*mesh_device, sender_core_.device_coord)
+                              : nullptr;
     if (sender_device && svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
@@ -247,7 +251,7 @@ void D2HSocket::write_socket_metadata(
         // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
         // blob directly to the caller-provided LIM address.
         const auto& cluster = mesh_device->impl().metal_env().get_cluster();
-        const uint32_t device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        const uint32_t device_id = internal::get_device(*mesh_device, sender_core_.device_coord)->id();
         cluster.write_core(
             config_data.data(),
             total_config_bytes,
@@ -263,14 +267,14 @@ void D2HSocket::write_socket_metadata(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
     } else if (sender_core_type_ != HalProgrammableCoreType::TENSIX) {
         auto& env = mesh_device->impl().metal_env();
-        const ChipId device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        const ChipId device_id = internal::get_device(*mesh_device, sender_core_.device_coord)->id();
         env.get_cluster().write_core(
             config_data.data(),
             total_config_bytes,
             tt_cxy_pair(device_id, sender_virtual_core(*mesh_device, device_id)),
             config_buffer_address_ + env.get_hal().get_l1_noc_offset(sender_core_type_));
     } else {
-        IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+        IDevice* device = internal::get_device(*mesh_device, sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
             device, sender_core_.core_coord, config_buffer_address_, config_data, CoreType::WORKER);
     }
@@ -289,7 +293,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
 
     auto& env = mesh_device->impl().metal_env();
     auto& cluster = env.get_cluster();
-    const uint32_t sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+    const uint32_t sender_device_id = internal::get_device(*mesh_device, sender_core_.device_coord)->id();
     CoreCoord sender_virtual_core_coord;
 
     // Mock/emulated chips have no device to map, so they skip the window creation below (guarded by
@@ -387,7 +391,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
 
-        auto* device = mesh_device->get_device(sender_core_.device_coord);
+        auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
         auto& sysmem_mgr = device->sysmem_manager();
         auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
         hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
@@ -480,7 +484,7 @@ D2HSocket::D2HSocket(
     // core and pick up that core's TLB base. Check membership rather than trust it.
     {
         const auto& cluster = mesh_device.impl().metal_env().get_cluster();
-        const uint32_t device_id = mesh_device_ptr->get_device(sender_core_.device_coord)->id();
+        const uint32_t device_id = internal::get_device(*mesh_device_ptr, sender_core_.device_coord)->id();
         const auto l2cpu_cores =
             cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
         const bool is_l2cpu_core = std::any_of(l2cpu_cores.begin(), l2cpu_cores.end(), [this](const auto& c) {
@@ -539,7 +543,7 @@ D2HSocket::~D2HSocket() noexcept {
         try {
             config_buffer_.reset();
             auto& svc = mesh_device_->impl().metal_context().get_service_core_manager();
-            auto* sender_device = mesh_device_->get_device(sender_core_.device_coord);
+            auto* sender_device = internal::get_device(*mesh_device_, sender_core_.device_coord);
             svc.deallocate_l1(sender_device, sender_core_.core_coord, svc_config_l1_addr_.value());
         } catch (const std::exception& e) {
             log_warning(LogMetal, "D2HSocket destructor: service-core L1 release failed: {}", e.what());
@@ -585,7 +589,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         uint32_t bytes_adjustment = fifo_size_ - next_fifo_rd_ptr;
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
+        tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
         while (bytes_recv < bytes_adjustment) {
+            ecc_watch.poll();
             // On mock, synthesize the wrap padding that bytes_acked_ consumes below.
             if (mock_flow_control_enabled_) {
                 simulate_device_sent(bytes_adjustment);
@@ -627,7 +633,9 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_recv < num_bytes) {
+        ecc_watch.poll();
         // On mock, synthesize exactly the wrap-adjusted bytes this read needs.
         if (mock_flow_control_enabled_) {
             simulate_device_sent(num_bytes);
@@ -739,7 +747,9 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
     refresh_connector_read_state();
     volatile uint32_t bytes_sent_value = read_bytes_sent();
     auto start_time = std::chrono::high_resolution_clock::now();
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_acked_ - bytes_sent_value != 0) {
+        ecc_watch.poll();
         refresh_connector_read_state();
         bytes_sent_value = read_bytes_sent();
         if (timeout_ms.has_value()) {
@@ -747,6 +757,7 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
                                   std::chrono::high_resolution_clock::now() - start_time)
                                   .count();
             if (elapsed_ms > timeout_ms.value()) {
+                ecc_watch.check_now();
                 TT_THROW(
                     "Timeout waiting for host to acknowledge data over D2H socket. Bytes sent: {}, Bytes "
                     "acknowledged: {}. Barrier was potentially issued on host before all required reads were "

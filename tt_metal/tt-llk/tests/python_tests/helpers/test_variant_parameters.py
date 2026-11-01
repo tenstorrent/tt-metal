@@ -55,7 +55,7 @@ from .sfpu_dispatch_constants import (
 )
 
 
-def _fp32_bits(value: float) -> int:
+def fp32_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
@@ -414,7 +414,7 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     relu_max_threshold: float = RELU_MAX_THRESHOLD
 
     def convert_to_cpp(self) -> str:
-        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        bits = fp32_bits(self.relu_max_threshold)
         return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
 
 
@@ -428,7 +428,7 @@ class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         value = self.max_min_scalar
-        bits = _fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
+        bits = fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
         return f"#define SFPU_UNARY_MAX_MIN_SCALAR {bits:#010x}u"
 
 
@@ -477,8 +477,8 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
             raise ValueError(f"polygamma supports orders 1 to 11, got {n}")
         scale = (-1) ** (n + 1) * math.factorial(n)
         return (
-            f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
-            f"#define SFPU_POLYGAMMA_SCALE_BITS {_fp32_bits(scale):#x}u"
+            f"#define SFPU_POLYGAMMA_N_BITS {fp32_bits(n):#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {fp32_bits(scale):#x}u"
         )
 
 
@@ -502,7 +502,7 @@ class SFPU_DROPOUT_PARAMS(TemplateParameter):
         ), f"dropout seed {self.dropout_seed:#x} is not 32-bit"
 
     def convert_to_cpp(self) -> str:
-        scale_bits = struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
+        scale_bits = fp32_bits(self.dropout_scale)
         return "\n".join(
             (
                 f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability:#010x}u",
@@ -747,6 +747,24 @@ class PACK_NUM_TILES(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t PACK_NUM_TILES = {self.num_tiles}u;"
+
+
+@dataclass
+class SDPA_BCAST_NUM_TILES(TemplateParameter):
+    """Outer-loop tile count of the SDPA bcast-col SrcB-reuse MOP (``sdpa_bcast_col_srcb_reuse_test.cpp``).
+
+    A template argument on both the math and the unpack LLK (``num_tiles``), so it cannot be a
+    runtime parameter: one ``_llk_unpack_A_`` call walks this many tiles and the math MOP writes
+    them to consecutive DEST tiles. Emits ``constexpr std::uint32_t SDPA_BCAST_NUM_TILES``.
+
+    The field carries the ``sdpa_bcast_`` prefix so it stays globally unique
+    (``test_perf_header_gate.py``); bare ``num_tiles`` belongs to ``PACK_NUM_TILES``.
+    """
+
+    sdpa_bcast_num_tiles: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_BCAST_NUM_TILES = {self.sdpa_bcast_num_tiles}u;"
 
 
 @dataclass
@@ -1600,6 +1618,19 @@ class LOOP_FACTOR(RuntimeParameter):
 
 
 @dataclass
+class GROUP_KT_DIM(RuntimeParameter):
+    """K tiles per quantization group (group-wise dequant matmul)."""
+
+    group_kt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GROUP_KT_DIM = {self.group_kt_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t GROUP_KT_DIM;", "I"
+
+
+@dataclass
 class UNPACK_TRANS_FACES(RuntimeParameter):
     unpack_transpose_faces: Transpose = Transpose.No
 
@@ -1679,6 +1710,20 @@ class ZERO_POINT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class OUT_ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of requant's output zero point, added after rounding.
+    Ignored by other binary ops."""
+
+    out_zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t OUT_ZERO_POINT = {self.out_zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t OUT_ZERO_POINT;", "I"
 
 
 @dataclass
@@ -2342,7 +2387,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
     preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
-                         copy_tile_init does.
+                         copy_init does.
     """
 
     signal_granularity: int = 1
@@ -2369,10 +2414,9 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
 class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
     """Compile-time dims for the experimental sdpa_custom_mm_reuse_dest_srcb OV matmul.
 
-    kt_dim: number of K tiles (softmax-score / V K tiles). The unpack MOP requires an
-            even kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in
-            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h); kt_dim < 2 underflows the
-            MOP iteration count and hangs the unpacker.
+    kt_dim: number of K tiles (softmax-score / V K tiles), 1 to 256. The unpack MOP
+            covers them in pairs and replays an odd last one directly (see
+            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h).
     nt_dim: number of V head-dim output tiles per K iteration (1..16).
     """
 
@@ -2463,8 +2507,8 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
         )
 
 

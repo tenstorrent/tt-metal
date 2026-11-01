@@ -6,7 +6,7 @@
 #include "fabric_command_interface.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <stdexcept>
 #include <chrono>
 #include <llrt/tt_cluster.hpp>
@@ -51,8 +51,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     const tt::tt_metal::CoreCoord& logical_core,
     const FabricNodeId& dest_fabric_node,
     const WorkerMemoryLayout& mem_layout) {
-
-    auto program = std::make_shared<tt_metal::Program>();
+    auto program = std::make_shared<tt_metal::Program>(CreateProgram(*device));
 
     // Get source fabric node ID from logical first device
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

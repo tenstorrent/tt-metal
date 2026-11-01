@@ -21,13 +21,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from .tt_common import signpost
 
 from loguru import logger
 
@@ -100,8 +94,7 @@ def multi_scale_deformable_attn_fused(
         concatenated by the op's writer, so no reshape/permute follows. The output
         lives in the memory ``value_memory`` selected (L1 or interleaved DRAM).
     """
-    if use_signpost:
-        signpost(header="fused_msda Start")
+    signpost(header="fused_msda Start")
 
     if value_memory not in {"auto", "l1", "dram"}:
         raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {value_memory!r}')
@@ -169,8 +162,7 @@ def multi_scale_deformable_attn_fused(
         )
         output = run_with_memory_config(ttnn.DRAM_MEMORY_CONFIG)
 
-    if use_signpost:
-        signpost(header="fused_msda End")
+    signpost(header="fused_msda End")
     return output
 
 
@@ -276,8 +268,8 @@ class TTMSDeformableAttention:
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
-        if use_signpost:
-            signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
+        deformable_attn_region = f"TT MS Deformable Attn Module {query.shape[1]} - {self.total_keys}"
+        signpost(header=f"{deformable_attn_region} Start")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -377,8 +369,7 @@ class TTMSDeformableAttention:
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
-        if use_signpost:
-            signpost(header="TT MS Deformable Attn Module End")
+        signpost(header=f"{deformable_attn_region} End")
 
         return output
 

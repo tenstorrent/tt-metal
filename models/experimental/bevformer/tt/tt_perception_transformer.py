@@ -24,7 +24,7 @@ from torchvision.transforms.functional import rotate
 
 from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
 from models.experimental.bevformer.tt.model_preprocessing import bev_grid_length, ego_shift
-from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
 
@@ -150,6 +150,7 @@ class TTPerceptionTransformer:
         ``(1, num_query, C)``, shared by the batch; ``bev_pos`` ``(bs, num_query, C)``; ``frame`` from
         :meth:`prepare_frame`; ``prev_bev`` the previous frame's ``(bs, num_query, C)`` BEV or None.
         Returns this frame's BEV, ``(bs, num_query, C)``."""
+        signpost(header="TTNN PerceptionTransformer Forward Start")
         bs = len(frame.img_metas)
         mlp = self.params.can_bus_mlp
         can_bus = ttnn.linear(frame.can_bus, mlp.linear1.weight, bias=mlp.linear1.bias, activation="relu")
@@ -168,6 +169,8 @@ class TTPerceptionTransformer:
             prev_bev = ttnn.concat([ttnn.unsqueeze(prev_bev, 1), ttnn.unsqueeze(bev_queries, 1)], dim=1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, -1, self.embed_dims))
             shift = frame.shift
-        return self.encoder(
+        bev_embed = self.encoder(
             bev_queries, value=value, bev_pos=bev_pos, prev_bev=prev_bev, shift=shift, img_metas=frame.img_metas
         )
+        signpost(header="TTNN PerceptionTransformer Forward End")
+        return bev_embed

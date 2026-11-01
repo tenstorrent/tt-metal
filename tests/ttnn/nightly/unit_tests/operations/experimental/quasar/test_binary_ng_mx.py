@@ -20,10 +20,10 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _on_quasar
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utility_functions import is_quasar
 
-quasar_only = pytest.mark.skipif(not _on_quasar(), reason="MX formats are Quasar only")
+quasar_only = pytest.mark.skipif(not is_quasar(), reason="MX formats are Quasar only")
 
 # One interleaved shape small enough for the simulator, and one that spreads tiles over several cores.
 _SHAPES = [(32, 32), (4 * 32, 8 * 32)]
@@ -95,7 +95,7 @@ def test_add_mx_in_bf16_out(device, dtype, shape):
     _assert_matches(golden, ttnn.to_torch(tc))
 
 
-@pytest.mark.skipif(_on_quasar(), reason="checks the non-Quasar guard")
+@pytest.mark.skipif(is_quasar(), reason="checks the non-Quasar guard")
 @pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8])
 def test_mx_rejected_off_quasar(device, expect_error, dtype):
     x = torch.randn((32, 32), dtype=torch.float32)

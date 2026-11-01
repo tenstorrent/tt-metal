@@ -26,7 +26,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -37,6 +36,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "context/metal_context.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
@@ -170,7 +170,7 @@ std::vector<CoreCoord> sorted_yx(const std::unordered_set<CoreCoord>& cores) {
 }
 
 DevicePrograms::DeviceCtx::DeviceCtx(distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord) :
-    mesh(&mesh), coord(coord), device(mesh.get_device(coord)) {}
+    mesh(&mesh), coord(coord), device(internal::get_device(mesh, coord)) {}
 DevicePrograms::DeviceCtx::~DeviceCtx() = default;
 DevicePrograms::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
