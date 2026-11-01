@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.num_faces,
             params.num_faces);
 
-        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */,
             0 /* within_face_16x16_transpose */,
             ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int i = 0; i < total_tiles; ++i)
                 {
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                         L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -126,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             BroadcastType::NONE,
-                            false /* unpack_to_dest */>(params.DST_INDEX + tile, formats.math, formats.math, params.num_faces);
+                            unpack_to_dest>(params.DST_INDEX + tile, formats.math, formats.math, params.num_faces);
                     }
 
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

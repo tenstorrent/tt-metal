@@ -394,3 +394,59 @@ def test_pack_block_w(
         dest_index,
         pack_block=3,
     )
+
+
+@skip_for_wormhole
+@parametrize(**PACK_BLOCK_SWEEP)
+def test_pack_block_plain(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+):
+    """The plain block and the closed block of llk_pack_block that program the output on every call (the first block of an output, LLK_PACK_W_OFFSET_OFF)."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=5,
+    )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[96, 128], [160, 32], [224, 32]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0, 1, 3],
+    block_tiles=[2, 3, 5, 6, 7],
+    pack_block=[2, 5],
+)
+def test_pack_block_tiles(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+):
+    """Blocks of 2 to 7 tiles from dest index 0, 1 and 3 (a two tile block of tiles 3 and 4 straddles a four tile boundary of DEST), the default W offset forms (2) and the plain and closed blocks (5)."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+    )

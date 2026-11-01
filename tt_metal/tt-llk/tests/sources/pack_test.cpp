@@ -217,6 +217,18 @@ inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std:
             _llk_pack_block_w_<sync, fp32>(dst_index, out_tile, num_tiles);
         }
     }
+    else if constexpr (pack_block_plain)
+    {
+        // the blocks llk_pack_block makes when it programs the output: the first block of an output, W offset off
+        if (bfp)
+        {
+            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
+        }
+        else
+        {
+            _llk_pack_block_<sync, fp32>(dst_index, address, num_tiles);
+        }
+    }
     else if constexpr (pack_block_fast)
     {
         if (bfp)
@@ -278,7 +290,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_pack_block_fast_init_<false>();
             }
-            if constexpr (!pack_block_fast)
+            if constexpr (!pack_block_fast && !pack_block_plain)
             {
                 _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
             }
