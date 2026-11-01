@@ -1,0 +1,135 @@
+2026-11-01 18:14:36.223 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 48 items / 40 deselected / 8 selected
+
+tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients 2026-11-01 18:14:36.510 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 18:14:36.510 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 18:14:36.510 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 18:14:36.510 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 18:14:36.521 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 18:14:36.522 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 18:14:36.603 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 18:14:36.603 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 18:14:36.603 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 18:14:36.603 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 18:14:36.605 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 18:14:36.610 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-11-01 18:14:36.737 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 18:14:36.770 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 18:14:36.770 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 18:14:36.771 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 18:14:36.810 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+rmsnorm: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999998 2.44e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999996 4.41e-03  (>= 0.99, <= 0.05) ok
+  dgamma                       (1, 1, 1, 5120)          0.999994 4.73e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient PASSED
+tests/python/test_mistral.py::test_rmsnorm_allcore_backward_with_frozen_gamma[32 tile-rows] rmsnorm all-core backward: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999998 2.42e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999996 2.74e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_rmsnorm_allcore_backward_with_frozen_gamma[64 tile-rows: two work items per core] rmsnorm all-core backward: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 5120)       0.999998 2.42e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 2, 1024, 5120)       0.999997 3.15e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[32 tile-rows] fused residual add + RMSNorm: tensor | shape | PCC | rel err | bar
+  sum                          (1, 1, 1024, 5120)       0.999999 1.77e-03  (>= 0.999, <= 0.02) ok
+  out                          (1, 1, 1024, 5120)       0.999997 4.09e-03  (>= 0.999, <= 0.02) ok
+  d residual (out only)        (1, 1, 1024, 5120)       0.999995 3.16e-03  (>= 0.99, <= 0.05) ok
+  d residual                   (1, 1, 1024, 5120)       0.999995 3.22e-03  (>= 0.99, <= 0.05) ok
+  d delta                      (1, 1, 1024, 5120)       0.999995 3.22e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[64 tile-rows: two work items per core] fused residual add + RMSNorm: tensor | shape | PCC | rel err | bar
+  sum                          (1, 2, 1024, 5120)       0.999999 1.77e-03  (>= 0.999, <= 0.02) ok
+  out                          (1, 2, 1024, 5120)       0.999997 3.39e-03  (>= 0.999, <= 0.02) ok
+  d residual (out only)        (1, 2, 1024, 5120)       0.999997 3.00e-03  (>= 0.99, <= 0.05) ok
+  d residual                   (1, 2, 1024, 5120)       0.999997 2.36e-03  (>= 0.99, <= 0.05) ok
+  d delta                      (1, 2, 1024, 5120)       0.999997 2.36e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_fused_residual_norm_model_matches_the_block_path loss: block path 11.93750, fused residual norm 11.93750
+fused residual norm vs the block path, 2 layers: tensor | shape | PCC | rel err | bar
+  LoraModel/model/blocks/0/attention/out_linear/lora_A (1, 1, 16, 4096)         0.999956 9.69e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/attention/out_linear/lora_B (1, 1, 5120, 16)         0.999962 9.81e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/attention/qkv_linear/lora_A (1, 1, 16, 5120)         0.999953 9.75e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/attention/qkv_linear/lora_B (1, 1, 6144, 16)         0.999955 1.02e-02  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/mlp/w2/lora_A (1, 1, 16, 32768)        0.999959 9.06e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/mlp/w2/lora_B (1, 1, 5120, 16)         0.999962 8.77e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/mlp/w_gate_up/lora_A (1, 1, 16, 5120)         0.999966 8.52e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/0/mlp/w_gate_up/lora_B (1, 1, 65536, 16)        0.999957 9.26e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/attention/out_linear/lora_A (1, 1, 16, 4096)         0.999958 9.16e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/attention/out_linear/lora_B (1, 1, 5120, 16)         0.999970 7.75e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/attention/qkv_linear/lora_A (1, 1, 16, 5120)         0.999981 7.01e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/attention/qkv_linear/lora_B (1, 1, 6144, 16)         0.999971 7.65e-03  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/mlp/w2/lora_A (1, 1, 16, 32768)        0.999948 1.05e-02  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/mlp/w2/lora_B (1, 1, 5120, 16)         0.999951 1.01e-02  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/mlp/w_gate_up/lora_A (1, 1, 16, 5120)         0.999934 1.16e-02  (>= 0.99, <= 0.05) ok
+  LoraModel/model/blocks/1/mlp/w_gate_up/lora_B (1, 1, 65536, 16)        0.999947 1.05e-02  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_rmsnorm_allcore_path_builds_no_node_for_a_no_grad_input PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+40.93s call     tt-train/tests/python/test_mistral.py::test_fused_residual_norm_model_matches_the_block_path
+1.50s call     tt-train/tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[64 tile-rows: two work items per core]
+1.41s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+0.70s call     tt-train/tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[32 tile-rows]
+0.66s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_allcore_backward_with_frozen_gamma[64 tile-rows: two work items per core]
+0.32s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_allcore_backward_with_frozen_gamma[32 tile-rows]
+0.16s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient
+0.09s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_allcore_path_builds_no_node_for_a_no_grad_input
+
+(16 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient
+PASSED tests/python/test_mistral.py::test_rmsnorm_allcore_backward_with_frozen_gamma[32 tile-rows]
+PASSED tests/python/test_mistral.py::test_rmsnorm_allcore_backward_with_frozen_gamma[64 tile-rows: two work items per core]
+PASSED tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[32 tile-rows]
+PASSED tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[64 tile-rows: two work items per core]
+PASSED tests/python/test_mistral.py::test_fused_residual_norm_model_matches_the_block_path
+PASSED tests/python/test_mistral.py::test_rmsnorm_allcore_path_builds_no_node_for_a_no_grad_input
+====================== 8 passed, 40 deselected in 45.80s =======================
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_dtype"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-11-01 18:15:23.072 | info     |    BuildKernels | JIT cache stats: 523/526 hits (99.4%) [523 cached, 106 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 18:15:23.072 | info     |    BuildKernels | JIT telemetry: 37 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 18:15:23.086 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 18:15:23.086 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 18:15:23.296 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 18:15:23.296 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 18:15:23.296 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

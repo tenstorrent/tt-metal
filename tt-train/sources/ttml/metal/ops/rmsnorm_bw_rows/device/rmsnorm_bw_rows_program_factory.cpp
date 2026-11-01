@@ -99,9 +99,10 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
     auto writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    const uint32_t inv_c_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(input.logical_shape()[-1]));
+    // -1/C: pass 2 accumulates a * (-t) onto gamma * dy on the FPU (iteration 29).
+    const uint32_t neg_inv_c_bits = std::bit_cast<uint32_t>(-1.0F / static_cast<float>(input.logical_shape()[-1]));
     auto compute = create_compute_kernel(
-        program, all_cores, {Wt, S, St, block, inv_c_bits}, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program, all_cores, {Wt, S, St, block, neg_inv_c_bits}, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     std::vector<tt::tt_metal::CoreCoord> cores;
     cores.reserve(num_cores);

@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // rmsnorm_bw_rows compute (one item (row r, slice s) with the slices resident in L1):
-//   pass 1: partial = sum over the slice of a * gamma * dy  (fp32 DEST)  -> exchanged between the row's cores
-//   inv = 1 / rms, t = rowsum(sum_s partial_s) * inv^2 / C
-//   pass 2: dL_da = inv * (gamma * dy - t * a) [+ residual_grad]
+//   pass 1: partial = sum over the slice of a * gamma * dy  (FPU products, fp32 DEST)  -> exchanged between the
+//           row's cores
+//   inv = 1 / rms, t = -rowsum(sum_s partial_s) * inv^2 / C
+//   pass 2: dL_da = inv * (gamma * dy + a * t) [+ residual_grad]   (all on the FPU, 4 tiles per DEST acquire)
+// Iteration 29 (iteration 20's variant A, landed once the exact-fp32 rule was relaxed to "the PCC holds"): the
+// SFPU per-tile chain (one tile per acquire) moved to the FPU; fp32 operands enter the FPU through 19-bit source
+// registers (~2^-11 relative): relative error vs fp64 1.7e-3 -> 4.1e-3, PCC 0.999993, 172 -> 145 us per call.
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
@@ -29,7 +33,7 @@ constexpr uint32_t Wt = get_compile_time_arg_val(0);
 constexpr uint32_t S = get_compile_time_arg_val(1);
 constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
-constexpr uint32_t inv_c_bits = get_compile_time_arg_val(4);
+constexpr uint32_t neg_inv_c_bits = get_compile_time_arg_val(4);  // fp32 bits of -1/C
 
 FORCE_INLINE void load_tile(uint32_t cb_id, uint32_t idx, uint32_t reg) {
     reconfig_data_format_srca(cb_id);
@@ -99,7 +103,7 @@ void kernel_main() {
     tile_regs_commit();
     pack_and_push(0, cb::acc);
 
-    // t = rowsum(acc) * inv * inv / C
+    // t = -rowsum(acc) * inv * inv / C (negated: pass 2 accumulates a * t onto gamma * dy on the FPU)
     cb_wait_front(cb::acc, 1);
     cb_wait_front(cb::inv, 1);
     tile_regs_acquire();
@@ -109,43 +113,53 @@ void kernel_main() {
     mul_binary_tile(0, 1, 0);
     mul_binary_tile(0, 1, 0);
     binop_with_scalar_tile_init();
-    mul_unary_tile(0, inv_c_bits);
+    mul_unary_tile(0, neg_inv_c_bits);
     tile_regs_commit();
     pack_and_push(0, cb::t);
     cb_pop_front(cb::acc, 1);
     cb_wait_front(cb::t, 1);
 
-    // pass 2: dL_da = inv * (gamma * dy - t * a) [+ dres], in full blocks for the writer
+    // pass 2: dL_da = inv * (gamma * dy + a * (-t)) [+ dres], `block` (4) tiles per DEST acquire, every step on
+    // the FPU: the row broadcast clears fp32 DEST, the a * (-t) product accumulates onto it (mul_init with
+    // acc_to_dest), the scale and the residual gradient take the tile from DEST (reuse_dest); full blocks for the
+    // writer.
     for (uint32_t c = 0; c < ncols; c += block) {
         const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
 #ifdef ADD_RESIDUAL_GRAD
         cb_wait_front(cb::dres, block);
 #endif
+        tile_regs_acquire();
+        reconfig_data_format(cb::dy, cb::gamma);
+        mul_bcast_rows_init(cb::dy, cb::gamma);
         for (uint32_t i = 0; i < n; ++i) {
-            tile_regs_acquire();
-            gamma_times_dy(c + i, 0);
-            load_tile(cb::t, 0, 1);
-            load_tile(cb::a, c + i, 2);
-            mul_binary_tile_init();
-            mul_binary_tile(1, 2, 1);
-            sub_binary_tile_init();
-            sub_binary_tile(0, 1, 0);
-            load_tile(cb::inv, 0, 1);
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
+            mul_tiles_bcast_rows(cb::dy, cb::gamma, c + i, c + i, i);
+        }
+        reconfig_data_format(cb::a, cb::t);
+        mul_init(cb::a, cb::t, /*acc_to_dest=*/true);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_tiles(cb::a, cb::t, c + i, 0, i);
+        }
+        reconfig_data_format_srcb(cb::inv);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::inv);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::inv, 0, i);
+        }
 #ifdef ADD_RESIDUAL_GRAD
-            load_tile(cb::dres, i, 1);
-            add_binary_tile_init();
-            add_binary_tile(0, 1, 0);
+        reconfig_data_format_srcb(cb::dres);
+        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::dres);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::dres, i, i);
+        }
 #endif
-            tile_regs_commit();
-            pack_and_push(0, cb::dx);
+        tile_regs_commit();
+        cb_reserve_back(cb::dx, block);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb::dx);
+        for (uint32_t i = 0; i < block; ++i) {  // a shorter tail pads the block with unused tiles
+            pack_tile(i < n ? i : 0U, cb::dx);
         }
-        for (uint32_t i = n; i < block; ++i) {  // tail padding (unused tiles)
-            tile_regs_acquire();
-            tile_regs_commit();
-            pack_and_push(0, cb::dx);
-        }
+        tile_regs_release();
+        cb_push_back(cb::dx, block);
 #ifdef ADD_RESIDUAL_GRAD
         cb_pop_front(cb::dres, block);
 #endif

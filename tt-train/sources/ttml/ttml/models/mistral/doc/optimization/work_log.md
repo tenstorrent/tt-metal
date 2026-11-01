@@ -155,6 +155,13 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 29: RMSNorm backward pass 2 on the FPU (kernel boost checklist)
+
+- Roofline / bytes: `RMSNormBackwardRows` 165 us per call vs a 125 us bandwidth roofline (iteration 20's accounting), 1.32 ms per 4 layers; pass 2's SFPU chain one tile per DEST acquire.
+- Expected time after the fix: 145-149 us (iteration 20's variant A measurement). Landed: 148 standalone, 1.320 -> 1.111 ms per 4 layers.
+- Structural fix: iteration 20's variant A kernel (`O/iter20_rmsnorm_bw_rows_kernel_variantA.cpp.txt`) installed as is, the factory's compile arg carries -1/C (`O/iter29_patch.py`); rejected in iteration 20 on the exact-fp32 rule only, admissible since the user's 10-31 allowance (PCC 0.999993, rel 4.1e-3).
+- Verification: standalone vs fp64 (`O/iter29_norm_bw_check.log`), norm harness subset 8, chain `O/iter29.{sh,log}`: harness 48, TP gradient check PASS, loss match PASS (0.0301), real weights 488.4.
+
 ### Iteration 28: KV backward in query-row blocks (kernel boost checklist)
 
 - Roofline / bytes: `SDPABackwardKV` 198 -> 172 us per call at the shard shape (0.72 ms per 4 layers) for 91 us of math stages; per query row 5 CB-serialised DEST passes and 12 fp32 packs (8 L1-accumulate).
@@ -341,7 +348,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 25 | `0cd8e1213a8` | `transpose_split(w=A)`: the low-rank update fused into the transpose (factory, reader, compute, binding), the fused LoRA backward routed through it, iteration-25 evidence |
 | 26 | `c193bd73925` | bundles three changes, each measured on its own (review round 10): chain credits (`CHAIN_SLOTS = 3`, counting semaphores; `O/iter26_build_check.log`), 8-row forward chunks (`kMaxSkChunkT = 8`, passes, two-chunk score CB; `O/iter26b_*`), per-kernel chain-length knobs (forward 8; `O/iter26c_*`); `lpt_schedule` initial loads (dropped in the round-10 commit) + `env_uint32_or` in `program_utils.hpp`, iteration-26 evidence |
 | 27 | `46dca91d991` | per-round chain stream bounds in the three SDPA chain kernels (factories compute them per chain and round, readers / writers / compute loop over them), backward chain length 7, iteration-27 evidence |
-| 28 | (this commit) | blocked `sdpa_bw_kv_compute_kernel.cpp` (rows per chunk, dP in DEST, block contractions; masked rows alone), `q_block` compile arg and block CBs in the KV factory, iteration-28 evidence |
-| review 10 | (the commit after 28) | review round 10 (iterations 23-27, `optimization/review_round10.md`): five P2 items answered (docs: ranked table from iteration 27, sections 23-27 in the document format with the full text in `D`, expected-time lines, Ledger entries, Rejected rows), `initial_load` dropped from `lpt_schedule`, the stale forward-kernel comment and the unused valid semaphore removed; hard-check gaps measured: bf16 DEST as intended (rejected on time), the SwiGLU backward stride A/B (no effect), the explicit-mask SDPA cases (found iteration 28's mask-register bug) |
+| 28 | `a891b66ff30` | blocked `sdpa_bw_kv_compute_kernel.cpp` (rows per chunk, dP in DEST, block contractions; masked rows alone), `q_block` compile arg and block CBs in the KV factory, iteration-28 evidence |
+| review 10 | `85fc26239b7` | review round 10 (iterations 23-27, `optimization/review_round10.md`): five P2 items answered (docs: ranked table from iteration 27, sections 23-27 in the document format with the full text in `D`, expected-time lines, Ledger entries, Rejected rows), `initial_load` dropped from `lpt_schedule`, the stale forward-kernel comment and the unused valid semaphore removed; hard-check gaps measured: bf16 DEST as intended (rejected on time), the SwiGLU backward stride A/B (no effect), the explicit-mask SDPA cases (found iteration 28's mask-register bug) |
+| 29 | (this commit) | `rmsnorm_bw_rows` pass 2 on the FPU (variant A kernel), factory arg -1/C, iteration-29 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

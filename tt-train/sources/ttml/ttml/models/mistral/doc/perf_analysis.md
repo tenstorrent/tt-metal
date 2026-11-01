@@ -59,6 +59,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 27 | real weights, warm | 487.5 (483.3) | - | `O/iter27_full_tp4_real.log` |
 | 28 | KV backward in query-row blocks (dP never leaves DEST, dV / dK contracted over the block) | **468.4 (463.5)** | **34.63 %** | `O/iter28b_tp_mfu_tp4.log` (first build `O/iter28_tp_mfu_tp4.log`: 464.7 (460.6) / 34.92 %) |
 | 28 | real weights, warm | 486.9 (480.1) | - | `O/iter28b_full_tp4_real.log` |
+| 29 | RMSNorm backward pass 2 on the FPU (iteration 20's variant A, 19-bit operands) | 472.2 (462.8) | 34.36 % | `O/iter29_tp_mfu_tp4.log` (profile clock mix 0.98-1.20 GHz, chips 0-1 at 0.98-1.01: the wall is the box, the attribution -2.1 ms/step) |
+| 29 | real weights, warm | 488.4 (483.2) | - | `O/iter29_full_tp4_real.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -340,6 +342,14 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Verification**: harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0293); real weights warm 486.9 (480.1) ms. The first build hid a mask-register bug under a DEST priming cycle (Ledger); the final build passes the causal six shapes, the explicit-mask (non-chain) cases and the MHA cases, chain rerun `O/iter28b*`.
 - **Evidence**: `O/iter28_patch.py`, `O/iter28{,b,c}_build_check.log`, `O/iter28_diag.py` (scratch), `O/iter28_noncausal_check.{py,log}`, `O/iter28c_noncausal_check.log`, `O/iter28_swiglu_bw_ab.{py,log}`, `O/iter28_bf16dest_patch.py`, `O/iter28_bf16dest_check.log`, `O/iter28{,b}.{sh,log}`, `O/iter28b_harness.log`, `O/iter28b_tp_grad_check_tp4.log`, `O/iter28b_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter28b_loss_comparison.txt`, `O/iter28b_full_tp4_real.log`, `O/iter28{,c}_sdpa_baseline.log`.
 
+## Iteration 29 (2026-11-01): RMSNorm backward pass 2 on the FPU (kernel boost)
+
+- **Change**: math (owned kernels): `rmsnorm_bw_rows` pass 2 (`dL_da = inv * (gamma * dy - t * a) [+ dres]`) on the FPU, 4 tiles per DEST acquire (row broadcast, accumulate, reuse-dest scale and residual add), iteration 20's variant A: the fp32 operands pass through 19-bit source registers (relative error vs fp64 1.7e-3 -> 4.1e-3, PCC 0.999993), admissible since the 10-31 allowance. Checklist: `optimization/work_log.md`, "Iteration 29".
+- **Result**: TP=4 468.4 -> 472.2 ms (best 463.5 -> 462.8), 34.36 % MFU; the profile's clock mix 0.98-1.20 GHz with chips 0-1 at 0.98-1.01 (Ledger): the wall is the box's, the landed gain is the attribution's; kernels without collectives 39.2 -> 38.7 ms per profiled step.
+- **Attribution** (chip 0, per 4 layers, cycle-time): `RMSNormBackwardRows` 1.320 -> 1.111 (-0.21 per 4 layers, ~-2.1 ms/step); standalone 172 -> 148 us per call (`O/iter29_norm_bw_check.log`: T=1024 C=5120 with residual 148, without 133).
+- **Verification**: norm harness subset 8; harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0301 vs 0.0299: the norm gradient's rounding); real weights warm 488.4 ms.
+- **Evidence**: `O/iter29_patch.py`, `O/iter29_build_check.{sh,log}`, `O/iter29_norm_bw_check.log`, `O/iter29_norm_tests.log`, `O/iter29.{sh,log}`, `O/iter29_harness.log`, `O/iter29_tp_grad_check_tp4.log`, `O/iter29_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter29_loss_comparison.txt`, `O/iter29_full_tp4_real.log`; the variant's measurements of 2026-10-30 in `O/iter20_*`.
+
 ## State after iteration 20 (2026-10-30 night): where the remaining time is
 
 > Written after iteration 20 (2026-10-30 night), kept as the record of that night's conclusion. Review round 9: the "owned kernels at their exact-fp32 ceilings" statement held for the compute side only; iteration 22 (2026-11-01) found the SDPA kernels' data path (the K/V stream) worth another ~4 ms/step with no numerics change, and iteration 23 continues there. The ttnn matmul and chip-skew statements stand.
@@ -439,4 +449,5 @@ Full ledger entries: `D`, "Ledger".
 - Iteration 28, first build: the blocked KV kernel put the mask tile in DEST[2] next to a two-row pass; `mask_tile` uses the register after the data register regardless of the argument, so DEST[1] (the second row's scores, or stale DEST on the first pass) acted as the mask: the causal path survived (the -inf add masks on its own) but for one core's first pass (`O/iter28_diag*`: head 3, K row 0, query row 0, S = 0) and the explicit-mask (non-chain) path broke (dK / dV PCC 0.90-0.95, `O/iter28_noncausal_check.log`); a DEST priming cycle had hidden the first-pass symptom and was removed with the fix (masked rows run alone with the mask in DEST[1]; `O/iter28c_*`). The round-10 non-causal case found it.
 - Iteration 24 loss match: the single-chip 8-layer run fuses qkv / gate_up / out and never w2 (not a transposed shape), so the match (identical to 23's) does not exercise the wide path; its torch reference is the harness case `test_mlp_fused_lora_wide_w2` at the shard width and the TP gradient check.
 - Review round 10 process items: iteration 26 bundled three changes in one commit (each measured on its own; recorded in the commits table), `lpt_schedule`'s unused `initial_load` parameter dropped, the sections 23-27 shortened to the document format (full text in `D`).
+- Iteration 29 profile: chips 0-1 at 0.98-1.01 GHz effective, chips 2-3 at 1.14-1.20 (tt-smi 1350 MHz); the MFU run 472.2 (best step 462.8) against 468.4 (463.5) for iteration 28 at 1.07-1.24: the box's clock mix moves the wall by more than the iteration's -2.1 ms/step; cycle-time rows used.
 - Rank-16 K lanes: `lowrank_update`, `skinny_contract`, the `[r, N]` + transpose path and the previous `ttnn.matmul` path all rely on the padded lanes 16..31 of `h` / `dh` and of `A` / `B` being zero (zero-padded parameters; `h` from `skinny_matmul` whose padded output columns are exact zeros); not validated on device.
