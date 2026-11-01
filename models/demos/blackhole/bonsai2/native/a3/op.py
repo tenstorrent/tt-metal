@@ -463,15 +463,23 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
     return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
 
 
-def weights_for_device(device, codes_kn, scales_gn, cache=None):
+def weights_for_device(device, codes_kn, scales_gn=None, cache=None):
     """codes [K, N] in {-1,0,1}, scales [K/128, N] -> (w bfp2, s fp32) DRAM width-sharded, bank-shuffled.
-    cache: path prefix; host tensors are dumped/loaded there (the conversion is the slow part)."""
+    codes_kn may instead be a callable returning (codes, scales); it is only called on a cache miss,
+    so a warm load never decodes the GGUF. cache: path prefix for the host .tensorbin files (written
+    once, never rewritten: other worktrees hardlink them)."""
     import os
 
     import torch
 
     banks = device.dram_grid_size().x
-    k, n = codes_kn.shape
+    rows = {}
+
+    def get():
+        if not rows:
+            c, sc = codes_kn() if callable(codes_kn) else (codes_kn, scales_gn)
+            rows["c"], rows["s"] = c, sc
+        return rows["c"], rows["s"]
 
     def host(name, build, dtype):
         path = f"{cache}.{name}.tensorbin" if cache else None
@@ -482,18 +490,19 @@ def weights_for_device(device, codes_kn, scales_gn, cache=None):
             ttnn.dump_tensor(path, t)
         return t
 
-    w = host("w", lambda: shuffle_for_banks(torch.as_tensor(codes_kn, dtype=torch.float32).reshape(1, 1, k, n), banks),
-             ttnn.DataType.BFLOAT2_B)
-    srows = None
+    def build_w():
+        c = torch.as_tensor(get()[0], dtype=torch.float32)
+        return shuffle_for_banks(c.reshape(1, 1, *c.shape), banks)
 
     def build_s():
-        sr = scale_rows(torch.as_tensor(scales_gn, dtype=torch.float32))
+        sr = scale_rows(torch.as_tensor(get()[1], dtype=torch.float32))
         return shuffle_for_banks(sr.reshape(1, 1, *sr.shape), banks)
 
+    w = host("w", build_w, ttnn.DataType.BFLOAT2_B)
     s = host("s", build_s, ttnn.float32)
-    s_rows = s.shape[-2]
+    k, n = w.shape[-2], w.shape[-1]
     return (ttnn.to_device(w, device, memory_config=weight_mem(device, k, n)),
-            ttnn.to_device(s, device, memory_config=weight_mem(device, s_rows, n)))
+            ttnn.to_device(s, device, memory_config=weight_mem(device, s.shape[-2], n)))
 
 
 def interleave_cols(a, b):

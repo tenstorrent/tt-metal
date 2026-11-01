@@ -48,15 +48,20 @@ class TernaryMLP:
         self.sh = shared
         dev = shared.device
         cache = (lambda name: os.path.join(cache_dir, f"blk{layer}.{name}")) if cache_dir else (lambda name: None)
-        g = read_ternary(shared.gguf, f"blk.{layer}.ffn_gate.weight")
-        u = read_ternary(shared.gguf, f"blk.{layer}.ffn_up.weight")
-        d = read_ternary(shared.gguf, f"blk.{layer}.ffn_down.weight")
-        # codes [N, K] -> [K, N]; scales [N, K/128] -> [K/128, N]; gate/up as column pairs
-        gu_codes = a3.interleave_cols(g.codes.T.astype(np.float32), u.codes.T.astype(np.float32))
-        gu_scales = a3.interleave_cols(g.scales.T.astype(np.float32), u.scales.T.astype(np.float32))
-        self.w_gu, self.s_gu = a3.weights_for_device(dev, gu_codes, gu_scales, cache("gu"))
-        self.w_d, self.s_d = a3.weights_for_device(dev, d.codes.T.astype(np.float32), d.scales.T.astype(np.float32),
-                                                   cache("down"))
+        # the GGUF codes are decoded only on a cache miss (a warm load just reads the .tensorbin files)
+        def gu():
+            g = read_ternary(shared.gguf, f"blk.{layer}.ffn_gate.weight")
+            u = read_ternary(shared.gguf, f"blk.{layer}.ffn_up.weight")
+            # codes [N, K] -> [K, N]; scales [N, K/128] -> [K/128, N]; gate/up as column pairs
+            return (a3.interleave_cols(g.codes.T.astype(np.float32), u.codes.T.astype(np.float32)),
+                    a3.interleave_cols(g.scales.T.astype(np.float32), u.scales.T.astype(np.float32)))
+
+        def down():
+            d = read_ternary(shared.gguf, f"blk.{layer}.ffn_down.weight")
+            return d.codes.T.astype(np.float32), d.scales.T.astype(np.float32)
+
+        self.w_gu, self.s_gu = a3.weights_for_device(dev, gu, cache=cache("gu"))
+        self.w_d, self.s_d = a3.weights_for_device(dev, down, cache=cache("down"))
 
     def forward(self, x):
         sh = self.sh
