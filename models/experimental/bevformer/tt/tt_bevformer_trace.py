@@ -112,7 +112,12 @@ class TTBEVFormerTrace:
         scratch = ttnn.clone(prev_bev)
         ttnn.copy(prev_bev, scratch)
         ttnn.deallocate(scratch)
-        self.capture_if_stale()
+        try:
+            self.capture_if_stale()
+        except Exception:
+            # A half-built runner is never released by its caller.
+            self.release()
+            raise
 
     @property
     def stale(self):
@@ -144,12 +149,14 @@ class TTBEVFormerTrace:
         ttnn.copy(self.staging, self.image)
         self._image_read = ttnn.record_event(self.device, CQ_OPS)
 
-    def __call__(self, img_metas):
-        """Run one frame on the :meth:`upload`-ed images with their ``img_metas``. Returns the
+    def __call__(self, img_metas, host_frame=None):
+        """Run one frame on the :meth:`upload`-ed images with their ``img_metas``. ``host_frame`` is
+        the frame's :meth:`TTBEVFormer.host_frame` if the caller prepared it ahead (for example on a
+        host thread), or None to prepare it here. Returns the
         device ``(scores, labels, boxes, valid)`` of :meth:`TTBEVFormer.detect`, valid until the
         next call; synchronize before reading them. A frame that finds the traces stale, or grows
         the plan, runs live; :meth:`capture_if_stale` then captures them again."""
-        self.model.refill_frame(img_metas, self.frame)
+        self.model.refill_frame(img_metas, self.frame, host_frame)
         if self.stale:
             return self._live()
         ttnn.execute_trace(self.device, self.trace_ids["cameras"], cq_id=CQ_OPS, blocking=False)

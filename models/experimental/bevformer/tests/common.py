@@ -343,7 +343,12 @@ def build_reference_fpn(seed=0):
 
 
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
-    """NCHW torch tensor -> (1, 1, N*H*W, C) device tensor, the layout conv2d reads and writes."""
+    """NCHW torch tensor -> (1, 1, N*H*W, C) ttnn tensor, the layout conv2d reads and writes
+    (``device`` None keeps it on the host)."""
+    if dtype == ttnn.bfloat16:
+        # torch rounds float32 to bfloat16 bit for bit as from_torch does, several times faster, and
+        # the permute then moves half the bytes.
+        nchw = nchw.to(torch.bfloat16)
     n, c, h, w = nchw.shape
     nhwc = nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c)
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)

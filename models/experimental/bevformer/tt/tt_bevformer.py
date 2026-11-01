@@ -73,10 +73,15 @@ class TTBEVFormer:
         self._check_batch(img_metas)
         return self.transformer.prepare_frame(img_metas, frame)
 
-    def refill_frame(self, img_metas, frame=None):
+    def host_frame(self, img_metas):
+        """See ``TTPerceptionTransformer.host_frame``."""
+        self._check_batch(img_metas)
+        return self.transformer.host_frame(img_metas)
+
+    def refill_frame(self, img_metas, frame=None, host_frame=None):
         """See ``TTPerceptionTransformer.refill_frame``."""
         self._check_batch(img_metas)
-        return self.transformer.refill_frame(img_metas, frame)
+        return self.transformer.refill_frame(img_metas, frame, host_frame)
 
     def project_cameras(self, frame):
         """``frame.cameras``: the cameras projected through ``frame``'s buffers, as device work only;

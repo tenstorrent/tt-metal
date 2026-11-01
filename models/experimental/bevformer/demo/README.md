@@ -49,22 +49,25 @@ region, 256 MiB by default, which holds base's three traces.
 
 Tracing removes the host's op dispatch from the frame. It helps where dispatch, not the device's
 work, bounds the frame: in ten-frame synthetic runs on a BH P100, tiny's device path drops by about
-a third, while small's and base's change by 1 to 2 percent.
+a third, while small's and base's stay within a percent of eager.
 
-`--num-command-queues 2`, with `--trace`, pipelines the frames: right after frame N is queued, the
-host loads and converts frame N + 1's images and uploads them on a second command queue while frame
-N still runs. Frame N + 1's metas are still turned into its device inputs when it is queued. Both
-latencies change meaning:
+`--num-command-queues 2`, with `--trace`, pipelines the frames. A host thread loads frames two ahead
+of the device and prepares their inputs as host tensors: the images in bfloat16 and the frame's
+other inputs, its `PerceptionFrame` buffers. Right after frame N is queued, frame N + 1's images upload
+on a second command queue while frame N still runs. Both latencies change meaning:
 
 * `end_to_end_latency_ms` is the interval between two frames' detections, the throughput a stream
-  sees. The first frame's interval also covers its own images' load and upload.
+  sees. The first frame's interval also covers the wait for the thread's first frame and that
+  frame's upload.
 * `device_latency_ms` spans this frame's replay and readback and, in between, the next frame's
-  image load, conversion and upload. It exceeds the device path when the host is the slower side,
-  so compare device paths without pipelining.
+  upload, plus any wait for the thread when the host is the slower side. Compare device paths
+  without pipelining.
 
-In the same runs, against eager, pipelining shortens the median end-to-end interval by about 1.7x on
-tiny, 1.8x on small and 1.9x on base. Two command queues also take worker cores for dispatch, which slows base's device
-path by about 4 percent. Two command queues have been run on Blackhole only.
+In the same runs the median end-to-end interval drops against eager by about 3.4x on tiny, 2.0x on
+small and 1.75x on base, to the device path: the host's work is hidden. Two command queues take
+worker cores for dispatch, which slows the device path by up to a few percent. Two command queues
+have been run on Blackhole only. The mode needs ttnn's fast runtime mode, the default: the slow one
+tracks ttnn calls on a process-wide stack that the thread's calls would interleave with.
 
 ## Recorded smoke results
 
@@ -350,7 +353,7 @@ The `summary` object contains:
 The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
 every measured frame. It excludes image loading, preprocessing, the images' upload, the unmeasured
 preparation frame, cold-start warmup and trace captures; it includes the detections' readback. With
-`--num-command-queues 2` it includes the next frame's image load, conversion and upload instead,
+`--num-command-queues 2` it includes the next frame's upload and any wait for its host inputs instead,
 and is not a device-path figure.
 
 ## Visualize detections

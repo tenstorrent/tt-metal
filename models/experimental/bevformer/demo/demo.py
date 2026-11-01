@@ -14,6 +14,8 @@ import statistics
 import subprocess
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -24,6 +26,11 @@ from models.experimental.bevformer.config.convert_upstream import convert_upstre
 from models.experimental.bevformer.config.loader import read_source_bytes
 from models.experimental.bevformer.config.schema import SUPPORTED_VARIANTS
 from models.experimental.bevformer.demo.dataset import SequenceManifest
+
+
+# Frames the pipelined run's host thread prepares ahead of the one on device: one ready for the next
+# upload while the thread already works on the one after it, so the thread never waits on the loop.
+PREFETCH_FRAMES = 2
 
 
 def _parse_args(argv=None):
@@ -65,8 +72,9 @@ def _parse_args(argv=None):
         type=int,
         choices=(1, 2),
         default=1,
-        help="With --trace, 2 loads, converts and uploads each frame's images, the upload on a second command "
-        "queue, while the previous frame runs; the latencies then measure that pipeline (see demo/README.md)",
+        help="With --trace, 2 prepares frames on a host thread ahead of the device and uploads each frame's "
+        "images on a second command queue while the previous frame runs; the latencies then measure that "
+        "pipeline (see demo/README.md)",
     )
     parser.add_argument("--output-dir", default="bevformer_demo_output")
     return parser.parse_args(argv)
@@ -308,6 +316,10 @@ def run_demo(args):
     )
     if args.num_command_queues == 2 and not args.trace:
         raise ValueError("--num-command-queues 2 requires --trace")
+    if args.num_command_queues == 2 and not ttnn.CONFIG.enable_fast_runtime_mode:
+        # The slow runtime tracks ttnn calls on one process-wide stack, which the prefetch thread's
+        # from_torch calls would interleave with the main loop's.
+        raise ValueError("--num-command-queues 2 needs ttnn's fast runtime mode")
     device = ttnn.open_device(
         device_id=args.device_id,
         l1_small_size=32 * 1024,
@@ -363,59 +375,18 @@ def run_demo(args):
             )
             logger.info(f"Traces captured in {traced.captures[0] * 1e3:.1f} ms")
 
-        def host_image(images):
-            return to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        def host_inputs(index):
+            # Host work only, so the prefetch thread can run it: the frame's images in the image
+            # buffer's layout, its metas and its token.
+            images, metas, token = load_frame(index)
+            return to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), metas, token
 
-        # Pipelined, frame N + 1's images are loaded, converted and uploaded while frame N runs on
-        # device, so a frame's end-to-end latency is the interval since the previous frame finished.
-        pipelined = args.num_command_queues == 2
-        frame_end = time.perf_counter()
-        if pipelined:
-            pending = load_frame(1)
-            traced.upload(host_image(pending[0]))
-        for index in range(1, frame_count):
-            if pipelined:
-                images, metas, token = pending
-                device_start = time.perf_counter()
-                outputs = traced(metas)
-                if index + 1 < frame_count:
-                    pending = load_frame(index + 1)
-                    traced.upload(host_image(pending[0]))
-                # Reading the detections back waits for this frame only, not for the next upload.
-                compacted = tt_model.get_bboxes(*outputs)[0]
-                device_latency = time.perf_counter() - device_start
-                end_to_end_start = frame_end
-            elif traced is not None:
-                end_to_end_start = time.perf_counter()
-                images, metas, token = load_frame(index)
-                traced.upload(host_image(images))
-                # As in eager, the images' upload is outside the timed region and the compaction,
-                # which reads the detections back, inside it.
-                ttnn.synchronize_device(device)
-                device_start = time.perf_counter()
-                compacted = tt_model.get_bboxes(*traced(metas))[0]
-                ttnn.synchronize_device(device)
-                device_latency = time.perf_counter() - device_start
-            else:
-                end_to_end_start = time.perf_counter()
-                images, metas, token = load_frame(index)
-                tt_image = to_conv_layout(images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        def prefetched_inputs(index):
+            # host_inputs plus the frame's other inputs as host tensors, all ahead of the device.
+            host_image, metas, token = host_inputs(index)
+            return host_image, metas, token, tt_model.host_frame(metas)
 
-                # Preparing the frame projects the cameras on device and queues their visible counts' readback.
-                device_start = time.perf_counter()
-                prepared = tt_model.prepare_frame(metas, prepared)
-                cls_scores, bbox_preds, next_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
-                compacted = detect_frame(cls_scores, bbox_preds)
-                ttnn.synchronize_device(device)
-                ttnn.deallocate(tt_image)
-                device_latency = time.perf_counter() - device_start
-                compacted = compacted[0]
-                prev_bev = next_bev
-            end_to_end_latency = time.perf_counter() - end_to_end_start
-            if traced is not None:
-                # After a frame that grew the plan, which ran live; timed apart in trace_capture_ms.
-                traced.capture_if_stale()
-
+        def record(index, token, compacted, device_latency, end_to_end_latency):
             sample_boxes, sample_scores, sample_labels = compacted
             detections = _serialize_detection(sample_boxes, sample_scores, sample_labels, config.class_names)
             results.append(
@@ -433,9 +404,87 @@ def run_demo(args):
                 f"frame {index - 1:03d} token={token}: {len(detections)} detections, "
                 f"device {device_latency * 1e3:.1f} ms, end-to-end {end_to_end_latency * 1e3:.1f} ms"
             )
-            # The demo's own bookkeeping above stays out of the next pipelined interval, as it stays
-            # out of every window when not pipelined.
-            frame_end = time.perf_counter()
+
+        def run_eager():
+            nonlocal prepared, prev_bev
+            for index in range(1, frame_count):
+                end_to_end_start = time.perf_counter()
+                host_image, metas, token = host_inputs(index)
+                tt_image = ttnn.to_device(host_image, device)
+                # Preparing the frame projects the cameras on device and queues their visible counts' readback.
+                device_start = time.perf_counter()
+                prepared = tt_model.prepare_frame(metas, prepared)
+                cls_scores, bbox_preds, prev_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
+                compacted = detect_frame(cls_scores, bbox_preds)[0]
+                ttnn.synchronize_device(device)
+                ttnn.deallocate(tt_image)
+                device_latency = time.perf_counter() - device_start
+                record(index, token, compacted, device_latency, time.perf_counter() - end_to_end_start)
+
+        def run_traced():
+            for index in range(1, frame_count):
+                end_to_end_start = time.perf_counter()
+                host_image, metas, token = host_inputs(index)
+                traced.upload(host_image)
+                # As in eager, the images' upload is outside the timed region, and the frame's other
+                # inputs and the compaction, which reads the detections back, inside it.
+                ttnn.synchronize_device(device)
+                device_start = time.perf_counter()
+                compacted = tt_model.get_bboxes(*traced(metas))[0]
+                ttnn.synchronize_device(device)
+                device_latency = time.perf_counter() - device_start
+                end_to_end_latency = time.perf_counter() - end_to_end_start
+                # After a frame that grew the plan, which ran live; timed apart in trace_capture_ms.
+                traced.capture_if_stale()
+                record(index, token, compacted, device_latency, end_to_end_latency)
+
+        def run_pipelined():
+            # A host thread prepares frames PREFETCH_FRAMES ahead, and frame N + 1's images upload
+            # on the second command queue while frame N runs, so a frame's end-to-end latency is the
+            # interval since the previous frame finished. One thread keeps the frames in order. A
+            # thread, not a process: the image decode, torch's cast and permute and from_torch's
+            # packing release the GIL, so they overlap the main loop without copying each image batch
+            # between processes.
+            pool = ThreadPoolExecutor(max_workers=1)
+            try:
+                pending = deque()
+
+                def prefetch(index):
+                    if index < frame_count:
+                        pending.append(pool.submit(prefetched_inputs, index))
+
+                for index in range(1, 1 + PREFETCH_FRAMES):
+                    prefetch(index)
+                frame_end = time.perf_counter()
+                host_image, metas, token, host_frame = pending.popleft().result()
+                traced.upload(host_image)
+                for index in range(1, frame_count):
+                    device_start = time.perf_counter()
+                    outputs = traced(metas, host_frame)
+                    prefetch(index + PREFETCH_FRAMES)
+                    current = token
+                    if pending:
+                        host_image, metas, token, host_frame = pending.popleft().result()
+                        traced.upload(host_image)
+                    # Reading the detections back waits for this frame only, not for the next upload.
+                    compacted = tt_model.get_bboxes(*outputs)[0]
+                    device_latency = time.perf_counter() - device_start
+                    end_to_end_latency = time.perf_counter() - frame_end
+                    traced.capture_if_stale()
+                    record(index, current, compacted, device_latency, end_to_end_latency)
+                    # The demo's own bookkeeping stays out of the next interval, as it stays out of
+                    # every window when not pipelined.
+                    frame_end = time.perf_counter()
+            finally:
+                # On a failure, drop the frames not yet started rather than prepare them first.
+                pool.shutdown(wait=True, cancel_futures=True)
+
+        if traced is None:
+            run_eager()
+        elif args.num_command_queues == 2:
+            run_pipelined()
+        else:
+            run_traced()
     finally:
         if traced is not None:
             traced.release()

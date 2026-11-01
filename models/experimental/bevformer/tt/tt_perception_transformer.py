@@ -61,6 +61,15 @@ class PerceptionFrame:
     cameras: Optional[CameraProjection] = None
 
 
+@dataclass
+class HostFrame:
+    """A :class:`PerceptionFrame`'s buffers as ttnn host tensors, by field name, with the metas
+    they were derived from."""
+
+    img_metas: list
+    tensors: dict
+
+
 def rotation_gather(img_metas, bev_h, bev_w, rotate_center):
     """Host ``(index, mask)`` for :class:`PerceptionFrame`: sample ``b``'s cell ``q`` takes stacked
     row ``index[..., b * num_query + q]`` of the previous BEV, or zero where ``mask`` is zero."""
@@ -97,7 +106,18 @@ class TTPerceptionTransformer:
             spatial_shapes=self.spatial_shapes,
         )
 
-    def _host_frame(self, img_metas):
+    def host_frame(self, img_metas) -> "HostFrame":
+        """The frame's buffers as ttnn host tensors: host work only, no device calls, so a host
+        thread can prepare them ahead of :meth:`refill_frame`."""
+        return HostFrame(
+            img_metas=img_metas,
+            tensors={
+                name: ttnn.from_torch(tensor, dtype=dtype, layout=layout)
+                for name, (tensor, dtype, layout) in self._host_frame_specs(img_metas).items()
+            },
+        )
+
+    def _host_frame_specs(self, img_metas):
         can_bus = torch.tensor([[list(map(float, meta["can_bus"]))] for meta in img_metas])
         assert can_bus.shape[-1] == CAN_BUS_DIMS, f"can_bus has {can_bus.shape[-1]} values, expected {CAN_BUS_DIMS}"
         grid_length = bev_grid_length(self.encoder.pc_range, self.bev_h, self.bev_w)
@@ -121,26 +141,26 @@ class TTPerceptionTransformer:
         frame.cameras = self.encoder.project_cameras(img_metas, frame.projection)
         return frame
 
-    def refill_frame(self, img_metas, frame=None):
-        """The frame's host-derived buffers only, without projecting the cameras. Without ``frame``,
-        a new one; with ``frame``, refilled in place for a frame of the same batch size."""
-        host = self._host_frame(img_metas)
+    def refill_frame(self, img_metas, frame=None, host_frame=None):
+        """The frame's host-derived buffers only, without projecting the cameras: ``host_frame``,
+        the frame's :meth:`host_frame`, or made here when None. Without ``frame``, a new one; with
+        ``frame``, refilled in place for a frame of the same batch size."""
+        if host_frame is None:
+            host_frame = self.host_frame(img_metas)
+        if host_frame.img_metas is not img_metas:
+            raise ValueError("host_frame was prepared from other metas than this frame's")
         if frame is None:
-            frame = PerceptionFrame(
+            return PerceptionFrame(
                 img_metas=img_metas,
-                **{
-                    name: ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=self.device)
-                    for name, (tensor, dtype, layout) in host.items()
-                },
+                **{name: ttnn.to_device(tensor, self.device) for name, tensor in host_frame.tensors.items()},
             )
-        else:
-            frame.img_metas = img_metas
-            for name, (tensor, dtype, layout) in host.items():
-                buffer = getattr(frame, name)
-                assert tuple(buffer.shape) == tuple(
-                    tensor.shape
-                ), f"{name}: the frame holds {tuple(buffer.shape)}, not {tuple(tensor.shape)}; prepare a new frame"
-                ttnn.copy_host_to_device_tensor(ttnn.from_torch(tensor, dtype=dtype, layout=layout), buffer)
+        frame.img_metas = img_metas
+        for name, tensor in host_frame.tensors.items():
+            buffer = getattr(frame, name)
+            assert tuple(buffer.shape) == tuple(
+                tensor.shape
+            ), f"{name}: the frame holds {tuple(buffer.shape)}, not {tuple(tensor.shape)}; prepare a new frame"
+            ttnn.copy_host_to_device_tensor(tensor, buffer)
         return frame
 
     def camera_features(self, mlvl_feats, bs):
