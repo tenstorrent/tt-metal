@@ -156,6 +156,82 @@ FORCE_INLINE void write_row_chunk(
     });
 }
 
+// gamma/beta multicast block, one per tensor: `group_cols` tile columns per 2 * FACE_BYTES group, column c's 64 B
+// entry at 64 * (c % group_cols) and its face-1 row 0 FACE_BYTES above its face-0 row 0. One read of
+// FACE_BYTES + 32 B then fills a tile slot's row 0 of faces 0 and 1 (face-0 rows 1-15 are don't-care for the row
+// broadcast). TILE: the face-1 read lands there directly. ROW_MAJOR: the [face 0 | face 1] spans land at the
+// entries and one local copy per group, shifted by FACE_BYTES - 32 B, moves each face-1 half into place; source
+// and copy must not overlap, which bounds the group to 7 columns. Every source read is 64 B-aligned (BH DRAM).
+template <bool affine_is_tile, uint32_t tensor_w_tiles, uint32_t group_cols, uint32_t page_elems, uint32_t elem_bytes>
+struct AffineBlock {
+    static constexpr uint32_t TILE_DIM = 32;
+    static constexpr uint32_t FACE_DIM = 16;
+    static constexpr uint32_t row_bytes = TILE_DIM * elem_bytes;
+    static constexpr uint32_t face_row_bytes = FACE_DIM * elem_bytes;
+    static constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * elem_bytes;
+    static constexpr uint32_t tile_bytes = 4 * face_bytes;
+    static constexpr uint32_t group_bytes = 2 * face_bytes;
+    static constexpr uint32_t rm_shift = face_bytes - face_row_bytes;
+    static constexpr uint32_t tensor_bytes = (tensor_w_tiles + group_cols - 1) / group_cols * group_bytes;
+    static_assert(
+        group_cols >= 1 && group_cols * row_bytes <= (affine_is_tile ? face_bytes : rm_shift),
+        "affine group overlaps its face-1 rows");
+    static_assert(affine_is_tile || page_elems % TILE_DIM == 0, "RM affine stick must hold whole tile rows");
+
+    // fn(first column, columns, block offset of the group)
+    template <typename Fn>
+    static FORCE_INLINE void for_each_group(Fn fn) {
+        uint32_t group = 0;
+        for (uint32_t col = 0; col < tensor_w_tiles; col += group_cols, group += group_bytes) {
+            fn(col, tensor_w_tiles - col < group_cols ? tensor_w_tiles - col : group_cols, group);
+        }
+    }
+
+    // ROW_MAJOR: a group's entries inside one stick page are contiguous, so they land in one read.
+    template <typename Accessor>
+    static FORCE_INLINE void issue_reads(const Accessor& accessor, uint32_t block) {
+        for_each_group([&](uint32_t first_col, uint32_t cols, uint32_t group) {
+            uint32_t entry = block + group;
+            if constexpr (affine_is_tile) {
+                for (uint32_t col = first_col; col < first_col + cols; ++col, entry += row_bytes) {
+                    noc_async_read(accessor.get_noc_addr(col, 0), entry, row_bytes);
+                    noc_async_read(accessor.get_noc_addr(col, face_bytes), entry + face_bytes, row_bytes);
+                }
+            } else {
+                constexpr uint32_t page_cols = page_elems / TILE_DIM;
+                for (uint32_t col = first_col; col < first_col + cols;) {
+                    const uint32_t page_col = page_cols == 1 ? 0 : col % page_cols;
+                    uint32_t span_cols = page_cols - page_col;
+                    span_cols = span_cols < first_col + cols - col ? span_cols : first_col + cols - col;
+                    noc_async_read(
+                        accessor.get_noc_addr(page_cols == 1 ? col : col / page_cols, page_col * row_bytes),
+                        entry,
+                        span_cols * row_bytes);
+                    col += span_cols;
+                    entry += span_cols * row_bytes;
+                }
+            }
+        });
+    }
+
+    // ROW_MAJOR, after the entries landed.
+    static FORCE_INLINE void shift_face1_rows(uint32_t block) {
+        for_each_group([&](uint32_t, uint32_t cols, uint32_t group) {
+            noc_async_read(get_noc_addr(block + group), block + group + rm_shift, cols * row_bytes);
+        });
+    }
+
+    // Row 0 of faces 0/1 of `tensor_w_tiles` consecutive tile slots from `slot`.
+    static FORCE_INLINE void scatter(uint32_t block, uint32_t slot) {
+        for_each_group([&](uint32_t, uint32_t cols, uint32_t group) {
+            const uint64_t entry = get_noc_addr(block + group);
+            for (uint32_t col = 0; col < cols; ++col, slot += tile_bytes) {
+                noc_async_read(entry + col * row_bytes, slot, face_bytes + face_row_bytes);
+            }
+        });
+    }
+};
+
 template <uint32_t depth, typename Issue, typename Retire>
 FORCE_INLINE void read_block_chunks(Noc noc, uint32_t num_chunks, Issue issue, Retire retire) {
     static_assert(depth >= 1 && depth <= NOC_MAX_TRANSACTION_ID, "trid ring depth out of the NoC id range");

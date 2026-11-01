@@ -64,6 +64,8 @@ HALF_BAND_EVEN_FIRST = None
 HALF_BAND_NOC_PLAN = True
 HEAVY_READER_NOC_BY_Y = False
 HALF_BAND_STREAM = False
+# Refinement 5: the affine injector's writer RISC reads beta while its reader reads gamma (one NoC each).
+AFFINE_BETA_ON_WRITER = True
 L1_HEADROOM_BYTES = 64 * 1024
 
 CB_INPUT_TILES = 0
@@ -122,10 +124,21 @@ def tensor_row_tiles(shape):
     return _num_images(shape) * _div_up(shape[-2], TILE)
 
 
+_AFFINE_ELEM_BYTES = 2  # bf16 gamma / beta
+_FACE_BYTES = (TILE // 2) ** 2 * _AFFINE_ELEM_BYTES
+_AFFINE_ROW_BYTES = TILE * _AFFINE_ELEM_BYTES
+
+
+def _affine_group_cols(affine_is_tile):
+    """Tile columns per 2 * FACE_BYTES group of the gamma/beta multicast block (reader: one read per tile slot).
+    Entries are 64 B; TILE fills the face-0 half, ROW_MAJOR stops short of its copy shifted by FACE_BYTES - 32 B."""
+    span = _FACE_BYTES if affine_is_tile else _FACE_BYTES - _AFFINE_ROW_BYTES // 2
+    return span // _AFFINE_ROW_BYTES
+
+
 def _affine_scratch_bytes(Wt, affine_is_tile):
-    """gamma + beta compact multicast block: per tile column two 64 B tile rows (TILE) or one 64 B stick span."""
-    entry_bytes = 2 * TILE * 2 if affine_is_tile else TILE * 2
-    return 2 * Wt * entry_bytes
+    """gamma + beta grouped multicast block."""
+    return 2 * _div_up(Wt, _affine_group_cols(affine_is_tile)) * 2 * _FACE_BYTES
 
 
 def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass, stream_normalize, whole_row_passes):
@@ -326,7 +339,8 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
             stream_normalize=stream_normalize,
             whole_row_passes=whole_row_passes,
         )
-        return _footprint(pages, formats) + _affine_scratch_bytes(Wt, affine_is_tile=True) <= budget
+        affine_bytes = max(_affine_scratch_bytes(Wt, affine_is_tile) for affine_is_tile in (True, False))
+        return _footprint(pages, formats) + affine_bytes <= budget
 
     R = next((r for r in range(_div_up(core_row_tiles_max, MIN_BLOCKS_PER_CORE), 0, -1) if fits(r)), None)
     if R is None:
@@ -355,6 +369,12 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
     )
 
 
+def _affine_injector(blocking):
+    """Index into blocking.assignment of the core that reads gamma/beta and multicasts them: the last core.
+    The first core (it launches ~0.4 us earlier) measured flat on the sync-only floor (32x32 3.73 -> 3.66 us)."""
+    return len(blocking.assignment) - 1
+
+
 def _core_nocs(blocking, grid_y):
     """(reader_noc, writer_noc) per assignment entry; the kernels address through noc_index, so this is host-only.
 
@@ -379,9 +399,10 @@ def _core_nocs(blocking, grid_y):
             # Both RISCs read here, and both use read cmd buf 1: they need different NoCs. Writer choice wins.
             reader_noc = 1 - writer_noc
         nocs.append((reader_noc, writer_noc))
-    # The affine injector (last core) multicasts from its reader RISC; it keeps the default pair, the only
-    # one its multicast was validated on (a swapped injector hung the writer's write barrier).
-    nocs[-1] = (0, 1)
+    # The affine injector multicasts from its reader RISC; it keeps the default pair, the only one its multicast
+    # was validated on (a swapped injector hung the writer's write barrier). Distinct NoCs also let its writer
+    # read beta alongside (AFFINE_BETA_ON_WRITER).
+    nocs[_affine_injector(blocking)] = (0, 1)
     return nocs
 
 
@@ -525,6 +546,23 @@ def create_program_descriptor(
         if blocking.residual_on_writer
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    writer_ct_args.extend(
+        ttnn.TensorAccessorArgs(beta).get_compile_time_args()
+        if AFFINE_BETA_ON_WRITER
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+    assert gamma.element_size() == beta.element_size() == _AFFINE_ELEM_BYTES, "affine group geometry assumes bf16"
+    affine_named_ct_args = [
+        ("affine_scratch_cb", CB_AFFINE_SCRATCH),
+        ("affine_group_cols", _affine_group_cols(affine_is_tile)),
+        ("affine_beta_on_writer", int(AFFINE_BETA_ON_WRITER)),
+    ]
+    writer_named_ct_args = affine_named_ct_args + [
+        ("affine_is_tile", int(affine_is_tile)),
+        ("affine_page_elems", affine_page_elems),
+        ("affine_page_bytes", beta.buffer_aligned_page_size()),
+        ("affine_elem_bytes", beta.element_size()),
+    ]
 
     compute_ct_args = [
         CB_INPUT_TILES,
@@ -575,7 +613,15 @@ def create_program_descriptor(
             unit_count,
             rotation,
         ]
-        writer_rt[core.x][core.y] = [out_addr, unit_start, unit_count, rotation, res_addr]
+        writer_rt[core.x][core.y] = [
+            out_addr,
+            unit_start,
+            unit_count,
+            rotation,
+            res_addr,
+            beta_addr,
+            int(core_idx == _affine_injector(blocking)),
+        ]
         compute_rt[core.x][core.y] = [core_row_tiles, int(core_row_tiles >= blocking.stream_normalize_min_rows)]
 
     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
@@ -588,7 +634,7 @@ def create_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "layer_norm_tile_reader.cpp"),
                 core_ranges=ranges,
                 compile_time_args=reader_ct_args,
-                named_compile_time_args=[("affine_scratch_cb", CB_AFFINE_SCRATCH)],
+                named_compile_time_args=affine_named_ct_args,
                 runtime_args=reader_rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=noc_enum[reader_noc]
@@ -601,6 +647,7 @@ def create_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "layer_norm_tile_writer.cpp"),
                 core_ranges=ranges,
                 compile_time_args=writer_ct_args,
+                named_compile_time_args=writer_named_ct_args,
                 runtime_args=writer_rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=noc_enum[writer_noc]
@@ -619,13 +666,14 @@ def create_program_descriptor(
     descriptor = ttnn.ProgramDescriptor(cbs=_cb_descriptors(blocking) + [_affine_scratch_cb(blocking, affine_is_tile)])
     # gamma/beta do not vary along the row split: one injector (the last core of the split) reads them
     # and multicasts the compact block to the active cores (Perf 1: affine TILE in DRAM 76.1 -> 52.9 us).
-    # No handshake: the landing block is a fresh reader-private CB. Cores without rows are not in
+    # No handshake: the landing block is a fresh scratch CB. Cores without rows are not in
     # `cores`, so they are neither receivers nor in the program. The send runs on the injector's
     # reader NoC, which sets the rectangle corner order.
-    injector = blocking.assignment[-1][0]
+    injector_idx = _affine_injector(blocking)
+    injector = blocking.assignment[injector_idx][0]
     affine_mcast = ttnn.Mcast(
         input_tensor.device(),
-        ttnn.McastConfig(handshake=False, noc=noc_enum[nocs[-1][0]]),
+        ttnn.McastConfig(handshake=False, noc=noc_enum[nocs[injector_idx][0]]),
         cores,
         cores.num_cores(),
         ttnn.McastExplicitFixedSenderConfig([injector]),

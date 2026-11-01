@@ -8,3 +8,6 @@
 {"event":"fix_applied","what":"one-pass variance with residual biased at |mean|=100 (SrcA/SrcB precision mismatch on fp32 z); shifted residual add d=(x-x[:,0])+res; gate streamed one-pass to balanced splits or unbalanced L1 no-residual","ts":"2026-11-01T19:41:24+00:00"}
 {"event":"test_run","status":"pass","note":"final: golden slice 139/139, regression 21/21, unit dir all green; focus rows flat (gated), balanced rows -1.3..-2.9 us","ts":"2026-11-01T19:56:54+00:00"}
 {"event":"test_run","status":"pass","test":"test_layer_norm_tile_half_band.py","count":23,"ts":"2026-11-01T20:21:44+00:00"}
+{"event":"test_run","status":"pass","detail":"R5: unit dir 237/237, golden slice 118/118; sync-only 4.7 -> 3.5 us","ts":"2026-11-01T21:11:47+00:00"}
+{"event":"hypothesis","detail":"one-group RM affine: beta face-1 halves read 0; trid barrier right after a single read passes before NIU counts it outstanding","ts":"2026-11-01T21:11:51+00:00"}
+{"event":"fix_applied","detail":"writer load_beta uses software-counted noc_async_read_barrier (runs before any other writer read)","ts":"2026-11-01T21:11:51+00:00"}

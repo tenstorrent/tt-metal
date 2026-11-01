@@ -30,12 +30,22 @@ void kernel_main() {
     constexpr uint32_t image_bands = get_compile_time_arg_val(13);
     constexpr auto output_args = TensorAccessorArgs<14>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_affine_scratch = get_named_compile_time_arg_val("affine_scratch_cb");
+    constexpr uint32_t affine_group_cols = get_named_compile_time_arg_val("affine_group_cols");
+    constexpr bool beta_on_writer = get_named_compile_time_arg_val("affine_beta_on_writer") != 0;
+    constexpr bool affine_is_tile = get_named_compile_time_arg_val("affine_is_tile") != 0;
+    constexpr uint32_t affine_page_elems = get_named_compile_time_arg_val("affine_page_elems");
+    constexpr uint32_t affine_page_bytes = get_named_compile_time_arg_val("affine_page_bytes");
+    constexpr uint32_t affine_elem_bytes = get_named_compile_time_arg_val("affine_elem_bytes");
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t unit_start = get_arg_val<uint32_t>(1);
     const uint32_t unit_count = get_arg_val<uint32_t>(2);
     const uint32_t rotation = get_arg_val<uint32_t>(3);
     [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(4);
+    [[maybe_unused]] const uint32_t beta_addr = get_arg_val<uint32_t>(5);
+    const bool affine_injector = get_arg_val<uint32_t>(6) != 0;
 
     static_assert(tensor_w_tiles % io_chunk_tiles == 0, "every block pop must be a whole number of chunks");
     static_assert(write_chunks_per_flush >= 1, "flush group must hold at least one chunk");
@@ -104,7 +114,32 @@ void kernel_main() {
         }
     };
 
+    // Injector only (beta_on_writer): beta into the scratch block's second half, handed to the reader by the push.
+    // Runs before any other read of this RISC, so the plain read barrier (software-counted) is exact; a trid
+    // barrier right after a single read can pass before the NIU counts it outstanding (seen with one group).
+    auto load_beta = [&]() {
+        using Affine = layer_norm_tile::
+            AffineBlock<affine_is_tile, tensor_w_tiles, affine_group_cols, affine_page_elems, affine_elem_bytes>;
+        DataflowBuffer scratch(cb_affine_scratch);
+        scratch.reserve_back(1);
+        const uint32_t beta_block = scratch.get_write_ptr() + Affine::tensor_bytes;
+        Affine::issue_reads(TensorAccessor(beta_args, beta_addr, affine_page_bytes), beta_block);
+        noc_async_read_barrier();
+        if constexpr (!affine_is_tile) {
+            Affine::shift_face1_rows(beta_block);
+            noc_async_read_barrier();
+        }
+        scratch.push_back(1);
+    };
+
     constexpr uint32_t prefetch_rows = (in_depth - 1) * block_row_tiles;
+    // Before the residual prefetch: the multicast waits on beta, and the injector's first residual block can
+    // land late under all-core load.
+    if constexpr (beta_on_writer) {
+        if (affine_injector) {
+            load_beta();
+        }
+    }
     if constexpr (residual_on_writer) {
         for (uint32_t block_row = 0; block_row < prefetch_rows && block_row < core_row_tiles;
              block_row += block_row_tiles) {
