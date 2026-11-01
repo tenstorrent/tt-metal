@@ -70,24 +70,22 @@ def _to_torch(tensors):
     return [ttnn.to_torch(t, cq_id=0).float() for t in tensors]
 
 
-def _device_params(num_command_queues, timeout_s):
-    params = {"l1_small_size": 32 * 1024, "trace_region_size": TRACE_REGION_SIZE}
-    params["num_command_queues"] = num_command_queues
-    return pytest.param(params, id=f"{num_command_queues}cq", marks=pytest.mark.timeout(timeout_s))
-
-
 @torch.no_grad()
-# Measured on base with a cold kernel cache: 1 CQ about 180 s; 2 CQs about 900 s, compiling every
-# kernel again for the smaller grid two queues leave.
-@pytest.mark.parametrize("device_params", [_device_params(1, 1200), _device_params(2, 2400)], indirect=True)
-def test_bevformer_trace_matches_live(device, device_params, reset_seeds):
-    """Every frame's images are uploaded before the previous frame's detections are read, as a
-    pipelined caller does, and nothing synchronizes the input queue: the detections are read on
-    the ops queue alone. With two command queues the upload thus overlaps the previous frame and
-    races the next frame's copy out of the staging buffer, which only the runner's events order.
-    A race test cannot force the losing interleaving, so a missing event shows as a flaky failure,
-    not a certain one."""
-    num_command_queues = device_params["num_command_queues"]
+# Measured on base: about 170 s, or about 900 s with a cold kernel cache, as two command queues
+# leave a smaller grid every kernel is compiled for again.
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32 * 1024, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
+    """The demo's pipelined use: two command queues, each frame's host inputs prepared ahead, and
+    its images uploaded before the previous frame's detections are read, on the ops queue alone.
+    The upload thus overlaps the previous frame and races the next frame's copy out of the staging
+    buffer, which only the runner's events order. A race test cannot force the losing
+    interleaving, so a missing event shows as a flaky failure, not a certain one. One command
+    queue's replays are pinned by test_bevformer_perf's [trace] variant."""
     generator = torch.Generator().manual_seed(0)
     torch_model = build_reference_bevformer((BEV_H, BEV_W))
     images = [random_image_batch(generator=generator) for _ in range(NUM_FRAMES)]
@@ -110,9 +108,7 @@ def test_bevformer_trace_matches_live(device, device_params, reset_seeds):
         frame, prev_bev, _ = live_frame(i, frame, prev_bev)
     # The live pass sized the planner for every frame, so only GROWTH_FRAME and RESERVE_FRAME grow it.
     planner = tt_model.planner
-    runner = TTBEVFormerTrace(
-        tt_model, device, _host_image(images[0]), frame, prev_bev, num_command_queues=num_command_queues
-    )
+    runner = TTBEVFormerTrace(tt_model, device, _host_image(images[0]), frame, prev_bev, num_command_queues=2)
     size = planner.size
 
     def grow():
@@ -135,7 +131,7 @@ def test_bevformer_trace_matches_live(device, device_params, reset_seeds):
             planner.size = size_and_grow if i == GROWTH_FRAME else size
             if i == RESERVE_FRAME:
                 grow()
-            outputs = runner(frames[i])
+            outputs = runner(frames[i], tt_model.host_frame(frames[i]))
             if i + 1 < NUM_FRAMES:
                 runner.upload(_host_image(images[i + 1]))
             # Blocking reads on the ops queue; the input queue's upload may still run.
@@ -153,6 +149,9 @@ def test_bevformer_trace_matches_live(device, device_params, reset_seeds):
                     assert_pcc(want, have, PCC_THRESHOLD)
         # One set of output buffers per capture: replays keep their buffers.
         assert len(replayed_addresses) == 3, replayed_addresses
+        # A frame's host inputs refill only that frame, before anything reaches the device.
+        with expect_error(ValueError, "other metas"):
+            runner(frames[0], tt_model.host_frame(frames[1]))
     finally:
         planner.size = size
         runner.release()

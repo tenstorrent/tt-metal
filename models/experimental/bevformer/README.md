@@ -51,15 +51,26 @@ scene selection, score filtering, and output format.
 
 ## Performance
 
-- For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
-  `stop` signposts by default. Set `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames;
-  the harness accepts only `1` or `2`, and either run has one preparation frame outside the
-  signposts:
+- For the detector's device ops, one frame with a previous BEV between Tracy's `start` and `stop`
+  signposts by default, live (`[live]`) or replayed from the demo's traces (`[trace]`). Set
+  `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames; the harness accepts only `1` or
+  `2`, and either run has one preparation frame outside the signposts. Profile one variant per
+  run, and add `--tracing-mode` to `tt-perf-report` for `[trace]`:
 
 ```sh
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
-BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
+BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[trace]"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
+```
+- `tests/perf/test_bevformer_trace.py` checks the demo's pipelined path, two command queues with
+  host inputs prepared ahead, against the same detector run live, frame by frame: replays at
+  changing counts, a frame no camera sees, and the plan grown both within a frame and between
+  frames, each followed by a recapture. It runs the selected variant:
+
+```sh
+pytest models/experimental/bevformer/tests/perf/test_bevformer_trace.py
 ```
 - See the demo's [recorded smoke results](demo/README.md#recorded-smoke-results) for ten-frame
   end-to-end measurements of the bundled tiny, small and base configs. These wall-clock results
@@ -79,8 +90,8 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
   from `config/bevformer_<variant>.json` when `model_config.py` is first imported. A normalized
   local config can instead be selected with `BEVFORMER_CONFIG=/path/to/config.json`. The backbone
   and FPN tests (`test_resnet.py`,
-  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py`,
-  `test_bevformer_trace.py` and the backbone and detector harnesses in `tests/perf/` run the selected variant;
+  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py` and
+  the backbone and detector harnesses in `tests/perf/` run the selected variant;
   `test_perception_transformer.py` keeps fixed BEV grids, and the other tests' `*_base` and `*_tiny`
   presets are fixed sizes.
 - `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
@@ -102,11 +113,6 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
-
-- `test_bevformer_trace.py`: the detector replayed from traces against the same detector run live,
-  frame by frame, with one and with two command queues: replays at changing counts, a frame no
-  camera sees, and the plan grown both within a frame and between frames, each followed by a
-  recapture.
 
 ## Project Structure
 
