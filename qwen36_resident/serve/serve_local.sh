@@ -4,15 +4,21 @@
 #
 # vllm serve the resident Qwen3.6/3.8-27B on one 1 x 4 Blackhole mesh (QuietBox 2: 2x P300c).
 #
-# usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|dflash2|multi|multi-long [args]
+# usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|dflash2|multi|multi-long|multi-ttft
+#   [args]
 #   plain: one user, any sampling; greedy and top_k <= 32 are drawn on device (full speed), others on the host.
 #   mtp:   one user, greedy only (a request with temperature > 0 is served greedily; the server warns once), MTP
 #          speculative decode (4 tokens per step) through the plugin's adaptive block output.
 #   dflash2: one user, greedy only (as mtp), DFlash2 speculative decode (8 tokens per step; lane dfl's
 #          qwen36_resident.dflash.ResidentDFlash) through the plugin's adaptive block output.
-#   multi: MAX_NUM_SEQS users (default 16) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
-#          PREFILL_CHUNK_TOKENS (default 1024) between decode steps. Needs vllm-tt-plugin branch resident-mu (TT chunk
-#          core). Host sampling unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
+#   multi: MAX_NUM_SEQS users (default 16) on the rows-mode build (launches of 8, paged KV pool). Prefill gangs: the
+#          waiting prompts prefill whole, as one step, before their decodes start (a burst is one wave); a prompt over
+#          PREFILL_GANG_TOKENS (2048) arriving while others decode is split into PREFILL_CHUNK_TOKENS (1024) spans
+#          between decode steps. Needs vllm-tt-plugin branch resident-mu-sched (TT chunk core + gangs). Host sampling
+#          unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
+#   multi-ttft: multi with the interleaved prefill policy instead of prefill gangs (PREFILL_GANG_TOKENS 0): a long prompt
+#          is split into PREFILL_CHUNK_TOKENS spans between decode steps, so first tokens come sooner (c=16 TTFT ~1/3 of
+#          multi's) and the running users' decode is slower (TPOT 2-4x multi's at 2K-10K prompts)
 #   multi-long: multi without the 128 PP chunk (RESIDENT_PREFILL_CHUNKS 256,512,1024) and with a 29,440-block pool
 #          (RESIDENT_MAX_TOKENS_ALL_USERS 1,884,160; the plugin adds one block per slot, so the engine logs 29,456):
 #          7 users at 256K, 8 at 230K, 16 at 115K; TTFT +49 ms at 128-token prompts.
@@ -25,7 +31,7 @@
 #   SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
 #   1,540,096 = 24,064 blocks), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
 set -euo pipefail
-PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi|multi-long [vllm serve args...]}
+PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi|multi-long|multi-ttft [vllm serve args...]}
 shift
 WT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 : "${HF_MODEL:?set HF_MODEL to the checkpoint snapshot dir}"
@@ -51,7 +57,7 @@ case $PROFILE in
   plain) ;;
   mtp) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM ;;
   dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
-  multi | multi-long)
+  multi | multi-long | multi-ttft)
     if [ "$PROFILE" = multi-long ]; then
       # long contexts: no 128 PP chunk (its small-matmul weight copies, 3.21 GB/chip) buys a 29,440-block pool of
       # 64 positions (TTFT +49 ms at 128-token prompts, +20 ms at 512, none from 2K; accuracy-gated). The plugin adds
@@ -74,11 +80,12 @@ case $PROFILE in
     # the decode step, TTFT ~3x the interleaved policy's); a prompt arriving while others decode stalls them about as
     # the interleave did. PREFILL_GANG_TOKENS=0: the interleaved policy (one long prompt split between decode steps)
     GANG=''
+    [ "$PROFILE" = multi-ttft ] && : "${PREFILL_GANG_TOKENS:=0}"
     [ "${PREFILL_GANG_TOKENS:=2048}" != 0 ] && GANG=", \"prefill_gang_tokens\": $PREFILL_GANG_TOKENS"
     [ "${PREFILL_GANG_IDLE_TOKENS:-0}" != 0 ] && GANG="$GANG, \"prefill_gang_idle_tokens\": $PREFILL_GANG_IDLE_TOKENS"
     TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING$GANG}}"
     ;;
-  *) echo "unknown profile $PROFILE (plain|mtp|dflash2|multi|multi-long)" >&2; exit 2 ;;
+  *) echo "unknown profile $PROFILE (plain|mtp|dflash2|multi|multi-long|multi-ttft)" >&2; exit 2 ;;
 esac
 
 VLLM=${VLLM_VENV:+$VLLM_VENV/bin/}vllm
