@@ -222,6 +222,12 @@ def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None 
         + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(dst).get_compile_time_args())
     )
+    # (generic_op's program cache does not re-read this descriptor's runtime args on a hit: every address set gets its
+    # own program - a salt the kernel ignores, after its accessor args)
+    salt = 0
+    for a in [int(t.buffer_address()) for t in (tab_t, dst, *srcs)]:
+        salt = (salt * 1000003 + a) & 0x7FFFFFFF
+    ct.append(salt)
     prog = ttnn.ProgramDescriptor()
     prog.cbs = [
         ttnn.CBDescriptor(

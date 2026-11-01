@@ -59,11 +59,21 @@ def test_flat_gather_layout(mesh):
         assert torch.equal(got, want), f"{name}: {int((got != want).sum())} values differ"
 
 
-def test_flat_gather_device(mesh):
+@pytest.mark.parametrize("rounds", [2])
+def test_flat_gather_device(mesh, rounds):
+    """Two rounds on fresh tensors (a model gathers every layer: the second hits the program cache)."""
     fw = flat_weights_module()
     lay = _lay(mesh)
     fm = flat_face_map(H, I, E, lay)
-    W = [tuple(m_.to(torch.bfloat16) for m_ in w) for w in _weights(1)]
+    kept = []  # (the rounds' sources stay allocated: each round's at other addresses)
+    for seed in range(1, rounds + 1):
+        kept += _device_round(mesh, fw, lay, fm, seed)
+    for t in kept:
+        ttnn.deallocate(t)
+
+
+def _device_round(mesh, fw, lay, fm, seed):
+    W = [tuple(m_.to(torch.bfloat16) for m_ in w) for w in _weights(seed)]
     dt = ttnn.bfloat4_b
     rep = ttnn.ReplicateTensorToMesh(mesh)
     srcs = [
@@ -82,3 +92,4 @@ def test_flat_gather_device(mesh):
         assert torch.equal(a, b), f"{name}: {int((a != b).sum())} values differ from the weight prep"
         ttnn.deallocate(dst)
         ttnn.deallocate(want)
+    return srcs
