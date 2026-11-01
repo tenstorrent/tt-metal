@@ -320,18 +320,18 @@ constexpr bool matmul_half_end_fold_k = false;
 #endif
 
 // Dynamic throttle switch: even k steps run the form of the init, odd ones the throttled tile MOP; MATMUL_DYN_SWITCH re-inits through
-// the switch path of _llk_math_matmul_init_ (dyn_switch), without it every change runs the full init
+// _llk_math_matmul_init_switch_, without it every change runs the full init
 #ifdef MATMUL_DYN_SWITCH
-constexpr bool dyn_sw = true;
+#define DYN_REINIT _llk_math_matmul_init_switch_
 #else
-constexpr bool dyn_sw = false;
+#define DYN_REINIT _llk_math_matmul_init_
 #endif
 #ifdef MATMUL_ROW_MOP
-#define DYN_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true, false, 0, false, false, 0, false, dyn_sw
+#define DYN_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true, false, 0, false, false, 0, false
 #else
-#define DYN_INIT_ARGS MATMUL_MATH_INIT_TEMPLATE_ARGS, dyn_sw
+#define DYN_INIT_ARGS MATMUL_MATH_INIT_TEMPLATE_ARGS
 #endif
-#define DYN_TINIT_ARGS MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false, dyn_sw
+#define DYN_TINIT_ARGS MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false
 #define DYN_TCALL_ARGS MATMUL_FIDELITY, 5, false, true, matmul_reuse_dir_k
 static std::uint32_t dyn_status = 0;
 #define DYN_MATMUL(j)                                                                                                                  \
@@ -341,7 +341,7 @@ static std::uint32_t dyn_status = 0;
         {                                                                                                                              \
             if (dyn_status != 1)                                                                                                       \
             {                                                                                                                          \
-                _llk_math_matmul_init_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); \
+                DYN_REINIT<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); \
                 dyn_status = 1;                                                                                                        \
             }                                                                                                                          \
             _llk_math_matmul_<DYN_TCALL_ARGS>(0, CT_DIM, RT_DIM);                                                                      \
@@ -350,7 +350,7 @@ static std::uint32_t dyn_status = 0;
         {                                                                                                                              \
             if (dyn_status != 0)                                                                                                       \
             {                                                                                                                          \
-                _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); \
+                DYN_REINIT<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); \
                 dyn_status = 0;                                                                                                        \
             }                                                                                                                          \
             _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(0, CT_DIM, RT_DIM);                                                           \

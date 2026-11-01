@@ -133,11 +133,9 @@ ALWI void matmul_block_math_dynamic_throttle(
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
     const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
-    // the switch between the two MOPs keeps the addr mods and the zero flag state the throttled MOP does not change
-    constexpr bool dyn_switch_ok = true;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
-            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, false, true, in1_order, reuse_dir, false, false, dyn_switch_ok>(
+            MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, false, true, in1_order, reuse_dir>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
@@ -150,7 +148,7 @@ ALWI void matmul_block_math_dynamic_throttle(
         }
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, dyn_switch_ok>(
+            MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
