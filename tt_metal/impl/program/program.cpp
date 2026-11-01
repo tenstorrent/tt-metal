@@ -2628,23 +2628,19 @@ bool detail::ProgramImpl::cb_regions_touch_service_cores(const IDevice* device) 
     if (!svc.has_any_claims()) {
         return false;
     }
-    std::vector<ChipId> chip_ids;
+    // Union of claimed cores over the physical devices behind `device` (a handful of dispatch-column
+    // cores), so the CB ranges below are tested against that small set instead of core by core.
+    std::unordered_set<CoreCoord> claimed;
     if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
         for (auto device_id : mesh->get_device_ids()) {
-            chip_ids.push_back(device_id);
+            auto chip_claimed = svc.claimed_cores(device_id);
+            claimed.insert(chip_claimed.begin(), chip_claimed.end());
         }
     } else {
-        chip_ids.push_back(device->id());
+        claimed = svc.claimed_cores(device->id());
     }
     auto range_touches = [&](const CoreRange& range) {
-        for (const auto& core : range) {
-            for (auto chip_id : chip_ids) {
-                if (svc.is_service_core(chip_id, core)) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        return std::any_of(claimed.begin(), claimed.end(), [&](const CoreCoord& core) { return range.contains(core); });
     };
     for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (range_touches(cb_allocator.core_range)) {
@@ -2663,7 +2659,8 @@ bool detail::ProgramImpl::cb_regions_touch_service_cores(const IDevice* device) 
 
 void detail::ProgramImpl::cache_simple_l1_validation(const IDevice* device) {
     const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-    // Generation first: a claim landing while the scan below runs then fails the next comparison.
+    // Claims change only sequentially (see ServiceCoreManagerImpl), so the generation read here matches
+    // the claims the full validation just checked against.
     this->simple_l1_validation_claims_gen_ = svc.claims_generation();
     this->simple_l1_validation_touches_service_ = this->cb_regions_touch_service_cores(device);
     this->simple_l1_validation_cached_ =

@@ -680,7 +680,13 @@ TEST_F(ServiceCoreFdFixture, CachedL1ValidationWithServiceClaims) {
     auto& svc_prog = svc_workload->get_programs().begin()->second.impl();
     svc_prog.compile_and_allocate(mesh, false);
     EXPECT_FALSE(svc_prog.simple_l1_validation_usable(mesh));
-    svc_prog.compile_and_allocate(mesh, false);
+    // Claim all of the core's service L1: the lowest allocation now sits below the CB region end.
+    const DeviceAddr svc_l1 = svc.allocate_l1(device, svc_core, svc.bytes_available(device, svc_core));
+    EXPECT_THAT(
+        [&] { svc_prog.compile_and_allocate(mesh, false); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("ServiceCoreManager-allocated")));
+    svc.deallocate_l1(device, svc_core, svc_l1);
+    EXPECT_NO_THROW(svc_prog.compile_and_allocate(mesh, false));
     EXPECT_FALSE(svc_prog.simple_l1_validation_usable(mesh));
 
     svc.release(device, {svc_core});

@@ -62,6 +62,9 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
         state.fd_compute_grid = device->compute_with_storage_grid_size();
     }
 
+    // Bump before the loop below: a duplicate core TT_FATALs midway, after earlier cores are claimed.
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
+
     // Init per-core allocator
     auto [base, size] = l1_service_range(env_.get_hal());
     const DeviceAddr dram_align = env_.get_hal().get_alignment(HalMemType::DRAM);
@@ -72,7 +75,6 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
             size, base, dram_align, dram_align, allocator::FreeListOpt::SearchPolicy::FIRST);
         slot.alloc->init();
     }
-    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoord>& cores) {
