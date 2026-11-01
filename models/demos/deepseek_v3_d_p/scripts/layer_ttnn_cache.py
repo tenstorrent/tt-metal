@@ -13,10 +13,17 @@ When the layers include 0 the embedding is built first and reported like a layer
 the embedding plus layers 0..N-1, TtPrefillTransformer.check_cache_complete(num_layers=N) runs at the end,
 so `--layers 0-9` gives a folder the smoke test accepts as L10.
 
+The HF checkpoint is --hf-model, else $KIMI_K2_7_HF_MODEL / $GLM53_HF_MODEL, else the adapter default; it
+may be a checkout dir or an HF hub-cache repo root (models--org--name). --download instead fetches from the
+model's HF repo only the config, tokenizer, code and the shards holding the requested layers (plus the
+embedding shards when layer 0 is requested) into the hub cache at $HF_HOME (default
+~/.cache/huggingface), which must not be on Weka, and builds from that snapshot.
+
     python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model kimi_k2_7 --layers 0-9
     python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model glm_5_3 --layers 0-10 --compare --remove
+    HF_HOME=~/hf python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model glm_5_3 --layers 1 --download
 
-Exit codes: 0 all PASS, 1 DIFF, 2 guard or usage error, 3 build FAIL, 4 Weka changed, 130 Ctrl-C.
+Exit codes: 0 all PASS, 1 DIFF, 2 guard or usage error, 3 build or download FAIL, 4 Weka changed, 130 Ctrl-C.
 """
 
 import argparse
@@ -60,6 +67,7 @@ MODELS = {
     "kimi_k2_7": {
         "num_layers": 61,
         "num_dense_layers": 1,
+        "hf_repo_id": "moonshotai/Kimi-K2.7-Code",
         "ttnn_cache_env": "TT_KIMI_PREFILL_TTNN_CACHE",
         "env_var": "KIMI_K2_7_HF_MODEL",
         "ttnn_cache_default": "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill",
@@ -68,6 +76,7 @@ MODELS = {
     "glm_5_3": {
         "num_layers": 78,
         "num_dense_layers": 3,
+        "hf_repo_id": "zai-org/GLM-5.3",
         "ttnn_cache_env": "TT_GLM53_PREFILL_TTNN_CACHE",
         "env_var": "GLM53_HF_MODEL",
         "ttnn_cache_default": "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill",
@@ -189,7 +198,17 @@ def parse_args(argv=None):
     p.add_argument(
         "--weka-cache", default=None, help="Reference cache root for --compare (read only); default from the adapter"
     )
-    p.add_argument("--hf-model", default=None, help="HF checkpoint dir (read only); default from the adapter")
+    p.add_argument(
+        "--hf-model",
+        default=None,
+        help="HF checkpoint dir or hub-cache repo root (read only); default from the env var, then the adapter",
+    )
+    p.add_argument(
+        "--download",
+        action="store_true",
+        help="Download the HF files the requested layers need into $HF_HOME (default ~/.cache/huggingface) "
+        "and build from them; excludes --hf-model",
+    )
     p.add_argument(
         "--remove",
         action="store_true",
@@ -265,6 +284,11 @@ def check_env_paths(environ: Mapping, mounts, roots=WEKA_ROOTS) -> None:
         value = environ.get(var)
         if value and is_weka(Path(value), mounts, roots):
             raise GuardError(f"${var}={value} is on Weka")
+
+
+def hf_cache_dir(environ: Mapping, home: Path) -> Path:
+    """Where --download puts the hub cache; matches the deepseek_v3_d_p test conftest."""
+    return Path(environ.get("HF_HOME") or Path(home) / ".cache" / "huggingface").expanduser()
 
 
 def build_units(layers: list[int]) -> list:
@@ -662,9 +686,11 @@ class Ctx:
     out: Path
     out_cache: Path
     weka_dir: Path | None
-    hf_model: Path
+    hf_model: Path | None
     mounts: list
     weka_bytes: dict = field(default_factory=dict)
+    hf_cache: Path | None = None
+    hf_config: Path | None = None
 
 
 def _disk_check(path: Path, needed: int, min_free_gb: float) -> None:
@@ -677,6 +703,8 @@ def _disk_check(path: Path, needed: int, min_free_gb: float) -> None:
 
 
 def guard_phase(args) -> Ctx:
+    if args.download and args.hf_model:
+        raise GuardError("--download and --hf-model are mutually exclusive")
     mounts = read_mounts(Path("/proc/self/mounts").read_text())
     out = check_out_root(args.out_root, Path.home().resolve(), mounts)
     check_env_paths(os.environ, mounts)
@@ -688,9 +716,18 @@ def guard_phase(args) -> Ctx:
         weka_dir = Path(weka_root).expanduser() / f"{args.model}_bh_32dev" / "8x4"
         if not weka_dir.is_dir():
             raise GuardError(f"reference cache dir missing: {weka_dir}")
-    hf_model = Path(args.hf_model or os.environ.get(m["env_var"]) or m["hf_model_default"]).expanduser()
-    if not (hf_model / "model.safetensors.index.json").is_file():
-        raise GuardError(f"no model.safetensors.index.json in {hf_model}")
+    hf_model = hf_cache = None
+    if args.download:
+        hf_cache = hf_cache_dir(os.environ, Path.home())
+        if is_weka(hf_cache, mounts):
+            raise GuardError(f"HF cache {hf_cache} is on Weka; set HF_HOME to a local dir")
+    else:
+        from models.demos.deepseek_v3_d_p.utils.hf_download import resolve_hf_snapshot_dir
+
+        hf_model = Path(args.hf_model or os.environ.get(m["env_var"]) or m["hf_model_default"]).expanduser()
+        hf_model = resolve_hf_snapshot_dir(hf_model)
+        if not (hf_model / "model.safetensors.index.json").is_file():
+            raise GuardError(f"no model.safetensors.index.json in {hf_model}")
 
     try:
         layers = parse_layers(args.layers, m["num_layers"])
@@ -712,7 +749,45 @@ def guard_phase(args) -> Ctx:
         raise GuardError(f"out not clean: {out_cache} already holds files for layers {dirty}")
     needed = max(weka_bytes.values(), default=0) if args.remove else sum(weka_bytes.values())
     _disk_check(out_cache, needed, args.min_free_gb)
-    return Ctx(args, args.model, layers, out, out_cache, weka_dir, hf_model, mounts, weka_bytes)
+    return Ctx(args, args.model, layers, out, out_cache, weka_dir, hf_model, mounts, weka_bytes, hf_cache)
+
+
+def _missing_shard_bytes(repo_id: str, snapshot: Path, shards: list[str]) -> int | None:
+    """Bytes of `shards` not yet in `snapshot`, from the hub's file metadata; None when unavailable."""
+    missing = [s for s in shards if not (snapshot / s).is_file()]
+    if not missing:
+        return 0
+    try:
+        from huggingface_hub import HfApi
+
+        infos = HfApi().get_paths_info(repo_id, missing, revision=snapshot.name)
+        return sum(i.size for i in infos)
+    except Exception as e:
+        print(f"download: shard sizes unavailable ({type(e).__name__}: {e})", flush=True)
+        return None
+
+
+def download_phase(ctx: Ctx) -> None:
+    """Fetch the HF files for ctx.layers into ctx.hf_cache and point ctx.hf_model at the snapshot and
+    ctx.hf_config at a flat copy of its config and code files."""
+    from models.demos.deepseek_v3_d_p.utils.hf_download import download_layers, flat_config_dir
+
+    repo_id = MODELS[ctx.model]["hf_repo_id"]
+
+    def on_plan(snapshot: Path, shards: list[str]) -> None:
+        needed = _missing_shard_bytes(repo_id, snapshot, shards)
+        size = "size unknown" if needed is None else f"{needed / GIB:.1f} GiB not yet cached"
+        print(f"download: {repo_id} -> {ctx.hf_cache}: {len(shards)} shards, {size}", flush=True)
+        for name in shards:
+            print(f"  {name}", flush=True)
+        if needed:
+            _disk_check(ctx.hf_cache, needed, ctx.args.min_free_gb)
+
+    snapshot = download_layers(repo_id, ctx.hf_cache, ctx.layers, embed=0 in ctx.layers, on_plan=on_plan)
+    if not (snapshot / "model.safetensors.index.json").is_file():
+        raise GuardError(f"no model.safetensors.index.json in downloaded snapshot {snapshot}")
+    ctx.hf_model = snapshot
+    ctx.hf_config = flat_config_dir(snapshot, ctx.hf_cache / "flat_config", repo_id)
 
 
 def mock_desc_path() -> Path:
@@ -985,6 +1060,7 @@ def _start_runtime(ctx: Ctx, t0: float) -> Runtime:
         actual = {
             "num_layers": adapter.model_config.NUM_LAYERS,
             "num_dense_layers": adapter.model_config.NUM_DENSE_LAYERS,
+            "hf_repo_id": adapter.hf_repo_id,
             "ttnn_cache_env": adapter.ttnn_cache_env,
             "env_var": adapter.env_var,
             "ttnn_cache_default": adapter.ttnn_cache_default,
@@ -1010,7 +1086,7 @@ def run_phase(ctx: Ctx) -> int:
         return 2
     os.environ.setdefault("TT_METAL_MOCK_CLUSTER_DESC_PATH", str(desc))
     os.environ.pop("TT_METAL_WATCHER", None)
-    os.environ["PREFILL_HF_MODEL"] = str(ctx.hf_model)
+    os.environ["PREFILL_HF_MODEL"] = str(ctx.hf_config or ctx.hf_model)
 
     reports_dir = ctx.out / ctx.model / "reports"
     spec = ctx.args.layers.replace(",", "_")
@@ -1111,6 +1187,18 @@ def main(argv=None) -> int:
     except GuardError as e:
         print(f"GUARD: {e}", file=sys.stderr)
         return 2
+    if args.download:
+        sys.addaudithook(make_audit_hook(WEKA_ROOTS))
+        try:
+            download_phase(ctx)
+        except GuardError as e:
+            print(f"GUARD: {e}", file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            return 130
+        except Exception:
+            traceback.print_exc()
+            return 3
     try:
         return run_phase(ctx)
     except KeyboardInterrupt:
