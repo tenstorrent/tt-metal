@@ -328,10 +328,15 @@ HostTensor to_row_major_layout(const HostTensor& tensor) {
             // MX formats are TILE-only and, unlike BFP, have no legacy callers relying on a silent no-op.
             TT_THROW("to_layout: {} supports TILE layout only; convert to a non-MX dtype first", tensor.dtype());
             return tensor;
+        } else if constexpr (std::is_same_v<T, tensor_impl::bfloat2_b>) {
+            // BFLOAT2_B is TILE-only and, like MX and unlike BFLOAT8_B/BFLOAT4_B, has no legacy callers relying on
+            // the silent no-op below.
+            TT_THROW("to_layout: {} supports TILE layout only; convert it to another dtype first", tensor.dtype());
+            return tensor;
         } else if constexpr (
-            std::is_same_v<T, tensor_impl::bfloat2_b> || std::is_same_v<T, tensor_impl::bfloat4_b> ||
-            std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, float8_e4m3>) {
-            // bfloat2_b / bfloat4_b / bfloat8_b: TODO(#43763):
+            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
+            std::is_same_v<T, float8_e4m3>) {
+            // bfloat4_b / bfloat8_b: TODO(#43763):
             // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
             // This silent fail has a high impact area and should be studied and addressed asap.
             //
