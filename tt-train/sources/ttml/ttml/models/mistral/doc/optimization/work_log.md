@@ -155,6 +155,13 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 34 (rejected): base matmuls with the full-sync DEST (8-tile output subblocks)
+
+- Roofline / bytes: the base matmuls 201 ms/step at 72-85 % of the HiFi4 peak with 4-tile fp32 output subblocks (DEST half-sync); full sync doubles the DEST and would allow 8-tile subblocks (fewer DEST round trips per output tile).
+- Expected time after the fix: -5-10 % on the matmuls (~-10-20 ms/step). Landed: none: every 8-tile subblock fails ttnn's validation (the reuse / mcast factories do not support full sync, `matmul_device_operation.cpp:642-657`), and with 4-tile subblocks full sync changes nothing (gate_up forward 1.67 vs 1.69 ms, bit-exact).
+- Structural fix tried: `dst_full_sync_en` in the sweep's compute config, subblocks up to 8 (`O/iter34_matmul_sweep1d.py`, `O/iter34_sweep.sh`); the dX shapes (M = 5184 / 8256) have no 1D config with a 4-row subblock (per-core M 162 / 258) and were swept 2D in iteration 19.
+- Lesson: the matmul efficiency gap is in ttnn's mcast kernels (half-sync DEST), not in their program configs; closing it is ttnn kernel work.
+
 ### Iteration 33 (rejected): the backward's dx all-reduce overlapped with the LoRA gradient products
 
 - Roofline / bytes: 17 collectives per 4 layers at 4.0 ms (the library's transfer time; 40-90 ms/step with the clock skew); the backward's 8 (the column-parallel layers' dx all-reduces) have independent work beside them: the layer's dA / dB products (~0.6 ms per layer against ~0.24 ms of collective).
@@ -383,6 +390,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 30 | `82f35c84e55` | SDPA forward diagonal chunk prefix (`n_cols` through the QK^T, mask, max, exp and PV stages), iteration-30 evidence |
 | 31 (rejected) | `85a06ef9dfe` | docs and evidence only: skinny_matmul read-ahead measured and reverted |
 | 32 | `b1b0e107c27` | `metal/ops/vp_ce_row_stats` (new op: device op, factory, kernels, wrapper, binding), `losses.cpp` forward statistics through it, iteration-32 evidence |
-| 33 (rejected) | (this commit) | docs and evidence only: the second-queue collective overlap (implemented, refused by the dispatcher) and the Ethernet dispatch (unavailable), both reverted |
+| 33 (rejected) | `46944a1d62f` | docs and evidence only: the second-queue collective overlap (implemented, refused by the dispatcher) and the Ethernet dispatch (unavailable), both reverted |
+| 34 (rejected) | (this commit) | docs and evidence only: the full-sync DEST matmul sweep, refused by ttnn's matmul validation |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

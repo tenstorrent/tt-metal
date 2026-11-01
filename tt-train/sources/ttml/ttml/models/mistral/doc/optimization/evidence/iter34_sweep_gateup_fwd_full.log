@@ -1,0 +1,199 @@
+2026-11-01 20:25:28.925 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-01 20:25:28.964 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 20:25:28.964 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 20:25:28.964 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 20:25:28.964 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 20:25:28.975 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 20:25:28.975 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 20:25:29.054 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 20:25:29.054 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 20:25:29.054 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 20:25:29.054 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 20:25:29.056 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 20:25:29.268 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 20:25:29.300 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 20:25:29.300 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 20:25:29.300 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 20:25:29.342 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 1.93 ms, 90.3 TFLOP/s wall
+      5.71 ms     30.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=4x1
+      3.88 ms     44.8 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=4x5
+      3.75 ms     46.3 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x1
+      2.38 ms     73.0 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x5
+      2.87 ms     60.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x1
+      1.67 ms    104.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5
+      2.57 ms     67.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x1
+      1.67 ms    103.9 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5
+2026-11-01 20:25:31.696 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:31.697 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:31.698 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:31.698 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:31.699 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:31.700 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+      4.49 ms     38.8 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=4x1
+      3.91 ms     44.5 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=4x5
+      3.20 ms     54.4 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x1
+      2.29 ms     75.9 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x5
+      2.55 ms     68.3 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x1
+      1.66 ms    104.9 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x5
+      2.38 ms     73.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=32x1
+2026-11-01 20:25:32.199 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:32.200 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:32.200 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:32.201 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:32.202 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+      4.17 ms     41.7 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=4x1
+      3.98 ms     43.7 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=4x5
+      2.63 ms     66.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=8x1
+      2.47 ms     70.3 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=8x5
+      2.24 ms     77.7 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=16x1
+2026-11-01 20:25:32.564 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:32.565 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:32.566 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+      7.67 ms     22.7 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=2x2
+      7.58 ms     22.9 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=2x6
+      4.07 ms     42.8 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=4x2
+      4.12 ms     42.2 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=4x6
+      2.39 ms     72.8 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=8x2
+      2.33 ms     74.5 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=8x6
+      2.05 ms     84.9 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=16x2
+      1.95 ms     89.2 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=16x6
+      1.99 ms     87.6 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=32x2
+      7.00 ms     24.9 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=4x1
+      4.06 ms     42.8 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=4x2
+      4.59 ms     37.9 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=4x3
+      4.13 ms     42.1 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=4x6
+      4.31 ms     40.4 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=8x1
+      2.39 ms     72.7 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=8x2
+      2.49 ms     69.7 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=8x3
+      2.35 ms     74.0 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=8x6
+      3.28 ms     53.0 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=16x1
+      2.04 ms     85.4 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=16x2
+      1.97 ms     88.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=16x3
+      1.95 ms     89.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=16x6
+      2.98 ms     58.5 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=32x1
+      1.97 ms     88.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=32x2
+      1.92 ms     90.5 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=32x3
+2026-11-01 20:25:34.374 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.375 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.375 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.376 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.377 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.377 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.378 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.379 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.379 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.380 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.381 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.381 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.382 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.383 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.383 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.384 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.384 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:34.385 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+      7.87 ms     22.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=2x2
+      7.61 ms     22.9 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=2x6
+      4.17 ms     41.7 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=4x2
+      4.10 ms     42.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=4x6
+      2.24 ms     77.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=8x2
+      2.33 ms     74.7 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=8x6
+      1.98 ms     87.7 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=16x2
+      1.92 ms     90.4 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=16x6
+      1.93 ms     90.3 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=32x2
+      7.08 ms     24.6 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=4x1
+      4.18 ms     41.6 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=4x2
+      4.66 ms     37.3 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=4x3
+      4.09 ms     42.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=4x6
+      3.86 ms     45.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=8x1
+      2.25 ms     77.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=8x2
+      2.52 ms     69.0 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=8x3
+      2.35 ms     74.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=8x6
+      2.94 ms     59.2 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x1
+      1.98 ms     87.7 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x2
+      1.95 ms     89.2 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x3
+      1.89 ms     92.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x6
+      2.73 ms     63.8 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=32x1
+      1.94 ms     89.8 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=32x2
+      1.93 ms     90.0 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=32x3
+2026-11-01 20:25:36.186 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.187 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.188 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.189 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.189 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.190 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.190 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.191 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.191 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.192 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.193 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.193 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.194 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.194 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.195 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.196 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.197 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:36.198 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+      8.08 ms     21.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=2x2
+      7.63 ms     22.8 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=2x6
+      4.38 ms     39.8 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=4x2
+      4.15 ms     41.9 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=4x6
+      2.46 ms     70.6 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=8x2
+      2.40 ms     72.6 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=8x6
+      1.91 ms     91.0 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=16x2
+      7.21 ms     24.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=4x1
+      4.37 ms     39.8 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=4x2
+      4.82 ms     36.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=4x3
+      4.14 ms     42.0 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=4x6
+      3.84 ms     45.3 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=8x1
+      2.47 ms     70.4 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=8x2
+      2.77 ms     62.9 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=8x3
+      2.40 ms     72.6 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=8x6
+      2.59 ms     67.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=16x1
+      1.92 ms     90.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=16x2
+      1.88 ms     92.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=16x3
+2026-11-01 20:25:37.580 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.581 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.582 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.583 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.583 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.584 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.585 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.585 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.586 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.586 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.587 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+2026-11-01 20:25:37.588 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: out_subblock_w 1 times out_subblock_h 8 needs to be at most 4 to fit in hardware (assert.hpp:104)
+--- sorted ---
+148 configs tried, 86 ran, 62 failed
+      1.66 ms    104.9 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x5
+      1.67 ms    104.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5
+      1.67 ms    103.9 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5
+      1.88 ms     92.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=16x3
+      1.89 ms     92.1 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x6
+      1.91 ms     91.0 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=2x2 out_block=16x2
+      1.92 ms     90.5 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=32x3
+      1.92 ms     90.5 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=6 sub=4x1 out_block=16x2
+      1.92 ms     90.4 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=16x6
+      1.93 ms     90.3 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=32x2
+      1.93 ms     90.0 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=32x3
+      1.94 ms     89.8 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=32x2
+      1.95 ms     89.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=16x6
+      1.95 ms     89.2 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=16x6
+      1.95 ms     89.2 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x3
+      1.97 ms     88.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=32x2
+      1.97 ms     88.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=4x1 out_block=16x3
+      1.98 ms     87.7 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=4x1 out_block=16x2
+      1.98 ms     87.7 TFLOP/s  max|diff| 3.12e-02  grid 10x10 per_core_N=6 in0_block_w=3 sub=2x2 out_block=16x2
+      1.99 ms     87.6 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=6 in0_block_w=2 sub=2x2 out_block=32x2
+   grid 11x10 per_core_N=5 in0_block_w=2 sub=8x1 out_block=8x1 FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ma
+   grid 11x10 per_core_N=5 in0_block_w=2 sub=8x1 out_block=8x5 FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ma
+   grid 11x10 per_core_N=5 in0_block_w=2 sub=8x1 out_block=16x1 FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/ma
+2026-11-01 20:25:37.817 | info     |    BuildKernels | JIT cache stats: 483/483 hits (100.0%) [483 cached, 221 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 20:25:37.817 | info     |    BuildKernels | JIT telemetry: 30 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 20:25:37.831 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 20:25:37.831 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 20:25:38.014 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 20:25:38.014 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 20:25:38.014 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

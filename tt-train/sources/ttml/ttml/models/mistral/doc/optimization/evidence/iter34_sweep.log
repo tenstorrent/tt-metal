@@ -1,0 +1,45 @@
+=== gateup_fwd_half 2026-11-01T20:25:17Z
+rc=0
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 1.94 ms, 89.6 TFLOP/s wall
+      5.71 ms     30.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=4x1
+      3.90 ms     44.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=4x5
+      3.74 ms     46.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x1
+      2.38 ms     73.1 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x5
+      2.87 ms     60.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x1
+      1.69 ms    102.8 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5
+      2.58 ms     67.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x1
+      1.69 ms    103.2 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5
+      4.48 ms     38.9 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=4x1
+      3.92 ms     44.4 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=4x5
+      3.20 ms     54.4 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x1
+      2.30 ms     75.5 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x5
+      2.55 ms     68.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x1
+=== gateup_fwd_full 2026-11-01T20:25:28Z
+rc=0
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 1.93 ms, 90.3 TFLOP/s wall
+      5.71 ms     30.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=4x1
+      3.88 ms     44.8 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=4x5
+      3.75 ms     46.3 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x1
+      2.38 ms     73.0 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x5
+      2.87 ms     60.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x1
+      1.67 ms    104.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5
+      2.57 ms     67.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x1
+      1.67 ms    103.9 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5
+      4.49 ms     38.8 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=4x1
+      3.91 ms     44.5 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=4x5
+      3.20 ms     54.4 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x1
+      2.29 ms     75.9 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x5
+      2.55 ms     68.3 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x1
+=== gateup_dx_half 2026-11-01T20:25:38Z
+rc=0
+M=5184 K=16384 N=1024: ttnn's own choice on the 11x8 grid 1.82 ms, 95.5 TFLOP/s wall
+=== gateup_dx_full 2026-11-01T20:25:42Z
+rc=0
+M=5184 K=16384 N=1024: ttnn's own choice on the 11x8 grid 2.11 ms, 82.3 TFLOP/s wall
+=== w2_dx_half 2026-11-01T20:25:46Z
+rc=0
+M=8256 K=5120 N=1024: ttnn's own choice on the 11x8 grid 0.94 ms, 91.7 TFLOP/s wall
+=== w2_dx_full 2026-11-01T20:25:49Z
+rc=0
+M=8256 K=5120 N=1024: ttnn's own choice on the 11x8 grid 1.09 ms, 79.5 TFLOP/s wall
+=== done 2026-11-01T20:25:52Z
