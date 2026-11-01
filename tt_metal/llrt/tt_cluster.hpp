@@ -167,6 +167,10 @@ public:
     // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
+    bool requires_snoop_for_dm_coherence() const;
+    void write_core_with_snoop_if_required(
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
     // Write to core without effects of write combining
     template <typename DType>
     void write_core_immediate(
