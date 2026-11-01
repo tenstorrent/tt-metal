@@ -389,15 +389,6 @@ The implementation is FlashAttention-2.”</p>
 <li><p><span class="tt-api-param-name"><strong>attn_mask_block_map</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Defaults to <cite>None</cite>. Non causal with <cite>attn_mask</cite> only. [Bm x Hm x ceil(Sq / q_chunk) x ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR with the mask’s batch and head dims, nonzero where a (q chunk, k chunk) block of the mask has a visible entry. Blocks flagged 0 are not read or computed; rows whose every block is 0 are unspecified. Heads whose K/V chunks are forwarded between their cores keep those chains, and stream every block, while fewer than 40 percent of the blocks in a sample of the map’s rows are masked; skipping blocks pays only past that.</span></p></li>
 </ul>
 </dd>
-</dl>
-<p>Grouped-query attention (non-causal, <cite>nqh &gt; nkh</cite>) is scheduled automatically. Cores working on the query
-heads of one KV head can share its K/V (read once, then forwarded core to core). With a single K chunk
-(<cite>k_chunk_size &gt;= s</cite>, <cite>fp32_dest_acc_en=False</cite>), each core also keeps a KV head’s K/V across its consecutive
-query chunks instead of re-reading it. When <cite>q_chunk_size</cite> does not divide <cite>s</cite>, a query chunk may run on into
-the next query head of its group if that lowers the most query chunks any core runs (no <cite>attn_mask</cite>, no
-<cite>attention_sink</cite>, tile-aligned unpadded <cite>s</cite>, <cite>nkh == nvh</cite>). None of this changes the output layout. Head
-crossing can change the rounding of some rows with <cite>fp32_dest_acc_en=False</cite>, not the accuracy.</p>
-<dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">

@@ -542,8 +542,8 @@ pattern. This parameter is crucial for achieving optimal performance in
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">stream_in1</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.stream_in1" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Select ring-rotated FIFO delivery for gather_in0 over PrefetcherPipes. The weight MUST
-be queued with the <code class="docutils literal notranslate"><span class="pre">(weight,</span> <span class="pre">block_count,</span> <span class="pre">rotation)</span></code>
+<p>Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB or with
+PrefetcherPipes. The weight MUST be queued with the <code class="docutils literal notranslate"><span class="pre">(weight,</span> <span class="pre">block_count,</span> <span class="pre">rotation)</span></code>
 request form. Without it, gather_in0 over PrefetcherPipes takes its K-blocks in K order,
 into a pipe ring that holds the whole layer.
 mcast_in0 consumes natural FIFO order and requires this flag to remain false. Defaults

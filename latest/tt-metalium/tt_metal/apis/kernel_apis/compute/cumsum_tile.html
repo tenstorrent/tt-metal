@@ -27,7 +27,7 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="cumprod_tile" href="cumprod_tile.html" />
+    <link rel="next" title="alt_complex_rotate90_tile" href="alt_complex_rotate90_tile.html" />
     <link rel="prev" title="i1_tile" href="i1_tile.html" />
  <link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
 
@@ -308,8 +308,8 @@
 <h1>cumsum_tile<a class="headerlink" href="#cumsum-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_10CumsumModeEN7ckernel16cumsum_tile_initEvv">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">CumsumMode</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">mode</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">CumsumMode</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">Default</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a4d227a73ad78cf476b57bd4c70a01a5d"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">cumsum_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10CumsumModeEN7ckernel16cumsum_tile_initEvv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel16cumsum_tile_initEv">
+<span class="target" id="namespaceckernel_1a0f5297422d5cec0f884a5878d3fec2e6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">cumsum_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel16cumsum_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Please refer to documentation for any_init. </p>
@@ -317,11 +317,11 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_10CumsumModeEN7ckernel11cumsum_tileEv8uint32_tb">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">CumsumMode</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">mode</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">CumsumMode</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">Default</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ae54ad35e676f10b7eb8474282a866c0c"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">cumsum_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">first</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10CumsumModeEN7ckernel11cumsum_tileEv8uint32_tb" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel11cumsum_tileE8uint32_tb">
+<span class="target" id="namespaceckernel_1a47b1551684ce2a625a8e71de87d45a12"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">cumsum_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">first</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel11cumsum_tileE8uint32_tb" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Calculates the columnwise (top to bottom) cumulative sum. For multi tile cumulative sum, tiles must come in NWH order (for example using reader_unary_transpose_wh_8bank) and <em>first</em> must be false for all tiles where H != 0. Tiles are also output in NWH order so writer_unary_transpose_wh can be used to store them back in NHW order. The running column totals are carried between the tiles of one column in SFPU registers, so no other SFPU operation may run between the <em>cumsum_tile</em> calls of the same column. After any other SFPU operation, call <em>cumsum_tile_init</em> again before the next <em>cumsum_tile</em>, with the same mode. CumsumMode::Compensated runs a compensated (Kahan) sum: the rounding error of each add is kept next to the running totals and fed back into the next add, so the error does not grow with the length of the scan. CumsumMode::Compensated is only available on Wormhole and Blackhole. Not supported on Quasar (compile error). The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Calculates the columnwise (top to bottom) cumulative sum. For multi tile cumulative sum, tiles must come in NWH order (for example using reader_unary_transpose_wh_8bank) and <em>first</em> must be false for all tiles where H != 0. Tiles are also output in NWH order so writer_unary_transpose_wh can be used to store them back in NHW order. The running column totals are carried between the tiles of one column in SFPU registers, so no other SFPU operation may run between the <em>cumsum_tile</em> calls of the same column. After any other SFPU operation, call <em>cumsum_tile_init</em> again before the next <em>cumsum_tile</em>. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <div class="tt-api-param-list colwidths-auto docutils container">
@@ -341,7 +341,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="i1_tile.html" class="btn btn-neutral float-left" title="i1_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="cumprod_tile.html" class="btn btn-neutral float-right" title="cumprod_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="alt_complex_rotate90_tile.html" class="btn btn-neutral float-right" title="alt_complex_rotate90_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
