@@ -194,7 +194,8 @@ Isolating A/B: `v4pl3p` = v4pl3n with only the runtime pointer restored. VC1 1-h
 -> 139.9-140.2 (v4pl3p), other VC1 rows unchanged, suite 161.9 -> 160.5, inter-mesh 339.1 / 338.9, 2D 3-hop 146.0 /
 145.9. So the compile-time address is what cost VC1 1-hop (~2.2 cycles); the extra `lui` per pass is the likely
 mechanism (hypothesis). It had bought VC2 -0.3% to -0.9% and one ERISC -0.2% to -0.4% (v4pl2 against v4pl1). VC1 is a
-production config and VC2 opt-in: keep the runtime pointer. v4pl3p = v4pl1 + uniform presence + the credit path decided
+production config and VC2 opt-in: keep the runtime pointer. **Re-checked 2026-11-01 (V4_RECEIVER_SHAPE.md §32, job 327): holds; v4rxc7c +2.1 to
++2.4 on VC1 1-hop.** v4pl3p = v4pl1 + uniform presence + the credit path decided
 before the call + the send-gate order (+ `in_flight` separate): the candidate for the next full census.
 
 ## 13. `v4pl5`: the candidate (v4pl3p cleaned up)
@@ -248,6 +249,16 @@ increment on every forward is dead work; of the non-posted pair only `acked` is 
 flush before a flushed atomic: hardware ack count == `acked`); `num_issued` only at teardown. Levers (hypotheses):
 forwards with `update_counter=false`; local writes counting only `acked`; later, batching `acked` until something reads
 it; the credit sender's counters.
+**WRONG (2026-10-30, user's recollection, then the source):** the posted counter and `num_issued` are read during
+operation: delivering a `NOC_UNICAST_INLINE_WRITE` packet uses Blackhole's emulated L1 inline write
+(`noc_fast_spoof_write_dw_inline`, flush=true), which spins until the hardware sent counts equal the software issued
+counts, posted and non-posted, on NOC1; an uncounted forward or local write there makes it spin forever (tt-metal
+#28758, why the dataflow API forces `update_counter` on Blackhole). Two ERISCs: the receiver (ERISC1, NOC1) alone keeps
+NOC1's counts; the sender is on ERISC0 / NOC0 (`worker_handshake_noc = noc_index`). One ERISC: the router runs on
+ERISC1 with NOC_INDEX 1, so the sender's credit writes share NOC1's counts too. The "uncounted" variant is dropped.
+Left (not pursued for now): batching the counts and publishing them before every reader (a missed reader hangs), or
+giving inline-write delivery its own transaction-ID completion so nothing reads the global counts (changes main's
+delivery helper).
 
 ## 15. v4pl5's acceptance run, and the one-ERISC isolation (jobs 232-242, 246)
 
@@ -268,3 +279,127 @@ v4pl6 = v4pl5 with v4pl1's credit and connection sequence (step 2.1 dropped). Va
 two-ERISC suite 0.0% (2D, 1D, mix, burst, ring, Y-torus, trimmed, mux; VC1 split and inter-mesh), one ERISC 2D -0.3%,
 1D -0.2%, ring -0.3%, VC2 on two ERISCs 0.0% to -0.1%, one ERISC -0.9%; no row worse than 1% (MixCmd excluded, as in
 every census), six one-ERISC rows better than 1%. Accepted: **lead `v4pl6`** (from v4sh2b, through v4pl1).
+
+## 17. NoC command buffers: presets, and whether a second buffer overlaps (2026-10-30; job 263)
+
+User's question: rotating a packet's back-to-back NoC commands (scatter chunks, multicast forwards) over several command
+buffers, so one waits less; would reprogramming a buffer cost more than the wait? Counts from the NoC API that v4pl6
+builds with, checked in the compiled v4pl6 2D receivers (E/W- and N/S-facing) and sender (scratchpad `noc_regs.py`).
+
+Register writes per command (each command also reads its buffer's ready state first):
+
+| Command | Buffer | Preset | Full | The preset holds |
+| --- | --- | ---: | ---: | --- |
+| local write (E1) | 0 | 6 | 7 | NOC_CTRL only |
+| forward data, one live downstream (1D, E/W 2D) | 2 | 5 | 7 | NOC_CTRL, destination coordinate |
+| forward credit, one live downstream | 1 | 1 (2 on rings) | 7 | all but the go register |
+| forward data / credit, several downstreams | 2 / **3** | - | 7 / 7 | none |
+| atomic (E1), upstream credit (E0) | 3 | - | 7 | none |
+| worker credit (E0, out of line) | 0 | 3 | - | the connected worker's credit word |
+
+Buffer use: E1 with one live downstream uses all four; E1 with several leaves buffer 1 unused (its forward credits go on
+the atomics buffer); E0 on two ERISCs uses 0 and 3 and leaves 1 and 2 unused. The emulated inline-write delivery
+(`noc_fast_spoof_write_dw_inline`) also writes buffer 0's NOC_CTRL; it writes the value the local-write preset holds,
+so the preset survives, by coincidence of equal values.
+
+**Microbenchmark** (`EriscLoadOverlap.NocCmdBufOverlap`, kernel `erisc_load_ubench/kernels/noc_cmdbuf_overlap.cpp`;
+`results/noc_cmdbuf_overlap.csv`): ERISC1 / NOC1 as the receiver, non-posted transaction-ID writes to a Tensix L1,
+issued as the receiver's local writes (NOC_CTRL preset, then transaction ID with its ready wait, source, length,
+destination, coordinate, go), rotating over 1 / 2 / 4 buffers; bursts of 4 from an idle interface (best of 64) and
+streams of 64 (best of 8). Cycles per write:
+
+| | burst issue | burst ready call | stream issue | stream ready call | stream all sent |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 B - 2 KiB, n = 1 / 2 / 4 | 40 / 37 / 38 | 15.3 / 14.5 / 14.3 | 42.7 / 46.1 / 42.5 | 14.1 / 15.2 / 14.0 | 43 / 46 / 43 |
+| 4 KiB, n = 1 / 2 / 4 | 57 / 37 / 38 | 31.8 / 14.5 / 14.3 | 70.4 / 69.2 / 67.0 | 41.9 / 38.4 / 38.6 | 72.1 / 72.0 / 72.1 |
+
+- Up to 2 KiB a write never waits for its buffer: the ready call costs ~14 with 1 buffer or 4 (the ready read
+  itself plus the tag write), and the rest of the ~37-43 cycles is programming. More buffers have nothing to hide.
+  The n = 2 / 1 differences at these sizes (burst -13, stream +3.4 per write, first write alone 38 / 35 / 36) appear
+  at 64 B too, where nothing waits: code shape, not the NoC.
+- At 4 KiB the writes leave at the NoC interface's rate (~72 cycles each, ~57 B/cycle, as RESULTS §17's 53-57):
+  with 2 buffers a burst of four 4 KiB writes is issued ~80 cycles sooner (227 -> 148), but every write has left at
+  the same time (342 -> 335). A second buffer frees the core for other work; it does not move data sooner.
+- So the receiver's "command-buffer waits" (RESULTS §98 v4u: ~7 per NoC command) are the ready read, not a busy
+  buffer, except for back-to-back large writes. Rotating buffers is not a lever for scatter (chunks are small) or
+  for multicast forwards of small packets; for 4 KiB multicast it would only pay if the receiver had work to overlap.
+  Earlier attempts at the ready reads: grouping them with the header (v4ub) lost; pairing a stateful forward's two
+  (v4uf) gained on forwarded rows.
+- Programming: the first write alone takes 35-38 cycles, ~14 of them the ready call, leaving ~21-24 for five register
+  writes and their address arithmetic (estimate: ~3-4 cycles per back-to-back register write). **WRONG (job 266,
+  table 4 below):** a fully programmed credit (7 register writes) against a preset one (1) costs 6.0 cycles more per
+  pair, so ~1 cycle per register write; the rest of the 21-24 is address arithmetic, the loop and the timer reads.
+- A write from buffer 1 or 3 needs this core as its source coordinate: `noc_init` sets NOC_TARG_ADDR_COORDINATE only on
+  the two write buffers (0, 2), and buffers 1 and 3 keep their last read's or atomic's target. The first build wrote
+  from them without it and hung ERISC1 (job 259; broker held the mesh degraded; reset through the broker). The
+  benchmark presets the coordinate on every buffer and bounds its waits.
+
+## 18. A ready mask over the command buffers, and forward-like pairs (2026-10-30; job 266)
+
+User's idea: read the buffers' ready registers as a group (as the stream registers are), keep a mask of buffers known
+ready (one seen ready stays ready until this core issues on it), take the next command's buffer from it (rotation, or
+any ready buffer), reload when a needed bit is clear or opportunistically at each pass's end. Constraint found first
+(§17): a buffer's leftover registers matter (an atomic or inline write leaves its destination as the source a later
+write would read), so buffers are pooled by command class. The benchmark (`NocCmdBufOverlap`, now three kernel runs;
+`results/noc_cmdbuf_mask.csv`) adds: table 2, the table-1 writes through a mask sampled before each repetition (the
+previous pass's end, not timed in the issue) and after every 4 writes, the transaction ID then written without a ready
+read; table 3, one grouped sample of 1-4 idle buffers; table 4, forward-like pairs (posted data write, then a posted
+inline write to a stream register of the same core). Cycles; table 1 re-run in the same job.
+
+| issue, 4-write burst (min) | per-command read: 1 / 2 / 4 buffers | mask: rotate 1 / 2 / 4, any of 2 / 4 |
+| --- | --- | --- |
+| 64 B - 2 KiB | 172 / 154 / 150 | 190 / 190 / 157 / 205 / 195 |
+| 4 KiB | 232 / 154 / 150 | 255 / 211 / 157 / 232 / 195 |
+
+| issue per write, stream of 64 (min) | per-command read: 1 / 2 / 4 | mask: rotate 1 / 2 / 4, any of 2 / 4 |
+| --- | --- | --- |
+| 64 B - 1 KiB | 44.0 / 43.9 / 47.0 | 47.6 / 45.4 / **40.3** / 53.0 / 51.0 |
+| 4 KiB (all sent: 72 per write in every case) | 70.5 / 69.1 / 67.0 | 70.6 / 69.9 / 67.8 / 69.7 / 68.5 |
+
+Table 3, one grouped sample: 1 buffer 11.0, 2: 15.1, 3: 18.1, 4: 22.1 (the first read ~10, each further one ~4).
+
+| per pair (32 pairs, min) | shared buffer | data preset + credit full | both preset | preset + mask | preset + mask, data rotating |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 B: issue / all sent | 91.9 / 92.3 | 56.5 / 57.0 | **50.5** / 50.9 | 54.2 / 54.7 | 65.2 / 65.7 |
+| 4 KiB: issue / all sent | 123.9 / 125.2 | 73.8 / 75.5 | 73.5 / 75.5 | 73.9 / 75.6 | 87.7 / 89.3 |
+
+- The mask does not pay on its own. A per-command ready read costs only a few cycles beyond the mask's own
+  bookkeeping (its latency overlaps the next command's address arithmetic), while the mask needs a sample per pass
+  (11 + ~4 per buffer) and, picking any ready buffer, a runtime-to-buffer dispatch (+7 to +9 per write). Only fixed
+  rotation over 4 buffers in a long stream wins (-3.7 per write); E1 has no four free buffers. Forward-like pairs
+  with the mask: +3.7 per pair at 64 B, equal at 4 KiB; rotating the data over two buffers: +15.
+- Separate buffers per command class matter: sharing one buffer between the data write and its credit costs +35
+  per pair at 64 B (+50 at 4 KiB). The credit is kicked a few cycles after the data and waits for the data command
+  to be accepted (~25-30 cycles at 64 B), and both are programmed in full. A data write takes ~35-40 cycles to
+  program, so the previous write on the same buffer has been accepted by then (table 1: no wait below 4 KiB).
+- Presets are worth ~1 cycle per register write avoided (credit full against preset: -6.0 per pair at 64 B; nothing at
+  4 KiB, where the NoC's rate binds). §17's register counts at this cost: a forward on a several-downstream router
+  ~8 more than a stateful one; E0's upstream credit ~5-6 per credit, once per completion group.
+- What remains: grouping the ready reads a packet needs anyway, as v4uf does for a stateful forward's two (table 3:
+  each further read in a group ~4 against ~10 alone), e.g. a fused packet's local-write and atomic buffers, or a
+  write-and-forward packet's three. Hypothesis, a few cycles on those rows.
+
+## 19. `v4hd`: header fields taken in once per packet into a per-slot ring (2026-10-30; jobs 267-270) - rejected
+
+User's idea: load a packet's header fields once and keep them for later use (the receiver reads `src_ch_id` in the
+first-level-ack loop and the same word again when processing; and a parse-ahead receiver would need it). v4hd = v4pl6 +
+`SlotHeaders` per receiver channel (the size / send type / source word and the routing fields, per ring slot, in
+memory), filled by a take-in step (in the ack loop under first-level acks, at the poll for every packet the
+packets-received register shows otherwise) and read by processing. Coverage 1,610/1,610 (-O3); E1 code +56 to +260 B
+(VC1 E0+E1 23,524, 3,100 left), E1 stack -128 B; validation 13/13 (job 267). Row-first A/B against v4pl6 in the same
+jobs, 2 repetitions each, every pair within 0.1:
+
+| row (cycles/packet) | v4pl6 | v4hd | |
+| --- | ---: | ---: | ---: |
+| ring1 / ringbidir / halfring | 150.7 / 150.6 / 182.4 | 153.5 / 153.5 / 185.2 | +2.8 / +2.9 / +2.8 |
+| torusns | 158.8 | 171.0 | +12.2 |
+| ew16 / ewscatter / hop3 / mcast | 115.8 / 141.9 / 145.9 / 141.8 | 126.0 / 159.0 / 152.8 / 145.6 | +10.2 / +17.1 / +6.9 / +3.8 |
+| lin1 / linmcast | 124.4 / 142.8 | 124.4 / 150.2 | 0.0 / +7.4 |
+
+Worse on every row but lin1. Rejected; deferred strict atomics need a pending record copied from the header, not this.
+Hypothesis (static code only, cycles not split): the duplicate load it removes was already overlapped with the
+others (the header word and route bytes issue back to back), so dropping it saves an issue slot; the ring adds, per
+packet, two stores and two local-memory loads with index arithmetic for both arrays, and spills around the take-in
+loop (torus E1: +19 loop instructions, +4 stack loads, +4 stack stores). Without first-level acks intake and
+processing are the same moment, so the ring is pure cost there. Rows set by the worker's credit loop also slow down
+when the receiver's per-packet time grows, even where the sender binds (a hypothesis for the size of the 2D losses).

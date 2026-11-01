@@ -139,6 +139,19 @@ def add_host_setting_args(hd):
         t = t.replace("#define KERNEL_COMPILE_TIME_ARG_MAP ",
                       '#define KERNEL_COMPILE_TIME_ARG_MAP {"ETH_TXQ_SEQ_UPDATE_TIMEOUT",%s},' % (v.group(1) if v else 0), 1)
         open(m, "w").write(t)
+    # SENDER_CH_<i>_CONNECTION_SEMAPHORE_ADDR (2026-11-01, v4rxc7c/wc): the host's
+    # sender_channels_connection_semaphore_address[i], 96 B into the channel's connection info block
+    # (EDMChannelWorkerLocationInfo, 64 B, then the flow-control and terminate fields, 16 B each); 0 where the channel
+    # has no block (erisc_datamover_builder.cpp, the sender channel layout).
+    t = open(m).read()
+    if '{"SENDER_CH_0_CONNECTION_SEMAPHORE_ADDR",' not in t:
+        extra = ""
+        for i in range(10):
+            v = re.search(r'\{"LOCAL_SENDER_CH_%d_CONN_INFO_ADDR",(\d+)\}' % i, t)
+            info = int(v.group(1)) if v else 0
+            extra += '{"SENDER_CH_%d_CONNECTION_SEMAPHORE_ADDR",%d},' % (i, info + 96 if info else 0)
+        t = t.replace("#define KERNEL_COMPILE_TIME_ARG_MAP ", "#define KERNEL_COMPILE_TIME_ARG_MAP " + extra, 1)
+        open(m, "w").write(t)
 
 
 # OFFLINE_SFPI=<sfpi root> builds with another toolchain (compiler, its headers and libraries) than the one the

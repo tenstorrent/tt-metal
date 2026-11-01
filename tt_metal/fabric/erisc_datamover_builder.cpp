@@ -1371,6 +1371,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", i)] =
             static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[i]);
     }
+    // Study (fabric_exp, v4): each sender channel's connection semaphore, the address its runtime arg also carries, so
+    // the router reads a worker's connection state every pass without loading a pointer (unused by main's routers).
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_CONNECTION_SEMAPHORE_ADDR", i)] =
+            static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[i]);
+    }
 
     // --- Status pointers ---
     named_args["TERMINATION_SIGNAL_ADDR"] = static_cast<uint32_t>(this->termination_signal_ptr);
@@ -1579,6 +1585,24 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
     named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
     named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+    // A receiver channel left serviced (the capture saw it consume packets) while its VC shows neither forwards nor
+    // local writes contradicts itself: every packet a receiver consumes is forwarded or written here. The router takes
+    // the two flags as agreeing (forwarding is off on a serviced channel only where the channel delivers every packet:
+    // VC2's, VC0's on a speedy router), so such a capture is a capture failure.
+    for (size_t vc = 0; vc < 2; vc++) {
+        const bool vc_has_receiver = vc == 0 || config.num_used_receiver_channels_per_vc[1] != 0;
+        const bool delivers_only = vc == 0 && enable_speedy_vc0 && !this->has_drisc_offload();
+        TT_FATAL(
+            !vc_has_receiver || delivers_only || !this->is_receiver_channel_serviced_[risc_id][vc] ||
+                compute_disable_rx_forwarding(vc) == 0,
+            "Channel trimming capture is inconsistent for the router at fabric node {}, Ethernet channel {}: receiver "
+            "channel {} (VC{}) consumed packets but the capture records neither forwards nor local writes on its VC. "
+            "Recapture the channel trimming profile.",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            vc,
+            vc);
+    }
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;

@@ -93,7 +93,8 @@ Status (2026-10-29):
   VC2's own state in registers; one ERISC, VC0's semaphore pointer loaded at its use from the record rather than once
   at pass entry (the only change in that pass). Side finding: VC2 on costs VC0 traffic heavily on any router (v4sh2b,
   2D 4352 mean 144.5 without VC2 -> 214.0 with; 3-hop write 151.9 -> 304.3); cause unknown (hypothesis: VC0's buffer
-  slots shrink). Next (user, 2026-10-29): control placement first (V4_PLACEMENT.md), then revisit 1c on top of it.
+  slots shrink). **Partly (2026-11-01, V4_RECEIVER_SHAPE §26): the tier split costs +0.7 to +29.9 on v4rxc7; VC2
+  compiled in at the same VC0 split costs +14 to +32 more.** Next (user, 2026-10-29): control placement first (V4_PLACEMENT.md), then revisit 1c on top of it.
 
 The original draft follows.
 

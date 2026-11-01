@@ -125,6 +125,9 @@ CASES = {
     "bh_vc1_1erisc_sc": (BH, None, {**ONE, **SC}, "bh"),
     "bh_vc1_1erisc": (BH, None, ONE, "bh"),
     "bh_vc1_allinstr": (BH, None, ALL_INSTR, "bh"),
+    # VC1 + VC2 (2026-11-01): the VC1 split with VC2 enabled (v4 admits it from variants/v4rxc7v)
+    "bh_vc1_vc2": (BH, None, {"TT_METAL_ENABLE_FABRIC_VC2": "1"}, "bh"),
+    "bh_vc1_vc2_1erisc": (BH, None, {"TT_METAL_ENABLE_FABRIC_VC2": "1", **ONE}, "bh"),
     "wh_vc1": (WH_T3K, None, {}, "wh"),
     # Single BH Galaxy (8x4); express = the 8x4 torus with one dim-0 express pattern (5 VC0 sender channels, Z routers)
     "glx_2d": (GLX, test_yaml("Mesh"), {}, False),

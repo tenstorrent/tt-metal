@@ -1,0 +1,30 @@
+# One long row for PC sampling (torusns_scatter): TorusY1HopNS scatter write at 4352 B, ~9 s (as exp_torus_y.yaml's
+# row; run with TT_METAL_ENABLE_FABRIC_VC2=1 for the VC2-on receiver, V4_RECEIVER_SHAPE.md step 2).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: torusns_scatter
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
