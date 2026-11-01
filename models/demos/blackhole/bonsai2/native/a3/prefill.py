@@ -25,6 +25,7 @@ from . import op as a3
 import os
 
 _FP32_DEST = os.environ.get("BONSAI_DQ_FP32", "1") == "1"
+_DQ_FID = ttnn.MathFidelity.HiFi4
 KDIR = "models/demos/blackhole/bonsai2/native/a3/kernels/"
 
 _HIFI4 = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
@@ -33,7 +34,7 @@ _LOFI = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi, f
                                          packer_l1_acc=False)
 
 
-def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b):
+def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fidelity=None):
     """w, s: a3.weights_for_device output for codes [K, N_pad] (gu: (gate, up) column pairs).
     n: real output columns (gu: per half). Returns [1, 1, K, n] DRAM tensor(s) (gu: (gate, up))."""
     device = w.device()
@@ -72,13 +73,13 @@ def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b):
         compile_time_args=ct, runtime_args=rt, config=cfg)
     prog = ttnn.ProgramDescriptor(
         kernels=[
-            kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb], rd, ttnn.ReaderConfigDescriptor()),
-            kd("dequant_writer.cpp", [ng, n // 32, int(gu), otb], wr, ttnn.WriterConfigDescriptor()),
-            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8], cp, ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=_FP32_DEST, math_approx_mode=False)),
+            kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb, ncols], rd, ttnn.ReaderConfigDescriptor()),
+            kd("dequant_writer.cpp", [ng, n // 32, int(gu), otb, int(os.environ.get("BONSAI_DQ_SKIPW", "0")), ncols], wr, ttnn.WriterConfigDescriptor()),
+            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols], cp, ttnn.ComputeConfigDescriptor(
+                math_fidelity=fidelity or _DQ_FID, fp32_dest_acc_en=_FP32_DEST, math_approx_mode=False)),
         ],
         semaphores=[],
-        cbs=[cb(0, w.dtype, wtb, 64), cb(1, ttnn.float32, 4096, 2), cb(16, dtype, otb, 16)])
+        cbs=[cb(0, w.dtype, wtb, 64), cb(1, ttnn.float32, 4096, 2), cb(16, dtype, otb, 64)])
     ttnn.generic_op([w, s] + outs, prog)
     return tuple(outs) if gu else outs[0]
 
@@ -100,8 +101,18 @@ class Rotator:
             x = ttnn.typecast(x, ttnn.bfloat16)
         xt = ttnn.transpose(ttnn.reshape(x, [1, 1, s, k]), -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         xt4 = ttnn.reshape(xt, [1, k // 1024, 1024, s])
+        # S=128: small M blocks beat auto, bit-identical (sweep_rot.py, chip 3, ms): K=17408 0.140 vs 0.522
+        # (per_core_M 8), K=5120 0.071 vs 0.170 and K=6144 0.086 vs 0.201 (per_core_M 4). At 2048 auto beats
+        # every reuse config tried.
+        pc = None
+        if s == 128:
+            g = x.device().compute_with_storage_grid_size()
+            pcm = 4 if (k // 1024) * 8 <= g.x * g.y else 8
+            pc = ttnn.MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=(g.x, g.y), in0_block_w=4,
+                                                        out_subblock_h=pcm // 4, out_subblock_w=4 if pcm == 4 else 2,
+                                                        per_core_M=pcm, per_core_N=4)
         rt = ttnn.matmul(self.mt[k], xt4, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        dtype=ttnn.bfloat16)  # default would be in0's bfp8
+                         dtype=ttnn.bfloat16, program_config=pc)  # dtype: default would be in0's bfp8
         ttnn.deallocate(xt)
         y = ttnn.transpose(ttnn.reshape(rt, [1, 1, k, s]), -2, -1, memory_config=mem)
         ttnn.deallocate(rt)

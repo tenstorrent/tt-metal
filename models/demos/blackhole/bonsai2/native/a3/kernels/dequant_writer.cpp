@@ -18,23 +18,23 @@ void kernel_main() {
     constexpr uint32_t gu = get_compile_time_arg_val(2);
     constexpr uint32_t otb = get_compile_time_arg_val(3);  // bytes per output tile
     constexpr uint32_t cb_out = 16;
+    constexpr bool skip = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t ncols = get_compile_time_arg_val(5);  // debug: drop the writes (bound analysis)
     const InterleavedAddrGen<true> og0{.bank_base_address = out_addr, .page_size = otb};
     const InterleavedAddrGen<true> og1{.bank_base_address = out_addr2, .page_size = otb};
 
     for (uint32_t u = u0; u < u0 + nu; ++u) {
-        const uint32_t c = u / ng, G = u % ng;
+        const uint32_t c = u % ncols, G = u / ncols;
         const uint32_t oc = gu ? c >> 1 : c;
         const auto& og = (gu && (c & 1)) ? og1 : og0;
-        for (uint32_t q = 0; q < 4; ++q) {
-            cb_wait_front(cb_out, 8);
-            uint32_t l1 = get_read_ptr(cb_out);
-            for (uint32_t t = 0; t < 8; ++t) {
-                noc_async_write(l1, get_noc_addr((G * 32 + q * 8 + t) * out_nt + oc, og), otb);
-                l1 += otb;
-            }
-            noc_async_writes_flushed();  // L1 free to reuse; acks are collected once at the end
-            cb_pop_front(cb_out, 8);
+        cb_wait_front(cb_out, 32);
+        uint32_t l1 = get_read_ptr(cb_out);
+        for (uint32_t t = 0; t < 32 && !skip; ++t) {
+            noc_async_write(l1, get_noc_addr((G * 32 + t) * out_nt + oc, og), otb);
+            l1 += otb;
         }
+        noc_async_writes_flushed();  // L1 free to reuse; acks are collected once at the end
+        cb_pop_front(cb_out, 32);
     }
     noc_async_write_barrier();
 }

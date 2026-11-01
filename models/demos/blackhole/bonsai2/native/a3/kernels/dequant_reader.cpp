@@ -8,7 +8,8 @@
 //           offset j*s_tiles*4096; super-group G lives in tile G/4, rows (G%4)*8..+7).
 // One work unit = (column c, super-group G) = 32 code tiles (8 groups of 128) + the one
 // scale tile that holds their 8 scale rows.
-// Runtime args: w_addr, s_addr, u0 (first unit), nu (units on this core). Unit u: c = u / ng, G = u % ng.
+// Runtime args: w_addr, s_addr, u0 (first unit), nu (units on this core). Unit u: c = u % ncols, G = u / ncols
+// (column fastest, so a core's consecutive units hit different DRAM banks).
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -21,11 +22,12 @@ void kernel_main() {
     constexpr uint32_t s_tiles = get_compile_time_arg_val(1);  // scale tiles per column
     constexpr uint32_t cpb = get_compile_time_arg_val(2);      // weight columns per DRAM bank
     constexpr uint32_t wtb = get_compile_time_arg_val(3);      // bytes per code tile
+    constexpr uint32_t ncols = get_compile_time_arg_val(4);    // real weight columns
     constexpr uint32_t cb_w = 0, cb_s = 1;
     constexpr uint32_t kt = ng * 32;
 
     for (uint32_t u = u0; u < u0 + nu; ++u) {
-        const uint32_t c = u / ng, G = u % ng;
+        const uint32_t c = u % ncols, G = u / ncols;
         const uint32_t bank = c / cpb, j = c % cpb;
         cb_reserve_back(cb_s, 1);
         noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + (j * s_tiles + G / 4) * 4096),
