@@ -249,9 +249,12 @@ def gated_attention_forward_ttnn(
     if fused_qkv_weight is not None:
         if isinstance(fused_qkv_weight, ttnn.Tensor):
             qkv_fused = ttnn.linear(hidden_states, fused_qkv_weight, compute_kernel_config=ckc, memory_config=memory_config)
-        else:  # bonsai2 BONSAI_NATIVE=pq2_0: exact-ternary TernaryLinear, decode only
-            assert T <= ttnn.TILE_SIZE, "exact-ternary qkv is decode-only"
+        elif T <= ttnn.TILE_SIZE:  # bonsai2 BONSAI_NATIVE=pq2_0: exact-ternary TernaryLinear (A3 decode)
             qkv_fused = fused_qkv_weight.forward(hidden_states, out_mem=memory_config)
+        else:  # bonsai2 BONSAI_NATIVE=pq2_0 prefill: dequant + stock matmul
+            from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_linear
+
+            qkv_fused = prefill_linear(fused_qkv_weight, hidden_states, mem=memory_config)
         _qg_n = num_attention_heads * head_dim * 2
         _kv_n = num_key_value_heads * head_dim
         _total = _qg_n + 2 * _kv_n
