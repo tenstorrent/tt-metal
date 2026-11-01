@@ -159,7 +159,9 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
     rot = rotator(sh)
     k, h = x.shape[-1], mlp.w_d.shape[-2]  # w_d is [K=hidden, N=dim]
     xr = rot(x)
-    wg, wu = dequant(mlp.w_gu, mlp.s_gu, k, h, gu=True)
+    # BONSAI_PF_GU=bfp4: gate/up scratch in bfp4 (the dense path's gate/up dtype): 0.9 vs 1.3 ms dequant per layer.
+    gu_dt = ttnn.bfloat4_b if os.environ.get("BONSAI_PF_GU") == "bfp4" else ttnn.bfloat8_b
+    wg, wu = dequant(mlp.w_gu, mlp.s_gu, k, h, gu=True, dtype=gu_dt)
     pc = wide_pc(xr.shape[-2], k, h)
     g = ttnn.linear(xr, wg, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
     u = ttnn.linear(xr, wu, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
