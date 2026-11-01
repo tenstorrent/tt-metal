@@ -194,11 +194,13 @@ class BankStreamMatmul:
         ttnn.generic_op(section["tensors"], program)
         return section["out"]
 
-    def section(self, x, w, compact_out=None, rows=4, start=0, x_wait=0):
+    def section(self, x, w, compact_out=None, rows=4, start=0, x_wait=0, signal=None):
         """The program of ``__call__`` as kernels, CBs, semaphores, tensors and its output ``out``, for a launch of
         its own or inside another one. ``start`` > 0 (a prefetch): the weights stream into L1 whole once semaphore
         START_SEM counts ``start`` increments, and x (in DRAM) is read once X_READY_SEM of the bank groups' x
-        loaders (``self.x_loaders(x)``) counts ``x_wait``; compute then runs on the resident weights."""
+        loaders (``self.x_loaders(x)``) counts ``x_wait``; compute then runs on the resident weights. ``signal``
+        (NoC cores, with ``compact_out``): each core raises semaphore 0 of every one of them once its output rows
+        landed (the producer of a ReduceExpand.call_fabric launch)."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert _is_interleaved(x) and rows in (4, 8)
         assert not start or (x.memory_config().buffer_type == ttnn.BufferType.DRAM and self.can_share and x_wait)
@@ -240,6 +242,8 @@ class BankStreamMatmul:
                 if q:
                     peers[b].append(noc)
         share_len = 4 + 2 * max(len(p) for p in peers)
+        assert signal is None or compact_out is not None, "a signalled output is the compact rows"
+        sig = [len(signal)] + [v for c in signal for v in (c.x, c.y)] if signal else []
         reader_rt, writer_rt = [], []
         for (b, q), vc in zip(self.slots, self.vcs):
             first = b + self.banks * q * self.cpc
@@ -251,7 +255,7 @@ class BankStreamMatmul:
                 share = [1, 0, 0, len(peers[b])] + [v for c in peers[b] for v in (c.x, c.y)]
             else:
                 share = [2, loaders[b].x, loaders[b].y, 0]
-            writer_rt.append([x_addr, out_addr, first, valid] + share + [0] * (share_len - len(share)))
+            writer_rt.append([x_addr, out_addr, first, valid] + share + [0] * (share_len - len(share)) + sig)
 
         ranges = _ranges(self.cores)
         reader = _kernel(
@@ -295,6 +299,8 @@ class BankStreamMatmul:
                 rows,
                 self.X_READY_SEM,
                 x_wait if start else 0,
+                4 + share_len if signal else 0,
+                0,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),

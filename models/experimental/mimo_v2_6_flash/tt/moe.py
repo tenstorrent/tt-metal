@@ -341,7 +341,8 @@ class TtMiMoMoE:
             fabric = fabric_row_gather(self.plan, self.reduce_expand)
             h = norm[1]
             fused_router = self.router_scores is not None and self.router_scores.accepts(h, self.w_router)
-            if route and ROUTER_IN_REDUCE and fused_router:
+            # Not beside an o stream producer: both take the bank cores and their neighbours.
+            if route and ROUTER_IN_REDUCE and fused_router and not isinstance(compact, PendingCompact):
                 # The router of the decode that reads norm_out (forward_decode right after this) runs in this launch.
                 waits = len(self.reduce_expand.cores)
                 section = self.router_scores.section(h, self.w_router, wait=waits)

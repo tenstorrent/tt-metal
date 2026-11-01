@@ -61,7 +61,7 @@ from ..reference.spec_decode import ADAPTIVE, GROUP_SLOTS, SPEC_SLOTS, WIDTHS
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
-from .moe_stream import KERNEL_DIR, user_rows, zero_output
+from .moe_stream import KERNEL_DIR, PendingCompact, fabric_transport_noc, user_rows, zero_output
 from .profiling import steps
 from .rope import permute_heads_for_rope
 
@@ -126,6 +126,10 @@ VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
 # rows past them as zeros, what padding them with idle slots (output 0, NO_KEY_LSE) gave, without the nine small ops.
 # MIMO_VERIFY_PAD_IDLE=1 pads.
 PAD_IDLE_SLOTS = os.environ.get("MIMO_VERIFY_PAD_IDLE", "0") == "1"
+# The compact decode's o projection inside the following row reduction's launch (a PendingCompact producer): the
+# fabric gather's connections open while it runs instead of on the reduce's critical path. MIMO_O_IN_REDUCE=0: its own
+# launch.
+O_IN_REDUCE = os.environ.get("MIMO_O_IN_REDUCE", "1") == "1"
 
 
 def verify_variants():
@@ -1411,6 +1415,19 @@ class TtMiMoAttention:
         """
         if compact:
             assert self.o_stream is not None, "compact decode needs the bank-local o stream"
+            if self.fabric_gather and O_IN_REDUCE:
+                # The o stream runs in the reduce's launch (its fabric connections open meanwhile), signalling the
+                # transport cores once its rows landed.
+                section = self.o_stream.section(
+                    attn_cat,
+                    self.wo_decode,
+                    compact_out=self.compact_buf,
+                    rows=self.rows,
+                    signal=fabric_transport_noc(self.plan.mesh_device),
+                )
+                return PendingCompact(
+                    section, self.compact_buf, len(self.o_stream.cores), release=lambda: attn_cat.deallocate(True)
+                )
             rows = self.o_stream(attn_cat, self.wo_decode, compact_out=self.compact_buf, rows=self.rows)
             attn_cat.deallocate(True)
             return rows if self.fabric_gather else self.plan.all_gather(rows, dim=3)

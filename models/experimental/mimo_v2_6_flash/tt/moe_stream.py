@@ -1033,6 +1033,8 @@ class ReduceExpand:
         io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
         ttnn.generic_op(io, mesh_program)
         fabric.advance()
+        if producer is not None and producer.release is not None:
+            producer.release()
         return out, norm_out
 
     def _call_norm(self, gathered, out, residual, gamma, norm_out, eps):
@@ -1324,8 +1326,9 @@ class PendingCompact:
     tensors) writes ``rows``, and each of its ``signals`` cores then raises semaphore 0 of every transport core.
     ReduceExpand.call_fabric runs it in the same launch as the all-gather and the reduce."""
 
-    def __init__(self, section, rows, signals):
-        self.section, self.rows, self.signals = section, rows, signals
+    def __init__(self, section, rows, signals, release=None):
+        """``release``: called once the launch is enqueued (frees the section's inputs the caller no longer needs)."""
+        self.section, self.rows, self.signals, self.release = section, rows, signals, release
 
 
 def fabric_row_gather(plan, reduce):

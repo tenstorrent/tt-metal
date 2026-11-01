@@ -66,6 +66,7 @@ void kernel_main() {
     for (uint32_t t = 0; t < cores * tiles_per_core; t++) {
         noc_async_read(src_gen.get_noc_addr(first_core * tiles_per_core + t, 0), scratch + t * tile_bytes, tile_bytes);
     }
+    MOE_MARK(66);
 
     PacketHeaderPool::reset();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[cores * packets];
@@ -73,6 +74,7 @@ void kernel_main() {
         headers[i] = PacketHeaderPool::allocate_header();
     }
     connection.open_finish();
+    MOE_MARK(67);
     noc_async_read_barrier();
     MOE_MARK(62);
 

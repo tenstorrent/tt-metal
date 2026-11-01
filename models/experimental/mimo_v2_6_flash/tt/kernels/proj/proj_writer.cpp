@@ -13,7 +13,9 @@
 // reach only output rows that are written as zeros.
 //
 // ``x_wait`` > 0 (x written by another program of the same launch): roles 0 and 1 read x only once semaphore
-// ``x_sem`` counts that many increments.
+// ``x_sem`` counts that many increments. ``signal_at`` > 0 (the compact output feeds a reduce in the same launch):
+// runtime args signal_at.. are [count, x0, y0, ...]; once the output rows landed, semaphore ``signal_sem`` of each of
+// those cores gets one increment.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -39,6 +41,8 @@ void kernel_main() {
     constexpr uint32_t rows = get_compile_time_arg_val(10);  // the user rows: 4 or 8
     constexpr uint32_t x_sem = get_compile_time_arg_val(11);
     constexpr uint32_t x_wait = get_compile_time_arg_val(12);
+    constexpr uint32_t signal_at = get_compile_time_arg_val(13);
+    constexpr uint32_t signal_sem = get_compile_time_arg_val(14);
     constexpr uint32_t tile_bytes = 2048;                    // bf16 32x32
     constexpr uint32_t face_bytes = 512;                     // bf16 16x16
     constexpr uint32_t user_bytes = rows * 32;               // the user rows of a face
@@ -109,7 +113,15 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, cols);
-        if (role == 1) {
+        if constexpr (signal_at > 0) {
+            const uint32_t count = get_arg_val<uint32_t>(signal_at);
+            for (uint32_t i = 0; i < count; i++) {
+                const uint32_t sx = get_arg_val<uint32_t>(signal_at + 1 + 2 * i);
+                const uint32_t sy = get_arg_val<uint32_t>(signal_at + 2 + 2 * i);
+                noc_semaphore_inc(get_noc_addr(sx, sy, get_semaphore(signal_sem)), 1);
+            }
+        }
+        if (role == 1 || signal_at > 0) {
             noc_async_atomic_barrier();
         }
         return;
