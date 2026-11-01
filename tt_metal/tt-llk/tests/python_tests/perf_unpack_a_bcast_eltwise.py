@@ -45,11 +45,6 @@ def test_perf_col_tile_sdpa(
     run_types,
     is_perf,
 ):
-
-    # MathFidelity is only used for Elwmul
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
-
     run_unpack_a_bcast_eltwise(
         formats,
         mathop,

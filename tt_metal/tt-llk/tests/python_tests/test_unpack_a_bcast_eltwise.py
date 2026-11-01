@@ -37,6 +37,15 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test, result_tensor
 
 
+def _skip_unsupported(mathop, math_fidelity, input_dimensions, srca_reuse_count):
+    input_tiles = input_dimensions[0] * input_dimensions[1] // MAX_TILE_ELEMENTS
+    if input_tiles % srca_reuse_count != 0:
+        pytest.skip("Input tiles must be divisible by reuse factor")
+
+    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
+        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
+
+
 @skip_for_blackhole
 @parametrize(
     formats=input_output_formats(
@@ -65,16 +74,11 @@ def test_unp_bcast_sub_sdpa(
     input_dimensions,
     srca_reuse_count,
 ):
+    _skip_unsupported(mathop, math_fidelity, input_dimensions, srca_reuse_count)
 
     # Precompute constants
     input_tiles = input_dimensions[0] * input_dimensions[1] // MAX_TILE_ELEMENTS
     reuse_factor = input_tiles // srca_reuse_count
-
-    if input_tiles % srca_reuse_count != 0:
-        pytest.skip("Input tiles must be divisible by reuse factor")
-
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -167,6 +171,8 @@ def run_unpack_a_bcast_eltwise(
     perf_report=None,
     run_types=None,
 ):
+    _skip_unsupported(mathop, math_fidelity, input_dimensions, srca_reuse_count)
+
     tile_count = input_dimensions[0] * input_dimensions[1] // MAX_TILE_ELEMENTS
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
