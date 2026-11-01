@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Refinement 2 — WIDTH_SHARDED / BLOCK_SHARDED rms_norm.
+"""Refinements 2 + 4 — WIDTH_SHARDED / BLOCK_SHARDED / HEIGHT_SHARDED rms_norm.
 
 Covers every combine topology and shard-placement path:
   * k = 1 (one shard column), k <= 8 symmetric all-gather, k > 8 per-row owner gather + inv_rms return;
   * WIDTH groups spanning several grid rows (auto config over the whole grid);
   * ragged shards (Split.PAD last column / row), pinned perf geometries;
   * W tail (masked in the collapse reduce — the caller's shard must not change), H padding, poisoned padding;
-  * ROW_MAJOR stick shards (sub-tile shard widths, local tilize), fp32 / bf16 / bf8b.
+  * ROW_MAJOR stick shards (sub-tile shard widths, local tilize), fp32 / bf16 / bf8b;
+  * HEIGHT (k = 1, local reduction): row shards over the whole grid (multi-range grid, ragged last shard).
 """
 
 import pytest
@@ -20,6 +21,7 @@ from ttnn.operations.rms_norm import rms_norm
 
 WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
 
 def _ref(x, gamma, eps):
@@ -107,7 +109,7 @@ def test_block_tile(device, shape):
     _run(device, shape, BS)
 
 
-@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize("ml", [WS, BS, HS])
 @pytest.mark.parametrize(
     "shape", [(1, 1, 32, 50), (2, 1, 100, 47), (1, 1, 17, 64), (1, 1, 416, 1025), (1, 1, 32, 4095)]
 )
@@ -115,13 +117,13 @@ def test_non_aligned_tile(device, ml, shape):
     _run(device, shape, ml)
 
 
-@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize("ml", [WS, BS, HS])
 @pytest.mark.parametrize("shape", [(1, 1, 32, 40), (1, 1, 32, 200), (1, 1, 224, 72), (1, 1, 40, 40)])
 def test_poisoned_padding(device, ml, shape):
     _run(device, shape, ml, fp32_dest=False, poison=1000.0)
 
 
-@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize("ml", [WS, BS, HS])
 @pytest.mark.parametrize(
     "shape", [(1, 1, 32, 64), (1, 1, 256, 512), (2, 1, 100, 47), (1, 1, 32, 4096), (1, 1, 333, 1000), (1, 32, 50)]
 )
@@ -129,13 +131,13 @@ def test_row_major(device, ml, shape):
     _run(device, shape, ml, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize("ml", [WS, BS, HS])
 def test_fp32_and_no_gamma(device, ml):
     _run(device, (1, 1, 64, 1024), ml, dtype=ttnn.float32, gamma_layout=None)
     _run(device, (1, 1, 64, 1000), ml, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-@pytest.mark.parametrize("ml", [WS, BS])
+@pytest.mark.parametrize("ml", [WS, BS, HS])
 def test_bf8b_rm_gamma(device, ml):
     _run(device, (1, 1, 64, 2048), ml, dtype=ttnn.bfloat8_b, gamma_layout=ttnn.ROW_MAJOR_LAYOUT, pcc=0.99)
 
@@ -176,3 +178,25 @@ def test_pinned_perf_geometry(device, rows, W, ml, shard):
 def test_owner_combine_multi_block(device, shape, layout):
     """Members own different row counts per block: cb_inv_owned's read pointer must wrap correctly."""
     _run(device, shape, WS, layout=layout, fp32_dest=False)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 256, 512),  # golden loose case: 8 one-tile-row shards
+        (1, 1, 32, 32),  # one shard, one tile
+        (2, 4, 128, 512),  # leading dims folded into the row shards
+        (1, 1, 8192, 1024),  # 256 tile-rows over the whole grid: multi-range grid + ragged last shard
+        (7136, 736),  # Rt = 223 (prime): ragged last shard
+        (99991, 64),  # Rt = 3125, H tail in the last shard
+        (100, 5120),  # wide rows, 4 tile-rows
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_height(device, shape, layout):
+    _run(device, shape, HS, layout=layout, fp32_dest=False, fidelity=ttnn.MathFidelity.HiFi2)
+
+
+def test_height_rm_tile_gamma(device):
+    """HEIGHT shards hold whole rows, so a ROW_MAJOR input pairs with a TILE gamma (W-split RM shards cannot)."""
+    _run(device, (1, 1, 333, 1000), HS, layout=ttnn.ROW_MAJOR_LAYOUT, gamma_layout=ttnn.TILE_LAYOUT)

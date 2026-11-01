@@ -88,6 +88,7 @@ SUPPORTED = {
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],

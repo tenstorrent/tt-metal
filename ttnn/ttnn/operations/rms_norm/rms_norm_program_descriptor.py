@@ -12,8 +12,8 @@ Blocking (op_design.md -> Blocking Model):
 Every knob below (k, block_row_tiles, x_block_depth, rm_chunk_w_tiles, out_unit_tiles) is computed
 once here and handed to the kernels as a CT/RT arg; the kernels derive all trip counts from them.
 
-WIDTH / BLOCK_SHARDED (Refinement 2): the shard spec fixes the work split — one group per shard row
-(BLOCK) or a single group (WIDTH), k = shard columns, members and their NoC coordinates from the shard
+HEIGHT / WIDTH / BLOCK_SHARDED (Refinements 2, 4): the shard spec fixes the work split — one group per shard row
+(BLOCK / HEIGHT) or a single group (WIDTH), k = shard columns (HEIGHT: k = 1, no combine), members and their NoC coordinates from the shard
 grid (orientation-aware, groups may span grid rows). Block = the resident shard (sub-blocked along rows
 only under L1 pressure). TILE: cb_x / cb_out are backed on the input / output shards (zero-copy). RM:
 the resident sticks are copied locally into the tilize staging CB (never gathered across Tensix cores).
@@ -399,9 +399,9 @@ def _ordered_shard_cores(grid, row_major: bool):
 
 
 def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int) -> Blocking:
-    """WIDTH / BLOCK_SHARDED: the shard spec IS the work split; block = the resident shard.
+    """HEIGHT / WIDTH / BLOCK_SHARDED: the shard spec IS the work split; block = the resident shard.
 
-    Groups = shard rows (WIDTH: one), k = shard columns. Member -> (slice, core) from the shard grid in its
+    Groups = shard rows (WIDTH: one), k = shard columns (HEIGHT: one — local reduction, no combine). Member -> (slice, core) from the shard grid in its
     orientation: WIDTH walks the grid's cores in order (a group may span grid rows); BLOCK puts shard
     (row g, column i) at (x0 + i, y0 + g) for ROW_MAJOR, (x0 + g, y0 + i) for COL_MAJOR. Ragged last shard
     row / column (Split.PAD): the members own only their valid tile-rows / W tiles.
@@ -431,6 +431,18 @@ def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int
 
         def core_of(g, i):
             return order[i]
+
+    elif mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        # k = 1: every Tensix core holds whole rows (the reduction is local, no combine). Shard row g lives on the
+        # g-th core of the grid in its orientation (a multi-range grid, e.g. full rows + a partial last row).
+        if n_w != 1:
+            raise RuntimeError(f"rms_norm: HEIGHT shard width {sw} does not cover the tensor")
+        order = _ordered_shard_cores(ss.grid, row_major)
+        if len(order) < n_h:
+            raise RuntimeError(f"rms_norm: {n_h} row shards but only {len(order)} shard-grid cores")
+
+        def core_of(g, i):
+            return order[g]
 
     else:
         bb = ss.grid.bounding_box()
@@ -512,11 +524,9 @@ def _gamma_mcast_groups(blk: Blocking, grid_x: int):
     return None
 
 
-def is_sharded_wb(tensor) -> bool:
-    return tensor.memory_config().memory_layout in (
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    )
+def is_sharded(tensor) -> bool:
+    """Any shard scheme (HEIGHT / WIDTH / BLOCK): the shard spec fixes the work split, consumed in place."""
+    return tensor.memory_config().is_sharded()
 
 
 def cb_l1_budget(device) -> int:
@@ -567,7 +577,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     device = input_tensor.device()
     geo = derive_geometry(input_tensor.shape)
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    sharded = is_sharded_wb(input_tensor)
+    sharded = is_sharded(input_tensor)
     has_gamma = gamma is not None
     x_dtype = input_tensor.dtype
     g_dtype = gamma.dtype if has_gamma else x_dtype
