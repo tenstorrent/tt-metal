@@ -1,0 +1,215 @@
+2026-11-01 19:19:44.715 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 48 items / 26 deselected / 22 selected
+
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-16-w [N, K] (x @ A^T)] 2026-11-01 19:19:44.946 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 19:19:44.946 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 19:19:44.946 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 19:19:44.946 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 19:19:44.957 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 19:19:44.958 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 19:19:45.037 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 19:19:45.037 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 19:19:45.037 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 19:19:45.037 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 19:19:45.039 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 19:19:45.305 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 19:19:45.338 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 19:19:45.338 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 19:19:45.338 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 19:19:45.380 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+skinny_matmul K=5120 N=16 transpose_b=True batches=1: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 16)         0.999999 1.72e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-16-w [K, N] (g @ B)] skinny_matmul K=5120 N=16 transpose_b=False batches=1: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 16)         0.999999 1.71e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-32-w [N, K] (x @ A^T)] skinny_matmul K=5120 N=32 transpose_b=True batches=1: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 32)         0.999999 1.72e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-32-w [K, N] (g @ B)] skinny_matmul K=5120 N=32 transpose_b=False batches=1: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 32)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-64-w [N, K] (x @ A^T)] skinny_matmul K=5120 N=64 transpose_b=True batches=1: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 64)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-64-w [K, N] (g @ B)] skinny_matmul K=5120 N=64 transpose_b=False batches=1: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 64)         0.999999 1.74e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-16-w [N, K] (x @ A^T)] skinny_matmul K=8192 N=16 transpose_b=True batches=2: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 16)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-16-w [K, N] (g @ B)] skinny_matmul K=8192 N=16 transpose_b=False batches=2: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 16)         0.999999 1.74e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-32-w [N, K] (x @ A^T)] skinny_matmul K=8192 N=32 transpose_b=True batches=2: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 32)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-32-w [K, N] (g @ B)] skinny_matmul K=8192 N=32 transpose_b=False batches=2: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 32)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-64-w [N, K] (x @ A^T)] skinny_matmul K=8192 N=64 transpose_b=True batches=2: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 64)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-64-w [K, N] (g @ B)] skinny_matmul K=8192 N=64 transpose_b=False batches=2: tensor | shape | PCC | rel err | bar
+  out                          (1, 2, 1024, 64)         0.999999 1.73e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-gate_up] skinny_contract N=16384 scale=2.0 transpose_out=True: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 16384, 16)        0.999999 1.70e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_contract_matches_torch[dA-in5120] skinny_contract N=5120 scale=1.0 transpose_out=False: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 16, 5120)         0.999999 1.69e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-out-scaled] skinny_contract N=1024 scale=0.5 transpose_out=True: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 16)         0.999999 1.67e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-qkv-routed] skinny_contract N=1536 scale=0.5 transpose_out=True: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1536, 16)         0.999999 1.69e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-short-last-group] skinny_contract N=7072 scale=1.0 transpose_out=True: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 7072, 16)         0.999999 1.69e-03  (>= 0.9999, <= 0.01) ok
+PASSED
+tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base lora linear (qkv shape): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 6144)       0.999997 2.37e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999997 2.40e-03  (>= 0.99, <= 0.05) ok
+  d lora_A                     (16, 5120)               0.999997 2.41e-03  (>= 0.99, <= 0.05) ok
+  d lora_B                     (6144, 16)               0.999997 2.42e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_mlp_fused_lora_wide_w2 mlp, fused LoRA, wide w2 input (no K-concat): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 3.99e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999987 5.05e-03  (>= 0.99, <= 0.05) ok
+  dA w_gate_up                 (16, 5120)               0.999987 5.02e-03  (>= 0.99, <= 0.05) ok
+  dB w_gate_up                 (16384, 16)              0.999987 5.06e-03  (>= 0.99, <= 0.05) ok
+  dA w2                        (16, 8192)               0.999991 4.31e-03  (>= 0.99, <= 0.05) ok
+  dB w2                        (5120, 16)               0.999991 4.31e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]] decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 4.24e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999982 6.79e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999950 1.43e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999951 1.38e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999963 1.01e-02  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999964 1.03e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999977 7.91e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999976 7.92e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999979 7.35e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999979 7.30e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed] decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 4.24e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999982 6.80e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999949 1.44e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999951 1.39e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999964 1.01e-02  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999964 1.03e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999977 7.91e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999976 7.92e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999979 7.35e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999979 7.30e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul] decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999993 4.08e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999984 6.50e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999954 1.40e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999955 1.32e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999968 9.95e-03  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999969 1.01e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999979 7.85e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999978 7.64e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999983 6.84e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999983 6.81e-03  (>= 0.99, <= 0.05) ok
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+19.09s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]]
+17.89s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+17.70s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed]
+4.18s call     tt-train/tests/python/test_mistral.py::test_mlp_fused_lora_wide_w2
+1.86s call     tt-train/tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+1.16s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-16-w [N, K] (x @ A^T)]
+0.77s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-16-w [N, K] (x @ A^T)]
+0.77s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-64-w [N, K] (x @ A^T)]
+0.62s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-64-w [K, N] (g @ B)]
+0.60s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-16-w [K, N] (g @ B)]
+0.56s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-64-w [N, K] (x @ A^T)]
+0.41s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-64-w [K, N] (g @ B)]
+0.28s call     tt-train/tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-gate_up]
+0.28s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-32-w [N, K] (x @ A^T)]
+0.27s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-32-w [K, N] (g @ B)]
+0.14s call     tt-train/tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-short-last-group]
+0.10s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-32-w [K, N] (g @ B)]
+0.10s call     tt-train/tests/python/test_mistral.py::test_skinny_contract_matches_torch[dA-in5120]
+0.10s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-32-w [N, K] (x @ A^T)]
+0.10s call     tt-train/tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-16-w [K, N] (g @ B)]
+0.04s call     tt-train/tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-qkv-routed]
+0.04s call     tt-train/tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-out-scaled]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-16-w [N, K] (x @ A^T)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-16-w [K, N] (g @ B)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-32-w [N, K] (x @ A^T)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-32-w [K, N] (g @ B)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-64-w [N, K] (x @ A^T)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=5120, 32 tile-rows-64-w [K, N] (g @ B)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-16-w [N, K] (x @ A^T)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-16-w [K, N] (g @ B)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-32-w [N, K] (x @ A^T)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-32-w [K, N] (g @ B)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-64-w [N, K] (x @ A^T)]
+PASSED tests/python/test_mistral.py::test_skinny_matmul_matches_torch[K=8192, 64 tile-rows-64-w [K, N] (g @ B)]
+PASSED tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-gate_up]
+PASSED tests/python/test_mistral.py::test_skinny_contract_matches_torch[dA-in5120]
+PASSED tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-out-scaled]
+PASSED tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-qkv-routed]
+PASSED tests/python/test_mistral.py::test_skinny_contract_matches_torch[dB-short-last-group]
+PASSED tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+PASSED tests/python/test_mistral.py::test_mlp_fused_lora_wide_w2
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]]
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed]
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+================= 22 passed, 26 deselected in 67.12s (0:01:07) =================
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "get_run_mode"
+ - leaked function ""
+ - leaked function "create_submesh"
+ - leaked function ""
+ - leaked function "size"
+ - leaked function ""
+ - leaked function "is_allocated"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-11-01 19:20:52.907 | info     |    BuildKernels | JIT cache stats: 731/796 hits (91.8%) [731 cached, 223 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 19:20:52.907 | info     |    BuildKernels | JIT telemetry: 39 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 19:20:52.922 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 19:20:52.922 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 19:20:53.071 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 19:20:53.071 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 19:20:53.071 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

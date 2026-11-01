@@ -49,6 +49,7 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 28 | math (kernel boost) | KV backward in query-row blocks (dP in DEST, dV / dK contracted over the block) | 48 | 468.4 (463.5) | 34.63 % | landed (backward 345 -> 323 us per call standalone; a mask-register bug found by the round-10 explicit-mask case, fixed) |
 | 29 | math (kernel boost) | RMSNorm backward pass 2 on the FPU (iteration 20's variant A, now admissible) | 48 | 472.2 (best 462.8) | 34.36 % | landed (172 -> 148 us per call, -2.1 ms/step cycle-time; the wall is the run's clock mix) |
 | 30 | math (kernel boost) | SDPA forward: the diagonal chunk computes only the tiles up to the diagonal | 48 | **468.4** | **34.63 %** | landed (bit-exact; -0.1 ms/step at the shard shape, -6 % forward at 32 heads) |
+| 31 | math (kernel boost) | `skinny_matmul` x reads in flight before one barrier | - | - | - | rejected (48 -> 47 us per call: not latency-bound; evidence `O/iter31_*`) |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.

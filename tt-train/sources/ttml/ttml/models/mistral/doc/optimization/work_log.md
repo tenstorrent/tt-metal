@@ -155,6 +155,13 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 31 (rejected): skinny_matmul x reads in flight (kernel boost checklist)
+
+- Roofline / bytes: `SkinnyMatmulPartial` 36 us per call for a 10 MB read over 104 cores (~290 GB/s), the reader's x stream with a barrier per 4-tile block.
+- Expected time after the fix: 36 -> ~25 us (the read latency amortised over 32-tile chunks). Landed: 48 -> 47 us per call (wall, partial + reduce): no gain, the stream was not latency-bound.
+- Structural fix tried: chunks of up to 8 blocks per barrier, a two-chunk x CB, the compute popping the tail padding (`O/iter31_patch.py`); outputs unchanged (the same differing counts against ttnn's matmul). Reverted, Rejected table.
+- Verification of the rejection: `O/iter31_skinny_check.py` before / after (`O/iter31_skinny_baseline.log`, `O/iter31_skinny_check.log`), LoRA harness subset 22 passed on the variant (`O/iter31_lora_tests.log`).
+
 ### Iteration 30: SDPA forward diagonal chunk prefix (kernel boost checklist)
 
 - Roofline / bytes: with 8-row chunks a row computes round_up(q + 1, 8) K tiles for q + 1 needed: 3.5 masked tiles per row on average (+21 % of the forward's math stages, ~50 us per call).
@@ -358,6 +365,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 28 | `a891b66ff30` | blocked `sdpa_bw_kv_compute_kernel.cpp` (rows per chunk, dP in DEST, block contractions; masked rows alone), `q_block` compile arg and block CBs in the KV factory, iteration-28 evidence |
 | review 10 | `85fc26239b7` | review round 10 (iterations 23-27, `optimization/review_round10.md`): five P2 items answered (docs: ranked table from iteration 27, sections 23-27 in the document format with the full text in `D`, expected-time lines, Ledger entries, Rejected rows), `initial_load` dropped from `lpt_schedule`, the stale forward-kernel comment and the unused valid semaphore removed; hard-check gaps measured: bf16 DEST as intended (rejected on time), the SwiGLU backward stride A/B (no effect), the explicit-mask SDPA cases (found iteration 28's mask-register bug) |
 | 29 | `2352f1d3241` | `rmsnorm_bw_rows` pass 2 on the FPU (variant A kernel), factory arg -1/C, iteration-29 evidence |
-| 30 | (this commit) | SDPA forward diagonal chunk prefix (`n_cols` through the QK^T, mask, max, exp and PV stages), iteration-30 evidence |
+| 30 | `82f35c84e55` | SDPA forward diagonal chunk prefix (`n_cols` through the QK^T, mask, max, exp and PV stages), iteration-30 evidence |
+| 31 (rejected) | (this commit) | docs and evidence only: skinny_matmul read-ahead measured and reverted |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.
