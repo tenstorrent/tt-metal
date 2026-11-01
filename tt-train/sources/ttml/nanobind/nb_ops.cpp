@@ -31,6 +31,7 @@
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "metal/ops/transpose_split/transpose_split.hpp"
+#include "metal/ops/vp_ce_row_stats/vp_ce_row_stats.hpp"
 #include "metal/ops/vp_cross_entropy_bw/vp_cross_entropy_bw.hpp"
 #include "metal/ops/write_tile_block/write_tile_block.hpp"
 #include "nb_export_enum.hpp"
@@ -755,6 +756,15 @@ void py_module(nb::module_& m) {
             nb::arg("out_cols") = 0,
             "Fused packed-SwiGLU forward: packed [.., R, 2*I] = [gate|up] -> h = silu(gate)*up "
             "[.., R, I].");
+        py_metal.def(
+            "vp_ce_row_stats",
+            &ttml::metal::vp_ce_row_stats,
+            nb::arg("logits"),
+            nb::arg("mode"),
+            nb::arg("max_col") = nb::none(),
+            "Row statistics of a [B, 1, S, V] bf16 shard: mode 0 the per-slice row max (broadcast over the tile "
+            "columns), mode 1 the per-slice row sum of exp(x - max_col); [B, 1, S, slices * 32] fp32, reduce it "
+            "with max / sum over the last dim.");
         py_metal.def(
             "swiglu_packed_bw",
             &ttml::metal::swiglu_packed_bw,

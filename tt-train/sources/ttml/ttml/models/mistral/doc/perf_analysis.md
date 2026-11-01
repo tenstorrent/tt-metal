@@ -63,6 +63,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 29 | real weights, warm | 488.4 (483.2) | - | `O/iter29_full_tp4_real.log` |
 | 30 | SDPA forward: the diagonal chunk computes only the tiles up to the diagonal | 468.4 (463.0) | 34.63 % | `O/iter30_tp_mfu_tp4.log` (clock mix 1.00-1.19 GHz) |
 | 30 | real weights, warm | 489.2 (481.6) | - | `O/iter30_full_tp4_real.log` |
+| 32 | cross-entropy forward statistics in one pass over the logits shard (`vp_ce_row_stats`) | 464.2 (459.5) | 34.95 % | `O/iter32_tp_mfu_tp4.log` |
+| 32 | real weights, warm | 483.5 (478.0) | - | `O/iter32_full_tp4_real.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -360,6 +362,14 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Verification**: six shapes bit-exact with iteration 28's outputs (`O/iter30_build_check.log`); harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0301, identical to 29); real weights warm 489.2 ms.
 - **Evidence**: `O/iter30_patch.py`, `O/iter30_build_check.{sh,log}`, `O/iter30.{sh,log}`, `O/iter30_harness.log`, `O/iter30_tp_grad_check_tp4.log`, `O/iter30_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter30_loss_comparison.txt`, `O/iter30_full_tp4_real.log`.
 
+## Iteration 32 (2026-11-01): cross-entropy forward statistics in one pass (kernel boost)
+
+- **Change**: fixed-cost math (owned kernels): new op `metal/ops/vp_ce_row_stats`: per (row, vocab slice) item the row max (FPU reduce, broadcast over the tile's columns) or the row sum of exp(x - max) (accurate SFPU exp, elementwise fp32 accumulation in DEST, the SFPU fp32 row reduce masked to column 0), `[B, 1, S, slices * 32]` fp32 partials reduced by `ttnn::max` / `ttnn::sum`; `losses.cpp` uses it for the local max and the local sum, the 128 MB fp32 exp tensor of the sub-exp + sum path is gone. Checklist: `optimization/work_log.md`, "Iteration 32".
+- **Result**: TP=4 468.4 -> 464.2 ms (best 463.0 -> 459.5), 34.95 % MFU (profile clock mix 1.10-1.14 GHz on chips 0-1).
+- **Attribution** (chip 0, per profiled step, cycle-time): the CE forward rows `Reduce` [1024, 32768] x2 (0.69) and `BinaryNg` [1024, 32768] (0.63) replaced by `VpCeRowStats` 0.539 (the sum: the accurate exp) + 0.188 (the max): 1.29 -> 0.73 ms per step, ~-0.56 ms/step; standalone at the shard shape (`O/iter32e_ce_stats_check.log`): max 51 us + sum 152 (chain 215) against 500 for ttnn's max + sub / exp / sum; precision identical (row max exact, row sums 5.3e-6 max relative vs fp64, the old path 5.3e-6).
+- **Verification**: standalone vs numpy (`O/iter32e_ce_stats_check.log`); CE / loss / embedding harness subset 5; harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0301, identical to 30); real weights warm 483.5 (478.0) ms.
+- **Evidence**: `O/iter32_patch.py` (the op's files), `O/iter32_ce_stats_check.{py,log}` + `O/iter32{b,c,d,e}_ce_stats_check.log` (the sum's four variants: FPU matmul-with-ones 2e-4 relative, FPU reduce NaN columns, SFPU accumulation + FPU reduce, SFPU reduce with the SDPA's bf16-grade exp 5.6e-4, then the accurate exp), `O/iter32_ce_tests.log`, `O/iter32.{sh,log}`, `O/iter32_harness.log`, `O/iter32_tp_grad_check_tp4.log`, `O/iter32_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter32_loss_comparison.txt`, `O/iter32_full_tp4_real.log`.
+
 ## State after iteration 20 (2026-10-30 night): where the remaining time is
 
 > Written after iteration 20 (2026-10-30 night), kept as the record of that night's conclusion. Review round 9: the "owned kernels at their exact-fp32 ceilings" statement held for the compute side only; iteration 22 (2026-11-01) found the SDPA kernels' data path (the K/V stream) worth another ~4 ms/step with no numerics change, and iteration 23 continues there. The ttnn matmul and chip-skew statements stand.
@@ -461,4 +471,5 @@ Full ledger entries: `D`, "Ledger".
 - Iteration 24 loss match: the single-chip 8-layer run fuses qkv / gate_up / out and never w2 (not a transposed shape), so the match (identical to 23's) does not exercise the wide path; its torch reference is the harness case `test_mlp_fused_lora_wide_w2` at the shard width and the TP gradient check.
 - Review round 10 process items: iteration 26 bundled three changes in one commit (each measured on its own; recorded in the commits table), `lpt_schedule`'s unused `initial_load` parameter dropped, the sections 23-27 shortened to the document format (full text in `D`).
 - Iteration 29 profile: chips 0-1 at 0.98-1.01 GHz effective, chips 2-3 at 1.14-1.20 (tt-smi 1350 MHz); the MFU run 472.2 (best step 462.8) against 468.4 (463.5) for iteration 28 at 1.07-1.24: the box's clock mix moves the wall by more than the iteration's -2.1 ms/step; cycle-time rows used.
+- Iteration 32: the SDPA kernels' `sdpa_exp_tile` (Blackhole `exp_21f_bf16`) is a bf16-grade exp (5.6e-4 relative on the row sums); the FPU paths (matmul with a ones column, `reduce_tile`) round fp32 operands to 19 bits (2e-4 on an 8192-term sum); the cross-entropy normalizer keeps the old path's 5e-6 only with `exp_tile<false>` and the SFPU fp32 reduce. A debug run of the FPU-reduce variant hung the chips (`tt-smi -r`).
 - Rank-16 K lanes: `lowrank_update`, `skinny_contract`, the `[r, N]` + transpose path and the previous `ttnn.matmul` path all rely on the padded lanes 16..31 of `h` / `dh` and of `A` / `B` being zero (zero-padded parameters; `h` from `skinny_matmul` whose padded output columns are exact zeros); not validated on device.

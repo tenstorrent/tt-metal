@@ -155,6 +155,14 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 32: cross-entropy forward statistics in one pass (kernel boost checklist)
+
+- Roofline / bytes: the vocab-parallel CE forward's local statistics: `ttnn::max` over the [1024, 8192] bf16 shard (16 MB, 0.34 ms per step in the profile), `subtract + exp` into a 128 MB fp32 tensor (0.63) and `ttnn::sum` over it (0.34): ~1.3 ms per step for two reads of 16 MB (~0.1 ms at bandwidth).
+- Expected time after the fix: ~0.3 ms per step (two passes over the shard). Landed standalone: 500 -> 215 us for the chain (the accurate exp is 150 of it).
+- Structural fix: `vp_ce_row_stats` (device op, factory, reader / writer / compute, binding) with two modes; the sum mode's path: FPU matmul-with-ones (2e-4 relative, source-register rounding), FPU `reduce_tile` (NaN in the unwritten columns), SFPU elementwise accumulation + one FPU reduce on a zeroed DEST (still 5.6e-4: the SDPA exp is bf16-grade), finally the accurate `exp_tile<false>` + `sfpu_reduce<SUM, Float32, REDUCE_ROW>` + `mask_tile` to column 0 (5.3e-6, the old path's).
+- Lesson: `sdpa_exp_tile` is the SDPA's bf16-grade exp; every FPU route (reduce, matmul) rounds fp32 to 19 bits: fp32-precision reductions stay on the SFPU (`sfpu_reduce`).
+- Verification: standalone vs numpy at the shard shape, the CE / loss / embedding harness subset, chain `O/iter32.{sh,log}`.
+
 ### Iteration 31 (rejected): skinny_matmul x reads in flight (kernel boost checklist)
 
 - Roofline / bytes: `SkinnyMatmulPartial` 36 us per call for a 10 MB read over 104 cores (~290 GB/s), the reader's x stream with a barrier per 4-tile block.
@@ -366,6 +374,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 10 | `85fc26239b7` | review round 10 (iterations 23-27, `optimization/review_round10.md`): five P2 items answered (docs: ranked table from iteration 27, sections 23-27 in the document format with the full text in `D`, expected-time lines, Ledger entries, Rejected rows), `initial_load` dropped from `lpt_schedule`, the stale forward-kernel comment and the unused valid semaphore removed; hard-check gaps measured: bf16 DEST as intended (rejected on time), the SwiGLU backward stride A/B (no effect), the explicit-mask SDPA cases (found iteration 28's mask-register bug) |
 | 29 | `2352f1d3241` | `rmsnorm_bw_rows` pass 2 on the FPU (variant A kernel), factory arg -1/C, iteration-29 evidence |
 | 30 | `82f35c84e55` | SDPA forward diagonal chunk prefix (`n_cols` through the QK^T, mask, max, exp and PV stages), iteration-30 evidence |
-| 31 (rejected) | (this commit) | docs and evidence only: skinny_matmul read-ahead measured and reverted |
+| 31 (rejected) | `85a06ef9dfe` | docs and evidence only: skinny_matmul read-ahead measured and reverted |
+| 32 | (this commit) | `metal/ops/vp_ce_row_stats` (new op: device op, factory, kernels, wrapper, binding), `losses.cpp` forward statistics through it, iteration-32 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

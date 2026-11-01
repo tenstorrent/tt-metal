@@ -14,6 +14,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
+#include "metal/ops/vp_ce_row_stats/vp_ce_row_stats.hpp"
 #include "metal/ops/vp_cross_entropy_bw/device/vp_cross_entropy_bw_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -23,21 +24,6 @@ namespace ttml::ops::distributed {
 
 namespace {
 
-// Fuses `exp` after `subtract` into a single binary_ng kernel via the SFPU
-// op-chain (post_activations).  The (a - b) intermediate stays in DST regs.
-ttnn::Tensor fused_subtract_exp_fp32(const ttnn::Tensor& a, const ttnn::Tensor& b) {
-    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-    // 0.0f matches ttnn::exp's default fast_and_approximate_mode=false.
-    const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0f};
-    const ttsl::Span<const EltwiseUnary> post_activations(&exp_act, 1);
-    return ttnn::subtract(
-        a,
-        b,
-        /*output_dtype=*/ttnn::DataType::FLOAT32,
-        /*memory_config=*/std::nullopt,
-        /*output=*/std::nullopt,
-        post_activations);
-}
 
 }  // namespace
 
@@ -95,21 +81,27 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // per-position [B,1,S,1] tensor itself, so no extra factor is needed.
     const float inv_N = (reduce == ReduceType::MEAN) ? (1.0F / static_cast<float>(N)) : 1.0F;
 
-    // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
-    auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
+    // Step 1: local max [B,1,S,1] per device: one pass over the shard (iteration 32: `vp_ce_row_stats`, per-slice
+    // partials broadcast over the tile columns, max over them). fp32 holding bf16 values exactly.
+    auto local_max = ttnn::max(ttml::metal::vp_ce_row_stats(logits->get_value(), 0U), 3, /* keepdim */ true);
 
     // Step 2: all-gather local maxes → [B,1,S,tp_size] → global max [B,1,S,1]
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
     auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
-    // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel.
-    auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
-    auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
-    local_exp.deallocate();
+    // Step 3: the row sums of exp(logits - global_max) in one pass over the shard (iteration 32: `vp_ce_row_stats`
+    // mode 1, fp32 exp on the SFPU, per-slice partial sums in column 0, summed); the 128 MB fp32 exp tensor of the
+    // sub-exp + sum path is gone.
+    auto local_sum = ttnn::sum(
+        ttml::metal::vp_ce_row_stats(logits->get_value(), 1U, global_max),
+        3,
+        /* keepdim */ true,
+        std::nullopt,
+        core::ComputeKernelConfig::precise());
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
     // log_normalizer = global_max + log(global_sum)  [B,1,S,1]
-    // global_max is BF16; log(global_sum) is FP32 — output_dtype promotes the add.
+    // global_max is FP32 (bf16 values); log(global_sum) is FP32.
     auto log_normalizer = ttnn::add(global_max, ttnn::log(global_sum), ttnn::DataType::FLOAT32);
 
     // Step 4: target_logit_local via select_target_logit:
