@@ -150,6 +150,16 @@ OVERLAP_BLOCKS = 1
 # Perf-probe ablation defines (never set by the op): e.g. ("RMS_ABLATE_EMPTY", "RMS_ABLATE_DM",
 # "CKL_ELTWISE_CHAIN_SKIP_COMPUTE"). Stubs a stage's payload, keeps its synchronization (/perf-measure).
 PERF_ABLATE = ()
+# NoC pairing (Perf 1, dram_noc_balance): interleaved inputs only. Under the usual pairing (reader NoC0 / writer NoC1)
+# the NoC arbitration starves part of the grid (BH p150b, (8192,7168): rd_read 15..545 us for equal work per Tensix
+# core). The Tensix cores in the NOC_SWAP_COLUMNS logical worker columns nearest DRAM bank 0's column (asked of the
+# device: get_optimal_dram_bank_to_logical_worker_assignment) run the reversed pairing (reader NoC1 / writer NoC0),
+# which moves part of the read stream off NoC0 (catalog noc_placement `swap_columns`). Every multicast sender keeps
+# the usual pairing (a sender's writer must issue on its channel's NoC — kernel_lib Mcast static_asserts it — and a
+# gamma read + multicast on the read-heavy NoC0 measured 10-22 us to issue): the inv_rms senders (member 0 of each
+# owner group) and the k > 1 gamma column senders stay unswapped; k = 1 sends gamma from the first unswapped Tensix
+# core. Bit-identical output. BH p150b, see perf_experiments/dram_noc_balance/port. 0 = usual pairing everywhere.
+NOC_SWAP_COLUMNS = 3
 
 
 def _f32_bits(v: float) -> int:
@@ -735,6 +745,38 @@ def _inv_mcast_order(blk: Blocking, all_cores, row_major: bool):
     return order
 
 
+def _noc_swapped_columns(device) -> set:
+    """Logical worker columns whose Tensix cores run the reversed NoC pairing (NOC_SWAP_COLUMNS nearest DRAM bank 0)."""
+    if not NOC_SWAP_COLUMNS:
+        return set()
+    grid = device.compute_with_storage_grid_size()
+    nearest = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
+    anchor = nearest[0].x
+    return set(sorted(range(grid.x), key=lambda col: (abs(col - anchor), col))[:NOC_SWAP_COLUMNS])
+
+
+def _ordered(cores, order):
+    key = (lambda c: (c.y, c.x)) if order == ttnn.McastCoreOrder.RowMajor else (lambda c: (c.x, c.y))
+    return sorted(cores, key=key)
+
+
+def _noc_swapped_cores(device, blk, all_cores, gamma_groups, inv_order) -> set:
+    """(x, y) of the active Tensix cores that run the reversed NoC pairing (interleaved only; see NOC_SWAP_COLUMNS)."""
+    cols = _noc_swapped_columns(device)
+    swapped = {(c.x, c.y) for c in all_cores if c.x in cols}
+    if inv_order is not None:  # inv_rms multicast senders: member 0 of each owner group
+        swapped -= {(grp[0].core.x, grp[0].core.y) for grp in blk.groups}
+    if gamma_groups is not None and gamma_groups[1] == ttnn.McastCoreOrder.ColumnMajor:  # k > 1 gamma senders
+        size, order = gamma_groups
+        ordered = _ordered(all_cores, order)
+        swapped -= {(ordered[i].x, ordered[i].y) for i in range(0, len(ordered), size)}
+    return swapped
+
+
+def _dm_config(processor, noc):
+    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC)
+
+
 def is_sharded(tensor) -> bool:
     """Any shard scheme (HEIGHT / WIDTH / BLOCK): the shard spec fixes the work split, consumed in place."""
     return tensor.memory_config().is_sharded()
@@ -919,7 +961,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     g_addr = gamma.buffer_address() if has_gamma else 0
     out_addr = output_tensor.buffer_address()
 
-    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    reader_rt, writer_rt, compute_rt = {}, {}, ttnn.RuntimeArgs()
     tw = geo.tensor_w_tiles
     for members in blk.groups:
         noc_xy = []
@@ -935,7 +977,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             owns_tail = 1 if (opts.mask_tail and mem.w_tile_start + mem.core_w == tw) else 0
             # TILE sharded: every tile-row pushes the whole shard row (pitch) into the shard-backed cb_out.
             norm_w = pitch if opts.shard_backed else mem.core_w
-            reader_rt[c.x][c.y] = [
+            reader_rt[(c.x, c.y)] = [
                 x_addr,
                 mem.row_start,
                 num_blocks,
@@ -976,24 +1018,55 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
                 mem.col0,
             ]
             assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
-            writer_rt[c.x][c.y] = writer_base + noc_xy
+            writer_rt[(c.x, c.y)] = writer_base + noc_xy
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
-        core_ranges=core_ranges,
-        compile_time_args=reader_ct,
-        defines=defines,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
-        core_ranges=core_ranges,
-        compile_time_args=writer_ct,
-        defines=defines,
-        runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
-    )
+    # DM kernel groups: the usual pairing (reader NoC0 / writer NoC1) and, on the swapped Tensix cores, the reversed one.
+    swapped = set() if sharded else _noc_swapped_cores(device, blk, all_cores, gamma_groups, inv_order)
+    dm_groups = []  # (cores, reader config, writer config)
+    for cores, rcfg, wcfg in (
+        (
+            [c for c in all_cores if (c.x, c.y) not in swapped],
+            ttnn.ReaderConfigDescriptor(),
+            ttnn.WriterConfigDescriptor(),
+        ),
+        (
+            [c for c in all_cores if (c.x, c.y) in swapped],
+            _dm_config(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1),
+            _dm_config(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0),
+        ),
+    ):
+        if cores:
+            dm_groups.append((cores, rcfg, wcfg))
+
+    def _rt(cores, table):
+        rt = ttnn.RuntimeArgs()
+        for c in cores:
+            rt[c.x][c.y] = table[(c.x, c.y)]
+        return rt
+
+    readers, writers = [], []
+    for cores, rcfg, wcfg in dm_groups:
+        crs = core_ranges if len(dm_groups) == 1 else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        readers.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+                core_ranges=crs,
+                compile_time_args=reader_ct,
+                defines=defines,
+                runtime_args=_rt(cores, reader_rt),
+                config=rcfg,
+            )
+        )
+        writers.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+                core_ranges=crs,
+                compile_time_args=writer_ct,
+                defines=defines,
+                runtime_args=_rt(cores, writer_rt),
+                config=wcfg,
+            )
+        )
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
         core_ranges=core_ranges,
@@ -1013,30 +1086,36 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             for sem in (SEM_PARTIALS_PAR, SEM_INV_PAR):
                 semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=core_ranges, initial_value=0))
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+    next_sem = SEM_GAMMA_MCAST_FIRST
     if gamma_mcast:
-        # Sender = each group's first Tensix core (reads the slice); one-shot, no handshake.
+        # Sender = each group's first Tensix core (reads the slice); one-shot, no handshake. k = 1 (one group of every
+        # Tensix core) with swapped cores: the first Tensix core on the usual pairing (all swapped: core 0 on NoC0).
         group_size, order = gamma_groups
+        sender, noc = 0, ttnn.NOC.NOC_1  # the usual writer NoC (WriterConfigDescriptor)
+        if swapped and order == ttnn.McastCoreOrder.RowMajor:
+            plain = [i for i, c in enumerate(_ordered(all_cores, order)) if (c.x, c.y) not in swapped]
+            sender, noc = (plain[0], ttnn.NOC.NOC_1) if plain else (0, ttnn.NOC.NOC_0)
         mc = ttnn.Mcast(
             device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # the writer's NoC (WriterConfigDescriptor)
+            ttnn.McastConfig(noc=noc, handshake=False),
             core_ranges,
             group_size,
-            ttnn.McastFixedSenderConfig(),
+            ttnn.McastFixedSenderConfig(sender_index=sender),
             order,
         )
-        mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
+        mc.attach(descriptor, "gamma_mcast", writers, next_sem)
+        next_sem = mc.next_semaphore_id()
     if inv_order is not None:
-        # Single-owner blocks: member 0 (the group's first Tensix core in `inv_order`) multicasts inv_rms to its group.
+        # Single-owner blocks: member 0 (the group's first Tensix core in `inv_order`, always on the usual pairing)
+        # multicasts inv_rms to its group.
         inv_mc = ttnn.Mcast(
             device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # the writer's NoC (WriterConfigDescriptor)
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # member 0's writer NoC
             core_ranges,
             k,
             ttnn.McastFixedSenderConfig(),
             inv_order,
         )
-        inv_mc.attach(
-            descriptor, "inv_mcast", [writer], mc.next_semaphore_id() if gamma_mcast else SEM_GAMMA_MCAST_FIRST
-        )
-    descriptor.kernels = [reader, writer, compute]
+        inv_mc.attach(descriptor, "inv_mcast", writers, next_sem)
+    descriptor.kernels = readers + writers + [compute]
     return descriptor

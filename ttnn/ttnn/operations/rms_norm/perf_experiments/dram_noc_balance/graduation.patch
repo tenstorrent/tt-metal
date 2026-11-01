@@ -1,0 +1,211 @@
+--- rms_norm_program_descriptor.py	2026-11-01 19:16:24.897990301 +0000
++++ rms_norm_program_descriptor.py	2026-11-01 20:27:01.775624500 +0000
+@@ -111,6 +111,18 @@
+ # Perf-probe ablation defines (never set by the op): e.g. ("RMS_ABLATE_EMPTY", "RMS_ABLATE_DM",
+ # "CKL_ELTWISE_CHAIN_SKIP_COMPUTE"). Stubs a stage's payload, keeps its synchronization (/perf-measure).
+ PERF_ABLATE = ()
++# NoC pairing (Perf 1, dram_noc_balance): interleaved inputs only. Under the usual pairing (reader NoC0 / writer NoC1)
++# the NoC arbitration starves part of the grid (BH p150b, (8192,7168): rd_read 15..545 us for equal work per Tensix
++# core). The Tensix cores in the NOC_SWAP_COLUMNS logical worker columns nearest DRAM bank 0's column (asked of the
++# device: get_optimal_dram_bank_to_logical_worker_assignment) run the reversed pairing (reader NoC1 / writer NoC0),
++# which moves part of the read stream off NoC0 (catalog noc_placement `swap_columns`). BH p150b, bit-identical output:
++# (8192,7168) 636 -> 600 us, (8192,1024) 89 -> 83 us, (640,7168) k=6 52.6 -> 48.0 us, fp32 (128,8192) 28.7 -> 26.5 us;
++# measured loss: (2,1,128,256) fp32 (16 Tensix cores, 0.5 MB) 5.31 -> 5.5 us. 0 = usual pairing everywhere.
++NOC_SWAP_COLUMNS = 3
++# TILE interleaved reader: one barrier per READ_WINDOW_TILES reads inside a tile-row (bounds the reads in flight per
++# Tensix core; a no-op when the slice is <= READ_WINDOW_TILES tiles). 0 = one barrier per tile-row. 32 measured
++# 1.04-1.06x on (8192,7168) alone, +0-3% (inconsistent across runs) on top of the column swap — left off.
++READ_WINDOW_TILES = 0
+ 
+ 
+ def _f32_bits(v: float) -> int:
+@@ -670,6 +682,20 @@
+     return cb
+ 
+ 
++def _noc_swapped_columns(device) -> set:
++    """Logical worker columns whose Tensix cores run the reversed NoC pairing (NOC_SWAP_COLUMNS nearest DRAM bank 0)."""
++    if not NOC_SWAP_COLUMNS:
++        return set()
++    grid = device.compute_with_storage_grid_size()
++    nearest = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
++    anchor = nearest[0].x
++    return set(sorted(range(grid.x), key=lambda col: (abs(col - anchor), col))[:NOC_SWAP_COLUMNS])
++
++
++def _dm_config(processor, noc):
++    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC)
++
++
+ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+     device = input_tensor.device()
+     geo = derive_geometry(input_tensor.shape)
+@@ -754,7 +780,9 @@
+     x_acc_args = ttnn.TensorAccessorArgs() if sharded else ttnn.TensorAccessorArgs(input_tensor)
+     out_acc_args = ttnn.TensorAccessorArgs() if sharded else ttnn.TensorAccessorArgs(output_tensor)
+ 
+-    reader_ct = [geo.tensor_w_tiles, geo.W, geo.H, geo.image_row_tiles, pitch, C, x_page, elem_bytes, d]
++    reader_ct = [
++        geo.tensor_w_tiles, geo.W, geo.H, geo.image_row_tiles, pitch, C, x_page, elem_bytes, d, READ_WINDOW_TILES
++    ]
+     reader_ct.extend(x_acc_args.get_compile_time_args())
+ 
+     writer_ct = [
+@@ -794,7 +822,7 @@
+     g_addr = gamma.buffer_address() if has_gamma else 0
+     out_addr = output_tensor.buffer_address()
+ 
+-    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
++    reader_rt, writer_rt, compute_rt = {}, {}, ttnn.RuntimeArgs()
+     tw = geo.tensor_w_tiles
+     for members in blk.groups:
+         noc_xy = []
+@@ -810,7 +838,7 @@
+             owns_tail = 1 if (opts.mask_tail and mem.w_tile_start + mem.core_w == tw) else 0
+             # TILE sharded: every tile-row pushes the whole shard row (pitch) into the shard-backed cb_out.
+             norm_w = pitch if opts.shard_backed else mem.core_w
+-            reader_rt[c.x][c.y] = [
++            reader_rt[(c.x, c.y)] = [
+                 x_addr,
+                 mem.row_start,
+                 num_blocks,
+@@ -851,24 +879,48 @@
+                 mem.col0,
+             ]
+             assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
+-            writer_rt[c.x][c.y] = writer_base + noc_xy
++            writer_rt[(c.x, c.y)] = writer_base + noc_xy
+ 
+-    reader = ttnn.KernelDescriptor(
+-        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+-        core_ranges=core_ranges,
+-        compile_time_args=reader_ct,
+-        defines=defines,
+-        runtime_args=reader_rt,
+-        config=ttnn.ReaderConfigDescriptor(),
+-    )
+-    writer = ttnn.KernelDescriptor(
+-        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+-        core_ranges=core_ranges,
+-        compile_time_args=writer_ct,
+-        defines=defines,
+-        runtime_args=writer_rt,
+-        config=ttnn.WriterConfigDescriptor(),
+-    )
++    # Two DM kernel groups: usual pairing (reader NoC0 / writer NoC1) and, on the swapped columns, the reversed one.
++    swap_cols = set() if sharded else _noc_swapped_columns(device)
++    swapped = {(c.x, c.y) for c in all_cores if c.x in swap_cols}
++    dm_groups = []  # (cores, reader NoC, writer NoC)
++    for cores, rnoc, wnoc in (
++        ([c for c in all_cores if (c.x, c.y) not in swapped], ttnn.NOC.NOC_0, ttnn.NOC.NOC_1),
++        ([c for c in all_cores if (c.x, c.y) in swapped], ttnn.NOC.NOC_1, ttnn.NOC.NOC_0),
++    ):
++        if cores:
++            dm_groups.append((cores, rnoc, wnoc))
++
++    def _rt(cores, table):
++        rt = ttnn.RuntimeArgs()
++        for c in cores:
++            rt[c.x][c.y] = table[(c.x, c.y)]
++        return rt
++
++    readers, writers = [], []
++    for cores, rnoc, wnoc in dm_groups:
++        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
++        readers.append(
++            ttnn.KernelDescriptor(
++                kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
++                core_ranges=crs,
++                compile_time_args=reader_ct,
++                defines=defines,
++                runtime_args=_rt(cores, reader_rt),
++                config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, rnoc),
++            )
++        )
++        writers.append(
++            ttnn.KernelDescriptor(
++                kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
++                core_ranges=crs,
++                compile_time_args=writer_ct,
++                defines=defines,
++                runtime_args=_rt(cores, writer_rt),
++                config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, wnoc),
++            )
++        )
+     compute = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+         core_ranges=core_ranges,
+@@ -884,16 +936,36 @@
+             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     if gamma_mcast:
+-        # Sender = each group's first Tensix core (reads + expands the slice); one-shot, no handshake.
++        # One-shot, no handshake. The channel's NoC must be its sender's writer NoC.
+         group_size, order = gamma_groups
+-        mc = ttnn.Mcast(
+-            device,
+-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # the writer's NoC (WriterConfigDescriptor)
+-            core_ranges,
+-            group_size,
+-            ttnn.McastFixedSenderConfig(),
+-            order,
+-        )
+-        mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
+-    descriptor.kernels = [reader, writer, compute]
++        if order == ttnn.McastCoreOrder.RowMajor:
++            # k = 1: one group of every Tensix core; sender = the first (row-major) on the usual pairing (NoC1 writer),
++            # else (every active core swapped) core 0 on NoC0.
++            ordered = sorted(all_cores, key=lambda c: (c.y, c.x))
++            plain = [i for i, c in enumerate(ordered) if (c.x, c.y) not in swapped]
++            mc = ttnn.Mcast(
++                device,
++                ttnn.McastConfig(noc=ttnn.NOC.NOC_1 if plain else ttnn.NOC.NOC_0, handshake=False),
++                core_ranges,
++                group_size,
++                ttnn.McastFixedSenderConfig(sender_index=plain[0] if plain else 0),
++                order,
++            )
++            mc.attach(descriptor, "gamma_mcast", writers, SEM_GAMMA_MCAST_FIRST)
++        else:
++            # k > 1: one group per grid column — a column is wholly swapped or not, so one channel per DM group, on
++            # that group's writer NoC (sender = each column's first Tensix core).
++            sem = SEM_GAMMA_MCAST_FIRST
++            for (cores, _rnoc, wnoc), wk in zip(dm_groups, writers):
++                mc = ttnn.Mcast(
++                    device,
++                    ttnn.McastConfig(noc=wnoc, handshake=False),
++                    ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
++                    group_size,
++                    ttnn.McastFixedSenderConfig(),
++                    order,
++                )
++                mc.attach(descriptor, "gamma_mcast", [wk], sem)
++                sem = mc.next_semaphore_id()
++    descriptor.kernels = readers + writers + [compute]
+     return descriptor
+--- kernels/rms_norm_reader.cpp	2026-11-01 19:16:24.893990250 +0000
++++ kernels/rms_norm_reader.cpp	2026-11-01 20:24:52.589983673 +0000
+@@ -41,7 +41,10 @@
+ constexpr uint32_t x_page_bytes = get_compile_time_arg_val(6);
+ constexpr uint32_t elem_bytes = get_compile_time_arg_val(7);
+ constexpr uint32_t x_block_depth = get_compile_time_arg_val(8);
+-constexpr auto x_args = TensorAccessorArgs<9>();
++// TILE interleaved: one barrier per read_window_tiles reads inside a tile-row (0: one per tile-row) — bounds the reads
++// in flight per Tensix core (Perf 1, dram_noc_balance).
++constexpr uint32_t read_window_tiles = get_compile_time_arg_val(9);
++constexpr auto x_args = TensorAccessorArgs<10>();
+ 
+ constexpr uint32_t TILE_DIM = 32;
+ constexpr uint32_t FACE_DIM = 16;
+@@ -223,6 +226,11 @@
+                 if constexpr (!ablate_dm) {
+                     noc_async_read(x_acc.get_noc_addr(first_tile + j), base + row_off + j * tile_bytes, tile_bytes);
+                 }
++                if constexpr (read_window_tiles != 0) {
++                    if ((j + 1) % read_window_tiles == 0) {
++                        noc_async_read_barrier();
++                    }
++                }
+             }
+             noc_async_read_barrier();
+             if (owns_w_tail) {

@@ -441,8 +441,12 @@ FORCE_INLINE void owner_return_inv(uint32_t rows, ExchangeState& st) {
         if (owned > 0) {  // member 0: the block's only owner
             cb_wait_front(cb_inv_owned, 1);
             Noc noc;
-            // faces 0..2 are contiguous (face 1 is don't-care): one send covers column 0
-            inv_mcast.sender(noc).send(get_read_ptr(cb_inv_owned), inv_base, partial_faces_only ? 3 * (tb / 4) : tb);
+            // faces 0..2 are contiguous (face 1 is don't-care): one send covers column 0. optional_sender: a writer
+            // kernel group holding no member 0 (reversed NoC pairing on the DRAM-adjacent columns) has no sender
+            // pipe compiled in; member 0 always sits in the group whose writer NoC is the channel's.
+            if (auto sender = inv_mcast.optional_sender(noc)) {
+                sender->send(get_read_ptr(cb_inv_owned), inv_base, partial_faces_only ? 3 * (tb / 4) : tb);
+            }
             cb_pop_front(cb_inv_owned, 1);
         }
         return;
