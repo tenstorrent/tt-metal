@@ -3,119 +3,82 @@
 
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/rsqrt.h"
-#include "api/compute/bcast.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+// Inputs are waited for and popped by the caller; each helper reserves and publishes its whole output.
+constexpr ckl::InputSpec resident(uint32_t dfb_id) {
+    return ckl::input(dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+}
+
+constexpr ckl::OutputSpec published(uint32_t dfb_id) {
+    return ckl::output(dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
+}
 
 template <typename DFB>
 void square(uint32_t n, DFB& tmp) {
-    tmp.reserve_back(n);
-    pack_reconfig_data_format(dfb::tmp);
-    reconfig_data_format(dfb::x, dfb::x);
-    mul_init(dfb::x, dfb::x, false);
-    for (uint32_t i = 0; i < n; i++) {
-        tile_regs_acquire();
-        mul_tiles(dfb::x, dfb::x, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::tmp, i);
-        tile_regs_release();
-    }
-    tmp.push_back(n);
+    DataflowBuffer x(dfb::x);
+    ckl::square<resident(dfb::x), published(dfb::tmp)>(ckl::IterationShape::tiles(n), x, tmp);
 }
 
 template <typename DFB>
 void inverse_rms(DFB& inv) {
-    inv.reserve_back(1);
-    pack_reconfig_data_format(dfb::inv);
-    reconfig_data_format(dfb::stats, dfb::epsilon);
-    add_init(dfb::stats, dfb::epsilon);
-    tile_regs_acquire();
-    add_tiles(dfb::stats, dfb::epsilon, 0, 0, 0);
-    rsqrt_tile_init();
-    rsqrt_tile(0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, dfb::inv, 0);
-    tile_regs_release();
-    inv.push_back(1);
+    DataflowBuffer stats(dfb::stats);
+    DataflowBuffer epsilon(dfb::epsilon);
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        ckl::BinaryFpu<ckl::BinaryFpuOp::Add, resident(dfb::stats), resident(dfb::epsilon)>{stats, epsilon},
+        ckl::Rsqrt<>{},
+        ckl::PackTile<published(dfb::inv)>{inv});
 }
 
 template <typename DFB>
 void scale_by_inverse_rms(uint32_t Vt, DFB& norm) {
-    norm.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::norm);
-    reconfig_data_format(dfb::x, dfb::inv);
-    mul_bcast_cols_init(dfb::x, dfb::inv);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(dfb::x, dfb::inv, i, 0, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::norm, i);
-        tile_regs_release();
-    }
-    norm.push_back(Vt);
+    DataflowBuffer x(dfb::x);
+    DataflowBuffer inv(dfb::inv);
+    ckl::mul<
+        resident(dfb::x),
+        ckl::input(dfb::inv, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+        published(dfb::norm)>(ckl::IterationShape::tiles(Vt), x, inv, norm);
 }
 
 template <typename DFB>
 void apply_weight(uint32_t Vt, DFB& tmp) {
-    tmp.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::tmp);
-    reconfig_data_format(dfb::norm, dfb::weight);
-    mul_bcast_rows_init(dfb::norm, dfb::weight);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles_bcast_rows(dfb::norm, dfb::weight, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::tmp, i);
-        tile_regs_release();
-    }
-    tmp.push_back(Vt);
+    DataflowBuffer norm(dfb::norm);
+    DataflowBuffer weight(dfb::weight);
+    ckl::mul<
+        resident(dfb::norm),
+        ckl::input(
+            dfb::weight,
+            ckl::BroadcastDim::Row,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::InputTileMapping::Block),
+        published(dfb::tmp)>(ckl::IterationShape::tiles(Vt), norm, weight, tmp);
 }
 
+// Flattened so the unpacker init folds to this buffer's tile shape. Inlined into the full work-item loop, it would
+// exceed GCC's function-growth limit and stay a call that decodes the shape at run time, at a stage boundary on the
+// critical path.
 template <typename DFB>
-void activate_gate(uint32_t Vt, DFB& norm) {
-    norm.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::norm);
-    reconfig_data_format_srca(dfb::gate);
-    copy_init(dfb::gate);
-    sigmoid_tile_init();
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::norm, i);
-        tile_regs_release();
-    }
-    norm.push_back(Vt);
+__attribute__((flatten)) void activate_gate(uint32_t Vt, DFB& norm) {
+    DataflowBuffer gate(dfb::gate);
+    ckl::unary<ckl::Sigmoid<>, resident(dfb::gate), published(dfb::norm)>(ckl::IterationShape::tiles(Vt), gate, norm);
 }
 
 template <typename DFB>
 void multiply_output(uint32_t Vt, DFB& out) {
-    out.reserve_back(Vt);
-    pack_reconfig_data_format(dfb::out);
-    reconfig_data_format(dfb::tmp, dfb::norm);
-    mul_init(dfb::tmp, dfb::norm);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles(dfb::tmp, dfb::norm, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::out, i);
-        tile_regs_release();
-    }
-    out.push_back(Vt);
+    DataflowBuffer tmp(dfb::tmp);
+    DataflowBuffer norm(dfb::norm);
+    ckl::mul<resident(dfb::tmp), resident(dfb::norm), published(dfb::out)>(
+        ckl::IterationShape::tiles(Vt), tmp, norm, out);
 }
 
 template <uint32_t Vt>
