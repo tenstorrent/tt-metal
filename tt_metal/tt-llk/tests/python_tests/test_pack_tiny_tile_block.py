@@ -137,6 +137,7 @@ def _make_config(
             ),
         ),
         "dest_acc": dest_acc,
+        "unpack_to_dest": formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes,
     }
 
     configuration = create_test_or_perf_config(
@@ -216,6 +217,29 @@ def test_pack_tiny_tile_block_bfp(
         golden_tensor
     ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
 
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Int32, DataFormat.Int32),
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
+        InputOutputFormat(DataFormat.UInt8, DataFormat.UInt8),
+    ],
+    dest_acc=[DestAccumulation.Yes],
+    tile_dims=[(8, 32), (16, 16), (32, 32)],
+    num_tiles=[2, 4, 8],
+    pack_mode=[1, 2, 3, 4],
+)
+def test_pack_tiny_tile_block_int(formats, dest_acc, tile_dims, num_tiles, pack_mode):
+    """Integer outputs through the closed block (1), per tile (2), the dense run (3) and the closed block with the W offset (4)."""
+    if pack_mode == 3 and tile_dims == (32, 32):
+        pytest.skip("The dense block pack records at most eight PACRs per tile")
+    configuration, golden_tensor, torch_format = _make_config(tile_dims, num_tiles, formats, dest_acc, pack_mode)
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
