@@ -356,6 +356,14 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
+#ifdef LLK_PACK_W_OFFSET
+    // The first block after an init is the plain block, which packs Float32 tiles of a 4 or 5 tile block slower than the per-tile pack; the next block programs the W offset.
+    if (ntiles <= 5 && static_cast<DataFormat>(pack_dst_format[output_id]) == DataFormat::Float32 && pack_w_last != output_id) {
+        pack_w_last = output_id;
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        return;
+    }
+#endif
     if (llk_pack_block_is_contiguous(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
