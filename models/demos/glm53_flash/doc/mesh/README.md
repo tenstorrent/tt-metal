@@ -1581,6 +1581,28 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-11-01 20:47: the served c1 1 M ladder: 494.8 -> 456.9 s, memory-safe (plan kernel + paged keys + 4096 sub-chunks)
+
+Five served single-user 1 M needle runs (`served_8x4_needle1m_1_*`, 1 038 673 tokens, the needle found and the
+first token identical in every run), each with the per-chunk DRAM log where noted:
+
+| expert bookkeeping | expert sub-chunk | sparse keys | TTFT | DRAM per bank at the last chunk |
+|---|---|---|---|---|
+| chain | 2048 | whole-prefix copy | 494.8 s | (10-31) |
+| chain | 4096 | copy | 472.5 s | n/a |
+| plan kernel | 2048 | copy | 443.0 s | largest free block 139 MiB vs the copy's 134.2 MB: 5 MB from OOM |
+| plan kernel | 4096 | copy | OOM at chunk 57 | largest free block 133.4 MiB |
+| plan kernel | 2048 | paged op | 484.8 s | 139 MiB, no 1 GiB transient |
+| plan kernel | 4096 | paged op | **456.9 s** | 127 MiB, no 1 GiB transient |
+
+The components: the region-plan kernel −52 s; the 4096 sub-chunk −22..28 s; the paged sparse op +42 s on the
+sequence-parallel slab path (its gathered K rows cost ~70 ms per DSA layer per 16 K chunk against the stock op over
+the contiguous copy: the next attention item). The copy path's best point (443 s) sits 5 MB from the allocator's
+largest-block limit at the end of the prompt, which is how the plan-kernel + 4096 run died, so the 1 M profile's
+defaults are the memory-safe column: the plan kernel (the code default), the paged keys and the 4096 sub-chunk (both
+in the TIS catalog). Without the 1 GiB copy the planner no longer reserves it and the KDA snapshot ring fits on
+device at 1 M (the served check of that runs next: hit restores in milliseconds instead of the host store's 4.2 s).
+
 ### 2026-11-01 18:10: the 32 x 1 M repeat miss: the wave path never snapshotted, and the ring ops were mesh-wide (fixed, host-tested; device stages queued)
 
 Why round 2 of the capstone re-prefilled 31 of 32 prompts from 0 (06:54 entry): the wave path recorded every
