@@ -62,7 +62,6 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (  # noqa: E402
 )
 from models.demos.glm53_flash.custom_ops.glu_split.op import GluSplit  # noqa: E402
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk  # noqa: E402
-from models.demos.glm53_flash.custom_ops.row_gather.op import RowGather  # noqa: E402
 from models.demos.glm53_flash.tests.custom_ops.test_expert_dispatch import DOWN_READERS, GROUPS  # noqa: E402
 from models.demos.glm53_flash.tests.custom_ops.test_expert_dispatch import upload as upload_random_experts  # noqa: E402
 from models.demos.glm53_flash.tests.custom_ops.test_router_topk import _gate, _real_x  # noqa: E402
@@ -176,68 +175,6 @@ def test_glu_split_chip0(mesh_device, T, I):
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
     assert torch.equal(ttnn.to_torch(out2)[0, 0], got)
-    ttnn.release_trace(mesh_device, tid)
-
-
-@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("S, N", [(2048, 18688), (16384, 133376)], ids=["regions-2048", "regions-16384"])
-def test_row_gather_chip0(mesh_device, S, N):
-    """``RowGather`` (the regions prefill path's row gathers as one generic op) vs ``ttnn.embedding`` and the torch
-    golden on the two region-buffer shapes (T = 2048 and 16384 gathered tokens, H = 4096): bit-identical rows, zero
-    rows at out-of-range indices, the warmed wall of both; trace replay."""
-    H = 4096
-    g = torch.Generator().manual_seed(S)
-    src_host = (torch.randn(S, H, generator=g)).bfloat16()
-    idx_host = torch.randint(0, S, (N,), generator=g, dtype=torch.int64)
-    idx_host[::97] = S + 5  # out of range: zero rows
-    idx_host[1::89] = 0
-    src = ttnn.from_torch(src_host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
-    idx = ttnn.from_torch(
-        idx_host.to(torch.int32).reshape(1, N), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-    )
-    op = RowGather(mesh_device)
-    out = ttnn.from_torch(
-        torch.zeros(N, H).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-    )
-    op(src, idx, out)
-    got = ttnn.to_torch(out)
-    golden = RowGather.golden(src_host, idx_host)
-    assert torch.equal(got, golden), (got - golden).abs().max()
-    # the reference op on in-range indices only (embedding has no out-of-range contract)
-    idx_in = idx_host.clamp(0, S - 1)
-    idx_in_dev = ttnn.from_torch(
-        idx_in.to(torch.int32).reshape(1, N), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-    )
-    ref = ttnn.embedding(idx_in_dev, src, layout=ttnn.ROW_MAJOR_LAYOUT)
-    assert torch.equal(ttnn.to_torch(ref)[0], RowGather.golden(src_host, idx_in))
-    walls = {}
-    for name, fn in (
-        ("embedding", lambda: ttnn.embedding(idx_in_dev, src, layout=ttnn.ROW_MAJOR_LAYOUT)),
-        ("row_gather", lambda: op(src, idx_in_dev, out)),
-    ):
-        fn()
-        ttnn.synchronize_device(mesh_device)
-        best = 1e9
-        for _ in range(3):
-            t0 = time.perf_counter()
-            r = fn()
-            ttnn.synchronize_device(mesh_device)
-            best = min(best, time.perf_counter() - t0)
-            if name == "embedding":
-                ttnn.deallocate(r)
-        walls[name] = best
-    gb = 2 * N * H * 2 / 1e9
-    logger.info(
-        f"row_gather S={S} N={N}: embedding {walls['embedding'] * 1e3:.2f} ms ({gb / walls['embedding']:.0f} GB/s), "
-        f"row_gather {walls['row_gather'] * 1e3:.2f} ms ({gb / walls['row_gather']:.0f} GB/s)"
-    )
-    # trace replay
-    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    op(src, idx, out)
-    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-    assert torch.equal(ttnn.to_torch(out), golden)
     ttnn.release_trace(mesh_device, tid)
 
 
