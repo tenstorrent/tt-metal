@@ -178,11 +178,12 @@ def flat_face_map(H: int, I: int, E: int, lay: dict) -> dict:
 
 def emulate_gather(srcs: list, face_map: torch.Tensor) -> torch.Tensor:
     """gather on the host: float source matrices (s order) -> the dest pages [pages, 32, 32]."""
-    R, C = srcs[0].shape
-    NT = (R // 32) * (C // 32)
-    faces = torch.stack(
-        [s.reshape(R // 32, 2, 16, C // 32, 2, 16).permute(0, 3, 1, 4, 2, 5).reshape(NT * 4, 256) for s in srcs]
-    ).reshape(-1, 256)
+
+    def faces_of(s):  # (each source's own [rows, cols]: Wd is [I, H]; every source has NT tiles)
+        R, C = s.shape
+        return s.reshape(R // 32, 2, 16, C // 32, 2, 16).permute(0, 3, 1, 4, 2, 5).reshape(-1, 256)
+
+    faces = torch.cat([faces_of(s) for s in srcs])
     fm = face_map.to(torch.int64)
     got = torch.where((fm >= 0).unsqueeze(-1), faces[fm.clamp(min=0)], torch.zeros(()))  # [pages, 4, 256]
     P = fm.shape[0]
