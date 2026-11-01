@@ -54,18 +54,17 @@ def main() -> int:
                                  layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
             y = ttnn.to_torch(mlp.forward(xt)).float().numpy()
             ttnn.synchronize_device(device)
-            hd = ttnn.to_torch(sh.h).float().numpy().flatten()
-            p_h, p_y = cpu_ref.pcc(hd, h.flatten()), cpu_ref.pcc(y[0, 0, 0], ref)
+            p_y = cpu_ref.pcc(y[0, 0, 0], ref)
             rows_zero = bool(np.all(y[0, 0, 1:] == 0))
             device_kernel_us(ttnn, device)
             for _ in range(args.calls):
                 ttnn.deallocate(mlp.forward(xt))
             ttnn.synchronize_device(device)
-            d = np.array(all_kernel_us(ttnn, device)).reshape(args.calls, 4)
+            d = np.array(all_kernel_us(ttnn, device)).reshape(args.calls, -1)
             st = np.median(d, axis=0)
             ok = p_y >= 0.9999
             rc |= 0 if ok else 1
-            print(f"layer {layer:2d}: pcc h {p_h:.7f}  y {p_y:.7f}  rows 1-31 zero {rows_zero}  "
+            print(f"layer {layer:2d}: pcc y {p_y:.7f}  rows 1-31 zero {rows_zero}  "
                   f"{'ok' if ok else 'FAIL'}\n   device us: prep5120 {st[0]:.1f}  gate|up {st[1]:.1f}  "
                   f"prep17408 {st[2]:.1f}  down {st[3]:.1f}  total {np.median(d.sum(1)):.1f}", flush=True)
     finally:

@@ -436,7 +436,7 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
             vc = (vc + 1) & 0x3
         seen.append((core, bank))
         vcs.append((core, vc))
-    common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu))]
+    common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu)), ("tm_is_active_core", 1)]
     modes = [ttnn.UnpackToDestMode.Default] * 64
     modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
@@ -453,14 +453,11 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
         brisc_named_compile_time_args=common + [("tm_out_tile32", int(out_tile32)), ("tm_out_is_dram", int(out_is_dram))],
         trisc_named_compile_time_args=common,
         trisc_compute_config=cfg,
-        unified_compile_time_core_descriptors=[UnifiedCompileTimeCoreDescriptor(
-            named_compile_time_arg="tm_is_active_core", core_range=grid, value=1, other_value=0)],
-        per_core_compile_time_descriptors=[per_core("tm_bank_id", [(c, b) for c, b, _ in workers]),
-                                           per_core("tm_vc", vcs)],
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-            ncrisc_args=[(c, [w.buffer_address() + i * cols_per_core * kt * tile_bytes]) for c, _, i in workers],
+            ncrisc_args=[(c, [w.buffer_address() + i * cols_per_core * kt * tile_bytes, b, vc])
+                         for (c, b, i), (_, vc) in zip(workers, vcs)],
             brisc_args=[(c, [s.buffer_address() + i * cols_per_core * s_tiles * 4096, out.buffer_address(),
-                             col0(b, i) * pcn, n_real // 32 or (1 << 30)]) for c, b, i in workers],
+                             col0(b, i) * pcn, n_real // 32 or (1 << 30), b]) for c, b, i in workers],
         ),
     )
     return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
