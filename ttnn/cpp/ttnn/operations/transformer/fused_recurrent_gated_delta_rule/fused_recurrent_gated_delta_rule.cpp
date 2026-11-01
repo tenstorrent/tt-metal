@@ -78,7 +78,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state,
     bool use_qk_l2norm,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool head_major_output) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -171,11 +172,16 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
     const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 
-    // o [BH*T,1,V] -> [B,HV,T,V] -> [B,T,HV,V].
-    ttnn::Tensor o = ttnn::to_layout(o_pt, Layout::ROW_MAJOR);
-    o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
-    o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
-    o = ttnn::to_layout(o, Layout::TILE);
+    // o [BH*T,1,V] -> [B,HV,T,V] -> [B,T,HV,V]. head_major_output keeps the kernel's [BH*T,1,V] (one head per
+    // tile-row): a per-head consumer (the gated norm) works on it as is, and at B == T == 1 its tile sequence
+    // equals that of [1,1,HV*V], so the caller can flatten it with a view instead of untilize/permute/tilize.
+    ttnn::Tensor o = o_pt;
+    if (!head_major_output) {
+        o = ttnn::to_layout(o_pt, Layout::ROW_MAJOR);
+        o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
+        o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
+        o = ttnn::to_layout(o, Layout::TILE);
+    }
 
     std::optional<ttnn::Tensor> state_opt;
     if (ring) {

@@ -26,6 +26,7 @@ def _dense_wdtype(default):
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
+    l2_norm_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
@@ -46,6 +47,50 @@ def _replace(old, new):
 def _softplus_add(a, bias):
     """g-gate: softplus(a + bias) fused into one op (softplus as a post-activation on the add)."""
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
+
+
+def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
+    """QWEN36_1C_GDN_TRIM: fused_recurrent_gated_delta_rule_ttnn (high_precision) with two ops fewer.
+
+    l2norm(x) = rms_norm(x) * K^-0.5; for q that factor folds into the op's own query scale (max rel diff
+    6e-8). g arrives fp32 from its producer, so its typecast goes. k keeps its multiply: as an rms_norm
+    gamma the K^-0.5 is applied at lower precision (3.6e-4 max diff, measured).
+    """
+    K = q.shape[-1]
+    f32 = ttnn.float32
+    ckc = _gdn_norm_ckc()
+    qn = ttnn.rms_norm(ttnn.typecast(q, f32), epsilon=1e-6 / K, compute_kernel_config=ckc)
+    if ckc is None:
+        kn = l2_norm_ttnn(ttnn.typecast(k, f32), dim=-1)
+    else:
+        kn = ttnn.multiply(ttnn.rms_norm(ttnn.typecast(k, f32), epsilon=1e-6 / K, compute_kernel_config=ckc), K**-0.5)
+    return ttnn.transformer.fused_recurrent_gated_delta_rule(
+        qn,
+        kn,
+        ttnn.typecast(v, f32),
+        g,
+        ttnn.typecast(beta, f32),
+        scale=scale * K**-0.5,
+        output_final_state=True,
+        **op_kwargs,
+    )
+
+
+def _gdn_norm_ckc():
+    """QWEN36_1C_GDN_NORM_HIFI=1: GDN decode q/k l2norms and gated norm with HiFi4 + fp32 accumulation. Isolated,
+    rms_norm on fp32 [16,128] lands 2.1e-4 from exact instead of 2.5e-3 with the default config."""
+    if os.environ.get("QWEN36_1C_GDN_NORM_HIFI") != "1":
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+
+def head_major_flat_view(x):
+    """[H, 1, D] TILE -> [1, 1, H*D] without moving data: each head is one tile-row, so the H*D/32 tiles are
+    already in the order [1, 1, H*D] (padded [1, 32, H*D]) stores them."""
+    H, _, D = x.shape
+    return ttnn.experimental.view(x, ttnn.Shape([1, 1, H * D]), ttnn.Shape([1, ttnn.TILE_SIZE, H * D]))
 
 
 def _silu_mul(x, z, memory_config, dtype=None):
@@ -397,6 +442,26 @@ class TPGatedDeltaNet:
         )
         self._rec_ring_idx = None
         self._rec_ring_idx_bh = -1
+        # QWEN36_1C_CONV_HM: single-chip, one-user decode keeps the conv shift register head-major,
+        # [1, qkv_dim/128, 128] instead of [1, 1, qkv_dim]: 12 tiles instead of 320 for the K copies,
+        # the mul/mac chain and the SiLU, and the q/k/v head split becomes row slices with no reshape
+        # copy after them. The qkv row is reshaped once on the way in.
+        self._conv_hm = (
+            self._inplace_rec_state
+            and self.B == 1
+            and self.Dk == self.Dv == 128
+            and os.environ.get("QWEN36_1C_CONV_HM") == "1"
+        )
+        self._gdn_trim = self._inplace_rec_state and os.environ.get("QWEN36_1C_GDN_TRIM") == "1"
+        # QWEN36_1C_GDN_HMO (with GDN_TRIM, one user): the recurrence hands o back head-major [Nv, 1, Dv]; the
+        # gated norm runs on that, and a view flattens it to [1, 1, Nv*Dv] (same tile sequence), replacing
+        # the op's untilize/permute/tilize and the reshape copy after the norm.
+        self._gdn_hmo = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_HMO") == "1"
+        self._conv_state_shape = (
+            (1, self.qkv_dim_tp // 128, 128) if self._conv_hm else (1, self.B, self.qkv_dim_tp)
+        )
+        if self._conv_hm:
+            self._conv_taps_hm = [ttnn.reshape(t, self._conv_state_shape) for t in self.tw["conv_taps"]]
         # One-hot matmul config: HiFi4 + fp32 accumulate keep a 0/1 selector matmul exact in bf16.
         self._cfg_onehot = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -457,7 +522,7 @@ class TPGatedDeltaNet:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
 
-        self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
+        self.conv_states = [z(self._conv_state_shape) for _ in range(self.K)]
         # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
         if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = ttnn.from_torch(
@@ -471,7 +536,7 @@ class TPGatedDeltaNet:
             self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
         # Cross-chunk conv carry + persistent zero sources (created before any trace)
         self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
-        self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
+        self._zero_conv0 = z(self._conv_state_shape)
         self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
         self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
         if self._gdn_kda_conv:
@@ -995,6 +1060,8 @@ class TPGatedDeltaNet:
                     ttnn.deallocate(zero)
                 for j in range(self.K - 1):
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
+                    if self._conv_hm:
+                        src = ttnn.reshape(src, self._conv_state_shape)
                     ttnn.copy(src, self.conv_states[j + 1])
                 # Prefill wrote the taps directly, so they are the truth and the [B,K,C] window
                 # mirror is behind (_ensure_conv_win re-seeds it at the next eager spec seed).
@@ -1557,20 +1624,31 @@ class TPGatedDeltaNet:
             qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
             ttnn.deallocate(qkv)
             qkv = qkv_p
+        if self._conv_hm:
+            qkv_hm = ttnn.reshape(qkv, self._conv_state_shape)
+            if qkv_hm is not qkv:
+                ttnn.deallocate(qkv)
+            qkv = qkv_hm
+        taps = self._conv_taps_hm if self._conv_hm else tw["conv_taps"]
         for j in range(self.K - 1):
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
         self._conv_win_stale = True  # decode shifted the taps; the window mirror is now behind
         ttnn.deallocate(qkv)
-        conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
+        conv = ttnn.multiply(st[0], taps[0], memory_config=_L1)
         for j in range(1, self.K):
-            conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+            conv = ttnn.mac(st[j], taps[j], conv)
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+        if self._conv_hm:  # rows are heads: q = [0, Nk), k = [Nk, 2Nk), v = [2Nk, 2Nk + Nv)
+            q = ttnn.slice(conv, (0, 0, 0), (1, Nk, Dk), memory_config=_L1)
+            k = ttnn.slice(conv, (0, Nk, 0), (1, 2 * Nk, Dk), memory_config=_L1)
+            v = ttnn.slice(conv, (0, 2 * Nk, 0), (1, 2 * Nk + Nv, Dv), memory_config=_L1)
+        else:
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
 
         # GQA expand Q/K Nk->Nv; recurrence L2-norms + scales internally.
@@ -1593,7 +1671,12 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
+        g = ttnn.multiply(
+            tw["neg_exp_A"],
+            _softplus_add(a, tw["dt_bias"]),
+            memory_config=_L1,
+            **({"dtype": ttnn.float32} if self._gdn_trim else {}),
+        )
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
@@ -1615,7 +1698,20 @@ class TPGatedDeltaNet:
             # per_token=false (per_token || last is true either way) -- see test_gdn_ring_inplace.py for
             # the output- and state-identical check.
             rec_in_place = self._inplace_rec_state and B == Bmax
-            if rec_in_place:
+            if rec_in_place and self._gdn_trim and os.environ.get("QWEN35_GDN_DECODE_BF16") != "1":
+                o, new_rec = fused_recurrent_trim(
+                    q,
+                    k,
+                    v,
+                    beta,
+                    g,
+                    self.scale,
+                    initial_state=ttnn.reshape(self.rec_state, (B * Nv, Dk, Dv)),  # metadata view
+                    initial_state_block_idx=self._ensure_rec_ring_idx(B * Nv),
+                    output_per_token_state=True,
+                    **({"head_major_output": True} if self._gdn_hmo else {}),
+                )
+            elif rec_in_place:
                 o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
                     q,
                     k,
@@ -1664,11 +1760,18 @@ class TPGatedDeltaNet:
         else:
             self._write_recurrent_state_prefix(new_rec, B)
 
-        out_r = ttnn.reshape(o, (B, Nv, Dv))
-        out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
-        ttnn.deallocate(out_r)
-        out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
-        ttnn.deallocate(out_n)
+        if self._gdn_hmo:
+            out_n = ttnn.rms_norm(  # o: [Nv, 1, Dv]
+                o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1, compute_kernel_config=_gdn_norm_ckc()
+            )
+            ttnn.deallocate(o)
+            out_f = head_major_flat_view(out_n)
+        else:
+            out_r = ttnn.reshape(o, (B, Nv, Dv))
+            out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
+            ttnn.deallocate(out_r)
+            out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
+            ttnn.deallocate(out_n)
         gated = _silu_mul(out_f, z, _L1)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)

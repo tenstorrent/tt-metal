@@ -70,7 +70,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         nb::arg("output_per_token_state") = false,
         nb::arg("use_qk_l2norm") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("head_major_output") = false);
 }
 
 }  // namespace ttnn::operations::transformer
