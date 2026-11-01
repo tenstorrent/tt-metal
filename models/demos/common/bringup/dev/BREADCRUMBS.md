@@ -2489,3 +2489,17 @@ model.steady_state(start) (when the device model has it) before every timed run;
 steady_state(None) before the quick per-layer accuracy run and the counting run, so their values still come from the
 golden prefix on the normal path. A model without the hook is unchanged. Selftest test_e2e_runtime.py::
 test_timed_runs_take_the_steady_state_path_and_accuracy_runs_the_normal_one. DS41's hook: FIX.16.
+
+## F237 / F238: a released fix lands inside the --until scope; agents run long device jobs detached (DeepSeek-V4.1, 2026-10-31 / 11-01)
+
+- F237: _first_open skipped only passed tasks, so a fix released mid-run was placed before an old open task outside the
+  --until scope (FIX.13) and the scope's next task (P.21) ran ahead of it. run() records scope_until; the fix goes before
+  the first open task inside upstream(until). Selftest test_overseer.py::
+  test_a_queued_fix_runs_before_the_scopes_next_task_not_an_open_task_outside_it (fails without the fix).
+- F238: agents ran device jobs under their tool call's ~10-minute limit (timeout or background task); three times a
+  run was cut off (FIX.16, P.22, FIX.19), the safe runner marked all 32 cards dirty and the next run would reset the box
+  (FIX.19: an owner reset). devjob.py: `devjob start NAME -- CMD` runs it in its own session (survives the call, the
+  agent and an abort; never killed by the tool), `devjob wait NAME` returns its rc or 75 (still running), `status`,
+  `tail`. Agents' rule 3 requires it for runs over ~9 minutes and forbids killing a device job. devjob.py is in
+  stamps NO_MEASURE. Selftests test_devjob.py (a job outlives its starter; a timed-out wait leaves it running; no
+  double start; the command check judges what a devjob wraps: test_the_command_check_looks_inside_a_devjob).
