@@ -37,6 +37,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.mhc_ep import mhc_expand_proj
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand import mhc_expand
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand2 import mhc_expand2
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand3 import mhc_expand3
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc_lane import lane_ok, mhc_expand_front
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_mixes import mhc_post, mhc_proj
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_mixes2 import mhc_post2, mhc_proj2, proj_plan
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_pre import mhc_mixes_cn
@@ -244,6 +245,56 @@ class DSV41MHC:
             self.post_fidelity,
         )
         return ((pre, post, comb), h, rm) if emit_rm else ((pre, post, comb), h)
+
+    def expand_front(self, y, residual, post, comb, pre_in, w, eps=1e-20, pool=None):
+        """DSV41_MHC_LANEFUSE=1 (with LANEPAR): the (attention-side) expand new = post * y + comb^T residual FUSED into the front of THIS sub-block (mixes + collapse + norm of the new
+        streams), one program (mhc_lane.mhc_expand_front); the new streams are written into the pooled stream buffer (valid rows) and never re-read.
+        -> (x_new, (pre, post, comb), h, h_tok) or None when the fused program does not apply (switch off, no pool, T > 16, y not bf16 token rows):
+        the caller then runs expand + mixes_collapse as before. Bit-identical to those two calls."""
+        T = int(residual.shape[0])
+        if not (
+            _flag("DSV41_MHC_LANEPAR")
+            and _flag("DSV41_MHC_LANEFUSE")
+            and pool is not None
+            and T <= 16
+            and self.pre_fused_ok(T)
+            and _flag("DSV41_MHC_EXPAND_V2", "1")
+        ):
+            return None
+        Ti = 4 if T <= 4 else 8 if T <= 8 else -(-T // 4) * 4
+        tg = 4 if Ti >= 8 and os.environ.get("DSV41_MHC_MIXES_T4", "1") == "1" else 8
+        plan = proj_plan(Ti, self.dim, self.device, tg, T, shared=Ti > 8)
+        if not lane_ok(T, plan, y):
+            self.lane_skipped = (
+                T,
+                str(y.dtype),
+                tuple(int(v) for v in y.shape),
+                plan.TG,
+            )  # diagnostic: why the fused program did not apply
+            return None
+        self.lane_used = getattr(self, "lane_used", 0) + 1
+        buf = mhc_stream_pool.get(residual.device(), T, residual.shape[3], pool[0], pool[1])
+        w4 = self._norm_weight(w, T)
+        x_new, pre_, post_, comb_, h, rm = mhc_expand_front(
+            y,
+            residual,
+            post,
+            comb,
+            buf,
+            pre_in,
+            w4,
+            self._wt(plan),
+            self.consts9,
+            plan,
+            self.mix_col,
+            self._w.iters,
+            self._w.eps,
+            self.sq_eps,
+            eps,
+            True,
+            self.post_fidelity,
+        )
+        return x_new, (pre_, post_, comb_), h, rm
 
     def collapse(self, x, pre):
         """sum_i pre_i x_i: [T,1,1,n] @ [T,1,n,C] -> [T,1,1,C] (fp32). (The layer wants collapse_norm.)"""

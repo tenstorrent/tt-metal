@@ -23,6 +23,7 @@ ARMS = {
     "base": {},
     "ff": {"DSV41_MHC_FRONT_FAST": "1"},
     "lane": {"DSV41_MHC_LANEPAR": "1"},
+    "lanefuse": {"DSV41_MHC_LANEPAR": "1", "DSV41_MHC_LANEFUSE": "1"},
 }
 ALLK = {k for a in ARMS.values() for k in a} | set(PROD)
 
@@ -59,3 +60,45 @@ def test_mhc_lane_us(mesh_device):
                 f"MHCLANE {arm} T={T} front_attn={f1:.1f} expand_attn={e1:.1f} front_ffn_rm={f2:.1f} expand_ffn={e2:.1f} sum={f1 + e1 + f2 + e2:.1f}",
                 flush=True,
             )
+
+
+def _host(t):
+    return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param(DEV, id="ring")], indirect=True)
+@torch.no_grad()
+def test_mhc_lane_bits(mesh_device):
+    """fused expand + front (DSV41_MHC_LANEPAR=1: DSV41MHC.expand_front) == expand (valid rows, pooled) + mixes_collapse(emit_rm), bit for bit: x2 (valid pieces and the
+    zero padding of the pooled buffer), pre / post / comb, h, rm; T in DSV41_MHC_PAR_T (default 1..16), 3 seeds"""
+    md = mesh_device
+    up = mk(md)
+    set_arm("base")
+    os.environ["DSV41_MHC_EXPAND_VALID"] = "1"
+    m = DSV41MHC(md, torch.randn(24, 4 * D) * 0.02, torch.randn(24) * 0.3, torch.tensor([0.4, 0.3, 0.5]))
+    w = up(torch.rand(1, 1, 1, D) + 0.5)
+    bad = tot = 0
+    for T in Ts(",".join(str(t) for t in range(1, 17))):
+        for seed in range(3):
+            torch.manual_seed(seed * 1000 + T)
+            x = up(torch.randn(T, 1, 4, D) + 0.3 * torch.randn(T, 1, 1, D))
+            pre_in = up(torch.rand(T, 1, 1, 4))
+            a = up(torch.randn(1, 1, T, D), ttnn.bfloat16)
+            post, comb = up(torch.rand(T, 1, 4, 1)), up(torch.rand(T, 1, 4, 4))
+            set_arm("base")
+            os.environ["DSV41_MHC_EXPAND_VALID"] = "1"
+            x2 = m.expand(a, x, post, comb, None, pool=("ref", "attn"))
+            (pr, po, cb), h, rm = m.mixes_collapse(x2, pre_in, w, 1e-20, emit_rm=True)
+            ref = [_host(t).reshape(-1) for t in (x2, pr, po, cb, h, rm)]
+            set_arm("lanefuse")
+            f = m.expand_front(a, x, post, comb, pre_in, w, 1e-20, pool=("lane", "attn"))
+            assert f is not None, T
+            got = [_host(f[0]).reshape(-1)] + [_host(t).reshape(-1) for t in (*f[1], f[2], f[3])]
+            for nm, g, r in zip(("x2", "pre", "post", "comb", "h", "rm"), got, ref):
+                tot += 1
+                if not torch.equal(g, r):
+                    bad += 1
+                    print(f"LANEDIFF T={T} seed={seed} {nm} maxabs={float((g - r).abs().max()):.3e}", flush=True)
+        print(f"LANEBITS T={T} done bad={bad}/{tot}", flush=True)
+    assert bad == 0

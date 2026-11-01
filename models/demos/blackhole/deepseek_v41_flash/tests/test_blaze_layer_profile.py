@@ -119,7 +119,7 @@ def test_layer_op_table(mesh_device):
     def fwd(profile=None):
         o, n = layer.forward(x, pre, st, profile=profile)
         ttnn.synchronize_device(md)
-        ttnn.deallocate(o)
+        pass  # o may be a pooled persistent stream buffer (mhc_stream_pool): not deallocated
         ttnn.deallocate(n)
 
     for _ in range(3):

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// mHC projection v5 (= v3, but each group starts when its own x rows have landed; DSV41_MHC_FRONT_FAST), compute.
-// (v3 text:) mHC projection v3 (NGRP token groups per core), compute.  Xj (row 4*tl+i = token tl, stream i, 32 cols of
-// column tile j), W_ij (fn^T chunk of stream i).
+// mHC lane-parallel fused expand + projection (DSV41_MHC_LANEPAR), compute: the new x tiles come from the expand matmul
+// (see mhc_lf_reader.cpp), then the projection of mhc_proj5_compute. (v3 text:) mHC projection v3 (NGRP token groups
+// per core), compute.  Xj (row 4*tl+i = token tl, stream i, 32 cols of column tile j), W_ij (fn^T chunk of stream i).
 //   Z_i  = sum_j Xj @ W_ij                (row 4*tl+i of Z_i is the stream-i term of token tl; other rows unused)
 //   Q    = sum_j (Xj*Xj) @ ONES_col       (column NCOL: per-row sum of squares)
 //   P    = sum_i SEL_i @ Z_i + SEL_all @ Q  (row tl = token tl: mixes in columns 0..mix_hc-1, sum of squares in column
@@ -29,11 +29,34 @@ void kernel_main() {
     constexpr uint32_t cb_p = get_compile_time_arg_val(7);
     constexpr uint32_t TPJ = get_compile_time_arg_val(8);
     constexpr uint32_t NGRP = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_a = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_b = get_compile_time_arg_val(11);
 
-    compute_kernel_hw_startup(cb_x, cb_w, cb_p);
-    CircularBuffer x(cb_x), w(cb_w), ones(cb_ones), sel(cb_sel), sq(cb_sq), z(cb_z), q(cb_q), p(cb_p);
+    compute_kernel_hw_startup(cb_a, cb_b, cb_x);
+    CircularBuffer x(cb_x), w(cb_w), ones(cb_ones), sel(cb_sel), sq(cb_sq), z(cb_z), q(cb_q), p(cb_p), a(cb_a), b(cb_b);
     DeviceZoneScopedN("PC_ALL");
-    // lanepar: the x rows land first (small), the squares need only x; the weights are waited for before the first Z
+    // LANEPAR fused expand: x_new tile (g, j) = A_g @ B_(g, j) (the mHC expand, one fp32 tile matmul per group and
+    // column tile, as mhc_expand4_compute), packed into cb_x = the X tile of the projection. All groups first: the
+    // reader forwards / stores them independent of the weights.
+    for (uint32_t g = 0; g < NGRP; ++g) {
+        a.wait_front(g + 1);
+        b.wait_front((g + 1) * TPJ);
+        reconfig_data_format(cb_a, cb_b);
+        matmul_init(cb_a, cb_b);
+        for (uint32_t j = 0; j < TPJ; ++j) {
+            tile_regs_acquire();
+            matmul_tiles(cb_a, cb_b, g, g * TPJ + j, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            x.reserve_back(1);
+            pack_tile(0, cb_x);
+            x.push_back(1);
+            tile_regs_release();
+        }
+    }
+    {
+        DeviceZoneScopedN("PC_expdone");
+    }
 
     for (uint32_t g = 0; g < NGRP; ++g) {
         const uint32_t xo = g * TPJ;

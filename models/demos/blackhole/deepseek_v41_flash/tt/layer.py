@@ -267,23 +267,32 @@ class DSV41Layer:
             x2 = _rnd_bf16(self.mhc_attn.expand(a, xp, attn_post, attn_comb, None))
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
         elif fuse_pre:
-            # DSV41_MHC_X2LITE=1: x2 only feeds the FFN-side mHC kernels (rows 0..3 read with 256 B reads): write just those rows
-            # (superseded by the valid-row write when DSV41_MHC_EXPAND_VALID=1 and the pooled buffer applies)
-            x2 = self.mhc_attn.expand(
-                P2(a),
-                xp,
-                attn_post,
-                attn_comb,
-                None,
-                lite=_X2LITE or getattr(self, "x2lite", False),
-                pool=(self.mhc_pool_tag, "attn"),
+            # DSV41_MHC_LANEPAR=1: the attention-side expand and the FFN-side mixes + collapse + norm are ONE program (mhc_lane); None = not applicable
+            fused = self.mhc_ffn.expand_front(
+                P2(a), xp, attn_post, attn_comb, attn_pre, self.ffn_norm_w, self.eps, pool=(self.mhc_pool_tag, "attn")
             )
+            if fused is not None:
+                x2 = fused[0]
+            else:
+                # DSV41_MHC_X2LITE=1: x2 only feeds the FFN-side mHC kernels (rows 0..3 read with 256 B reads): write just those rows
+                # (superseded by the valid-row write when DSV41_MHC_EXPAND_VALID=1 and the pooled buffer applies)
+                x2 = self.mhc_attn.expand(
+                    P2(a),
+                    xp,
+                    attn_post,
+                    attn_comb,
+                    None,
+                    lite=_X2LITE or getattr(self, "x2lite", False),
+                    pool=(self.mhc_pool_tag, "attn"),
+                )
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
                 P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn, pool=(self.mhc_pool_tag, "attn")
             )
         mark("mhc_attn_expand+ffn_mixes")
-        if fuse_pre:
+        if fuse_pre and fused is not None:
+            (ffn_pre, ffn_post, ffn_comb), h, h_tok = fused[1], fused[2], fused[3]
+        elif fuse_pre:
             (ffn_pre, ffn_post, ffn_comb), h, h_tok = self.mhc_ffn.mixes_collapse(
                 x2, attn_pre, self.ffn_norm_w, self.eps, emit_rm=True
             )

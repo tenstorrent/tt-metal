@@ -38,7 +38,9 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
     # DSV41_MHC_EXPAND_GRP (default on with EXPAND_FAST): a core handles ONE token group x gpc column tiles (it reads the comb / post rows of its 4 tokens only, not all T)
     grp = fast and os.environ.get("DSV41_MHC_EXPAND_GRP", "1") == "1"
     if grp:
-        cmax = int(os.environ.get("DSV41_MHC_EXPAND_CORES", "96"))
+        # LANEPAR: up to 130 cores (T = 12 / 16: 120 / 128 cores, 4-5 column tiles each instead of 80-96 cores with 5-8): the per-core piece reads and writes are issue-bound
+        lane_cores = "130" if os.environ.get("DSV41_MHC_LANEPAR", "0") == "1" else "96"
+        cmax = int(os.environ.get("DSV41_MHC_EXPAND_CORES", lane_cores))
         csl = max(c for c in range(1, nt + 1) if nt % c == 0 and G * c <= cmax)  # column slices per token group
         cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)][: G * csl]
         gpc = nt // csl

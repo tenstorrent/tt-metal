@@ -50,6 +50,7 @@ ARMS = {
     "base": {},
     "ff": {"DSV41_MHC_FRONT_FAST": "1"},
     "lane": {"DSV41_MHC_LANEPAR": "1"},
+    "lanefuse": {"DSV41_MHC_LANEPAR": "1", "DSV41_MHC_LANEFUSE": "1"},
 }
 for _k, _v in os.environ.items():
     if _k.startswith("DSV41_LAYER_ARM_"):
@@ -134,6 +135,10 @@ def test_mhc_lane_layer(mesh_device):
         ttnn.synchronize_device(md)
 
     res = dict(layer=LAYER, T=UPR, B=B, arms={}, compare={})
+    print(
+        f"LANEUSED fused expand+front calls so far: {getattr(layer.mhc_ffn, 'lane_used', 0)} skipped: {getattr(layer.mhc_ffn, 'lane_skipped', None)}",
+        flush=True,
+    )
     us = {a: [] for a in arms}
     for r in range(rounds):
         for arm in arms:
