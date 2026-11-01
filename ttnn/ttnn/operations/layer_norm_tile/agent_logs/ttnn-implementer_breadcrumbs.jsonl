@@ -4,3 +4,4 @@
 {"event":"test_run","status":"pass","tests":"unit dir 92/92, golden slice 75/75","ts":"2026-11-01T15:12:42+00:00"}
 {"event":"perf_measure","refinement":2,"rows":"test_reference_rows order","before_us":[48.3,51.5,40.5,31.8,28.1,43.7,23.2,79.2],"after_us":[46,51.7,40.4,27.9,28.3,42.8,22,76],"shipped":["COMPUTE_DEST_LANES=4","inv_std VectorMode::C","reconfig elision"],"parked":["FUSE_NORMALIZE_AFFINE"],"ts":"2026-11-01T15:43:24+00:00"}
 {"event":"test_run","status":"pass","tests":"layer_norm_tile unit dir 107 passed, golden slice 117 passed","ts":"2026-11-01T15:43:24+00:00"}
+{"event":"test_run","status":"pass","test":"test_perf_bench.py","note":"streaming row stats (G=C, one-pass under fp32+HiFi4) first pass, 12/12","ts":"2026-11-01T19:06:41+00:00"}

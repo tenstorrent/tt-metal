@@ -35,6 +35,13 @@ OUT_DEPTH = 1
 # cycles). A DEST-reuse fused normalize/affine pass measured slower under fp32 DEST in Refinement 2
 # and again in Perf 1, and was removed.
 COMPUTE_DEST_LANES = 4
+# Row statistics (Refinement 3). STREAM_ROW_STATS accumulates the row sums per stats window as the reader's
+# chunks land instead of after the whole row; off, the window is the whole row. ONE_PASS_VARIANCE carries
+# the sum of squares in the same windows (var = E[z^2] - mean^2) and drops the centered sum-of-squares pass;
+# gated to fp32 DEST + HiFi4, where z * z is exact and accumulates in fp32. Elsewhere the variance stays
+# two-pass over the centered row.
+STREAM_ROW_STATS = True
+ONE_PASS_VARIANCE = True
 L1_HEADROOM_BYTES = 64 * 1024
 
 CB_INPUT_TILES = 0
@@ -44,9 +51,11 @@ CB_BETA_TILES = 3
 CB_ROW_WORK_A = 4
 CB_ROW_WORK_B = 5
 CB_ROW_MEAN = 6
+CB_STAT_PARTIAL = 7  # raw row sums carried between stats windows
 CB_INV_STD = 8
 CB_AFFINE_SCRATCH = 9  # reader-private landing block of the gamma/beta multicast
 CB_OUTPUT_TILES = 16
+NUM_CIRCULAR_BUFFERS = 64
 
 # Work-pair page format: one id per allocation group, the alias partner shares it (l1_ledger.md).
 _WORK_ALIAS = {CB_ROW_WORK_A: CB_ROW_WORK_B}
@@ -68,6 +77,8 @@ class Blocking:
     write_chunks_per_flush: int
     bank_stagger: bool
     residual_on_writer: bool
+    stats_window_tiles: int  # G: tiles per row-stats window, a multiple of C or Wt
+    one_pass: bool  # one-pass variance (sum and sum of squares in the stats windows)
     all_cores: object
     assignment: tuple  # ((core, row_tile_start, core_row_tiles), ...)
 
@@ -84,7 +95,7 @@ def _affine_scratch_bytes(Wt, affine_is_tile):
     return 2 * Wt * entry_bytes
 
 
-def _cb_pages(R, in_depth, *, Wt, has_residual):
+def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass):
     """Page count per CB: the single source for both the L1 footprint and the allocation (l1_ledger.md)."""
     pages = {
         CB_INPUT_TILES: in_depth * R * Wt,
@@ -97,6 +108,8 @@ def _cb_pages(R, in_depth, *, Wt, has_residual):
     }
     if has_residual:
         pages[CB_RESIDUAL_TILES] = in_depth * R * Wt
+    if stats_window_tiles < Wt:
+        pages[CB_STAT_PARTIAL] = 2 if one_pass else 1
     return pages
 
 
@@ -112,6 +125,7 @@ def _cb_page_formats(fp32_dest_acc_en):
         CB_ROW_WORK_A: work,
         CB_ROW_WORK_B: work,
         CB_ROW_MEAN: work,
+        CB_STAT_PARTIAL: work,
         CB_INV_STD: work,
         CB_OUTPUT_TILES: io,
     }
@@ -139,19 +153,40 @@ def _io_chunk_tiles(Wt):
     return max(c for c in range(1, min(Wt, IO_CHUNK_TARGET_TILES) + 1) if Wt % c == 0)
 
 
+def _stats_window_tiles(Wt, C):
+    """Smallest even multiple of the reader chunk C dividing Wt (windows pair their tiles); Wt when odd or off."""
+    if not STREAM_ROW_STATS:
+        return Wt
+    if C % 2 == 0:
+        return C
+    return 2 * C if Wt % 2 == 0 else Wt
+
+
+def _one_pass(compute_kernel_config):
+    return (
+        ONE_PASS_VARIANCE
+        and bool(compute_kernel_config.fp32_dest_acc_en)
+        and compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi4
+    )
+
+
 def _residual_on_writer(residual, num_active_cores, num_grid_cores):
     if not RESIDUAL_ON_WRITER or residual is None:
         return False
     return 2 * num_active_cores >= num_grid_cores
 
 
-def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
-    """Single source of every block knob (R, C, in_depth, stream knobs). None when R1's predicate fails."""
+def select_blocking(input_tensor, *, residual, compute_kernel_config):
+    """Single source of every block knob (R, C, G, in_depth, stream knobs). None when R1's predicate fails."""
     has_residual = residual is not None
+    fp32_dest_acc_en = bool(compute_kernel_config.fp32_dest_acc_en)
+    one_pass = _one_pass(compute_kernel_config)
     shape = list(input_tensor.shape)
     if shape[-1] % TILE != 0:
         return None
     Wt = shape[-1] // TILE
+    C = _io_chunk_tiles(Wt)
+    G = _stats_window_tiles(Wt, C)
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     all_cores, assignment, core_row_tiles_max = _split_rows(device, tensor_row_tiles(shape))
@@ -163,7 +198,7 @@ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
         return 2 if _div_up(core_row_tiles_max, R) >= 2 else 1
 
     def fits(R):
-        pages = _cb_pages(R, in_depth_for(R), Wt=Wt, has_residual=has_residual)
+        pages = _cb_pages(R, in_depth_for(R), Wt=Wt, has_residual=has_residual, stats_window_tiles=G, one_pass=one_pass)
         return _footprint(pages, formats) + _affine_scratch_bytes(Wt, affine_is_tile=True) <= budget
 
     R = next((r for r in range(_div_up(core_row_tiles_max, MIN_BLOCKS_PER_CORE), 0, -1) if fits(r)), None)
@@ -172,7 +207,7 @@ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
 
     return Blocking(
         block_row_tiles=R,
-        io_chunk_tiles=_io_chunk_tiles(Wt),
+        io_chunk_tiles=C,
         in_depth=in_depth_for(R),
         tensor_w_tiles=Wt,
         has_residual=has_residual,
@@ -181,6 +216,8 @@ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
         write_chunks_per_flush=WRITE_CHUNKS_PER_FLUSH,
         bank_stagger=BANK_STAGGER,
         residual_on_writer=_residual_on_writer(residual, len(assignment), grid.x * grid.y),
+        stats_window_tiles=G,
+        one_pass=one_pass,
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -214,6 +251,26 @@ def _core_nocs(blocking, grid_y):
     return nocs
 
 
+def _compute_config(requested, blocking):
+    """The caller's config plus UnpackToDestFp32 on the fp32 row-sum carry CB (lossless reload, not TF32)."""
+    config = ttnn.ComputeConfigDescriptor()
+    for field in (
+        "math_fidelity",
+        "fp32_dest_acc_en",
+        "math_approx_mode",
+        "dst_full_sync_en",
+        "bfp8_pack_precise",
+        "enable_trisc2_rvv",
+        "unpack_to_dest_mode",
+    ):
+        setattr(config, field, getattr(requested, field))
+    if blocking.fp32_dest_acc_en and blocking.stats_window_tiles < blocking.tensor_w_tiles:
+        modes = list(config.unpack_to_dest_mode) or [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
+        modes[CB_STAT_PARTIAL] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        config.unpack_to_dest_mode = modes
+    return config
+
+
 def _float_bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
@@ -233,7 +290,14 @@ def _cb_descriptors(blocking):
     R = blocking.block_row_tiles
     Wt = blocking.tensor_w_tiles
     cores = blocking.all_cores
-    pages = _cb_pages(R, blocking.in_depth, Wt=Wt, has_residual=blocking.has_residual)
+    pages = _cb_pages(
+        R,
+        blocking.in_depth,
+        Wt=Wt,
+        has_residual=blocking.has_residual,
+        stats_window_tiles=blocking.stats_window_tiles,
+        one_pass=blocking.one_pass,
+    )
     formats = _cb_page_formats(blocking.fp32_dest_acc_en)
 
     cbs = []
@@ -328,10 +392,12 @@ def create_program_descriptor(
         R,
         Wt,
         int(has_residual),
-        width,
         _float_bits(1.0 / width),
         _float_bits(epsilon),
         COMPUTE_DEST_LANES,
+        blocking.stats_window_tiles,
+        int(blocking.one_pass),
+        CB_STAT_PARTIAL,
     ]
 
     compute_rt = ttnn.RuntimeArgs()
@@ -395,7 +461,7 @@ def create_program_descriptor(
             core_ranges=cores,
             compile_time_args=compute_ct_args,
             runtime_args=compute_rt,
-            config=compute_kernel_config,
+            config=_compute_config(compute_kernel_config, blocking),
         )
     )
     descriptor = ttnn.ProgramDescriptor(cbs=_cb_descriptors(blocking) + [_affine_scratch_cb(blocking, affine_is_tile)])

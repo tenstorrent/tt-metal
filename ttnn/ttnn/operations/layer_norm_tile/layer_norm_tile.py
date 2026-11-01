@@ -181,7 +181,7 @@ def layer_norm(
     blocking = select_blocking(
         input_tensor,
         residual=residual_input_tensor,
-        fp32_dest_acc_en=bool(compute_kernel_config.fp32_dest_acc_en),
+        compute_kernel_config=compute_kernel_config,
     )
     if blocking is None:
         raise NotImplementedError("layer_norm: row-resident footprint exceeds L1; regime R2 w_split_combine not built")
