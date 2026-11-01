@@ -73,3 +73,32 @@ def test_mlp_dramshard_equiv(mesh_device):
                 n = ttnn.to_torch(ttnn.sharded_to_interleaved(z, ttnn.L1_MEMORY_CONFIG)).float().reshape(-1)[:N]
                 print(f"  {label:<12} bit-exact vs old {100 * (n == o).float().mean().item():6.2f}%"
                       f"  max|d| vs old {(n - o).abs().max():.3e}  vs float64 {(n - r).abs().max():.3e}")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("wdtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_mlp_dramshard_down_equiv(mesh_device, wdtype):
+    """down_proj: DRAM-sharded (in0 = the 32-core x 17-tile width shard of SiLU(gate)*up) vs _down_decode_progcfg."""
+    from models.demos.blackhole.qwen36.tt.mlp import _down_decode_progcfg
+
+    torch.manual_seed(0)
+    Kd, Nd = N, K
+    h_t = torch.randn(1, 1, 1, Kd)
+    w_t = torch.randn(Kd, Nd) * 0.02
+    ckc = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True)
+    w_il = ttnn.from_torch(w_t, dtype=wdtype, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    w_ds = ttnn.to_memory_config(w_il, tpc.create_dram_sharded_mem_config(Kd, Nd))
+    h_il = ttnn.from_torch(h_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device,
+                           memory_config=ttnn.L1_MEMORY_CONFIG)
+    h_sh = ttnn.to_memory_config(h_il, tpc.create_activation_shard_config(Kd))
+    o = ttnn.to_torch(ttnn.linear(h_il, w_il, compute_kernel_config=ckc, memory_config=ttnn.L1_MEMORY_CONFIG,
+                                  program_config=_down_decode_progcfg(Nd))).float().reshape(-1)[:Nd]
+    pc = tpc.create_dram_sharded_matmul_program_config(1, Kd, Nd)
+    for workers in (1, 2):
+        cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=(Kd // 32) // 32, per_core_M=pc.per_core_M, per_core_N=pc.per_core_N,
+            fused_activation=None, num_workers_per_dram_bank=workers)
+        y = ttnn.linear(h_sh, w_ds, compute_kernel_config=ckc, program_config=cfg,
+                        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        n = ttnn.to_torch(ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)).float().reshape(-1)[:Nd]
+        print(f"down {wdtype} w{workers}: bit-exact vs 1D {100 * (n == o).float().mean().item():6.2f}%  max|d| {(n - o).abs().max():.3e}")
