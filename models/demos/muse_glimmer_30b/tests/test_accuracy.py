@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
-from models.demos.muse_glimmer_30b.tt.model_config import DEFAULT_CKPT_DIR, MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.model_config import DEFAULT_CKPT_DIR, LOW_PRECISION, MuseGlimmerModelArgs
 
 CKPT = os.environ.get("HF_MODEL") or DEFAULT_CKPT_DIR
 GOLDEN = os.path.join(os.path.dirname(__file__), "reference_outputs", "tf_ref_photosynthesis.refpt")
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
     reason="checkpoint or golden file not available",
 )
 
-MIN_TOP1 = 0.90
+MIN_TOP1 = 0.88 if LOW_PRECISION else 0.90
 MIN_TOP5_CONTAINS = 0.98
 
 

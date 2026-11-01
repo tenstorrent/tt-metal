@@ -258,7 +258,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const CoreRangeSet worker_core_range(worker_core_set);
     const CoreRangeSet mux_core_range(mux_core_set);
 
-    // Fabric mux config
+    // Fabric mux config. The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays
+    // clear of persistent L1 there; its addresses are offsets until the mux publishes the map's base.
     constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
     tt::tt_fabric::FabricMuxConfig mux_config(
         /*num_full_size_channels=*/workers_per_dir,
@@ -266,10 +267,11 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         /*num_buffers_full_size_channel=*/num_buffers_per_channel,
         /*num_buffers_header_only_channel=*/0,
         /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
-        /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+        /*base_l1_address=*/0);
 
     tt::tt_metal::KernelHandle mux_kernel_id = 0;
     if (use_mux && mux_core_range.num_cores() > 0) {
+        mux_config.place_in_program_local_l1(program, mux_core_range);
         mux_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",

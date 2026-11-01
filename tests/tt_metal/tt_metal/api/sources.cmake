@@ -55,6 +55,7 @@ set(UNIT_TESTS_API_SOURCES
     test_prefetcher_pipe_dram_sender.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
+    test_host_write_dma.cpp
     test_kernel_compile_cache.cpp
     test_kernel_creation.cpp
     test_offline_kernel_compile.cpp
@@ -99,6 +100,7 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/test_host_tensor.cpp
     tensor/test_host_tensor_to_layout.cpp
     tensor/test_host_tensor_to_dtype.cpp
+    tensor/test_bfp_host_preparation.cpp
     tensor/test_host_tensor_spec_preservation.cpp
     tensor/test_host_tensor_to_tensor_spec.cpp
     tensor/test_mesh_tensor.cpp

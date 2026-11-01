@@ -101,8 +101,9 @@ def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, 
 # Helpers
 # ---------------------------------------------------------------------------
 # Row at which the Blackhole split gather hands a block's rows from the reader
-# to the writer. Must equal fused_msda_gather::SPLIT_ROW in msda_gather_rows.hpp.
-SPLIT_ROW = 15
+# to the writer, keyed by the value tensor's buffer type. Must equal
+# fused_msda_gather::SPLIT_ROW_L1 / SPLIT_ROW_DRAM in msda_gather_rows.hpp.
+SPLIT_ROW = {"l1": 16, "dram": 15}
 
 
 def _pack_locations(loc: torch.Tensor) -> torch.Tensor:
@@ -140,7 +141,7 @@ def _per_head_stride_supported(num_heads: int, head_dim: int) -> bool:
     return (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
 
 
-def _num_valid_queries_case(B, Q, H, seed):
+def _num_valid_queries_case(B, Q, H, seed, packed=True):
     spatial_shapes = [(12, 20), (6, 10)]
     L, P, D, Z = 2, 4, 32, 2
     S = sum(h * w for h, w in spatial_shapes)
@@ -152,9 +153,14 @@ def _num_valid_queries_case(B, Q, H, seed):
     reference = _msda_reference(
         value, _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar"), attn, spatial_shapes
     )
-    return (_pack_value(value), ref_pts, _pack_locations(offsets), _pack_weights(attn)), spatial_shapes, reference
+    if packed:
+        offsets, attn = _pack_locations(offsets), _pack_weights(attn)
+    return (_pack_value(value), ref_pts, offsets, attn), spatial_shapes, reference
 
 
+# Packed inputs take the tiled geometry on Blackhole, unpacked ones the per-point geometry; their
+# runtime args differ, so each is checked through a cache hit.
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
 @pytest.mark.parametrize(
     "B,Q,H,counts",
     [
@@ -165,7 +171,7 @@ def _num_valid_queries_case(B, Q, H, seed):
         (2, 300, 8, ([300, 129], [17, 288])),
     ],
 )
-def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(device, B, Q, H, counts):
+def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(device, B, Q, H, counts, packed):
     """Rows below each batch's count match the reference, and changing the counts is a cache hit.
 
     The counts cut blocks mid-way, at a block boundary and down to one row; Q itself leaves a
@@ -182,7 +188,7 @@ def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(de
     first, second = counts
     calls = []
     for seed, num_valid_queries in enumerate((None, first, None, second)):
-        tensors, spatial_shapes, reference = _num_valid_queries_case(B, Q, H, seed=seed)
+        tensors, spatial_shapes, reference = _num_valid_queries_case(B, Q, H, seed=seed, packed=packed)
         # Kept alive until the end so the allocator cannot hand a later call the same addresses.
         calls.append(([_to_device(t, device) for t in tensors], spatial_shapes, reference, num_valid_queries))
 
@@ -586,17 +592,18 @@ def test_fused_msda_v1_partially_out_of_bounds(device):
     _assert_close(ref, out)
 
 
-@pytest.mark.parametrize("memory", ["dram", "l1"])
 @pytest.mark.parametrize("D", [32, 64])
-@pytest.mark.parametrize("Q", [129, SPLIT_ROW, SPLIT_ROW + 1, 32 + SPLIT_ROW, 32 + SPLIT_ROW + 1])
+@pytest.mark.parametrize(
+    "memory, Q", [(m, q) for m, s in SPLIT_ROW.items() for q in (129, s, s + 1, 32 + s, 32 + s + 1)]
+)
 def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     """An out-of-bounds corner must contribute nothing, element by element.
 
-    Regression gate for the input-tile mask. The compute kernel builds the
-    reduction's scalar from the fractions the SFPU produced and has no bounds
-    information, so the zeroing of un-gathered input rows in
-    `fused_msda_reader_common.hpp` is the only thing standing between a stale
-    circular-buffer row and a live weight.
+    Regression gate for the out-of-bounds mask. The gathers skip an
+    out-of-bounds corner and leave its input slot holding an earlier point's
+    value stick, so the zero weight compute gives that corner
+    (`msda_geometry.hpp::mask_corner_weights`) is the only thing standing
+    between a stale slot and the sum.
 
     It asserts a per-element error ratio on top of `_assert_close` because a
     stale row is itself a plausible sampled value: correlation degrades more
@@ -606,10 +613,10 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     The case is built so that both halves matter: enough corners are outside
     the map to exercise the mask, and enough are inside that a slot the reader
     skips has just been written with a real value stick by an earlier point.
-    Every Q leaves a partial trailing block, so the `r >= v_rows` half of the
-    zeroing predicate is taken as well. With the gather split between the two
-    data-movement RISCs at ``SPLIT_ROW``, v_rows = SPLIT_ROW / SPLIT_ROW + 1 sit
-    on the split: the writer only zeroes, or gathers exactly one row.
+    Every Q leaves a partial trailing block, whose rows >= v_rows the gathers
+    skip as well. With the gather split between the two data-movement RISCs at
+    ``SPLIT_ROW[memory]``, v_rows = SPLIT_ROW[memory] and SPLIT_ROW[memory] + 1
+    sit on the split: the writer gathers nothing, or exactly one row.
     """
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
     B, H, L, P = 1, 4, 4, 4
@@ -634,8 +641,176 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
     assert high_error_ratio <= 0.01, (
         f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
-        "An unmasked out-of-bounds corner reads a stale input row and multiplies it by a live weight"
+        "An out-of-bounds corner kept a live weight and multiplied a stale input slot"
     )
+
+
+@pytest.mark.parametrize("memory", ["l1", "dram"])
+@pytest.mark.parametrize("path", ["v1", "v2_tiled", "v2_tiled_32"])
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")], ids=["inf", "nan"])
+def test_fused_msda_nonfinite_value_does_not_leak_into_out_of_bounds_corners(device, bad, path, memory):
+    """A non-finite value stick gathered for one query must not reach a later one.
+
+    On Blackhole the gathers leave an out-of-bounds corner's input slot holding
+    whatever an earlier point gathered there, and only compute's zero weight
+    cancels it. The contiguous work split gives the first core several query
+    blocks, and its input CB holds two points' corners, so every later point on
+    that core reuses the slots query 0's points wrote. Query 0 samples a
+    non-finite pixel in bounds; every other query has all its corners out of
+    bounds and must come out exactly 0. "v2_tiled" (L * P = 16) is the tiled
+    geometry and, with D = 32, the split gather; "v2_tiled_32" (L * P = 32) adds
+    the second group of 16 points.
+    """
+    grid = device.compute_with_storage_grid_size()
+    spatial_shapes = [(8, 8)]
+    B, H, D = 1, 1, 32
+    L, P = {"v1": (1, 4), "v2_tiled": (1, 16), "v2_tiled_32": (1, 32)}[path]
+    Q = 96 * grid.x * grid.y
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, 64, H, D))
+    value[0, 3 * 8 + 3] = bad
+    attn = torch.full((B, Q, H, L, P), 1.0 / P)
+    value_t = _to_device_in(_pack_value(value), device, memory)
+    attn_t = _to_device(_pack_weights(attn), device)
+
+    if path == "v1":
+        loc = torch.full((B, Q, H, L, P, 2), 5.0)
+        loc[0, 0] = 3.5 / 8
+        out = ttnn.experimental.fused_msda(value_t, _to_device(_pack_locations(loc), device), attn_t, spatial_shapes)
+    else:
+        R = 4
+        ref_pts = torch.full((B, Q, R, 2), 5.0)
+        ref_pts[0, 0] = 3.5 / 8
+        offsets = torch.zeros(B, Q, H, L, P, 2)
+        out = ttnn.experimental.fused_msda_from_offsets(
+            value_t,
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            attn_t,
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    out = ttnn.to_torch(out).to(torch.float32)
+
+    assert not out[0, 0].isfinite().all(), "query 0 did not sample the non-finite pixel; the case no longer applies"
+    assert torch.count_nonzero(out[0, 1:]) == 0, (
+        f"{torch.count_nonzero(out[0, 1:])} nonzero outputs outside query 0: a skipped slot "
+        "kept an earlier non-finite stick and its zero weight did not cancel it"
+    )
+
+
+@pytest.mark.parametrize("L, P", [(4, 4), (4, 8), (1, 8)], ids=["LP16", "LP32", "LP8"])
+@pytest.mark.parametrize(
+    "memory, Q, D",
+    [(m, 32 + q, 32) for m, s in SPLIT_ROW.items() for q in (s, s + 1)] + [("dram", 32 + SPLIT_ROW["dram"], 16)],
+)
+def test_fused_msda_v2_tiled_masks_out_of_bounds_corners(device, memory, Q, D, L, P):
+    """An out-of-bounds corner must contribute nothing on the tiled geometry too.
+
+    V2 with packed inputs takes the tiled geometry on Blackhole, whose block
+    solve and corner tiles are separate code from the per-point path; L * P are
+    BEVFormer-base's (32, two groups of 16 points), exactly one group (16) and
+    BEVFormer-small and -tiny's (8, half a group). Each Q is a full query block
+    followed by a tail block with v_rows = SPLIT_ROW[memory] or
+    SPLIT_ROW[memory] + 1 on the split, where the writer gathers nothing or one
+    row. D = 16 takes the tile-scatter gather.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)][:L]
+    B, H, R = 1, 1, 4
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    ref_pts = _bf16(ref_pts * 1.5 - 0.25)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar")
+
+    oob = _oob_corner_fraction(loc, spatial_shapes)
+    assert 0.25 < oob < 0.75, f"test no longer exercises the mask: {oob:.2%} of corners are out of bounds"
+
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device_in(_pack_value(value), device, memory),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    ).to(torch.float32)
+
+    _assert_close(ref, out)
+
+    abs_tol = max(2e-2, 6e-2 * ref.abs().max().item())
+    high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
+    assert high_error_ratio <= 0.01, (
+        f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
+        "An out-of-bounds corner kept a live weight and multiplied a stale input slot"
+    )
+
+
+# Raw bf16 bit patterns: converting a float32 NaN to bf16 drops its sign.
+@pytest.mark.parametrize("bad", [0x7FC0, 0xFFC0, 0x7F80, 0xFF80], ids=["nan", "neg_nan", "inf", "neg_inf"])
+@pytest.mark.parametrize("path", ["v1", "v2", "v2_tiled", "v2_tiled_32"])
+def test_fused_msda_nonfinite_sampling_location_contributes_nothing(device, path, bad):
+    """A sample whose x, y or both is NaN or infinite must add nothing.
+
+    `msda_geometry.hpp::corner_word` clamps the floored corner before its bounds
+    tests, so such a sample's corner word must have every flag clear: the
+    gathers issue no read for it and compute zeroes its weights, although the
+    attention weight handed to the op is live. The reference drops the poisoned
+    samples instead, and the other points of the same queries must be
+    untouched: on the tiled path a poisoned offset is one column of the block
+    matmul. "v2" (unpacked inputs) takes the per-point geometry, "v2_tiled"
+    (L * P = 16) and "v2_tiled_32" (L * P = 32) the tiled one on Blackhole.
+    """
+    B, Q, H, D = 1, 64, 2, 32
+    if path == "v2_tiled":
+        spatial_shapes, P, R = [(16, 20), (8, 10), (4, 5), (2, 3)], 4, 4
+    elif path == "v2_tiled_32":
+        spatial_shapes, P, R = [(16, 20), (8, 10), (4, 5), (2, 3)], 8, 4
+    else:
+        spatial_shapes, P, R = [(16, 20), (8, 10)], 4, 2
+    L = len(spatial_shapes)
+
+    torch.manual_seed(0)
+    poisoned = torch.rand(B, Q, H, L, P) < 0.1
+    # 0: x only, 1: y only, 2: both
+    which = torch.randint(0, 3, (B, Q, H, L, P))
+    bad_x = poisoned & (which != 1)
+    bad_y = poisoned & (which != 0)
+
+    if path == "v1":
+        value, coords, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
+        loc = coords
+    else:
+        value, ref_pts, coords, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+        loc = _locations_from_offsets(ref_pts, coords, spatial_shapes, "pillar")
+    sent = coords.to(torch.bfloat16)
+    bits = sent.view(torch.int16)
+    bad_int16 = bad - 0x10000 if bad >= 0x8000 else bad
+    bits[..., 0][bad_x] = bad_int16
+    bits[..., 1][bad_y] = bad_int16
+
+    ref = _msda_reference(value, loc, attn.masked_fill(poisoned, 0.0), spatial_shapes)
+    if path == "v1":
+        out = ttnn.experimental.fused_msda(
+            _to_device(value, device),
+            _to_device(_pack_locations(sent), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+        )
+    else:
+        packed = path != "v2"
+        out = ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(sent) if packed else sent, device),
+            _to_device(_pack_weights(attn) if packed else attn, device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    out = ttnn.to_torch(out).to(torch.float32)
+
+    assert out.isfinite().all(), f"{(~out.isfinite()).sum()} non-finite outputs: a poisoned sample kept a live weight"
+    _assert_close(ref, out)
 
 
 @pytest.mark.timeout(300)
@@ -797,20 +972,25 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
 
 
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
 @pytest.mark.parametrize(
     "reference_mode, spatial_shapes, Q, P, R",
     [
-        # BEVFormer's decoder: L = R = 1, where level and pillar mode coincide.
+        # BEVFormer's decoder and temporal self-attention: L = R = 1, where level and pillar
+        # mode coincide.
         ("level", [(200, 200)], 256, 4, 1),
         # The encoder's spatial cross-attention: four z-anchors, a partial query tile.
         ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 8, 4),
+        ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 4, 4),
     ],
-    ids=["decoder-200x200", "pillar-R4"],
+    ids=["decoder-200x200", "pillar-R4-LP32", "pillar-R4-LP16"],
 )
-def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_shapes, Q, P, R):
-    """float32 reference points, forwarded to the SFPU unrounded, next to the same points in
-    bf16. Each run is checked against a reference sampling at its own points, so a program built
-    for one reference dtype and reused for the other fails."""
+def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_shapes, Q, P, R, packed):
+    """float32 reference points, kept unrounded into px, next to the same points in bf16. Each run
+    is checked against a reference sampling at its own points, so a program built for one
+    reference dtype and reused for the other fails. Packed inputs take the tiled geometry on
+    Blackhole, where the FPU reads a float32 point as three bf16 parts; unpacked ones the
+    per-point geometry, where the SFPU reads it whole."""
     B, H, D = 1, 8, 32
     L = len(spatial_shapes)
     S = sum(h * w for h, w in spatial_shapes)
@@ -831,8 +1011,8 @@ def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_
             ttnn.experimental.fused_msda_from_offsets(
                 _to_device(_pack_value(value), device),
                 ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
-                _to_device(_pack_locations(offsets), device),
-                _to_device(_pack_weights(attn), device),
+                _to_device(_pack_locations(offsets) if packed else offsets, device),
+                _to_device(_pack_weights(attn) if packed else attn, device),
                 spatial_shapes,
                 reference_mode=reference_mode,
             )
@@ -940,11 +1120,33 @@ def _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=0):
     return value, ref_pts, offsets, attn
 
 
+def _check_reference_points_reused(device, Q, reference_mode, R, D, ref_dtype, L, P, spatial_shapes, packed=True):
+    H = 3
+    grid = device.compute_with_storage_grid_size()
+    B = 2 * grid.x * grid.y + 1
+
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            _to_device(_pack_locations(offsets) if packed else offsets, device),
+            _to_device(_pack_weights(attn) if packed else attn, device),
+            spatial_shapes,
+            reference_mode=reference_mode,
+        )
+    ).to(torch.float32)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
 @pytest.mark.parametrize("ref_dtype", [ttnn.bfloat16, ttnn.float32], ids=["ref_bf16", "ref_fp32"])
 @pytest.mark.parametrize("D", [32, 64])
 @pytest.mark.parametrize("reference_mode,R", [("level", 2), ("pillar", 2)])
 @pytest.mark.parametrize("Q", [17, 33])
-def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference_mode, R, D, ref_dtype):
+def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference_mode, R, D, ref_dtype, packed):
     """reference_points staged once per query block must be re-staged whenever the block changes.
 
     Tiles are ordered batch, query block, head, and each core takes a contiguous
@@ -960,13 +1162,103 @@ def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference
       * Q = 33: the run crosses a query-block boundary, and goes from a full
         block into a v_rows = 1 tail block.
     float32 reference points use a 4-byte-per-coordinate arena, reused the same way.
+    Packed inputs (L * P = 8) take the tiled geometry on Blackhole, where the reference tile is
+    rewritten only when the query block changes and re-pushed unchanged otherwise, and block
+    t+1's points are staged while block t is still being gathered; unpacked ones the per-point
+    geometry.
     """
-    spatial_shapes = [(8, 10), (4, 5)]
-    H, L, P = 3, 2, 4
-    grid = device.compute_with_storage_grid_size()
-    B = 2 * grid.x * grid.y + 1
+    _check_reference_points_reused(device, Q, reference_mode, R, D, ref_dtype, 2, 4, [(8, 10), (4, 5)], packed)
 
+
+@pytest.mark.parametrize("ref_dtype", [ttnn.bfloat16, ttnn.float32], ids=["ref_bf16", "ref_fp32"])
+@pytest.mark.parametrize("P", [4, 8], ids=["LP16", "LP32"])
+@pytest.mark.parametrize("Q", [17, 33])
+def test_fused_msda_v2_tiled_reference_points_reused_across_heads(device, Q, P, ref_dtype):
+    """The same reuse and re-staging on the tiled geometry with four levels, one and two groups
+    of 16 points."""
+    _check_reference_points_reused(device, Q, "pillar", 2, 32, ref_dtype, 4, P, [(8, 10), (4, 5), (2, 3), (1, 2)])
+
+
+@pytest.mark.parametrize(
+    "L, P, R, reference_mode",
+    [
+        (1, 2, 1, "level"),
+        (1, 4, 1, "level"),
+        (1, 8, 4, "pillar"),
+        (2, 6, 2, "level"),
+        (2, 8, 4, "pillar"),
+        (3, 3, 3, "level"),
+        (1, 15, 15, "pillar"),
+        (3, 8, 4, "pillar"),
+        (2, 12, 4, "pillar"),
+        (4, 8, 4, "pillar"),
+        (4, 8, 4, "level"),
+        (2, 16, 4, "pillar"),
+        (1, 32, 4, "pillar"),
+    ],
+)
+@pytest.mark.parametrize("ref_dtype", [ttnn.bfloat16, ttnn.float32], ids=["ref_bf16", "ref_fp32"])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_fused_msda_v2_tiled_points_per_block(device, L, P, R, reference_mode, ref_dtype, align_corners):
+    """Every point of a block lands in its own lane and group on the tiled geometry (packed V2,
+    2 <= L * P <= 32, Blackhole).
+
+    Point J is lane J % 16 of group J // 16, and its level is J // P. L * P = 2, 4, 8 and 12
+    leave lanes of the only group unused, 9 and 15 (with R = 15, the most the reference tile
+    holds) are odd, 24 leaves the second group part-filled, (2, 12) puts level 1 across both
+    groups and (4, 8) changes level inside the second. A point read from the wrong lane, group,
+    level or reference point samples elsewhere. Offsets that end short of a 64 B boundary bring
+    padding into columns no point uses. B = cores + 1 gives every core several blocks, so each
+    block's geometry is solved while the previous one is gathered, and Q = 33 adds a v_rows = 1
+    tail block.
+    """
+    spatial_shapes = [(29, 50), (15, 25), (8, 13), (4, 7)][:L]
+    grid = device.compute_with_storage_grid_size()
+    B, Q, H, D = grid.x * grid.y + 1, 33, 2, 32
+    torch.manual_seed(0)
     value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    ref_pts = torch.rand(B, Q, R, 2)
+    if ref_dtype == ttnn.bfloat16:
+        ref_pts = _bf16(ref_pts)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode, align_corners=align_corners)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode=reference_mode,
+            align_corners=align_corners,
+        )
+    ).to(torch.float32)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), out, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "L, P, R, reference_mode",
+    [
+        (1, 1, 1, "level"),
+        (3, 11, 3, "level"),
+        (4, 12, 4, "pillar"),
+        (1, 16, 16, "pillar"),
+    ],
+    ids=["LP1", "LP33", "LP48", "R16"],
+)
+@pytest.mark.parametrize("ref_dtype", [ttnn.bfloat16, ttnn.float32], ids=["ref_bf16", "ref_fp32"])
+def test_fused_msda_v2_packed_outside_tiled_range(device, L, P, R, reference_mode, ref_dtype):
+    """Packed V2 the tiled geometry does not take runs the per-point geometry.
+
+    L * P = 1 is below the block-ahead solve's minimum, 33 and 48 are past the 32 a block's
+    attention row holds, and R = 16 is past the 15 reference points a reference tile holds.
+    """
+    spatial_shapes = [(29, 50), (15, 25), (8, 13), (4, 7)][:L]
+    B, Q, H, D = 2, 33, 2, 32
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    ref_pts = torch.rand(B, Q, R, 2)
+    if ref_dtype == ttnn.bfloat16:
+        ref_pts = _bf16(ref_pts)
     loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode)
 
     out = ttnn.to_torch(
@@ -979,11 +1271,56 @@ def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference
             reference_mode=reference_mode,
         )
     ).to(torch.float32)
-    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out, pcc=0.999)
+
+
+@pytest.mark.parametrize("packed", [True, False], ids=["tiled", "per_point"])
+def test_fused_msda_v2_float32_reference_point_sub_ulp(device, packed):
+    """A float32 reference point keeps all 24 significant bits into the sampling position.
+
+    Pixel x of a 256-wide level holds K * (x % 2), and every point lies a fraction f in
+    [1/64, 1/16) right of an even pixel centre, so each output is K * f. A point that lost its
+    last 8 significant bits would move by up to 256 * 2^-16 = 2^-8 px, K / 2^8 at the output,
+    against output roundings of at most K / 2^12. The tiled geometry reads the point as three
+    bf16 tiles, so this fails if any part is dropped. B = cores + 1 runs several blocks per core,
+    with the reference tile reused across heads.
+    """
+    grid = device.compute_with_storage_grid_size()
+    B, Q, H, L, P, D, R = grid.x * grid.y + 1, 33, 2, 1, 4, 32, 1
+    W, K = 256, 16.0
+    spatial_shapes = [(2, W)]
+    x = torch.arange(2 * W) % W
+    value = (K * (x % 2)).to(torch.float32).view(1, 2 * W, 1, 1).expand(B, 2 * W, H, D).contiguous()
+
+    torch.manual_seed(0)
+    x0 = 2 * torch.randint(64, 127, (B, Q), dtype=torch.float64)
+    f = 1 / 64 + torch.rand(B, Q, dtype=torch.float64) * (1 / 16 - 1 / 64)
+    ref_pts = torch.empty(B, Q, R, 2, dtype=torch.float32)
+    ref_pts[..., 0, 0] = ((x0 + 0.5 + f) / W).to(torch.float32)
+    ref_pts[..., 0, 1] = 0.25  # py = 0: row 0, dy = 0
+    # The sampling position of the float32 point, exactly.
+    expected = K * (ref_pts[..., 0, 0].to(torch.float64) * W - 0.5 - x0)
+
+    offsets = torch.zeros(B, Q, H, L, P, 2)
+    attn = torch.full((B, Q, H, L, P), 1.0 / P)
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            ttnn.from_torch(ref_pts, dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            _to_device(_pack_locations(offsets) if packed else offsets, device),
+            _to_device(_pack_weights(attn) if packed else attn, device),
+            spatial_shapes,
+            reference_mode="level",
+        )
+    ).to(torch.float64)
+
+    err = (out - expected.unsqueeze(-1)).abs().max().item()
+    assert err <= K / 2**11, f"max error {err} exceeds {K / 2**11}: the reference point lost bits"
 
 
 @pytest.mark.timeout(300)
-def test_fused_msda_v2_repeated_calls_hit_program_cache(device):
+@pytest.mark.parametrize("P", [4, 8], ids=["LP16", "LP32"])
+def test_fused_msda_v2_repeated_calls_hit_program_cache(device, P):
     """A cached V2 program re-reads reference_points on every launch.
 
     The reader skips re-staging reference points for consecutive tiles of one
@@ -992,7 +1329,7 @@ def test_fused_msda_v2_repeated_calls_hit_program_cache(device):
     catches both a stale buffer binding and a cache that outlives the launch.
     """
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
-    B, Q, H, L, P, D, R = 2, 900, 8, 4, 4, 32, 4
+    B, Q, H, L, D, R = 2, 900, 8, 4, 32, 4
     value, ref_a, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=1)
     ref_b = _bf16(torch.rand_like(ref_a))
 
@@ -1067,13 +1404,11 @@ def test_fused_msda_rejects_too_many_levels(device, expect_error):
 
 
 @pytest.mark.parametrize("shapes", [[(257, 4)], [(4, 257)]], ids=["h", "w"])
-def test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers(device, expect_error, shapes):
-    """A feature map larger than bf16 counts exactly must be refused, not mis-sampled.
+def test_fused_msda_rejects_spatial_shape_beyond_extent_limit(device, expect_error, shapes):
+    """A feature map past the tested extent must be refused, not run.
 
-    The SFPU geometry hands the reader floor(px) as bf16, which represents every
-    integer up to 256 and only some beyond it. At 257 the decoded corner would
-    round to a *different, still in-bounds* pixel -- a silently wrong sample
-    rather than a failure -- so the op rejects the shape instead.
+    256 per axis is the largest extent the op is tested at; past it nothing pins
+    the corner word or the geometry, so the op rejects the shape.
 
     Both axes are parametrized because one `TT_FATAL` tests both, so a refactor
     that drops the `w` half would otherwise go unnoticed.
@@ -1083,13 +1418,11 @@ def test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers(device, exp
         ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes)
 
 
-def test_fused_msda_accepts_spatial_shape_at_the_bf16_exact_limit(device):
-    """256 is the largest exactly-representable corner index, so it must be accepted.
+def test_fused_msda_accepts_spatial_shape_at_extent_limit(device):
+    """A 256-pixel axis, the largest the op accepts, must sample correctly.
 
     The companion to the rejection test above: it pins the boundary itself, so a
-    `<` where the code means `<=` fails here rather than silently narrowing the
-    op. It is also the only case that exercises the bf16 corner decode at its
-    stated limit.
+    `<` where the code means `<=` fails here rather than silently narrowing the op.
     """
     spatial_shapes = [(256, 4)]
     B, Q, H, L, P, D = 1, 8, 1, 1, 4, 32

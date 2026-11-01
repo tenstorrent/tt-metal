@@ -14,6 +14,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/constants.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cmath>
 
@@ -510,81 +511,79 @@ bool noc_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
 
 bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // The Metal 2.0 / DataflowBuffer factory (binary_ng_metal_v2_factory.cpp) is a generic port of the
-    // descriptor factory's no-broadcast tiled path. It covers the whole SubtileBroadcastType::NONE,
-    // tensor-tensor, TILE slice — FPU and SFPU, any dtype (lhs/rhs must match), full lhs/rhs/post
-    // activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
+    // The Metal 2.0 / DataflowBuffer factory (binary_ng_metal_v2_factory.cpp) covers the whole
+    // SubtileBroadcastType::NONE, tensor-tensor, TILE slice — FPU and SFPU, any dtype (lhs/rhs must match), full
+    // lhs/rhs/post activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
     // read/written over the NoC) OR L1-sharded (height/block/width). The DFB kernels are per-operand
     // capable (reader: SRC_SHARDED / SRC_SHARDED_B; writer: DST_SHARDED). The factory borrows
     // all-or-nothing: only when all three operands are L1-sharded with one memory config are their resident
     // L1 shards borrowed to back the DFBs (no NoC work); otherwise — any interleaved operand or a
     // different shard spec — NONE are borrowed and every operand is read/written over the NoC via a
     // sharding-aware TensorAccessor.
-    // Everything else falls through to the descriptor path; this predicate is the correctness boundary.
-    // Deferred to the descriptor (not handled by the factory): tensor-scalar, where-op, quantization,
-    // row-major (non-TILE), and mixed lhs/rhs dtype.
+    // This predicate is the correctness boundary: an op outside it and outside the Quasar-native slice is not
+    // supported. Not supported here, for example: where-op, quantization, row-major (non-TILE), and mixed lhs/rhs
+    // dtype.
     using tt::tt_metal::BufferType;
     using tt::tt_metal::TensorMemoryLayout;
 
     // Tensor-SCALAR admission. The DFB path handles tensor-scalar by having the writer fill the RHS
     // input DFB (in1) once with the packed scalar (coherent uncached-L1-alias store on Quasar DM cores)
     // and the compute wait on it once / reuse tile index 0. Admitted for {bf16, fp32} FPU/SFPU, TILE
-    // 32x32, no-broadcast, interleaved or sharded a (int32 stays on the descriptor — see the dtype block
-    // below; later tasks add row-major / where-with-scalar / quant, which also stay on the descriptor).
+    // 32x32, no-broadcast, interleaved or sharded a (int32 is not supported — see the dtype block
+    // below; row-major, where-with-scalar and quantization are not supported either).
     // Early-return so the tensor-tensor checks below (which dereference input_tensor_b and require
     // input_layout_b == TILE, INVALID for a scalar) are skipped.
     const bool is_scalar = !tensor_args.input_tensor_b.has_value() && attributes.scalar.has_value();
     if (is_scalar) {
         if (attributes.is_where_op || attributes.is_quant_op) {
-            return false;  // where-with-scalar / quantization stay on the descriptor
+            return false;  // where-with-scalar / quantization: not supported
         }
         if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
             return false;  // a python scalar never subtile-broadcasts, but stay defensive
         }
         if (attributes.input_layout_a != Layout::TILE || attributes.output_layout != Layout::TILE) {
-            return false;  // row-major scalar routes to the descriptor
+            return false;  // row-major scalar: not supported
         }
         if (tensor_args.input_tensor_a.logical_shape().volume() == 0) {
-            return false;  // zero-volume falls to the descriptor (empty core set otherwise)
+            return false;  // zero-volume: not supported (the factory would derive an empty core set)
         }
         // Scalar dtype admission. There is no b tensor, so the RHS tile's data format is DERIVED exactly
-        // as the factory/descriptor derive it: b_dtype = (is_sfpu && !is_block_float(a)) ? a : bf16. The
+        // as the factory derives it: b_dtype = (is_sfpu && !is_block_float(a)) ? a : bf16. The
         // DFB compute unpacks lhs and rhs with a SINGLE shared data format (on Quasar the per-operand
         // copy_tile data-format reconfig is a no-op), so a scalar is correct only when the derived
         // b_dtype == a. is_binary_sfpu_op is dtype-aware: bf16 add/subtract are FPU (is_sfpu false) but
         // still derive b_dtype = bf16 == a, so every bf16 op is admitted; fp32 add/subtract/multiply/
         // divide are all SFPU (is_sfpu true, so b_dtype = fp32 = a) and route the ported fp32 SFPU tile
-        // ops. An fp32 FPU-only op keeps b_dtype = bf16 != fp32 and correctly falls to the descriptor.
+        // ops. An fp32 FPU-only op keeps b_dtype = bf16 != fp32 and is not supported.
         //
         // int32 is intentionally NOT admitted: although its RHS format derives to int32 == a (int add/mul
         // are is_sfpu, and add_int_sfpu / mul_int_sfpu are compiled into the SFPU scalar kernel), the int32
         // SFPU tile ops do NOT produce correct results on the Quasar DFB compute path (empirically: scalar
         // add/multiply return all-zero tiles, and int32 tensor-tensor returns garbage). That is a
-        // compute/sim-level gap, not a format issue, so keep every int32 op on the descriptor (a clean
-        // "unsupported on Quasar" over silent-wrong) until the int32 DFB compute path is fixed.
+        // compute/sim-level gap, not a format issue, so every int32 op is refused (a clean error over
+        // silent-wrong) until the int32 DFB compute path is fixed.
         using DT = tt::tt_metal::DataType;
         const DT adt = tensor_args.input_tensor_a.dtype();
         if (adt != DT::BFLOAT16 && adt != DT::FLOAT32) {
-            return false;  // int32 (broken on the Quasar DFB compute) + block-float stay on the descriptor
+            return false;  // int32 (broken on the Quasar DFB compute) + block-float: not supported
         }
         const DT b_dtype = (attributes.is_sfpu && !is_block_float(adt)) ? adt : DT::BFLOAT16;
         if (b_dtype != adt) {
-            return false;  // derived scalar RHS format != a (e.g. an fp32 FPU-only op) -> descriptor
+            return false;  // derived scalar RHS format != a (e.g. an fp32 FPU-only op): not supported
         }
         const auto& a_tile = tensor_args.input_tensor_a.tensor_spec().tile();
-        // 32x32 tiles only, as in the tensor-tensor path; anything else routes to the descriptor.
+        // 32x32 tiles only, as in the tensor-tensor path; anything else is not supported.
         return a_tile.get_height() == tt::constants::TILE_HEIGHT && a_tile.get_width() == tt::constants::TILE_WIDTH;
     }
-    // No b and no scalar -> descriptor (validation should already preclude this).
+    // No b and no scalar: not supported (validation should already preclude this).
     if (!tensor_args.input_tensor_b.has_value()) {
         return false;
     }
-    // where-op / quantization route to the descriptor.
+    // where-op / quantization: not supported.
     if (attributes.is_where_op || attributes.is_quant_op) {
         return false;
     }
-    // Zero-volume (degenerate) tensors fall to the descriptor path; the v2 factory would derive an
-    // empty core set, and the descriptor handles the empty case as the main op does.
+    // Zero-volume (degenerate) tensors are not supported: the factory would derive an empty core set.
     if (tensor_args.input_tensor_a.logical_shape().volume() == 0 ||
         tensor_args.input_tensor_b->logical_shape().volume() == 0) {
         return false;
@@ -600,8 +599,8 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // is invisible to the consumer and corrupts the neighbor DFB (see reader_row_col_mixed_bcast_dfb.cpp).
     // All are admitted only for bf16, on both the FPU (add/subtract) and SFPU
     // (multiply/divide/maximum/minimum) compute kernels (fp32/int bcast paths are later tasks). Admitting a type
-    // here without a matching factory kernel would route it to an unwired factory path, so keep every
-    // not-yet-wired type on the descriptor.
+    // here without a matching factory kernel would route it to an unwired factory path, so a not-yet-wired
+    // type stays unsupported.
     switch (attributes.subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: break;  // whole no-broadcast slice (FPU/SFPU, any dtype)
         case SubtileBroadcastType::ROW_A:
@@ -617,7 +616,7 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
             }
             break;
     }
-    // TILE layout (32x32) in and out (row-major routes to the descriptor).
+    // TILE layout (32x32) in and out (row-major is not supported).
     if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
         attributes.output_layout != Layout::TILE) {
         return false;
@@ -639,8 +638,8 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
     // int32 is silent-wrong on the Quasar DFB compute path: the int32 SFPU tile ops run but return garbage
     // output (suspected: the factory's set_unpack_mode emits an SFPU unpack mode only for Float32, never
-    // Int32). Route int32 to the descriptor (a clean "unsupported on Quasar" throw) rather than admit it to
-    // the DFB and silently return wrong results -- mirrors the tensor-scalar is_scalar branch above, which
+    // Int32). Refuse int32 (a clean error) rather than admit it to the DFB and silently
+    // return wrong results -- mirrors the tensor-scalar is_scalar branch above, which
     // already excludes int32. bf16/fp32 are unaffected. Remove once the int32 DFB-compute path is fixed
     // (tracked in QUASAR_PARITY_GAPS.md §2).
     if (a.dtype() == tt::tt_metal::DataType::INT32) {
@@ -782,12 +781,21 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
     if (matches_quasar_native_slice(attributes, tensor_args)) {
         return ProgramFactoryQuasarNative{};
     }
-    // DFB / Metal 2.0 is the default for the matching slice (arch-portable: CB-backed on WH/BH,
-    // overlay-backed on Quasar). Everything else uses the descriptor path.
+    // DFB / Metal 2.0 for the matching slice (arch-portable: CB-backed on WH/BH, overlay-backed on Quasar).
     if (matches_metal_v2_slice(attributes, tensor_args)) {
         return ProgramFactoryMetalV2{};
     }
-    return ProgramFactory{};
+    const auto& a = tensor_args.input_tensor_a;
+    const auto& b = tensor_args.input_tensor_b;
+    TT_THROW(
+        "ttnn.experimental.quasar binary op {} is not supported for a {} {}, b {}, broadcast {}. Unsupported cases "
+        "include mixed a and b dtypes, int32, row-major layout, where, quantization, zero volume, and a broadcast in "
+        "a dtype other than bfloat16. On Wormhole or Blackhole, use the production ttnn op.",
+        enchantum::to_string(attributes.binary_op_type),
+        a.dtype(),
+        attributes.input_layout_a,
+        b.has_value() ? fmt::format("{} {}", b->dtype(), attributes.input_layout_b) : std::string{"a scalar"},
+        enchantum::to_string(attributes.subtile_broadcast_type));
 }
 
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

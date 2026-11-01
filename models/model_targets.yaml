@@ -1027,9 +1027,12 @@ targets:
           # Consistent step up from 149/37, so the old center tripped the "much better than
           # expected" upper bound (171.8 / 42.9) on every run. TTFT unchanged (still in band).
           # Validated on run 34255364518 (job 102168738297).
+          # TTFT lowered 2026-10-21 from 14.4 to 12.5 ms after the matmul multicast helper migration:
+          # b4 data-parallel runs measured 11.92 and 12.44 ms (run 39498544839), against a 12.24 ms
+          # lower bound; main's last 5 runs sat at 12.7-13.9 ms, which the new band also covers.
           - status: active
             perf:
-              prefill_time_to_first_token: 14.4
+              prefill_time_to_first_token: 12.5
               decode_t/s/u: 52.0
               decode_t/s: 208.0
             accuracy:
@@ -1603,12 +1606,15 @@ targets:
             accuracy:
               top1: 98
               top5: 99
+          # TTFT lowered 2026-10-21 from 82 to 71 ms after the matmul multicast helper migration:
+          # runs 39498544839 and 39559748326 measured 69.08 and 69.00 ms, below the 69.7 ms lower
+          # bound; main's last 5 runs sat at 70.9-74.8 ms, which the new band also covers.
           - batch_size: 32
             seq_len: 707
             status: active
             perf:
               decode_t/s/u: 29.9
-              prefill_time_to_first_token: 82
+              prefill_time_to_first_token: 71
             accuracy: {}
   qwen2.5-72b:
     aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
@@ -1986,7 +1992,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 150.0
+              prefill_time_to_first_token: 116.0
               decode_t/s: 26.0
               decode_t/s/u: 26.0
               tolerance: 0.2
@@ -2464,12 +2470,15 @@ targets:
               decode_t/s/u: 23.3354
               decode_t/s: 23.3354
               prefill_t/s: 876.3
-              prefill_time_to_token: 0.1708
+              # Batch-1 128-token TTFT is noisy on every T3K perf host, not tied to one runner:
+              # 114.5-190.6 ms over 14 scheduled nights (10-15..10-28). Centred at the midpoint with +/-30%.
+              prefill_time_to_token: 0.152
               compile_decode: 0.0452
               # Widened to +/-30% (default is +/-15%): prefill_t/s swings across runs
               # (749.6 prior calibration vs 876.3 run 105412280076, ~15-17%). Observed
               # within +/-30% across runs (PR #59424, pt.9).
               prefill_t_s_tolerance: 0.30
+              prefill_time_to_token_tolerance: 0.30
             accuracy: {}
             owner_id: U08H31YMN4Q # Sanjay Sanjay
             team: models

@@ -11,9 +11,11 @@ namespace tt::tt_fabric::connection_interface {
 inline constexpr uint8_t edm_fabric_write_noc_index = 0;
 
 // Constants that define different connection states for a connection to a fabric router
-static constexpr uint32_t unused_connection_value = 0;
-static constexpr uint32_t open_connection_value = 1;
-static constexpr uint32_t close_connection_request_value = 2;
+enum ConnectionValue : uint32_t {
+    unused_connection_value = 0,
+    open_connection_value = 1,
+    close_connection_request_value = 2,
+};
 
 // Stream ID for the worker connection credits: the local worker writes to the auto-inc register of
 // this stream ID to notify the fabric router of new packets available.

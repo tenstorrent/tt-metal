@@ -43,7 +43,7 @@ void validate_matmul_operand_basics(
         input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
         "Operands to matmul need to be on device!");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(
@@ -406,6 +406,7 @@ void validate_matmul_bias_shape(
     const std::optional<const Tensor>& optional_bias,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
+    const ttnn::Shape& a_shape,
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape,
     const ttnn::Shape& b_shape_padded,
@@ -441,6 +442,27 @@ void validate_matmul_bias_shape(
         expected_bias_height,
         in0_tile.get_height(),
         is_reuse_config ? Mt : 1);
+    // Guard logical h: padded-h check accepts anything that pads to the right tile count; sub-tile bias rows silently read padding.
+    const uint32_t logical_m = a_shape[-2];
+    // Batched DRAM-sharded factory hardcodes row_broadcast_bias=1, so it only honors [1, N] regardless of Mt.
+    const bool is_batched_dram_sharded_config = std::holds_alternative<
+        operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(chosen_program_config);
+    const bool non_reuse_accepts_per_row_bias = Mt == 1 && !is_batched_dram_sharded_config;
+    const bool bias_h_ok =
+        is_reuse_config ? (bias_shape[-2] == logical_m)
+                        : (bias_shape[-2] == 1 || (non_reuse_accepts_per_row_bias && bias_shape[-2] == logical_m));
+    TT_FATAL(
+        bias_h_ok,
+        "Unsupported bias shape: logical bias h ({}) must be {} (M={}, Mt={}, is_reuse={}).",
+        bias_shape[-2],
+        is_reuse_config
+            ? fmt::format("{} (reuse: per-row bias [M, N])", logical_m)
+            : (non_reuse_accepts_per_row_bias
+                   ? fmt::format("1 or {} (non-reuse Mt==1: broadcast [1, N] or per-row [M, N])", logical_m)
+                   : std::string("1 (broadcast-only path: non-reuse Mt>1 or batched DRAM-sharded)")),
+        logical_m,
+        Mt,
+        is_reuse_config);
     TT_FATAL(
         bias_shape_padded[-1] == b_shape_padded[-1],
         "Unsupported bias shape: padded last dimension of bias, {}, not "
@@ -2317,7 +2339,68 @@ void validate_matmul_mcast1d_config(
         TT_FATAL(!optional_bias.has_value(), "{}: Bias is not supported when using gather_in0.", config_name);
     } else {
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
-        check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        if (input_tensor_a.is_sharded()) {
+            // Anchor on allowed_worker_cores (matches factory at
+            // matmul_multicore_reuse_mcast_1d_program_factory.cpp:6944-6967).
+            const auto& worker = program_config.allowed_worker_cores.value();
+            CoreCoord start_core = worker.bounding_box().start_coord;
+            if (attributes.sub_device_id.has_value()) {
+                start_core = input_tensor_a.device()
+                                 ->worker_cores(
+                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                     attributes.sub_device_id.value())
+                                 .bounding_box()
+                                 .start_coord;
+            }
+            const auto worker_bbox = worker.bounding_box();
+            const auto cwsg = worker_bbox.grid_size();
+            const CoreRangeSet matmul_core_rect(
+                CoreRange(start_core, CoreCoord(start_core.x + cwsg.x - 1, start_core.y + cwsg.y - 1)));
+            const uint32_t M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const auto& shard_grid = input_tensor_a.shard_spec().value().grid;
+            // mcast_in0 pins exact count; mcast_in1 allows shard >= div_up(M, per_core_M) since the
+            // factory writes args only to the first `expected_cores` row-major cores.
+            const uint32_t expected_cores =
+                program_config.mcast_in0 ? shard_grid.num_cores() : tt::div_up(M, program_config.per_core_M);
+            TT_FATAL(
+                shard_grid.num_cores() >= expected_cores,
+                "{}: sharded in0 has {} cores but factory needs at least {}.",
+                config_name,
+                shard_grid.num_cores(),
+                expected_cores);
+            // Containment: every shard core must lie inside allowed_worker_cores (strictly tighter than
+            // the old device-grid check this branch replaces).
+            const auto shard_cores = tt::tt_metal::corerange_to_cores(shard_grid, std::nullopt, /*row_wise=*/true);
+            for (const auto& c : shard_cores) {
+                TT_FATAL(
+                    worker.contains(c),
+                    "{}: sharded in0 core {} is outside allowed_worker_cores {}.",
+                    config_name,
+                    c,
+                    worker);
+            }
+            // Factory writes per-core args row-major in the bbox rect; the first `expected_cores`
+            // row-major cores of the shard must match that enumeration (#60249 catch).
+            const auto expected_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                start_core, expected_cores, matmul_core_rect, /*row_wise=*/true);
+            const auto expected_cores_vec =
+                tt::tt_metal::corerange_to_cores(expected_grid, std::nullopt, /*row_wise=*/true);
+            const std::vector<CoreCoord> shard_first_n(shard_cores.begin(), shard_cores.begin() + expected_cores);
+            TT_FATAL(
+                shard_first_n == expected_cores_vec,
+                "{}: first {} row-major cores of sharded in0 grid {} must match factory core set {} "
+                "(row-major from sub-device origin {}, cwsg {}x{}).",
+                config_name,
+                expected_cores,
+                shard_grid,
+                expected_grid,
+                start_core,
+                cwsg.x,
+                cwsg.y);
+        } else {
+            check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        }
         if (!attributes.global_cb.has_value()) {
             check_tensor_in_grid(input_tensor_b, device_grid_1d);
         }
@@ -2699,7 +2782,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_mcast1d_subdevice_worker_grid(input_tensor_a, attributes, chosen_program_config);
     validate_matmul_input_count(attributes, input_tensors, input_tensor_b, chosen_program_config);
     validate_matmul_bias_shape(
-        optional_bias, in0_tile, in1_tile, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
+        optional_bias, in0_tile, in1_tile, a_shape, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
     validate_matmul_untilize_out(attributes, chosen_program_config);
 
     // ---- per-config validation: one std::visit over the chosen program config ----
@@ -2853,6 +2936,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
         // for missing allowed_worker_cores was emitted at the entry point above.
         operations::matmul::normalize_program_config(
             chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
+        // launch() computes output specs before validate_on_program_cache_miss, and the branches below
+        // divide by per_core_M / per_core_N.
+        validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
         return std::visit(
             [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -3234,6 +3320,14 @@ MatmulParams create_matmul_attributes(
     TT_FATAL(device != nullptr, "Operand to matmul must be on device");
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
+    if (has_user_grid) {
+        // The auto-generated configs split work by core_grid.x * core_grid.y.
+        TT_FATAL(
+            parameters.user_core_coord->x > 0 && parameters.user_core_coord->y > 0,
+            "matmul: core_grid must be non-zero, got ({}, {})",
+            parameters.user_core_coord->x,
+            parameters.user_core_coord->y);
+    }
     const bool has_program_config = parameters.program_config.has_value();
     bool are_inputs_low_precision_df =
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&

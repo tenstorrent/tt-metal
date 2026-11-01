@@ -75,7 +75,7 @@ StochasticRoundingResult run_stochastic_rounding(
     const size_t output_byte_size = num_tiles * tile_byte_size_output;
     const size_t num_elements = num_tiles * tt::constants::TILE_HW;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*cq.device());
     auto mesh_workload = distributed::MeshWorkload();
 
     auto input_dram_buffer = distributed::MeshBuffer::create(

@@ -102,7 +102,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly)
     // Sanity: prove the "good" compute kernel actually compiles on this device/arch, so the
     // throw below is attributable to the deliberately-broken kernel and not the valid ones.
     {
-        Program good = CreateProgram();
+        Program good = CreateProgram(this->device());
         add_tile_cbs(good, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
         CreateKernel(good, kGoodComputeKernel, CoreCoord(0, 0), ComputeConfig{.compile_args = {1u, 0u}});
         EXPECT_NO_THROW(good.impl().compile(&this->device()));
@@ -115,7 +115,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly)
     // Repro program: a grid of valid compute kernels (unique compile args -> each misses the
     // JIT cache and really compiles, staying in flight) plus one uncompilable data-movement
     // kernel whose build step throws mid-flight.
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     // A small grid keeps several compute kernels (3 TRISC build steps each) genuinely in
     // flight when the bad kernel's step throws, without inflating CI compile time.

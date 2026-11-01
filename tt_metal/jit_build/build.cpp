@@ -466,6 +466,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
     }
 
+    if (this->arch_ == tt::ARCH::BLACKHOLE && rtoptions.get_l1_ecc_halt_enabled()) {
+        this->defines_ += "-DL1_ECC_HALT ";
+    }
+
     if (rtoptions.get_gathering_enabled()) {
         this->defines_ += "-DENABLE_GATHERING ";
     }
@@ -593,6 +597,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
+    this->is_compute_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                        build_config.processor_class == HalProcessorClassType::COMPUTE;
     // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
     this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
@@ -1183,6 +1189,10 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
     if (settings != nullptr && settings->get_rvv_enabled()) {
         target.cflags += this->rvv_cflags_;
+    }
+    // Per-kernel opt-out of the SFPI compiler's replay optimization (tenstorrent/tt-metal#58433).
+    if (settings != nullptr && this->is_compute_ && settings->get_sfpu_replay_optimization_disabled()) {
+        target.cflags += " -mno-tt-tensix-optimize-replay ";
     }
     target.lflags = lflags_;
     target.linker_script = linker_script_;

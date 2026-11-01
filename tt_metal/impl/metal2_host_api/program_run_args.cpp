@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
@@ -515,6 +516,82 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/true);
 }
 
+const MeshTensor* FindBoundTensor(
+    const TensorBindingHandle& handle,
+    const std::unordered_map<std::string, const MeshTensor*>& tensor_by_param,
+    bool required) {
+    auto it = tensor_by_param.find(handle.tensor_parameter_name);
+    if (it == tensor_by_param.end()) {
+        TT_FATAL(
+            !required,
+            "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught this).",
+            handle.tensor_parameter_name);
+        return nullptr;
+    }
+    return it->second;
+}
+
+// Write each per-node TensorBinding's base address into the RTA buffer of every node `kernel` runs on,
+// at the handle's addr_rta_offset. Bindings whose tensor is absent from tensor_by_param are left
+// untouched unless require_all is set (partial updates omit them).
+// Pre-condition: every node of the kernel has its RTA buffer allocated (it holds the per-node section).
+//
+// NOTE: As with the CRTA path, the address comes from the MeshTensor's reference buffer, which assumes
+// every device in the mesh places the tensor at the same per-node addresses.
+void PatchPerNodeBindingRtas(
+    Kernel& kernel,
+    const std::unordered_map<std::string, const MeshTensor*>& tensor_by_param,
+    std::string_view kernel_name,
+    bool require_all) {
+    for (const auto& handle : kernel.tensor_binding_handles()) {
+        if (!handle.is_per_node) {
+            continue;
+        }
+        const MeshTensor* tensor = FindBoundTensor(handle, tensor_by_param, require_all);
+        if (tensor == nullptr) {
+            continue;
+        }
+        const Buffer* buffer = tensor->mesh_buffer().get_reference_buffer();
+        TT_FATAL(
+            buffer != nullptr,
+            "Tensor argument for per-node TensorParameter '{}' has no backing Buffer.",
+            handle.tensor_parameter_name);
+        // TensorSpec validation already pins the per-node allocation flag (it is part of MemoryConfig equality),
+        // so this only trips if the buffer disagrees with its own tensor's MemoryConfig.
+        TT_FATAL(
+            per_core_allocation::is_per_core_allocation(*buffer),
+            "Tensor argument for per-node TensorParameter '{}' is backed by a Buffer that is not per-node allocated.",
+            handle.tensor_parameter_name);
+        const auto& node_addresses = per_core_allocation::get_per_core_addresses(*buffer);
+        const uint32_t word = handle.addr_rta_offset / sizeof(uint32_t);
+        for (const CoreCoord& node : kernel.logical_cores()) {
+            auto a_it = node_addresses.find(node);
+            TT_FATAL(
+                a_it != node_addresses.end(),
+                "Internal error: kernel '{}' runs on node {}, where the tensor bound to per-node TensorParameter '{}' "
+                "has no shard (validation should have caught this).",
+                kernel_name,
+                node.str(),
+                handle.tensor_parameter_name);
+            const DeviceAddr address = a_it->second;
+            TT_FATAL(
+                address <= std::numeric_limits<uint32_t>::max(),
+                "Tensor argument for TensorParameter '{}' base address {} on node {} exceeds uint32_t max",
+                handle.tensor_parameter_name,
+                address,
+                node.str());
+            RuntimeArgsData& rta = kernel.runtime_args_data(node);
+            TT_FATAL(
+                rta.data() != nullptr && word < rta.size(),
+                "Internal error: kernel '{}' node {} RTA buffer has no slot for per-node tensor binding '{}'.",
+                kernel_name,
+                node.str(),
+                handle.accessor_name);
+            rta[word] = static_cast<uint32_t>(address);
+        }
+    }
+}
+
 // Attach the actual L1 Buffer to every borrowed-memory DFB, by resolving each DFB's named
 // TensorParameter to the corresponding MeshTensor passed in tensor_args and extracting its
 // MeshBuffer's reference buffer. Under the lockstep mesh allocation invariant, any one of the
@@ -632,13 +709,11 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // kernel_run_args loop below and the binding-only second pass after it.
     auto append_binding_crtas = [&](const auto& binding_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : binding_handles) {
-            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-            TT_FATAL(
-                t_it != tensor_by_param.end(),
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught "
-                "this).",
-                handle.tensor_parameter_name);
-            EmitBindingCrtaValues(handle, *t_it->second, [&out](uint32_t w) { out.push_back(w); });
+            if (handle.is_per_node) {
+                continue;  // Lives in the per-node RTAs (see PatchPerNodeBindingRtas).
+            }
+            const MeshTensor& tensor = *FindBoundTensor(handle, tensor_by_param, /*required=*/true);
+            EmitBindingCrtaValues(handle, tensor, [&out](uint32_t w) { out.push_back(w); });
         }
     };
 
@@ -684,12 +759,13 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
     //
     // Layout:
-    //   RTA per-node:  [named_rta_0 ... named_rta_N-1, vararg_0 ... vararg_M-1]
+    //   RTA per-node:  [named_rta_0 ... named_rta_N-1, per_node_ta_addr_0 ... per_node_ta_addr_P-1,
+    //                   vararg_0 ... vararg_M-1]
     //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
     //   scratch_addr_S-1,
     //                   vararg_0 ... vararg_L-1]
     //
-    // RTA layout has two sections: named RTAs and RTA varargs.
+    // RTA layout has three sections: named RTAs, per-node TensorBinding addresses, and RTA varargs.
     // CRTA layout has four sections: named CRTAs, TensorBinding addresses, Scratchpad addresses, and CRTA varargs.
     //
     // TensorBinding address section is used by headergen to emit the `tensor::` namespace tokens.
@@ -702,10 +778,11 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
 
         const bool kernel_has_named_rtas = !schema->runtime_arg_names.empty();
-        const size_t num_named_rtas = schema->runtime_arg_names.size();
+        const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
         const auto& slot_of = schema->runtime_arg_name_to_slot;
 
-        // RTA layout per node: [named_rta_0 ... named_rta_{N-1}, vararg_0 ... vararg_{M-1}].
+        // RTA layout per node: [named_rta_0 ... named_rta_{N-1}, per-node TensorBinding addresses,
+        // vararg_0 ... vararg_{M-1}].
         // Named RTAs are scattered to their declaration slot via the schema's name->slot index
         // (one hash lookup per supplied arg, O(N)/node — matching how UpdateProgramRunArgs
         // serializes); varargs are positional and follow the named section.
@@ -749,7 +826,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     "SetProgramRunArgs fast path: kernel '{}' node {} has varargs but no allocated RTA buffer.",
                     kernel_name,
                     node.str());
-                uint32_t* vdst = rta.data() + num_named_rtas;
+                uint32_t* vdst = rta.data() + rta_vararg_offset;
                 for (const uint32_t v : vals) {
                     *vdst++ = v;
                 }
@@ -785,24 +862,27 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 auto vararg_it = varargs_by_node.find(node);
                 const bool has_named = named_it != named_rtas_by_node.end();
                 const bool has_varargs = vararg_it != varargs_by_node.end();
-                if (!kernel_has_named_rtas && !has_varargs) {
+                if (rta_vararg_offset == 0 && !has_varargs) {
                     continue;  // Nothing to set on this node.
                 }
                 const size_t num_varargs = has_varargs ? vararg_it->second->size() : 0;
 
                 // Value-initialized to the exact combined width so the scatter can assign by slot.
-                std::vector<uint32_t> combined(num_named_rtas + num_varargs, 0u);
+                // The per-node TensorBinding section is filled by PatchPerNodeBindingRtas below.
+                std::vector<uint32_t> combined(rta_vararg_offset + num_varargs, 0u);
                 if (kernel_has_named_rtas && has_named) {
                     for (const auto& [slot, value] : named_it->second) {
                         combined[slot] = value;
                     }
                 }
                 if (has_varargs) {
-                    std::copy(vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
+                    std::copy(
+                        vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + rta_vararg_offset);
                 }
                 kernel->set_runtime_args(node, combined);
             }
         }
+        PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name.get(), /*require_all=*/true);
 
         // Assemble the kernel's per-enqueue CRTA buffer in four structurally-separate sections:
         //   1. User-named CRTAs, in schema order, sourced from common_runtime_arg_values.
@@ -814,14 +894,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         //      0 here until allocate_scratchpads patches it at program-compile time).
         //   4. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
-        std::size_t binding_section_words = 0;
-        for (const auto& handle : binding_handles) {
-            binding_section_words += 1u + handle.num_runtime_field_crta_words;
-        }
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
-            schema->common_runtime_arg_names.size() + binding_section_words +
-            kernel->scratchpad_binding_handles().size() + kernel_common_runtime_varargs(kernel_params).size());
+            kernel->get_crta_layout().vararg_section_offset + kernel_common_runtime_varargs(kernel_params).size());
         for (const auto& name : schema->common_runtime_arg_names) {
             auto v_it = kernel_params.common_runtime_arg_values.find(name);
             TT_FATAL(
@@ -866,6 +941,16 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
         // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
         // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
+        // Likewise, each node's RTA buffer is exactly the per-node TensorBinding section.
+        if (const uint32_t per_node_words = kernel->get_rta_layout().binding_section_words; per_node_words > 0) {
+            if (kernel->cores_with_runtime_args().empty()) {
+                const std::vector<uint32_t> zeros(per_node_words, 0u);
+                for (const auto& node : kernel->logical_cores()) {
+                    kernel->set_runtime_args(node, zeros);
+                }
+            }
+            PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name, /*require_all=*/true);
+        }
         std::vector<uint32_t> combined_crtas;
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(scratchpad_handles, combined_crtas);
@@ -933,13 +1018,18 @@ void UpdateTensorArgs(
     // handle.addr_crta_offset: the always-present address word, plus any runtime accessor
     // field words (shape, when dynamic_tensor_shape is set). The rest of the buffer (named
     // CRTAs, vararg CRTAs) is left untouched and retains the values installed by the most
-    // recent SetProgramRunArgs call. The kernel's RTA buffer is also left untouched
-    // (tensor binding state lives in CRTAs only).
+    // recent SetProgramRunArgs call. The kernel's RTA buffers are also left untouched, except
+    // for the per-node TensorBinding section (a per-node binding's address lives there).
     for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
         if (binding_handles.empty()) {
             continue;
+        }
+
+        PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name, /*require_all=*/true);
+        if (kernel->get_crta_layout().binding_section_words == 0) {
+            continue;  // No CRTA-resident bindings.
         }
 
         // Pre-condition: SetProgramRunArgs must have been called previously to size and
@@ -953,15 +1043,13 @@ void UpdateTensorArgs(
 
         RuntimeArgsData& crta = kernel->common_runtime_args_data();
         for (const auto& handle : binding_handles) {
-            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-            TT_FATAL(
-                t_it != tensor_by_param.end(),
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have "
-                "caught this).",
-                handle.tensor_parameter_name);
+            if (handle.is_per_node) {
+                continue;
+            }
+            const MeshTensor& tensor = *FindBoundTensor(handle, tensor_by_param, /*required=*/true);
             // addr_crta_offset is a byte offset; data() is uint32_t*.
             uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-            EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+            EmitBindingCrtaValues(handle, tensor, [&dst](uint32_t w) { *dst++ = w; });
         }
     }
 
@@ -1232,7 +1320,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
 
-        const size_t num_named_rtas = schema->runtime_arg_names.size();
+        const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
 
         // ---- Per-node RTA buffer: patch supplied named RTAs at their declaration-order slot ----
         if (!kernel_params.runtime_arg_values.empty()) {
@@ -1270,7 +1358,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 node.str());
             RuntimeArgsData& rta = kernel->runtime_args_data(node);
             for (size_t j = 0; j < vals.size(); ++j) {
-                rta[num_named_rtas + j] = vals[j];
+                rta[rta_vararg_offset + j] = vals[j];
             }
         }
 
@@ -1300,14 +1388,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             if (!cvarargs.empty()) {
                 // Common varargs live after the named CRTAs, the tensor-binding address section, and the
                 // scratchpad address section.
-                const auto& binding_handles = kernel->tensor_binding_handles();
-                size_t binding_section_words = 0;
-                for (const auto& h : binding_handles) {
-                    binding_section_words += 1u + h.num_runtime_field_crta_words;
-                }
-                const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
-                const size_t crta_vararg_base =
-                    schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
+                const size_t crta_vararg_base = kernel->get_crta_layout().vararg_section_offset;
                 for (size_t j = 0; j < cvarargs.size(); ++j) {
                     crta[crta_vararg_base + j] = cvarargs[j];
                 }
@@ -1344,15 +1425,16 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             if (binding_handles.empty()) {
                 continue;
             }
-            bool any_supplied = false;
+            PatchPerNodeBindingRtas(*kernel, tensor_by_param, kernel_name, /*require_all=*/false);
+            bool any_crta_supplied = false;
             for (const auto& handle : binding_handles) {
-                if (tensor_by_param.contains(handle.tensor_parameter_name)) {
-                    any_supplied = true;
+                if (!handle.is_per_node && tensor_by_param.contains(handle.tensor_parameter_name)) {
+                    any_crta_supplied = true;
                     break;
                 }
             }
-            if (!any_supplied) {
-                continue;  // none of this kernel's bindings are being updated.
+            if (!any_crta_supplied) {
+                continue;  // none of this kernel's CRTA-resident bindings are being updated.
             }
             TT_FATAL(
                 !kernel->common_runtime_args().empty(),
@@ -1361,12 +1443,15 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 kernel_name);
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
             for (const auto& handle : binding_handles) {
-                auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-                if (t_it == tensor_by_param.end()) {
-                    continue;  // tensor omitted → binding slot retained.
+                if (handle.is_per_node) {
+                    continue;  // Patched above.
+                }
+                const MeshTensor* tensor = FindBoundTensor(handle, tensor_by_param, /*required=*/false);
+                if (tensor == nullptr) {
+                    continue;  // Tensor omitted → binding slot retained.
                 }
                 uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-                EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+                EmitBindingCrtaValues(handle, *tensor, [&dst](uint32_t w) { *dst++ = w; });
             }
         }
 
