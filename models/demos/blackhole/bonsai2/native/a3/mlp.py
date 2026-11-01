@@ -63,6 +63,7 @@ class TernaryMLP:
 
     def forward(self, x):
         sh = self.sh
+        assert x.dtype == ttnn.bfloat16, "prep reads bf16 rows"
         # The masked inputs are per-call L1 allocations: anything resident in L1 is reserved on
         # every core and clashes with the model's large-CB ops (the final norm on core (0, 0)).
         x8 = a3.masked_input_buffer(sh.device, sh.workers, 5120)

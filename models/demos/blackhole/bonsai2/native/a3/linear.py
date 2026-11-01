@@ -47,7 +47,9 @@ class TernaryLinear:
     def forward(self, x, out_mem=None):
         sh = self.sh
         x_in = x
-        if x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
+        if x.dtype != ttnn.bfloat16:  # prep reads bf16 rows; the GDN out-proj input is fp32
+            x = ttnn.typecast(x, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        elif x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
         a3.prep(x, sh.m[self.k], x8, sh.workers, src_tile32=True)
@@ -62,7 +64,7 @@ class TernaryLinear:
 
 # Sites that passed their e2e gate; each joins in its own commit.
 VALIDATED = {"mlp"}
-WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "lm_head"}
+WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head"}
 
 
 def sites():
@@ -92,3 +94,12 @@ def gdn_in_rows(shared: Shared, layer: int):
     codes = np.concatenate([qkv.codes[perm_qkv], z.codes[v]])
     scales = np.concatenate([qkv.scales[perm_qkv], z.scales[v]])
     return codes, scales
+
+
+def attn_qkv_rows(shared: Shared, layer: int):
+    """Full-attention [q+gate | k | v] rows as QWEN36_1C_FUSED_QKV concatenates the HF q/k/v_proj
+    (the converter keeps attn_q/k/v as_is in all 16 attention layers)."""
+    from models.demos.blackhole.bonsai2.native.gguf_ternary import read_ternary
+
+    ts = [read_ternary(shared.gguf, f"blk.{layer}.attn_{p}.weight") for p in ("q", "k", "v")]
+    return np.concatenate([t.codes for t in ts]), np.concatenate([t.scales for t in ts])
