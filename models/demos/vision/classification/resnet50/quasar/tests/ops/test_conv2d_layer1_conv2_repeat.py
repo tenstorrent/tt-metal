@@ -27,6 +27,8 @@ Variants:
   model     TILE input HEIGHT_SHARDED over all worker cores, reshard_if_not_optimal=False (the model's path)
   modelcfg  ROW_MAJOR input, reshard_if_not_optimal=True (test_conv2d_layer_conv2_modelcfg.py's path)
   one_core  TILE input HEIGHT_SHARDED on 1 core, reshard_if_not_optimal=False
+  model_nocache  "model" with the program cache disabled, so every iteration builds a new program: if the
+            output still changes, the cause is not the reuse of the cached program
 
 RESNET_REPEAT_N sets the number of iterations (default 5). RESNET_PCC_DUMP=<dir> also saves the input, the
 golden and each output (bfloat16, [H, W, C]) to <dir>/repeat_<variant>_*.pt.
@@ -117,12 +119,14 @@ def _report_errmap(tag, out, golden, num_cores):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("variant", ["model", "modelcfg", "one_core"])
+@pytest.mark.parametrize("variant", ["model", "modelcfg", "one_core", "model_nocache"])
 def test_layer1_conv2_repeat(mesh_device, variant, monkeypatch):
     device = mesh_device
     torch.manual_seed(0)
     monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")  # the model's split path for HS conv2
     n_iter = int(os.environ.get("RESNET_REPEAT_N", "5"))
+    if variant == "model_nocache":
+        device.disable_and_clear_program_cache()
 
     # Post-ReLU activations and He-scaled weights, so the values look like the model's (many zeros, O(1)).
     torch_input = torch.relu(torch.randn((1, IN_CH, SPATIAL, SPATIAL))).bfloat16().float()
