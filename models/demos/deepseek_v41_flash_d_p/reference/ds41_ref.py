@@ -334,6 +334,109 @@ def fp8_linear(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     return mm(K.act_quant_dequant(x, 32), w)
 
 
+# ============================================================================================= device formats (FIX.21)
+# A diagnosis-only emulation of the device's number formats on top of numerics official at bf16 (owner 2026-11-01,
+# FIX.21: which of the device's format / precision choices make its error larger than DeepSeek's reference?). One
+# switch per site, 'official' (the reference's own quantizer and dtype, the code above unchanged) or 'device' (what
+# tt/settings.py ships, as the tt/ code computes it). Never a golden, never a gate's target: the goldens stay native.
+# reference/test_format_attribution.py runs it. Every rounding below is a format the device really stores or computes
+# in (rule 17): the bfp packers' rules are tests/test_bfp_packer_rounding.py's (`rne_host` = ttnn's host packer and the
+# SFPU packs of ckv_bfp4 / bfp_round / the rope chain; `device` = the packer with bfp8_pack_precise, half away from
+# zero), checked against it and against tt/experts.py:_bfp4_round in test_format_attribution.py.
+FORMAT_MODES = ("official", "device")
+FORMAT_SITES = {
+    # site: what the device does (setting) | what the official reference does
+    "experts_w": "routed expert weights bfloat4_b, RNE, 16 values along K of the stored [N, K] (EXPERTS_IMPL=bfp4) | "
+    "the checkpoint's fp4 e2m1 x ue8m0 per 32, exact",
+    "experts_act": "routed experts' x / h / y bfloat8_b tiles (packer, half away), gate / up / act in fp32 DEST, the "
+    "bf16 routing weight applied in the combine after w2 (EXPERTS_PRECISION=glm, flat op) | x and r*h fp8 e4m3 per 32 "
+    "(ue8m0), gate / up / w2 out bf16, the weight before w2",
+    "shared": "shared expert x / h bfloat8_b (half away; SE_PACK_PRECISE), weights bfloat8_b along K (GEMM_INPUTS, "
+    "MoE block D5) | x / h fp8 e4m3 per 32",
+    "moe_sums": "routed terms snapped to 2^-19 and summed in fp32, the routed sum bf16 (MOE_HEAD=fused, COMBINE_SNAP); "
+    "the shared expert's 4 TP partials (inter / TP) each bf16, reduce-scattered in bf16 (fabric_reduce_scatter) | "
+    "routed sum fp32 in expert order, shared expert one fp32 GEMM, both rounded once at moe_add",
+    "dense_w": "fp8 dense weights (q_a | wkv, wq_b, wo_a, wo_b, indexer wq_b, engram wkv) as bfloat8_b of W^T: 16 "
+    "values along N, RNE (DENSE_WEIGHTS=bfp8) | the dequantized fp8 values (wo_a bf16), exact",
+    "gemm_in": "the fp8 GEMMs' inputs (q_a / kv, wq_b, wo_a, wo_b, indexer wq_b) bfloat8_b (typecast / packer, half "
+    "away; GEMM_INPUTS=bfp8) | fp8 e4m3 per 32 with a ue8m0 scale (act_quant)",
+    "fidelity": "HiFi2 (MATMUL_FIDELITY / ATTN_FIDELITY) on the matmuls with a bf16 in0: in0 truncated to 6 explicit "
+    "mantissa bits, in1 to 9 (FPU_BITS, K-30): mHC hc_fn (+ its weight RNE to 9 bits, FP32_WEIGHT_ROUND=srca), "
+    "compressor wkv / wgate / wk, indexer weights_proj, sparse_sdpa q (Q K^T) and P (P V) | fp32 / bf16 GEMMs",
+    "window_kv": "window KV kept bf16 (state, served cache), attention reads it as bfloat8_b, RNE (WINDOW_KV_FORMAT="
+    "bfp8_tiles, ckv_bfp4 SFPU) | fp8 e4m3 per 32 (ue8m0), stored and read",
+    "ckv": "compressed KV bfloat4_b, RNE, 16 values a group (CKV_FORMAT=bfp4_rows), stored and read | fp4 e2m1 per 16 "
+    "with an e4m3 scale",
+    "index_k": "index keys kept bf16 (state, served cache), scored as bfloat4_b, RNE (INDEX_K_FORMAT=bfp4) | fp4 e2m1 "
+    "per 32 (ue8m0), stored",
+    "index_q": "index query bfloat4_b, RNE (INDEX_Q_FORMAT=bfp4, rope chain output) | fp4 e2m1 per 32 (ue8m0)",
+    "index_score": "index score at fp32 DEST (q.k, relu x bf16 gate, head sum fp32), written bf16 (ring_indexer_score_dsa, "
+    "K-13) | bf16 einsum, relu x weights and head sum as bf16 tensors (model.py)",
+    "engram_rows": "engram rows bfloat8_b, RNE (ENGRAM_ROWS=bfp8, tt/engram_bfp8.py), read by the wkv matmul as sent | "
+    "bf16 rows (exact), fp8 act quant (the identity on them)",
+}
+DEVICE_TP = 4  # galaxy_8x4: the TP axis the shared expert's partial sums run over (moe_sums)
+COMBINE_SNAP = 2.0**-19  # tt/moe_block_adapter.py COMBINE_SNAP
+BFP_GROUP = 16
+
+
+def bfp_round(t: torch.Tensor, mant: int, ties: str = "even") -> torch.Tensor:
+    """t (last dim a multiple of 16) as a bfp tile holds it, fp32: per 16 values along the last dim one shared exponent
+    (the group's largest), each value an integer multiple of 2^(E - mant + 1) with |q| <= 2^mant - 1 (bfloat8_b: mant
+    7, bfloat4_b: 3). ties "even": ttnn's host packer / the SFPU packs (tests/test_bfp_packer_rounding.py rne_host,
+    tt/experts.py:_bfp4_round); "away": the packer with bfp8_pack_precise (that file's `device` rule; bfp8 only)."""
+    shape = t.shape
+    g = t.float().reshape(-1, BFP_GROUP)
+    amax = torch.maximum(g.amax(dim=-1, keepdim=True), g.amin(dim=-1, keepdim=True).neg())
+    _, e = torch.frexp(amax)
+    s = torch.ldexp(torch.ones_like(e, dtype=torch.float64), mant - e.clamp_min(-120))
+    up, down = s.float(), (1.0 / s).float()
+    v = g * up
+    v = torch.sign(v) * torch.floor(v.abs() + 0.5) if ties == "away" else v.round()
+    lim = 2**mant - 1
+    v = v.clamp_(-lim, lim).mul_(down)
+    return v.masked_fill_(amax < 2.0**-126, 0.0).reshape(shape)  # a denormal group packs as zeros (exponent 0)
+
+
+def fpu_operand(t: torch.Tensor, bits: int) -> torch.Tensor:
+    """t (fp32 / bf16 values) as the FPU multiplies it: ``bits`` explicit mantissa bits, the rest dropped toward zero
+    (ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/reference.py truncate, FPU_BITS; K-30)."""
+    i = t.float().contiguous().view(torch.int32)
+    sh = 23 - bits
+    return ((i >> sh) << sh).view(torch.float32)
+
+
+def rne_mantissa(t: torch.Tensor, bits: int) -> torch.Tensor:
+    """fp32 t rounded to nearest even at ``bits`` explicit mantissa bits (tt/common.py:fpu_weight, srca = 9)."""
+    w = t.float().contiguous()
+    sh = 23 - bits
+    i = w.view(torch.int32)
+    lsb = (i >> sh) & 1
+    r = ((i + ((1 << (sh - 1)) - 1) + lsb) >> sh) << sh
+    return torch.where(torch.isfinite(w), r.view(torch.float32), w)
+
+
+def bf16(t: torch.Tensor) -> torch.Tensor:
+    return t.to(torch.bfloat16).float()
+
+
+HIFI2_IN0, HIFI2_IN1 = 6, 9  # FPU_BITS["HiFi2"] (in0 = srcB, the activation; in1 = srcA, the weight)
+
+
+def attend_fpu(
+    q: torch.Tensor, kv: torch.Tensor, valid: torch.Tensor, sink: torch.Tensor, scale: float
+) -> torch.Tensor:
+    """kernels.attend as sparse_sdpa computes it at HiFi2 (fidelity 'device'): q (in0 of Q K^T) and the bf16 P (in0
+    of P V) truncated to 6 explicit mantissa bits; K / V (in1, bf16 or bfp) keep theirs; statistics fp32."""
+    s = torch.matmul(fpu_operand(q, HIFI2_IN0), kv.float().transpose(-1, -2)) * torch.tensor(scale, dtype=torch.float32)
+    s = s.masked_fill(~valid[:, None, :], float("-inf"))
+    m = s.amax(dim=-1, keepdim=True).clamp_min(-1e30)
+    p = torch.exp(s - m)
+    denom = p.sum(dim=-1, keepdim=True) + torch.exp(sink.float()[None, :, None] - m)
+    p = fpu_operand(bf16(p), HIFI2_IN0)
+    return torch.matmul(p, kv.float()) / denom
+
+
 def yarn_freqs(dim: int, theta: float, original: int, factor: float, beta_fast: float, beta_slow: float):
     """inference precompute_freqs_cis without the position table: the [dim / 2] fp32 frequencies."""
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
@@ -367,11 +470,14 @@ def rope(x: torch.Tensor, rot: torch.Tensor, inverse: bool = False) -> torch.Ten
     return torch.cat([head, out], dim=-1)
 
 
-def hc_mixes(stream: torch.Tensor, fn: torch.Tensor, scale: torch.Tensor, base: torch.Tensor, cfg: Config):
-    """Block.hc_mixes: streams [S, 4, H] -> [S, 24] fp32 = [pre | post | comb row-major (j input, k output)]."""
+def hc_mixes(
+    stream: torch.Tensor, fn: torch.Tensor, scale: torch.Tensor, base: torch.Tensor, cfg: Config, hifi2: bool = False
+):
+    """Block.hc_mixes: streams [S, 4, H] -> [S, 24] fp32 = [pre | post | comb row-major (j input, k output)].
+    hifi2 (format site fidelity 'device'): the projection's in0 truncated to 6 bits, fn RNE to 9 (FP32_WEIGHT_ROUND)."""
     flat = stream.flatten(1).float()
     rs = torch.rsqrt(flat.square().mean(-1, keepdim=True) + cfg.eps)
-    mixes = mm(flat, fn) * rs
+    mixes = (mm(fpu_operand(flat, HIFI2_IN0), rne_mantissa(fn, HIFI2_IN1)) if hifi2 else mm(flat, fn)) * rs
     pre, post, comb = K.sinkhorn_split(mixes, scale, base, cfg.hc, cfg.sinkhorn_iters, cfg.hc_eps)
     return torch.cat([pre, post, comb.flatten(-2)], dim=-1)
 
@@ -551,6 +657,8 @@ class DS41Reference:
         assert dtype in (torch.float32, torch.bfloat16), f"dtype {dtype}: fp32, or bf16 (official, the GPU's)"
         assert numerics == "official" or dtype == torch.float32, "native is fp32 (the golden target)"
         self.numerics = numerics
+        self.formats: dict = {}  # FIX.21 device-format sites set to 'device' (with_formats); empty = the reference
+        self._wcache: dict = {}  # (layer, name, format) -> a weight as the device holds it (shared by the copies)
         self.cfg = cfg = Config.from_dir(model_path)
         self.ck = Checkpoint(model_path)
         self.dtype = dtype  # official's activation dtype (bf16: the GPU configuration); the arithmetic stays fp32
@@ -598,6 +706,48 @@ class DS41Reference:
         other = copy.copy(self)
         other.numerics, other.dtype = numerics, dtype
         return other
+
+    def with_formats(self, formats: dict | None = None, **sites) -> "DS41Reference":
+        """FIX.21: the same reference (weights shared) with device-format sites (FORMAT_SITES) switched to 'device';
+        official at bf16 only (the sites replace its quantizers). ``formats`` / keywords: site -> 'official' | 'device'.
+        """
+        import copy
+
+        f = dict(formats or {}, **sites)
+        for k, v in f.items():
+            assert k in FORMAT_SITES, f"format site {k!r} not in {sorted(FORMAT_SITES)}"
+            assert v in FORMAT_MODES, f"format site {k}: {v!r} not in {FORMAT_MODES}"
+        assert self.bf16 or not any(v == "device" for v in f.values()), "device formats sit on official at bf16"
+        other = copy.copy(self)
+        other.formats = {k: v for k, v in f.items() if v == "device"}
+        return other
+
+    def _dev(self, site: str) -> bool:
+        """Format site ``site`` runs the device's format (FIX.21)."""
+        return site in self.formats
+
+    def _dense(self, layer: int, name: str) -> torch.Tensor:
+        """A dense fp8 (wo_a: bf16) weight [..., N, K] as the GEMM multiplies it: dense_w 'device' = bfloat8_b of W^T
+        (tt/ uploads W^T: 16-value groups along N), RNE (ttnn's host packer); else the exact values."""
+        w = self.w[layer][name]
+        if not self._dev("dense_w"):
+            return w
+        key = (layer, name, "bfp8_nt")
+        if key not in self._wcache:
+            self._wcache[key] = bfp_round(w.float().transpose(-1, -2), 7).transpose(-1, -2).contiguous()
+        return self._wcache[key]
+
+    def _gemm_in(self, x: torch.Tensor) -> torch.Tensor:
+        """An fp8 GEMM's input: gemm_in 'device' = bfloat8_b (typecast / packer, half away); else _q8."""
+        return bfp_round(x, 7, "away") if self._dev("gemm_in") else self._q8(x)
+
+    def _lin8(self, layer: int, name: str, x: torch.Tensor) -> torch.Tensor:
+        """inference linear() with an fp8 weight, at the active formats (official: fp8_linear)."""
+        return mm(self._gemm_in(x), self._dense(layer, name))
+
+    def _fid(self, x: torch.Tensor) -> torch.Tensor:
+        """A bf16 in0 at HiFi2 (fidelity 'device': 6 explicit mantissa bits); else x."""
+        return fpu_operand(x, HIFI2_IN0) if self._dev("fidelity") else x
 
     def _r(self, x: torch.Tensor) -> torch.Tensor:
         """A value model.py holds in bf16 (official at bf16): x rounded to bf16 (round to nearest even), kept in an fp32
@@ -691,7 +841,7 @@ class DS41Reference:
 
         def attn_hc(ctx, x):
             s, _ = self._unpack(x)
-            return hc_mixes(s, w["hc_attn_fn"], w["hc_attn_scale"], w["hc_attn_base"], cfg)
+            return hc_mixes(s, w["hc_attn_fn"], w["hc_attn_scale"], w["hc_attn_base"], cfg, self._dev("fidelity"))
 
         def attn_collapse(ctx, x):
             s, pre = self._unpack(x)
@@ -702,7 +852,14 @@ class DS41Reference:
             return r(hc_post(r(y), s, mix[:, hc : 2 * hc], mix[:, 2 * hc :].unflatten(-1, (hc, hc))).flatten(1))
 
         def ffn_hc(ctx, h):
-            return hc_mixes(r(h).unflatten(1, (hc, -1)), w["hc_ffn_fn"], w["hc_ffn_scale"], w["hc_ffn_base"], cfg)
+            return hc_mixes(
+                r(h).unflatten(1, (hc, -1)),
+                w["hc_ffn_fn"],
+                w["hc_ffn_scale"],
+                w["hc_ffn_base"],
+                cfg,
+                self._dev("fidelity"),
+            )
 
         def ffn_collapse(ctx, h, attn_mix):
             return r(hc_pre(r(h).unflatten(1, (hc, -1)), attn_mix[:, :hc]))
@@ -715,13 +872,13 @@ class DS41Reference:
 
         table = {
             "engram_rows": lambda ctx: self._engram_rows(layer, ctx),
-            "engram_kv": lambda ctx, rows: r(self._fp8_linear(rows, w["engram.wkv.weight"])),
+            "engram_kv": lambda ctx, rows: r(self._engram_kv(layer, rows)),
             "engram_add": lambda ctx, x, kv: self._engram_add(layer, x, kv),
             "attn_hc": attn_hc,
             "attn_collapse": attn_collapse,
             "attn_norm": lambda ctx, x: r(rms_norm(r(x), w["attn_norm.weight"], cfg.eps)),
             "q_a": lambda ctx, x: r(
-                rms_norm(r(self._fp8_linear(r(x), w["attn.wq_a.weight"])), w["attn.q_norm.weight"], cfg.eps)
+                rms_norm(r(self._lin8(layer, "attn.wq_a.weight", r(x))), w["attn.q_norm.weight"], cfg.eps)
             ),
             "kv": lambda ctx, x: self._window_kv(layer, ctx, x),
             "compressor": lambda ctx, x: self._compressor(layer, ctx, x),
@@ -733,9 +890,7 @@ class DS41Reference:
             "ffn_norm": lambda ctx, x: r(rms_norm(r(x), w["ffn_norm.weight"], cfg.eps)),
             "router": lambda ctx, x: self._route(layer, r(x)),
             "experts": lambda ctx, x, rt: self._experts(layer, r(x), rt),
-            "shared_expert": lambda ctx, x: self._swiglu(
-                r(x), *(w[f"ffn.shared_experts.{n}.weight"] for n in ("w1", "w3", "w2")), None, lin=mm
-            ),
+            "shared_expert": lambda ctx, x: self._shared(layer, r(x)),
             "moe_add": lambda ctx, a, b: r(a + r(b)),
             "ffn_residual": ffn_residual,
         }
@@ -748,6 +903,12 @@ class DS41Reference:
             st.tail[layer].fill_(-1)
         ids, st.tail[layer] = self.hasher.hashes(ctx.extra["tokens"], layer, st.tail[layer])
         return self._r(self.tables[layer].rows(ids).flatten(1))  # ParallelEngramEmbedding: .to(bf16)
+
+    def _engram_kv(self, layer: int, rows: torch.Tensor) -> torch.Tensor:
+        """wkv(rows): engram_rows 'device' = the rows as bfloat8_b (RNE, tt/engram_bfp8.py) read as sent; else fp8 act
+        quant (the identity on the table's values)."""
+        x = bfp_round(rows, 7) if self._dev("engram_rows") else self._q8(rows)
+        return mm(x, self._dense(layer, "engram.wkv.weight"))
 
     def _engram_add(self, layer: int, x: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
         cfg, w = self.cfg, self.w[layer]
@@ -769,8 +930,10 @@ class DS41Reference:
     def _window_kv(self, layer: int, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
         cfg, w = self.cfg, self.w[layer]
         r = self._r
-        kv = r(rms_norm(r(self._fp8_linear(r(x), w["attn.wkv.weight"])), w["attn.kv_norm.weight"], cfg.eps))
+        kv = r(rms_norm(r(self._lin8(layer, "attn.wkv.weight", r(x))), w["attn.kv_norm.weight"], cfg.eps))
         kv = r(rope(kv, self._rot(layer, torch.arange(ctx.start, ctx.start + x.shape[0]))))
+        if self._dev("window_kv"):  # kept bf16 (the served cache); attention reads it as bfloat8_b
+            return kv
         return r(self._q8(kv))
 
     def _compressor(self, layer: int, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
@@ -779,13 +942,14 @@ class DS41Reference:
         x = b(x)
         if s0 == 0 and layer in st.partial:  # a new sequence (each step resets only the state it owns)
             st.partial[layer].zero_()
+        xf = self._fid(x)  # HiFi2 in0 (fidelity 'device')
         if r == 1:  # bf16 wkv on bf16 x at bf16 (model.py: self.norm(self.wkv(x)))
             latent = b(
-                rms_norm(self._mm16(x, w["attn.compressor.wkv.weight"]), w["attn.compressor.norm.weight"], cfg.eps)
+                rms_norm(self._mm16(xf, w["attn.compressor.wkv.weight"]), w["attn.compressor.norm.weight"], cfg.eps)
             )
         else:
-            kv = mm(x.float(), w["attn.compressor.wkv.weight"])
-            sc = mm(x.float(), w["attn.compressor.wgate.weight"])
+            kv = mm(xf.float(), w["attn.compressor.wkv.weight"])
+            sc = mm(xf.float(), w["attn.compressor.wgate.weight"])
             p = s0 % r  # tokens of the unfinished group carried in the state
             kv = torch.cat([st.partial[layer][0, :p], kv])
             sc = torch.cat([st.partial[layer][1, :p], sc])
@@ -799,9 +963,15 @@ class DS41Reference:
         g0 = s0 // r
         n = latent.shape[0]
         rot = self._rot(layer, (g0 + torch.arange(n)) * r)  # a group sits at its first token's position
-        k = b(rms_norm(self._mm16(latent, w["attn.indexer.wk.weight"]), w["attn.indexer.k_norm.weight"], cfg.eps))
-        k = b(self._q4(b(rope(k, rot)), 32))
-        ckv = b(self._q4(b(rope(latent, rot)), 16, e4m3_scale=True))
+        k = b(
+            rms_norm(
+                self._mm16(self._fid(latent), w["attn.indexer.wk.weight"]), w["attn.indexer.k_norm.weight"], cfg.eps
+            )
+        )
+        # index_k 'device': kept bf16 (the served cache), scored as bfloat4_b (_indexer); ckv 'device': bfloat4_b
+        k = b(rope(k, rot)) if self._dev("index_k") else b(self._q4(b(rope(k, rot)), 32))
+        ckv = b(rope(latent, rot))
+        ckv = bfp_round(ckv, 3) if self._dev("ckv") else b(self._q4(ckv, 16, e4m3_scale=True))
         st.ckv[layer][g0 : g0 + n] = ckv
         st.index_k[layer][g0 : g0 + n] = k
         return torch.cat([ckv, k], dim=-1)
@@ -818,12 +988,18 @@ class DS41Reference:
         assert keys.shape[0] == n_keys
         pos = torch.arange(s0, end)
         rb = self._r
-        q = rb(self._fp8_linear(rb(qr), w["attn.indexer.wq_b.weight"])).view(s, nh, hd)
-        q = rb(self._q4(rb(rope(q, self._rot(layer, pos))), 32))
-        wts = rb(self._mm16(rb(x), w["attn.indexer.weights_proj.weight"]) * (hd**-0.5 * nh**-0.5))
+        q = rb(self._lin8(layer, "attn.indexer.wq_b.weight", rb(qr))).view(s, nh, hd)
+        q = rb(rope(q, self._rot(layer, pos)))
+        q = bfp_round(q, 3) if self._dev("index_q") else rb(self._q4(q, 32))
+        wts = rb(self._mm16(self._fid(rb(x)), w["attn.indexer.weights_proj.weight"]) * (hd**-0.5 * nh**-0.5))
+        if self._dev("index_k"):  # the bf16 keys (state / served cache) as the score op reads them
+            keys = bfp_round(rb(keys), 3)
         topk = min(cfg.index_topk, n_keys)
         out = torch.full((s, cfg.index_topk), -1, dtype=torch.int32)
-        if self.bf16:  # model.py: einsum('bshd,btd->bsht') of bf16 q and keys, relu x weights and the head sum in bf16
+        score_fp32 = self._dev("index_score")  # fp32 DEST score, written bf16
+        if (
+            self.bf16 and not score_fp32
+        ):  # model.py: einsum('bshd,btd->bsht') of bf16 q and keys, relu x weights and the head sum in bf16
             q, keys, wts = q.to(torch.bfloat16), keys.to(torch.bfloat16), wts.to(torch.bfloat16)
         for t0 in range(0, s, K.INDEX_Q_BLOCK):
             t1 = min(s, t0 + K.INDEX_Q_BLOCK)
@@ -836,6 +1012,8 @@ class DS41Reference:
             for k0 in range(0, width, K.INDEX_K_BLOCK):
                 sc = K.index_score_tile(qb, keys, k0)[:b]  # [b, nh, nk]
                 score[:, k0 : k0 + sc.shape[-1]] = (sc.relu_() * wb).sum(dim=1)
+            if score_fp32:
+                score = bf16(score)
             score = score.masked_fill(torch.arange(n_keys) >= lens, float("-inf"))
             if cfg.is_cand_source(layer):
                 blocks = select_candidate_blocks(score, lens, cfg.cand_topk_blocks, cfg.cand_block)
@@ -858,11 +1036,13 @@ class DS41Reference:
         pos = torch.arange(s0, s0 + s)
         rot = self._rot(layer, pos)
         b = self._r
-        q = b(self._fp8_linear(b(qr), w["attn.wq_b.weight"])).view(s, cfg.n_heads, d)
+        q = b(self._lin8(layer, "attn.wq_b.weight", b(qr))).view(s, cfg.n_heads, d)
         q = b(rope(q, rot))
         # window keys: ext holds positions s0 - win .. s0 + s - 1 (the previous chunk's tail from the ring)
         prev_pos = torch.arange(s0 - win, s0)
         ext = torch.cat([st.window[layer][prev_pos.remainder(win)], b(kv).float()])
+        # window_kv 'device': the bf16 [carry | chunk] region read as bfloat8_b (ckv_bfp4 dtype bfloat8_b, RNE)
+        ext_keys = bfp_round(b(ext), 7) if self._dev("window_kv") else ext
         wpos = window_rows(pos, win)  # [S, win] positions, inference order
         wvalid = (wpos <= pos.unsqueeze(-1)) & (wpos < s0 + s)
         wrow = (wpos - (s0 - win)).clamp(max=ext.shape[0] - 1)
@@ -874,26 +1054,30 @@ class DS41Reference:
                 ckv = torch.cat([st.ckv[layer][: s0 // r], b(compressed[:, :d]).float()])
             else:
                 ckv = st.ckv[cfg.kv_source_of(layer)][: (s0 + s) // r]
+            if self._dev("ckv"):  # the table holds bfloat4_b records (a loaded prefix re-encoded; own rows unchanged)
+                ckv = bfp_round(b(ckv), 3)
             topk = topk[:, : min(cfg.index_topk, (s0 + s) // r)].long()  # inference width: min(topk, end // r)
         sink = w["attn.attn_sink"].float()
         qa = q.to(torch.bfloat16) if self.bf16 else q  # kernels.attend: bf16 q -> P rounded to bf16 before P @ V
+        att = attend_fpu if self._dev("fidelity") else K.attend
         o = torch.empty(s, cfg.n_heads, d)
         for t0 in range(0, s, Q_BLOCK):
             t1 = min(s, t0 + Q_BLOCK)
-            keys = ext[wrow[t0:t1]]  # [B, win, d]
+            keys = ext_keys[wrow[t0:t1]]  # [B, win, d]
             valid = wvalid[t0:t1]
             if r:
                 idx = topk[t0:t1]
                 keys = torch.cat([keys, ckv[idx.clamp_min(0)]], dim=1)
                 valid = torch.cat([valid, idx >= 0], dim=1)
-            o[t0:t1] = b(K.attend(qa[t0:t1], keys, valid, sink, d**-0.5))  # sparse_attn: .to(q.dtype)
+            o[t0:t1] = b(att(qa[t0:t1], keys, valid, sink, d**-0.5))  # sparse_attn: .to(q.dtype)
         # the ring keeps the last `win` positions
         tail = min(s, win)
         st.window[layer][pos[-tail:].remainder(win)] = b(kv[-tail:]).float()
         o = b(rope(o, rot, inverse=True)).view(s, cfg.o_groups, -1)
-        o = b(self._q8(o))
-        y = self._mm16(o, w["attn.wo_a.weight"], K.grouped_out)  # wo_a [groups, o_lora_rank, heads_per_group * d]
-        return b(self._fp8_linear(y.flatten(1), w["attn.wo_b.weight"]))
+        o = b(self._gemm_in(o))
+        wo_a = self._dense(layer, "attn.wo_a.weight")  # [groups, o_lora_rank, heads_per_group * d]
+        y = self._mm16(o, wo_a, K.grouped_out)
+        return b(self._lin8(layer, "attn.wo_b.weight", y.flatten(1)))
 
     # ---------------------------------------------------------------- MoE
     def _route(self, layer: int, x: torch.Tensor) -> torch.Tensor:
@@ -918,9 +1102,58 @@ class DS41Reference:
             h = weights * h
         return self._r(lin(self._q8(self._r(h)), w2))  # self.w2(x.to(dtype))
 
+    def _routed_glm(self, x, w1, w3, w2, weights) -> torch.Tensor:
+        """experts_act 'device' (EXPERTS_PRECISION=glm on the flat op): x / h / y bfloat8_b tiles (packer, half away),
+        gate / up and the clamped SiLU in fp32 DEST, the bf16 routing weight applied after w2 (the combine)."""
+        lim = self.cfg.swiglu_limit
+        xq = bfp_round(x, 7, "away")
+        gate, up = K.expert_linear(xq, w1), K.expert_linear(xq, w3)
+        if lim > 0:
+            up = up.clamp(min=-lim, max=lim)
+            gate = gate.clamp(max=lim)
+        h = bfp_round(F.silu(gate) * up, 7, "away")
+        y = bfp_round(K.expert_linear(h, w2), 7, "away")
+        return bf16(weights) * y
+
+    def _shared(self, layer: int, x: torch.Tensor) -> torch.Tensor:
+        """The shared expert at the active formats. shared 'device': x / h bfloat8_b (half away), weights bfloat8_b
+        along K (exact for its fp8 values), gate / up written bf16; moe_sums 'device': w2 as DEVICE_TP partials over
+        the intermediate, each written bf16 and summed in bf16 (the fused head's row reduce-scatter)."""
+        w1, w3, w2 = (self.w[layer][f"ffn.shared_experts.{n}.weight"] for n in ("w1", "w3", "w2"))
+        if not (self._dev("shared") or self._dev("moe_sums")):
+            return self._swiglu(x, w1, w3, w2, None, lin=mm)
+        if self._dev("shared"):
+            key = (layer, "shared", "bfp8_nk")
+            if key not in self._wcache:
+                self._wcache[key] = tuple(bfp_round(t, 7) for t in (w1, w3, w2))
+            w1, w3, w2 = self._wcache[key]
+            q = lambda t: bfp_round(t, 7, "away")  # noqa: E731
+        else:
+            q = self._q8
+        lim = self.cfg.swiglu_limit
+        xq = q(x)
+        gate, up = bf16(mm(xq, w1)), bf16(mm(xq, w3))
+        if lim > 0:
+            up = up.clamp(min=-lim, max=lim)
+            gate = gate.clamp(max=lim)
+        h = F.silu(gate) * up
+        h = q(h) if self._dev("shared") else q(self._r(h))  # device: packed from fp32 DEST in one rounding
+        if not self._dev("moe_sums"):
+            return self._r(mm(h, w2))
+        n = h.shape[-1] // DEVICE_TP
+        acc = None
+        for c in range(DEVICE_TP):  # bf16 partials, bf16 adds
+            part = bf16(mm(h[:, c * n : (c + 1) * n].contiguous(), w2[:, c * n : (c + 1) * n].contiguous()))
+            acc = part if acc is None else bf16(acc + part)
+        return acc
+
     def _experts(self, layer: int, x: torch.Tensor, routing: torch.Tensor) -> torch.Tensor:
         """sum over the selected experts of routing[t, e] * expert_e(x[t]), in expert-id order (the inference MoE
-        order), tokens grouped per expert (kernels.expert_linear pads a group to 32-row multiples)."""
+        order), tokens grouped per expert (kernels.expert_linear pads a group to 32-row multiples). Format sites:
+        experts_w 'device' = the weights as bfloat4_b (16 along K of the stored [N, K], RNE: tt/experts.py
+        _bfp4_round); experts_act 'device' = _routed_glm; moe_sums 'device' = each term snapped to COMBINE_SNAP, fp32
+        sum, the result bf16."""
+        dev_w, glm, snap = self._dev("experts_w"), self._dev("experts_act"), self._dev("moe_sums")
         out = torch.zeros(x.shape, dtype=torch.float32)
         tok_all, exp_all = (routing != 0).nonzero(as_tuple=True)
         order = torch.argsort(exp_all, stable=True)
@@ -933,10 +1166,16 @@ class DS41Reference:
             tok = tok_all[off : off + n]
             off += n
             ws = pf.get(e)
-            y = self._swiglu(x[tok].float(), ws["w1"][2], ws["w3"][2], ws["w2"][2], routing[tok, e, None].float())
+            w1, w3, w2 = (bfp_round(ws[k][2], 3) if dev_w else ws[k][2] for k in ("w1", "w3", "w2"))
+            if glm:
+                y = self._routed_glm(x[tok].float(), w1, w3, w2, routing[tok, e, None].float())
+            else:
+                y = self._swiglu(x[tok].float(), w1, w3, w2, routing[tok, e, None].float())
+            if snap:
+                y = torch.round(y / COMBINE_SNAP) * COMBINE_SNAP
             out.index_add_(0, tok, y)
             del ws
-        return out
+        return bf16(out) if snap else out
 
     # ---------------------------------------------------------------- forward
     def embed(self, tokens: torch.Tensor) -> torch.Tensor:

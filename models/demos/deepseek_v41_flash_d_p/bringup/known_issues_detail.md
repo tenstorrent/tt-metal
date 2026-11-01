@@ -571,3 +571,82 @@ BREADCRUMBS section of FIX.20 (overseer fix, 8x4, 2026-11-01); BREADCRUMBS.md is
 - OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.tests.bringup.official_final_norm s10240 last`
   (only for a new golden); `gate FIX.20 --check --unit FIX.20`.
+
+## FIX.21 FORMAT_ATTRIBUTION: which device format makes the device's error larger than DeepSeek's reference
+
+(BREADCRUMBS.md is 9 bytes under the 500 KB hook, DS41-194: this section is FIX.21's breadcrumb too.)
+
+What: `reference/ds41_ref.py` got a diagnosis-only device-format emulation on top of numerics official at bf16
+(`FORMAT_SITES`, `DS41Reference.with_formats(site='device')`, `bfp_round`, `fpu_operand`, `attend_fpu`); the goldens
+and every gate stay native. `reference/test_format_attribution.py` runs it on layers 0-9 chained as the ladder feeds
+the device (`reference/drift.py:replay`), rung `last` (s56320's last chunk, 51200-56319, golden prefix loaded): one
+5120-token chunk a run (s10240 needs two), deep enough that the compressed history / index formats matter, and the
+device's own numbers on it are FIX.20's ladder. CPU, 16 threads, nice 19: official ~270 s a run, all-device ~600 s
+(the per-use bfp4 rounding of every routed expert's weights is half of it).
+
+Sites ('device' = tt/settings.py's shipped choice; 'official' = model.py's own quantizer):
+
+| site | device | official | loo L09 | add L09 | (medians L00-L09) |
+|---|---|---|---|---|---|
+| experts_w | routed weights bfloat4_b, 16 along K of [N, K], RNE (EXPERTS_IMPL=bfp4) | fp4 e2m1 x ue8m0 / 32, exact | 0.960 | 0.946 | 0.976 / 0.949 |
+| ckv | compressed KV bfloat4_b / 16, RNE (CKV_FORMAT=bfp4_rows) | fp4 e2m1 / 16, e4m3 scale | 0.178 | 0.278 | 0.193 / 0.295 |
+| index_k | keys bf16 in the state, scored bfloat4_b (INDEX_K_FORMAT) | fp4 e2m1 / 32 ue8m0 | 0.018 | 0.046 | 0.021 / 0.045 |
+| moe_sums | routed terms snapped 2^-19, fp32 sum, bf16 out; shared expert 4 TP partials bf16 + bf16 adds | fp32 sums, one bf16 rounding | 0.001 | 0.017 | 0.001 / 0.018 |
+| dense_w | fp8 dense weights (and bf16 wo_a) as bfloat8_b of W^T / 16 along N (DENSE_WEIGHTS) | exact | 0.006 | 0.016 | 0.006 / 0.009 |
+| fidelity | HiFi2: bf16 in0 truncated to 6 explicit bits, in1 9 (hc_fn + its srca weight, compressor wkv / wgate / wk, weights_proj, sdpa q and P) | fp32 / bf16 GEMMs | -0.000 | 0.002 | 0.005 / 0.003 |
+| index_q | query bfloat4_b RNE (INDEX_Q_FORMAT) | fp4 e2m1 / 32 | -0.003 | 0.004 | 0.000 / 0.004 |
+| index_score | fp32 DEST score, bf16 out | bf16 einsum / relu*w / head sum | 0.004 | 0.000 | 0.002 / 0.000 |
+| engram_rows | rows bfloat8_b RNE (ENGRAM_ROWS) | bf16 exact | -0.005 | 0.000 | 0.001 / 0.004 |
+| experts_act | x / h / y bfloat8_b (half away), fp32 act, bf16 weight after w2 (EXPERTS_PRECISION=glm) | fp8 x, r*h; bf16 gate / up / out | -0.001 | -0.060 | 0.006 / -0.061 |
+| shared | x / h bfloat8_b, bfp8 weights (SE_PACK_PRECISE) | fp8 x / h | -0.029 | -0.024 | -0.029 / -0.035 |
+| window_kv | bf16 state, read as bfloat8_b RNE (WINDOW_KV_FORMAT=bfp8_tiles) | e4m3 / 32 ue8m0 | -0.042 | -0.117 | -0.055 / -0.144 |
+| gemm_in | fp8 GEMM inputs bfloat8_b (half away; GEMM_INPUTS) | e4m3 / 32 ue8m0 | -0.071 | -0.174 | -0.079 / -0.174 |
+
+gap_closed (loo) = (err_device - err_loo) / (err_device - err_official), addone = (err_add - err_official) / (same),
+on err_layer_L09: device 0.12522, official 0.07862 (gap 0.0466; at L00 the device is BETTER, -0.0031, from gemm_in
+and window_kv). Sums: loo 1.02, add-one 0.93: the sites are close to additive; experts_w and ckv overlap a little
+(their add-ones sum to 1.22, their loos to 1.14), the negative sites offset part of that.
+
+Validation (before any attribution): the all-device run vs FIX.20's device errors on the same rung, err_layer_L00..L09
+and every err_state of those layers (26 metrics, compress_partial / engram_tail exact on both): ratio 0.893-1.007,
+median 0.986 (layers 0.965-0.993; window_kv states 0.89-0.99, the bf16 served cache, DS41-143). The official run
+reproduces drift-last.json to 5 digits. How fidelity is emulated: FPU_BITS (flat_routed_expert_ttnn/tests/reference.py,
+K-30): at HiFi2 / LoFi in0 (srcB) keeps 6 explicit mantissa bits, in1 (srcA) 9 at HiFi2 / 4 at LoFi, truncated; so a
+bfp8 / e4m3 / bfp4 operand is never cut, only bf16 activations are (the sites listed); the routed / shared experts at
+LoFi have bfp4 / e4m3-valued weights (<= 4 bits) and bfp8 x / h: no-ops there. bfp rules: test_bfp_packer_rounding.py
+rne_host (host packer, ckv_bfp4 / bfp_round / the rope chain SFPU packs) and `device` (bfp8_pack_precise / typecast,
+half away), checked value for value by test_bfp_rules_match_packers; denormal groups pack as zeros.
+
+Not sites (equal to official at bf16 or no-ops by the rule above): BF16_ACTIVATIONS / FFN_NORM_DTYPE / norm outputs
+(official rounds the same points to bf16), FP32_ACC (needed == all), the router (HiFi3 on bf16 x: no truncation; bf16
+weights folded into experts_act), CCL bf16 sums other than the MoE's (OWN_ROWS / ATTN_SP32 leave none on this path).
+Not modelled: the double rounding of bf16 -> bfp8 where a norm packs bfp8 straight from fp32 (NORM_GEMM_DTYPE), the
+flat op's h packer (one half-away rounding assumed), ring orders of the bf16 reduce-scatter.
+
+Side finding (index keys): with the keys scored as bfloat4_b the top-k misses 0.168 / 0.152 of the native ids (L02 /
+L08) vs 0.108 / 0.086 with the reference's own fp4 (add_index_k vs official; the device 0.164 / 0.155): bfloat4_b's 3
+magnitude bits under a 16-value exponent select worse than e2m1 with a ue8m0 per 32, unlike the per-step numbers in
+INDEX_K_FORMAT's note (7.6-15.7 % vs 8.0-16.6 %). It costs the layer outputs little (loo 0.018).
+
+At the tokens (part 4; 40 layers from the golden prefix, rung last's chunk, test_logit_kl's metric and its cached
+official final norm; CPU 16 threads: all-device 2360 s, minus experts_w 1356 s):
+
+| run | final_norm rel | kl_mean | kl_p99 | top1 | top5 | nll |
+|---|---|---|---|---|---|---|
+| device (FIX.20) | 0.190 | 0.00508 | | 0.9965 | | |
+| emulation, all device | 0.188 | 0.00464 | 0.0799 | 0.9969 | 0.894 | 0.0278 |
+| emulation, all device but experts_w official | 0.100 | 0.00143 | 0.0177 | 0.9979 | 0.943 | 0.0244 |
+| official (DeepSeek, bf16) | 0.121 | 0.00242 | 0.0308 | 0.9975 | 0.927 | 0.0272 |
+
+So the emulation also matches the device end to end (KL 0.91 x, final norm 0.99 x), and with exact expert weights
+the device's other formats land BELOW DeepSeek's own reference (KL 0.59 x official, final norm 0.83 x).
+
+Recommendation: A/B EXPERTS_IMPL=bfp8 on the device first (exact for the checkpoint's e2m1 x ue8m0 values, DS41-10):
+leave-one-out says it removes 0.96 of the hidden-state gap at L09. Cost from tt/settings.py: P.10 experts call 3.47
+-> 4.47 ms a layer (2x2, chunk 2048), weights 8.9 -> 16.8 GiB a chip at 40 layers on 8x4 (MOE_IMPL=block asserts
+bfloat4_b today: tt/moe_block_adapter.py, so the A/B needs the block to take bfp8 weights). Second: CKV_FORMAT=bf16
+(0.18-0.28; +3.3x table memory, sparse_sdpa -0.4 %).
+
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.21 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (runs cached in
+generated/fix21_format_attribution/<golden hash>/v1/; delete them, or bump EMU_VERSION, after changing a site).
