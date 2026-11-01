@@ -1458,10 +1458,16 @@ class TtDSA(LightweightModule):
         # GLM53_PREFILL_QBLOCK rows and attention blocks of GLM53_PREFILL_ABLOCK rows (``_sparse_rows``); one
         # whole-prefix ROW_MAJOR kv copy (the sparse_sdpa contract) serves every block of the chunk: rebuilt
         # from the pages, or the layer's arena appended with this chunk's latent (GLM53_PREFIX_INCREMENTAL)
-        kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
+        paged = (cache, user) if self.paged_sparse and cache.paged_slot_block0(user) is not None else None
+        if paged is None:  # else the paged op reads the cache's tiles in place (GLM53_PAGED_SPARSE, as the wave path)
+            kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
+        else:
+            kv_rm, kv_owned = None, False
         ttnn.deallocate(c)
         self._mark("kv_copy")
-        o_sparse = self._sparse_rows(x, q_resid, q, cache, user, kv_rm, start=start, end=end, r0=split, r1=T)
+        o_sparse = self._sparse_rows(
+            x, q_resid, q, cache, user, kv_rm, start=start, end=end, r0=split, r1=T, paged=paged
+        )
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
         if kv_owned:
@@ -1659,7 +1665,14 @@ class TtDSA(LightweightModule):
         # chunk the rows below 2048 are scored at the clamped position 2048 (a valid full prefix) and dropped by
         # the select. The whole-prefix kv: rebuilt from the pages, or the layer's arena appended with the chunk's
         # gathered latent ``c`` (every row holds the whole chunk; GLM53_PREFIX_INCREMENTAL)
-        kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
+        # the sparse attention's keys: the paged op reads the cache's tiles in place (GLM53_PAGED_SPARSE, as the
+        # wave path), else the whole-prefix ROW_MAJOR copy (1 GiB per DSA layer per chunk near 1 M: the transient
+        # that fragmented the 1 M c1 cell's DRAM, served 2026-11-01 18:33)
+        paged = (cache, user) if self.paged_sparse and cache.paged_slot_block0(user) is not None else None
+        if paged is None:
+            kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
+        else:
+            kv_rm, kv_owned = None, False
         ttnn.deallocate(c)
         self._mark("kv_copy")
         o_sparse = self._sparse_rows(
@@ -1675,6 +1688,7 @@ class TtDSA(LightweightModule):
             r1=T_loc,
             row_starts_of=lambda q0: tuple(start + r * T_loc + q0 for r in range(rows)),
             pos_floor=self.sparse_row_start,
+            paged=paged,
         )
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
