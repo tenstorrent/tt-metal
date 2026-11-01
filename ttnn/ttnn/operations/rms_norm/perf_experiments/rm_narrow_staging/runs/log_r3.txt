@@ -1,0 +1,407 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-01 19:43:26] SAFE_PYTEST: waiting for device (20s) — holder pid=2687010 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=2687009 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r2 "
+[2026-11-01 19:43:48] SAFE_PYTEST: waiting for device (40s) — holder pid=2687010 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=2687009 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r2 "
+[2026-11-01 19:44:10] SAFE_PYTEST: waiting for device (60s) — holder pid=2687010 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=2687009 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r2 "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — compile step -> JIT server bgdepyc04:12345 when >= 10 programs, else local (real pass always local)
+SAFE_PYTEST: env UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS=10 TT_METAL_JIT_SERVER_ENDPOINT=bgdepyc04:12345 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1 UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=128 PYTHONPATH=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal:/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal python -m tracy -r -m pytest -p tests.plugins.up_front_collect -x /tmp/rns_bench/test_rns_bench.py -s -p conftest
+========================================
+2026-11-01 19:44:30.900 | INFO     | __main__:main:374 - Using port 8086
+2026-11-01 19:44:30.900 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-01 19:44:30.961 | INFO     | __main__:run_workload:409 - Test process started
+2026-11-01 19:44:32.773 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/adamjanovic/.cache/ttnn,model_cache_path=/home/adamjanovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.20, pytest-9.0.3, pluggy-1.7.0
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /tmp/rns_bench
+plugins: xdist-3.8.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, split-0.11.0, repeat-0.9.4, anyio-4.16.0, timeout-2.4.0, github-actions-annotate-failures-0.3.0
+collected 4 items
+2026-11-01 19:44:36.062 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-11-01 19:44:36.062 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-11-01 19:44:36.063 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-01 19:44:36.063 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-01 19:44:36.067 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:654)
+2026-11-01 19:44:36.067 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-01 19:44:36.101 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:176)
+2026-11-01 19:44:36.101 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-11-01 19:44:36.101 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:153)
+2026-11-01 19:44:36.101 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-11-01 19:44:36.102 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-11-01 19:44:36.135 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-11-01 19:44:36.268 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-11-01 19:44:36.268 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-11-01 19:44:36.268 | info     |          Fabric | Loaded physical groupings from: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-01 19:44:36.269 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-11-01 19:44:36.269 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-11-01 19:44:36.269 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-11-01 19:44:36.269 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 1x1_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-11-01 19:44:36.269 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-11-01 19:44:36.327 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:37.083 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw16: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 16], 16)
+RNS_ORDER wid_sw16 base
+RNS_ORDER wid_sw16 pz
+RNS_DIFF wid_sw16 pz max_abs_vs_base=0.0
+RNS_ORDER wid_sw16 pzst
+RNS_DIFF wid_sw16 pzst max_abs_vs_base=0.0
+RNS_ORDER wid_sw16 pzstc
+RNS_DIFF wid_sw16 pzstc max_abs_vs_base=0.0
+RNS_ORDER wid_sw16 cpuallpz
+RNS_DIFF wid_sw16 cpuallpz max_abs_vs_base=0.0
+2026-11-01 19:44:37.181 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:37.277 | info     |           Metal | Disabling and clearing program cache on MeshDevice 3 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw32: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 32], 8)
+RNS_ORDER wid_sw32 base
+RNS_ORDER wid_sw32 pz
+RNS_DIFF wid_sw32 pz max_abs_vs_base=0.0
+RNS_ORDER wid_sw32 pzst
+RNS_DIFF wid_sw32 pzst max_abs_vs_base=0.0
+RNS_ORDER wid_sw32 pzstc
+RNS_DIFF wid_sw32 pzstc max_abs_vs_base=0.0
+RNS_ORDER wid_sw32 cpuallpz
+RNS_DIFF wid_sw32 cpuallpz max_abs_vs_base=0.0
+2026-11-01 19:44:37.373 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:37.465 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw64: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 64], 4)
+RNS_ORDER wid_sw64 base
+RNS_ORDER wid_sw64 pz
+RNS_DIFF wid_sw64 pz max_abs_vs_base=0.0
+RNS_ORDER wid_sw64 pzst
+RNS_DIFF wid_sw64 pzst max_abs_vs_base=0.0
+RNS_ORDER wid_sw64 pzstc
+RNS_DIFF wid_sw64 pzstc max_abs_vs_base=0.0
+RNS_ORDER wid_sw64 cpuallpz
+RNS_DIFF wid_sw64 cpuallpz max_abs_vs_base=0.0
+2026-11-01 19:44:37.559 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:37.652 | info     |           Metal | Disabling and clearing program cache on MeshDevice 7 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw128: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 128], 2)
+RNS_ORDER wid_sw128 base
+2026-11-01 19:44:37.657 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 1048576 B L1 buffer across 2 banks, where each bank needs to store 524288 B, but bank size is 1461120 B (allocated: 1048576 B, free: 412544 B, largest free block: 412544 B) (assert.hpp:104)
+
+UP_FRONT_INLINE: collect pass over 4 item(s) took 1.6s
+UP_FRONT_INLINE: compile route farm (programs=16, farm_min=10)
+
+UP_FRONT_COLLECT: 16 ops stashed across 4 bodies -> 16 unique programs (swallowed 1, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=8 fallback=0
+2026-11-01 19:44:37.735 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:37.828 | info     |           Metal | Enabling program cache on MeshDevice 9 (mesh_device.cpp:1222)
+UP_FRONT_COLLECT: 16 collected · 16 built · 0 already compiled in 8.4s (workers=128, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=16 programs=16 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=16 compile_s=8.6 collect_s=1.6 route=farm
+UP_FRONT_INLINE: compile step took 8.6s; starting the real pass
+
+../../../../../../../tmp/rns_bench/test_rns_bench.py 2026-11-01 19:44:46.335 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:46.418 | info     |           Metal | Disabling and clearing program cache on MeshDevice 11 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw16: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 16], 16)
+RNS_ORDER wid_sw16 base
+RNS_ORDER wid_sw16 pz
+RNS_DIFF wid_sw16 pz max_abs_vs_base=0.0
+RNS_ORDER wid_sw16 pzst
+RNS_DIFF wid_sw16 pzst max_abs_vs_base=0.0
+RNS_ORDER wid_sw16 pzstc
+RNS_DIFF wid_sw16 pzstc max_abs_vs_base=0.0
+RNS_ORDER wid_sw16 cpuallpz
+RNS_DIFF wid_sw16 cpuallpz max_abs_vs_base=0.0
+.2026-11-01 19:44:46.716 | info     |           Metal | Device kernel duration perf summary (device=0): count=5, min=137027ns, avg=175407.4ns, max=250387ns (profiler_analysis.cpp:729)
+2026-11-01 19:44:46.716 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=11400ns, range=[136800..250800), underflow(<136800ns)=0, overflow(>=250800ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      136800 ..       148200) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      148200 ..       159600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      159600 ..       171000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      171000 ..       182400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      182400 ..       193800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      193800 ..       205200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      205200 ..       216600) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      216600 ..       228000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      228000 ..       239400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.716 | info     |           Metal |   [      239400 ..       250800) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 19:44:46.767 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:46.852 | info     |           Metal | Disabling and clearing program cache on MeshDevice 13 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw32: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 32], 8)
+RNS_ORDER wid_sw32 base
+RNS_ORDER wid_sw32 pz
+RNS_DIFF wid_sw32 pz max_abs_vs_base=0.0
+RNS_ORDER wid_sw32 pzst
+RNS_DIFF wid_sw32 pzst max_abs_vs_base=0.0
+RNS_ORDER wid_sw32 pzstc
+RNS_DIFF wid_sw32 pzstc max_abs_vs_base=0.0
+RNS_ORDER wid_sw32 cpuallpz
+RNS_DIFF wid_sw32 cpuallpz max_abs_vs_base=0.0
+.2026-11-01 19:44:47.183 | info     |           Metal | Device kernel duration perf summary (device=0): count=5, min=76988ns, avg=159519.6ns, max=323180ns (profiler_analysis.cpp:729)
+2026-11-01 19:44:47.183 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=24700ns, range=[74100..321100), underflow(<74100ns)=0, overflow(>=321100ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 19:44:47.183 | info     |           Metal |   [       74100 ..        98800) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [       98800 ..       123500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      123500 ..       148200) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      148200 ..       172900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      172900 ..       197600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      197600 ..       222300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      222300 ..       247000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      247000 ..       271700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      271700 ..       296400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.183 | info     |           Metal |   [      296400 ..       321100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.226 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:47.311 | info     |           Metal | Disabling and clearing program cache on MeshDevice 15 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw64: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 64], 4)
+RNS_ORDER wid_sw64 base
+RNS_ORDER wid_sw64 pz
+RNS_DIFF wid_sw64 pz max_abs_vs_base=0.0
+RNS_ORDER wid_sw64 pzst
+RNS_DIFF wid_sw64 pzst max_abs_vs_base=0.0
+RNS_ORDER wid_sw64 pzstc
+RNS_DIFF wid_sw64 pzstc max_abs_vs_base=0.0
+RNS_ORDER wid_sw64 cpuallpz
+RNS_DIFF wid_sw64 cpuallpz max_abs_vs_base=0.0
+.2026-11-01 19:44:47.586 | info     |           Metal | Device kernel duration perf summary (device=0): count=5, min=95600ns, avg=207510.8ns, max=493159ns (profiler_analysis.cpp:729)
+2026-11-01 19:44:47.586 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=39800ns, range=[79600..477600), underflow(<79600ns)=0, overflow(>=477600ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 19:44:47.586 | info     |           Metal |   [       79600 ..       119400) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      119400 ..       159200) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      159200 ..       199000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      199000 ..       238800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      238800 ..       278600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      278600 ..       318400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      318400 ..       358200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      358200 ..       398000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      398000 ..       437800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.586 | info     |           Metal |   [      437800 ..       477600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:47.631 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 19:44:47.716 | info     |           Metal | Disabling and clearing program cache on MeshDevice 17 (mesh_device.cpp:1232)
+RNS_GEOM wid_sw128: (1, 1, 2048, 256) TensorMemoryLayout.WIDTH_SHARDED shard=([2048, 128], 2)
+RNS_ORDER wid_sw128 base
+2026-11-01 19:44:47.777 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 1048576 B L1 buffer across 2 banks, where each bank needs to store 524288 B, but bank size is 1461120 B (allocated: 1048576 B, free: 412544 B, largest free block: 412544 B) (assert.hpp:104)
+F2026-11-01 19:44:48.353 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 19:44:48.363 | info     |           Metal | Device kernel duration perf summary (device=0): count=1, min=199718ns, avg=199718.0ns, max=199718ns (profiler_analysis.cpp:729)
+2026-11-01 19:44:48.363 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[199700..200700), underflow(<199700ns)=0, overflow(>=200700ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      199700 ..       199800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      199800 ..       199900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      199900 ..       200000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200000 ..       200100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200100 ..       200200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200200 ..       200300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200300 ..       200400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200400 ..       200500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200500 ..       200600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.363 | info     |           Metal |   [      200600 ..       200700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 19:44:48.372 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+
+=================================== FAILURES ===================================
+____________________________ test_bench[wid_sw128] _____________________________
+
+device = MeshDevice(1x1 grid, 1 devices), cell = 'wid_sw128'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fd77c199810>
+
+    @pytest.mark.parametrize("cell", IDS)
+    def test_bench(device, cell, monkeypatch):
+        device.disable_and_clear_program_cache()  # variants differ only in kernel source/defines
+        cfg = CELLS[cell]
+        shape, ml, dtype = cfg["shape"], cfg["ml"], cfg["dtype"]
+        torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+        torch.manual_seed(0)
+        x = torch.randn(shape, dtype=torch.float32).to(torch_dtype)
+        W = shape[-1]
+        g = torch.randn(W, dtype=torch.float32).to(torch.bfloat16) if cfg["gamma"] else None
+        gdtype = ttnn.bfloat16
+        if cell == "int_rm_128x4096_gf32":
+            g = g.to(torch.float32)
+            gdtype = ttnn.float32
+        tg = create_ttnn_input_tensor(g.reshape(1, 1, 1, W), device, dtype=gdtype, layout=RM) if g is not None else None
+        mc = None
+        if cfg["shard"]:
+            mc = shard_config(cfg["shard"][0], cfg["shard"][1], ml, layout=RM, dtype=dtype, device=device)
+        tx = create_ttnn_input_tensor(x, device, dtype=dtype, layout=RM, memory_layout=ml, memory_config=mc)
+        kw = {} if ml == ML.INTERLEAVED else {"memory_config": tx.memory_config()}
+        ck = ttnn.ComputeConfigDescriptor()
+        ck.math_fidelity = ttnn.MathFidelity.HiFi4
+        ck.fp32_dest_acc_en = cfg["fp32"]
+        ck.math_approx_mode = False
+        expected = pytorch_rms_norm(x, gamma=g, epsilon=1e-6)
+        ss = tx.memory_config().shard_spec
+        print(f"RNS_GEOM {cell}: {shape} {ml} shard={None if ss is None else (list(ss.shape), ss.grid.num_cores())}")
+
+        ref_out = None
+        for v in VSEL:
+            defs = VARIANTS[v]
+            monkeypatch.setattr(pd, "KERNEL_DIR", REAL_KDIR if defs is None else HERE / "kernels")
+            monkeypatch.setattr(pd, "PERF_ABLATE", () if defs is None else defs)
+>           out = rms_norm(tx, gamma=tg, epsilon=1e-6, compute_kernel_config=ck, **kw)
+
+/tmp/rns_bench/test_rns_bench.py:121:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/operations/rms_norm/rms_norm.py:225: in rms_norm
+    output_tensor = ttnn.allocate_tensor_on_device(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.allocate_tensor_on_device', function=<nanobind.nb_func object at 0x7fd...ut_tensor', 'optional_tensor', 'optional_output_tensor', 'out', 'output', 'output_tensors', 'optional_output_tensors'))
+function_args = (Shape([1, 1, 2048, 256]), DataType.BFLOAT16, Layout.ROW_MAJOR, MeshDevice(1x1 grid, 1 devices), MemoryConfig(memory_l...DistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0))
+function_kwargs = {}, cq_id = None, recording = False, started = False
+python_io_record = None
+
+    def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        started = False
+        python_io_record = None
+        try:
+            if recording:
+                ttnn.graph.track_function_start(self.python_fully_qualified_name)
+                started = True
+                python_io_record = ttnn.graph.append_python_io_record(self.python_fully_qualified_name)
+                ttnn.graph.record_python_operation(
+                    self.python_fully_qualified_name,
+                    function_args,
+                    function_kwargs,
+                    record=python_io_record,
+                )
+                input_tensors = get_all_tensors((function_args, function_kwargs))
+                set_tensor_id(input_tensors)
+
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_FATAL @ /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:495: false
+E               info:
+E               Out of Memory: Not enough space to allocate 1048576 B L1 buffer across 2 banks, where each bank needs to store 524288 B, but bank size is 1461120 B (allocated: 1048576 B, free: 412544 B, largest free block: 412544 B)
+E               backtrace:
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xafd0d1) [0x7fd78f7f10d1]
+E                --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)
+E                --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)
+E                --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)
+E                --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+E                --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+E                --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+E                --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)
+E                --- ttnn::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/_ttnn.so(+0x444755) [0x7fd793609755]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/_ttnn.so(+0x3bc9fd) [0x7fd7935819fd]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x55695751c5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x99) [0x5569574bd3e9]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x5569576032fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x5569573a6b86]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0xaae2) [0x556957521742]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0xaae2) [0x556957521742]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x55695751c5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x5569574be279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x5569574bd466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x5569576032fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x5569573a6b86]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x55695754b60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x556957548afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x2fd72) [0x5569575469d2]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x55695751c5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x5569574be279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x5569574bd466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x5569576032fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x7414) [0x55695751e074]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x55695754b60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x216e6) [0x556957538346]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x5569574be279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x55695754b60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x556957548afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x55695754b60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x216e6) [0x556957538346]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x55695754b60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x556957548afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x55695751c5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x5569574be279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x5569574bd466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x5569576032fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x5569573a6b86]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x55695754b60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x556957548afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x55695751c5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x5569574be279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x5569573efe07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x556957546ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5569574bbdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x5569574bd466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x5569576032fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x5569573a6b86]
+
+ttnn/ttnn/decorators.py:1245: RuntimeError
+=========================== short test summary info ============================
+FAILED ../../../../../../../tmp/rns_bench/test_rns_bench.py::test_bench[wid_sw128]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+========================= 1 failed, 3 passed in 12.65s =========================
+2026-11-01 19:44:49.561 | info     |    BuildKernels | JIT cache stats: 98/98 hits (100.0%) [10 cached, 50 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 19:44:49.561 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 19:44:49.565 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-11-01 19:44:49.565 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-11-01 19:44:49.637 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-11-01 19:44:49.637 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-11-01 19:44:49.637 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)
+2026-11-01 19:44:49.870 | INFO     | __main__:main:483 - Copying /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_01_19_44_49.tracy
+2026-11-01 19:44:49.878 | INFO     | __main__:main:486 - Copied /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_01_19_44_49.tracy
+2026-11-01 19:44:49.879 | INFO     | __main__:main:495 - embed.tracy -> traces/conftest_2026_11_01_19_44_49.tracy
+2026-11-01 19:44:49.879 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-01 19:44:49.879 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-01 19:44:49.879 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-01 19:44:50.927 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-01 19:44:50.977 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-01 19:44:50.977 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-01 19:44:53.076 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-01 19:44:53.076 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-01 19:44:53.137 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-01 19:44:53.137 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-01 19:44:53.160 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-01 19:44:53.177 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_19_44_53/ops_perf_results_2026_11_01_19_44_53.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 4 item(s) took 1.6s
+PRECOMPILE: UP_FRONT_INLINE: compile route farm (programs=16, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 16 ops stashed across 4 bodies -> 16 unique programs (swallowed 1, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=8 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 16 collected · 16 built · 0 already compiled in 8.4s (workers=128, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 8.6s; starting the real pass
+SAFE_PYTEST: PROFILER CSV: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_19_44_53/ops_perf_results_2026_11_01_19_44_53.csv
+SAFE_PYTEST_RESULT: PASS

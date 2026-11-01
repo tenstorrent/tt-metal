@@ -15,7 +15,9 @@
 //         zeroed in place (the caller's shard is never mutated): the tail member emits a 0/1 row mask
 //         (prepare_reduce_mask) that compute applies to the tail tile's x^2 inside the collapse reduce.
 //   RM  : per (tile-row, chunk) the valid stick pieces are copied locally (own-L1 NoC reads) from the shard into
-//         the cb_x_rm tilize staging, zero-filled to the tile edge (covers the W tail and shard padding).
+//         the cb_x_rm tilize staging, zero-filled to the tile edge (covers the W tail and shard padding): one read
+//         per tile-row when the shard pitch equals the staging pitch, else stateful per-stick reads; single-chunk
+//         shards zero each staging slot's tail only on the slot's first use.
 
 #include <cstdint>
 
@@ -124,8 +126,19 @@ void kernel_main() {
 
 #if defined(RMS_SHARDED) && defined(RMS_RM)
     // ---- RM shard: local stick copy (own L1) into the tilize staging, zero-filled to the tile edge ----
+    // Narrow pieces are transaction-count-bound (~20 ns per local NoC read on BH; a RISC-V word copy is slower
+    // still at every legal piece width >= 16 B). So: shard row pitch == staging pitch and a full piece -> ONE
+    // read per (tile-row, chunk); otherwise one read per stick through the one-packet set_state / with_state pair
+    // (NoC coordinates + length programmed once per tile-row).
+    // Tail zero fill: single-chunk shards write pieces of one width, and nothing else writes cb_x_rm, so a slot's
+    // tail columns stay zero once filled -> zeroed on the slot's first use only (the per-stick fill was ~60 % of
+    // the staging time on 16 B pieces). A ragged tile-row (nsticks < 32) is the shard's last, so its slot is never
+    // reused after a short fill.
     constexpr uint32_t chunk_row_bytes = rm_chunk_w_tiles * TILE_DIM * elem_bytes;
     constexpr uint32_t tile_row_bytes = TILE_DIM * elem_bytes;
+    static_assert(chunk_row_bytes <= NOC_MAX_BURST_SIZE, "a stick piece must be one NoC packet");
+    const uint32_t stage_slots = get_local_cb_interface(cb_x_rm).fifo_size / (TILE_DIM * chunk_row_bytes);
+    uint32_t reservations = 0;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
         MaybeDeviceZoneScope("rd_block");  // occupancy: local stick copies + back-pressure on cb_x_rm
@@ -140,16 +153,22 @@ void kernel_main() {
                 cb_reserve_back(cb_x_rm, rm_chunk_w_tiles);
                 const uint32_t l1 = get_write_ptr(cb_x_rm);
                 const uint32_t src = x_addr + s0 * x_page_bytes + c0 * elem_bytes;
-                for (uint32_t s = 0; s < nsticks; ++s) {
-                    noc_async_read(get_noc_addr(src + s * x_page_bytes), l1 + s * chunk_row_bytes, bytes);
+                if (x_page_bytes == chunk_row_bytes && bytes == chunk_row_bytes) {
+                    noc_async_read(get_noc_addr(src), l1, nsticks * chunk_row_bytes);
+                } else {
+                    noc_async_read_one_packet_set_state(get_noc_addr(src), bytes);
+                    for (uint32_t s = 0; s < nsticks; ++s) {
+                        noc_async_read_one_packet_with_state(src + s * x_page_bytes, l1 + s * chunk_row_bytes);
+                    }
                 }
                 const uint32_t tail_end = ((bytes + tile_row_bytes - 1) / tile_row_bytes) * tile_row_bytes;
-                if (tail_end > bytes) {
+                if (tail_end > bytes && (chunks_this > 1 || reservations < stage_slots)) {
                     for (uint32_t s = 0; s < nsticks; ++s) {
                         dataflow_kernel_lib::fill_l1_range<elem_bytes>(
                             l1 + s * chunk_row_bytes + bytes, tail_end - bytes, 0);
                     }
                 }
+                ++reservations;
                 noc_async_read_barrier();
                 cb_push_back(cb_x_rm, rm_chunk_w_tiles);
             }

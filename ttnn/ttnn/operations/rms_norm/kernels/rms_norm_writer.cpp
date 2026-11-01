@@ -48,7 +48,8 @@
 // store_block
 //   TILE sharded: cb_out IS the output shard (zero-copy) — compute packs straight into it; the writer only
 //         waits for the block's pages so the program cannot retire before the shard is written.
-//   RM sharded: per (chunk, tile-row) the untilized stick pieces are written back to the local output shard.
+//   RM sharded: per (chunk, tile-row) the untilized stick pieces are written back to the local output shard
+//         (one write per tile-row when the shard pitch equals the staging pitch, else stateful per-stick writes).
 //   TILE: per tile-row, in units of <= out_unit_tiles tiles: wait, write, flush, pop. A unit is also clamped
 //         to the cb_out ring end (tracked in out_ring_pos) — its pages are read linearly from the read pointer,
 //         and core_w_tiles need not be a multiple of out_unit_tiles.
@@ -548,6 +549,7 @@ void kernel_main() {
         MaybeDeviceZoneScope("wr_store");  // occupancy: waits on pass 2 output + issue/flush of the writes
 #if defined(RMS_SHARDED) && defined(RMS_RM)
         constexpr uint32_t chunk_row_bytes = rm_chunk_w_tiles * TILE_DIM * elem_bytes;
+        static_assert(chunk_row_bytes <= NOC_MAX_BURST_SIZE, "a stick piece must be one NoC packet");
         for (uint32_t c = 0; c < chunks_this; ++c) {
             const uint32_t c0 = c * rm_chunk_w_tiles * TILE_DIM;
             const uint32_t cols =
@@ -559,8 +561,15 @@ void kernel_main() {
                 cb_wait_front(cb_out_rm, rm_chunk_w_tiles);
                 const uint32_t l1 = get_read_ptr(cb_out_rm);
                 const uint32_t dst = out_addr + s0 * out_page_bytes + c0 * elem_bytes;
-                for (uint32_t s = 0; s < nsticks; ++s) {
-                    noc_async_write(l1 + s * chunk_row_bytes, get_noc_addr(dst + s * out_page_bytes), bytes);
+                if (out_page_bytes == chunk_row_bytes && bytes == chunk_row_bytes) {
+                    // Shard pitch == staging pitch: the tile-row's sticks are one contiguous run.
+                    noc_async_write(l1, get_noc_addr(dst), nsticks * chunk_row_bytes);
+                } else {
+                    // Stateful one-packet writes: NoC coordinates + length programmed once per tile-row.
+                    noc_async_write_one_packet_set_state(get_noc_addr(dst), bytes);
+                    for (uint32_t s = 0; s < nsticks; ++s) {
+                        noc_async_write_one_packet_with_state(l1 + s * chunk_row_bytes, dst + s * out_page_bytes);
+                    }
                 }
                 noc_async_writes_flushed();
                 cb_pop_front(cb_out_rm, rm_chunk_w_tiles);
