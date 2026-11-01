@@ -210,8 +210,6 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             ttnn.deallocate(tensor)
 
 
-# Calibrated on Galaxy SP8xTP4 with bfloat8_b projection weights (#60313), worst over the four lengths:
-# output 2.46e-2, recurrent 1.97e-2, convolution 9.03e-3. Bars sit ~5% above that.
 _REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.026, recurrent=0.021, convolution=0.0095)
 
 
