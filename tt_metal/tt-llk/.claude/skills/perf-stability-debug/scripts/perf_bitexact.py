@@ -2,26 +2,6 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Compare two LLK perf run directories point by point and count what is not bit-exact.
-
-A same-code control (one build, measured twice) must give identical cycles on a stable
-harness. This script answers "how many points moved, and by how much", per run type and
-marker. It does not judge regressions: use perf/regression_compare.py for that.
-
-    perf_bitexact.py <run dir A> <run dir B> [--marker TILE_LOOP] [--threshold 0.02]
-                     [--min-cycles 30] [--json out.json] [--list 20]
-
-A run directory is perf_data/runs/<PERF_RUN_TAG> (or any directory with the per-module
-<module>/<module>.csv reports below it). Per-worker (.gw*, .master*), .post and
-.counters CSVs are skipped.
-
-A point is identified by every column that is not a value column. Value columns are
-mean(...), std(...), min(...), max(...), median(...) and TEXT_SIZE(...): if any of
-them entered the key, a run with extra columns (for example min() with a run count)
-would split every point and look clean. TEXT_SIZE is compared separately: a
-different TEXT_SIZE means the code is not the same, so the pair is not a same-code
-control.
-"""
 
 import argparse
 import collections
@@ -46,7 +26,6 @@ def report_files(root):
 
 
 def load(root):
-    """{(module, run_type, marker, key...): (cycles, text_size)}"""
     points = {}
     files = report_files(root)
     if not files:
@@ -77,7 +56,9 @@ def load(root):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(
+        description="Count LLK perf points that are not bit-exact between two run directories."
+    )
     ap.add_argument("a", help="first run directory")
     ap.add_argument("b", help="second run directory")
     ap.add_argument("--marker", help="only this marker (e.g. TILE_LOOP); default all")
