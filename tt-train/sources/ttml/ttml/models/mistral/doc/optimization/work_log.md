@@ -155,6 +155,14 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 25: low-rank update fused into transpose_split (kernel boost checklist)
+
+- Roofline / bytes: `LowrankUpdate` 0.88 ms per 4 layers (12 calls: a full read + write of dx, 10-17 MB each, at ~310 GB/s) on top of `TransposeSplit` 0.49 (which already writes every dx tile): the update's whole cost is the second pass.
+- Structural fix: one DEST pass per dx tile: matmul (s_dh tile x A tile column, K = one tile) into DEST0, the transposed input tile into DEST1, SFPU add, one pack. The s_dh tile is the transposed, scaled tail tile, recomputed once per row block per core (items are row-major, so a core sees few row blocks) into a 1-tile resident CB; the reader adds the tail tile per new row block and A's tile column per item. The wide dx's extra columns and the tail output keep the plain path.
+- Measured standalone: bit-exact with the two-op path; gate_up 180 -> 74 us, w2 shard 277 -> 116 us per call (`O/iter25c_fused_check.log`).
+- Lesson: a patch script run inside a background command hides its traceback (the op's factory anchor had a blank line, so the factory, reader, compute and Python parts never landed, and the first check measured the plain transpose with the term missing: `O/iter25_fused_check.log`, `O/iter25b_fused_check.log`); patch scripts run in the foreground and their asserts are read before the build.
+- Verification: standalone three shapes, fused-LoRA harness subset (incl. the wide-w2 test), then the full chain (`O/iter25.{sh,log}`).
+
 ### Iteration 24: w2 K-concat removed (wide LoRA input buffer)
 
 - Roofline / bytes: the per-linear ``concat(x, pad(h))`` moves 17 MB (w2 shard) at 433 GB/s: 101 us per call, ~4 ms/step for w2, plus gate_up's 65 us per call (kept, see below).
@@ -298,6 +306,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 9 | `912f9562ba6` | stage review round 9 record and its doc answers |
 | 23 | `0be1385dbde` | SDPA chain forwarding on the writer RISC / NOC_1 (forward, Q, KV readers, writers, factories), chains reversed, iteration-23 evidence |
 | review 9 P1 | `4041c62353d` | `sdpa_bw_q` factory: one-row K/V blocks outside the chain; list-mode and chain-mode checks, attention tests |
-| 24 | (this commit) | wide fused-LoRA input for w2 (first chain `O/iter24.log` failed in the wrapper's backward, fixed; chain `O/iter24b*`): `swiglu_packed_fw out_cols`, `skinny_matmul tail_out`, `transpose_split dx_cols`, `lowrank_update` / `swiglu_packed_bw` wide gradient, `MLP.swiglu_op` hook, iteration-24 evidence |
+| 24 | `b88de55dd41` | wide fused-LoRA input for w2 (first chain `O/iter24.log` failed in the wrapper's backward, fixed; chain `O/iter24b*`): `swiglu_packed_fw out_cols`, `skinny_matmul tail_out`, `transpose_split dx_cols`, `lowrank_update` / `swiglu_packed_bw` wide gradient, `MLP.swiglu_op` hook, iteration-24 evidence |
+| 25 | (this commit) | `transpose_split(w=A)`: the low-rank update fused into the transpose (factory, reader, compute, binding), the fused LoRA backward routed through it, iteration-25 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

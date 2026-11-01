@@ -37,7 +37,7 @@ from .frozen_linear import (
     full_core_grid,
     local_in_out,
 )
-from .lora import lowrank_update, skinny_contract, skinny_matmul, skinny_matmul_fits
+from .lora import skinny_contract, skinny_matmul, skinny_matmul_fits
 
 __all__ = [
     "FusedLoraLinearT",
@@ -140,13 +140,14 @@ class FusedLoraLinearT(Function):
         # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
         # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
         # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
-        # producer's backward never reads) so the autograd shapes match; lowrank_update takes the wider acc.
+        # producer's backward never reads) so the autograd shapes match.
+        # dx += (s dh) @ A is fused into the transpose (iteration 25): the tail's s_dh tile and A's tile column
+        # multiply in the same DEST pass as the transposed tile. dB = s * g^T h ; dA = (s dh)^T x (dh all-reduced
+        # first when B is column-sharded).
         dx, s_dh = ttml.ops.metal.transpose_split(
-            dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0
+            dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0, a_val
         )
         ttnn.deallocate(dcat_t)
-        # dx += (s dh) @ A ; dB = s * g^T h ; dA = (s dh)^T x (dh all-reduced first when B is column-sharded)
-        dx = lowrank_update(dx, s_dh, a_val)
         grad_b = skinny_contract(h, grad_output, scaling, transpose_out=True)  # s * g^T h -> [out, r]
         if reduce_axis is not None:
             s_dh = ttml.core.distributed.all_reduce(s_dh, reduce_axis)

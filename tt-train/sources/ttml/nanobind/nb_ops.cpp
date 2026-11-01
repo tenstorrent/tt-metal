@@ -813,6 +813,7 @@ void py_module(nb::module_& m) {
             nb::arg("tail_rows"),
             nb::arg("tail_scale") = 1.0F,
             nb::arg("dx_cols") = 0,
+            nb::arg("w") = nb::none(),
             "[input[:rows]^T, tail_scale * input[rows:rows + tail_rows]^T] for a [1, 1, R, T] bf16 input in one pass: "
             "the fused LoRA backward's dx and s*dh from its [in + TAIL, T] product.");
         py_metal.def(

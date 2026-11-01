@@ -1,0 +1,18 @@
+=== build _ttml 2026-11-01T11:30:18Z
+build rc=0
+=== fused lowrank check 2026-11-01T11:30:30Z
+check rc=1
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter25_fused_check.py", line 41, in <module>
+    dx_r, tail_r = metal.transpose_split(dcat_t, I, R, scale, dx_cols)
+TypeError: transpose_split(): incompatible function arguments. The following argument types are supported:
+    1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+=== fused-LoRA harness subset 2026-11-01T11:30:33Z
+tests rc=1
+                raise RuntimeError(
+>           raise RuntimeError(f"Error in backward of {bwd_cls.__name__}: {e}") from e
+E           RuntimeError: Error in backward of FusedLoraLinearT: transpose_split(): incompatible function arguments. The following argument types are supported:
+sources/ttml/ttml/autograd/function.py:296: RuntimeError
+============ 3 failed, 5 passed, 40 deselected in 70.70s (0:01:10) =============
+=== done 2026-11-01T11:31:46Z

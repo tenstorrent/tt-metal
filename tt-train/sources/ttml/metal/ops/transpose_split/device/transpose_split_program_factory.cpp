@@ -22,8 +22,12 @@ constexpr auto kComputeKernelPath =
 
 constexpr uint32_t kInCb = 0;
 constexpr uint32_t kOutCb = 1;
+constexpr uint32_t kTailInCb = 2;  // fused low-rank update: the tail tile of the item's row block
+constexpr uint32_t kACb = 3;       // its transpose, scaled: the s_dh tile (bf16), resident while t is unchanged
+constexpr uint32_t kWCb = 4;       // the w (LoRA A) tile of the item's column
 
 constexpr uint32_t kReaderInIdx = 0U;
+constexpr uint32_t kReaderWIdx = 1U;
 constexpr uint32_t kWriterDxIdx = 0U;
 constexpr uint32_t kWriterTailIdx = 1U;
 
@@ -57,9 +61,18 @@ TransposeSplitProgramFactory::cached_program_t TransposeSplitProgramFactory::cre
 
     const uint32_t scale_bits = std::bit_cast<uint32_t>(args.tail_scale);
     std::map<std::string, std::string> defines;
+    const bool fuse = tensor_args.w.has_value();
+    if (fuse) {
+        defines["FUSE_LOWRANK"] = "1";
+        create_circular_buffer(program, all_cores, kTailInCb, bf16, tile, 2U);
+        create_circular_buffer(program, all_cores, kACb, bf16, tile, 1U);
+        create_circular_buffer(program, all_cores, kWCb, bf16, tile, 2U);
+    }
+    auto* w_buffer = fuse ? tensor_args.w->buffer() : input.buffer();  // stand-in accessor args when unfused
 
     std::vector<uint32_t> reader_ct_args{Tt, rows_t, dx_items, dxt};
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(w_buffer).append_to(reader_ct_args);
     auto reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_ct_args{Tt, rows_t, dx_items};
@@ -71,7 +84,7 @@ TransposeSplitProgramFactory::cached_program_t TransposeSplitProgramFactory::cre
         return create_compute_kernel(
             program,
             cores,
-            {work_count, Tt, rows_t, dx_items, scale_bits},
+            {work_count, Tt, rows_t, dx_items, scale_bits, dxt},
             defines,
             kComputeKernelPath,
             /*fp32_dest_acc_en=*/true);
@@ -86,7 +99,7 @@ TransposeSplitProgramFactory::cached_program_t TransposeSplitProgramFactory::cre
         const bool in_group_1 = core_group_1.contains(core);
         const uint32_t work_count = in_group_1 ? work_per_core_1 : work_per_core_2;
         SetRuntimeArgs(program, in_group_1 ? compute_1 : compute_2, core, {work_start});
-        SetRuntimeArgs(program, reader, core, {input.buffer()->address(), work_start, work_count});
+        SetRuntimeArgs(program, reader, core, {input.buffer()->address(), w_buffer->address(), work_start, work_count});
         SetRuntimeArgs(
             program, writer, core, {dx.buffer()->address(), tail.buffer()->address(), work_start, work_count});
         cores.push_back(core);
@@ -107,6 +120,8 @@ void TransposeSplitProgramFactory::override_runtime_arguments(
     auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_id);
     for (const auto& core : shared.cores) {
         reader_args[core.x][core.y][kReaderInIdx] = tensor_args.input.buffer()->address();
+        reader_args[core.x][core.y][kReaderWIdx] =
+            tensor_args.w.has_value() ? tensor_args.w->buffer()->address() : tensor_args.input.buffer()->address();
         auto& w = writer_args[core.x][core.y];
         w[kWriterDxIdx] = dx.buffer()->address();
         w[kWriterTailIdx] = tail.buffer()->address();

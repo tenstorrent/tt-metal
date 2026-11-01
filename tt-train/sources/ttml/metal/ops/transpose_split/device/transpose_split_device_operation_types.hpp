@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -20,6 +21,9 @@ struct Params {
 
 struct Inputs {
     ttnn::Tensor input;  // [1, 1, R, T] bf16 TILE
+    // Fused low-rank update (iteration 25): dx += tail^T @ w with w [1, 1, tail_rows, rows] bf16 (the LoRA A), the
+    // tail transposed and scaled as the tail output is; replaces a separate lowrank_update pass over dx.
+    std::optional<ttnn::Tensor> w = std::nullopt;
 };
 
 using operation_attributes_t = Params;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal {
@@ -13,6 +15,13 @@ namespace ttml::metal {
 // [1, 1, T, tail_rows]. One pass over the input (one tile transpose per output tile) in place of the two slices
 // and two transposes of the fused LoRA backward's `[in + TAIL, T]` product.
 std::vector<ttnn::Tensor> transpose_split(
-    const ttnn::Tensor& input, uint32_t rows, uint32_t tail_rows, float tail_scale = 1.0F, uint32_t dx_cols = 0);
+    const ttnn::Tensor& input,
+    uint32_t rows,
+    uint32_t tail_rows,
+    float tail_scale = 1.0F,
+    uint32_t dx_cols = 0,
+    // With w ([1, 1, tail_rows, rows] bf16, the LoRA A): dx += (tail_scale * tail^T) @ w in the same pass
+    // (iteration 25), in place of a lowrank_update over dx.
+    const std::optional<ttnn::Tensor>& w = std::nullopt);
 
 }  // namespace ttml::metal

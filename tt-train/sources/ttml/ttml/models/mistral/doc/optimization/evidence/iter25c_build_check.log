@@ -1,0 +1,21 @@
+=== build _ttml 2026-11-01T11:37:07Z
+build rc=0
+=== fused lowrank check 2026-11-01T11:37:10Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+gate_up: fused vs two ops max|diff| 0.000e+00 differing 0/5242880; vs fp64 ref: two ops 3.103e-02, fused 3.103e-02
+    tail: max|diff| 0.000e+00
+    us: transpose_split 55 + lowrank_update = 180 -> fused 74
+w2 shard, wide dx: fused vs two ops max|diff| 0.000e+00 differing 0/8388608; vs fp64 ref: two ops 2.958e-02, fused 2.958e-02
+    tail: max|diff| 0.000e+00
+    wide tail columns: max|diff| 6.672e+00
+    us: transpose_split 86 + lowrank_update = 277 -> fused 116
+w2 shard, scaled tail: fused vs two ops max|diff| 0.000e+00 differing 0/8388608; vs fp64 ref: two ops 3.134e-02, fused 3.134e-02
+    tail: max|diff| 0.000e+00
+    wide tail columns: max|diff| 5.625e+00
+    us: transpose_split 86 + lowrank_update = 276 -> fused 116
+FUSED LOWRANK PASS
+=== fused-LoRA harness subset 2026-11-01T11:37:15Z
+tests rc=0
+================= 8 passed, 40 deselected in 101.01s (0:01:41) =================
+=== done 2026-11-01T11:38:59Z

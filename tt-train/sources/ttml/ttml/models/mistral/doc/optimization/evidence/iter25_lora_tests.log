@@ -1,0 +1,664 @@
+2026-11-01 11:30:34.628 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 48 items / 40 deselected / 8 selected
+
+tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[32 tile-rows] 2026-11-01 11:30:35.021 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-01 11:30:35.021 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-01 11:30:35.021 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-01 11:30:35.021 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-01 11:30:35.032 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-01 11:30:35.032 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-01 11:30:35.111 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-01 11:30:35.111 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-01 11:30:35.112 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-01 11:30:35.112 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-01 11:30:35.113 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-01 11:30:35.318 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-01 11:30:35.352 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-01 11:30:35.352 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-01 11:30:35.352 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-01 11:30:35.392 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+fused residual add + RMSNorm: tensor | shape | PCC | rel err | bar
+  sum                          (1, 1, 1024, 5120)       0.999999 1.77e-03  (>= 0.999, <= 0.02) ok
+  out                          (1, 1, 1024, 5120)       0.999997 4.09e-03  (>= 0.999, <= 0.02) ok
+  d residual (out only)        (1, 1, 1024, 5120)       0.999997 3.46e-03  (>= 0.99, <= 0.05) ok
+  d residual                   (1, 1, 1024, 5120)       0.999997 2.62e-03  (>= 0.99, <= 0.05) ok
+  d delta                      (1, 1, 1024, 5120)       0.999997 2.62e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[64 tile-rows: two work items per core] fused residual add + RMSNorm: tensor | shape | PCC | rel err | bar
+  sum                          (1, 2, 1024, 5120)       0.999999 1.77e-03  (>= 0.999, <= 0.02) ok
+  out                          (1, 2, 1024, 5120)       0.999997 3.39e-03  (>= 0.999, <= 0.02) ok
+  d residual (out only)        (1, 2, 1024, 5120)       0.999997 3.00e-03  (>= 0.99, <= 0.05) ok
+  d residual                   (1, 2, 1024, 5120)       0.999997 2.36e-03  (>= 0.99, <= 0.05) ok
+  d delta                      (1, 2, 1024, 5120)       0.999997 2.36e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_fused_residual_norm_model_matches_the_block_path FAILED
+tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base lora linear (qkv shape): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 6144)       0.999997 2.37e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999997 2.40e-03  (>= 0.99, <= 0.05) ok
+  d lora_A                     (16, 5120)               0.999997 2.41e-03  (>= 0.99, <= 0.05) ok
+  d lora_B                     (6144, 16)               0.999997 2.42e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_mlp_fused_lora_wide_w2 FAILED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]] decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 4.27e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999982 6.75e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999950 1.39e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999951 1.35e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999961 1.04e-02  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999963 1.07e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999976 8.00e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999976 7.97e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999979 7.38e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999979 7.34e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed] decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 4.27e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999982 6.76e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999950 1.41e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999951 1.35e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999962 1.04e-02  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999963 1.07e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999976 8.00e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999976 7.97e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999979 7.38e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999979 7.34e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul] FAILED
+
+=================================== FAILURES ===================================
+____________ test_fused_residual_norm_model_matches_the_block_path _____________
+
+    def backward_closure():
+        try:
+            # Get gradients from output tensors
+            # If an output wasn't used in the loss, initialize with zeros
+            # (consistent with C++ behavior where get_grad() returns default tensor)
+            grad_outputs = []
+            for out in bwd_outputs:
+                if out is not None and out.is_grad_initialized():
+                    grad_outputs.append(out.get_grad())
+                elif out is not None:
+                    # Create zero tensor with same shape as output
+                    grad_outputs.append(cpp.core.zeros_like(out.get_value()))
+                else:
+                    grad_outputs.append(None)
+            grad_outputs = tuple(grad_outputs)
+
+            # Call user's backward - returns gradients (PyTorch style)
+            if len(grad_outputs) == 1:
+>               grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+sources/ttml/ttml/autograd/function.py:269:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ctx = <ttml.autograd.function.FunctionContext object at 0x771d5d385400>
+grad_output = ttnn.Tensor([[[[-1.1129e-07,  9.9838e-07,  ...,  1.2666e-07, -3.6508e-07],
+               [ 1.6689e-06, -2.5481e-06,  ...7,  ..., -6.0201e-06, -7.8231e-07]]]], shape=Shape([1, 1, 1024, 65536]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_val, a_val, h, w_val = ctx.saved_tensors
+        ctx.save_for_backward()
+        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide = ctx.meta
+        cfg = _compute_config()
+        # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
+        dcat_t = ttnn.matmul(
+            w_val,
+            grad_output,
+            transpose_b=True,
+            compute_kernel_config=cfg,
+            **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
+        )
+        # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
+        # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
+        # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
+        # producer's backward never reads) so the autograd shapes match; lowrank_update takes the wider acc.
+>       dx, s_dh = ttml.ops.metal.transpose_split(
+            dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0
+        )
+E       TypeError: transpose_split(): incompatible function arguments. The following argument types are supported:
+E           1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+E
+E       Invoked with types: ttnn._ttnn.tensor.Tensor, int, int, float, int
+
+sources/ttml/ttml/modules/fused_lora.py:144: TypeError
+
+The above exception was the direct cause of the following exception:
+
+    def test_fused_residual_norm_model_matches_the_block_path():
+        """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
+        the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number
+        of fused norms (2 per layer, the final norm included, the first norm plain)."""
+        from ttml.common.utils import set_seed
+        from ttml.models.mistral.fused_residual_norm import use_fused_residual_norm
+        from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
+
+        layers = 2
+        cfg = MistralConfig.from_hf(HF_CONFIG, max_position_embeddings=SEQ, num_hidden_layers=layers)
+        rng = seeded(9)
+        ids = rng.integers(0, VOCAB, (1, 1, 1, SEQ), dtype=np.uint32)
+        targets = rng.integers(0, VOCAB, (1, SEQ), dtype=np.uint32)
+        lora_B = {}
+        fingerprints = []
+
+        def build(fused_residual):
+            set_seed(1234)
+            model = LoraModel(
+                Mistral(cfg),
+                LoraConfig(
+                    rank=RANK,
+                    alpha=ALPHA,
+                    target_modules=[
+                        r"attention\.qkv_linear$",
+                        r"attention\.out_linear$",
+                        r"mlp\.w_gate_up$",
+                        r"mlp\.w2$",
+                    ],
+                ),
+            )
+            for name, tensor in model.parameters().items():
+                if "lora_B" in name:  # zero-initialised: random so that the A gradients are not zero
+                    if name not in lora_B:
+                        lora_B[name] = bf16(rng.normal(0.0, 0.02, tuple(tensor.shape())))
+                    assign(tensor, lora_B[name])
+            qkv = next(n for n in model.parameters() if n.endswith("blocks/0/attention/qkv_linear/weight"))
+            fingerprints.append(float(np.abs(to_host(model.parameters()[qkv])).sum()))
+            assert fingerprints[0] == fingerprints[-1], "the two models must start from the same random init"
+            transpose_frozen_weights(model)
+            fuse_lora_into_frozen_weights(model)
+            use_allcore_rmsnorm_backward(model)
+            if fused_residual:
+                assert use_fused_residual_norm(model) == 2 * layers
+            model.train()
+            return model
+
+        def run(model):
+            x = ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+            y = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+            loss = ttml.ops.loss.cross_entropy_loss(model(x, None), y, ttml.ops.ReduceType.MEAN)
+            loss.backward(False)
+            grads = {n: grad_of(p) for n, p in model.parameters().items() if p.get_requires_grad()}
+            loss_val = float(to_host(loss).ravel()[0])
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+            return loss_val, grads
+
+>       loss_ref, grads_ref = run(build(False))
+                              ^^^^^^^^^^^^^^^^^
+
+tests/python/test_mistral.py:519:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/python/test_mistral.py:513: in run
+    loss.backward(False)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def backward_closure():
+        try:
+            # Get gradients from output tensors
+            # If an output wasn't used in the loss, initialize with zeros
+            # (consistent with C++ behavior where get_grad() returns default tensor)
+            grad_outputs = []
+            for out in bwd_outputs:
+                if out is not None and out.is_grad_initialized():
+                    grad_outputs.append(out.get_grad())
+                elif out is not None:
+                    # Create zero tensor with same shape as output
+                    grad_outputs.append(cpp.core.zeros_like(out.get_value()))
+                else:
+                    grad_outputs.append(None)
+            grad_outputs = tuple(grad_outputs)
+
+            # Call user's backward - returns gradients (PyTorch style)
+            if len(grad_outputs) == 1:
+                grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+            else:
+                grad_inputs = bwd_cls.backward(bwd_ctx, *grad_outputs)
+
+            # Normalize to tuple
+            if grad_inputs is None:
+                grad_inputs = (None,) * len(bwd_inputs)
+            elif not isinstance(grad_inputs, tuple):
+                grad_inputs = (grad_inputs,)
+
+            # Validate: number of returned gradients must match number of tensor inputs
+            if len(grad_inputs) != len(bwd_inputs):
+                raise RuntimeError(
+                    f"{bwd_cls.__name__}.backward() returned {len(grad_inputs)} "
+                    f"gradients but expected {len(bwd_inputs)} (one per tensor input). "
+                    f"Return None for inputs that don't need gradients."
+                )
+
+            # Accumulate gradients to input tensors
+            for tensor, grad in zip(bwd_inputs, grad_inputs):
+                if grad is not None and tensor.get_requires_grad():
+                    # Handle both ttml Tensor and raw ttnn tensor
+                    if hasattr(grad, "get_value"):
+                        tensor.add_grad(grad.get_value())
+                    else:
+                        tensor.add_grad(grad)
+        except Exception as e:
+>           raise RuntimeError(f"Error in backward of {bwd_cls.__name__}: {e}") from e
+E           RuntimeError: Error in backward of FusedLoraLinearT: transpose_split(): incompatible function arguments. The following argument types are supported:
+E               1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+E
+E           Invoked with types: ttnn._ttnn.tensor.Tensor, int, int, float, int
+
+sources/ttml/ttml/autograd/function.py:296: RuntimeError
+_________________________ test_mlp_fused_lora_wide_w2 __________________________
+
+    def backward_closure():
+        try:
+            # Get gradients from output tensors
+            # If an output wasn't used in the loss, initialize with zeros
+            # (consistent with C++ behavior where get_grad() returns default tensor)
+            grad_outputs = []
+            for out in bwd_outputs:
+                if out is not None and out.is_grad_initialized():
+                    grad_outputs.append(out.get_grad())
+                elif out is not None:
+                    # Create zero tensor with same shape as output
+                    grad_outputs.append(cpp.core.zeros_like(out.get_value()))
+                else:
+                    grad_outputs.append(None)
+            grad_outputs = tuple(grad_outputs)
+
+            # Call user's backward - returns gradients (PyTorch style)
+            if len(grad_outputs) == 1:
+>               grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+sources/ttml/ttml/autograd/function.py:269:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ctx = <ttml.autograd.function.FunctionContext object at 0x771d5d373440>
+grad_output = ttnn.Tensor([[[[ 6.2256e-03, -8.5449e-03,  ...,  1.5564e-02, -9.9487e-03],
+               [-1.7700e-02, -3.0060e-03,  ...03,  ...,  5.0964e-03, -2.3346e-03]]]], shape=Shape([1, 1, 1024, 5120]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_val, a_val, h, w_val = ctx.saved_tensors
+        ctx.save_for_backward()
+        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide = ctx.meta
+        cfg = _compute_config()
+        # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
+        dcat_t = ttnn.matmul(
+            w_val,
+            grad_output,
+            transpose_b=True,
+            compute_kernel_config=cfg,
+            **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
+        )
+        # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
+        # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
+        # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
+        # producer's backward never reads) so the autograd shapes match; lowrank_update takes the wider acc.
+>       dx, s_dh = ttml.ops.metal.transpose_split(
+            dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0
+        )
+E       TypeError: transpose_split(): incompatible function arguments. The following argument types are supported:
+E           1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+E
+E       Invoked with types: ttnn._ttnn.tensor.Tensor, int, int, float, int
+
+sources/ttml/ttml/modules/fused_lora.py:144: TypeError
+
+The above exception was the direct cause of the following exception:
+
+    def test_mlp_fused_lora_wide_w2():
+        """The fused-LoRA wide input path (iteration 24): an MLP at the TP=4 shard width (w2: 8192 -> 5120, a
+        transposed shape) with LoRA on both linears, fused. SwiGLU writes the [T, 8192 + 64] buffer, h goes into
+        its tail (no concat / pad), the wide gradient flows back through transpose_split, lowrank_update and the
+        SwiGLU backward. Output, dx and every adapter gradient vs torch; the hook must be installed."""
+        rng = seeded(9)
+        inter = 8192
+        x_np = rand_x(rng)
+        w_gu = rand_weight(rng, 2 * inter, HIDDEN)
+        w2 = rand_weight(rng, HIDDEN, inter, std=0.004)
+        dout_np = rand_x(rng, std=0.01)
+        shapes = {"w_gate_up": (HIDDEN, 2 * inter), "w2": (inter, HIDDEN)}
+        adapters = {
+            name: (
+                bf16(rng.uniform(-1 / math.sqrt(i), 1 / math.sqrt(i), (1, 1, RANK, i))),
+                bf16(rng.normal(0.0, 0.02, (1, 1, o, RANK))),
+            )
+            for name, (i, o) in shapes.items()
+        }
+        mlp = LlamaMLP(HIDDEN, inter)
+        assign(mlp.w_gate_up.weight.tensor, w_gu)
+        assign(mlp.w2.weight.tensor, w2)
+        lora = LoraModel(mlp, LoraConfig(rank=RANK, alpha=ALPHA, target_modules=[r"w_gate_up$", r"w2$"]))
+        layers = {"w_gate_up": mlp.w_gate_up, "w2": mlp.w2}
+        for name, layer in layers.items():
+            assert isinstance(layer, LoraLinear), name
+            assign(layer.lora_A.tensor, adapters[name][0])
+            assign(layer.lora_B.tensor, adapters[name][1])
+        converted = transpose_frozen_weights(lora)
+        fused = fuse_lora_into_frozen_weights(lora)
+        assert sorted(fused) == ["model.w2", "model.w_gate_up"], (converted, fused)
+        assert getattr(mlp, "swiglu_op", None) is not None, "the wide SwiGLU hook was not installed on the MLP"
+        x = to_device(x_np, requires_grad=True)
+        out = lora(x)
+        out_val = to_host(out)
+>       _backward(out, dout_np)
+
+tests/python/test_mistral.py:701:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/python/test_mistral.py:254: in _backward
+    out.backward(False)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def backward_closure():
+        try:
+            # Get gradients from output tensors
+            # If an output wasn't used in the loss, initialize with zeros
+            # (consistent with C++ behavior where get_grad() returns default tensor)
+            grad_outputs = []
+            for out in bwd_outputs:
+                if out is not None and out.is_grad_initialized():
+                    grad_outputs.append(out.get_grad())
+                elif out is not None:
+                    # Create zero tensor with same shape as output
+                    grad_outputs.append(cpp.core.zeros_like(out.get_value()))
+                else:
+                    grad_outputs.append(None)
+            grad_outputs = tuple(grad_outputs)
+
+            # Call user's backward - returns gradients (PyTorch style)
+            if len(grad_outputs) == 1:
+                grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+            else:
+                grad_inputs = bwd_cls.backward(bwd_ctx, *grad_outputs)
+
+            # Normalize to tuple
+            if grad_inputs is None:
+                grad_inputs = (None,) * len(bwd_inputs)
+            elif not isinstance(grad_inputs, tuple):
+                grad_inputs = (grad_inputs,)
+
+            # Validate: number of returned gradients must match number of tensor inputs
+            if len(grad_inputs) != len(bwd_inputs):
+                raise RuntimeError(
+                    f"{bwd_cls.__name__}.backward() returned {len(grad_inputs)} "
+                    f"gradients but expected {len(bwd_inputs)} (one per tensor input). "
+                    f"Return None for inputs that don't need gradients."
+                )
+
+            # Accumulate gradients to input tensors
+            for tensor, grad in zip(bwd_inputs, grad_inputs):
+                if grad is not None and tensor.get_requires_grad():
+                    # Handle both ttml Tensor and raw ttnn tensor
+                    if hasattr(grad, "get_value"):
+                        tensor.add_grad(grad.get_value())
+                    else:
+                        tensor.add_grad(grad)
+        except Exception as e:
+>           raise RuntimeError(f"Error in backward of {bwd_cls.__name__}: {e}") from e
+E           RuntimeError: Error in backward of FusedLoraLinearT: transpose_split(): incompatible function arguments. The following argument types are supported:
+E               1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+E
+E           Invoked with types: ttnn._ttnn.tensor.Tensor, int, int, float, int
+
+sources/ttml/ttml/autograd/function.py:296: RuntimeError
+_ test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul] _
+
+    def backward_closure():
+        try:
+            # Get gradients from output tensors
+            # If an output wasn't used in the loss, initialize with zeros
+            # (consistent with C++ behavior where get_grad() returns default tensor)
+            grad_outputs = []
+            for out in bwd_outputs:
+                if out is not None and out.is_grad_initialized():
+                    grad_outputs.append(out.get_grad())
+                elif out is not None:
+                    # Create zero tensor with same shape as output
+                    grad_outputs.append(cpp.core.zeros_like(out.get_value()))
+                else:
+                    grad_outputs.append(None)
+            grad_outputs = tuple(grad_outputs)
+
+            # Call user's backward - returns gradients (PyTorch style)
+            if len(grad_outputs) == 1:
+>               grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+sources/ttml/ttml/autograd/function.py:269:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+ctx = <ttml.autograd.function.FunctionContext object at 0x771d54ce2780>
+grad_output = ttnn.Tensor([[[[-1.1110e-04,  7.7820e-04,  ...,  1.5831e-04, -1.1873e-04],
+               [ 4.6968e-05,  8.6975e-04,  ...5,  ..., -6.6833e-03,  2.0027e-05]]]], shape=Shape([1, 1, 1024, 65536]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_val, a_val, h, w_val = ctx.saved_tensors
+        ctx.save_for_backward()
+        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide = ctx.meta
+        cfg = _compute_config()
+        # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
+        dcat_t = ttnn.matmul(
+            w_val,
+            grad_output,
+            transpose_b=True,
+            compute_kernel_config=cfg,
+            **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
+        )
+        # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
+        # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
+        # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
+        # producer's backward never reads) so the autograd shapes match; lowrank_update takes the wider acc.
+>       dx, s_dh = ttml.ops.metal.transpose_split(
+            dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0
+        )
+E       TypeError: transpose_split(): incompatible function arguments. The following argument types are supported:
+E           1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+E
+E       Invoked with types: ttnn._ttnn.tensor.Tensor, int, int, float, int
+
+sources/ttml/ttml/modules/fused_lora.py:144: TypeError
+
+The above exception was the direct cause of the following exception:
+
+transposed = 'fused'
+
+    @pytest.mark.parametrize(
+        "transposed",
+        ["plain", "transposed", "fused"],
+        ids=["weights [out,in]", "frozen weights transposed", "transposed + LoRA fused into the base matmul"],
+    )
+    def test_block_forward_and_gradients_under_lora(transposed):
+        """A whole decoder block at real shapes with LoRA on its four linears: output, dx, every adapter gradient;
+        base weights and gammas frozen and gradient-free. ``transposed`` runs the base projections through the
+        transposed-weight path (``transpose_frozen_weights``) the training example uses."""
+        rng = seeded(6)
+        x_np = rand_x(rng)
+        gammas = [bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN))) for _ in range(2)]
+        w_qkv = rand_weight(rng, (HEADS + 2 * KV_HEADS) * HEAD_DIM, HIDDEN)
+        w_out = rand_weight(rng, HIDDEN, HEADS * HEAD_DIM, std=0.02)
+        w_gu = rand_weight(rng, 2 * INTER, HIDDEN)
+        w2 = rand_weight(rng, HIDDEN, INTER, std=0.004)
+        dout_np = rand_x(rng, std=0.01)
+        shapes = {
+            "qkv_linear": (HIDDEN, w_qkv.shape[2]),
+            "out_linear": (HEADS * HEAD_DIM, HIDDEN),
+            "w_gate_up": (HIDDEN, 2 * INTER),
+            "w2": (INTER, HIDDEN),
+        }
+        adapters = {
+            name: (
+                bf16(rng.uniform(-1 / math.sqrt(i), 1 / math.sqrt(i), (1, 1, RANK, i))),
+                bf16(rng.normal(0.0, 0.02, (1, 1, o, RANK))),
+            )
+            for name, (i, o) in shapes.items()
+        }
+
+        block = LlamaBlock(
+            HIDDEN, HEADS, KV_HEADS, rope_params(), head_dim=HEAD_DIM, intermediate_size=INTER, rms_norm_eps=EPS
+        )
+        assign(block.attention_norm.gamma.tensor, gammas[0])
+        assign(block.mlp_norm.gamma.tensor, gammas[1])
+        assign(block.attention.qkv_linear.weight.tensor, w_qkv)
+        assign(block.attention.out_linear.weight.tensor, w_out)
+        assign(block.mlp.w_gate_up.weight.tensor, w_gu)
+        assign(block.mlp.w2.weight.tensor, w2)
+        lora = LoraModel(
+            block,
+            LoraConfig(
+                rank=RANK,
+                alpha=ALPHA,
+                target_modules=[r"attention\.qkv_linear$", r"attention\.out_linear$", r"mlp\.w_gate_up$", r"mlp\.w2$"],
+            ),
+        )
+        lora_layers = {
+            "qkv_linear": block.attention.qkv_linear,
+            "out_linear": block.attention.out_linear,
+            "w_gate_up": block.mlp.w_gate_up,
+            "w2": block.mlp.w2,
+        }
+        for name, layer in lora_layers.items():
+            assert isinstance(layer, LoraLinear), name
+            assign(layer.lora_A.tensor, adapters[name][0])
+            assign(layer.lora_B.tensor, adapters[name][1])
+        if transposed != "plain":
+            # qkv, out and gate_up have a measured win and are stored [in, out]; w2 (32768 -> 5120) does not and stays.
+            converted = transpose_frozen_weights(lora)
+            assert sorted(converted) == [
+                "model.attention.out_linear",
+                "model.attention.qkv_linear",
+                "model.mlp.w_gate_up",
+            ], converted
+            assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN, 2 * INTER)
+            assert tuple(block.mlp.w2.weight.tensor.shape()) == (1, 1, HIDDEN, INTER)
+        if transposed == "fused":
+            fused = fuse_lora_into_frozen_weights(lora)
+            assert sorted(fused) == sorted(converted), fused
+            assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN + 64, 2 * INTER)
+        x = to_device(x_np, requires_grad=True)
+        out = lora(x, None)
+        out_val = to_host(out)
+>       _backward(out, dout_np)
+
+tests/python/test_mistral.py:796:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/python/test_mistral.py:254: in _backward
+    out.backward(False)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def backward_closure():
+        try:
+            # Get gradients from output tensors
+            # If an output wasn't used in the loss, initialize with zeros
+            # (consistent with C++ behavior where get_grad() returns default tensor)
+            grad_outputs = []
+            for out in bwd_outputs:
+                if out is not None and out.is_grad_initialized():
+                    grad_outputs.append(out.get_grad())
+                elif out is not None:
+                    # Create zero tensor with same shape as output
+                    grad_outputs.append(cpp.core.zeros_like(out.get_value()))
+                else:
+                    grad_outputs.append(None)
+            grad_outputs = tuple(grad_outputs)
+
+            # Call user's backward - returns gradients (PyTorch style)
+            if len(grad_outputs) == 1:
+                grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+            else:
+                grad_inputs = bwd_cls.backward(bwd_ctx, *grad_outputs)
+
+            # Normalize to tuple
+            if grad_inputs is None:
+                grad_inputs = (None,) * len(bwd_inputs)
+            elif not isinstance(grad_inputs, tuple):
+                grad_inputs = (grad_inputs,)
+
+            # Validate: number of returned gradients must match number of tensor inputs
+            if len(grad_inputs) != len(bwd_inputs):
+                raise RuntimeError(
+                    f"{bwd_cls.__name__}.backward() returned {len(grad_inputs)} "
+                    f"gradients but expected {len(bwd_inputs)} (one per tensor input). "
+                    f"Return None for inputs that don't need gradients."
+                )
+
+            # Accumulate gradients to input tensors
+            for tensor, grad in zip(bwd_inputs, grad_inputs):
+                if grad is not None and tensor.get_requires_grad():
+                    # Handle both ttml Tensor and raw ttnn tensor
+                    if hasattr(grad, "get_value"):
+                        tensor.add_grad(grad.get_value())
+                    else:
+                        tensor.add_grad(grad)
+        except Exception as e:
+>           raise RuntimeError(f"Error in backward of {bwd_cls.__name__}: {e}") from e
+E           RuntimeError: Error in backward of FusedLoraLinearT: transpose_split(): incompatible function arguments. The following argument types are supported:
+E               1. transpose_split(input: ttnn._ttnn.tensor.Tensor, rows: int, tail_rows: int, tail_scale: float = 1.0, dx_cols: int = 0, arg5: ttnn._ttnn.tensor.Tensor | None) -> list[ttnn._ttnn.tensor.Tensor]
+E
+E           Invoked with types: ttnn._ttnn.tensor.Tensor, int, int, float, int
+
+sources/ttml/ttml/autograd/function.py:296: RuntimeError
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+19.69s call     tt-train/tests/python/test_mistral.py::test_fused_residual_norm_model_matches_the_block_path
+17.17s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed]
+16.81s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]]
+9.78s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+2.33s call     tt-train/tests/python/test_mistral.py::test_mlp_fused_lora_wide_w2
+1.74s call     tt-train/tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[32 tile-rows]
+1.45s call     tt-train/tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[64 tile-rows: two work items per core]
+1.33s call     tt-train/tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+
+(16 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[32 tile-rows]
+PASSED tests/python/test_mistral.py::test_add_rmsnorm_fused_forward_and_gradients[64 tile-rows: two work items per core]
+PASSED tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]]
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed]
+FAILED tests/python/test_mistral.py::test_fused_residual_norm_model_matches_the_block_path
+FAILED tests/python/test_mistral.py::test_mlp_fused_lora_wide_w2 - RuntimeErr...
+FAILED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+============ 3 failed, 5 passed, 40 deselected in 70.70s (0:01:10) =============
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function ""
+ - leaked function "experimental_per_core_buffer_address"
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-11-01 11:31:46.377 | info     |    BuildKernels | JIT cache stats: 694/694 hits (100.0%) [694 cached, 152 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 11:31:46.377 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 11:31:46.391 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-01 11:31:46.391 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-01 11:31:46.594 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-01 11:31:46.594 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-01 11:31:46.594 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
