@@ -115,11 +115,16 @@ def _gtab(mesh, epc):
     )
 
 
+def _k3_checkpoint() -> Path:
+    """Kimi-K3's checkpoint: $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that)."""
+    return Path(os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or "")
+
+
 def _cache_dir(mesh):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import _checkpoint_identity
 
     R, C = tuple(mesh.shape)
-    ckpt = Path(os.environ.get("KIMI_K3_CKPT", ""))
+    ckpt = _k3_checkpoint()
     root = Path(os.environ.get("K3_BLOCK_WEKA_CACHE") or os.environ.get("TT_KIMI_K3_PREFILL_TTNN_CACHE") or _WEKA_CACHE)
     return root / f"kimi_k3_bh_{R * C}dev" / _checkpoint_identity(ckpt) / f"mesh{R}x{C}.tpaxis1"
 
@@ -168,7 +173,7 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None):
             "up": t[sp + "up_proj.weight"].float(),
             "down": t[sp + "down_proj.weight"].float(),
         }
-    ckpt = Path(os.environ.get("KIMI_K3_CKPT", ""))
+    ckpt = _k3_checkpoint()
     assert (ckpt / "model.safetensors.index.json").is_file(), f"K3 MoE block: no checkpoint at {ckpt}"
     p = layer_prefix(ckpt, layer_idx)
     keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
