@@ -19,7 +19,8 @@ void kernel_main() {
     constexpr uint32_t OUT_H = get_compile_time_arg_val(6);
     constexpr uint32_t OUT_TR = get_compile_time_arg_val(7);
     constexpr uint32_t OUT_COL0 = get_compile_time_arg_val(8);
-    constexpr auto o_args = TensorAccessorArgs<9>();
+    constexpr uint32_t NT = get_compile_time_arg_val(9);
+    constexpr auto o_args = TensorAccessorArgs<10>();
 
     const uint32_t b0 = get_arg_val<uint32_t>(0);
     const uint32_t nb = get_arg_val<uint32_t>(1);
@@ -30,7 +31,7 @@ void kernel_main() {
         const uint32_t h = b - tr_g * NH;
         const uint32_t u = tr_g / CB32;
         const uint32_t tr_l = tr_g - u * CB32;
-        out.wait_front(16);
+        out.wait_front(NT);
         if constexpr (OUT_RM) {
             const uint32_t o_addr = get_common_arg_val<uint32_t>(u);
             const auto o_acc = TensorAccessor(o_args, o_addr, 1024);
@@ -42,11 +43,11 @@ void kernel_main() {
             const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
             const auto o_acc = TensorAccessor(o_args, o_addr, 2048);
             const uint32_t base = u * OUT_U + h * OUT_H + tr_l * OUT_TR + OUT_COL0;
-            for (uint32_t j = 0; j < 16; ++j) {
+            for (uint32_t j = 0; j < NT; ++j) {
                 noc.async_write(out, o_acc, 2048, {.offset_bytes = j * 2048}, {.page_id = base + j, .offset_bytes = 0});
             }
         }
         noc.async_write_barrier();
-        out.pop_front(16);
+        out.pop_front(NT);
     }
 }

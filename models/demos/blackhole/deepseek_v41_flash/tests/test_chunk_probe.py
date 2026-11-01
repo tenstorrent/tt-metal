@@ -25,7 +25,7 @@ WMAX = int(os.environ.get("PROBE_WMAX", "1048576"))
 MODE = os.environ.get("PROBE_MODE", "matched")
 CHUNK = int(os.environ.get("PROBE_CHUNK", "512"))
 REPS = int(os.environ.get("PROBE_REPS", "2"))
-B = 4
+B = int(os.environ.get("PROBE_B", "4"))
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
@@ -58,7 +58,7 @@ def test_chunk_probe(mesh_device):
         layer_ids=LAYERS,
         log=log,
     )
-    assert m.Up == 1 and m.U == 1, (m.Up, m.U)
+    log(f"PROBE Up={m.Up} U={m.U}")
     pm = m.prefill_model
     if os.environ.get(
         "PROBE_APC_GB"
@@ -68,11 +68,26 @@ def test_chunk_probe(mesh_device):
         import cProfile
 
         pm.build_prof = cProfile.Profile()
+    oprec = None
+    if (
+        os.environ.get("PROBE_REC") == "1"
+    ):  # op recorder (device op id ranges + callers) for joining the trace profile with op names
+        from models.demos.blackhole.deepseek_v41_flash.tests.op_table_recorder import OpRecorder
+
+        oprec = OpRecorder()
+        oprec.install()
+        oprec.rows, oprec.zero, oprec.marks = [], {}, []
+        oprec.enabled = True
     rec = []
     orig_rw = pm.replay_window
 
     def rw(tokens, hashes, s0, C, active, vis=None, **kw):  # (prepped / overlap / ops of the host-overlap path)
         th, td = orig_rw(tokens, hashes, s0, C, active, vis=vis, **kw)
+        if (
+            os.environ.get("PROBE_PROFREAD") == "1"
+        ):  # device profiler: drain after every replayed window (trace ops are only logged when read per replay)
+            ttnn.synchronize_device(md)
+            ttnn.ReadDeviceProfiler(md)
         rec.append((s0, th, td))
         return th, td
 
@@ -107,7 +122,12 @@ def test_chunk_probe(mesh_device):
         ids = tk(json.load(open(os.environ["PROBE_PROMPT"]))[0]["prompt"])["input_ids"]
         assert len(ids) >= max(LENS), len(ids)
         toks = torch.tensor(ids[: max(LENS)]).long().unsqueeze(0).repeat(B, 1)
-        os.environ["PROBE_SAME"] = "1"
+        if os.environ.get(
+            "PROBE_ROLL"
+        ):  # real text, a different rolled copy per user (realistic routing skew, distinct prompts)
+            toks = torch.stack([toks[u].roll(u * int(os.environ["PROBE_ROLL"])) for u in range(B)])
+        else:
+            os.environ["PROBE_SAME"] = "1"
     if os.environ.get(
         "PROBE_IDS"
     ):  # a saved 1-D token tensor, the same prompt for every user (LENS must equal its length)
@@ -234,6 +254,13 @@ def test_chunk_probe(mesh_device):
                 + " ".join(f"s0={rec[i][0]}:{td[i] * 1e3:.0f}ms" for i in pos)
                 + f" first={[int(res[b][0]) for b in USERS]}"
             )
+            if os.environ.get("PROBE_ALLWIN") == "1":
+                log(
+                    "PROBE WINDOWS "
+                    + " ".join(
+                        f"{(r_[0][0] if isinstance(r_[0], (list, tuple)) else r_[0])}:{r_[2] * 1e3:.1f}" for r_ in rec
+                    )
+                )
             # ---- account of the time outside the device (PROBE_WL=1 adds the per-window timeline)
             sync_run = os.environ.get("DSV41_PF_ASYNC_SERVER") == "0"
             key_ = lambda s0_: tuple(s0_) if isinstance(s0_, (list, tuple)) else s0_  # noqa: E731
@@ -474,4 +501,10 @@ def test_chunk_probe(mesh_device):
             os.environ.get("PROBE_PROF_SORT", "cumulative")
         ).print_stats(60)
         log("PROBE BUILD PROFILE (host work of the window builds, cumulative):\n" + buf_.getvalue())
+    if oprec is not None:
+        import json
+
+        oprec.enabled = False
+        json.dump(oprec.rows, open(os.path.join(os.environ.get("PO_OUT", "/tmp"), "oprows.json"), "w"))
+        log(f"PROBE recorded {len(oprec.rows)} op calls")
     log("PROBE DONE")

@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t IN_TR = get_compile_time_arg_val(11);
     constexpr uint32_t IN_COL0 = get_compile_time_arg_val(12);
     constexpr uint32_t NU = get_compile_time_arg_val(13);  // users (number of RM input buffers)
-    constexpr auto in_args = TensorAccessorArgs<14>();
+    constexpr uint32_t NT = get_compile_time_arg_val(14);  // tiles per head block
+    constexpr auto in_args = TensorAccessorArgs<15>();
     constexpr auto c_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
     constexpr auto p_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
@@ -62,7 +63,7 @@ void kernel_main() {
 
         cbc.reserve_back(2);
         cbs.reserve_back(2);
-        cbin.reserve_back(16);
+        cbin.reserve_back(NT);
         for (uint32_t jj = 0; jj < 2; ++jj) {
             const uint32_t tp = tabrow * 16 + 14 + jj;
             noc.async_read(c_acc, cbc, 2048, {.page_id = tp, .offset_bytes = 0}, {.offset_bytes = jj * 2048});
@@ -80,7 +81,7 @@ void kernel_main() {
             const uint32_t in_addr = get_common_arg_val<uint32_t>(3);
             const auto in_acc = TensorAccessor(in_args, in_addr, 2048);
             const uint32_t base = u * IN_U + h * IN_H + tr_l * IN_TR + IN_COL0;
-            for (uint32_t j = 0; j < 16; ++j) {
+            for (uint32_t j = 0; j < NT; ++j) {
                 noc.async_read(
                     in_acc, cbin, 2048, {.page_id = base + j, .offset_bytes = 0}, {.offset_bytes = j * 2048});
             }
@@ -88,6 +89,6 @@ void kernel_main() {
         noc.async_read_barrier();
         cbc.push_back(2);
         cbs.push_back(2);
-        cbin.push_back(16);
+        cbin.push_back(NT);
     }
 }

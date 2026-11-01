@@ -757,9 +757,12 @@ class DSV41PrefillIndexer:
         k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
         k = ttnn.reshape(k, [U, 1, Cc, IDIM])
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
-        k = self._rope(k, (c, s_))
+        if FA.on("DSV41_FA_IDXK"):  # addcmul RoPE of the index keys in one program (tt/fuse_attn.py idx_k)
+            k = FA.idx_k(k, tab, pf_tune.p64(self.md), U, Cc)
+        else:
+            c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
+            s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
+            k = self._rope(k, (c, s_))
         if self.fp4_k:
             k = self._fp4(k)
         Cc8 = sh["Cc8"]
@@ -814,13 +817,18 @@ class DSV41PrefillIndexer:
             if (int(qr.shape[-2]) == 512 and int(qr.shape[-1]) == 1280 and int(d.wq_b.shape[-1]) == 4096)
             else None
         )
-        q = ttnn.to_layout(
-            ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc, program_config=_qb_pc), ttnn.ROW_MAJOR_LAYOUT
-        )
-        qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
-        qh = self._rope(qh, (c, s_))
+        if FA.on("DSV41_FA_IDXQ"):  # head split + addcmul RoPE in one program (tt/fuse_attn.py idx_q)
+            q = ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc, program_config=_qb_pc)
+            qh = FA.idx_q(q, tab, pf_tune.p64(self.md), U, C)
+            ttnn.deallocate(q)
+        else:
+            q = ttnn.to_layout(
+                ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc, program_config=_qb_pc), ttnn.ROW_MAJOR_LAYOUT
+            )
+            qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
+            c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
+            s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
+            qh = self._rope(qh, (c, s_))
         if self.fp4_q:
             qh = self._fp4(qh)
         wt = ttnn.to_layout(ttnn.reshape(w, [U, 1, C, IHEADS]), ttnn.TILE_LAYOUT)
@@ -858,36 +866,54 @@ class DSV41PrefillIndexer:
             tk.tick("stair")
             ids = ttnn.experimental.topk_large_indices(sc, k=TOPK, valid_length_tensor=nvalid)
             tk.tick("topk_local")
-            idf = ttnn.to_layout(
-                ttnn.typecast(ids, ttnn.float32), ttnn.TILE_LAYOUT
-            )  # local slots, 0xFFFFFFFF -> ~4.3e9
-            valid = ttnn.lt(idf, float(Lc))
-            idc = ttnn.typecast(ttnn.where(valid, idf, 0.0), ttnn.uint32)
-            vals = ttnn.where(
-                ttnn.typecast(valid, ttnn.bfloat16),
-                ttnn.to_layout(ttnn.gather(sc, 3, index=ttnn.to_layout(idc, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT),
-                float("-inf"),
-            )
-            pg = ttnn.typecast(
-                ttnn.add(ttnn.multiply(idf, float(cols)), sh["cid"]), ttnn.uint32
-            )  # global slot = local * cols + column
-            tk.tick("gather_vals")
-            cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
-            cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
-            tk.tick("allgathers")
-            pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
-            tk.tick("topk_merge")
-            posf = ttnn.to_layout(ttnn.typecast(pos, ttnn.float32), ttnn.TILE_LAYOUT)
-            posu = ttnn.typecast(
-                ttnn.clamp(posf, max=float(cols * TOPK)), ttnn.uint32
-            )  # a sentinel position selects the 0xFFFFFFFF column
-            cpe = ttnn.concat(
-                [cp, sh["skip_rm"]], dim=3
-            )  # row-major end to end (the tile conversions of the [C, 4128] candidates cost ~4 ms)
-            fin = ttnn.gather(cpe, 3, index=ttnn.to_layout(posu, ttnn.ROW_MAJOR_LAYOUT))
-            tk.tick("final_gather")
+            if FA.on(
+                "DSV41_FA_IDXP"
+            ):  # local top-512 post-processing and merge post-processing in one program each (tt/fuse_attn.py idx_local / idx_final)
+                vals, pg = FA.idx_local(sc, ids, sh["cid"], Lc, cols, C)
+                idf = valid = idc = posf = posu = cpe = None
+                tk.tick("gather_vals")
+                cv = mc.allgather(vals, ccl, axis=1, dim=3)  # [1,1,C,cols*512]
+                cp = mc.allgather(pg, ccl, axis=1, dim=3)
+                tk.tick("allgathers")
+                pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
+                tk.tick("topk_merge")
+                fin = FA.idx_final(pos, cp, C)
+                tk.tick("final_gather")
+            else:
+                idf = ttnn.to_layout(
+                    ttnn.typecast(ids, ttnn.float32), ttnn.TILE_LAYOUT
+                )  # local slots, 0xFFFFFFFF -> ~4.3e9
+                valid = ttnn.lt(idf, float(Lc))
+                idc = ttnn.typecast(ttnn.where(valid, idf, 0.0), ttnn.uint32)
+                vals = ttnn.where(
+                    ttnn.typecast(valid, ttnn.bfloat16),
+                    ttnn.to_layout(
+                        ttnn.gather(sc, 3, index=ttnn.to_layout(idc, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT
+                    ),
+                    float("-inf"),
+                )
+                pg = ttnn.typecast(
+                    ttnn.add(ttnn.multiply(idf, float(cols)), sh["cid"]), ttnn.uint32
+                )  # global slot = local * cols + column
+                tk.tick("gather_vals")
+                cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
+                cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
+                tk.tick("allgathers")
+                pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
+                tk.tick("topk_merge")
+                posf = ttnn.to_layout(ttnn.typecast(pos, ttnn.float32), ttnn.TILE_LAYOUT)
+                posu = ttnn.typecast(
+                    ttnn.clamp(posf, max=float(cols * TOPK)), ttnn.uint32
+                )  # a sentinel position selects the 0xFFFFFFFF column
+                cpe = ttnn.concat(
+                    [cp, sh["skip_rm"]], dim=3
+                )  # row-major end to end (the tile conversions of the [C, 4128] candidates cost ~4 ms)
+                fin = ttnn.gather(cpe, 3, index=ttnn.to_layout(posu, ttnn.ROW_MAJOR_LAYOUT))
+                tk.tick("final_gather")
             per_user.append(fin)
             for t_ in (sc, scr, blk, ids, idf, valid, idc, vals, pg, cv, cp, pos, posf, posu, cpe, qu, wu):
+                if t_ is None:
+                    continue
                 ttnn.deallocate(t_)
         ttnn.deallocate(qh)
         tk.report()

@@ -61,8 +61,11 @@ def real(key, shape, scale=1.0):
     "device_params", [pytest.param({"l1_small_size": 16384, "trace_region_size": 200000000}, id="p")], indirect=True
 )
 @pytest.mark.parametrize("per_user", [True, False])
+@pytest.mark.parametrize("mode", [0, 1])
 @torch.no_grad()
-def test_fuse_attn_kernels(mesh_device, per_user):
+def test_fuse_attn_kernels(mesh_device, per_user, mode):
+    os.environ["DSV41_FA_ROPE_MODE"] = str(mode)
+    print(f"ROPE MODE {mode} per_user {per_user}", flush=True)
     md = mesh_device
     up = make(md)
     P = pf_tune.p64(md)
