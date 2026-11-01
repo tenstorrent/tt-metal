@@ -1,0 +1,71 @@
+{
+ "used": [
+  {
+   "id": "K-57",
+   "how": "every device job was a whole-mesh run_safe_pytest job, one at a time; no single-card job or probe on the 8x4",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "kept layer 20's output DevH across chunks without a load-time copy, and checked the profile's F196 warm-up (no program-cache growth, misses refused in the timed runs) instead",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-188",
+   "how": "read the tail-mode L39 rel 0.613 (ladder 0.758) as the known rounding swing of the last layer, not a tail-mode effect; layers 21-38 sit at 0.138-0.165",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which per-chunk structures are keyed by chunk start / chunk size (top-k and candidate stores, ChunkMemo, window carry keyed by end, WindowTables): what a pass over a different row range or chunk length would need to rebuild"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.17",
+   "answer": "done",
+   "evidence": "DEEP_LAYERS=all|tail (default all) in tt/settings.py, tt/model.py layer/tail_pass; tests/perf/test_deep_tail.py passes vs the golden (layers 0-20, 21-39 on the tail rows, final hidden, top-5); measured tail vs all at 51200 / 512000 and the tail pass; tok/s x1.60 / x1.68 / x1.78 at 128k / 512k / 1M (BREADCRUMBS FIX.17). Departure: the tail runs as whole 5120-row chunks (1 or 2), not a 3072-row padded chunk: the model has one chunk geometry"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or inflated: the tail pass runs the model's normal chunks"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only test_deep_tail.py and test_profile.py"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.17",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-01T00:28:13",
+  "head": "48c27f679f4",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.17.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.17_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.17_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.17.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_deep_tail.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
