@@ -77,3 +77,61 @@ No SUPPORTED change.
 **Done when**: measured device-ns improves on flagged #1; the 8x512 all-L1 reference row beats stock 43.3 us and the 8x512 L1 no-residual row beats 34.5 us by more than noise; the precision baseline (`test_layer_norm_tile_precision_baseline.py`) and golden suite stay green; no regression across the guard set named in Refinement 1.
 
 **Outcome**: device kernel us, baseline (3 runs) -> after (2 runs): flagged #1 47.3-48.3 -> 46.0-46.1, 8x512 all L1 30.6-31.8 -> 27.6-28.3 (stock 43.3), 8x512 L1 no-residual 27.7-29.9 -> 27.8-28.8 (flat inside noise, stock 34.5), all DRAM 51.5-51.9 -> 51.6-51.9, DRAM no-residual 40.5-40.9 -> 40.4-40.5, 8x384 all DRAM 43.7-44.0 -> 42.7-42.9, 32x32 23.0-23.2 -> 21.9-22.1, affine TILE DRAM 77.5-79.2 -> 75.7-76.3. Per-row math cycles (8x512 L1 no-residual, second block): center 1.6k -> 0.9k, inv_std 2.2k -> 1.5k, normalize+affine 6.1k -> 5.0k; mean 0.9k and sumsq 2.0k unchanged. Shipped: DEST-lane blocking on the streaming passes (`COMPUTE_DEST_LANES` = 4, PerBlockSize lifecycles), `VectorMode::C` on the inv_std SFPU post-op, reconfig dropped on work_a/work_b and gamma/beta boundaries (measured null, kept: format provably constant). Parked: `FUSE_NORMALIZE_AFFINE` (one dest-reuse pass with ROW-broadcast gamma/beta, correct, ~7.4k vs 6.2k cycles: dest-reuse moves and per-group re-inits cost more than the fp32 round trips); `MIN_BLOCKS_PER_CORE` = 1 re-measured on the new compute and still loses 2-6 us (flagged #1 52.0). Remaining bottleneck: on the L1 no-residual row the first block waits ~8.7 us for its row (mean phase cannot start until the whole row is resident) and the 2-row cores then run two serial ~7 us compute blocks; the remaining per-row compute is HiFi4 fp32 FPU passes at ~80 cycles/tile. Next lever would be streaming the mean accumulation as chunks land (overlap the read with the first reduction) or a cheaper sumsq pass; not built here because both restructure the reduce helper's input policy rather than turn an exposed knob.
+
+### [ ] Refinement 3 — Stream row statistics while chunks land, then stream normalize + write
+
+**Type**: perf
+
+**Goal**: remove the window in which DRAM idles while every core computes. Model profiling (Nomic Embed v2, 8x512 forward, after Perf 2) puts the op at 966 us per forward: 18x flagged #1 at ~36 us, 6x flagged #2 at ~47.5 us, 1x flagged #3 at ~34 us. The Perf 2 peel shows the op is serial per core (full ~= read_only + write_only - sync). With 128 tile-rows on 110 cores nearly every core owns one row, so the grid reads, then computes, then writes in lockstep, and DRAM is idle during the compute window. Achieved DRAM bandwidth is ~390 GB/s on flagged #1, against ~440 GB/s on flagged #2.
+
+Levers:
+- Accumulate the row statistics per C-tile chunk as the reader pushes it. Today the mean phase waits for the whole row (Refinement 2 Outcome: "first block waits ~8.7 us for its row").
+- Keep the two-pass precision. Either:
+  - run a shifted one-pass sum / sum-of-squares, shifted by the first chunk's mean, in fp32 DEST and gated on `fp32_dest_acc_en`; the golden large-mean rows (mean 100, std 1) must stay green under both DEST modes; or
+  - stream the mean only, then center + sumsq from L1 while it is resident.
+
+  Measure both.
+- Then stream normalize + affine + pack per chunk, so the writer starts at the first normalized chunk, not after the whole row. `output_chunk_interleave` (Perf 2) did this alone and was null, because writes then landed on the two-row cores' row-1 reads. Measure it again together with the streaming stats and with Refinement 4, and keep it as a knob if it is null alone.
+
+**Verifier notes**: scheme-change inside the compute and reader schedule; the CB topology may change (per-chunk partial-stat tiles). Keep every knob single-source in `Blocking`. Precision gate unchanged: `(0.999, 0.02)` for fp32 DEST, `(0.998, 0.05)` for bf16 DEST.
+
+**Done when**:
+- flagged #1 improves by >= 2 us (median of 3).
+- flagged #2 and #3 do not regress.
+- Golden 545/545.
+- No regression on the guard set.
+
+### [ ] Refinement 4 — Half-tile (16-row) band work split: balance 128 rows on 110 cores
+
+**Type**: perf
+
+**Goal**: build the planner's deferred regime R3 `half_band_split` (op_design.md). 128 tile-rows on 110 cores leaves 18 cores with 2 rows, and those cores set the makespan on flagged #2. They also couple every compute speedup to a regression: one-row cores finish early and their writes collide with the two-row cores' row-1 reads (Perf 2: stats_fusion +1.9% on #2, normalize_affine +5%).
+
+Split work in 16-row bands: bytes [0, 1024) and [1024, 2048) of each tile page, faces 0-1 / 2-3. 256 bands on 110 cores gives at most 3 bands = 1.5 rows of bytes per core, instead of 2 rows. It also gives every core >= 2 units, so one band's compute overlaps another band's DRAM traffic.
+
+Two bands from any tile-rows pack into one compute tile, because rows are independent along W. Compute work therefore does not double.
+
+Non-aligned S: all-padding bands (H % 32 in [1, 16]) are skipped, not read.
+
+**Verifier notes**: scheme-change (work unit + reader/writer addressing). Gate it per shape class by measurement: keep R1 where it wins (e.g. R <= cores, or all-L1 rows), with the measured reason in the regime table. Combine with Refinement 3 and re-measure; the two are expected to compound. Keep the Perf 1 NoC-balance and affine-multicast paths working, or re-derive them per regime.
+
+**Done when**:
+- flagged #2 improves by >= 3 us (median of 3).
+- flagged #1 improves or stays flat.
+- 8x384 and the non-aligned INPUTS rows do not regress.
+- Golden 545/545.
+
+### [ ] Refinement 5 — Fixed per-call overhead (~4.6 us "sync only")
+
+**Type**: perf
+
+**Goal**: the Perf 2 peel measures ~4.6 us of fixed cost per call ("sync only": every stage stubbed) on every row, including 32x32. That is ~115 us per Nomic forward (25 calls).
+
+Attribute it with the zone instrumentation, then cut what is not inherent. Candidates:
+- the gamma/beta multicast handshake on the critical path;
+- CB / TensorAccessor setup;
+- runtime-arg volume;
+- semaphore waits;
+- program-level overhead from the kernel count.
+
+**Done when**: the sync-only floor drops measurably (median of 3); no row regresses; golden 545/545.
