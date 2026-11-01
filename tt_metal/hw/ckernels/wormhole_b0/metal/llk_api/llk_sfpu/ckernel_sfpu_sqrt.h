@@ -124,6 +124,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool RECIPROCAL, bool FAST_APPROX>
 inline void _calculate_sqrt_internal_() {
+#ifndef TT_METAL_DISABLE_SFPU_REPLAY_OPTIMIZATION
     if constexpr (
         APPROXIMATION_MODE == false && fp32_dest_acc_en == false && RECIPROCAL == true && FAST_APPROX == false) {
         if constexpr (ITERATIONS == 8 || ITERATIONS == 32) {
@@ -802,6 +803,7 @@ inline void _calculate_sqrt_internal_() {
             return;
         }
     }
+#endif
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
