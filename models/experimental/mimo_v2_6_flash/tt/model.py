@@ -56,6 +56,10 @@ ROPE_TABLE_MARGIN = 32  # one tile
 # host time per chunk, which several rows or vLLM lanes on one host thread pay one after another). A setup or capture
 # that fails (the trace region too small, say) drops the traces with a warning and later chunks run eagerly.
 PREFILL_CHUNK_TRACE = os.environ.get("MIMO_PREFILL_CHUNK_TRACE", "1") == "1"
+# A speculative step's traces replay on an empty queue, as the sampled decode step (``_decode_replay``): 1 drains
+# before each replay that a host copy precedes (a verify, a staged accept, a backfill, a host-planned draft), 2 before
+# every one (a chained draft and an accept with nothing staged too), 0 never.
+SPEC_REPLAY_SYNC = int(os.environ.get("MIMO_SPEC_REPLAY_SYNC", "1"))
 # The slack a later-chunk capture needs in the trace region over the largest one captured before it (the traces of a
 # replica differ only in their SDPA programs).
 CHUNK_TRACE_HEADROOM = 1.1
@@ -1762,6 +1766,13 @@ class TtMiMoModel:
                 ttnn.release_trace(self.mesh_device, self.decode_trace["sampled"]["id"])
             self.decode_trace = None
 
+    def spec_drain(self, copied):
+        """Before a speculative step's trace replay (``copied``: a host copy precedes it): wait for the queue to empty
+        (MIMO_SPEC_REPLAY_SYNC), as the sampled decode step does: a replay behind commands still in flight now and then
+        breaks the replica (``_decode_replay``)."""
+        if SPEC_REPLAY_SYNC >= (1 if copied else 2):
+            ttnn.synchronize_device(self.mesh_device)
+
     def _decode_replay(self, sample):
         """Replays the decode trace (``sample``: the sampled one); returns its output."""
         trace = self.decode_trace["sampled"] if sample else self.decode_trace
@@ -1914,6 +1925,7 @@ class TtMiMoModel:
             )
             for h, d in zip(host, self.verify_traces[layout]["inputs"][2:6]):
                 ttnn.copy_host_to_device_tensor(h, d)
+        self.spec_drain(copied=True)
         ttnn.execute_trace(self.mesh_device, self.verify_traces[layout]["id"], cq_id=0, blocking=False)
         return self.verify_traces[layout]["output"]
 
@@ -1926,6 +1938,7 @@ class TtMiMoModel:
         assert trace is not None and trace["accept"] is not None, "no accept trace captured"
         if groups is not None:
             self.verify_sampler.stage(slots, groups)
+        self.spec_drain(copied=groups is not None)
         ttnn.execute_trace(self.mesh_device, trace["accept"], cq_id=0, blocking=False)
 
     def read_next_tokens(self, handle):

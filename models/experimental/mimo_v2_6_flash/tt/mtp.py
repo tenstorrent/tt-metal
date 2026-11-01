@@ -537,6 +537,7 @@ class TtMiMoMTP:
         self._require_trace()  # captured with the draft trace (capture_trace)
         assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < layout.groups
         self.history.upload_backfill(slot, a, group, keep_stash=len(self.drafting[layout]) == 1)
+        self.model.spec_drain(copied=True)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
 
     def enqueue(self, tokens, plan):
@@ -557,6 +558,7 @@ class TtMiMoMTP:
         inputs = self.trace["inputs"]
         for h, d in zip(rope, inputs[len(inputs) - len(rope) :]):
             ttnn.copy_host_to_device_tensor(h, d)
+        m.spec_drain(copied=True)
         ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
     def enqueue_layers(self, commits, layout=LAYOUT):
@@ -575,6 +577,7 @@ class TtMiMoMTP:
         )
         self.last_inputs_s = time.perf_counter() - t
         ttnn.copy_host_to_device_tensor(host, m.spec_inputs.mtp_packed)
+        m.spec_drain(copied=True)
         ttnn.execute_trace(m.mesh_device, self.traces[layout]["id"], cq_id=0, blocking=False)
 
     def enqueue_chained(self, layout=LAYOUT):
@@ -584,6 +587,7 @@ class TtMiMoMTP:
         ``enqueue``)."""
         self._require_trace()
         assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
+        self.model.spec_drain(copied=False)
         ttnn.execute_trace(self.model.mesh_device, self.traces[layout]["id"], cq_id=0, blocking=False)
 
     def read_drafts(self, anchor, group=0, layout=LAYOUT):
