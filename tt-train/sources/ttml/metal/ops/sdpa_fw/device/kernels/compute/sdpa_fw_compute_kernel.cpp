@@ -116,6 +116,13 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chu
 
     for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
         cb_wait_front(cb_key, Sk_chunk_t * qWt);
+#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
+        // The diagonal chunk's K tiles past the diagonal are fully masked (exp = 0): only the tiles up to the
+        // diagonal are computed (iteration 30); the CB pushes and pops stay whole chunks.
+        const uint32_t n_cols = (k_chunk == diag_chunk) ? (diag_pos_in_chunk + 1U) : Sk_chunk_t;
+#else
+        const uint32_t n_cols = Sk_chunk_t;
+#endif
 
         reconfig_data_format(cb_query, cb_key);
         pack_reconfig_data_format(cb_attention_weights);
@@ -143,7 +150,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chu
         cb_reserve_back(cb_attention_weights, Sk_chunk_t);
         // The chunk's score tiles in passes of kPass columns (one DEST cycle each), packed in order into the
         // reserved chunk; one push after the passes (and the mask stamp below).
-        for (uint32_t p = 0; p < Sk_chunk_t; p += kPass) {
+        for (uint32_t p = 0; p < n_cols; p += kPass) {
+            const uint32_t pass_cols = (n_cols - p < kPass) ? (n_cols - p) : kPass;  // the last pass of the diagonal
             tile_regs_acquire();
             {
                 // One matmul_block call does ONE K-step (1 Q tile × kPass K tiles → kPass accumulated
@@ -168,7 +176,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chu
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t n = 0; n < kPass; ++n) {
+            for (uint32_t n = 0; n < pass_cols; ++n) {
                 pack_tile(n, cb_attention_weights);
             }
             tile_regs_release();
@@ -179,17 +187,15 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chu
             // Unpacker → mask CB (BF16); packer stays on cb_attention_weights (FP32).
             copy_init(cb_attn_mask);
             pack_reconfig_l1_acc(1);
-            for (uint32_t n = diag_pos_in_chunk; n < Sk_chunk_t; ++n) {
-                // n == diag_pos_in_chunk → mask[0] (causal diagonal pattern).
-                // n  > diag_pos_in_chunk → mask[1] (all -1e9, strictly past the diagonal).
-                const uint32_t mask_tile_idx = (n == diag_pos_in_chunk) ? 0U : 1U;
+            {
+                // Only the diagonal tile takes the causal pattern (mask[0]); the tiles past it are not computed.
                 tile_regs_acquire();
-                copy_tile(cb_attn_mask, mask_tile_idx, /* dst */ 0);
+                copy_tile(cb_attn_mask, /* mask_tile_idx */ 0, /* dst */ 0);
                 tile_regs_commit();
                 tile_regs_wait();
-                // pack_tile<true> packs DST[0] to cb_attention_weights[n]; with l1_acc=1 the
+                // pack_tile<true> packs DST[0] to cb_attention_weights[diag]; with l1_acc=1 the
                 // packer reads the existing FP32 score, adds the FP32 mask in DST, writes FP32.
-                pack_tile</* out_of_order */ true>(/* dst */ 0, cb_attention_weights, /* offset */ n);
+                pack_tile</* out_of_order */ true>(/* dst */ 0, cb_attention_weights, /* offset */ diag_pos_in_chunk);
                 tile_regs_release();
             }
             pack_reconfig_l1_acc(0);
@@ -241,12 +247,13 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx, uint32_t round_chu
             cb_reduction_scaler,
             alias_cb_cur_max,
             alias_cb_prev_max,
-            /* do_eltwise_max */ k_chunk > 0);
+            /* do_eltwise_max */ k_chunk > 0,
+            n_cols);
 
         apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, Sk_chunk_t, kPass>(
-            cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
+            cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp, n_cols);
 
-        matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+        matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out, n_cols);
 
         cb_pop_front(cb_attention_weights, Sk_chunk_t);
         cb_pop_front(cb_value, Sk_chunk_t * vWt);

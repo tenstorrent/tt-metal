@@ -61,6 +61,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 28 | real weights, warm | 486.9 (480.1) | - | `O/iter28b_full_tp4_real.log` |
 | 29 | RMSNorm backward pass 2 on the FPU (iteration 20's variant A, 19-bit operands) | 472.2 (462.8) | 34.36 % | `O/iter29_tp_mfu_tp4.log` (profile clock mix 0.98-1.20 GHz, chips 0-1 at 0.98-1.01: the wall is the box, the attribution -2.1 ms/step) |
 | 29 | real weights, warm | 488.4 (483.2) | - | `O/iter29_full_tp4_real.log` |
+| 30 | SDPA forward: the diagonal chunk computes only the tiles up to the diagonal | 468.4 (463.0) | 34.63 % | `O/iter30_tp_mfu_tp4.log` (clock mix 1.00-1.19 GHz) |
+| 30 | real weights, warm | 489.2 (481.6) | - | `O/iter30_full_tp4_real.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -349,6 +351,14 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Attribution** (chip 0, per 4 layers, cycle-time): `RMSNormBackwardRows` 1.320 -> 1.111 (-0.21 per 4 layers, ~-2.1 ms/step); standalone 172 -> 148 us per call (`O/iter29_norm_bw_check.log`: T=1024 C=5120 with residual 148, without 133).
 - **Verification**: norm harness subset 8; harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0301 vs 0.0299: the norm gradient's rounding); real weights warm 488.4 ms.
 - **Evidence**: `O/iter29_patch.py`, `O/iter29_build_check.{sh,log}`, `O/iter29_norm_bw_check.log`, `O/iter29_norm_tests.log`, `O/iter29.{sh,log}`, `O/iter29_harness.log`, `O/iter29_tp_grad_check_tp4.log`, `O/iter29_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter29_loss_comparison.txt`, `O/iter29_full_tp4_real.log`; the variant's measurements of 2026-10-30 in `O/iter20_*`.
+
+## Iteration 30 (2026-11-01): SDPA forward diagonal chunk prefix (kernel boost)
+
+- **Change**: math (owned kernels): on the diagonal chunk the forward computes only the K tiles up to the diagonal (QK^T passes, the mask stamp on the diagonal tile only, row max, exp / sum and the PV contraction over `n_cols` tiles; the CB traffic stays whole chunks); the skipped tiles were fully masked (exp = 0), so the outputs are bit-exact. Checklist: `optimization/work_log.md`, "Iteration 30".
+- **Result**: TP=4 472.2 -> 468.4 ms (best 462.8 -> 463.0), 34.63 % MFU (clock mix 1.00-1.19 GHz); kernels without collectives 38.7 -> 38.6 ms per profiled step.
+- **Attribution** (chip 0, per 4 layers, cycle-time): `SDPAForward` 0.397 -> 0.386 (-0.01 per 4 layers, ~-0.1 ms/step: at the shard shape the diagonal chunk's masked tiles were cheap); standalone shard forward 107 -> 106 us, 32 heads 334 -> 314, S=512 49 -> 44, S=2048 288 -> 276.
+- **Verification**: six shapes bit-exact with iteration 28's outputs (`O/iter30_build_check.log`); harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0301, identical to 29); real weights warm 489.2 ms.
+- **Evidence**: `O/iter30_patch.py`, `O/iter30_build_check.{sh,log}`, `O/iter30.{sh,log}`, `O/iter30_harness.log`, `O/iter30_tp_grad_check_tp4.log`, `O/iter30_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter30_loss_comparison.txt`, `O/iter30_full_tp4_real.log`.
 
 ## State after iteration 20 (2026-10-30 night): where the remaining time is
 

@@ -117,7 +117,8 @@ void update_cur_row_max_value(
     uint32_t cb_identity_scaler,
     uint32_t cb_cur_max,
     uint32_t cb_prev_max,
-    bool do_eltwise_max = false) {
+    bool do_eltwise_max = false,
+    uint32_t n_tiles = Sk_chunk_t) {  // tiles of the chunk that carry scores (the diagonal chunk's prefix)
     cb_wait_front(cb_attention_weights, Sk_chunk_t);
 
     constexpr uint32_t reduce_dst_idx = 0;
@@ -125,7 +126,7 @@ void update_cur_row_max_value(
     reconfig_data_format(cb_attention_weights, cb_identity_scaler);
     reduce_init<pool_type, reduce_dim>(cb_attention_weights, cb_identity_scaler, cb_cur_max);
     tile_regs_acquire();
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+    for (uint32_t n = 0; n < n_tiles; ++n) {
         reduce_tile<pool_type, reduce_dim>(
             cb_attention_weights,
             cb_identity_scaler,
@@ -166,7 +167,10 @@ void update_cur_row_max_value(
 // accumulation), each pass one tile_regs cycle. The score CB holds two chunks: the exp tiles go to the free
 // slot and the raw scores are popped, so a chunk larger than DEST needs no in-place aliasing.
 template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t = 1U, uint32_t Pass = Sk_chunk_t>
-void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
+void apply_exp_inplace_and_find_exp_sum(
+    uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum, uint32_t n_tiles = Sk_chunk_t) {
+    // n_tiles: the chunk's tiles that carry scores (the diagonal chunk's prefix, iteration 30); the CB traffic
+    // stays whole chunks.
     static_assert(Sk_chunk_t % Pass == 0U, "the chunk is a whole number of passes");
     cb_wait_front(cb_attention_weights, Sk_chunk_t);
     cb_wait_front(cb_cur_max, onetile);
@@ -178,11 +182,12 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     pack_reconfig_data_format(cb_attention_weights);
     pack_reconfig_l1_acc(false);
 
-    for (uint32_t p = 0; p < Sk_chunk_t; p += Pass) {
+    for (uint32_t p = 0; p < n_tiles; p += Pass) {
+        const uint32_t pass_tiles = (n_tiles - p < Pass) ? (n_tiles - p) : Pass;
         // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
         // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
         tile_regs_acquire();
-        for (uint32_t n = 0; n < Pass; ++n) {
+        for (uint32_t n = 0; n < pass_tiles; ++n) {
             sub_tiles_bcast_cols(
                 cb_attention_weights, cb_cur_max, /* in0 tile_idx */ p + n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
             sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(n);
@@ -190,12 +195,12 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
         tile_regs_commit();
         tile_regs_wait();
         // The pass's exp tiles, in order, into the reserved chunk.
-        for (uint32_t n = 0; n < Pass; ++n) {
+        for (uint32_t n = 0; n < pass_tiles; ++n) {
             pack_tile(n, cb_attention_weights);
         }
         // The chunk's partial row sum directly in cb_cur_exp_sum[0]: the first exp tile overwrites slot 0
         // (L1-acc off), every later tile L1-accumulates onto it.
-        for (uint32_t n = 0; n < Pass; ++n) {
+        for (uint32_t n = 0; n < pass_tiles; ++n) {
             pack_reconfig_l1_acc(p + n > 0U);
             pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
         }
@@ -224,7 +229,12 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
 // `unary_bcast` scratch and is therefore capped at `dst_size - 1`.
 template <uint32_t Sk_chunk_t = 1U>
 void matmul_qk_by_v(
-    uint32_t Wt, uint32_t block_size, uint32_t cb_attention_weights, uint32_t cb_value, uint32_t cb_cur_mm_out) {
+    uint32_t Wt,
+    uint32_t block_size,
+    uint32_t cb_attention_weights,
+    uint32_t cb_value,
+    uint32_t cb_cur_mm_out,
+    uint32_t n_tiles = Sk_chunk_t) {  // K tiles of the chunk contracted (the diagonal chunk's prefix)
     cb_wait_front(cb_attention_weights, Sk_chunk_t);
     cb_wait_front(cb_value, Sk_chunk_t * Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
@@ -238,14 +248,14 @@ void matmul_qk_by_v(
         /* transpose */ 0,
         /* ct_dim */ block_size,
         /* rt_dim */ 1,
-        /* kt_dim */ Sk_chunk_t);
+        /* kt_dim */ n_tiles);
 
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         // K-reduction: at each k step, matmul_block writes ct_dim=block_size output tiles into
         // DST[0..block_size-1], accumulating across k steps. For Sk_chunk_t==1 the loop runs
         // once and behavior matches the legacy single-step matmul.
-        for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
+        for (uint32_t k_in_chunk = 0; k_in_chunk < n_tiles; ++k_in_chunk) {
             matmul_block(
                 cb_attention_weights,
                 cb_value,
@@ -255,7 +265,7 @@ void matmul_qk_by_v(
                 /* transpose */ 0,
                 /* ct_dim */ block_size,
                 /* rt_dim */ 1,
-                /* kt_dim */ Sk_chunk_t);
+                /* kt_dim */ n_tiles);
         }
         tile_regs_commit();
         tile_regs_wait();
