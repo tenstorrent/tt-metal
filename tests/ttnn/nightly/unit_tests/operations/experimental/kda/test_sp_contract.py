@@ -21,6 +21,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     group_summary_nd_sharded,
     summary_oracle,
     to_device,
+    unpack_summary,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     qkv_device_inputs,
@@ -41,7 +42,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for tensor in host:
         tensor.zero_()
     host[2][:] = torch.eye(32)
-    host[5].fill_(1)
+    host[5].fill_(0)  # complement form: final_decay = expm1(0) means no decay
     host[6][:] = torch.eye(32)
     inputs = device_protocol(host, mesh_device)
     seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)
@@ -174,11 +175,11 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
         assert entries.dtype == final.dtype == ttnn.float32
         assert output.dtype == ttnn.bfloat16
         assert all(t.memory_config() == ttnn.DRAM_MEMORY_CONFIG for t in (entries, output, final))
-        # Per device: head A, head B, tail A, tail B from the packed [2, N, K, 2K] rows.
+        # Per device: head A, head B, tail A, tail B from the packed complement-form [2, N, K, 2K] rows.
         # Every expected value depends only on a rank's split, so each distinct split is computed once.
         oracles = {}
         got_summaries = list(
-            zip(*((s[0, ..., :dim], s[0, ..., dim:], s[1, ..., :dim], s[1, ..., dim:]) for s in _shards(summaries)))
+            zip(*((*unpack_summary(s[0].float()), *unpack_summary(s[1].float())) for s in _shards(summaries)))
         )
         for shard, (got_entries, got_output, got_final) in enumerate(
             zip(_shards(entries), _shards(output), _shards(final), strict=True)
@@ -447,9 +448,16 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                             ranks[rank][2][folded] = ranks[rank][3][folded] = torch.nan
                 expected.append(torch.stack(entries))
             dims = [None, None]
-            # Packed [2, N, K, K+V] summaries of every rank, concatenated along N and sharded back by SP rank.
+            # Packed complement-form [2, N, K, K+V] summaries ([E | B], E = A - I, exact for these values) of every
+            # rank, concatenated along N and sharded back by SP rank.
+            eye = torch.eye(key_dim, dtype=host_dtype)
             packed = torch.cat(
-                [torch.stack([torch.cat(rank[0:2], dim=-1), torch.cat(rank[2:4], dim=-1)]) for rank in ranks],
+                [
+                    torch.stack(
+                        [torch.cat([rank[0] - eye, rank[1]], dim=-1), torch.cat([rank[2] - eye, rank[3]], dim=-1)]
+                    )
+                    for rank in ranks
+                ],
                 dim=1,
             )
             dims[axis] = 1
@@ -491,7 +499,8 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
     generator = torch.Generator().manual_seed(4127)
     eye = torch.eye(key_dim).expand(sp_size, heads, -1, -1)
     # Non-commuting, BF16-representable transitions: a reordered chain fails loudly.
-    a = (0.9 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
+    # Complement form: the op takes E = A - I.
+    a = (-0.1 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
     b = (0.05 * torch.randn(sp_size, heads, key_dim, value_dim, generator=generator)).bfloat16().float()
     seed = initial_state(heads, key_dim, value_dim)
     transforms = ttnn.from_torch(
@@ -519,7 +528,7 @@ def test_sp_chain_affine_transforms_order(mesh_device, axis):
         for step in range(sp_size):
             rank = (first_rank + step) % sp_size
             entries[rank] = carry
-            carry = a[rank] @ carry + b[rank]
+            carry = carry + (a[rank] @ carry + b[rank])
         entry, final = ttnn.experimental.kda.chain_affine_transforms(
             transforms,
             initial,

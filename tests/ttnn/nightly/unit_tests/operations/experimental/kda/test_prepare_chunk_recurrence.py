@@ -202,7 +202,7 @@ def _oracle(
     kd = beta * k * decay
     q_decay = q * decay
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
-    final_decay = torch.exp(final_g).unsqueeze(-1)
+    final_decay = torch.expm1(final_g).unsqueeze(-1)
     k_fp64 = k.double()
     cumulative_g_fp64 = cumulative_g.double()
     anchor_g = cumulative_g_fp64[:, :, -1:].mul(0.5)
@@ -783,7 +783,7 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     chunk = _t_inv_numerical_stress_inputs()
     inputs = tuple(x.repeat(1, chunks, 1) for x in chunk)
     key_dim = chunk[3].shape[-1]
-    expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
+    expected = torch.expm1(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
     if output_bf16_mask & (1 << 5):
         expected = expected.to(torch.bfloat16).float()
     outputs = _run(

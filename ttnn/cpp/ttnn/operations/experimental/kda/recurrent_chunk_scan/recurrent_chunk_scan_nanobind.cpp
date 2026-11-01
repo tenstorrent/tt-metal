@@ -117,14 +117,16 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             S_after = A @ S_before + B
 
-        and is stored as ``K`` rows of ``[A | B]`` in a ``[S, N, K, K+V]`` tensor. Slot 0
+        and is stored in complement form, ``E = A - I``, as ``K`` rows of ``[E | B]`` in a
+        ``[S, N, K, K+V]`` tensor, so a transition close to the identity keeps the precision
+        of its small change through the BF16 transport. Slot 0
         holds head transforms; with ``tail``, slot 1 holds tail transforms (``S = 2``).
         A group crossing the chronological wrap has both a head and a tail transform,
         allowing other ranks' transitions to be applied between them. Groups wholly
         before or after the split have only a head or only a tail segment, respectively,
         and unsplit ranks have only head segments. A slot whose segment holds no valid
         chunk -- including every slot of a group past ``actual_end`` or of a rank with
-        no valid chunk -- holds the identity ``(I, 0)`` with ``init``, and is unspecified
+        no valid chunk -- holds the identity, ``(0, 0)`` in complement form, with ``init``, and is unspecified
         without it.
 
         It derives the transform through two parallel recurrence evaluations:
@@ -169,7 +171,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 Compute-kernel configuration.
 
             tail (bool, optional): Also write tail transforms as slot 1. Defaults to False.
-            init (bool, optional): Write the identity ``(I, 0)`` into every slot without a
+            init (bool, optional): Write the identity ``(0, 0)`` into every slot without a
                 valid segment. When False those slots are unspecified. Defaults to True.
 
         Returns:
@@ -177,7 +179,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``tail`` is set and ``S = 1`` otherwise, in ``memory_config``.
 
         Note:
-            Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
+            Summaries accumulate in FLOAT32; E is formed in FLOAT32 and packs directly to
+            BFLOAT16 for transport. Requires ``fp32_dest_acc_en``.
             Consumers must use the same chronology and geometry.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are

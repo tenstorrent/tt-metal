@@ -20,9 +20,9 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
 
             F_g(S) = A_g @ S + B_g
 
-        Transforms are read from packed summaries, as produced by
-        ``summarize_chunk_recurrence``, whose transform index is flattened
-        batch-head-group order:
+        Transforms are read in complement form, ``E_g = A_g - I``, from packed
+        summaries, as produced by ``summarize_chunk_recurrence``; ``A_g = E_g + I``
+        is formed in FP32. The transform index is flattened batch-head-group order:
 
             index = batch_head * groups_per_head + group
 
@@ -52,7 +52,7 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
 
         Args:
             summaries (ttnn.Tensor): Packed group transforms ``[S, B*H*G, K, K+V]``:
-                ``K`` rows of ``[A | B]`` per transform, head transforms in slot 0
+                ``K`` rows of ``[E | B]`` per transform, head transforms in slot 0
                 and, with ``S = 2``, tail transforms in slot 1. ``S = 2`` is
                 required when the sequence-parallel axis has more than one device.
                 Must be a TILE-layout FLOAT32 or BFLOAT16 device tensor.
