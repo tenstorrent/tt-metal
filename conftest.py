@@ -543,6 +543,14 @@ def set_fabric(
             )
 
 
+# Opening a 1-chip mesh with fabric is a TT_FATAL on a single host, so a fabric test can't run there
+def skip_fabric_on_one_chip(fabric_config, num_devices):
+    import ttnn
+
+    if fabric_config not in (None, ttnn.FabricConfig.DISABLED) and num_devices < 2 and not ttnn.using_distributed_env():
+        pytest.skip(f"{fabric_config} needs a mesh of at least 2 chips, got {num_devices}")
+
+
 def get_default_fabric_tensix_config():
     import ttnn
 
@@ -658,6 +666,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    skip_fabric_on_one_chip(fabric_config, mesh_shape.mesh_size())
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
@@ -759,6 +768,7 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    skip_fabric_on_one_chip(fabric_config, ttnn.get_num_devices())
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
 
     mesh_device = ttnn.open_mesh_device(
@@ -831,6 +841,7 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
+    skip_fabric_on_one_chip(device_params.get("fabric_config"), ttnn.get_num_devices())
     with bh_2d_mesh_device_context(device_params) as mesh_device:
         yield mesh_device
 
