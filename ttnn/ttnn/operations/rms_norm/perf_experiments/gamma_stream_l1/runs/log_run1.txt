@@ -1,0 +1,9 @@
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=4 defs=()
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=4 defs=('GS_STATEFUL',)
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=106496 cores=4 defs=('GS_COMPACT',)
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=106496 cores=4 defs=('GS_COMPACT', 'GS_STATEFUL')
+hgt_tile_g op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g base: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g sf: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g compact: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g compact_sf: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact

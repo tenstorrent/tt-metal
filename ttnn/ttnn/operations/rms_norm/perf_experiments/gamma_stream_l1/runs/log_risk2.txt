@@ -1,0 +1,7 @@
+shape=[7136, 736] budget=1272704 G=0 depth=2 C=1 b=2 k=1 slice_w=23 footprint=58240 cores=112 defs=('GS_RES_LOCAL',)
+shape=[7136, 736] budget=1272704 G=0 depth=2 C=1 b=2 k=1 slice_w=23 footprint=58240 cores=112 defs=('GS_COMPACT', 'GS_RES_LOCAL')
+shape=[7136, 736] budget=1272704 G=0 depth=2 C=1 b=2 k=1 slice_w=23 footprint=58240 cores=112 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST')
+height6_Layout.TILE op: pcc_ref=0.999984 maxabs_ref=0.1673 vs_op=bit-exact
+height6_Layout.TILE res: pcc_ref=0.502277 maxabs_ref=17.46 vs_op=DIFF maxabs=17.5 bad_rows=7104[0..7103] bad_tilecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+height6_Layout.TILE lean: pcc_ref=0.502277 maxabs_ref=17.46 vs_op=DIFF maxabs=17.5 bad_rows=7104[0..7103] bad_tilecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+height6_Layout.TILE lean_mc: pcc_ref=0.502277 maxabs_ref=17.46 vs_op=DIFF maxabs=17.5 bad_rows=7104[0..7103] bad_tilecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]

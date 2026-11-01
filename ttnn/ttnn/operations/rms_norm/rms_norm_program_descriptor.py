@@ -38,7 +38,7 @@ TILE = 32
 # CB indices — must match kernels/rms_norm_common.hpp.
 CB_X_RM = 0  # RM: raw stick pieces (tile-sized pages) -> tilize
 CB_X = 1  # resident x block (ping)
-CB_GAMMA = 2  # expanded gamma slice, program lifetime
+CB_GAMMA = 2  # gamma slice (faces 0/1 pages, row-broadcast by compute), program lifetime
 CB_SUMSQ = 3  # per tile-row DEST-accumulated sum of x^2 (pass-1 output)
 CB_PARTIAL = 4  # k > 1: this member's per-row partial (column 0)
 CB_GATHERED = 5  # k > 1: k partials per row, all-gathered over the NoC
@@ -78,11 +78,11 @@ GAMMA_MCAST = True
 # per-core slice load (a shard grid column need not hold a single W slice).
 GAMMA_MCAST_SHARDED_K1 = True
 # k > 1, per-core gamma load (no multicast): the writer issues the gamma DRAM reads at kernel start but finishes the
-# load (barrier + expand) only after block 0's partials are sent / its owner duties are done, so the cross-core
+# load (barrier [+ RM face-1 copy]) only after block 0's partials are sent / its owner duties are done, so the cross-core
 # combine no longer waits on it. Pays when pass 1 is short (few tile-rows per block): BH p150b, perf config,
 # blocks of 1-2 tile-rows — (1,1,32,32768) k=49 24.3 -> 20.8 us, (160,11008) k=25 29.4 -> 24.8 us, (352,4096)
 # 25.9 -> 24.2 us, WIDTH (32,7168) 9.3 -> 8.3 us. With long blocks the early load is already hidden behind pass 1
-# and the late expand only delays pass 2: BLOCK (7168,1024) [736,128] (23 tile-rows) 29.9 -> 30.8 us. Gated on
+# and the late finish only delays pass 2: BLOCK (7168,1024) [736,128] (23 tile-rows) 29.9 -> 30.8 us. Gated on
 # block_row_tiles <= GAMMA_AFTER_SEND_MAX_ROWS.
 GAMMA_AFTER_SEND = True
 GAMMA_AFTER_SEND_MAX_ROWS = 8
@@ -91,7 +91,7 @@ GAMMA_AFTER_SEND_MAX_ROWS = 8
 SIGNAL_AFTER_FLUSH = True
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
 OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
-# Streamed gamma (fallback when the resident expanded gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
+# Streamed gamma (fallback when the resident gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
 # beside the two resident shards): gamma flows through a GAMMA_STREAM_DEPTH-chunk ring of <= GAMMA_STREAM_CHUNK_CAP
 # tiles, re-loaded per (block, chunk). The largest chunk that fits is chosen.
 GAMMA_STREAM_CHUNK_CAP = 16
@@ -160,11 +160,20 @@ def acc_dtype(fp32_dest_acc_en: bool):
     return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
 
 
+def _gamma_page_bytes(gamma_dtype) -> int:
+    """cb_gamma page bytes: the bfp exponent section (if any) + faces 0/1 (half the datum area) of a gamma tile."""
+    elem = 1 if gamma_dtype == ttnn.bfloat8_b else ttnn.tile_size(gamma_dtype) // (TILE * TILE)
+    exp = ttnn.tile_size(gamma_dtype) - TILE * TILE * elem
+    return exp + (TILE * TILE * elem) // 2
+
+
 class _Sizes:
     def __init__(self, x_dtype, gamma_dtype, is_rm, has_gamma, fp32_dest_acc_en):
         self.T_in = ttnn.tile_size(x_dtype)
         self.T_out = self.T_in
-        self.T_g = ttnn.tile_size(gamma_dtype) if has_gamma else 0
+        # cb_gamma page: [bfp exponent section +] faces 0/1 of a gamma tile — compute reads gamma ROW-broadcast
+        # (row 0 of faces 0/1 only), so faces 2/3 are never stored.
+        self.T_g = _gamma_page_bytes(gamma_dtype) if has_gamma else 0
         self.T_acc = ttnn.tile_size(acc_dtype(fp32_dest_acc_en))
         self.is_rm = is_rm
         self.has_gamma = has_gamma
@@ -780,6 +789,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
         1 if (GAMMA_AFTER_SEND and b <= GAMMA_AFTER_SEND_MAX_ROWS) else 0,
         1 if SIGNAL_AFTER_FLUSH else 0,
+        sz.T_g,
     ]
     writer_ct.extend(out_acc_args.get_compile_time_args())
     writer_ct.extend(
@@ -884,7 +894,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     if gamma_mcast:
-        # Sender = each group's first Tensix core (reads + expands the slice); one-shot, no handshake.
+        # Sender = each group's first Tensix core (reads the slice); one-shot, no handshake.
         group_size, order = gamma_groups
         mc = ttnn.Mcast(
             device,

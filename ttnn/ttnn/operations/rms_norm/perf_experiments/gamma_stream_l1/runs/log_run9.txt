@@ -1,0 +1,15 @@
+shape=[1, 1, 4160, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=130 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 4160, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=130 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=False)
+hgt_tile_4160x8192 op: pcc_ref=0.999997 maxabs_ref=0.1098 vs_op=bit-exact
+hgt_tile_4160x8192 fix: pcc_ref=0.999997 maxabs_ref=0.1098 vs_op=bit-exact
+hgt_tile_4160x8192 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.1098 vs_op=bit-exact
+shape=[1, 1, 4096, 2048] budget=1198976 G=0 depth=2 C=1 b=1 k=1 slice_w=64 footprint=139264 cores=128 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 4096, 2048] budget=1198976 G=0 depth=2 C=1 b=1 k=1 slice_w=64 footprint=147456 cores=128 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=True)
+hgt_tile_4096x2048 op: pcc_ref=0.999997 maxabs_ref=0.09471 vs_op=bit-exact
+hgt_tile_4096x2048 fix: pcc_ref=0.999997 maxabs_ref=0.09471 vs_op=bit-exact
+hgt_tile_4096x2048 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.09471 vs_op=bit-exact
+shape=[1, 1, 8192, 1024] budget=1198976 G=0 depth=2 C=1 b=2 k=1 slice_w=32 footprint=51200 cores=128 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 8192, 1024] budget=1198976 G=0 depth=2 C=1 b=2 k=1 slice_w=32 footprint=57344 cores=128 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=True)
+hgt_tile_8192x1024_gbf8 op: pcc_ref=0.999997 maxabs_ref=0.1084 vs_op=bit-exact
+hgt_tile_8192x1024_gbf8 fix: pcc_ref=0.999997 maxabs_ref=0.1084 vs_op=bit-exact
+hgt_tile_8192x1024_gbf8 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.1084 vs_op=bit-exact

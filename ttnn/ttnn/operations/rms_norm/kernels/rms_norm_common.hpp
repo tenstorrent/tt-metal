@@ -10,7 +10,7 @@
 namespace rms_norm_cb {
 constexpr uint32_t cb_x_rm = 0;            // RM: raw stick pieces (tile-sized pages) -> tilize
 constexpr uint32_t cb_x = 1;               // resident x block (ping)
-constexpr uint32_t cb_gamma = 2;           // expanded gamma slice (every row of tile j = gamma[32j..32j+31])
+constexpr uint32_t cb_gamma = 2;           // gamma slice, faces 0/1 pages (row 0 = gamma[32j..32j+31], ROW-broadcast)
 constexpr uint32_t cb_sumsq_tiles = 3;     // per tile-row DEST-accumulated sum of x^2
 constexpr uint32_t cb_partial_sumsq = 4;   // k > 1: this member's per-row partial (column 0)
 constexpr uint32_t cb_gathered_sumsq = 5;  // k > 1: k partials per tile-row (tile r*k + m)

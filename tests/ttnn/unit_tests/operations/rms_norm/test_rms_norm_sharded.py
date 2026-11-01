@@ -236,6 +236,9 @@ def test_height_streamed_gamma(device, shape, dtype, gamma_dtype, gamma_layout, 
         ((1, 1, 416, 1025), HS, 4),  # W tail (masked) + ragged chunk
         ((1, 1, 1024, 1024), BS, 3),  # k > 1 owner combine + streamed gamma
         ((1, 1, 64, 4095), WS, 2),  # ragged last shard column: gap tiles in the last chunk
+        # Perf 1 regression: 223 tile-rows over 130 Tensix cores -> 2 tile-rows per shard x 2 gamma windows. Each
+        # window must land row-major in the shard-backed output (was packed window-major: PCC 0.50).
+        ((7136, 736), HS, 16),
     ],
 )
 @pytest.mark.parametrize("gamma_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

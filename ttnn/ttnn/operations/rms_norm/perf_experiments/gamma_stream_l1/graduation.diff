@@ -1,0 +1,882 @@
+--- ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py	2026-11-01 19:16:24.897990301 +0000
++++ ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1/gs_descriptor.py	2026-11-01 20:39:18.176975115 +0000
+@@ -31,7 +31,15 @@
+
+ import ttnn
+
+-KERNEL_DIR = Path(__file__).parent / "kernels"
++KERNEL_DIR = Path(__file__).parent / "kernels"  # gamma_stream_l1 clone
++
++# ---- gamma_stream_l1 bench knobs (set by the bench via monkeypatch) ----
++GS_DEFINES = ()  # e.g. ("GS_STATEFUL", "GS_COMPACT")
++GS_LOG = None  # path: append one plan line per descriptor build
++GS_RES_CHUNK_TILE = 16  # GS_RES_LOCAL: TILE chunk (tiles) of the local resident expand (RM: the RM chunk C)
++GS_SEM_SLAB = 7  # GS_SLAB_SEM: BRISC -> NCRISC "row slab landed" flag (same Tensix core)
++GS_RES_MCAST_MIN_CORES = 1  # GS_RES_MCAST: multicast the compact slab when the HEIGHT group has >= this many cores
++GS_RES_RM_PREFETCH = 2  # GS_RES_LOCAL RM: chunks expanded before the first stick drain
+
+ TILE = 32
+
+@@ -49,6 +57,8 @@
+ CB_SUMSQ_ACC = 10  # sharded TILE W tail: raw sum-of-squares of the full W tiles (reduce Accumulate CB)
+ CB_TAIL_MASK = 11  # sharded TILE W tail: 0/1 row mask of the valid columns of the last W tile
+ CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows this member owns
++CB_GAMMA2 = 14  # gamma_stream_l1 GS_SPLIT: odd streamed gamma chunks (NCRISC producer)
++CB_GAMMA_ROW = 13  # gamma_stream_l1: resident compact gamma row-0 slab (streamed gamma, GS_COMPACT)
+
+ SEM_PARTIALS_ARRIVED = 0
+ SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
+@@ -196,6 +206,10 @@
+     mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
+     gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
+     rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
++    # gamma_stream_l1: features this plan carries (each adds CB bytes; dropped, in this order, when L1 is short)
++    gs_compact: bool = False  # resident compact row slab (streamed: place from L1; resident k = 1: local expand)
++    gs_split: bool = False  # TILE sharded: NCRISC streams / expands the odd chunks into cb_gamma2
++    gs_res: bool = False  # sharded k = 1 resident: local chunked expand (needs the slab) instead of the multicast
+
+
+ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> dict:
+@@ -218,6 +232,16 @@
+             plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
+     if sz.has_gamma:
+         plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk if opts.gamma_chunk else pitch, sz.T_g)
++        if _gs_res_local(sz, k, opts):
++            plan[CB_GAMMA_ROW] = (1, _gs_row_bytes(sz, slice_w))
++            ev, od = _gs_res_split_pages(sz, opts, pitch)
++            if od:
++                plan[CB_GAMMA] = (ev, sz.T_g)
++                plan[CB_GAMMA2] = (od, sz.T_g)
++        if opts.gamma_chunk and opts.gs_compact:
++            plan[CB_GAMMA_ROW] = (1, _gs_row_bytes(sz, slice_w))
++        if _gs_split(opts):
++            plan[CB_GAMMA2] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk, sz.T_g)
+     if k > 1:
+         plan[CB_PARTIAL] = (b, sz.T_acc)
+         if opts.owner_combine:
+@@ -238,6 +262,37 @@
+     return plan
+
+
++def _gs_res_local(sz, k, opts) -> bool:
++    """GS_RES_LOCAL: sharded k == 1 with a resident gamma slice — local chunked expand instead of the multicast."""
++    return (
++        opts.gs_res and getattr(sz, "sharded", False) and k == 1 and sz.has_gamma and not opts.gamma_chunk
++    )
++
++
++def _gs_res_split_pages(sz, opts, pitch):
++    """(even, odd) cb_gamma / cb_gamma2 pages of the GS_RES_LOCAL split (TILE sharded only, >= 2 chunks); odd 0 = none."""
++    if not opts.gs_split or not opts.shard_backed:
++        return pitch, 0
++    g = GS_RES_CHUNK_TILE
++    nch = _div_up(pitch, g)
++    if nch < 2:
++        return pitch, 0
++    odd = (nch // 2) * g - ((nch * g - pitch) if nch % 2 == 0 else 0)
++    return pitch - odd, odd
++
++
++def _gs_split(opts) -> bool:
++    """GS_SPLIT applies to TILE-sharded streamed gamma only (the reader RISC-V is otherwise idle there)."""
++    return bool(opts.gamma_chunk) and opts.shard_backed and opts.gs_split
++
++
++def _gs_row_bytes(sz, slice_w: int) -> int:
++    """Resident compact gamma row-0 slab: TILE gamma — per tile [exp + 64 B][64 B]; RM — the slice row + lead slack."""
++    if getattr(sz, "g_is_tile", True):
++        return slice_w * (getattr(sz, "g_exp", 0) + 128)
++    return (slice_w + 2) * TILE * getattr(sz, "g_elem", 2)
++
++
+ def footprint(sz: _Sizes, tw: int, k: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> int:
+     """Per-Tensix-core CB bytes — the l1_ledger.md expression, summed from cb_plan()."""
+     k, s = _normalize_k(tw, k)
+@@ -336,20 +391,39 @@
+     GAMMA_STREAM_FORCE_CHUNK (test hook) skips the resident-gamma candidates (TILE: also caps G).
+     """
+     force = bool(GAMMA_STREAM_FORCE_CHUNK) and sz.has_gamma
++    d = set(GS_DEFINES)
++    # gamma_stream_l1 feature combos, richest first; each is dropped when it does not fit.
++    res_combos = [replace(opts, gs_res=True, gs_compact=True, gs_split="GS_SPLIT" in d)] if "GS_RES_LOCAL" in d else []
++    if "GS_RES_LOCAL" in d and "GS_SPLIT" in d:
++        res_combos.append(replace(opts, gs_res=True, gs_compact=True))
++    str_combos = []
++    for c_, s_ in ((True, True), (False, True), (True, False)):
++        if (not c_ or "GS_COMPACT" in d) and (not s_ or "GS_SPLIT" in d):
++            if replace(opts, gs_compact=c_, gs_split=s_) not in str_combos:
++                str_combos.append(replace(opts, gs_compact=c_, gs_split=s_))
++    str_combos.append(opts)
+     if not sz.is_rm:
+         if not force:
++            yield from res_combos
+             yield opts
+         if sz.has_gamma:
+-            for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
+-                yield replace(opts, gamma_chunk=g)
++            gmax = min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w)
++            for i, so in enumerate(str_combos):
++                floor = 1 if i + 1 == len(str_combos) else min(4, gmax)
++                for g in range(gmax, floor - 1, -1):
++                    yield replace(so, gamma_chunk=g)
+         return
+     cap = RM_CHUNK_CAP
+     while True:
+         o = replace(opts, rm_chunk_cap=cap)
+         if not force:
++            for rc in res_combos:
++                yield replace(rc, rm_chunk_cap=cap, gs_split=False)
+             yield o
+         if sz.has_gamma:
+-            yield replace(o, gamma_chunk=_rm_chunk(slice_w, cap)[0])
++            for so in str_combos:
++                if not so.gs_split:
++                    yield replace(so, rm_chunk_cap=cap, gamma_chunk=_rm_chunk(slice_w, cap)[0])
+         if cap == 1:
+             return
+         cap //= 2
+@@ -684,6 +758,10 @@
+     elem_bytes = _datum_bytes(input_tensor)
+     g_elem_bytes = _datum_bytes(gamma) if has_gamma else elem_bytes
+     gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
++    sz.g_is_tile = gamma_is_tile
++    sz.g_elem = g_elem_bytes
++    sz.g_exp = _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0
++    sz.sharded = sharded
+
+     budget = cb_l1_budget(device)
+     grid = device.compute_with_storage_grid_size()
+@@ -716,6 +794,8 @@
+         CB_SUMSQ_ACC: t_acc,
+         CB_TAIL_MASK: t_acc,
+         CB_INV_OWNED: t_acc,
++        CB_GAMMA_ROW: ttnn.bfloat16,
++        CB_GAMMA2: g_dtype,
+     }
+     plan = cb_plan(sz, k, blk.slice_w_tiles, b, d, opts)
+     cbs = [_cb(idx, pages, page_bytes, cb_dtype[idx], core_ranges) for idx, (pages, page_bytes) in plan.items()]
+@@ -736,12 +816,49 @@
+     if opts.mask_tail:
+         defines.append(("RMS_MASK_TAIL", "1"))
+     defines.extend((name, "1") for name in PERF_ABLATE)
++    gs_res = _gs_res_local(sz, k, opts)
++    gs_res_split = gs_res and _gs_res_split_pages(sz, opts, pitch)[1] > 0
++    if opts.gamma_chunk:
++        defines.extend(
++            (name, "1")
++            for name in GS_DEFINES
++            if name not in ("GS_SPLIT", "GS_RES_LOCAL", "GS_COMPACT")
++            or (name == "GS_SPLIT" and _gs_split(opts))
++            or (name == "GS_COMPACT" and opts.gs_compact)
++        )
++    elif gs_res:
++        defines.append(("GS_RES_LOCAL", "1"))
++        defines.append(("GS_RES_CHUNK", str(C if is_rm else GS_RES_CHUNK_TILE)))
++        defines.append(("GS_RES_RM_PREFETCH", str(GS_RES_RM_PREFETCH)))
++        if gs_res_split:
++            defines.append(("GS_SPLIT", "1"))
++        defines.extend((n, "1") for n in GS_DEFINES if n in ("GS_STATEFUL", "GS_RM_SCATTER_RISCV", "GS_WINDOW_FIX"))
++    if GS_LOG:
++        with open(GS_LOG, "a") as f:
++            f.write(
++                f"shape={list(input_tensor.shape)} budget={budget} G={opts.gamma_chunk} depth={GAMMA_STREAM_DEPTH} "
++                f"C={blk.rm_chunk_w_tiles} b={blk.block_row_tiles} k={blk.k} slice_w={blk.slice_w_tiles} "
++                f"footprint={blk.footprint} cores={sum(len(g) for g in blk.groups)} defs={GS_DEFINES} "
++                f"plan(compact={opts.gs_compact},split={opts.gs_split},res={opts.gs_res})\n"
++            )
+     gamma_groups = None
+     if opts.gamma_chunk:
+         defines.append(("RMS_GAMMA_CHUNK", str(opts.gamma_chunk)))  # streamed gamma: per-core chunk ring, no mcast
+         defines.append(("RMS_GAMMA_STREAM_DEPTH", str(GAMMA_STREAM_DEPTH)))
+-    elif has_gamma and (GAMMA_MCAST_SHARDED_K1 and k == 1 if sharded else GAMMA_MCAST):
++    elif has_gamma and not gs_res and (GAMMA_MCAST_SHARDED_K1 and k == 1 if sharded else GAMMA_MCAST):
+         gamma_groups = _gamma_mcast_groups(blk, grid.x)
++    gs_slab_mcast = (
++        has_gamma
++        and sharded
++        and k == 1
++        and "GS_RES_MCAST" in GS_DEFINES
++        and (gs_res or opts.gs_compact)
++        and len(blk.groups) >= GS_RES_MCAST_MIN_CORES
++    )
++    if gs_slab_mcast:
++        # multicast the compact row slab (not the expanded slice); GS_SLAB_SEM tells this core's NCRISC it landed
++        gamma_groups = _gamma_mcast_groups(blk, grid.x)
++        defines.append(("GS_SLAB_SEM", str(GS_SEM_SLAB)))
+     gamma_mcast = gamma_groups is not None
+     if gamma_mcast:
+         defines.append(("RMS_GAMMA_MCAST", "1"))
+@@ -853,14 +970,26 @@
+             assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
+             writer_rt[c.x][c.y] = writer_base + noc_xy
+
+-    reader = ttnn.KernelDescriptor(
+-        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+-        core_ranges=core_ranges,
+-        compile_time_args=reader_ct,
+-        defines=defines,
+-        runtime_args=reader_rt,
+-        config=ttnn.ReaderConfigDescriptor(),
+-    )
++    if _gs_split(opts) or gs_res_split:
++        # NCRISC runs the writer source in GS_NC_ROLE: the sharded-TILE reader duty (cb_x publish, tail mask)
++        # + the odd gamma chunks.
++        reader = ttnn.KernelDescriptor(
++            kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
++            core_ranges=core_ranges,
++            compile_time_args=writer_ct,
++            defines=[d_ for d_ in defines if d_[0] != "RMS_GAMMA_MCAST"] + [("GS_NC_ROLE", "1")],
++            runtime_args=writer_rt,
++            config=ttnn.ReaderConfigDescriptor(),
++        )
++    else:
++        reader = ttnn.KernelDescriptor(
++            kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
++            core_ranges=core_ranges,
++            compile_time_args=reader_ct,
++            defines=defines,
++            runtime_args=reader_rt,
++            config=ttnn.ReaderConfigDescriptor(),
++        )
+     writer = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+         core_ranges=core_ranges,
+@@ -882,6 +1011,8 @@
+         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS_ARRIVED, core_ranges=core_ranges, initial_value=0))
+         if opts.owner_combine:
+             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
++    if gs_slab_mcast:
++        semaphores.append(ttnn.SemaphoreDescriptor(id=GS_SEM_SLAB, core_ranges=core_ranges, initial_value=0))
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     if gamma_mcast:
+         # Sender = each group's first Tensix core (reads + expands the slice); one-shot, no handshake.
+--- ttnn/ttnn/operations/rms_norm/kernels/rms_norm_common.hpp	2026-11-01 16:14:31.991439355 +0000
++++ ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1/kernels/rms_norm_common.hpp	2026-11-01 19:47:07.977286601 +0000
+@@ -21,4 +21,6 @@
+ constexpr uint32_t cb_sumsq_acc = 10;      // sharded TILE W tail: raw sum x^2 of the full W tiles (Accumulate CB)
+ constexpr uint32_t cb_tail_mask = 11;      // sharded TILE W tail: 0/1 row mask of the tail tile's valid columns
+ constexpr uint32_t cb_inv_owned = 12;      // owner combine (k > K_SYM_MAX_*): inv_rms of the rows this member owns
++constexpr uint32_t cb_gamma2 = 14;         // gamma_stream_l1 GS_SPLIT: odd streamed gamma chunks (NCRISC producer)
++constexpr uint32_t cb_gamma_row = 13;      // gamma_stream_l1: resident compact gamma row-0 slab (streamed gamma)
+ }  // namespace rms_norm_cb
+--- ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp	2026-11-01 19:30:09.704440463 +0000
++++ ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1/kernels/rms_norm_writer.cpp	2026-11-01 20:39:18.176975115 +0000
+@@ -64,6 +64,9 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #endif
+ #include "rms_norm_common.hpp"
++#if defined(GS_NC_ROLE) && defined(RMS_MASK_TAIL)
++#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
++#endif
+
+ using namespace rms_norm_cb;
+
+@@ -291,29 +294,265 @@
+ };
+ #endif
+
++#ifdef RMS_HAS_GAMMA
++// ===== gamma_stream_l1 bench variants (perf_experiments/gamma_stream_l1) =====
++// GS_STATEFUL: the expand's local NoC copies use the one-packet stateful read API — every copy of a stage has
++//   the same size and source core (this one), so the cmd buffer's size / source-coordinate registers are written
++//   once per stage and each copy only writes its two L1 addresses (vs a full register set per noc_async_read).
++// GS_COMPACT: the row-0 slab of this member's whole gamma slice is read from DRAM ONCE per program into a small
++//   resident L1 region (cb_gamma_row: TILE gamma — per tile the same two 64 B-aligned pieces the per-chunk path
++//   reads, d0 + 128 B; RM gamma — the contiguous slice row), at kernel start (overlaps pass 1). Each chunk's tiles
++//   are then placed from L1 (local copies) instead of DRAM, then expanded as before.
++FORCE_INLINE void expand_rows_any(uint32_t base, uint32_t num_tiles) {
++#ifdef GS_STATEFUL
++    constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
++    constexpr uint32_t face_row_bytes = FACE_DIM * gamma_elem_bytes;
++    expand_gamma_exponents(base, num_tiles);
++    const uint64_t self = get_noc_addr(0);
++    for (uint32_t rows = 1; rows < FACE_DIM; rows <<= 1) {
++        const uint32_t bytes = rows * face_row_bytes;
++        noc_async_read_one_packet_set_state(self, bytes);
++        for (uint32_t j = 0; j < num_tiles; ++j) {
++            const uint32_t tile = base + j * g_tile_bytes + gamma_exp_bytes;
++            noc_async_read_one_packet_with_state(tile, tile + bytes);
++            noc_async_read_one_packet_with_state(tile + face_bytes, tile + face_bytes + bytes);
++        }
++        noc_async_read_barrier();
++    }
++    noc_async_read_one_packet_set_state(self, 2 * face_bytes);
++    for (uint32_t j = 0; j < num_tiles; ++j) {
++        const uint32_t tile = base + j * g_tile_bytes + gamma_exp_bytes;
++        noc_async_read_one_packet_with_state(tile, tile + 2 * face_bytes);
++    }
++    noc_async_read_barrier();
++#else
++    expand_gamma_rows(base, num_tiles);
++#endif
++}
++
++#if defined(GS_COMPACT) || defined(GS_RES_LOCAL)
++constexpr uint32_t gs_slab_tile_bytes = gamma_exp_bytes + 2 * GAMMA_READ_ALIGN;  // TILE gamma: per-tile row-0 slab
++
++// Resident row slab: issue the DRAM reads (no barrier) into cb_gamma_row's L1.
++template <typename Accessor>
++FORCE_INLINE uint32_t gs_issue_row_slab(
++    const Accessor& g_acc,
++    uint32_t w_tile_start,
++    uint32_t core_w_tiles,
++    uint32_t col0,
++    uint32_t valid_cols,
++    uint32_t parity,  // GS_SPLIT: only the tiles of chunks with (chunk index & 1) == parity; 2 = all
++    uint32_t chunk) {
++    cb_reserve_back(cb_gamma_row, 1);  // private L1 region (both RISC-Vs: disjoint tile slabs), never pushed
++    const uint32_t row = get_write_ptr(cb_gamma_row);
++    if constexpr (gamma_is_tile) {
++        constexpr uint32_t d0 = gamma_exp_bytes;
++        constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
++        for (uint32_t j = 0; j < core_w_tiles; ++j) {
++            if (parity < 2 && ((j / chunk) & 1) != parity) {
++                continue;
++            }
++            const uint32_t slab = row + j * gs_slab_tile_bytes;
++            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, 0), slab, d0 + GAMMA_READ_ALIGN);
++            noc_async_read(g_acc.get_noc_addr(w_tile_start + j, d0 + face_bytes), slab + d0 + GAMMA_READ_ALIGN,
++                           GAMMA_READ_ALIGN);
++        }
++    } else {
++        const uint32_t byte0 = col0 * gamma_elem_bytes;
++        const uint32_t lead = gamma_rm_lead(col0);
++        noc_async_read(g_acc.get_noc_addr(0, byte0 - lead), row, lead + valid_cols * gamma_elem_bytes);
++    }
++    return row;
++}
++
++// Place row 0 of chunk tiles [c0, c0 + n) from the resident slab into `base`, then expand.
++FORCE_INLINE void gs_fill_from_slab(uint32_t row, uint32_t base, uint32_t c0, uint32_t n, uint32_t col0) {
++    constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
++    if constexpr (gamma_is_tile) {
++        constexpr uint32_t d0 = gamma_exp_bytes;
++        const uint64_t self = get_noc_addr(0);
++        // piece 0: [exp section (bfp) + face 0 row 0 (+ row 1 junk, overwritten by the expand)]
++        noc_async_read_one_packet_set_state(self, d0 + GAMMA_READ_ALIGN);
++        for (uint32_t j = 0; j < n; ++j) {
++            noc_async_read_one_packet_with_state(row + (c0 + j) * gs_slab_tile_bytes, base + j * g_tile_bytes);
++        }
++        noc_async_read_one_packet_set_state(self, GAMMA_READ_ALIGN);
++        for (uint32_t j = 0; j < n; ++j) {
++            noc_async_read_one_packet_with_state(
++                row + (c0 + j) * gs_slab_tile_bytes + d0 + GAMMA_READ_ALIGN, base + j * g_tile_bytes + d0 + face_bytes);
++        }
++        noc_async_read_barrier();
++    } else {
++        const uint32_t lead = gamma_rm_lead(col0);
++#ifdef GS_RM_SCATTER_RISCV
++        // RISC-V scatter straight from the resident row (no staging, so no descending-order constraint).
++        constexpr uint32_t words_per_face_row = FACE_DIM * gamma_elem_bytes / sizeof(uint32_t);
++        for (uint32_t j = 0; j < n; ++j) {
++            volatile tt_l1_ptr uint32_t* src =
++                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row + lead + (c0 + j) * TILE_DIM * gamma_elem_bytes);
++            volatile tt_l1_ptr uint32_t* dst0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes);
++            volatile tt_l1_ptr uint32_t* dst1 =
++                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes + face_bytes);
++            for (uint32_t w = 0; w < words_per_face_row; ++w) {
++                dst0[w] = src[w];
++                dst1[w] = src[words_per_face_row + w];
++            }
++        }
++#else
++        // Local NoC copies of the two 16-datum row-0 pieces per tile (16 B-aligned: lead is a 16 B multiple).
++        constexpr uint32_t frb = FACE_DIM * gamma_elem_bytes;
++        const uint64_t self = get_noc_addr(0);
++        noc_async_read_one_packet_set_state(self, frb);
++        for (uint32_t j = 0; j < n; ++j) {
++            const uint32_t src = row + lead + (c0 + j) * TILE_DIM * gamma_elem_bytes;
++            const uint32_t dst = base + j * g_tile_bytes;
++            noc_async_read_one_packet_with_state(src, dst);
++            noc_async_read_one_packet_with_state(src + frb, dst + face_bytes);
++        }
++        noc_async_read_barrier();
++#endif
++    }
++}
++#endif
++
++#if defined(GS_COMPACT) || defined(GS_RES_LOCAL)
++// Acquire the resident row slab (returns its L1 base).
++//   GS_SLAB_SEM, BRISC (RMS_GAMMA_MCAST): the HEIGHT group's sender reads the WHOLE slab once and multicasts it
++//     (a few KB-tens of KB instead of every Tensix core issuing ~2 DRAM reads per gamma tile at kernel start); then
++//     the local flag semaphore GS_SLAB_SEM is raised for this core's NCRISC.
++//   GS_SLAB_SEM, NCRISC (GS_NC_ROLE): wait for that flag — the slab is already in this core's L1.
++//   otherwise: this RISC-V reads the tiles of its own chunk parity itself.
++template <typename Accessor>
++FORCE_INLINE uint32_t gs_slab_acquire(
++    const Accessor& g_acc,
++    uint32_t w_tile_start,
++    uint32_t core_w_tiles,
++    uint32_t col0,
++    uint32_t valid_cols,
++    uint32_t parity,
++    uint32_t chunk) {
++#if defined(GS_SLAB_SEM) && defined(GS_NC_ROLE)
++    cb_reserve_back(cb_gamma_row, 1);
++    const uint32_t row = get_write_ptr(cb_gamma_row);
++    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GS_SLAB_SEM)), 1);
++    return row;
++#elif defined(GS_SLAB_SEM) && defined(RMS_GAMMA_MCAST)
++    cb_reserve_back(cb_gamma_row, 1);
++    uint32_t row = get_write_ptr(cb_gamma_row);
++    {
++        MaybeDeviceZoneScope("gs_slab_mcast");
++        Noc noc;
++        if (auto sender = gamma_mcast.optional_sender(noc)) {
++            row = gs_issue_row_slab(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, 2, chunk);
++            noc_async_read_barrier();
++            uint32_t slab_bytes;
++            if constexpr (gamma_is_tile) {
++                slab_bytes = core_w_tiles * gs_slab_tile_bytes;
++            } else {
++                slab_bytes = ((gamma_rm_lead(col0) + valid_cols * gamma_elem_bytes + 63) / 64) * 64;
++            }
++            sender->send(row, row, slab_bytes);
++        } else if (auto receiver = gamma_mcast.optional_receiver(noc)) {
++            receiver->receive();
++        }
++    }
++    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GS_SLAB_SEM)), 1);
++    return row;
++#else
++    const uint32_t row = gs_issue_row_slab(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, parity, chunk);
++    noc_async_read_barrier();
++    return row;
++#endif
++}
++#endif
++
++#ifdef GS_RES_LOCAL
++// Resident slice, local expand (no multicast of expanded tiles): tiles [c0, c0 + n) into cb_g's next n pages,
++// placed from the resident row slab + expanded, pushed at once (compute waits progressively).
++template <uint32_t cb_g>
++FORCE_INLINE void gs_res_chunk(uint32_t row, uint32_t core_w_tiles, uint32_t col0, uint32_t c0, uint32_t n) {
++    cb_reserve_back(cb_g, n);
++    if (c0 < core_w_tiles) {
++        const uint32_t valid = (core_w_tiles - c0) < n ? (core_w_tiles - c0) : n;
++        const uint32_t base = get_write_ptr(cb_g);
++        gs_fill_from_slab(row, base, c0, valid, col0);
++        expand_rows_any(base, valid);
++    }
++    cb_push_back(cb_g, n);
++}
++#endif
++
+ #ifdef RMS_GAMMA_CHUNK
++
+ // stream_gamma_chunk: gamma tiles [c0, c0 + G) of this member's slice into the next G pages of the cb_gamma ring
+ // (always G pages pushed, so a chunk never wraps the ring). Gap tiles past core_w_tiles (a ragged shard column's
+ // padding / the RM chunk pitch) are pushed unwritten — their output is don't-care.
+-template <typename Accessor>
++template <uint32_t cb_g, typename Accessor>
+ FORCE_INLINE void stream_gamma_chunk(
+     const Accessor& g_acc,
+     uint32_t w_tile_start,
+     uint32_t core_w_tiles,
+     uint32_t col0,
+     uint32_t valid_cols,
+-    uint32_t c0) {
++    uint32_t c0,
++    [[maybe_unused]] uint32_t row) {
+     constexpr uint32_t G = RMS_GAMMA_CHUNK;
+-    cb_reserve_back(cb_gamma, G);
++    {
++        MaybeDeviceZoneScope("gs_ring_wait");  // back-pressure: compute has not freed a ring slot
++        cb_reserve_back(cb_g, G);
++    }
++#ifdef GS_ABLATE_FILL
++    if (false) {  // ablation: ring handshake only, no gamma payload (compute-bound floor of pass 2 with gamma)
++#else
+     if (c0 < core_w_tiles) {
++#endif
+         const uint32_t valid = (core_w_tiles - c0) < G ? (core_w_tiles - c0) : G;
++        const uint32_t base = get_write_ptr(cb_g);
++#ifdef GS_COMPACT
++        {
++            MaybeDeviceZoneScope("gs_place");  // row 0 from the resident slab (local)
++            gs_fill_from_slab(row, base, c0, valid, col0);
++        }
++#else
+         const uint32_t cols =
+             (valid_cols - c0 * TILE_DIM) < valid * TILE_DIM ? (valid_cols - c0 * TILE_DIM) : valid * TILE_DIM;
+-        fill_gamma_slice(g_acc, get_write_ptr(cb_gamma), w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
++        {
++            MaybeDeviceZoneScope("gs_place");  // row 0 from DRAM: issue + barrier (+ RM scatter)
++            issue_gamma_reads(g_acc, base, w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
++            noc_async_read_barrier();
++            if constexpr (!gamma_is_tile) {
++                constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
++                const uint32_t lead = gamma_rm_lead(col0 + c0 * TILE_DIM);
++                constexpr uint32_t words_per_face_row = FACE_DIM * gamma_elem_bytes / sizeof(uint32_t);
++                for (uint32_t jj = valid; jj > 0; --jj) {
++                    const uint32_t j = jj - 1;
++                    volatile tt_l1_ptr uint32_t* src =
++                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + lead + j * TILE_DIM * gamma_elem_bytes);
++                    volatile tt_l1_ptr uint32_t* dst0 =
++                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes);
++                    volatile tt_l1_ptr uint32_t* dst1 =
++                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes + face_bytes);
++                    uint32_t tmp[2 * words_per_face_row];
++                    for (uint32_t w = 0; w < 2 * words_per_face_row; ++w) {
++                        tmp[w] = src[w];
++                    }
++                    for (uint32_t w = 0; w < words_per_face_row; ++w) {
++                        dst0[w] = tmp[w];
++                        dst1[w] = tmp[words_per_face_row + w];
++                    }
++                }
++            }
++        }
++#endif
++        {
++            MaybeDeviceZoneScope("gs_expand");  // rows 1..31 (local copies, one barrier per stage)
++            expand_rows_any(base, valid);
++        }
+     }
+-    cb_push_back(cb_gamma, G);
++    cb_push_back(cb_g, G);
+ }
+ #endif
++#endif  // RMS_HAS_GAMMA (gamma_stream_l1 helpers)
+
+ // One partial / inv_rms tile to a peer: faces 0 and 2 (column 0) or the whole tile.
+ FORCE_INLINE void send_acc_tile(uint32_t src, uint64_t dst, uint32_t tile_bytes) {
+@@ -461,6 +700,63 @@
+ constexpr bool ablate_dm = false;
+ #endif
+
++#ifdef GS_NC_ROLE
++// gamma_stream_l1 GS_SPLIT, NCRISC side (TILE sharded only — the reader's job there is a single cb_x publish):
++// publish the resident shard to compute (the reader's duty), then stream the ODD gamma chunks into cb_gamma2
++// on NoC0, in parallel with BRISC's even chunks on NoC1.
++void kernel_main() {
++    const uint32_t num_blocks = get_arg_val<uint32_t>(2);
++    const uint32_t block_row_tiles = get_arg_val<uint32_t>(3);
++    const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(4);
++    const uint32_t w_tile_start = get_arg_val<uint32_t>(5);
++    const uint32_t core_w_tiles = get_arg_val<uint32_t>(6);
++    const uint32_t valid_cols = get_arg_val<uint32_t>(9);
++    const uint32_t gamma_addr = get_arg_val<uint32_t>(11);
++    const uint32_t col0 = get_arg_val<uint32_t>(12);
++#ifdef RMS_MASK_TAIL
++    constexpr uint32_t w_valid_in_last_tile = W - TILE_DIM * (tensor_w_tiles - 1);
++    if (w_tile_start + core_w_tiles == tensor_w_tiles) {
++        dataflow_kernel_lib::prepare_reduce_mask<cb_tail_mask, ckernel::ReduceDim::REDUCE_ROW>(w_valid_in_last_tile);
++    }
++#endif
++    {
++        const uint32_t shard_rows = (num_blocks - 1) * block_row_tiles + last_block_row_tiles;
++        cb_reserve_back(cb_x, shard_rows * x_row_pitch);
++        cb_push_back(cb_x, shard_rows * x_row_pitch);
++    }
++    const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
++#ifdef GS_RES_LOCAL
++    {
++        MaybeDeviceZoneScope("gs_res_load");  // resident slice, odd chunks: slab reads + local expand
++        constexpr uint32_t Gr = GS_RES_CHUNK;
++        const uint32_t total = x_row_pitch;
++        const uint32_t row = gs_slab_acquire(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, 1, Gr);
++        for (uint32_t c0 = Gr; c0 < total; c0 += 2 * Gr) {
++            gs_res_chunk<cb_gamma2>(row, core_w_tiles, col0, c0, (total - c0) < Gr ? (total - c0) : Gr);
++        }
++    }
++    return;
++#else
++    constexpr uint32_t gamma_chunk = RMS_GAMMA_CHUNK;
++    const uint32_t norm_w = x_row_pitch;
++#ifdef GS_COMPACT
++    uint32_t gs_row;
++    {
++        MaybeDeviceZoneScope("gs_row_load");
++        gs_row = gs_slab_acquire(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, 1, RMS_GAMMA_CHUNK);
++    }
++#else
++    const uint32_t gs_row = 0;
++#endif
++    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
++        MaybeDeviceZoneScope("wr_gamma_stream");
++        for (uint32_t c0 = gamma_chunk; c0 < norm_w; c0 += 2 * gamma_chunk) {
++            stream_gamma_chunk<cb_gamma2>(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, c0, gs_row);
++        }
++    }
++#endif
++}
++#else
+ void kernel_main() {
+ #ifdef RMS_ABLATE_EMPTY
+     return;
+@@ -488,6 +784,19 @@
+ #else
+     const uint32_t norm_w = core_w_tiles;
+ #endif
++#ifdef GS_COMPACT
++    uint32_t gs_row;
++    {
++        MaybeDeviceZoneScope("gs_row_load");  // once per program: row-0 slab DRAM reads + barrier
++#ifdef GS_SPLIT
++        gs_row = gs_slab_acquire(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, 0, RMS_GAMMA_CHUNK);
++#else
++        gs_row = gs_slab_acquire(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, 2, RMS_GAMMA_CHUNK);
++#endif
++    }
++#else
++    const uint32_t gs_row = 0;
++#endif
+ #endif
+     // Resident gamma slice (once per program). k == 1, multicast gamma, or !gamma_after_send: loaded at kernel start,
+     // overlapping the reader's x stream and pass 1. Per-core load with k > 1 and gamma_after_send: only the DRAM reads
+@@ -495,7 +804,39 @@
+     // the barrier + expand (+ multicast) run after block 0's partials have left (symmetric) / after this member's
+     // owner duties — the combine's critical path (partials out, owner combine + inv_rms return) no longer waits
+     // on the gamma expand, which instead overlaps the wait for the other members.
+-#if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
++#if defined(RMS_HAS_GAMMA) && defined(GS_RES_LOCAL)
++    // gamma_stream_l1 GS_RES_LOCAL (sharded k == 1): every Tensix core expands its own resident slice locally,
++    // chunk by chunk, from a resident row slab (no multicast of the 2 KB/tile expanded slice); compute waits
++    // progressively. TILE: all chunks now (GS_SPLIT: even chunks; NCRISC does the odd ones). RM: prefetch
++    // GS_RES_RM_PREFETCH chunks now, the rest after each chunk's sticks drain (compute blocks on cb_out_rm).
++    const auto g_res_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
++    constexpr uint32_t gs_rc = GS_RES_CHUNK;
++#ifdef RMS_RM
++    const uint32_t gs_total = chunks_this * rm_chunk_w_tiles;
++    constexpr uint32_t gs_first_n = GS_RES_RM_PREFETCH;
++    constexpr uint32_t gs_step = gs_rc;
++    constexpr uint32_t gs_parity = 2;
++#else
++    const uint32_t gs_total = x_row_pitch;
++    constexpr uint32_t gs_first_n = 0xFFFFFFFF;
++#ifdef GS_SPLIT
++    constexpr uint32_t gs_step = 2 * gs_rc;
++    constexpr uint32_t gs_parity = 0;
++#else
++    constexpr uint32_t gs_step = gs_rc;
++    constexpr uint32_t gs_parity = 2;
++#endif
++#endif
++    uint32_t gs_res_row;
++    {
++        MaybeDeviceZoneScope("gs_res_load");  // slab reads + the first (TILE: all own) chunks' local expand
++        gs_res_row = gs_slab_acquire(g_res_acc, w_tile_start, core_w_tiles, col0, valid_cols, gs_parity, gs_rc);
++        for (uint32_t i = 0, c0 = 0; i < gs_first_n && c0 < gs_total; ++i, c0 += gs_step) {
++            gs_res_chunk<cb_gamma>(gs_res_row, core_w_tiles, col0, c0, (gs_total - c0) < gs_rc ? (gs_total - c0) : gs_rc);
++        }
++    }
++    auto finish_resident_gamma = [](uint32_t) {};
++#elif defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
+     const auto g_res_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
+ #ifdef RMS_RM
+     const uint32_t gamma_push_tiles = chunks_this * rm_chunk_w_tiles;
+@@ -561,8 +902,13 @@
+ #endif
+         {
+             MaybeDeviceZoneScope("wr_gamma_stream");  // occupancy: chunk loads + back-pressure on the ring
+-            for (uint32_t i = 0, c0 = 0; i < gamma_prefetch && c0 < norm_w; ++i, c0 += gamma_chunk) {
+-                stream_gamma_chunk(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, c0);
++#ifdef GS_SPLIT
++            constexpr uint32_t gs_step = 2 * gamma_chunk;  // even chunks here; odd chunks on NCRISC (GS_NC_ROLE)
++#else
++            constexpr uint32_t gs_step = gamma_chunk;
++#endif
++            for (uint32_t i = 0, c0 = 0; i < gamma_prefetch && c0 < norm_w; ++i, c0 += gs_step) {
++                stream_gamma_chunk<cb_gamma>(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, c0, gs_row);
+             }
+         }
+ #endif
+@@ -587,12 +933,19 @@
+                 noc_async_writes_flushed();
+                 cb_pop_front(cb_out_rm, rm_chunk_w_tiles);
+             }
++#if defined(RMS_HAS_GAMMA) && defined(GS_RES_LOCAL)
++            if (blk == 0 && c + GS_RES_RM_PREFETCH < chunks_this) {
++                MaybeDeviceZoneScope("gs_res_refill");
++                const uint32_t c0n = (c + GS_RES_RM_PREFETCH) * gs_rc;
++                gs_res_chunk<cb_gamma>(gs_res_row, core_w_tiles, col0, c0n, gs_rc);
++            }
++#endif
+ #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+             // Chunk c's gamma was popped before its sticks reached cb_out_rm: refill the ring with chunk c + depth
+             // (loaded while compute normalizes chunk c + 1, whose gamma is already resident).
+             if (c + RMS_GAMMA_STREAM_DEPTH < chunks_this) {
+-                stream_gamma_chunk(
+-                    g_acc, w_tile_start, core_w_tiles, col0, valid_cols, (c + RMS_GAMMA_STREAM_DEPTH) * gamma_chunk);
++                stream_gamma_chunk<cb_gamma>(
++                    g_acc, w_tile_start, core_w_tiles, col0, valid_cols, (c + RMS_GAMMA_STREAM_DEPTH) * gamma_chunk, gs_row);
+             }
+ #endif
+         }
+@@ -658,3 +1011,4 @@
+         noc_async_atomic_barrier();
+     }
+ }
++#endif  // GS_NC_ROLE
+--- ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp	2026-11-01 19:16:24.893990250 +0000
++++ ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1/kernels/rms_norm_compute.cpp	2026-11-01 20:33:47.820780868 +0000
+@@ -153,7 +153,10 @@
+ // ---- normalize_block: x * inv_rms (bcast Col) [* expanded gamma via DEST reuse] -> cb_out ----
+ // base_col: first tile column of the window (RM: chunk start); width: tiles walked per tile-row;
+ // gamma_col: cb_gamma page of the window's first column (resident: base_col; streamed chunk: 0).
+-template <uint32_t cb_x_blk>
++// kStridedOut (gamma_stream_l1 GS_WINDOW_FIX): a column window [base_col, base_col + width) of a multi-row block
++// is packed at tile base_col + r * x_row_pitch + c of the caller-reserved shard-backed cb_out (row-major), not
++// appended — sequential packing of per-chunk windows lands chunk-major in a row-major shard (wrong for rows > 1).
++template <uint32_t cb_x_blk, uint32_t cb_g = cb_gamma, bool kStridedOut = false>
+ ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col) {
+     constexpr auto x_in = input(
+         cb_x_blk,
+@@ -167,18 +170,31 @@
+     using XTimesInvRms = BinaryFpu<BinaryFpuOp::Mul, x_in, inv_rms_in>;
+ #ifdef RMS_HAS_GAMMA
+     constexpr auto gamma_in = input(
+-        cb_gamma,
++        cb_g,
+         WaitPolicy::None,
+         PopPolicy::None,
+         InputTileMapping::Row,
+         DataFormatReconfig::Enabled,
+         TileAddressing::Offset);
+     using TimesGamma = DestReuseBinary<BinaryFpuOp::Mul, gamma_in, DestReuseType::DEST_TO_SRCA>;
+-    eltwise_chain(
+-        IterationShape::grid(rows, width),
+-        XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
+-        TimesGamma{gamma_col},
+-        PackTile<output(cb_out)>{});
++    if constexpr (kStridedOut) {
++        eltwise_chain(
++            IterationShape::grid(rows, width),
++            XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
++            TimesGamma{gamma_col},
++            PackTile<output(
++                cb_out,
++                ReservePolicy::None,
++                PushPolicy::None,
++                DataFormatReconfig::Enabled,
++                TileAddressing::Strided)>{StridedTileRange{base_col, x_row_pitch}});
++    } else {
++        eltwise_chain(
++            IterationShape::grid(rows, width),
++            XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
++            TimesGamma{gamma_col},
++            PackTile<output(cb_out)>{});
++    }
+ #else
+     eltwise_chain(
+         IterationShape::grid(rows, width),
+@@ -291,7 +307,7 @@
+         MaybeDeviceZoneScope("cmp_wait_inv");  // owner combine: inv_rms returned by the row owners (writer)
+         cb_wait_front(cb_inv_rms, rows);
+     }
+-#if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
++#if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK) && !defined(GS_RES_LOCAL)
+     {
+         MaybeDeviceZoneScope("cmp_wait_gamma");  // resident gamma slice (writer load / multicast)
+         cb_wait_front(cb_gamma, gamma_tiles);
+@@ -309,6 +325,11 @@
+         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, 0);
+         cb_pop_front(cb_gamma, rm_chunk_w_tiles);
+ #else
++#if defined(RMS_HAS_GAMMA) && defined(GS_RES_LOCAL)
++        // gamma_stream_l1 GS_RES_LOCAL: the writer expands the resident slice chunk by chunk — wait progressively
++        // (a no-op after block 0).
++        cb_wait_front(cb_gamma, (c + 1) * rm_chunk_w_tiles);
++#endif
+         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, c * rm_chunk_w_tiles);
+ #endif
+         // untilize init/uninit per chunk: the normalize chain between chunks reprograms unpack/math/pack.
+@@ -317,11 +338,75 @@
+ #elif defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+     // Streamed gamma: one G-tile chunk per window, re-streamed by the writer every block.
+     constexpr uint32_t G = RMS_GAMMA_CHUNK;
++#ifdef GS_WINDOW_FIX
++    // multi-row blocks only: a single tile-row's windows already land row-major with the per-tile pack
++    const bool so = rows > 1;
++    if (so) {
++        cb_reserve_back(cb_out, rows * x_row_pitch);
++    }
++#else
++    constexpr bool so = false;
++#endif
++#ifdef GS_SPLIT
++    // gamma_stream_l1 GS_SPLIT: even chunks from cb_gamma (BRISC), odd chunks from cb_gamma2 (NCRISC).
++    for (uint32_t c0 = 0, ci = 0; c0 < norm_w; c0 += G, ++ci) {
++        const uint32_t n = (norm_w - c0) < G ? (norm_w - c0) : G;
++        if (ci & 1) {
++            cb_wait_front(cb_gamma2, G);
++            if (so) { normalize_window<cb_x_blk, cb_gamma2, true>(rows, c0, n, 0); } else { normalize_window<cb_x_blk, cb_gamma2, false>(rows, c0, n, 0); }
++            cb_pop_front(cb_gamma2, G);
++        } else {
++            cb_wait_front(cb_gamma, G);
++            if (so) { normalize_window<cb_x_blk, cb_gamma, true>(rows, c0, n, 0); } else { normalize_window<cb_x_blk, cb_gamma, false>(rows, c0, n, 0); }
++            cb_pop_front(cb_gamma, G);
++        }
++    }
++#else
+     for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
+         cb_wait_front(cb_gamma, G);
+-        normalize_window<cb_x_blk>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0);
++        if (so) { normalize_window<cb_x_blk, cb_gamma, true>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0); } else { normalize_window<cb_x_blk, cb_gamma, false>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0); }
+         cb_pop_front(cb_gamma, G);
+     }
++#endif
++#ifdef GS_WINDOW_FIX
++    if (so) {
++        cb_push_back(cb_out, rows * x_row_pitch);
++    }
++#endif
++#elif defined(RMS_HAS_GAMMA) && defined(GS_RES_LOCAL)
++    // gamma_stream_l1 GS_RES_LOCAL: resident slice expanded locally in GS_RES_CHUNK-tile chunks, waited
++    // progressively (no-op after block 0). GS_SPLIT: even chunks in cb_gamma (BRISC), odd in cb_gamma2 (NCRISC).
++    constexpr uint32_t Gr = GS_RES_CHUNK;
++#ifdef GS_WINDOW_FIX
++    // multi-row blocks only: a single tile-row's windows already land row-major with the per-tile pack
++    const bool so = rows > 1;
++    if (so) {
++        cb_reserve_back(cb_out, rows * x_row_pitch);
++    }
++#else
++    constexpr bool so = false;
++#endif
++    for (uint32_t c0 = 0, ci = 0; c0 < norm_w; c0 += Gr, ++ci) {
++        const uint32_t n = (norm_w - c0) < Gr ? (norm_w - c0) : Gr;
++#ifdef GS_SPLIT
++        const uint32_t pos = (ci >> 1) * Gr;
++        if (ci & 1) {
++            cb_wait_front(cb_gamma2, pos + n);
++            if (so) { normalize_window<cb_x_blk, cb_gamma2, true>(rows, c0, n, pos); } else { normalize_window<cb_x_blk, cb_gamma2, false>(rows, c0, n, pos); }
++        } else {
++            cb_wait_front(cb_gamma, pos + n);
++            if (so) { normalize_window<cb_x_blk, cb_gamma, true>(rows, c0, n, pos); } else { normalize_window<cb_x_blk, cb_gamma, false>(rows, c0, n, pos); }
++        }
++#else
++        cb_wait_front(cb_gamma, c0 + n);
++        if (so) { normalize_window<cb_x_blk, cb_gamma, true>(rows, c0, n, c0); } else { normalize_window<cb_x_blk, cb_gamma, false>(rows, c0, n, c0); }
++#endif
++    }
++#ifdef GS_WINDOW_FIX
++    if (so) {
++        cb_push_back(cb_out, rows * x_row_pitch);
++    }
++#endif
+ #else
+     normalize_window<cb_x_blk>(rows, 0, norm_w, 0);
+ #endif
+@@ -409,8 +494,19 @@
+ #endif
+
+ #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
++#if defined(GS_RES_LOCAL) && defined(GS_SPLIT)
++    {
++        constexpr uint32_t Gr = GS_RES_CHUNK;
++        const uint32_t nch = (gamma_tiles + Gr - 1) / Gr;
++        // odd chunks: nch / 2 of them; the ragged last chunk (index nch - 1) is odd iff nch is even.
++        const uint32_t odd_tiles = (nch / 2) * Gr - ((nch % 2 == 0) ? (nch * Gr - gamma_tiles) : 0);
++        cb_pop_front(cb_gamma, gamma_tiles - odd_tiles);
++        cb_pop_front(cb_gamma2, odd_tiles);
++    }
++#else
+     cb_pop_front(cb_gamma, gamma_tiles);
+ #endif
++#endif
+ #ifdef RMS_MASK_TAIL
+     if (owns_tail) {
+         cb_pop_front(cb_tail_mask, 1);  // reduce() waits the mask but never pops it

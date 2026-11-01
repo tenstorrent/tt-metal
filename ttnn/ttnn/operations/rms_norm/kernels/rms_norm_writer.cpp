@@ -4,17 +4,18 @@
 // rms_norm writer (BRISC / NoC1): GammaSliceLoad (once) + exchange_partials_block (k > 1) + store_block.
 // Per block (k > 1): exchange_send -> exchange_recv_partials -> [block 0: finish the gamma load] -> exchange_recv_inv.
 //
-// GammaSliceLoad — this member's W slice of gamma into cb_gamma, "expanded" so every row of tile j holds
-//   gamma[32j .. 32j+31] (lets pass 2 multiply with a plain DEST-reuse mul). Loaded here, not on the reader,
+// GammaSliceLoad — this member's W slice of gamma into cb_gamma. Compute multiplies by gamma ROW-broadcast
+//   (MulGammaRowBcast), so a cb_gamma page only needs row 0 of faces 0/1 = gamma[32j .. 32j+31]: pages are
+//   [bfp exponent section +] faces 0/1 (half a tile), nothing is expanded. Loaded here, not on the reader,
 //   so the x stream starts at once on every Tensix core; compute waits for it only before its first pass 2.
-//   RM gamma  : one contiguous read of the slice into tile 0's area, RISC-V scatter of the 2 x 16-datum
-//               row-0 pieces per tile (descending j, so the staging bytes are consumed before overwritten).
+//   RM gamma  : 64 B-aligned slice (lead == 0): per tile ONE DRAM read of the 32-datum row into face 0 rows
+//               0..1, then one local L1 copy of its upper half (face 0 row 1) into face 1 row 0 (a DRAM read keeps
+//               its source offset mod 64 B, so a bf16 face-1 half cannot land at face 1 directly). Unaligned slice
+//               (RM shards are 16 B granular): one contiguous read + RISC-V scatter of the 2 row-0 pieces per tile
+//               (descending j, so the staging bytes are consumed before overwritten).
 //   TILE gamma: per tile, face 0 row 0 and face 1 row 0 straight from DRAM (64 B reads; a bfloat8_b tile's
-//               64 B exponent section rides along with the first read and is re-patterned so every face
-//               row carries row 0's shared exponent).
-//   Both      : rows 1..15 of faces 0/1 and faces 2/3 are replicated by local NoC copies (doubling, one
-//               barrier per stage) — no RISC-V whole-tile store loop.
-//   Interleaved / sharded k = 1 (RMS_GAMMA_MCAST): read + expanded once per W slice and multicast to the slice's
+//               64 B exponent section rides along with the first read — row 0's exponents are already right).
+//   Interleaved / sharded k = 1 (RMS_GAMMA_MCAST): read once per W slice and multicast to the slice's
 //               group.
 //   Streamed (RMS_GAMMA_CHUNK = G, fallback when the resident slice does not fit L1): per block, the slice is
 //               re-loaded in G-tile chunks through a 2-chunk ring (always G pages pushed, so a chunk never wraps
@@ -22,7 +23,7 @@
 //
 // Gamma timing (Refinement 5): k == 1 / multicast gamma / blocks > GAMMA_AFTER_SEND_MAX_ROWS tile-rows — the load
 //   runs at kernel start. Per-core load with short blocks (gamma_after_send) — the DRAM reads are issued at kernel
-//   start; the barrier + expand run only after block 0's partials are out and the owner duties are done.
+//   start; the barrier [+ RM face-1 copy] runs only after block 0's partials are out and the owner duties are done.
 // Signal fence (signal_after_flush): every semaphore increment that publishes data writes follows a write flush,
 //   not a barrier (same NoC + VC + destination => in-order delivery); the barrier at kernel exit retires the acks.
 // exchange_partials_block — symmetric unicast all-gather, one round per block:
@@ -96,58 +97,18 @@ constexpr bool gamma_after_send = get_compile_time_arg_val(20) != 0;
 // same NoC and the same unicast-write VC to the same destination, so they arrive in program order. The
 // outstanding acks are retired once by the write barrier at kernel exit.
 constexpr bool signal_after_flush = get_compile_time_arg_val(21) != 0;
-constexpr auto out_args = TensorAccessorArgs<22>();
+constexpr uint32_t gamma_l1_page_bytes = get_compile_time_arg_val(22);  // cb_gamma page (faces 0/1 of a gamma tile)
+constexpr auto out_args = TensorAccessorArgs<23>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
 
 #ifdef RMS_HAS_GAMMA
-// Replicate row 0 of faces 0/1 of `num_tiles` gamma tiles into every row of every face (local NoC copies).
-constexpr uint32_t g_tile_bytes = gamma_exp_bytes + TILE_DIM * TILE_DIM * gamma_elem_bytes;
-
-// Block-float gamma: every face row of tile j must carry row 0's shared exponent — faces 0/2 take face 0
-// row 0's, faces 1/3 face 1 row 0's. 16 word stores per tile (the pattern, not a whole-tile fill).
-FORCE_INLINE void expand_gamma_exponents(uint32_t base, uint32_t num_tiles) {
-    static_assert(
-        gamma_exp_bytes == 0 || gamma_exp_bytes == 4 * FACE_DIM, "bfp gamma: expected one exponent byte per face row");
-    if constexpr (gamma_exp_bytes > 0) {
-        constexpr uint32_t words_per_face = FACE_DIM / sizeof(uint32_t);
-        for (uint32_t j = 0; j < num_tiles; ++j) {
-            volatile tt_l1_ptr uint8_t* exp8 = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base + j * g_tile_bytes);
-            volatile tt_l1_ptr uint32_t* exp32 =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + j * g_tile_bytes);
-            const uint32_t e_left = exp8[0] * 0x01010101u;          // face 0 row 0
-            const uint32_t e_right = exp8[FACE_DIM] * 0x01010101u;  // face 1 row 0
-            for (uint32_t w = 0; w < words_per_face; ++w) {
-                exp32[0 * words_per_face + w] = e_left;
-                exp32[1 * words_per_face + w] = e_right;
-                exp32[2 * words_per_face + w] = e_left;
-                exp32[3 * words_per_face + w] = e_right;
-            }
-        }
-    }
-}
-
-FORCE_INLINE void expand_gamma_rows(uint32_t base, uint32_t num_tiles) {
-    constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
-    constexpr uint32_t face_row_bytes = FACE_DIM * gamma_elem_bytes;
-    expand_gamma_exponents(base, num_tiles);
-    for (uint32_t rows = 1; rows < FACE_DIM; rows <<= 1) {
-        const uint32_t bytes = rows * face_row_bytes;
-        for (uint32_t j = 0; j < num_tiles; ++j) {
-            const uint32_t tile = base + j * g_tile_bytes + gamma_exp_bytes;
-            noc_async_read(get_noc_addr(tile), tile + bytes, bytes);                            // face 0
-            noc_async_read(get_noc_addr(tile + face_bytes), tile + face_bytes + bytes, bytes);  // face 1
-        }
-        noc_async_read_barrier();
-    }
-    for (uint32_t j = 0; j < num_tiles; ++j) {  // faces 0,1 -> faces 2,3 (rows 16..31)
-        const uint32_t tile = base + j * g_tile_bytes + gamma_exp_bytes;
-        noc_async_read(get_noc_addr(tile), tile + 2 * face_bytes, 2 * face_bytes);
-    }
-    noc_async_read_barrier();
-}
+// L1 stride of one cb_gamma page: [exponent section +] faces 0/1 (the row-broadcast unpack reads nothing else).
+constexpr uint32_t g_tile_bytes = gamma_l1_page_bytes;
+static_assert(
+    gamma_l1_page_bytes == gamma_exp_bytes + 2 * FACE_DIM * FACE_DIM * gamma_elem_bytes, "cb_gamma page = faces 0/1");
 
 constexpr uint32_t GAMMA_READ_ALIGN = 64;  // BH DRAM read alignment (also >= one 16-datum face row)
 
@@ -178,18 +139,36 @@ FORCE_INLINE void issue_gamma_reads(
     } else {
         const uint32_t byte0 = gamma_col0 * gamma_elem_bytes;
         const uint32_t lead = gamma_rm_lead(gamma_col0);
+        if (lead == 0) {
+            // one DRAM read of tile j's 32-datum row into face 0 rows 0..1 (finish moves the face-1 half). The last
+            // tile may read past W: its padding columns are don't-care output.
+            constexpr uint32_t row_bytes = TILE_DIM * gamma_elem_bytes;
+            for (uint32_t j = 0; j < core_w_tiles; ++j) {
+                noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes), base + j * g_tile_bytes, row_bytes);
+            }
+            return;
+        }
         noc_async_read(g_acc.get_noc_addr(0, byte0 - lead), base, lead + gamma_cols * gamma_elem_bytes);
     }
 }
 
-// finish_gamma_slice: wait for the row-0 reads, (RM) scatter row 0 into the tile faces, expand rows 1..31.
+// finish_gamma_slice: wait for the row-0 reads; RM: put row 0's face-1 half in face 1 (local copy / scatter).
 FORCE_INLINE void finish_gamma_slice(uint32_t base, uint32_t core_w_tiles, uint32_t gamma_col0) {
     noc_async_read_barrier();
     if constexpr (!gamma_is_tile) {
         constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
-        const uint32_t lead = gamma_rm_lead(gamma_col0);
-        // Scatter row 0: datums [32j, 32j+16) -> tile j face 0 row 0, [32j+16, 32j+32) -> face 1 row 0.
         constexpr uint32_t words_per_face_row = FACE_DIM * gamma_elem_bytes / sizeof(uint32_t);
+        constexpr uint32_t frow = FACE_DIM * gamma_elem_bytes;
+        const uint32_t lead = gamma_rm_lead(gamma_col0);
+        if (lead == 0) {
+            for (uint32_t j = 0; j < core_w_tiles; ++j) {  // face 0 row 1 (the face-1 half of row 0) -> face 1 row 0
+                const uint32_t tile = base + j * g_tile_bytes;
+                noc_async_read(get_noc_addr(tile + frow), tile + face_bytes, frow);
+            }
+            noc_async_read_barrier();
+            return;
+        }
+        // Scatter row 0: datums [32j, 32j+16) -> tile j face 0 row 0, [32j+16, 32j+32) -> face 1 row 0.
         for (uint32_t jj = core_w_tiles; jj > 0; --jj) {
             const uint32_t j = jj - 1;
             volatile tt_l1_ptr uint32_t* src =
@@ -207,10 +186,9 @@ FORCE_INLINE void finish_gamma_slice(uint32_t base, uint32_t core_w_tiles, uint3
             }
         }
     }
-    expand_gamma_rows(base, core_w_tiles);
 }
 
-// Fill `base` (cb_gamma's write pointer) with this member's expanded gamma slice; the caller owns the CB
+// Fill `base` (cb_gamma's write pointer) with this member's gamma slice; the caller owns the CB
 // reserve/push. gamma_col0 / gamma_cols: first global column and column count of the slice (RM gamma). The
 // slice start need not be tile- or 64 B-aligned (RM shards are 16 B granular): the read starts at the 64 B-
 // aligned offset below it and the scatter skips the lead bytes.
@@ -228,16 +206,16 @@ FORCE_INLINE void fill_gamma_slice(
 #endif
 
 #ifdef RMS_HAS_GAMMA
-// GammaSliceLoad: this member's expanded gamma slice into cb_gamma (program lifetime; compute first needs it
+// GammaSliceLoad: this member's gamma slice into cb_gamma (program lifetime; compute first needs it
 // at pass 2, so this overlaps the reader's x stream and pass 1).
 //   RMS_GAMMA_MCAST (interleaved): the Tensix cores sharing a W slice form one multicast group (host Mcast);
-//     its sender reads + expands the slice once and multicasts the expanded tiles to the group — the slice is
+//     its sender reads the slice once and multicasts the faces-0/1 pages to the group — the slice is
 //     read from DRAM once per W slice instead of once per Tensix core. One-shot (no handshake): cb_gamma is
 //     written once per launch and nothing else touches its L1.
-//   otherwise: every Tensix core reads + expands its own slice.
+//   otherwise: every Tensix core reads its own slice.
 //   Split in two so the DRAM reads can be in flight while the writer serves the combine:
 //   begin() reserves cb_gamma and issues this core's row-0 reads (per-core load, or the multicast sender);
-//   end() waits for them, expands, multicasts (sender) / receives (receiver) and pushes. load() = both.
+//   end() waits for them, finishes RM rows, multicasts (sender) / receives (receiver) and pushes. load() = both.
 #ifdef RMS_GAMMA_MCAST
 constexpr auto gamma_mcast = dataflow_kernel_lib::McastArgs<
     get_named_compile_time_arg_val("gamma_mcast_ct_offset"),
@@ -273,7 +251,7 @@ struct GammaSliceLoad {
     }
 
     FORCE_INLINE void end() {
-        MaybeDeviceZoneScope("wr_gamma_finish");  // barrier + expand (+ multicast send / receive wait)
+        MaybeDeviceZoneScope("wr_gamma_finish");  // barrier [+ RM face-1 copy] (+ multicast send / receive wait)
 #ifdef RMS_GAMMA_MCAST
         Noc noc;
         // optional_*: a W slice owned by a single Tensix core (one row-group) has a sender and no receivers.
@@ -492,9 +470,9 @@ void kernel_main() {
     // Resident gamma slice (once per program). k == 1, multicast gamma, or !gamma_after_send: loaded at kernel start,
     // overlapping the reader's x stream and pass 1. Per-core load with k > 1 and gamma_after_send: only the DRAM reads
     // are issued at kernel start;
-    // the barrier + expand (+ multicast) run after block 0's partials have left (symmetric) / after this member's
-    // owner duties — the combine's critical path (partials out, owner combine + inv_rms return) no longer waits
-    // on the gamma expand, which instead overlaps the wait for the other members.
+    // the barrier [+ RM face-1 copy] (+ multicast) run after block 0's partials have left (symmetric) / after this
+    // member's owner duties — the combine's critical path (partials out, owner combine + inv_rms return) no longer
+    // waits on the gamma finish, which instead overlaps the wait for the other members.
 #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
     const auto g_res_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
 #ifdef RMS_RM

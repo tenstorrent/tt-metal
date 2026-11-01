@@ -7,9 +7,13 @@
 //   collapse_sumsq_block       reduce<SUM, ROW, AccumulateViaAdd, Collapse>  -> cb_inv_rms (k==1, + finalize)
 //                                                                           -> cb_partial_sumsq (k>1)
 //   combine_partials_block     reduce<SUM, ROW, AccumulateViaAdd, Skip>(rows x k) + finalize -> cb_inv_rms
-//   normalize_block            eltwise_chain BinaryFpu(x * inv_rms, bcast Col) [-> DestReuse * gamma] -> cb_out
-//   untilize_out_block  (RM)   compute_kernel_lib::untilize<C>      cb_out -> cb_out_rm
+//   normalize_block            eltwise_chain BinaryFpu(x * inv_rms, bcast Col) [-> DestReuse * gamma bcast Row] ->
+//   cb_out untilize_out_block  (RM)   compute_kernel_lib::untilize<C>      cb_out -> cb_out_rm
 //
+// Raw LLK (documented exception): MulGammaRowBcast — compute_kernel_lib::DestReuseBinary has no BroadcastDim (its
+// init/exec call mul_reuse_dest_init / mul_reuse_dest_tiles, which hard-code BroadcastType::NONE), but the LLK supports
+// a ROW-broadcast CB operand on the dest-reuse multiply. Consuming gamma row-broadcast is what lets the writer skip the
+// gamma expand (local NoC copy stages + bfp exponent re-pattern) and keep only faces 0/1 per gamma page.
 // Raw API (documented exception): the finalize post-op (mul 1/W, add eps, rsqrt) runs on DST inside the
 // reduce() helper's post_reduce_op hook — reduce() exposes that hook as a uint32_t dst callable, not a chain,
 // so an eltwise_chain Rsqrt would need the reduced tile packed to L1 and re-read (extra CB + pass).
@@ -150,10 +154,53 @@ ALWI void combine_partials_block(uint32_t rows, FinalizeInvRms finalize) {
         finalize);
 }
 
-// ---- normalize_block: x * inv_rms (bcast Col) [* expanded gamma via DEST reuse] -> cb_out ----
+// ---- normalize_block: x * inv_rms (bcast Col) [* gamma (bcast Row) via DEST reuse] -> cb_out ----
 // base_col: first tile column of the window (RM: chunk start); width: tiles walked per tile-row;
 // gamma_col: cb_gamma page of the window's first column (resident: base_col; streamed chunk: 0).
-template <uint32_t cb_x_blk>
+#ifdef RMS_HAS_GAMMA
+// MulGammaRowBcast: DEST[d] *= row-broadcast(cb tile) — a DestReuseBinary<Mul, In, DEST_TO_SRCA> whose CB operand
+// (srcB) is ROW-broadcast: llk_unpack_A<ROW, acc_to_dest, DEST_TO_SRCA> unpacks faces 0,1,0,1 of the gamma page into
+// srcB, llk_math_eltwise_binary<ELWMUL, ROW, ..., DEST_TO_SRCA> issues ELWMUL with SRCB_BCAST_ROW on each DEST face
+// moved to srcA. Only row 0 of faces 0/1 of a gamma page is read. Same FPU/unpack work per tile as the NONE path.
+// Inherits every chain trait (waits, srcB reconfig fold, tile addressing) from DestReuseBinary; init/exec replaced.
+template <InputSpec In>
+struct MulGammaRowBcast : DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::DEST_TO_SRCA> {
+    using Base = DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::DEST_TO_SRCA>;
+    static constexpr uint32_t GCb = In.cb_id;
+    constexpr MulGammaRowBcast() noexcept = default;
+    constexpr explicit MulGammaRowBcast(uint32_t base) noexcept : Base(base) {}
+
+    static ALWI void init() {
+        state_configure(GCb, __builtin_LINE());
+        UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0, 0, GCb)));
+        MATH((llk_math_eltwise_binary_init<
+              EltwiseBinaryType::ELWMUL,
+              BroadcastType::ROW,
+              MATH_FIDELITY,
+              EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, GCb, 0)));
+    }
+
+    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+        const uint32_t in_idx =
+            compute_kernel_lib::tile_base_value<Base::Addressing>(this->tile_base) +
+            compute_kernel_lib::detail::input_idx<Base::Mapping, Base::Wait, Base::Pop, Base::Addressing>(
+                i_flat, ht, wt, this->row_stride);
+        const uint32_t dst = to_u32(Base::DstSlot) + slot_offset;
+        UNPACK((llk_unpack_A<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, in_idx)));
+        MATH((llk_math_eltwise_binary<
+              EltwiseBinaryType::ELWMUL,
+              BroadcastType::ROW,
+              DST_ACCUM_MODE,
+              MATH_FIDELITY,
+              EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, GCb, dst, true)));
+    }
+};
+#endif
+
+// kStridedOut: pack window tile (r, c) at page base_col + r * x_row_pitch + c of a caller-reserved cb_out (the
+// shard-backed output is row-major by tile-row). Needed when a multi-row block is normalized in several column
+// windows (streamed gamma): appending per-window would land the tiles window-major — wrong for rows > 1.
+template <uint32_t cb_x_blk, bool kStridedOut = false>
 ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col) {
     constexpr auto x_in = input(
         cb_x_blk,
@@ -173,12 +220,22 @@ ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[m
         InputTileMapping::Row,
         DataFormatReconfig::Enabled,
         TileAddressing::Offset);
-    using TimesGamma = DestReuseBinary<BinaryFpuOp::Mul, gamma_in, DestReuseType::DEST_TO_SRCA>;
-    eltwise_chain(
-        IterationShape::grid(rows, width),
-        XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
-        TimesGamma{gamma_col},
-        PackTile<output(cb_out)>{});
+    using TimesGamma = MulGammaRowBcast<gamma_in>;
+    if constexpr (kStridedOut) {
+        eltwise_chain(
+            IterationShape::grid(rows, width),
+            XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
+            TimesGamma{gamma_col},
+            PackTile<output(
+                cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Enabled, TileAddressing::Strided)>{
+                StridedTileRange{base_col, x_row_pitch}});
+    } else {
+        eltwise_chain(
+            IterationShape::grid(rows, width),
+            XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
+            TimesGamma{gamma_col},
+            PackTile<output(cb_out)>{});
+    }
 #else
     eltwise_chain(
         IterationShape::grid(rows, width),
@@ -315,12 +372,27 @@ ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[may
         untilize<rm_chunk_w_tiles, cb_out, cb_out_rm>(rows);
     }
 #elif defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
-    // Streamed gamma: one G-tile chunk per window, re-streamed by the writer every block.
+    // Streamed gamma: one G-tile chunk per window, re-streamed by the writer every block (sharded TILE only:
+    // cb_out is the row-major output shard). A multi-row block packs each window strided into the reserved block
+    // (Perf 1 fix, found by gamma_stream_l1: appending put window-major tiles into the row-major shard, PCC 0.11 on
+    // (1,1,8320,4608) HEIGHT fp32 gamma); a single tile-row's windows already land in order with the plain pack.
     constexpr uint32_t G = RMS_GAMMA_CHUNK;
+    const bool strided_out = rows > 1;
+    if (strided_out) {
+        cb_reserve_back(cb_out, rows * x_row_pitch);
+    }
     for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
+        const uint32_t n = (norm_w - c0) < G ? (norm_w - c0) : G;
         cb_wait_front(cb_gamma, G);
-        normalize_window<cb_x_blk>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0);
+        if (strided_out) {
+            normalize_window<cb_x_blk, true>(rows, c0, n, 0);
+        } else {
+            normalize_window<cb_x_blk>(rows, c0, n, 0);
+        }
         cb_pop_front(cb_gamma, G);
+    }
+    if (strided_out) {
+        cb_push_back(cb_out, rows * x_row_pitch);
     }
 #else
     normalize_window<cb_x_blk>(rows, 0, norm_w, 0);

@@ -1,0 +1,10 @@
+shape=[7136, 736] budget=1272704 G=16 depth=2 C=1 b=2 k=1 slice_w=23 footprint=81920 cores=112 defs=()
+shape=[7136, 736] budget=1272704 G=16 depth=2 C=1 b=2 k=1 slice_w=23 footprint=81920 cores=112 defs=('GS_RES_LOCAL',)
+forced8 op: pcc_ref=0.502274 maxabs_ref=17.46 vs_op=bit-exact
+forced8 base: pcc_ref=0.502274 maxabs_ref=17.46 vs_op=bit-exact
+forced8 res_c32: pcc_ref=0.502274 maxabs_ref=17.46 vs_op=bit-exact
+shape=[7136, 736] budget=1272704 G=0 depth=2 C=1 b=2 k=1 slice_w=23 footprint=55296 cores=112 defs=()
+shape=[7136, 736] budget=1272704 G=0 depth=2 C=1 b=2 k=1 slice_w=23 footprint=58240 cores=112 defs=('GS_RES_LOCAL',)
+height6_Layout.TILE op: pcc_ref=0.999984 maxabs_ref=0.1673 vs_op=bit-exact
+height6_Layout.TILE base: pcc_ref=0.999984 maxabs_ref=0.1673 vs_op=bit-exact
+height6_Layout.TILE res_c32: pcc_ref=0.999984 maxabs_ref=0.1673 vs_op=bit-exact

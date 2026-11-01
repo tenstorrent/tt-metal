@@ -1,0 +1,70 @@
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=4 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=4 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=False)
+shape=[128, 8192] budget=412544 G=32 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=4 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=False)
+hgt_tile_g op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_g lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=4 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=155776 cores=4 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=False)
+shape=[128, 8192] budget=412544 G=32 depth=2 C=1 b=1 k=1 slice_w=256 footprint=155776 cores=4 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=False)
+hgt_tile_grm op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=286720 cores=4 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=335872 cores=4 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=True)
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=335872 cores=4 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=True)
+hgt_tile_gbf8 op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=270336 cores=4 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=286720 cores=4 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=True)
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=286720 cores=4 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=True)
+hgt_tile_4096_g op: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g fix: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+shape=[128, 8192] budget=1428352 G=0 depth=2 C=32 b=1 k=1 slice_w=256 footprint=1384448 cores=128 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[128, 8192] budget=1428352 G=0 depth=2 C=32 b=1 k=1 slice_w=256 footprint=1400960 cores=128 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=True)
+shape=[128, 8192] budget=1428352 G=0 depth=2 C=32 b=1 k=1 slice_w=256 footprint=1400960 cores=128 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=True)
+hgt_rm_grm op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_rm_grm fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_rm_grm full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_rm_grm lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=139264 cores=4 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=303104 cores=4 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=False)
+shape=[128, 8192] budget=412544 G=32 depth=2 C=1 b=1 k=1 slice_w=256 footprint=303104 cores=4 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=False)
+hgt_tile_gf32 op: pcc_ref=0.999997 maxabs_ref=0.0745 vs_op=bit-exact
+hgt_tile_gf32 fix: pcc_ref=0.999997 maxabs_ref=0.0745 vs_op=bit-exact
+hgt_tile_gf32 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.0745 vs_op=bit-exact
+hgt_tile_gf32 lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.0745 vs_op=bit-exact
+shape=[1, 1, 160, 11008] budget=52096 G=10 depth=2 C=1 b=1 k=1 slice_w=344 footprint=49152 cores=5 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 160, 11008] budget=52096 G=5 depth=2 C=1 b=1 k=1 slice_w=344 footprint=49152 cores=5 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=False,split=True,res=False)
+shape=[1, 1, 160, 11008] budget=52096 G=10 depth=2 C=1 b=1 k=1 slice_w=344 footprint=49152 cores=5 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=False,split=False,res=False)
+hgt_tile_160x11008 op: pcc_ref=0.999997 maxabs_ref=0.1167 vs_op=bit-exact
+hgt_tile_160x11008 fix: pcc_ref=0.999997 maxabs_ref=0.1167 vs_op=bit-exact
+hgt_tile_160x11008 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.1167 vs_op=bit-exact
+hgt_tile_160x11008 lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.1167 vs_op=bit-exact
+shape=[1, 1, 32, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=1 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 32, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=1 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=False)
+shape=[1, 1, 32, 8192] budget=412544 G=32 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=1 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=False)
+hgt_tile_32x8192 op: pcc_ref=0.999997 maxabs_ref=0.07534 vs_op=bit-exact
+hgt_tile_32x8192 fix: pcc_ref=0.999997 maxabs_ref=0.07534 vs_op=bit-exact
+hgt_tile_32x8192 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.07534 vs_op=bit-exact
+hgt_tile_32x8192 lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.07534 vs_op=bit-exact
+shape=[1, 1, 1024, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=32 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 1024, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=32 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=True,res=False)
+shape=[1, 1, 1024, 8192] budget=412544 G=32 depth=2 C=1 b=1 k=1 slice_w=256 footprint=172032 cores=32 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=False)
+hgt_tile_1024x8192 op: pcc_ref=0.999997 maxabs_ref=0.09095 vs_op=bit-exact
+hgt_tile_1024x8192 fix: pcc_ref=0.999997 maxabs_ref=0.09095 vs_op=bit-exact
+hgt_tile_1024x8192 full_mc_fix: pcc_ref=0.999997 maxabs_ref=0.09095 vs_op=bit-exact
+hgt_tile_1024x8192 lean_mc_fix: pcc_ref=0.999997 maxabs_ref=0.09095 vs_op=bit-exact
+shape=[1, 1, 32, 4096] budget=1428352 G=0 depth=2 C=16 b=1 k=1 slice_w=128 footprint=1384448 cores=32 defs=('GS_WINDOW_FIX',) plan(compact=False,split=False,res=False)
+shape=[1, 1, 32, 4096] budget=1428352 G=0 depth=2 C=16 b=1 k=1 slice_w=128 footprint=1401088 cores=32 defs=('GS_COMPACT', 'GS_SPLIT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=True)
+shape=[1, 1, 32, 4096] budget=1428352 G=0 depth=2 C=16 b=1 k=1 slice_w=128 footprint=1401088 cores=32 defs=('GS_COMPACT', 'GS_RES_LOCAL', 'GS_RES_MCAST', 'GS_WINDOW_FIX') plan(compact=True,split=False,res=True)
+hgt_rm_32x4096_gf32 op: pcc_ref=1.000000 maxabs_ref=0.02517 vs_op=bit-exact
+hgt_rm_32x4096_gf32 fix: pcc_ref=1.000000 maxabs_ref=0.02517 vs_op=bit-exact
+hgt_rm_32x4096_gf32 full_mc_fix: pcc_ref=1.000000 maxabs_ref=0.02517 vs_op=bit-exact
+hgt_rm_32x4096_gf32 lean_mc_fix: pcc_ref=1.000000 maxabs_ref=0.02517 vs_op=bit-exact

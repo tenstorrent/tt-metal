@@ -1,0 +1,33 @@
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=4 defs=()
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=90240 cores=4 defs=('GS_COMPACT',)
+shape=[128, 8192] budget=412544 G=32 depth=2 C=1 b=1 k=1 slice_w=256 footprint=155776 cores=4 defs=('GS_COMPACT',)
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=155776 cores=4 defs=('GS_COMPACT', 'GS_SPLIT')
+shape=[128, 8192] budget=412544 G=16 depth=2 C=1 b=1 k=1 slice_w=256 footprint=73728 cores=4 defs=('GS_ABLATE_FILL',)
+hgt_tile_grm op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm base: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm compact: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm compact_g32: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm compact_split: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_grm ablate_fill: pcc_ref=0.077911 maxabs_ref=16.43 vs_op=DIFF maxabs=16.41
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=286720 cores=4 defs=()
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=286720 cores=4 defs=('GS_COMPACT',)
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=286720 cores=4 defs=('GS_COMPACT',)
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=286720 cores=4 defs=('GS_COMPACT', 'GS_SPLIT')
+shape=[128, 8192] budget=412544 G=0 depth=2 C=1 b=1 k=1 slice_w=256 footprint=286720 cores=4 defs=('GS_ABLATE_FILL',)
+hgt_tile_gbf8 op: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 base: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 compact: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 compact_g32: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 compact_split: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+hgt_tile_gbf8 ablate_fill: pcc_ref=0.999997 maxabs_ref=0.06788 vs_op=bit-exact
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=270336 cores=4 defs=()
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=270336 cores=4 defs=('GS_COMPACT',)
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=270336 cores=4 defs=('GS_COMPACT',)
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=270336 cores=4 defs=('GS_COMPACT', 'GS_SPLIT')
+shape=[1, 1, 128, 4096] budget=936832 G=0 depth=2 C=1 b=1 k=1 slice_w=128 footprint=270336 cores=4 defs=('GS_ABLATE_FILL',)
+hgt_tile_4096_g op: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g base: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g compact: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g compact_g32: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g compact_split: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
+hgt_tile_4096_g ablate_fill: pcc_ref=0.999997 maxabs_ref=0.06751 vs_op=bit-exact
