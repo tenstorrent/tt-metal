@@ -1,0 +1,545 @@
+--- a/ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py
++++ b/ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py
+@@ -53,6 +53,10 @@
+ SEM_PARTIALS_ARRIVED = 0
+ SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
+ SEM_GAMMA_MCAST_FIRST = 2  # gamma multicast channel (ttnn.Mcast allocates its semaphores from this id)
++# Combine pipeline: odd-sub-block partials / inv_rms semaphores (sharded k > 1 only, where the gamma multicast — the
++# other user of ids >= 2 — is never on).
++SEM_PARTIALS_PAR = 2
++SEM_INV_PAR = 3
+ WRITER_NOC_XY_ARG_BASE = 13  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
+ 
+ # Knob constants (design Phase 0 values).
+@@ -90,6 +94,21 @@
+ # increment of the partial exchange / inv_rms return (catalog tensix_all_reduce, design perf lamp "Signal fence").
+ SIGNAL_AFTER_FLUSH = True
+ PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
++# Combine pipeline (sharded TILE, owner combine, resident gamma): cut the resident shard's crt tile-rows into
++# COMBINE_PIPELINE_SUBBLOCKS sub-blocks of s = ceil(crt / 3) tile-rows and run compute as front(t+1), combine(t),
++# apply(t-1) against a two-round exchange window in the writer, so the cross-core exchange / owner combine / inv_rms
++# return of a sub-block overlaps pass 1 + collapse and pass 2 of its neighbours. Bit-exact with the one-block path.
++# BH p150b (bf16 perf cfg unless noted), one block -> pipelined: BLOCK (7168,1024) [736,128] 30.2 -> 27.6 us,
++# (8192,1024) [1024,128] 40.9 -> 37.4 us, (7168,2048) [736,192] 39.4 -> 36.2 us, WIDTH (2048,256) auto (HiFi4 fp32)
++# 55.2 -> 42.6 us, WIDTH (256,7168) [256,256] 22.6 -> 20.6 us. Gated (measured regressions otherwise):
++#   s >= COMBINE_PIPELINE_MIN_ROWS — one-tile-row sub-blocks pay a whole exchange round per tile-row
++#       ((640,6144) [64,704] k=9, crt=2: 19.5 -> 20.8 us);
++#   k <= COMBINE_PIPELINE_K_PER_WORK * s * (w + 1) (w = shard width in tiles) — each owner's k-way inv_rms return per
++#       round must hide behind one sub-block of work ((256,2048) WIDTH auto k=64, w=1, s=3: 26.0 -> 30.8 us).
++COMBINE_PIPELINE = True
++COMBINE_PIPELINE_SUBBLOCKS = 3
++COMBINE_PIPELINE_MIN_ROWS = 2
++COMBINE_PIPELINE_K_PER_WORK = 2
+ OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
+ # Streamed gamma (fallback when the resident expanded gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
+ # beside the two resident shards): gamma flows through a GAMMA_STREAM_DEPTH-chunk ring of <= GAMMA_STREAM_CHUNK_CAP
+@@ -196,6 +215,7 @@
+     mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
+     gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
+     rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
++    pipe_nb: int = 0  # combine pipeline: sub-blocks per Tensix core (0: off); b is then the sub-block (s tile-rows)
+ 
+ 
+ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> dict:
+@@ -209,8 +229,12 @@
+     else:
+         c, pitch = 1, slice_w
+     plan = {
+-        CB_SUMSQ: (b, sz.T_acc),
+-        CB_INV_RMS: (b, sz.T_acc),
++        # W-tail mask path: pass 1 pushes the block's tile-rows TWICE per front (full tiles, then the tail tile) and
++        # each collapse reads them by index from the front — with b pages the second push of a short block (rows < b,
++        # 2 * rows > b: ragged last shard row, short last sub-block) would wrap the ring under the indexed read.
++        CB_SUMSQ: (2 * b if opts.mask_tail else b, sz.T_acc),
++        # combine pipeline: a slot is rewritten only after its apply (lag 1 -> 3 sub-blocks in flight)
++        CB_INV_RMS: (min(3, opts.pipe_nb) * b if opts.pipe_nb else b, sz.T_acc),
+     }
+     if not opts.shard_backed:
+         plan[CB_X] = (b * pitch, sz.T_in)  # resident x block
+@@ -219,10 +243,11 @@
+     if sz.has_gamma:
+         plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk if opts.gamma_chunk else pitch, sz.T_g)
+     if k > 1:
+-        plan[CB_PARTIAL] = (b, sz.T_acc)
++        pipe = 2 if opts.pipe_nb else 1  # combine pipeline: front(t+1) precedes send(t); two-round exchange window
++        plan[CB_PARTIAL] = (pipe * b, sz.T_acc)
+         if opts.owner_combine:
+-            owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member r % k)
+-            plan[CB_GATHERED] = (owned * k, sz.T_acc)  # k partials per owned row (uniform -> lockstep slots)
++            owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member (r + ofs) % k)
++            plan[CB_GATHERED] = (pipe * owned * k, sz.T_acc)  # k partials per owned row (uniform -> lockstep slots)
+             plan[CB_INV_OWNED] = (owned, sz.T_acc)
+         else:
+             plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
+@@ -586,6 +611,21 @@
+         mask_tail=(not sz.is_rm) and geo.W % TILE != 0,
+     )
+     b, d, opts = _solve_rows_sharded(sz, k, slice_w, crt_max, budget, base_opts)
++    # Combine pipeline: sub-block the resident shard (see COMBINE_PIPELINE).
++    s_rows = _div_up(crt_max, COMBINE_PIPELINE_SUBBLOCKS)
++    if (
++        COMBINE_PIPELINE
++        and opts.shard_backed
++        and opts.owner_combine
++        and not opts.gamma_chunk
++        and b >= crt_max
++        and s_rows >= COMBINE_PIPELINE_MIN_ROWS
++        and k <= COMBINE_PIPELINE_K_PER_WORK * s_rows * (slice_w + 1)
++    ):
++        nb = _div_up(crt_max, s_rows)
++        o2 = replace(opts, pipe_nb=nb)
++        if nb > 1 and _plan_bytes(cb_plan(sz, k, slice_w, s_rows, 1, o2)) <= budget:
++            b, d, opts = s_rows, 1, o2
+     c, pitch = _pitch(sz, slice_w, opts.rm_chunk_cap)
+     return Blocking(
+         k=k,
+@@ -778,15 +818,18 @@
+         g_elem_bytes,
+         1 if gamma_is_tile else 0,
+         _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
+-        1 if (GAMMA_AFTER_SEND and b <= GAMMA_AFTER_SEND_MAX_ROWS) else 0,
++        1 if (GAMMA_AFTER_SEND and b <= GAMMA_AFTER_SEND_MAX_ROWS and not opts.pipe_nb) else 0,
+         1 if SIGNAL_AFTER_FLUSH else 0,
++        1 if opts.pipe_nb else 0,
++        SEM_PARTIALS_PAR,
++        SEM_INV_PAR,
+     ]
+     writer_ct.extend(out_acc_args.get_compile_time_args())
+     writer_ct.extend(
+         (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
+     )
+ 
+-    compute_ct = [k, pitch, C, d, combine_lookahead, 1 if opts.owner_combine else 0]
++    compute_ct = [k, pitch, C, d, combine_lookahead, 1 if opts.owner_combine else 0, 1 if opts.pipe_nb else 0]
+ 
+     inv_w_bits = _f32_bits(1.0 / geo.W)
+     eps_bits = _f32_bits(epsilon)
+@@ -882,6 +925,10 @@
+         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS_ARRIVED, core_ranges=core_ranges, initial_value=0))
+         if opts.owner_combine:
+             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
++        if opts.pipe_nb:
++            assert not gamma_mcast  # its semaphores also start at id 2
++            for sem in (SEM_PARTIALS_PAR, SEM_INV_PAR):
++                semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=core_ranges, initial_value=0))
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     if gamma_mcast:
+         # Sender = each group's first Tensix core (reads + expands the slice); one-shot, no handshake.
+--- a/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp
++++ b/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp
+@@ -23,6 +23,12 @@
+ // Combine lookahead (k > 1, x_block_depth == 2): pass 1 + collapse of block b+1 run before combine(b), so they
+ // overlap the partial all-gather of block b (the only stage that waits on other Tensix cores).
+ //
++// Combine pipeline (sharded TILE owner combine, combine_pipeline): the resident shard is cut into sub-blocks of
++// block_row_tiles tile-rows and run as  front(0); per t: front(t+1), combine(t), apply(t-1); apply(last)  so the
++// exchange of t overlaps front(t+1) and the inv_rms return of t overlaps apply(t-1) + front(t+2) + combine(t+1).
++// x (shard-backed, published whole by the reader) is popped only at kernel end; sub-block t is addressed at tile
++// t * block_row_tiles * x_row_pitch. Row owners rotate per sub-block: row r of t is owned by (t * s + r) % k.
++//
+ // Owner combine (k > K_SYM_MAX_*, WIDTH / BLOCK_SHARDED): tile-row r of a block is owned by member r % k; this
+ // member combines only its owned rows (k gathered partials each) into cb_inv_owned, which the writer returns
+ // to every member's cb_inv_rms. The gathered slots of the rows it does not own (uniform count per block keeps
+@@ -57,6 +63,7 @@
+ constexpr uint32_t x_block_depth = get_compile_time_arg_val(3);
+ constexpr bool combine_lookahead = get_compile_time_arg_val(4) != 0;
+ constexpr bool combine_owner = get_compile_time_arg_val(5) != 0;
++constexpr bool combine_pipeline = get_compile_time_arg_val(6) != 0;
+ 
+ // rsqrt(sum * (1/W) + eps) on DST[dst] — the reduce() post_reduce_op.
+ struct FinalizeInvRms {
+@@ -73,11 +80,13 @@
+ 
+ // ---- sum_squares_block: per tile-row, sum_j x[r][j]^2 accumulated in DEST, one fp32 tile per tile-row ----
+ // base_col / width: the tile-column window of the block walked (sharded W tail: full tiles, then the tail).
++// row_base: tile offset of the block's first tile-row from the CB front (combine pipeline: x is never popped
++// before kernel end, so the wait is cumulative from the front).
+ template <uint32_t cb_x_blk>
+-ALWI void sum_squares_block(uint32_t rows, uint32_t base_col, uint32_t width) {
++ALWI void sum_squares_block(uint32_t rows, uint32_t base_col, uint32_t width, uint32_t row_base = 0) {
+     {
+         MaybeDeviceZoneScope("cmp_wait_x");  // starved on the reader (interleaved) / tilize (RM)
+-        cb_wait_front(cb_x_blk, rows * x_row_pitch);
++        cb_wait_front(cb_x_blk, row_base + rows * x_row_pitch);
+     }
+     MaybeDeviceZoneScope("cmp_pass1");  // sum x^2 (DEST-accumulated), one pack per tile-row
+     constexpr auto x_in = input(
+@@ -97,7 +106,8 @@
+         DestAccumulation::PerRow)>;
+     eltwise_chain(
+         IterationShape::grid(rows, width),
+-        Square{StridedTileRange{base_col, x_row_pitch}, StridedTileRange{base_col, x_row_pitch}},
++        Square{
++            StridedTileRange{row_base + base_col, x_row_pitch}, StridedTileRange{row_base + base_col, x_row_pitch}},
+         PackRowSum{});
+ }
+ 
+@@ -154,7 +164,8 @@
+ // base_col: first tile column of the window (RM: chunk start); width: tiles walked per tile-row;
+ // gamma_col: cb_gamma page of the window's first column (resident: base_col; streamed chunk: 0).
+ template <uint32_t cb_x_blk>
+-ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col) {
++ALWI void normalize_window(
++    uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col, uint32_t row_base = 0) {
+     constexpr auto x_in = input(
+         cb_x_blk,
+         WaitPolicy::None,
+@@ -176,13 +187,13 @@
+     using TimesGamma = DestReuseBinary<BinaryFpuOp::Mul, gamma_in, DestReuseType::DEST_TO_SRCA>;
+     eltwise_chain(
+         IterationShape::grid(rows, width),
+-        XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
++        XTimesInvRms{StridedTileRange{row_base + base_col, x_row_pitch}},
+         TimesGamma{gamma_col},
+         PackTile<output(cb_out)>{});
+ #else
+     eltwise_chain(
+         IterationShape::grid(rows, width),
+-        XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
++        XTimesInvRms{StridedTileRange{row_base + base_col, x_row_pitch}},
+         PackTile<output(cb_out)>{});
+ #endif
+ }
+@@ -231,42 +242,47 @@
+ 
+ // pass 1 + collapse of one block into out_cb (+ post_op).
+ template <uint32_t cb_x_blk, uint32_t out_cb, typename PostOp>
+-ALWI void sum_and_collapse(uint32_t rows, uint32_t core_w_tiles, PostOp post_op, [[maybe_unused]] bool owns_tail) {
++ALWI void sum_and_collapse(
++    uint32_t rows, uint32_t core_w_tiles, PostOp post_op, [[maybe_unused]] bool owns_tail, uint32_t row_base = 0) {
+ #ifdef RMS_MASK_TAIL
+     if (owns_tail) {
+         const uint32_t full = core_w_tiles - 1;  // W tiles before the tail tile
+         if (full > 0) {
+-            sum_squares_block<cb_x_blk>(rows, 0, full);
++            sum_squares_block<cb_x_blk>(rows, 0, full, row_base);
+             collapse_sumsq_block<cb_sumsq_acc, cb_tail_mask>(rows, NoOp{}, Accumulate::at(cb_sumsq_acc, 0));
+-            sum_squares_block<cb_x_blk>(rows, full, 1);
++            sum_squares_block<cb_x_blk>(rows, full, 1, row_base);
+             collapse_sumsq_block<out_cb, cb_tail_mask>(
+                 rows, post_op, Accumulate::at_last(cb_sumsq_acc, 1), ReducePartialScaler::only_partial());
+         } else {
+-            sum_squares_block<cb_x_blk>(rows, 0, 1);
++            sum_squares_block<cb_x_blk>(rows, 0, 1, row_base);
+             collapse_sumsq_block<out_cb, cb_tail_mask>(
+                 rows, post_op, NoAccumulation{}, ReducePartialScaler::only_partial());
+         }
+         return;
+     }
+ #endif
+-    sum_squares_block<cb_x_blk>(rows, 0, core_w_tiles);
++    sum_squares_block<cb_x_blk>(rows, 0, core_w_tiles, row_base);
+     collapse_sumsq_block<out_cb>(rows, post_op);
+ }
+ 
+ // pass 1 + collapse of one block; k == 1 finalizes into cb_inv_rms, k > 1 leaves the raw partial.
+ template <uint32_t cb_x_blk>
+-ALWI void reduce_front(uint32_t rows, uint32_t core_w_tiles, FinalizeInvRms finalize, bool owns_tail) {
++ALWI void reduce_front(
++    uint32_t rows, uint32_t core_w_tiles, FinalizeInvRms finalize, bool owns_tail, uint32_t row_base = 0) {
+     if constexpr (w_split_cores == 1) {
+-        sum_and_collapse<cb_x_blk, cb_inv_rms>(rows, core_w_tiles, finalize, owns_tail);
++        sum_and_collapse<cb_x_blk, cb_inv_rms>(rows, core_w_tiles, finalize, owns_tail, row_base);
+     } else {
+-        sum_and_collapse<cb_x_blk, cb_partial_sumsq>(rows, core_w_tiles, NoOp{}, owns_tail);
++        sum_and_collapse<cb_x_blk, cb_partial_sumsq>(rows, core_w_tiles, NoOp{}, owns_tail, row_base);
+     }
+ }
+ 
+ // k > 1: combine the gathered partials of this block into inv_rms.
+-ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms finalize) {
++// ofs: owner rotation of the block (row r owned by member (r + ofs) % k); this member's first owned row is
++// r0 = (member_idx - ofs) mod k. ofs == 0 is the unrotated assignment.
++ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms finalize, uint32_t ofs = 0) {
+     if constexpr (combine_owner) {
+-        const uint32_t owned = member_idx < rows ? (rows - member_idx + w_split_cores - 1) / w_split_cores : 0;
++        const uint32_t r0 = (member_idx + w_split_cores - ofs) % w_split_cores;
++        const uint32_t owned = r0 < rows ? (rows - r0 + w_split_cores - 1) / w_split_cores : 0;
+         const uint32_t slots = ((rows + w_split_cores - 1) / w_split_cores) * w_split_cores;
+         if (owned > 0) {
+             combine_partials_block<cb_inv_owned>(owned, finalize);
+@@ -286,7 +302,13 @@
+ // gamma_tiles: cb_gamma pages (waited here, not at kernel start: the writer loads gamma while pass 1 runs; the
+ // wait is a no-op after the first block — gamma is popped only at kernel exit).
+ template <uint32_t cb_x_blk>
+-ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[maybe_unused]] uint32_t gamma_tiles) {
++ALWI void apply_back(
++    uint32_t rows,
++    uint32_t norm_w,
++    uint32_t chunks_this,
++    [[maybe_unused]] uint32_t gamma_tiles,
++    uint32_t row_base = 0,
++    bool pop_x = true) {
+     {
+         MaybeDeviceZoneScope("cmp_wait_inv");  // owner combine: inv_rms returned by the row owners (writer)
+         cb_wait_front(cb_inv_rms, rows);
+@@ -319,13 +341,15 @@
+     constexpr uint32_t G = RMS_GAMMA_CHUNK;
+     for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
+         cb_wait_front(cb_gamma, G);
+-        normalize_window<cb_x_blk>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0);
++        normalize_window<cb_x_blk>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0, row_base);
+         cb_pop_front(cb_gamma, G);
+     }
+ #else
+-    normalize_window<cb_x_blk>(rows, 0, norm_w, 0);
++    normalize_window<cb_x_blk>(rows, 0, norm_w, 0, row_base);
+ #endif
+-    cb_pop_front(cb_x_blk, rows * x_row_pitch);
++    if (pop_x) {
++        cb_pop_front(cb_x_blk, rows * x_row_pitch);
++    }
+     cb_pop_front(cb_inv_rms, rows);
+ }
+ 
+@@ -370,7 +394,28 @@
+         apply_back<cb_x>(rows, core_w_tiles, chunks_this, gamma_tiles);
+     }
+ #else
+-    if constexpr (w_split_cores > 1 && combine_lookahead) {
++    if constexpr (combine_pipeline && w_split_cores > 1) {
++        // Combine pipeline (see the header): front(t+1), combine(t), apply(t-1). The writer matches it with a
++        // two-round exchange window (rms_norm_writer.cpp).
++        const uint32_t s_rows = block_row_tiles;
++        auto base_of = [&](uint32_t t) { return t * s_rows * x_row_pitch; };
++        auto front = [&](uint32_t t) { reduce_front<cb_x>(rows_of(t), core_w_tiles, finalize, owns_tail, base_of(t)); };
++        auto apply = [&](uint32_t t) {
++            apply_back<cb_x>(rows_of(t), norm_w, chunks_this, gamma_tiles, base_of(t), false);
++        };
++        front(0);
++        for (uint32_t t = 0; t < num_blocks; ++t) {
++            if (t + 1 < num_blocks) {
++                front(t + 1);
++            }
++            combine_block(rows_of(t), member_idx, finalize, (t * s_rows) % w_split_cores);
++            if (t >= 1) {
++                apply(t - 1);
++            }
++        }
++        apply(num_blocks - 1);
++        cb_pop_front(cb_x, base_of(num_blocks - 1) + rows_of(num_blocks - 1) * x_row_pitch);
++    } else if constexpr (w_split_cores > 1 && combine_lookahead) {
+         reduce_front<cb_x>(rows_of(0), core_w_tiles, finalize, owns_tail);
+         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+             const uint32_t rows = rows_of(blk);
+--- a/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp
++++ b/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp
+@@ -41,6 +41,13 @@
+ //   An owner then returns its combined inv_rms tiles into slot r of EVERY member's cb_inv_rms (inv semaphore).
+ //   No slot is reused before it is consumed: a member's partial(b+1) exists only after its compute applied
+ //   inv_rms(b), i.e. after every owner of block b finished combine(b) and every member popped inv_rms(b-1).
++// Combine pipeline (combine_pipeline: sharded TILE owner combine, shard cut into sub-blocks — compute runs
++//   front(t+1), combine(t), apply(t-1)): a two-round exchange window. Sub-block i uses the partial / inv semaphore
++//   pair of parity i & 1 (each monotonic) and row owners rotate per sub-block (row r of i owned by (i*s + r) % k).
++//   Order: send(0), W1(0); per i: send(i+1), W3(i) (return inv_rms), W1(i+1) (wait partials), W4(i) (wait inv_rms).
++//   send(i+2) follows W4(i), i.e. every owner finished W1(i) / combine(i): a parity's counts never mix blocks i and
++//   i+2 and the 2-block cb_gathered ring slot of i is free before i+2 lands; an owner's W3(i+2) needs this member's
++//   send(i+2), so inv counts of i and i+2 never mix either. cb_out (the output shard) is waited once at the end.
+ // Payload (PARTIAL_FACES_ONLY): a partial / inv_rms tile is meaningful in column 0 only, which lives in faces
+ //   0 and 2 — ship those two faces, not the whole tile (the combine's Skip reduce and the Col-broadcast
+ //   normalize never read faces 1/3).
+@@ -96,7 +103,11 @@
+ // same NoC and the same unicast-write VC to the same destination, so they arrive in program order. The
+ // outstanding acks are retired once by the write barrier at kernel exit.
+ constexpr bool signal_after_flush = get_compile_time_arg_val(21) != 0;
+-constexpr auto out_args = TensorAccessorArgs<22>();
++constexpr bool combine_pipeline = get_compile_time_arg_val(22) != 0;
++constexpr uint32_t sem_par_id = get_compile_time_arg_val(23);      // combine pipeline: odd-block partials semaphore
++constexpr uint32_t sem_inv_par_id = get_compile_time_arg_val(24);  // combine pipeline: odd-block inv_rms semaphore
++static_assert(!(combine_pipeline && gamma_after_send), "combine pipeline loads the resident gamma at kernel start");
++constexpr auto out_args = TensorAccessorArgs<25>();
+ [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+ 
+ constexpr uint32_t TILE_DIM = 32;
+@@ -350,11 +361,20 @@
+     uint32_t slot_base;  // this block's cb_gathered_sumsq slot base (reserved by the send half)
+     uint32_t partials_expected;
+     uint32_t inv_expected;
++    uint32_t ofs = 0;       // owner rotation of the receive block (row r owned by member (r + ofs) % k)
++    uint32_t send_ofs = 0;  // owner rotation of the block being sent
+ };
+ 
+-FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx) {
++// First owned row of member m under rotation ofs: (m - ofs) mod k.
++FORCE_INLINE uint32_t first_owned_row(uint32_t member_idx, uint32_t ofs) {
+     constexpr uint32_t k = w_split_cores;
+-    return member_idx < rows ? (rows - member_idx + k - 1) / k : 0;
++    return (member_idx + k - ofs) % k;
++}
++
++FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx, uint32_t ofs = 0) {
++    constexpr uint32_t k = w_split_cores;
++    const uint32_t r0 = first_owned_row(member_idx, ofs);
++    return r0 < rows ? (rows - r0 + k - 1) / k : 0;
+ }
+ 
+ // exchange send half: this member's partials of the block out to their receivers (no cross-core wait).
+@@ -372,14 +392,17 @@
+     if constexpr (combine_owner) {
+         cb_reserve_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+         st.slot_base = get_write_ptr(cb_gathered_sumsq);
++        const uint32_t ofs = st.send_ofs;
+         for (uint32_t r = 0; r < rows; ++r) {
+-            const uint32_t slot = (r / k) * k + st.member_idx;
+-            send_acc_tile(src + r * tb, peer_addr(r % k, st.slot_base + slot * tb), tb);
++            const uint32_t owner = (r + ofs) % k;
++            const uint32_t j = (r + ofs) / k - (owner < ofs ? 1 : 0);  // index among the owner's rows
++            send_acc_tile(src + r * tb, peer_addr(owner, st.slot_base + (j * k + st.member_idx) * tb), tb);
+         }
+         fence_before_signal();
++        // Row r < min(rows, k) is the first row of its owner (r + ofs) % k, which owns (rows - r + k - 1) / k rows.
+         const uint32_t n_owners = rows < k ? rows : k;
+-        for (uint32_t o = 0; o < n_owners; ++o) {
+-            noc_semaphore_inc(peer_addr(o, st.sem_addr), (rows - o + k - 1) / k);
++        for (uint32_t r = 0; r < n_owners; ++r) {
++            noc_semaphore_inc(peer_addr(ofs == 0 ? r : (r + ofs) % k, st.sem_addr), (rows - r + k - 1) / k);
+         }
+     } else {
+         cb_reserve_back(cb_gathered_sumsq, k * rows);
+@@ -397,41 +420,53 @@
+     cb_pop_front(cb_partial_sumsq, rows);
+ }
+ 
+-// exchange receive, part 1: wait for this member's gathered partials -> cb_gathered_sumsq (compute combines);
+-//   owner topology: then return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
+-FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
++// W1 (owner topology): wait for this member's owned partials of the block, publish them to compute.
++FORCE_INLINE void owner_wait_partials(uint32_t rows, ExchangeState& st) {
+     constexpr uint32_t k = w_split_cores;
+-    if constexpr (combine_owner) {
+-        const uint32_t tb = st.tile_bytes;
+-        const uint32_t owned = owned_rows(rows, st.member_idx);
+-        st.partials_expected += owned * k;
+-        {
+-            MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
+-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+-        }
+-        cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+-        MaybeDeviceZoneScope("wr_inv_return");  // occupancy: waits on compute's owner combine + k-way return
++    st.partials_expected += owned_rows(rows, st.member_idx, st.ofs) * k;
++    {
++        MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
++        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
++    }
++    cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
++}
+ 
+-        cb_reserve_back(cb_inv_rms, rows);
+-        const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+-        if (owned > 0) {
+-            // One owned tile at a time from the CB front: members own different row counts per block, so the
+-            // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
+-            for (uint32_t j = 0; j < owned; ++j) {
+-                const uint32_t r = j * k + st.member_idx;
+-                cb_wait_front(cb_inv_owned, 1);
+-                const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+-                for (uint32_t m = 0; m < k; ++m) {
+-                    send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
+-                }
+-                noc_async_writes_flushed();
+-                cb_pop_front(cb_inv_owned, 1);
+-            }
+-            fence_before_signal();
++// W3 (owner topology): return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
++FORCE_INLINE void owner_return_inv(uint32_t rows, ExchangeState& st) {
++    constexpr uint32_t k = w_split_cores;
++    const uint32_t tb = st.tile_bytes;
++    const uint32_t r0 = first_owned_row(st.member_idx, st.ofs);
++    const uint32_t owned = owned_rows(rows, st.member_idx, st.ofs);
++    MaybeDeviceZoneScope("wr_inv_return");  // occupancy: waits on compute's owner combine + k-way return
++    cb_reserve_back(cb_inv_rms, rows);
++    const uint32_t inv_base = get_write_ptr(cb_inv_rms);
++    if (owned > 0) {
++        // One owned tile at a time from the CB front: members own different row counts per block, so the
++        // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
++        for (uint32_t j = 0; j < owned; ++j) {
++            const uint32_t r = r0 + j * k;
++            cb_wait_front(cb_inv_owned, 1);
++            const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+             for (uint32_t m = 0; m < k; ++m) {
+-                noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
++                send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
+             }
++            noc_async_writes_flushed();
++            cb_pop_front(cb_inv_owned, 1);
+         }
++        fence_before_signal();
++        for (uint32_t m = 0; m < k; ++m) {
++            noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
++        }
++    }
++}
++
++// exchange receive, part 1: wait for this member's gathered partials -> cb_gathered_sumsq (compute combines);
++//   owner topology: then return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
++FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
++    constexpr uint32_t k = w_split_cores;
++    if constexpr (combine_owner) {
++        owner_wait_partials(rows, st);
++        owner_return_inv(rows, st);
+     } else {
+         st.partials_expected += k;
+         {
+@@ -538,6 +573,62 @@
+         }
+     }
+ 
++#if defined(RMS_SHARDED) && !defined(RMS_RM) && !defined(RMS_GAMMA_CHUNK)
++    if constexpr (combine_pipeline && w_split_cores > 1 && combine_owner) {
++        // Combine pipeline: two-round exchange window (see the header). Parity p = i & 1 selects the semaphore
++        // pair and its expected counts.
++        auto rows_of = [&](uint32_t i) { return (i + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles; };
++        auto ofs_of = [&](uint32_t i) { return (i * block_row_tiles) % w_split_cores; };
++        const uint32_t sem_p[2] = {xs.sem_addr, get_semaphore(sem_par_id)};
++        const uint32_t sem_inv_p[2] = {xs.sem_inv_addr, get_semaphore(sem_inv_par_id)};
++        uint32_t pexp[2] = {0, 0};
++        uint32_t iexp[2] = {0, 0};
++        auto par = [&](uint32_t i, auto&& fn) {
++            const uint32_t p = i & 1;
++            xs.sem_addr = sem_p[p];
++            xs.sem_inv_addr = sem_inv_p[p];
++            xs.partials_expected = pexp[p];
++            xs.inv_expected = iexp[p];
++            fn();
++            pexp[p] = xs.partials_expected;
++            iexp[p] = xs.inv_expected;
++        };
++        auto send = [&](uint32_t i) {
++            par(i, [&] {
++                xs.send_ofs = ofs_of(i);
++                exchange_send(rows_of(i), xs);
++            });
++        };
++        auto wait_partials = [&](uint32_t i) {
++            par(i, [&] {
++                xs.ofs = ofs_of(i);
++                owner_wait_partials(rows_of(i), xs);
++            });
++        };
++        send(0);
++        wait_partials(0);
++        for (uint32_t i = 0; i < num_blocks; ++i) {
++            if (i + 1 < num_blocks) {
++                send(i + 1);
++            }
++            par(i, [&] {
++                xs.ofs = ofs_of(i);
++                owner_return_inv(rows_of(i), xs);
++            });
++            if (i + 1 < num_blocks) {
++                wait_partials(i + 1);
++            }
++            par(i, [&] { exchange_recv_inv(rows_of(i), xs); });
++        }
++        MaybeDeviceZoneScope("wr_store");  // cb_out IS the output shard: wait until compute has written all of it
++        const uint32_t shard_pages = ((num_blocks - 1) * block_row_tiles + last_block_row_tiles) * x_row_pitch;
++        cb_wait_front(cb_out, shard_pages);
++        cb_pop_front(cb_out, shard_pages);
++        noc_async_write_barrier();
++        noc_async_atomic_barrier();
++        return;
++    }
++#endif
+     [[maybe_unused]] uint32_t out_ring_pos = 0;  // TILE: cb_out page position of the read pointer
+     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;

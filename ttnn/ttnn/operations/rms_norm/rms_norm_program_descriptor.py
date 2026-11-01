@@ -53,6 +53,10 @@ CB_ONES = 13  # 1.0 reduce scaler tile of the FPU row collapse (reduce_tile ROW)
 SEM_PARTIALS_ARRIVED = 0
 SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
 SEM_GAMMA_MCAST_FIRST = 2  # gamma multicast channel (ttnn.Mcast allocates its semaphores from this id)
+# Combine pipeline: odd-sub-block partials / inv_rms semaphores. Only on sharded k > 1 owner combine, where neither
+# ttnn.Mcast user (gamma: sharded k = 1 only; inv_rms: off on the pipelined path) allocates ids >= 2 — asserted below.
+SEM_PARTIALS_PAR = 2
+SEM_INV_PAR = 3
 WRITER_NOC_XY_ARG_BASE = 13  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
 
 # Knob constants (design Phase 0 values).
@@ -96,6 +100,35 @@ GAMMA_AFTER_SEND_MAX_ROWS = 8
 # increment of the partial exchange / inv_rms return (catalog tensix_all_reduce, design perf lamp "Signal fence").
 SIGNAL_AFTER_FLUSH = True
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
+# Combine pipeline (sharded TILE, owner combine, resident gamma): cut the resident shard's crt tile-rows into
+# n sub-blocks of s = ceil(crt / n) tile-rows and run compute as front(t+1), combine(t), apply(t-1) against a
+# two-round exchange window in the writer (parity semaphores), so the cross-core exchange / owner combine / inv_rms
+# return of a sub-block overlaps pass 1 + collapse and pass 2 of its neighbours. Row owners rotate per sub-block
+# (row r of t owned by (t * s + r) % k). Bit-exact with the one-block path.
+# Sub-block count n (the most, from the top, that passes the gates; _pipe_subblock_rows), w = shard width in tiles:
+#   n = COMBINE_PIPELINE_SUBBLOCKS (3) — 2 and 4..8 measured slower on w >= 4 (BLOCK [736,128] / [1024,128] /
+#       [736,192], WIDTH (1024,1000) [1024,128]);
+#   w == 1: n = max(3, ceil(crt / max(COMBINE_PIPELINE_NARROW_MAX_ROWS, k))) — one-tile-wide shards have too little
+#       work per tile-row to hide the exchange behind 3 rounds (WIDTH (2048,256) [2048,32] k=8: n3 33.8 -> n8 31.4 us),
+#       but never fewer than k tile-rows per sub-block (WIDTH (2048,1024) [2048,32] k=32: n8 70.1 vs n3 47.6 us — only
+#       s of the k members own a row per round).
+# Gates (measured regressions otherwise):
+#   s >= COMBINE_PIPELINE_MIN_ROWS and s * (w + 1) >= COMBINE_PIPELINE_MIN_WORK — a round's fixed exchange latency
+#       must hide behind its sub-block ((640,6144) [64,704] s=1: 19.5 -> 20.8 us; BLOCK (2048,256) w=1 s=2: 1.07x,
+#       s=3: 0.96x, s=4: 0.90x);
+#   k <= COMBINE_PIPELINE_K_PER_WORK * s * (w + 1) — each owner's k-way inv_rms return per round must hide behind one
+#       sub-block of work ((256,2048) WIDTH auto k=64, w=1, s=3: 26.0 -> 30.8 us).
+# GAMMA_AFTER_SEND applies per sub-block (s <= GAMMA_AFTER_SEND_MAX_ROWS: finished after sub-block 0's inv_rms return):
+# RM gamma (one DRAM page read by every Tensix core) BLOCK (2048,1024) auto 12.6 -> 10.3 us vs finishing it at kernel
+# start; TILE gamma within ~2 %.
+# The single-owner inv_rms multicast (INV_MCAST) is off on the pipelined path: the rotated owner of a one-tile-row
+# sub-block need not be member 0, the multicast's fixed sender.
+COMBINE_PIPELINE = True
+COMBINE_PIPELINE_SUBBLOCKS = 3
+COMBINE_PIPELINE_NARROW_MAX_ROWS = 8  # w == 1: s <= max(this, k)
+COMBINE_PIPELINE_MIN_WORK = 8  # s * (w + 1) floor (x-tile equivalents of pass 1 + pass 2 per sub-block)
+COMBINE_PIPELINE_MIN_ROWS = 2
+COMBINE_PIPELINE_K_PER_WORK = 2
 OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
 # Streamed gamma (fallback when the resident gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
 # beside the two resident shards): gamma flows through a GAMMA_STREAM_DEPTH-chunk ring of <= GAMMA_STREAM_CHUNK_CAP
@@ -211,6 +244,7 @@ class PlanOpts:
     mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside pass 1 (0/1 row mask)
     gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
     rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
+    pipe_nb: int = 0  # combine pipeline: sub-blocks per Tensix core (0: off); b is then the sub-block (s tile-rows)
 
 
 def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> dict:
@@ -225,7 +259,8 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
         c, pitch = 1, slice_w
     plan = {
         CB_SUMSQ: (b, sz.T_acc),
-        CB_INV_RMS: (b, sz.T_acc),
+        # combine pipeline: a slot is rewritten only after its apply (lag 1 -> 3 sub-blocks in flight)
+        CB_INV_RMS: (min(3, opts.pipe_nb) * b if opts.pipe_nb else b, sz.T_acc),
         CB_ONES: (1, ttnn.tile_size(ttnn.bfloat16)),
     }
     if not opts.shard_backed:
@@ -235,10 +270,11 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
     if sz.has_gamma:
         plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk if opts.gamma_chunk else pitch, sz.T_g)
     if k > 1:
-        plan[CB_PARTIAL] = (b, sz.T_acc)
+        pipe = 2 if opts.pipe_nb else 1  # combine pipeline: front(t+1) precedes send(t); two-round exchange window
+        plan[CB_PARTIAL] = (pipe * b, sz.T_acc)
         if opts.owner_combine:
-            owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member r % k)
-            plan[CB_GATHERED] = (owned * k, sz.T_acc)  # k partials per owned row (uniform -> lockstep slots)
+            owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member (r + ofs) % k)
+            plan[CB_GATHERED] = (pipe * owned * k, sz.T_acc)  # k partials per owned row (uniform -> lockstep slots)
             plan[CB_INV_OWNED] = (owned, sz.T_acc)
         else:
             plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
@@ -498,6 +534,29 @@ def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget:
     )
 
 
+def _pipe_subblock_rows(crt: int, k: int, w: int) -> int:
+    """Combine pipeline sub-block s (tile-rows) for a crt-tile-row shard of w tiles in a k-member group; 0: off.
+
+    The most sub-blocks n in [2, n_max] whose s = ceil(crt / n) passes the gates (see COMBINE_PIPELINE): s >= MIN_ROWS,
+    s * (w + 1) >= MIN_WORK, k <= K_PER_WORK * s * (w + 1). n_max = SUBBLOCKS, raised on one-tile-wide shards (w == 1)
+    to ceil(crt / max(NARROW_MAX_ROWS, k)).
+    """
+    nb = COMBINE_PIPELINE_SUBBLOCKS
+    if w == 1:
+        nb = max(nb, _div_up(crt, max(COMBINE_PIPELINE_NARROW_MAX_ROWS, k)))
+    for n in range(nb, 1, -1):
+        s = _div_up(crt, n)
+        work = s * (w + 1)
+        if (
+            _div_up(crt, s) > 1
+            and s >= COMBINE_PIPELINE_MIN_ROWS
+            and work >= COMBINE_PIPELINE_MIN_WORK
+            and k <= COMBINE_PIPELINE_K_PER_WORK * work
+        ):
+            return s
+    return 0
+
+
 def _ordered_shard_cores(grid, row_major: bool):
     """Cores of a shard grid in shard-assignment order (row-major or column-major)."""
     cores = set()
@@ -601,6 +660,14 @@ def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int
         mask_tail=(not sz.is_rm) and geo.W % TILE != 0,
     )
     b, d, opts = _solve_rows_sharded(sz, k, slice_w, crt_max, budget, base_opts)
+    # Combine pipeline: sub-block the resident shard (see COMBINE_PIPELINE).
+    s_rows = _pipe_subblock_rows(crt_max, k, slice_w)
+    pipe_ok = opts.shard_backed and opts.owner_combine and not opts.gamma_chunk and b >= crt_max
+    if COMBINE_PIPELINE and pipe_ok and s_rows:
+        nb = _div_up(crt_max, s_rows)
+        o2 = replace(opts, pipe_nb=nb)
+        if nb > 1 and _plan_bytes(cb_plan(sz, k, slice_w, s_rows, 1, o2)) <= budget:
+            b, d, opts = s_rows, 1, o2
     c, pitch = _pitch(sz, slice_w, opts.rm_chunk_cap)
     return Blocking(
         k=k,
@@ -646,6 +713,8 @@ def _inv_mcast_order(blk: Blocking, all_cores, row_major: bool):
     """
     if not (INV_MCAST and blk.k > 1 and blk.opts.owner_combine):
         return None
+    if blk.opts.pipe_nb:
+        return None  # combine pipeline: rotated owners — a one-tile-row sub-block's owner need not be member 0
     b = blk.block_row_tiles
     if not any(b == 1 or (m.core_rows - 1) % b == 0 for grp in blk.groups for m in grp):
         return None  # no block of exactly one tile-row on any Tensix core
@@ -833,13 +902,16 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         1 if (GAMMA_AFTER_SEND and b <= GAMMA_AFTER_SEND_MAX_ROWS) else 0,
         1 if SIGNAL_AFTER_FLUSH else 0,
         sz.T_g,
+        1 if opts.pipe_nb else 0,
+        SEM_PARTIALS_PAR,
+        SEM_INV_PAR,
     ]
     writer_ct.extend(out_acc_args.get_compile_time_args())
     writer_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
     )
 
-    compute_ct = [k, pitch, C, d, combine_lookahead, 1 if opts.owner_combine else 0]
+    compute_ct = [k, pitch, C, d, combine_lookahead, 1 if opts.owner_combine else 0, 1 if opts.pipe_nb else 0]
 
     inv_w_bits = _f32_bits(1.0 / geo.W)
     eps_bits = _f32_bits(epsilon)
@@ -935,6 +1007,11 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS_ARRIVED, core_ranges=core_ranges, initial_value=0))
         if opts.owner_combine:
             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
+        if opts.pipe_nb:
+            # ids 2 / 3 are the first ttnn.Mcast ids: neither multicast may be attached on the pipelined path.
+            assert not gamma_mcast and inv_order is None
+            for sem in (SEM_PARTIALS_PAR, SEM_INV_PAR):
+                semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=core_ranges, initial_value=0))
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     if gamma_mcast:
         # Sender = each group's first Tensix core (reads the slice); one-shot, no handshake.

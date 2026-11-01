@@ -124,3 +124,10 @@ inv_mcast_return/dev_run3.csv
 inv_mcast_return/mixed.log
 inv_mcast_return/run1.log
 inv_mcast_return/run2.log
+combine_pipeline/port/runs/final2_dev.csv
+combine_pipeline/port/runs/unit_port3.log
+combine_pipeline/runs/dbg1.log
+combine_pipeline/runs/grad1_dev.csv
+combine_pipeline/runs/sweep1_dev.csv
+combine_pipeline/runs/sweep2_dev.csv
+combine_pipeline/runs/sweep3_dev.csv

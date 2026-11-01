@@ -38,6 +38,13 @@
 // Combine lookahead (k > 1, x_block_depth == 2): pass 1 + collapse of block b+1 run before combine(b), so they
 // overlap the partial all-gather of block b (the only stage that waits on other Tensix cores).
 //
+// Combine pipeline (sharded TILE owner combine, combine_pipeline): the resident shard is cut into sub-blocks of
+// block_row_tiles tile-rows and run as  front(0); per t: front(t+1), combine(t), apply(t-1); apply(last)  so the
+// exchange of t overlaps front(t+1) and the inv_rms return of t overlaps apply(t-1) + front(t+2) + combine(t+1).
+// x (shard-backed, published whole by the reader) is popped only at kernel end; sub-block t is addressed at tile
+// t * block_row_tiles * x_row_pitch (row_base). Row owners rotate per sub-block: row r of t is owned by
+// (t * s + r) % k.
+//
 // Owner combine (k > K_SYM_MAX_*, WIDTH / BLOCK_SHARDED): tile-row r of a block is owned by member r % k; this
 // member combines only its owned rows (k gathered partials each) into cb_inv_owned, which the writer returns
 // to every member's cb_inv_rms. The gathered slots of the rows it does not own (uniform count per block keeps
@@ -78,6 +85,10 @@ constexpr uint32_t rm_chunk_w_tiles = get_compile_time_arg_val(2);
 constexpr uint32_t x_block_depth = get_compile_time_arg_val(3);
 constexpr bool combine_lookahead = get_compile_time_arg_val(4) != 0;
 constexpr bool combine_owner = get_compile_time_arg_val(5) != 0;
+constexpr bool combine_pipeline = get_compile_time_arg_val(6) != 0;
+#if defined(RMS_GAMMA_CHUNK) || defined(RMS_RM)
+static_assert(!combine_pipeline, "combine pipeline: shard-backed TILE with resident gamma only");
+#endif
 
 // rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op. Column 0 lives only in the
 // EVEN-parity SFPU vectors of faces 0 and 2: VectorMode::C visits faces 0/2, the body visits offsets 0,2,4,6
@@ -112,11 +123,13 @@ struct FinalizeInvRms {
 // Up to DEST_AUTO_LIMIT tile-rows per DEST acquire (DEST[i] = tile-row r0 + i; ELWMUL accumulates into DEST, as
 // eltwise_chain's DestAccumulation::PerRow does). full_w: unmasked W tiles; with_tail: tile full_w is the masked
 // W tail (sharded), folded FIRST: DEST[i] = x_t * mask (bcast row 0), DEST[i] = DEST[i] * x_t (DEST reuse -> srcA).
+// row_base: tile offset of the block's first tile-row from the cb_x front (combine pipeline: x is popped only at
+// kernel end, so the wait is cumulative from the front).
 template <uint32_t cb_x_blk>
-ALWI void sum_squares_block(uint32_t rows, uint32_t full_w, [[maybe_unused]] bool with_tail) {
+ALWI void sum_squares_block(uint32_t rows, uint32_t full_w, [[maybe_unused]] bool with_tail, uint32_t row_base = 0) {
     {
         MaybeDeviceZoneScope("cmp_wait_x");  // starved on the reader (interleaved) / tilize (RM)
-        cb_wait_front(cb_x_blk, rows * x_row_pitch);
+        cb_wait_front(cb_x_blk, row_base + rows * x_row_pitch);
     }
     MaybeDeviceZoneScope("cmp_pass1");  // sum x^2 (DEST-accumulated), one pack per tile-row
     constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -139,19 +152,19 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t full_w, [[maybe_unused]] boo
             reconfig_data_format_srcb(cb_x_blk, cb_tail_mask);
             mul_bcast_rows_init(cb_x_blk, cb_tail_mask);
             for (uint32_t i = 0; i < n; ++i) {
-                mul_tiles_bcast_rows(cb_x_blk, cb_tail_mask, (r0 + i) * x_row_pitch + full_w, 0, i);
+                mul_tiles_bcast_rows(cb_x_blk, cb_tail_mask, row_base + (r0 + i) * x_row_pitch + full_w, 0, i);
             }
             reconfig_data_format_srcb(cb_tail_mask, cb_x_blk);
             mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_x_blk);
             for (uint32_t i = 0; i < n; ++i) {
                 mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                    cb_x_blk, (r0 + i) * x_row_pitch + full_w, i);
+                    cb_x_blk, row_base + (r0 + i) * x_row_pitch + full_w, i);
             }
             mul_init(cb_x_blk, cb_x_blk, true);
         }
 #endif
         for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t base = (r0 + i) * x_row_pitch;
+            const uint32_t base = row_base + (r0 + i) * x_row_pitch;
             for (uint32_t j = 0; j < full_w; ++j) {
                 mul_tiles(cb_x_blk, cb_x_blk, base + j, base + j, i);
             }
@@ -254,8 +267,11 @@ struct MulGammaRowBcast : DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::D
 // kStridedOut: pack window tile (r, c) at page base_col + r * x_row_pitch + c of a caller-reserved cb_out (the
 // shard-backed output is row-major by tile-row). Needed when a multi-row block is normalized in several column
 // windows (streamed gamma): appending per-window would land the tiles window-major — wrong for rows > 1.
+// row_base: tile offset of the block's first tile-row in cb_x (combine pipeline; the output is never offset —
+// cb_out is appended in sub-block order).
 template <uint32_t cb_x_blk, bool kStridedOut = false>
-ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col) {
+ALWI void normalize_window(
+    uint32_t rows, uint32_t base_col, uint32_t width, [[maybe_unused]] uint32_t gamma_col, uint32_t row_base = 0) {
     constexpr auto x_in = input(
         cb_x_blk,
         WaitPolicy::None,
@@ -286,14 +302,14 @@ ALWI void normalize_window(uint32_t rows, uint32_t base_col, uint32_t width, [[m
     } else {
         eltwise_chain(
             IterationShape::grid(rows, width),
-            XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
+            XTimesInvRms{StridedTileRange{row_base + base_col, x_row_pitch}},
             TimesGamma{gamma_col},
             PackTile<output(cb_out)>{});
     }
 #else
     eltwise_chain(
         IterationShape::grid(rows, width),
-        XTimesInvRms{StridedTileRange{base_col, x_row_pitch}},
+        XTimesInvRms{StridedTileRange{row_base + base_col, x_row_pitch}},
         PackTile<output(cb_out)>{});
 #endif
 }
@@ -342,25 +358,30 @@ ALWI void tilize_x_block(uint32_t rows, uint32_t chunks_this) {
 
 // pass 1 + collapse of one block into out_cb (+ post_op).
 template <uint32_t cb_x_blk, uint32_t out_cb, typename PostOp>
-ALWI void sum_and_collapse(uint32_t rows, uint32_t core_w_tiles, PostOp post_op, bool owns_tail) {
-    sum_squares_block<cb_x_blk>(rows, owns_tail ? core_w_tiles - 1 : core_w_tiles, owns_tail);
+ALWI void sum_and_collapse(
+    uint32_t rows, uint32_t core_w_tiles, PostOp post_op, bool owns_tail, uint32_t row_base = 0) {
+    sum_squares_block<cb_x_blk>(rows, owns_tail ? core_w_tiles - 1 : core_w_tiles, owns_tail, row_base);
     collapse_sumsq_block<out_cb>(rows, post_op);
 }
 
 // pass 1 + collapse of one block; k == 1 finalizes into cb_inv_rms, k > 1 leaves the raw partial.
 template <uint32_t cb_x_blk>
-ALWI void reduce_front(uint32_t rows, uint32_t core_w_tiles, FinalizeInvRms finalize, bool owns_tail) {
+ALWI void reduce_front(
+    uint32_t rows, uint32_t core_w_tiles, FinalizeInvRms finalize, bool owns_tail, uint32_t row_base = 0) {
     if constexpr (w_split_cores == 1) {
-        sum_and_collapse<cb_x_blk, cb_inv_rms>(rows, core_w_tiles, finalize, owns_tail);
+        sum_and_collapse<cb_x_blk, cb_inv_rms>(rows, core_w_tiles, finalize, owns_tail, row_base);
     } else {
-        sum_and_collapse<cb_x_blk, cb_partial_sumsq>(rows, core_w_tiles, NoOp{}, owns_tail);
+        sum_and_collapse<cb_x_blk, cb_partial_sumsq>(rows, core_w_tiles, NoOp{}, owns_tail, row_base);
     }
 }
 
 // k > 1: combine the gathered partials of this block into inv_rms.
-ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms finalize) {
+// ofs: owner rotation of the block (row r owned by member (r + ofs) % k); this member's first owned row is
+// r0 = (member_idx - ofs) mod k. ofs == 0 is the unrotated assignment.
+ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms finalize, uint32_t ofs = 0) {
     if constexpr (combine_owner) {
-        const uint32_t owned = member_idx < rows ? (rows - member_idx + w_split_cores - 1) / w_split_cores : 0;
+        const uint32_t r0 = (member_idx + w_split_cores - ofs) % w_split_cores;
+        const uint32_t owned = r0 < rows ? (rows - r0 + w_split_cores - 1) / w_split_cores : 0;
         const uint32_t slots = ((rows + w_split_cores - 1) / w_split_cores) * w_split_cores;
         if (owned > 0) {
             combine_partials_block<cb_inv_owned>(owned, finalize);
@@ -379,8 +400,15 @@ ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms final
 // shard-backed cb_out advances by x_row_pitch per tile-row — padding tiles of a ragged shard are don't-care).
 // gamma_tiles: cb_gamma pages (waited here, not at kernel start: the writer loads gamma while pass 1 runs; the
 // wait is a no-op after the first block — gamma is popped only at kernel exit).
+// row_base / pop_x: combine pipeline — sub-block t sits at row_base in cb_x, which is popped only at kernel end.
 template <uint32_t cb_x_blk>
-ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[maybe_unused]] uint32_t gamma_tiles) {
+ALWI void apply_back(
+    uint32_t rows,
+    uint32_t norm_w,
+    uint32_t chunks_this,
+    [[maybe_unused]] uint32_t gamma_tiles,
+    uint32_t row_base = 0,
+    bool pop_x = true) {
     {
         MaybeDeviceZoneScope("cmp_wait_inv");  // owner combine: inv_rms returned by the row owners (writer)
         cb_wait_front(cb_inv_rms, rows);
@@ -432,9 +460,11 @@ ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[may
         cb_push_back(cb_out, rows * x_row_pitch);
     }
 #else
-    normalize_window<cb_x_blk>(rows, 0, norm_w, 0);
+    normalize_window<cb_x_blk>(rows, 0, norm_w, 0, row_base);
 #endif
-    cb_pop_front(cb_x_blk, rows * x_row_pitch);
+    if (pop_x) {
+        cb_pop_front(cb_x_blk, rows * x_row_pitch);
+    }
     cb_pop_front(cb_inv_rms, rows);
 }
 
@@ -479,7 +509,28 @@ void kernel_main() {
         apply_back<cb_x>(rows, core_w_tiles, chunks_this, gamma_tiles);
     }
 #else
-    if constexpr (w_split_cores > 1 && combine_lookahead) {
+    if constexpr (combine_pipeline && w_split_cores > 1) {
+        // Combine pipeline (see the header): front(t+1), combine(t), apply(t-1). The writer matches it with a
+        // two-round exchange window (rms_norm_writer.cpp).
+        const uint32_t s_rows = block_row_tiles;
+        auto base_of = [&](uint32_t t) { return t * s_rows * x_row_pitch; };
+        auto front = [&](uint32_t t) { reduce_front<cb_x>(rows_of(t), core_w_tiles, finalize, owns_tail, base_of(t)); };
+        auto apply = [&](uint32_t t) {
+            apply_back<cb_x>(rows_of(t), norm_w, chunks_this, gamma_tiles, base_of(t), false);
+        };
+        front(0);
+        for (uint32_t t = 0; t < num_blocks; ++t) {
+            if (t + 1 < num_blocks) {
+                front(t + 1);
+            }
+            combine_block(rows_of(t), member_idx, finalize, (t * s_rows) % w_split_cores);
+            if (t >= 1) {
+                apply(t - 1);
+            }
+        }
+        apply(num_blocks - 1);
+        cb_pop_front(cb_x, base_of(num_blocks - 1) + rows_of(num_blocks - 1) * x_row_pitch);
+    } else if constexpr (w_split_cores > 1 && combine_lookahead) {
         reduce_front<cb_x>(rows_of(0), core_w_tiles, finalize, owns_tail);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             const uint32_t rows = rows_of(blk);

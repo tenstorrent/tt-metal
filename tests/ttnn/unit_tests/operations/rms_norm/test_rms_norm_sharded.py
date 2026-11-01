@@ -266,3 +266,31 @@ def test_forced_streamed_gamma_rm(device, monkeypatch, shape, ml, chunk_cap, pin
     monkeypatch.setattr(pd, "GAMMA_STREAM_FORCE_CHUNK", 1)
     monkeypatch.setattr(pd, "RM_CHUNK_CAP", chunk_cap)
     _run(device, shape, ml, layout=ttnn.ROW_MAJOR_LAYOUT, gamma_layout=ttnn.ROW_MAJOR_LAYOUT, pinned=pinned)
+
+
+@pytest.mark.parametrize(
+    "shape,ml,pinned,layout_note",
+    [
+        ((1, 1, 7168, 1024), BS, ([736, 128], (8, 10)), "w = 4, ragged last shard row"),
+        ((1, 1, 2048, 256), WS, None, "w = 1 narrow shards, k = 8"),
+        ((1, 1, 1024, 1000), BS, None, "masked W tail on the last shard column"),
+    ],
+)
+def test_combine_pipeline(device, shape, ml, pinned, layout_note):
+    """Perf 1 combine pipeline (sub-blocked owner combine): the rule turns it on for these shards, and the result
+    matches the reference with and without it."""
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    dtype = ttnn.bfloat16
+    if pinned is not None:
+        mc = shard_config(pinned[0], pinned[1], ml, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    else:
+        mc = auto_shard_config(list(shape), ml, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    xt = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
+    )
+    geo = pd.derive_geometry(xt.shape)
+    sz = pd._Sizes(dtype, dtype, False, True, True)
+    blk = pd.select_sharded_blocking(geo, sz, xt, pd.cb_l1_budget(device))
+    assert blk.opts.pipe_nb >= 2, (layout_note, blk.opts)
+    _run(device, shape, ml, pinned=pinned, fp32_dest=False, fidelity=ttnn.MathFidelity.HiFi2, pcc=0.9995)

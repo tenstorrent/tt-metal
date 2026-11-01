@@ -42,6 +42,15 @@
 //   An owner then returns its combined inv_rms tiles into slot r of EVERY member's cb_inv_rms (inv semaphore).
 //   No slot is reused before it is consumed: a member's partial(b+1) exists only after its compute applied
 //   inv_rms(b), i.e. after every owner of block b finished combine(b) and every member popped inv_rms(b-1).
+// Combine pipeline (combine_pipeline: sharded TILE owner combine, shard cut into sub-blocks — compute runs
+//   front(t+1), combine(t), apply(t-1)): a two-round exchange window. Sub-block i uses the partial / inv semaphore
+//   pair of parity i & 1 (each monotonic) and row owners rotate per sub-block (row r of i owned by (i*s + r) % k).
+//   Order: send(0), W1(0); per i: send(i+1), W3(i) (return inv_rms), W1(i+1) (wait partials), W4(i) (wait inv_rms).
+//   send(i+2) follows W4(i), i.e. every owner finished W1(i) / combine(i): a parity's counts never mix blocks i and
+//   i+2 and the 2-block cb_gathered ring slot of i is free before i+2 lands; an owner's W3(i+2) needs this member's
+//   send(i+2), so inv counts of i and i+2 never mix either. The single-owner inv_rms multicast is off on this path
+//   (a rotated one-tile-row sub-block's owner need not be member 0). cb_out (the output shard) is waited once at
+//   the end.
 // Payload (PARTIAL_FACES_ONLY): a partial / inv_rms tile is meaningful in column 0 only, which lives in faces
 //   0 and 2 — ship those two faces, not the whole tile (the combine's Skip reduce and the Col-broadcast
 //   normalize never read faces 1/3).
@@ -99,7 +108,10 @@ constexpr bool gamma_after_send = get_compile_time_arg_val(20) != 0;
 // outstanding acks are retired once by the write barrier at kernel exit.
 constexpr bool signal_after_flush = get_compile_time_arg_val(21) != 0;
 constexpr uint32_t gamma_l1_page_bytes = get_compile_time_arg_val(22);  // cb_gamma page (faces 0/1 of a gamma tile)
-constexpr auto out_args = TensorAccessorArgs<23>();
+constexpr bool combine_pipeline = get_compile_time_arg_val(23) != 0;
+constexpr uint32_t sem_par_id = get_compile_time_arg_val(24);      // combine pipeline: odd-sub-block partials semaphore
+constexpr uint32_t sem_inv_par_id = get_compile_time_arg_val(25);  // combine pipeline: odd-sub-block inv_rms semaphore
+constexpr auto out_args = TensorAccessorArgs<26>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_DIM = 32;
@@ -329,11 +341,20 @@ struct ExchangeState {
     uint32_t slot_base;  // this block's cb_gathered_sumsq slot base (reserved by the send half)
     uint32_t partials_expected;
     uint32_t inv_expected;
+    uint32_t ofs = 0;       // owner rotation of the receive block (row r owned by member (r + ofs) % k)
+    uint32_t send_ofs = 0;  // owner rotation of the block being sent
 };
 
-FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx) {
+// First owned row of member m under rotation ofs: (m - ofs) mod k.
+FORCE_INLINE uint32_t first_owned_row(uint32_t member_idx, uint32_t ofs) {
     constexpr uint32_t k = w_split_cores;
-    return member_idx < rows ? (rows - member_idx + k - 1) / k : 0;
+    return (member_idx + k - ofs) % k;
+}
+
+FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx, uint32_t ofs = 0) {
+    constexpr uint32_t k = w_split_cores;
+    const uint32_t r0 = first_owned_row(member_idx, ofs);
+    return r0 < rows ? (rows - r0 + k - 1) / k : 0;
 }
 
 // exchange send half: this member's partials of the block out to their receivers (no cross-core wait).
@@ -351,14 +372,17 @@ FORCE_INLINE void exchange_send(uint32_t rows, ExchangeState& st) {
     if constexpr (combine_owner) {
         cb_reserve_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
         st.slot_base = get_write_ptr(cb_gathered_sumsq);
+        const uint32_t ofs = st.send_ofs;
         for (uint32_t r = 0; r < rows; ++r) {
-            const uint32_t slot = (r / k) * k + st.member_idx;
-            send_acc_tile(src + r * tb, peer_addr(r % k, st.slot_base + slot * tb), tb);
+            const uint32_t owner = (r + ofs) % k;
+            const uint32_t j = (r + ofs) / k - (owner < ofs ? 1 : 0);  // index among the owner's rows (ofs 0: r / k)
+            send_acc_tile(src + r * tb, peer_addr(owner, st.slot_base + (j * k + st.member_idx) * tb), tb);
         }
         fence_before_signal();
+        // Row r < min(rows, k) is the first row of its owner (r + ofs) % k, which owns (rows - r + k - 1) / k rows.
         const uint32_t n_owners = rows < k ? rows : k;
-        for (uint32_t o = 0; o < n_owners; ++o) {
-            noc_semaphore_inc(peer_addr(o, st.sem_addr), (rows - o + k - 1) / k);
+        for (uint32_t r = 0; r < n_owners; ++r) {
+            noc_semaphore_inc(peer_addr((r + ofs) % k, st.sem_addr), (rows - r + k - 1) / k);
         }
     } else {
         cb_reserve_back(cb_gathered_sumsq, k * rows);
@@ -390,55 +414,67 @@ constexpr bool inv_mcast_on = true;
 #else
 constexpr bool inv_mcast_on = false;
 #endif
+static_assert(!(combine_pipeline && inv_mcast_on), "combine pipeline: rotated owners - inv_rms multicast must be off");
+
+// W1 (owner topology): wait for this member's owned partials of the block, publish them to compute.
+FORCE_INLINE void owner_wait_partials(uint32_t rows, ExchangeState& st) {
+    constexpr uint32_t k = w_split_cores;
+    st.partials_expected += owned_rows(rows, st.member_idx, st.ofs) * k;
+    {
+        MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
+    }
+    cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+}
+
+// W3 (owner topology): return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
+FORCE_INLINE void owner_return_inv(uint32_t rows, ExchangeState& st) {
+    constexpr uint32_t k = w_split_cores;
+    const uint32_t tb = st.tile_bytes;
+    const uint32_t r0 = first_owned_row(st.member_idx, st.ofs);
+    const uint32_t owned = owned_rows(rows, st.member_idx, st.ofs);
+    MaybeDeviceZoneScope("wr_inv_return");  // occupancy: waits on compute's owner combine + k-way return
+    cb_reserve_back(cb_inv_rms, rows);
+    const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+#ifdef RMS_INV_MCAST
+    if (rows == 1) {      // never rotated (static_assert above): member 0 owns the block's only row
+        if (owned > 0) {  // member 0: the block's only owner
+            cb_wait_front(cb_inv_owned, 1);
+            Noc noc;
+            // faces 0..2 are contiguous (face 1 is don't-care): one send covers column 0
+            inv_mcast.sender(noc).send(get_read_ptr(cb_inv_owned), inv_base, partial_faces_only ? 3 * (tb / 4) : tb);
+            cb_pop_front(cb_inv_owned, 1);
+        }
+        return;
+    }
+#endif
+    if (owned > 0) {
+        // One owned tile at a time from the CB front: members own different row counts per block, so the
+        // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
+        for (uint32_t j = 0; j < owned; ++j) {
+            const uint32_t r = r0 + j * k;
+            cb_wait_front(cb_inv_owned, 1);
+            const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+            for (uint32_t m = 0; m < k; ++m) {
+                send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_inv_owned, 1);
+        }
+        fence_before_signal();
+        for (uint32_t m = 0; m < k; ++m) {
+            noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
+        }
+    }
+}
 
 // exchange receive, part 1: wait for this member's gathered partials -> cb_gathered_sumsq (compute combines);
 //   owner topology: then return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
 FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
     constexpr uint32_t k = w_split_cores;
     if constexpr (combine_owner) {
-        const uint32_t tb = st.tile_bytes;
-        const uint32_t owned = owned_rows(rows, st.member_idx);
-        st.partials_expected += owned * k;
-        {
-            MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
-        }
-        cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
-        MaybeDeviceZoneScope("wr_inv_return");  // occupancy: waits on compute's owner combine + k-way return
-
-        cb_reserve_back(cb_inv_rms, rows);
-        const uint32_t inv_base = get_write_ptr(cb_inv_rms);
-#ifdef RMS_INV_MCAST
-        if (rows == 1) {
-            if (owned > 0) {  // member 0: the block's only owner
-                cb_wait_front(cb_inv_owned, 1);
-                Noc noc;
-                // faces 0..2 are contiguous (face 1 is don't-care): one send covers column 0
-                inv_mcast.sender(noc).send(
-                    get_read_ptr(cb_inv_owned), inv_base, partial_faces_only ? 3 * (tb / 4) : tb);
-                cb_pop_front(cb_inv_owned, 1);
-            }
-            return;
-        }
-#endif
-        if (owned > 0) {
-            // One owned tile at a time from the CB front: members own different row counts per block, so the
-            // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
-            for (uint32_t j = 0; j < owned; ++j) {
-                const uint32_t r = j * k + st.member_idx;
-                cb_wait_front(cb_inv_owned, 1);
-                const uint32_t inv_src = get_read_ptr(cb_inv_owned);
-                for (uint32_t m = 0; m < k; ++m) {
-                    send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
-                }
-                noc_async_writes_flushed();
-                cb_pop_front(cb_inv_owned, 1);
-            }
-            fence_before_signal();
-            for (uint32_t m = 0; m < k; ++m) {
-                noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
-            }
-        }
+        owner_wait_partials(rows, st);
+        owner_return_inv(rows, st);
     } else {
         st.partials_expected += k;
         {
@@ -556,6 +592,63 @@ void kernel_main() {
         }
     }
 
+#if defined(RMS_SHARDED) && !defined(RMS_RM) && !defined(RMS_GAMMA_CHUNK)
+    if constexpr (combine_pipeline && w_split_cores > 1 && combine_owner) {
+        // Combine pipeline: two-round exchange window (see the header). Parity p = i & 1 selects the semaphore
+        // pair and its expected counts.
+        auto rows_of = [&](uint32_t i) { return (i + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles; };
+        auto ofs_of = [&](uint32_t i) { return (i * block_row_tiles) % w_split_cores; };
+        const uint32_t sem_p[2] = {xs.sem_addr, get_semaphore(sem_par_id)};
+        const uint32_t sem_inv_p[2] = {xs.sem_inv_addr, get_semaphore(sem_inv_par_id)};
+        uint32_t pexp[2] = {0, 0};
+        uint32_t iexp[2] = {0, 0};
+        auto par = [&](uint32_t i, auto&& fn) {
+            const uint32_t p = i & 1;
+            xs.sem_addr = sem_p[p];
+            xs.sem_inv_addr = sem_inv_p[p];
+            xs.partials_expected = pexp[p];
+            xs.inv_expected = iexp[p];
+            fn();
+            pexp[p] = xs.partials_expected;
+            iexp[p] = xs.inv_expected;
+        };
+        auto send = [&](uint32_t i) {
+            par(i, [&] {
+                xs.send_ofs = ofs_of(i);
+                exchange_send(rows_of(i), xs);
+            });
+        };
+        auto wait_partials = [&](uint32_t i) {
+            par(i, [&] {
+                xs.ofs = ofs_of(i);
+                owner_wait_partials(rows_of(i), xs);
+            });
+        };
+        send(0);
+        wait_partials(0);
+        for (uint32_t i = 0; i < num_blocks; ++i) {
+            if (i + 1 < num_blocks) {
+                send(i + 1);
+            }
+            par(i, [&] {
+                xs.ofs = ofs_of(i);
+                owner_return_inv(rows_of(i), xs);
+            });
+            finish_resident_gamma(i);  // gamma_after_send: after sub-block 0's owner duties (no-op otherwise)
+            if (i + 1 < num_blocks) {
+                wait_partials(i + 1);
+            }
+            par(i, [&] { exchange_recv_inv(rows_of(i), xs); });
+        }
+        MaybeDeviceZoneScope("wr_store");  // cb_out IS the output shard: wait until compute has written all of it
+        const uint32_t shard_pages = ((num_blocks - 1) * block_row_tiles + last_block_row_tiles) * x_row_pitch;
+        cb_wait_front(cb_out, shard_pages);
+        cb_pop_front(cb_out, shard_pages);
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
+        return;
+    }
+#endif
     [[maybe_unused]] uint32_t out_ring_pos = 0;  // TILE: cb_out page position of the read pointer
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t rows = (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
