@@ -649,6 +649,10 @@ class TPGatedDeltaNet:
         _nat = getattr(self, "_native_out", None)
         if _nat is not None and x.shape[-2] <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0: exact-ternary decode
             return _nat.forward(x)
+        if _nat is not None:  # BONSAI_NATIVE=pq2_0 prefill: dequant + stock matmul
+            from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_linear
+
+            return prefill_linear(_nat, x)
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             return tpc.matmul_1d_decode(
@@ -687,8 +691,13 @@ class TPGatedDeltaNet:
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         _nat = getattr(self, "_native_in", None)
-        if _nat is not None and S <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0 decode
-            qkvz = _nat.forward(x, out_mem=ttnn.L1_MEMORY_CONFIG)
+        if _nat is not None:  # BONSAI_NATIVE=pq2_0: A3 decode, or dequant + stock matmul for prefill
+            if S <= tpc.TILE_SIZE:
+                qkvz = _nat.forward(x, out_mem=ttnn.L1_MEMORY_CONFIG)
+            else:
+                from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_linear
+
+                qkvz = prefill_linear(_nat, x)
             qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz), memory_config=_proj_mc)
             z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az), memory_config=_proj_mc)
             ttnn.deallocate(qkvz)

@@ -248,8 +248,15 @@ class Qwen36MLP:
         if self.num_devices > 1:
             return self._forward_tp(x)
         if self.native is not None:
-            T = x.shape[1] if len(x.shape) >= 3 else 1
-            assert T <= 1, "BONSAI_NATIVE=pq2_0 MLP is decode-only"
+            if x.shape[-2] > ttnn.TILE_SIZE:  # prefill: dequant + stock matmul (bonsai2/native/a3/prefill.py)
+                from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_mlp
+
+                T = x.shape[1] if len(x.shape) >= 3 else 1  # as the dense path below
+                down_pc = None
+                if T > 1 and getattr(self.args, "prefill_progcfg", None) is not None:
+                    down_pc = self.args.prefill_progcfg(T, self.native.w_d.shape[-2], x.shape[-1])
+                return prefill_mlp(self.native, x, ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG,
+                                   down_pc)
             if x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             return self.native.forward(x)

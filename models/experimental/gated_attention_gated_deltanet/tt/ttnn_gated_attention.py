@@ -590,9 +590,13 @@ def gated_attention_forward_ttnn(
     # this shape: 137.3 us today (DRAM activation, auto config) -> 102.2 us, and the L1 placement on
     # its own changes nothing (137.7), so the config is what buys the time.
     if not isinstance(o_proj_weight, ttnn.Tensor):
-        # bonsai2 BONSAI_NATIVE=pq2_0: an exact-ternary TernaryLinear (decode only); a ttnn weight never gets here.
-        assert T <= ttnn.TILE_SIZE, "exact-ternary o_proj is decode-only"
-        attn_output = o_proj_weight.forward(attn_output, out_mem=memory_config)
+        # bonsai2 BONSAI_NATIVE=pq2_0: an exact-ternary TernaryLinear (A3 decode; prefill via dequant + stock matmul).
+        if T <= ttnn.TILE_SIZE:
+            attn_output = o_proj_weight.forward(attn_output, out_mem=memory_config)
+        else:
+            from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_linear
+
+            attn_output = prefill_linear(o_proj_weight, attn_output, mem=memory_config)
     elif _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
         from models.demos.blackhole.qwen36.tt import tp_common as _tpc
 
