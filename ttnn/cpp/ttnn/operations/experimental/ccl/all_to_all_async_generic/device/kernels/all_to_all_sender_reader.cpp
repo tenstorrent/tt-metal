@@ -137,6 +137,24 @@ void kernel_main() {
         uint32_t block_idx = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_end_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_stride = get_arg_val<uint32_t>(arg_idx++);
+#ifdef TILIZE_INPUT
+        // Row-major input: fetch each tile row (32 input rows) for the tilize kernel, which fills the packet buffer.
+        // The host keeps every range on whole tile rows with stride 1.
+        constexpr uint32_t tile_height = 32;
+        CircularBuffer cb_rows(ROWS_CB);
+        const auto rows = TensorAccessor(input_tensor_args, input_address, ROW_BYTES);
+        for (; block_idx < block_end_id; block_idx += TILES_PER_ROW) {
+            const auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
+            const uint32_t first_row = tile_id / TILES_PER_ROW * tile_height;
+            cb_rows.reserve_back(TILES_PER_ROW);
+            const uint32_t rows_l1 = cb_rows.get_write_ptr();
+            for (uint32_t row = 0; row < tile_height; ++row) {
+                noc_async_read(rows.get_noc_addr(first_row + row), rows_l1 + row * ROW_BYTES, ROW_BYTES);
+            }
+            noc_async_read_barrier();
+            cb_rows.push_back(TILES_PER_ROW);
+        }
+#else
         while (block_idx < block_end_id) {
             if (packets_in_pair == 0) {
                 cb0.reserve_back(kPacketsPerPair);
@@ -173,6 +191,7 @@ void kernel_main() {
                 packets_in_pair = 0;
             }
         }
+#endif
     }
     if (packets_in_pair > 0) {
         noc_obj.async_read_barrier();
