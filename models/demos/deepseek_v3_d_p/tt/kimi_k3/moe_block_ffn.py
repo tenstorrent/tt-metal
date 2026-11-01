@@ -225,8 +225,16 @@ class TtK3MoEBlockFfn:
             )
             logger.info(
                 f"MoE block: built for chunk {chunk} at layer {self.layer_idx} in {time.time() - t0:.1f} s - "
-                f"accumulators {block.accumulators}, capacity {block.expert_kw['max_tokens_per_expert']}"
+                f"accumulators {block.accumulators}, capacity {block.expert_kw['max_tokens_per_expert']}, arena "
+                f"{block.arena_spec.memory_config.shard_spec.shape[0] * 64 >> 10} KB a core"
             )
+            fit = mb.plan_fused_head(res, dtypes, block.accumulators, block.l1_free)
+            if fit.ok and len(fit.planned):
+                p, lay = fit.planned[0], fit.planned[0].lay
+                logger.info(
+                    f"MoE block: head engine {lay.GX}x{lay.GY}, MT {lay.MT}, {lay.NCH} chunk(s), KB {lay.KB}, router on "
+                    f"the engine {lay.on_engine}, x in DRAM {lay.xdram}, predicted {p.t:.0f} us {fit.note}"
+                )
             hit = _BLOCKS[key] = (self.mesh, res, block)
         return hit[2]
 
