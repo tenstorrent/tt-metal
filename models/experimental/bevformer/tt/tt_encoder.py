@@ -451,28 +451,9 @@ class TTBEVFormerEncoder:
 
     @staticmethod
     def _host_lidar2img(img_metas):
-        """The cameras' projections from ``img_metas``, torch [B, num_cams, 4, 4]: each sample's
-        ``lidar2img``, or else the first sample's intrinsics times extrinsics."""
-        if "lidar2img" in img_metas[0]:
-            # Extract precomputed transformation matrices from dataset metadata
-            # lidar2img transforms points from lidar/world coordinates to camera image pixels
-            lidar2img_list = []
-            for meta in img_metas:
-                if isinstance(meta["lidar2img"], torch.Tensor):
-                    lidar2img_list.append(meta["lidar2img"])
-                else:
-                    # Convert numpy arrays or lists to tensors
-                    lidar2img_list.append(torch.tensor(meta["lidar2img"], dtype=torch.float32))
-
-            # Shape: [batch, num_cams, 4, 4] - homogeneous transformation matrices
-            return torch.stack(lidar2img_list).cpu()
-        # Fallback: construct transformation from separate intrinsic and extrinsic matrices
-        # Intrinsic: camera parameters (focal length, principal point)
-        # Extrinsic: camera pose in world coordinates (rotation + translation)
-        camera_intrinsics = torch.tensor(img_metas[0]["camera_intrinsics"], dtype=torch.float32)
-        camera_extrinsics = torch.tensor(img_metas[0]["camera_extrinsics"], dtype=torch.float32)
-        # Combined transformation: world -> camera -> image, the first sample's for every sample
-        return (camera_intrinsics @ camera_extrinsics).expand(len(img_metas), -1, -1, -1)
+        """Each sample's ``lidar2img``, the transform from lidar to image pixels, as torch
+        [B, num_cams, 4, 4] float32."""
+        return torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
 
     def forward(
         self,
