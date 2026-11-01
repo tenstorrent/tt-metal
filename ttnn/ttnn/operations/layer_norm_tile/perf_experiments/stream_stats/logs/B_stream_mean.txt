@@ -1,0 +1,13 @@
+/localdev/kgrujcic/tt-metal/generated/profiler/reports/2026_11_01_19_13_53/ops_perf_results_2026_11_01_19_13_53.csv
+focus1            37.9 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+focus2            49.8 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+focus3            34.4 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+allL1_res         26.0 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+L1_nores          22.7 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+8x384             38.7 us  cores   96  in0 8[8]x384[384] DEV_5_DRAM_INTERLEAVED
+32x32             21.5 us  cores   32  in0 32[32]x32[32] DEV_5_DRAM_INTERLEAVED
+affTILE           51.3 us  cores  110  in0 8[8]x512[512] DEV_5_DRAM_INTERLEAVED
+g_focus1_bf16     36.6 us  cores  110  in0 8[8]x512[512] DEV_5_L1_INTERLEAVED
+g_3x500           24.6 us  cores   48  in0 3[3]x512[500] DEV_5_L1_INTERLEAVED
+g_64x17           24.7 us  cores   64  in0 64[64]x32[17] DEV_5_DRAM_INTERLEAVED
+g_2x512           14.8 us  cores   32  in0 2[2]x512[512] DEV_5_L1_INTERLEAVED

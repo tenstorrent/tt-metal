@@ -8,9 +8,14 @@ the trid ring, grouped writer flush, bank stagger and split_reader paths stay co
 parked. (7, 1, 3200, W) gives several blocks per core with a ragged last block and in_depth = 2.
 """
 
+import importlib
+
 import pytest
 
-import ttnn.operations.layer_norm_tile.layer_norm_tile_program_descriptor as descriptor
+# By module name: `import a.b.c as d` resolves through package attributes, which can bind a second copy
+# of the module (sys.modules also holds `layer_norm_tile.layer_norm_tile_program_descriptor`), and
+# then the overrides never reach select_blocking.
+descriptor = importlib.import_module("ttnn.operations.layer_norm_tile.layer_norm_tile_program_descriptor")
 from tests.ttnn.unit_tests.operations.layer_norm_tile.test_layer_norm_tile import DRAM, L1, W, run_and_check
 
 KNOBS = {

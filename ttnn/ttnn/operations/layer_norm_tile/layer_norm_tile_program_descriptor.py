@@ -42,6 +42,9 @@ COMPUTE_DEST_LANES = 4
 # two-pass over the centered row.
 STREAM_ROW_STATS = True
 ONE_PASS_VARIANCE = True
+# STREAM_NORMALIZE (one-pass only): center, normalize, scale and shift run per stats window, so the writer
+# starts at the row's first window instead of during the last whole-row pass.
+STREAM_NORMALIZE = True
 L1_HEADROOM_BYTES = 64 * 1024
 
 CB_INPUT_TILES = 0
@@ -54,6 +57,8 @@ CB_ROW_MEAN = 6
 CB_STAT_PARTIAL = 7  # raw row sums carried between stats windows
 CB_INV_STD = 8
 CB_AFFINE_SCRATCH = 9  # reader-private landing block of the gamma/beta multicast
+CB_CHUNK_A = 10  # stream_normalize: one window between per-window passes
+CB_CHUNK_B = 11
 CB_OUTPUT_TILES = 16
 NUM_CIRCULAR_BUFFERS = 64
 
@@ -79,6 +84,7 @@ class Blocking:
     residual_on_writer: bool
     stats_window_tiles: int  # G: tiles per row-stats window, a multiple of C or Wt
     one_pass: bool  # one-pass variance (sum and sum of squares in the stats windows)
+    stream_normalize: bool  # normalize + affine per stats window (one_pass only)
     all_cores: object
     assignment: tuple  # ((core, row_tile_start, core_row_tiles), ...)
 
@@ -95,19 +101,23 @@ def _affine_scratch_bytes(Wt, affine_is_tile):
     return 2 * Wt * entry_bytes
 
 
-def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass):
+def _cb_pages(R, in_depth, *, Wt, has_residual, stats_window_tiles, one_pass, stream_normalize):
     """Page count per CB: the single source for both the L1 footprint and the allocation (l1_ledger.md)."""
     pages = {
         CB_INPUT_TILES: in_depth * R * Wt,
         CB_GAMMA_TILES: Wt,
         CB_BETA_TILES: Wt,
-        CB_ROW_WORK_A: R * Wt,  # alias group with CB_ROW_WORK_B: one allocation
         CB_ROW_MEAN: R,
         CB_INV_STD: R,
         CB_OUTPUT_TILES: OUT_DEPTH * R * Wt,
     }
     if has_residual:
         pages[CB_RESIDUAL_TILES] = in_depth * R * Wt
+    if has_residual or not stream_normalize:
+        pages[CB_ROW_WORK_A] = R * Wt  # z, or the whole-row passes; alias group with CB_ROW_WORK_B
+    if stream_normalize:
+        pages[CB_CHUNK_A] = stats_window_tiles
+        pages[CB_CHUNK_B] = stats_window_tiles
     if stats_window_tiles < Wt:
         pages[CB_STAT_PARTIAL] = 2 if one_pass else 1
     return pages
@@ -126,6 +136,8 @@ def _cb_page_formats(fp32_dest_acc_en):
         CB_ROW_WORK_B: work,
         CB_ROW_MEAN: work,
         CB_STAT_PARTIAL: work,
+        CB_CHUNK_A: work,
+        CB_CHUNK_B: work,
         CB_INV_STD: work,
         CB_OUTPUT_TILES: io,
     }
@@ -181,6 +193,7 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
     has_residual = residual is not None
     fp32_dest_acc_en = bool(compute_kernel_config.fp32_dest_acc_en)
     one_pass = _one_pass(compute_kernel_config)
+    stream_normalize = STREAM_NORMALIZE and one_pass
     shape = list(input_tensor.shape)
     if shape[-1] % TILE != 0:
         return None
@@ -198,7 +211,15 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
         return 2 if _div_up(core_row_tiles_max, R) >= 2 else 1
 
     def fits(R):
-        pages = _cb_pages(R, in_depth_for(R), Wt=Wt, has_residual=has_residual, stats_window_tiles=G, one_pass=one_pass)
+        pages = _cb_pages(
+            R,
+            in_depth_for(R),
+            Wt=Wt,
+            has_residual=has_residual,
+            stats_window_tiles=G,
+            one_pass=one_pass,
+            stream_normalize=stream_normalize,
+        )
         return _footprint(pages, formats) + _affine_scratch_bytes(Wt, affine_is_tile=True) <= budget
 
     R = next((r for r in range(_div_up(core_row_tiles_max, MIN_BLOCKS_PER_CORE), 0, -1) if fits(r)), None)
@@ -218,6 +239,7 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
         residual_on_writer=_residual_on_writer(residual, len(assignment), grid.x * grid.y),
         stats_window_tiles=G,
         one_pass=one_pass,
+        stream_normalize=stream_normalize,
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -297,6 +319,7 @@ def _cb_descriptors(blocking):
         has_residual=blocking.has_residual,
         stats_window_tiles=blocking.stats_window_tiles,
         one_pass=blocking.one_pass,
+        stream_normalize=blocking.stream_normalize,
     )
     formats = _cb_page_formats(blocking.fp32_dest_acc_en)
 
@@ -398,6 +421,9 @@ def create_program_descriptor(
         blocking.stats_window_tiles,
         int(blocking.one_pass),
         CB_STAT_PARTIAL,
+        int(blocking.stream_normalize),
+        CB_CHUNK_A,
+        CB_CHUNK_B,
     ]
 
     compute_rt = ttnn.RuntimeArgs()

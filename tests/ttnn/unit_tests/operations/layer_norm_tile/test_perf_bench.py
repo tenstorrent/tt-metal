@@ -1,14 +1,35 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf bench: one call per LOOSE_CASES perf row (run under scripts/run_safe_pytest.sh --profile)."""
+"""Perf bench: one call per LOOSE_CASES perf row (run under scripts/run_safe_pytest.sh --profile).
+
+LN_KNOBS="NAME=int,..." overrides layer_norm_tile_program_descriptor knob constants for A/B runs.
+"""
+
+import os
+
+import importlib
 
 import pytest
+
+# By module name: `import a.b.c as d` resolves through package attributes, which can bind a second copy
+# of the module (sys.modules also holds `layer_norm_tile.layer_norm_tile_program_descriptor`), and
+# then the overrides never reach select_blocking.
+descriptor = importlib.import_module("ttnn.operations.layer_norm_tile.layer_norm_tile_program_descriptor")
 
 from eval.golden_tests.layer_norm_tile.feature_spec import LOOSE_CASES
 from eval.golden_tests.layer_norm_tile.helpers import run_layer_norm
 
 PERF_CASES = [case for case in LOOSE_CASES if "achievable_ns" in case.get("extras", {})]
+
+
+@pytest.fixture(autouse=True)
+def _knob_overrides(monkeypatch):
+    for item in filter(None, os.environ.get("LN_KNOBS", "").split(",")):
+        knob, value = item.split("=")
+        monkeypatch.setattr(descriptor, knob, type(getattr(descriptor, knob))(int(value)))
+
+
 IDS = [
     "focus1_inL1_resDRAM_outDRAM",
     "focus2_allDRAM_res",

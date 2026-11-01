@@ -269,6 +269,11 @@ void kernel_main() {
     constexpr uint32_t stats_window_tiles = get_compile_time_arg_val(15);
     constexpr bool one_pass = get_compile_time_arg_val(16) != 0;
     constexpr uint32_t cb_stat_partial = get_compile_time_arg_val(17);
+    // stream_normalize (one_pass only): normalize + affine per stats window through two G-page chunk CBs.
+    constexpr bool stream_normalize = get_compile_time_arg_val(18) != 0;
+    constexpr uint32_t cb_chunk_a = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_chunk_b = get_compile_time_arg_val(20);
+    static_assert(!stream_normalize || one_pass, "per-window normalize needs inv_std before centering");
     static_assert(tensor_w_tiles % stats_window_tiles == 0, "a stats window never straddles rows");
 
     const uint32_t core_row_tiles = get_arg_val<uint32_t>(0);
@@ -293,6 +298,8 @@ void kernel_main() {
     DataflowBuffer row_mean(cb_row_mean);
     DataflowBuffer inv_std(cb_inv_std);
     DataflowBuffer stat_partial(cb_stat_partial);
+    [[maybe_unused]] DataflowBuffer chunk_a(cb_chunk_a);
+    [[maybe_unused]] DataflowBuffer chunk_b(cb_chunk_b);
     DataflowBuffer output_tiles(cb_output_tiles);
     DataflowBuffer& z_tiles = has_residual ? work_a : input_tiles;
 
@@ -300,7 +307,7 @@ void kernel_main() {
         const uint32_t rows =
             (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
         // Streaming passes take `dest_lanes` tiles per DEST acquire (one CB handshake per group).
-        const auto lane_shape = IterationShape::grid(rows, tensor_w_tiles).block_size(dest_lanes);
+        [[maybe_unused]] const auto lane_shape = IterationShape::grid(rows, tensor_w_tiles).block_size(dest_lanes);
 
         // residual_add_block + row_stats_window, interleaved per window so the stats run as tiles land
         {
@@ -326,53 +333,110 @@ void kernel_main() {
             }
         }
 
-        // center_block
-        {
-            MaybeDeviceZoneScope("compute_center");
-            sub<lane_input(cb_z),
-                input(cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                lane_output(cb_row_work_b)>(lane_shape, z_tiles, row_mean, work_b);
-        }
-
-        // row_stats_block (two-pass; c stays resident for normalize_block)
-        if constexpr (!one_pass) {
-            MaybeDeviceZoneScope("compute_row_stats");
-            row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(rows, work_b, inv_std);
-        }
-
-        // normalize_block
-        {
-            MaybeDeviceZoneScope("compute_normalize");
-            mul<lane_input(cb_row_work_b),
-                input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
-        }
-        {
-            MaybeDeviceZoneScope("compute_wait_affine");
-            gamma_tiles.wait_front(tensor_w_tiles);
-            beta_tiles.wait_front(tensor_w_tiles);
-        }
-
-        // affine_scale_block
-        {
-            MaybeDeviceZoneScope("compute_affine_scale");
-            mul<lane_input(cb_row_work_a, same_work_fmt),
-                input(cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
-        }
-
-        // affine_shift_block
-        {
-            MaybeDeviceZoneScope("compute_affine_shift");
-            add<lane_input(cb_row_work_b, same_work_fmt),
-                input(
-                    cb_beta_tiles,
+        if constexpr (stream_normalize) {
+            // normalize -> affine per window, so the writer starts at the row's first window. Each pass
+            // moves one window through a G-page chunk CB; the work alias pair cannot carry it (its ids
+            // must move whole blocks).
+            MaybeDeviceZoneScope("compute_stream_normalize");
+            const auto window_shape = IterationShape::grid(1, stats_window_tiles).block_size(dest_lanes);
+            constexpr auto col_stat = [](uint32_t cb) {
+                return input(
+                    cb,
+                    BroadcastDim::Col,
+                    WaitPolicy::Upfront,
+                    PopPolicy::None,
+                    InputTileMapping::Col,
+                    DataFormatReconfig::Enabled,
+                    TileAddressing::Offset);
+            };
+            constexpr auto affine_row = [](uint32_t cb) {
+                return input(
+                    cb,
                     BroadcastDim::Row,
                     WaitPolicy::Upfront,
                     PopPolicy::None,
                     InputTileMapping::Row,
-                    same_work_fmt),
-                lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
+                    DataFormatReconfig::Enabled,
+                    TileAddressing::Offset);
+            };
+            gamma_tiles.wait_front(tensor_w_tiles);
+            beta_tiles.wait_front(tensor_w_tiles);
+            for (uint32_t row = 0; row < rows; ++row) {
+                for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += stats_window_tiles) {
+                    eltwise_chain(
+                        window_shape,
+                        BinaryFpu<BinaryFpuOp::Sub, lane_input(cb_z), col_stat(cb_row_mean)>{z_tiles, row_mean, 0, row},
+                        PackTile<lane_output(cb_chunk_a)>{chunk_a});
+                    eltwise_chain(
+                        window_shape,
+                        BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_a), col_stat(cb_inv_std)>{
+                            chunk_a, inv_std, 0, row},
+                        PackTile<lane_output(cb_chunk_b)>{chunk_b});
+                    eltwise_chain(
+                        window_shape,
+                        BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_b, same_work_fmt), affine_row(cb_gamma_tiles)>{
+                            chunk_b, gamma_tiles, 0, col0},
+                        PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
+                    eltwise_chain(
+                        window_shape,
+                        BinaryFpu<BinaryFpuOp::Add, lane_input(cb_chunk_a, same_work_fmt), affine_row(cb_beta_tiles)>{
+                            chunk_a, beta_tiles, 0, col0},
+                        PackTile<lane_output(cb_output_tiles)>{output_tiles});
+                }
+            }
+            row_mean.pop_front(rows);
+            inv_std.pop_front(rows);
+        } else {
+            // center_block
+            {
+                MaybeDeviceZoneScope("compute_center");
+                sub<lane_input(cb_z),
+                    input(cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                    lane_output(cb_row_work_b)>(lane_shape, z_tiles, row_mean, work_b);
+            }
+
+            // row_stats_block (two-pass; c stays resident for normalize_block)
+            if constexpr (!one_pass) {
+                MaybeDeviceZoneScope("compute_row_stats");
+                row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(
+                    rows, work_b, inv_std);
+            }
+
+            // normalize_block
+            {
+                MaybeDeviceZoneScope("compute_normalize");
+                mul<lane_input(cb_row_work_b),
+                    input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                    lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
+            }
+            {
+                MaybeDeviceZoneScope("compute_wait_affine");
+                gamma_tiles.wait_front(tensor_w_tiles);
+                beta_tiles.wait_front(tensor_w_tiles);
+            }
+
+            // affine_scale_block
+            {
+                MaybeDeviceZoneScope("compute_affine_scale");
+                mul<lane_input(cb_row_work_a, same_work_fmt),
+                    input(
+                        cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                    lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
+            }
+
+            // affine_shift_block
+            {
+                MaybeDeviceZoneScope("compute_affine_shift");
+                add<lane_input(cb_row_work_b, same_work_fmt),
+                    input(
+                        cb_beta_tiles,
+                        BroadcastDim::Row,
+                        WaitPolicy::Upfront,
+                        PopPolicy::None,
+                        InputTileMapping::Row,
+                        same_work_fmt),
+                    lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
+            }
         }
     }
 
