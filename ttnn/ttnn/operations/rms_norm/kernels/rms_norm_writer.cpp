@@ -225,27 +225,26 @@ FORCE_INLINE void load_gamma_slice(
 #endif
 
 #ifdef RMS_GAMMA_CHUNK
-// stream_gamma_block: this block's gamma, chunk by chunk (pass 2 walks norm_w tiles per tile-row in G-tile windows).
-// Gap tiles past core_w_tiles (a ragged shard column's padding) are pushed unwritten — their output is don't-care.
+// stream_gamma_chunk: gamma tiles [c0, c0 + G) of this member's slice into the next G pages of the cb_gamma ring
+// (always G pages pushed, so a chunk never wraps the ring). Gap tiles past core_w_tiles (a ragged shard column's
+// padding / the RM chunk pitch) are pushed unwritten — their output is don't-care.
 template <typename Accessor>
-FORCE_INLINE void stream_gamma_block(
+FORCE_INLINE void stream_gamma_chunk(
     const Accessor& g_acc,
     uint32_t w_tile_start,
     uint32_t core_w_tiles,
-    uint32_t norm_w,
     uint32_t col0,
-    uint32_t valid_cols) {
+    uint32_t valid_cols,
+    uint32_t c0) {
     constexpr uint32_t G = RMS_GAMMA_CHUNK;
-    for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
-        cb_reserve_back(cb_gamma, G);
-        if (c0 < core_w_tiles) {
-            const uint32_t valid = (core_w_tiles - c0) < G ? (core_w_tiles - c0) : G;
-            const uint32_t cols =
-                (valid_cols - c0 * TILE_DIM) < valid * TILE_DIM ? (valid_cols - c0 * TILE_DIM) : valid * TILE_DIM;
-            fill_gamma_slice(g_acc, get_write_ptr(cb_gamma), w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
-        }
-        cb_push_back(cb_gamma, G);
+    cb_reserve_back(cb_gamma, G);
+    if (c0 < core_w_tiles) {
+        const uint32_t valid = (core_w_tiles - c0) < G ? (core_w_tiles - c0) : G;
+        const uint32_t cols =
+            (valid_cols - c0 * TILE_DIM) < valid * TILE_DIM ? (valid_cols - c0 * TILE_DIM) : valid * TILE_DIM;
+        fill_gamma_slice(g_acc, get_write_ptr(cb_gamma), w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
     }
+    cb_push_back(cb_gamma, G);
 }
 #endif
 
@@ -342,7 +341,9 @@ void kernel_main() {
 
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
     const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
-#ifdef RMS_SHARDED
+#if defined(RMS_RM)
+    const uint32_t norm_w = chunks_this * rm_chunk_w_tiles;  // RM: pass 2 walks chunks_this C-tile windows
+#elif defined(RMS_SHARDED)
     const uint32_t norm_w = x_row_pitch;  // sharded TILE: pass 2 walks the whole shard row
 #else
     const uint32_t norm_w = core_w_tiles;
@@ -407,7 +408,18 @@ void kernel_main() {
         }
 
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
-        stream_gamma_block(g_acc, w_tile_start, core_w_tiles, norm_w, col0, valid_cols);
+        // Streamed gamma for this block. TILE (shard-backed cb_out: compute never blocks on output) — every chunk now.
+        // RM — only the ring depth now, then chunk c + depth after chunk c's sticks are drained: compute blocks on
+        // cb_out_rm until this kernel drains it, so pushing every chunk first would deadlock on the gamma ring.
+        constexpr uint32_t gamma_chunk = RMS_GAMMA_CHUNK;
+#ifdef RMS_RM
+        constexpr uint32_t gamma_prefetch = RMS_GAMMA_STREAM_DEPTH;
+#else
+        constexpr uint32_t gamma_prefetch = 0xFFFFFFFF;
+#endif
+        for (uint32_t i = 0, c0 = 0; i < gamma_prefetch && c0 < norm_w; ++i, c0 += gamma_chunk) {
+            stream_gamma_chunk(g_acc, w_tile_start, core_w_tiles, col0, valid_cols, c0);
+        }
 #endif
         // ---- store_block ----
 #if defined(RMS_SHARDED) && defined(RMS_RM)
@@ -429,6 +441,14 @@ void kernel_main() {
                 noc_async_writes_flushed();
                 cb_pop_front(cb_out_rm, rm_chunk_w_tiles);
             }
+#if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+            // Chunk c's gamma was popped before its sticks reached cb_out_rm: refill the ring with chunk c + depth
+            // (loaded while compute normalizes chunk c + 1, whose gamma is already resident).
+            if (c + RMS_GAMMA_STREAM_DEPTH < chunks_this) {
+                stream_gamma_chunk(
+                    g_acc, w_tile_start, core_w_tiles, col0, valid_cols, (c + RMS_GAMMA_STREAM_DEPTH) * gamma_chunk);
+            }
+#endif
         }
 #elif defined(RMS_SHARDED)
         cb_wait_front(cb_out, rows * x_row_pitch);

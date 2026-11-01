@@ -47,10 +47,6 @@
 #endif
 #include "rms_norm_common.hpp"
 
-#if defined(RMS_RM) && defined(RMS_GAMMA_CHUNK)
-#error "streamed gamma (RMS_GAMMA_CHUNK) is a TILE-input regime; RM pass 2 walks rm_chunk_w_tiles windows"
-#endif
-
 using namespace compute_kernel_lib;
 using namespace rms_norm_cb;
 
@@ -283,19 +279,27 @@ ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[may
 #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
     cb_wait_front(cb_gamma, gamma_tiles);
 #endif
+#ifdef RMS_RM
+    for (uint32_t c = 0; c < chunks_this; ++c) {
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
-    // Streamed gamma (TILE input only): one G-tile chunk per window, re-streamed by the writer every block.
+        // Streamed gamma: one C-tile chunk per chunk window (the writer streams G == C tiles per chunk).
+        static_assert(RMS_GAMMA_CHUNK == rm_chunk_w_tiles, "RM streamed gamma chunk must equal the RM chunk");
+        cb_wait_front(cb_gamma, rm_chunk_w_tiles);
+        normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, 0);
+        cb_pop_front(cb_gamma, rm_chunk_w_tiles);
+#else
+        normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, c * rm_chunk_w_tiles);
+#endif
+        // untilize init/uninit per chunk: the normalize chain between chunks reprograms unpack/math/pack.
+        untilize<rm_chunk_w_tiles, cb_out, cb_out_rm>(rows);
+    }
+#elif defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+    // Streamed gamma: one G-tile chunk per window, re-streamed by the writer every block.
     constexpr uint32_t G = RMS_GAMMA_CHUNK;
     for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
         cb_wait_front(cb_gamma, G);
         normalize_window<cb_x_blk>(rows, c0, (norm_w - c0) < G ? (norm_w - c0) : G, 0);
         cb_pop_front(cb_gamma, G);
-    }
-#elif defined(RMS_RM)
-    for (uint32_t c = 0; c < chunks_this; ++c) {
-        normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, c * rm_chunk_w_tiles);
-        // untilize init/uninit per chunk: the normalize chain between chunks reprograms unpack/math/pack.
-        untilize<rm_chunk_w_tiles, cb_out, cb_out_rm>(rows);
     }
 #else
     normalize_window<cb_x_blk>(rows, 0, norm_w, 0);

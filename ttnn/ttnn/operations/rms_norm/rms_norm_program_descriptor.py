@@ -159,8 +159,8 @@ def _out_unit(slice_w_tiles: int) -> int:
     return min(slice_w_tiles, OUT_UNIT_CAP)
 
 
-def _rm_chunk(slice_w_tiles: int):
-    chunks = _div_up(slice_w_tiles, RM_CHUNK_CAP)
+def _rm_chunk(slice_w_tiles: int, cap: int = RM_CHUNK_CAP):
+    chunks = _div_up(slice_w_tiles, cap)
     c = _div_up(slice_w_tiles, chunks)
     return c, chunks * c
 
@@ -174,6 +174,7 @@ class PlanOpts:
     gather_depth: int = 2  # symmetric all-gather: blocks of cb_gathered (1 when every core runs one block)
     mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
     gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
+    rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
 
 
 def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> dict:
@@ -183,7 +184,7 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
     declarations) read this dict, so a knob change lands in exactly one place (l1_ledger.md rows).
     """
     if sz.is_rm:
-        c, pitch = _rm_chunk(slice_w)
+        c, pitch = _rm_chunk(slice_w, opts.rm_chunk_cap)
     else:
         c, pitch = 1, slice_w
     plan = {
@@ -255,9 +256,9 @@ class Blocking:
     footprint: int
 
 
-def _pitch(sz: _Sizes, slice_w: int):
+def _pitch(sz: _Sizes, slice_w: int, rm_chunk_cap: int = RM_CHUNK_CAP):
     """(rm_chunk_w_tiles, x_row_pitch) for a slice of `slice_w` tiles."""
-    return _rm_chunk(slice_w) if sz.is_rm else (1, slice_w)
+    return _rm_chunk(slice_w, rm_chunk_cap) if sz.is_rm else (1, slice_w)
 
 
 def _solve_rows(
@@ -281,7 +282,7 @@ def _solve_rows(
 
     def fits(b, d):
         single = b >= crt_max
-        o = PlanOpts(opts.shard_backed, opts.owner_combine, 1 if single else 2, opts.mask_tail, opts.gamma_chunk)
+        o = replace(opts, gather_depth=1 if single else 2)
         return _plan_bytes(cb_plan(sz, k, slice_w, b, d, o)) <= budget, o
 
     if allow_depth2 and overlap_blocks > 1 and crt_max > 1:
@@ -303,23 +304,46 @@ def _solve_rows(
     return 1, 1, o
 
 
-def _solve_rows_gamma_fallback(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
-    """_solve_rows with the resident gamma slice; if even one tile-row does not fit (TILE input with gamma), stream
-    gamma in the largest chunk G <= GAMMA_STREAM_CHUNK_CAP that fits. RM input keeps the resident plan (its binding
-    buffer is the tilized x row, not gamma)."""
-    streamable = sz.has_gamma and not sz.is_rm
-    if not (streamable and GAMMA_STREAM_FORCE_CHUNK):
+def _sharded_plan_candidates(sz: _Sizes, slice_w: int, opts: PlanOpts):
+    """Sharded CB regimes in preference order; the first whose one-tile-row plan fits L1 is used.
+
+    Default: resident gamma slice (loaded / multicast once) and the RM chunk at RM_CHUNK_CAP. Wide W beside two
+    resident shards may not fit that (HEIGHT k = 1 holds the whole row), so fall back to
+      TILE: gamma streamed in the largest G <= GAMMA_STREAM_CHUNK_CAP chunks (per block, 2-chunk ring);
+      RM  : per halved chunk cap C (staging / cb_out / untilize buffers scale with C): resident gamma, then gamma
+            streamed with G = C (pass 2 already walks C-tile windows). The tilized x row stays resident.
+    GAMMA_STREAM_FORCE_CHUNK (test hook) skips the resident-gamma candidates (TILE: also caps G).
+    """
+    force = bool(GAMMA_STREAM_FORCE_CHUNK) and sz.has_gamma
+    if not sz.is_rm:
+        if not force:
+            yield opts
+        if sz.has_gamma:
+            for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
+                yield replace(opts, gamma_chunk=g)
+        return
+    cap = RM_CHUNK_CAP
+    while True:
+        o = replace(opts, rm_chunk_cap=cap)
+        if not force:
+            yield o
+        if sz.has_gamma:
+            yield replace(o, gamma_chunk=_rm_chunk(slice_w, cap)[0])
+        if cap == 1:
+            return
+        cap //= 2
+
+
+def _solve_rows_sharded(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
+    """_solve_rows over _sharded_plan_candidates(): the first regime in which one tile-row block fits."""
+    for cand in _sharded_plan_candidates(sz, slice_w, opts):
         try:
-            return _solve_rows(sz, k, slice_w, crt_max, budget, opts, allow_depth2=False)
-        except RuntimeError:
-            if not streamable:
-                raise
-    for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
-        try:
-            return _solve_rows(sz, k, slice_w, crt_max, budget, replace(opts, gamma_chunk=g), allow_depth2=False)
+            return _solve_rows(sz, k, slice_w, crt_max, budget, cand, allow_depth2=False)
         except RuntimeError:
             continue
-    raise RuntimeError(f"rms_norm: one tile-row block does not fit L1 ({budget} B per core), even with streamed gamma")
+    raise RuntimeError(
+        f"rms_norm: one tile-row block does not fit L1 ({budget} B per core), even with streamed gamma / RM chunk 1"
+    )
 
 
 def _occ_cost(trt: int, tw: int, k: int, grid_x: int, grid_y: int) -> int:
@@ -515,13 +539,13 @@ def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int
         groups.append(members)
     crt_max = max(grp[0].core_rows for grp in groups)
 
-    c, pitch = _pitch(sz, slice_w)
     base_opts = PlanOpts(
         shard_backed=not sz.is_rm,
         owner_combine=k > K_SYM_MAX_SHARDED,
         mask_tail=(not sz.is_rm) and geo.W % TILE != 0,
     )
-    b, d, opts = _solve_rows_gamma_fallback(sz, k, slice_w, crt_max, budget, base_opts)
+    b, d, opts = _solve_rows_sharded(sz, k, slice_w, crt_max, budget, base_opts)
+    c, pitch = _pitch(sz, slice_w, opts.rm_chunk_cap)
     return Blocking(
         k=k,
         slice_w_tiles=slice_w,
@@ -671,6 +695,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     gamma_groups = None
     if opts.gamma_chunk:
         defines.append(("RMS_GAMMA_CHUNK", str(opts.gamma_chunk)))  # streamed gamma: per-core chunk ring, no mcast
+        defines.append(("RMS_GAMMA_STREAM_DEPTH", str(GAMMA_STREAM_DEPTH)))
     elif has_gamma and (GAMMA_MCAST_SHARDED_K1 and k == 1 if sharded else GAMMA_MCAST):
         gamma_groups = _gamma_mcast_groups(blk, grid.x)
     gamma_mcast = gamma_groups is not None

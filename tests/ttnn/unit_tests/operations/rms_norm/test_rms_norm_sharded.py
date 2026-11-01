@@ -211,15 +211,18 @@ def test_height_rm_tile_gamma(device):
         ((1, 1, 160, 11008), ttnn.bfloat16, ttnn.bfloat16, ttnn.TILE_LAYOUT),  # 704 KB shards, ~52 KB left for CBs
     ],
 )
-def test_height_streamed_gamma(device, shape, dtype, gamma_dtype, gamma_layout):
-    """Wide-W HEIGHT cells whose expanded gamma cannot stay resident beside the two shards: gamma streams in chunks."""
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_height_streamed_gamma(device, shape, dtype, gamma_dtype, gamma_layout, layout):
+    """Wide-W HEIGHT cells that do not fit with the resident gamma / RM chunk: gamma streams, RM chunk shrinks."""
+    if layout == ttnn.ROW_MAJOR_LAYOUT and (dtype == ttnn.bfloat8_b or gamma_layout == ttnn.TILE_LAYOUT):
+        pytest.skip("bfloat8_b has no ROW_MAJOR form; RM input pairs with RM gamma here")
     torch.manual_seed(0)
     x = torch.randn(shape, dtype=torch.float32)
     W = shape[-1]
     gamma_t = torch.randn(W, dtype=torch.float32)
     g = ttnn.from_torch(gamma_t.reshape(1, 1, 1, W), dtype=gamma_dtype, layout=gamma_layout, device=device)
-    mc = auto_shard_config(list(shape), HS, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    mc = auto_shard_config(list(shape), HS, layout=layout, dtype=dtype, device=device)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=mc)
     out = rms_norm(xt, gamma=g, epsilon=1e-6, memory_config=mc)
     exp = _ref(ttnn.to_torch(xt).float(), ttnn.to_torch(g).float().reshape(-1), 1e-6)
     p = _pcc(ttnn.to_torch(out).float(), exp)
@@ -242,3 +245,21 @@ def test_forced_streamed_gamma(device, monkeypatch, shape, ml, chunk, gamma_layo
 
     monkeypatch.setattr(pd, "GAMMA_STREAM_FORCE_CHUNK", chunk)
     _run(device, shape, ml, gamma_layout=gamma_layout)
+
+
+@pytest.mark.parametrize(
+    "shape,ml,chunk_cap,pinned",
+    [
+        # 8 tile-rows per shard x 4 chunks: compute blocks on cb_out_rm while > depth gamma chunks are still due
+        ((1, 1, 2048, 1024), HS, 8, ([256, 1024], (8, 1))),
+        ((1, 1, 333, 1000), HS, 4, None),  # ragged chunk pitch (32 = 4 * 8) + H tail
+        ((1, 1, 256, 2000), BS, 4, None),  # k > 1, W tail inside the last member's chunk
+    ],
+)
+def test_forced_streamed_gamma_rm(device, monkeypatch, shape, ml, chunk_cap, pinned):
+    """RM streamed gamma (G = C) with a lowered chunk cap: > depth chunks per block, several tile-rows per block."""
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    monkeypatch.setattr(pd, "GAMMA_STREAM_FORCE_CHUNK", 1)
+    monkeypatch.setattr(pd, "RM_CHUNK_CAP", chunk_cap)
+    _run(device, shape, ml, layout=ttnn.ROW_MAJOR_LAYOUT, gamma_layout=ttnn.ROW_MAJOR_LAYOUT, pinned=pinned)
