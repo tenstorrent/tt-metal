@@ -10,6 +10,7 @@ Request life: ``plan_hit`` (scheduler thread: pins the hit path, reserves a user
 -> ``release``. Everything is guarded by one RLock (the scheduler thread and the model thread both call in); listeners are called after the lock is released.
 """
 import hashlib
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -481,7 +482,7 @@ class BlockIndex:
         if depth > any_hit:
             self.counters["halo_loss"] += 1
             self.counters["halo_loss_tokens"] += depth - any_hit
-        if self.xrow and deep[0] - hit >= self.xrow_min and deep[0] <= self.xrow_max:
+        if self._xrow_on() and deep[0] - hit >= self.xrow_min and deep[0] <= self.xrow_max:
             xp = self._plan_xrow(req_id, chain, num_tokens, deep, ri, fin_users)
             if xp is not None:
                 return xp
@@ -516,6 +517,19 @@ class BlockIndex:
         self.counters["hits"] += 1
         self.counters["hit_tokens"] += hit
         return req.plan
+
+    def _xrow_on(self):
+        """``xrow`` and, when ``DSV41_APC_PAGED_XROW_FILE`` names a file that contains 0, a live off switch for A/B runs in one boot (a missing / unreadable file leaves the flag as set)"""
+        if not self.xrow:
+            return False
+        f = os.environ.get("DSV41_APC_PAGED_XROW_FILE")
+        if f:
+            try:
+                with open(f) as fh:
+                    return fh.read().strip() != "0"
+            except OSError:
+                pass
+        return True
 
     def _plan_xrow(self, req_id, chain, num_tokens, deep, best_row, fin_users):
         """cross-row hit: the deepest hit (``deep``) is on row ``sri`` that has no free user (or a shallower one is local). Reserve a user on another row, allocate fresh private pages there for the whole hit

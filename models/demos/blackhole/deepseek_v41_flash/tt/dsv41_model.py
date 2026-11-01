@@ -3060,6 +3060,9 @@ class Model:
             self.log_dram("after the paged-APC stores")
         if compiled and os.environ.get("DSV41_WARM_APC", "1") == "1":
             self.warm_apc()  # (compile-before-capture: the snapshot / restore programs must not first compile while a trace is live)
+        pa_ = self.__dict__.get("apc_paged")
+        if compiled and pa_ is not None and os.environ.get("DSV41_WARM_XROW", "1") == "1":
+            pa_.warm_xrow()  # (cross-row copy: gather / scatter / store slices, no-op unless DSV41_APC_PAGED_XROW=1)
         gc.collect()
         t2 = time.perf_counter()
         if compiled:  # (a (re)capture of the prefill trace: the carried prefill state of every user is gone)

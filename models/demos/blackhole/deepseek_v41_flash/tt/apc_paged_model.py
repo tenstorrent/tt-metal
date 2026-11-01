@@ -399,6 +399,64 @@ class PagedApc:
         return dt
 
     # ---- cross-row hit (M3, DSV41_APC_PAGED_XROW=1): host-staged copy of the blocks of a donor row into the row of the new request ---------------------------------------
+    def warm_xrow(self, user=0, tokens=1024):
+        """Compile-before-capture for the cross-row copy (``xrow_copy``): the same device ops on an idle ``user`` with zero / self-copied data, no index involved: the pool gather, the pool row scatter
+        (written back with what was read: no state change), the key-store slice + read-back of slot 0 and the halo slice + read-back. The save kernels are warmed by ``build``. -> seconds (0.0 when off).
+        """
+        if self.ks is None or not self.idx.xrow:
+            return 0.0
+        from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as PO
+        from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as PC
+
+        t0 = time.perf_counter()
+        m = self.model
+        cols, b = m.cols, int(user)
+        r = b // m.U
+        try:
+            m.release_user(b)
+            m.pool.release(b)
+            m.pool.admit(b, tokens + 1)
+            m.pool.sync_page_table()
+            for s_ in PO.SOURCES:
+                if s_ not in m.layer_ids:
+                    continue
+                n_ = tokens // PO.SRC_RATIO[s_]
+                phys = m.pool.phys_rows(b, s_, torch.arange(n_)).long()
+                lat = PC.gather_pool_rows(m, r, phys)
+                PC.scatter_rows_mesh(m, m.pool.pool, {r: (phys, lat)})
+            pend = []
+            for lid in self.ks.store:
+                R = self.ks.geom[lid].nrb * 32
+                part = ttnn.slice(self.ks.store[lid], [0, 0, 0, 0], [1, 1, R, APS.IDIM])
+                pend.append(
+                    (
+                        part,
+                        [
+                            ttnn.from_device(ttnn.get_device_tensors(part)[r * cols + c], blocking=False)
+                            for c in range(cols)
+                        ],
+                    )
+                )
+            hp = []
+            for pn in self.hs.store:
+                NL = len(self.hs.layers[pn])
+                sl = ttnn.slice(self.hs.store[pn], [0, 0, 0, 0], [NL, 1, APS.WINDOW, APS.HEAD_DIM])
+                hp.append((sl, ttnn.from_device(ttnn.get_device_tensors(sl)[r * cols], blocking=False)))
+            ttnn.synchronize_device(m.md)
+            for part, hs_ in pend:
+                for h in hs_:
+                    ttnn.to_torch(h)
+                ttnn.deallocate(part)
+            for sl, h in hp:
+                ttnn.to_torch(h)
+                ttnn.deallocate(sl)
+        finally:
+            m.release_user(b)
+        ttnn.synchronize_device(m.md)
+        dt = time.perf_counter() - t0
+        self.log(f"APC paged: cross-row copy ops warmed on an idle user in {dt:.1f} s")
+        return dt
+
     def xrow_copy(self, b, rid, plan, tokens, e):
         """The best hit of request ``rid`` lives on mesh row ``plan.xrow_src`` (no free user there); user ``b`` is on another row and holds fresh private pages (``plan.page_ids``). Read the donor blocks
         to the host (latents of the pool pages, key store slots, the tip's halo slots), write them into this row (latents scatter into the new pages, keys / halos through ``key_save`` /

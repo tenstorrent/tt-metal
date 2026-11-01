@@ -189,3 +189,26 @@ def test_receiving_row_has_the_block_without_the_donors_tip_halo():
     for r in ("o0", "o1", "o2"):
         idx.release(r)
     idx.check()
+
+
+def test_live_switch_file_turns_cross_row_off_and_on(tmp_path, monkeypatch):
+    f = tmp_path / "xrow"
+    monkeypatch.setenv("DSV41_APC_PAGED_XROW_FILE", str(f))
+    idx = mk()
+    t = toks(21, 5000)
+    donor(idx, "d", t, user=0)
+    idx.bind("occupant", 0, user=0)
+    f.write_text("0")
+    p = idx.plan_hit("a", t, len(t))
+    assert p.xrow_src == -1 and p.hit_tokens == 0  # off: the old behaviour
+    idx.cancel("a")
+    f.write_text("1")
+    p = idx.plan_hit("b", t, len(t))
+    assert p.xrow_src == 0
+    idx.cancel("b")
+    f.unlink()  # a missing file leaves the flag as set
+    p = idx.plan_hit("c", t, len(t))
+    assert p.xrow_src == 0
+    idx.cancel("c")
+    idx.release("occupant")
+    idx.check()
