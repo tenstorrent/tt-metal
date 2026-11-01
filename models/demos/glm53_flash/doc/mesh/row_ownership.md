@@ -339,12 +339,14 @@ Tests, in order:
    the untilize of x, the slot scatter and random reads over the 1.1 GB output table, not a slow gather. (d)
    `custom_ops/region_plan` (one single-core kernel: counts, tile-aligned offsets, every pick's slot, the local
    mask tile) is bit-identical to the chain and takes 1.2 / 8.6 ms at T = 2048 / 16384 against the chain's
-   6.2 / 35 ms; wired behind `GLM53_REGIONS_PLAN=kernel`, the 8x4 stage deltas and the chunk gain follow the reset.
+   6.2 / 35 ms; wired behind `GLM53_REGIONS_PLAN=kernel`. Measured on the 8x4 at the 1 M shape (16 K tokens, 72 experts per column, 2026-11-01 17:28): per sub-chunk at rt2048 the chain's 19.1 ms (bookkeeping 4.5 + pick tables 1.8) -> 15.9 ms (2.5 + 0.3), the layer wall 168.0 -> 139.6 ms; at rt4096 32.2 -> 25.0 ms (8.1 + 3.1 -> 4.4 + 0.3), the layer wall 136.6 -> 115.2 ms, i.e. plan + rt4096 = -31 % per MoE layer against today's default, PCC vs HF 0.999588 on all four (bit-identical plan). The 2.5 / 4.4 ms left in "bookkeeping" is the typecast + relayout of the ids and the output allocations, not the kernel.
    Remaining glue after it at 16 K: the bf8 TILE -> bf16 ROW_MAJOR relayout of the output table (10.5 ms,
    DRAM-bound at ~210 GB/s: a hard term while the pick gather needs rows), the pick gather over the 1.1 GB table
    (random 8 KB reads) and the region gather; a fused pick-gather + weighted-sum op would drop the 1 GB `comb`
-   round trip (~7 ms). Expected per layer at 16 K with the plan kernel and rt4096: ~85 ms (-25 %), i.e. the chunk
-   ~6.3 s; the 3-4x structural lever stays the EP-style prefill (section 2.5.1.1 options).
+   round trip (~7 ms). Measured 1 M chunk (16 K tokens, 45 layers + head, 17:38) with the plan kernel and
+   rt4096: 6.39 s (2564 tok/s) against 7.66 s today and 7.18 s with rt4096 alone (-16.6 %), the first token
+   identical; KDA+MoE layers 156 -> 126 ms, DSA+MoE 244 -> 212 ms. The served 1 M TTFT confirmation decides
+   the defaults; the 3-4x structural lever stays the EP-style prefill (section 2.5.1.1 options).
 
 Risks:
 

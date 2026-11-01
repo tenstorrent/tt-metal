@@ -270,7 +270,9 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     assert a.apc.content(s0.row, user).snapshots == {1024: 1}, a.apc.content(s0.row, user).snapshots
     resp, _ = srv.generate(0, la, LEN_A, N_RESP)
     content = a.apc.content(s0.row, user)
-    assert content.length == LEN_A + N_RESP and content.snapshots == {1024: 1, 1536: 0}, content.snapshots
+    # the decode crossing at 1536 is not a CHUNK multiple: no rolling snapshot (``plan_snapshot`` refuses positions the
+    # hit alignment cannot restore from, 7d6c01ff1f2); the prefill snapshot at 1024 is the one a hit restores
+    assert content.length == LEN_A + N_RESP and content.snapshots == {1024: 1}, content.snapshots
     a.release_request(0)
     assert a.apc.park_positions() == {(s0.row, user): LEN_A + N_RESP}
     lb = srv.prefill(1, side_prompt, 0)  # another request decodes while A's slot is parked at 1540
@@ -281,7 +283,7 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     # ---- pass 2: the multi-turn request, vLLM's hit = 1536 (the content's full blocks); served from the CHUNK-ALIGNED
     # snapshot at 1024 (``SlotPrefixCache.hit_align``: the continued chunk starts at a warmed device-chunk multiple,
     # the rows [1024, 1536) are prefilled again), twice: the first hit and the warm (steady-state) hit (its content is
-    # the first hit's + 5 decoded tokens, truncated back by the hit; entry 0 still holds 1536)
+    # the first hit's + 5 decoded tokens, truncated back by the hit)
     full = torch.cat([A, torch.tensor(resp, dtype=torch.int32), turn])
     assert full.numel() == LEN_A + N_RESP + LEN_TURN
     hits = []  # (ms, logits, tokens, decode logits) per hit

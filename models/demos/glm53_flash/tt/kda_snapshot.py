@@ -17,6 +17,14 @@ Two stores behind one interface (``save(user, entry)`` / ``load(user, entry)``):
   8x4: 1.1 GiB of host memory per snapshot) and written back per chip; for profiles whose DRAM holds no ring (the
   1 M x 4 profile) at the cost of a PCIe round trip per crossing / hit.
 
+Per-row writes (2026-11-01). Under per-row ownership (waves) slot index ``u`` on different mesh rows holds
+different requests, while the ring ops run on every chip at once (one slot index, one entry index for the mesh).
+A save therefore takes one entry PER ROW (``save(user, [e_0, .., e_{rows-1}])``): the entry selectors are
+sharded over the mesh rows (``shard_2d(0, None)``), row ``r`` writes its own copy into its ring entry ``e_r``, and
+a row that must keep its entries writes the scratch entry ``SCRATCH`` (one extra flat entry per chip, a sink no
+load ever reads). A load stays one entry for the mesh: the served adapter shields a row whose index is live with
+another request by saving that row's live carry into the very entry first (``_shield_live_rows``).
+
 Allocation discipline (doc s.6). Every save / load runs between replays of the decode trace, and a device buffer
 allocated while traces exist may sit where a replay's transient buffers were (the next replay overwrites it: the
 tt-metal allocator's "potentially unsafe" warning, the 2026-10-27 served hang), so nothing here allocates after the
@@ -51,6 +59,7 @@ from dataclasses import dataclass
 import torch
 
 TILE = 32
+SCRATCH = -1  # the per-row save's sink entry (``SnapshotDims.scratch``): "this row keeps its entries"
 
 _DTYPES = ("float32", "bfloat16", "int32")
 _LAYOUTS = ("TILE", "ROW_MAJOR")
@@ -115,6 +124,12 @@ class SnapshotDims:
 
     @property
     def E(self) -> int:
+        """Flat ring entries per chip: ``users x entries`` snapshot entries + the scratch entry."""
+        return self.users * self.entries + 1
+
+    @property
+    def scratch(self) -> int:
+        """The flat index of the scratch entry: a per-row save's sink on the rows it must leave alone."""
         return self.users * self.entries
 
     @property
@@ -123,7 +138,12 @@ class SnapshotDims:
         return self.H * self.K // TILE
 
     def entry(self, user: int, entry: int) -> int:
-        if not (0 <= user < self.users) or not (0 <= entry < self.entries):
+        """The flat ring index of ``(user, entry)``; ``entry == SCRATCH`` is the scratch entry (any user)."""
+        if not 0 <= user < self.users:
+            raise ValueError(f"snapshot (user {user}, entry {entry}) outside {self.users} x {self.entries}")
+        if entry == SCRATCH:
+            return self.scratch
+        if not 0 <= entry < self.entries:
             raise ValueError(f"snapshot (user {user}, entry {entry}) outside {self.users} x {self.entries}")
         return user * self.entries + entry
 
@@ -169,6 +189,7 @@ class SnapshotScratch:
         self.ops = ops if ops is not None else _ttnn()
         self.model = model
         self.mesh = model.mesh
+        self._rows = int(getattr(self.mesh, "rows", 1) or 1)  # per-row entry selectors shard over the mesh rows
         self.dims = dims
         self.layers = _kda_layers(model)
         self.plan = dims.plan(ring)
@@ -221,14 +242,17 @@ class SnapshotScratch:
         )
 
     # ------------------------------------------------------------------ in-place refreshes (no allocation)
-    def _refresh(self, name: str, host: torch.Tensor) -> None:
-        """Host values -> the persistent tensor ``name`` (replicated), in order on the command queue."""
+    def _refresh(self, name: str, host: torch.Tensor, per_row: bool = False) -> None:
+        """Host values -> the persistent tensor ``name``, in order on the command queue: replicated on every chip,
+        or (``per_row``: ``host`` is ``[rows, *shape]``) row ``r``'s values on the chips of mesh row ``r``."""
         shape, dtype, layout = self.plan[name]
-        src = host.reshape(shape)
+        rows = self._rows if per_row else 1
+        src = host.reshape((rows * shape[0],) + tuple(shape[1:]))
         if dtype == "int32":
             src = src.to(torch.int32)
+        mapper = self._mapper() if rows == 1 else self.mesh.shard_2d(0, None)
         h = self.ops.from_torch(
-            src.contiguous(), dtype=self._dtype(dtype), layout=self._layout(layout), mesh_mapper=self._mapper()
+            src.contiguous(), dtype=self._dtype(dtype), layout=self._layout(layout), mesh_mapper=mapper
         )
         self.ops.copy_host_to_device_tensor(h, self.t[name])
 
@@ -246,19 +270,31 @@ class SnapshotScratch:
         self._refresh("user_idx", torch.tensor([user], dtype=torch.int32))
         self._selected["user"] = user
 
-    def select_entry(self, idx: int) -> None:
-        """Point the ring-entry selectors at flat entry ``idx`` (refreshed only when the value changes)."""
+    def select_entry(self, idx) -> None:
+        """Point the ring-entry selectors at flat entry ``idx`` (refreshed only when the value changes): one index
+        for every chip, or one per mesh row (a sequence of ``rows`` flat indices: row ``r``'s chips select
+        ``idx[r]``, the scratch entry on the rows a save must leave alone)."""
         if "sel_entry" not in self.t:
             raise RuntimeError("no ring selectors (host store)")
-        if self._selected["entry"] == idx:
+        key = int(idx) if isinstance(idx, int) else tuple(int(i) for i in idx)
+        if self._selected["entry"] == key:
             return
         taps, E = self.dims.taps, self.dims.E
-        mask, keep = mask_keep(taps, E, idx)
-        self._refresh("sel_entry", one_hot_row(taps, E, idx))
-        self._refresh("ring_mask", mask)
-        self._refresh("ring_keep", keep)
-        self._refresh("entry_idx", torch.tensor([idx], dtype=torch.int32))
-        self._selected["entry"] = idx
+        if isinstance(key, int):
+            mask, keep = mask_keep(taps, E, key)
+            self._refresh("sel_entry", one_hot_row(taps, E, key))
+            self._refresh("ring_mask", mask)
+            self._refresh("ring_keep", keep)
+            self._refresh("entry_idx", torch.tensor([key], dtype=torch.int32))
+        else:
+            if len(key) != self._rows:
+                raise ValueError(f"{len(key)} per-row entries for {self._rows} mesh rows")
+            masks, keeps = zip(*(mask_keep(taps, E, i) for i in key))
+            self._refresh("sel_entry", torch.stack([one_hot_row(taps, E, i) for i in key]), per_row=True)
+            self._refresh("ring_mask", torch.stack(masks), per_row=True)
+            self._refresh("ring_keep", torch.stack(keeps), per_row=True)
+            self._refresh("entry_idx", torch.tensor(key, dtype=torch.int32).reshape(-1, 1), per_row=True)
+        self._selected["entry"] = key
 
     # ------------------------------------------------------------------ the slot primitives (no allocation)
     def _view(self, x, shape: tuple[int, ...]):
@@ -324,9 +360,11 @@ class DeviceKdaSnapshotRing(SnapshotScratch):
         self.rec = [self._alloc(rec_shape, "float32", "TILE") for _ in self.layers]
         self.conv = [self._alloc(conv_shape, "bfloat16", "TILE") for _ in self.layers]
 
-    def save(self, user: int, entry: int) -> None:
-        """The live carries of slot ``user`` -> ring entry ``entry`` (every chip, its own heads)."""
-        idx = self.dims.entry(user, entry)
+    def save(self, user: int, entry) -> None:
+        """The live carries of slot ``user`` -> ring entry ``entry`` (every chip, its own heads), or, with one entry
+        per mesh row (``entry`` a sequence of ``rows``), row ``r``'s copy into its own entry ``entry[r]``
+        (``SCRATCH``: that row's write lands in the scratch entry and its real entries stay as they were)."""
+        idx = self.dims.entry(user, entry) if isinstance(entry, int) else [self.dims.entry(user, e) for e in entry]
         self.select_user(user)
         self.select_entry(idx)
         t = self.t
@@ -344,7 +382,10 @@ class DeviceKdaSnapshotRing(SnapshotScratch):
             )
 
     def load(self, user: int, entry: int) -> None:
-        """Ring entry ``entry`` of slot ``user`` -> the live carries of slot ``user``."""
+        """Ring entry ``entry`` of slot ``user`` -> the live carries of slot ``user`` (every row: the ring read is
+        one index for the mesh; ``_shield_live_rows`` protects a row whose index is live with another request)."""
+        if entry == SCRATCH:
+            raise ValueError("the scratch entry holds no snapshot")
         idx = self.dims.entry(user, entry)
         self.select_user(user)
         self.select_entry(idx)
@@ -414,7 +455,10 @@ class HostKdaSnapshotStore(SnapshotScratch):
     def save(self, user: int, entry: int) -> None:
         """The slot's carries -> host, one non-blocking read per chip per layer and one recorded event (the host
         does not wait for the transfer: the synchronous reads cost 725-1194 ms per save at 32 chips x 34 layers,
-        served 2026-10-29); ``load`` waits for the event before it uses the data."""
+        served 2026-10-29); ``load`` waits for the event before it uses the data. A sequence of per-row entries
+        takes the per-row form (``_save_rows``)."""
+        if not isinstance(entry, int):
+            return self._save_rows(user, entry)
         self.dims.entry(user, entry)
         self.select_user(user)
         out = []
@@ -426,7 +470,45 @@ class HostKdaSnapshotStore(SnapshotScratch):
         self.events[(user, entry)] = record(self.mesh.device, 0) if pending and callable(record) else None
         self.data[(user, entry)] = out
 
+    def _save_rows(self, user: int, entries) -> None:
+        """The per-row form: row ``r``'s chips -> host entry ``entries[r]`` (``SCRATCH``: that row keeps its
+        entries); the chips of other rows an entry already holds stay. Synchronous reads (a wave snapshot every
+        ``hit_align`` tokens of wave progress: ~1 s against ~60 s of waves on the 8x4)."""
+        entries = [int(e) for e in entries]
+        if len(entries) != self._rows:
+            raise ValueError(f"{len(entries)} per-row entries for {self._rows} mesh rows")
+        for e in entries:
+            self.dims.entry(user, e)
+        targets = sorted({e for e in entries if e != SCRATCH})
+        if not targets:
+            return
+        self.select_user(user)
+        live = []
+        for k in range(len(self.layers)):
+            self.read_live(k, user)
+            live.append((self._read("rec_row"), self._read("conv_row")))
+        chips = int(live[0][0].shape[0])
+        per_row = chips // self._rows
+        for e in targets:
+            rows = [r for r, er in enumerate(entries) if er == e]
+            old = self.data.get((user, e))
+            event = self.events.pop((user, e), None)
+            if event is not None:
+                self.ops.event_synchronize(event)
+            layers = []
+            for k, (rec, conv) in enumerate(live):
+                rec_e = (self._materialize(old[k][0]) if old is not None else rec).clone()
+                conv_e = (self._materialize(old[k][1]) if old is not None else conv).clone()
+                for r in rows:
+                    rec_e[r * per_row : (r + 1) * per_row] = rec[r * per_row : (r + 1) * per_row]
+                    conv_e[r * per_row : (r + 1) * per_row] = conv[r * per_row : (r + 1) * per_row]
+                layers.append((rec_e, conv_e))
+            self.events[(user, e)] = None
+            self.data[(user, e)] = layers
+
     def load(self, user: int, entry: int) -> None:
+        if entry == SCRATCH:
+            raise ValueError("the scratch entry holds no snapshot")
         self.dims.entry(user, entry)
         if (user, entry) not in self.data:
             raise KeyError(f"no host snapshot for (user {user}, entry {entry})")

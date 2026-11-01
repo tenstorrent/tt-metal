@@ -39,6 +39,7 @@ from models.demos.glm53_flash.tests.test_generator_vllm_host import (
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.generator_vllm import GLM53FlashForCausalLM
 from models.demos.glm53_flash.tt.kda_snapshot import (
+    SCRATCH,
     DeviceKdaSnapshotRing,
     HostKdaSnapshotStore,
     SnapshotDims,
@@ -261,7 +262,8 @@ def test_planner_tail_split_and_snapshot_sizing():
     cfg = GLM53FlashConfig()
     per_user = kda_state_bytes_per_user(cfg, 4)
     assert per_user == 34 * (16 * 128 * 128 * 4 + 3 * 6144 * 2), per_user  # 35.2 MiB
-    assert snapshot_bytes_per_chip(cfg, 4, 4, 2) == 8 * per_user
+    assert snapshot_bytes_per_chip(cfg, 4, 4, 2) == 9 * per_user, "4 x 2 entries + the scratch entry"
+    assert snapshot_bytes_per_chip(cfg, 4, 4, 0) == 0
     plan = MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False)
     fit_1m = plan.max_snapshot_entries(4, 1048576)
     fit_128k = plan.max_snapshot_entries(28, 131072)
@@ -274,7 +276,7 @@ def test_planner_tail_split_and_snapshot_sizing():
     assert fit_128k >= 1
     with_ring = MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False, snapshot_entries=fit_128k)
     assert with_ring.fits(28, 131072) and not with_ring.fits(28, 131072 + 16384 * 4)
-    assert with_ring.bytes_for(28, 131072) - plan.bytes_for(28, 131072) == 28 * fit_128k * per_user
+    assert with_ring.bytes_for(28, 131072) - plan.bytes_for(28, 131072) == (28 * fit_128k + 1) * per_user
 
 
 # -------------------------------------------------------------------------------------- adapter e2e
@@ -325,7 +327,7 @@ class _FakeApcModel(_FakeMeshModel):
         self.next_start = [p + 1 for p in self._fed_pos[: self.max_batch]]
 
 
-def _apc_adapter(entries=2, users_per_row=4, max_seq_len=65536, tail_split=False, monkeypatch=None):
+def _apc_adapter(entries=2, users_per_row=4, max_seq_len=65536, tail_split=False, monkeypatch=None, independent=False):
     if monkeypatch is not None:
         monkeypatch.setenv("GLM53_VLLM_APC_TAIL_SPLIT", "1" if tail_split else "0")
     model = _FakeApcModel(2, 4, users_per_row, max_seq_len)
@@ -336,6 +338,7 @@ def _apc_adapter(entries=2, users_per_row=4, max_seq_len=65536, tail_split=False
         max_seq_len=max_seq_len,
         traced_prefill_lengths=tuple(model.trace_prefill_lengths()),
         pad_token_id=PAD,
+        rows_independent=independent,
     )
     a = GLM53FlashForCausalLM(model, g, prefix_cache_entries=entries)
     n = g.request_capacity
@@ -493,6 +496,83 @@ def test_miss_prefills_from_zero_and_a_shorter_hit_is_not_served(monkeypatch):
     assert (
         c.length == 40100 and c.snapshots == {32768: 2, 40096: 1} and torch.equal(c.tokens[:40100], share.reshape(-1))
     )
+
+
+def test_wave_members_snapshot_per_row_and_a_hit_shields_the_live_row(monkeypatch):
+    """Per-row ownership (waves): a burst of two 16 448-token prompts fills one wave per step (slot index 0 on rows
+    0 and 1); the step ending on 16 384 (the hit alignment) saves BOTH members in one per-row save (entry 1 on each
+    row), the unaligned steps save nothing. A repeat of prompt 0 hits at 16 384, restores entry 1 and continues as
+    a wave on its own row (no SP: the carry exists there only). With prompt 0 live again on (0, 0), the repeat of
+    prompt 1 on (1, 0) first saves row 0's live carry into entry 1 (row 1 and the idle rows: the scratch entry) so
+    the mesh-wide load hands it straight back, and row 0's entry-1 record is dropped. An SP step (a lone prompt
+    on a free slot index) forgets the other rows' content in that index: its chunks overwrite them. The hit
+    alignment is the device chunk (16 384, the served default): unaligned chunk ends and decode crossings are
+    not snapshotted (they could only evict the restorable one)."""
+    monkeypatch.delenv("GLM53_VLLM_APC_HIT_ALIGN", raising=False)
+    a, m = _apc_adapter(entries=2, independent=True)
+    assert a.apc.hit_align == 16384
+    L = 16384 + 64
+    both = torch.zeros(2, L, dtype=torch.int32)
+    both[0] = torch.arange(L) % 60 + 1
+    both[1] = torch.arange(L) % 7 + 1
+    a.prefill_forward(
+        both, prompt_lens=[L, L], start_pos=torch.tensor([0, 0]), empty_slots=[0, 1], sampling_params=_greedy(2)
+    )
+    assert [(a.slots.physical(k).row, a.slots.physical(k).user) for k in (0, 1)] == [(0, 0), (1, 0)]
+    waves = [c[4] for c in m.calls if c[0] == "prefill_wave"]
+    assert len(waves) == 9 and waves[7] == [(0, 0, 14336, 16384), (1, 0, 14336, 16384)], waves
+    snaps = [c for c in m.calls if c[0] == "snapshot_kda"]
+    assert snaps == [("snapshot_kda", 0, [1, 1])], snaps
+    assert a.apc.content(0, 0).snapshots == {16384: 1} and a.apc.content(1, 0).snapshots == {16384: 1}
+    assert not a.slots.physical(0).sp_only and a.apc.stats["snapshots"] == 2
+    a.release_request(0)
+    a.release_request(1)
+    # the repeat of prompt 0 (vLLM's hit: the full 16 384 block multiple) restores entry 1 on (0, 0) and walks the
+    # tail as a wave of one member; nothing is live elsewhere on slot index 0, so no shield save
+    m.calls.clear()
+    a.prefill_forward(
+        both[:1], prompt_lens=[L], start_pos=torch.tensor([16384]), empty_slots=[0], sampling_params=_greedy(1)
+    )
+    calls = [c for c in m.calls if c[0] in ("snapshot_kda", "restore_kda", "prefill", "prefill_wave")]
+    assert (
+        calls[0] == ("restore_kda", 0, 1, 16384) and calls[1][0] == "prefill_wave" and calls[1][4] == [(0, 0, 16384, L)]
+    ), calls
+    assert len(calls) == 2 and a.apc.stats["hits"] == 1 and not a.slots.physical(0).sp_only
+    assert a.apc.content(0, 0).snapshots == {16384: 1} and a.apc.content(0, 0).length == L
+    # prompt 0 stays live on (0, 0); the repeat of prompt 1 hits on (1, 0): row 0's live carry is shielded through
+    # entry 1 before the load, and row 0's entry-1 record goes
+    m.calls.clear()
+    a.prefill_forward(
+        both[1:], prompt_lens=[L], start_pos=torch.tensor([16384]), empty_slots=[1], sampling_params=_greedy(1)
+    )
+    calls = [c for c in m.calls if c[0] in ("snapshot_kda", "restore_kda", "prefill", "prefill_wave")]
+    assert calls[:2] == [("snapshot_kda", 0, [1, SCRATCH]), ("restore_kda", 0, 1, 16384)], calls
+    assert calls[2][0] == "prefill_wave" and calls[2][4] == [(1, 0, 16384, L)]
+    assert a.apc.content(0, 0).snapshots == {} and a.apc.stats["snapshots_dropped"] == 1
+    assert a.apc.content(1, 0).snapshots == {16384: 1} and a.apc.stats["hits"] == 2
+    # decode crossings under the chunk alignment are not snapshotted (unrestorable); a crossing on a 16 K multiple
+    # would save the slot's own row only (entry 0, the scratch elsewhere)
+    m.calls.clear()
+    _decode(a, [5, 6], [L, L])
+    for _ in range(31):
+        _decode(a, [5, 6], [a.slots.physical(0).position, a.slots.physical(1).position])
+    assert a.slots.physical(0).position % 32 == 0 and not [c for c in m.calls if c[0] == "snapshot_kda"]
+    assert a._save_target(a.slots.physical(0), 0, "decode") == [0, SCRATCH]
+    assert a._save_target(a.slots.physical(1), 0, "decode") == [SCRATCH, 0]
+    # a lone long prompt takes the sequence-parallel path on a slot index free on every row: the other rows' content
+    # in that index (prompt 1's retained copy once released) is forgotten, its chunk-end snapshot is mesh-wide
+    a.release_request(0)
+    a.release_request(1)
+    m.calls.clear()
+    lone = (torch.arange(L) % 11 + 1).to(torch.int32).reshape(1, L)
+    a.prefill_forward(lone, prompt_lens=[L], start_pos=torch.tensor([0]), empty_slots=[2], sampling_params=_greedy(1))
+    s2 = a.slots.physical(2)
+    assert s2.sp_only and [c for c in m.calls if c[0] == "prefill"], "an eager SP chunk"
+    other = [r for r in range(2) if r != s2.row][0]
+    assert a.apc.content(other, s2.user).length == 0, "the other row's content in the SP slot index is gone"
+    snaps = [c for c in m.calls if c[0] == "snapshot_kda"]
+    assert snaps == [("snapshot_kda", s2.user, 1)], snaps  # the 16 384 chunk end; the unaligned end 16 448 refused
+    assert a.apc.content(s2.row, s2.user).snapshots == {16384: 1}
 
 
 def test_stripped_multimodal_hit_is_refused_and_identified_spans_hit():
@@ -798,8 +878,9 @@ def _randomize(model, seed: int) -> list[tuple[torch.Tensor, torch.Tensor]]:
 def test_snapshot_dims_and_scratch_plan():
     ops = _FakeOps()
     d = SnapshotDims.from_model(_fake_kda_model(ops), 2)
-    assert (d.users, d.entries, d.E, d.nblk, d.taps, d.W, d.H, d.K, d.V) == (4, 2, 8, 2, 3, 64, 2, 32, 32)
+    assert (d.users, d.entries, d.E, d.nblk, d.taps, d.W, d.H, d.K, d.V) == (4, 2, 9, 2, 3, 64, 2, 32, 32)
     assert d.entry(1, 0) == 2 and d.entry(3, 1) == 7
+    assert d.scratch == 8 and d.entry(0, SCRATCH) == 8 == d.entry(3, SCRATCH), "the scratch entry: any user's sink"
     with expect_error(ValueError, "outside"):
         d.entry(4, 0)
     with expect_error(ValueError, "outside"):
@@ -823,15 +904,15 @@ def test_snapshot_dims_and_scratch_plan():
         "bfloat16",
         "TILE",
     )
-    assert ring["sel_user"] == ((3, 1, 4), "bfloat16", "TILE") and ring["sel_entry"] == ((3, 1, 8), "bfloat16", "TILE")
-    assert ring["user_mask"] == ((3, 4, 1), "bfloat16", "TILE") and ring["ring_keep"] == ((3, 8, 1), "bfloat16", "TILE")
-    assert ring["live_pt"] == ((4, 2), "int32", "ROW_MAJOR") and ring["ring_pt"] == ((8, 2), "int32", "ROW_MAJOR")
+    assert ring["sel_user"] == ((3, 1, 4), "bfloat16", "TILE") and ring["sel_entry"] == ((3, 1, 9), "bfloat16", "TILE")
+    assert ring["user_mask"] == ((3, 4, 1), "bfloat16", "TILE") and ring["ring_keep"] == ((3, 9, 1), "bfloat16", "TILE")
+    assert ring["live_pt"] == ((4, 2), "int32", "ROW_MAJOR") and ring["ring_pt"] == ((9, 2), "int32", "ROW_MAJOR")
     assert ring["user_idx"] == ((1,), "int32", "ROW_MAJOR") and ring["conv_ring_rows"] == (
-        (3, 8, 64),
+        (3, 9, 64),
         "bfloat16",
         "TILE",
     )
-    assert d.ring_entry_shapes() == ((8, 2, 32, 32), (3, 8, 64))
+    assert d.ring_entry_shapes() == ((9, 2, 32, 32), (3, 9, 64))
     sel, (mask, keep) = one_hot_row(3, 4, 2), mask_keep(3, 4, 2)
     assert sel.shape == (3, 1, 4) and sel[:, 0, 2].tolist() == [1.0] * 3 and float(sel.sum()) == 3.0
     assert torch.equal(mask + keep, torch.ones(3, 4, 1)) and mask[:, 2, 0].tolist() == [1.0] * 3
@@ -851,7 +932,7 @@ def test_device_ring_saves_and_restores_slots_without_allocating():
     assert ops.compute_configs == [
         ("fake-arch", dict(math_fidelity="HiFi4", math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
     ]
-    assert ring.t["live_pt"].t.tolist() == [[0, 1], [2, 3], [4, 5], [6, 7]] and ring.t["ring_pt"].t.shape == (8, 2)
+    assert ring.t["live_pt"].t.tolist() == [[0, 1], [2, 3], [4, 5], [6, 7]] and ring.t["ring_pt"].t.shape == (9, 2)
     ops.freeze()  # the decode capture: from here on nothing may allocate
     live = _randomize(m, 1)
     ring.save(1, 0)  # flat entry 2
@@ -860,7 +941,7 @@ def test_device_ring_saves_and_restores_slots_without_allocating():
         rec, conv = live[k]
         assert torch.equal(ring.rec[k].t[2], rec[1]) and torch.equal(ring.conv[k].t[:, 2, :], conv[:, 1, :])
         assert torch.equal(ring.rec[k].t[7], rec[3]) and torch.equal(ring.conv[k].t[:, 7, :], conv[:, 3, :])
-        others = [e for e in range(8) if e not in (2, 7)]
+        others = [e for e in range(9) if e not in (2, 7)]
         assert not ring.rec[k].t[others].any() and not ring.conv[k].t[:, others, :].any(), "untouched entries stay zero"
         st = m.layers[k].kda_batched
         assert torch.equal(st.recurrent.t, rec) and torch.equal(
@@ -886,6 +967,30 @@ def test_device_ring_saves_and_restores_slots_without_allocating():
     assert ops.refreshes == n + 8, "user + entry selectors (4 tensors each)"
     with expect_error(ValueError, "outside"):
         ring.save(0, 2)
+    # the per-row form (one entry per mesh row; one row here): the scratch entry takes the row's write and the
+    # slot's real entries stay, a real entry takes it like the replicated form; the scratch is never loaded
+    n = ops.refreshes
+    ring.save(2, [SCRATCH])
+    assert ops.refreshes == n + 4, "the per-row entry selectors (slot 2 is already selected)"
+    for k in range(2):
+        assert torch.equal(ring.rec[k].t[8], moved[k][0][2]) and torch.equal(
+            ring.conv[k].t[:, 8, :], moved[k][1][:, 2, :]
+        )
+        # slot 2's own entries as they were: entry 4 never written, entry 5 = the replicated save above
+        assert not ring.rec[k].t[4].any() and torch.equal(
+            ring.rec[k].t[5], moved[k][0][2]
+        ), "slot 2's entries untouched"
+    moved3 = _randomize(m, 6)
+    ring.save(2, [1])
+    for k in range(2):
+        assert torch.equal(ring.rec[k].t[5], moved3[k][0][2]) and torch.equal(
+            ring.conv[k].t[:, 5, :], moved3[k][1][:, 2, :]
+        )
+        assert torch.equal(ring.rec[k].t[8], moved[k][0][2]), "the scratch entry keeps the earlier write"
+    with expect_error(ValueError, "per-row entries"):
+        ring.save(2, [0, 1])
+    with expect_error(ValueError, "scratch entry"):
+        ring.load(2, SCRATCH)
     ring.release()
     assert not ring.rec and not ring.t and ops.frozen
 
@@ -916,6 +1021,18 @@ def test_host_store_round_trips_through_the_scratch_without_allocating():
         store.load(1, 0)
     with expect_error(ValueError, "outside"):
         store.save(0, 1)
+    # the per-row form: a scratch row stores nothing, a real entry takes the row's chips (one row here)
+    store.save(1, [SCRATCH])
+    assert (1, 0) not in store.data
+    store.save(1, [0])
+    assert torch.equal(store.data[(1, 0)][0][0][0, 0], moved[0][0][1])
+    moved2 = _randomize(m, 5)
+    store.load(1, 0)
+    for k in range(2):
+        st = m.layers[k].kda_batched
+        assert torch.equal(st.recurrent.t[1], moved[k][0][1]) and torch.equal(st.recurrent.t[0], moved2[k][0][0])
+    with expect_error(ValueError, "scratch entry"):
+        store.load(1, SCRATCH)
     store.release()
     assert not store.data and not store.t
 

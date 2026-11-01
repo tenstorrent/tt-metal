@@ -1581,6 +1581,48 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-11-01 18:10: the 32 x 1 M repeat miss: the wave path never snapshotted, and the ring ops were mesh-wide (fixed, host-tested; device stages queued)
+
+Why round 2 of the capstone re-prefilled 31 of 32 prompts from 0 (06:54 entry): the wave path recorded every
+member's content but took no KDA snapshot (only the SP path's `on_chunk` did), and at 1 M no 16 K-aligned decode
+crossing ever comes, so `lookup` had nothing to restore from and the confirmer trimmed every hit to 0 (the 64 K x 4
+repeat hit because 4 prompts < 8 rows = the SP path). Reading the ring showed why waves had no snapshots: the ring ops
+run with one slot index and one entry index for the whole mesh, right while every row held the same users and wrong
+under per-row ownership (a save for one row overwrote the entry on every row; a restore rewrote slot `u`'s live carry
+on every row). Fix (`doc/serving/prefix_caching.md` s.7): the ring gets one scratch entry and a per-row save form
+(rows-sharded entry selectors: row `r` writes its entry `e_r`, the rows to leave alone write the scratch); every wave
+step saves its members whose chunk ends on a hit-alignment multiple in one per-row save; a hit's restore first lets
+a row whose slot index is live with another request save its carry into the hit's entry (the mesh-wide load hands it
+back); SP steps forget the other rows' content in their slot index; unaligned prompt ends no longer evict the 16 K
+chunk-end snapshot. Host suite: 20/20 (`test_serving_prefix_cache_host.py`, new wave case). Device validation queued
+behind the served needles: the (2,4) block prefix-cache test on both stores and a served 8 x 20 K burst in two rounds
+(round 2 must hit at 16 384). Expected at 1 M: a repeat restores at 1 032 192 and prefills 6.5 K tokens instead of 1 M.
+
+### 2026-11-01 17:38: the 1 M prefill chunk 7.66 -> 6.39 s: the region-plan kernel + the 4096-token expert sub-chunk
+
+The free-pass profile of the last 16 K chunk at 1 M (`test_mesh_prefill_profile`, 45 layers + head, prefix 1 032 192)
+attributed 52 % of the 7.66 s to the routed experts, and inside them not to the expert kernel (~6 ms per layer, flat)
+but to the glue around it: the region bookkeeping chain (cumsum / one-hot / index arithmetic over the 16 K x 8 picks,
+6.2 ms at 2048 tokens, 35 ms at 16 K), the pick tables, two embedding gathers over the 1.1 GB output table and a
+bf8 -> bf16 row-major relayout. Two changes, both bit-identical to the chain (PCC vs HF 0.999588 on every run, the
+chunk's first token unchanged):
+
+| 16 K chunk at 1 M, free pass | chunk | KDA+MoE layer | DSA+MoE layer |
+|---|---|---|---|
+| default (chain, `GLM53_REGIONS_T=2048`) | 7.66 s | 156 ms | 244 ms |
+| `GLM53_REGIONS_T=4096` | 7.18 s | 145 ms | 232 ms |
+| `GLM53_REGIONS_PLAN=kernel` + `GLM53_REGIONS_T=4096` | 6.39 s | 126 ms | 212 ms |
+
+`custom_ops/region_plan` is one single-core generic op that reads the picks once and writes the counts, the
+tile-aligned region offsets, every pick's slot and the chip's local-expert mask tile (1.2 / 8.6 ms at 2048 / 16 K
+tokens against the chain's 6.2 / 35 ms); on the 8x4 at the 1 M shape it takes the expert layer's wall from 168.0 to
+139.6 ms at 2048-token sub-chunks and from 136.6 to 115.2 ms at 4096 (-31 % against today's default). The larger
+sub-chunk halves the number of glue passes per layer; at 8192 it saturates (the gathers and the relayout are
+DRAM-bound). A multi-core row gather was tried first and reverted: `ttnn.embedding` already gathers at 355-372 GB/s
+on one chip, the custom op at 224-264. The served 1 M needle with both knobs decides the 1 M profile's defaults
+(TTFT reference 494.8 s); the remaining expert glue (the output relayout, a fused pick-gather + weighted sum, ~7 ms
+per layer) and the mHC prefill (17 % of the chunk) are the next items; the 3-4x lever stays the EP-style prefill.
+
 ### 2026-11-01 06:54: the batch-32 decode at 1 M: 60 ms per step with all 32 resident users decoding together (the capstone's missing row)
 
 `served_8x4_needle1m_32_decode256`: the capstone configuration (32 x 1 038 673-token needle prompts submitted together,

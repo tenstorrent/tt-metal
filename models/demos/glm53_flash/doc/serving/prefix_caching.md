@@ -255,3 +255,50 @@ arrives with its payload stripped. ``mm_identifiers`` (vllm-tt-plugin#261) appen
 placeholder fields; ``mm_spans_of_row`` reads it when present. Until it merges, a hit on a prompt with images is
 refused (the mm refusal) and the request is prefilled from 0. Two requests hitting the same slot in one step: the
 first takes it, the second's lookup falls back (text: re-prefill; mm: the refusal).
+
+## 7. Per-row ownership: wave snapshots, per-row saves, the scratch entry (2026-11-01)
+
+The 32 x 1 M capstone's second round missed the prefix cache entirely (hit rate 0 %, 31 prompts re-prefilled from
+0, `doc/mesh/README.md` 2026-11-01 06:54). Root cause, from the code: the wave path (`prefill_forward`'s
+`WaveStep` branch) recorded every member's content but never snapshotted its KDA carry; only the sequence-parallel
+path's `on_chunk` did, and at 1 M no 16 K-aligned decode crossing ever comes (1 038 673 + 256 tokens never reaches
+1 048 576), so `lookup` found no snapshot, the confirmer trimmed every hit to 0 and vLLM's block pool then evicted
+the other prompts' hashes. The 64 K x 4 repeat hit because 4 prompts are fewer than the 8 rows: the SP path.
+
+Two more findings came with it. (1) The ring ops are per chip with ONE slot index and ONE entry index for the whole
+mesh (`DeviceKdaSnapshotRing.save/load`: replicated selectors), which was right while every row held the same
+users; under per-row ownership slot index `u` on different rows holds different requests, so a save for (row r, u)
+also overwrote entry `e` of slot `u` on every other row, and a restore for (row r, u) rewrote slot `u`'s LIVE carry
+on every other row (a live request there would have been clobbered; unobserved: no hit ever restored under
+waves). (2) A prompt whose end is a 32-multiple snapshotted that end and, with one prefill entry
+(`GLM53_VLLM_APC_SNAPSHOTS=2`), evicted its 16 K chunk-end snapshot: the only restorable one under the served hit
+alignment (64 K x 4 survived because 65 514 % 32 != 0).
+
+The fix keeps the ring ops (no new kernels) and makes the WRITE side per row:
+
+* `SnapshotDims.E = users x entries + 1`: the extra flat entry is the scratch entry (`kda_snapshot.SCRATCH`), a sink
+  no load ever reads; the planner counts it (`memory_plan.ring_entries`).
+* `save(user, [e_0, .., e_{rows-1}])`: one entry per mesh row. The entry selectors (`entry_idx`, `ring_mask`,
+  `ring_keep`, `sel_entry`) are refreshed rows-sharded (`shard_2d(0, None)`: row `r`'s chips get row `r`'s values),
+  so row `r` writes its own copy of slot `user` into its own entry `e_r`, and a row that must keep its entries
+  writes the scratch entry. The read side (`load`) stays one entry for the mesh: `ttnn.slice` takes a host index.
+  The host store's `_save_rows` merges row `r`'s chips into the entry's host copy (synchronous reads).
+* `GLM53FlashForCausalLM._snapshot_wave`: after every wave step, the members whose chunk ends on a multiple of the
+  hit alignment get the entry `plan_snapshot` grants them, in ONE per-row save (the other rows: scratch). At 1 M
+  every slot ends up with a snapshot at 1 032 192 = 63 x 16 384; the repeat restores there and prefills the last
+  6.5 K tokens instead of 1 M.
+* `_save_target`: a sequence-parallel chunk end saves mesh-wide (the prefix is replicated on every row; the SP step
+  first `forget`s the other rows' content in that slot index, which its chunks overwrite); every other save under
+  per-row ownership (a decode crossing, a wave end) writes the slot's own row and the scratch elsewhere.
+* `_shield_live_rows`: before a hit's restore, a row where the hit's slot index is live with another request saves
+  its live carry into the hit's entry (per-row save; the hit's row and the idle rows write the scratch), so the
+  mesh-wide load hands it straight back; that row's records of the entry go (`SlotPrefixCache.drop_entry`). Idle
+  rows take the load as is: a retained slot's live carry is never read (hits restore from entries). The hit's
+  continuation runs as a wave on the hit's row (`sp_only = False`): the restored carry exists there only.
+* `plan_snapshot` refuses every position the hit alignment cannot restore from, prefill ends included (the decode
+  rule generalized), so an unaligned prompt end no longer evicts the chunk-end snapshot.
+
+Tests: `tests/test_serving_prefix_cache_host.py` (`test_wave_members_snapshot_per_row_and_a_hit_shields_the_live_row`,
+the ring / host-store per-row sections, the dims and planner counts); device: `tests/test_serving_prefix_cache_mesh.py`
+on the (2,4) block (both stores, the ring one entry larger) and a served 8 x 20 K burst in two rounds on the 8x4
+(round 2 must log `[glm53-apc] hit: ... snapshot at 16384`).

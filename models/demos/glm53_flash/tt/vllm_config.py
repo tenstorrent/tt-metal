@@ -1060,7 +1060,14 @@ class SlotPrefixCache:
             raise ValueError(f"snapshot entries {entries} < 0")
         self._content: dict[tuple[int, int], SlotContent] = {}
         self._tick = 0
-        self.stats = {"hits": 0, "downgraded": 0, "refused_mm": 0, "snapshots": 0, "retained_evicted": 0}
+        self.stats = {
+            "hits": 0,
+            "downgraded": 0,
+            "refused_mm": 0,
+            "snapshots": 0,
+            "retained_evicted": 0,
+            "snapshots_dropped": 0,
+        }
 
     # ------------------------------------------------------------------ records
     def content(self, row: int, user: int) -> SlotContent:
@@ -1113,6 +1120,19 @@ class SlotPrefixCache:
         c = self.content(row, user)
         c.clear()
         c.live = False
+
+    def drop_entry(self, row: int, user: int, entry: int) -> int:
+        """Ring entry ``entry`` of slot ``(row, user)`` was overwritten by a write the slot was not the target of
+        (a hit's restore on another row shielding this live row through that entry): its position records go.
+        Returns how many."""
+        c = self._content.get((int(row), int(user)))
+        if c is None:
+            return 0
+        gone = [p for p, e in c.snapshots.items() if e == entry]
+        for p in gone:
+            del c.snapshots[p]
+        self.stats["snapshots_dropped"] += len(gone)
+        return len(gone)
 
     # ------------------------------------------------------------------ policy
     def slot_rank(self, row: int, user: int) -> int:
@@ -1172,10 +1192,11 @@ class SlotPrefixCache:
             raise ValueError(f"snapshot kind {kind!r}")
         if self.entries == 0 or position <= 0 or position % TILE:
             return None
-        if kind == "decode" and self.hit_align > TILE and position % self.hit_align:
-            # a decode crossing the hit cannot restore from (``lookup`` aligns the restore point to ``hit_align``)
-            # would only evict a restorable snapshot (entry 0 is shared when the ring holds one entry) and cost a
-            # save per crossing (~one per step at 32 slots: served apc_r2, 2026-10-29: 11.8 vs 14.1 tok/s per user)
+        if self.hit_align > TILE and position % self.hit_align:
+            # a position the hit cannot restore from (``lookup`` aligns the restore point to ``hit_align``) would
+            # only evict a restorable snapshot and cost a save: a decode crossing per step at 32 slots (served
+            # apc_r2, 2026-10-29: 11.8 vs 14.1 tok/s per user), or a prompt's unaligned 32-multiple end evicting
+            # its 16 K chunk-end snapshot from the one prefill entry (2026-11-01)
             return None
         c = self.content(row, user)
         if position in c.snapshots:

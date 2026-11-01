@@ -109,6 +109,7 @@ import torch
 from loguru import logger
 
 from models.demos.glm53_flash.tt import vllm_spec as vs
+from models.demos.glm53_flash.tt.kda_snapshot import SCRATCH
 from models.demos.glm53_flash.tt.mm_inputs import (
     IMAGE_TOKEN_ID,
     MMItem,
@@ -1024,7 +1025,8 @@ class GLM53FlashForCausalLM:
             reserve = plan.dram_bytes - plan.weights_bytes - plan.vision_bytes - plan.headroom(max_seq_len)
             allowance = int(os.environ.get(APC_WARMUP_ALLOWANCE_ENV, str(APC_WARMUP_ALLOWANCE_MIB))) * 2**20
             spare = float(free_bytes) - reserve - allowance
-            live = int(max(0.0, spare) // (users_per_row * plan.kda_state_bytes))
+            # the ring holds users x entries snapshot entries plus the per-row saves' scratch entry
+            live = int(max(0.0, spare - plan.kda_state_bytes) // (users_per_row * plan.kda_state_bytes))
             logger.info(
                 f"GLM53 vLLM APC: live DRAM free {free_bytes / 2**20:.0f} MiB per chip after the build, the planner's "
                 f"prefill reserve {reserve / 2**20:.0f} MiB, the warm-ups' allowance {allowance / 2**20:.0f} MiB: "
@@ -1753,10 +1755,13 @@ class GLM53FlashForCausalLM:
                     state = self.slots.allocate(logical, at=(hit.row, hit.user))
                     apc.begin(hit.row, hit.user, hit.position)
                     mark = self._apc_alloc_mark()
+                    self._shield_live_rows(hit)
                     self.model.restore_kda(state.user, hit.entry, hit.position)
                     self._apc_alloc_check(
                         f"the hit's restore of entry {hit.entry} at {hit.position} into user {state.user}", mark
                     )
+                    if self.geometry.rows_independent:
+                        state.sp_only = False  # the restored carry is on this row only: the continuation is a wave
                     apc.stats["hits"] += 1
                     logger.info(
                         f"[glm53-apc] hit: slot {logical} -> user {state.user} (row {state.row}) holds [0, {start}), "
@@ -1846,6 +1851,12 @@ class GLM53FlashForCausalLM:
                 if isinstance(step, SPStep):
                     i, state, start, end, ids = by_logical[step.logical]
                     mm = media.get(i)
+                    if apc is not None:
+                        # the SP chunks write slot index ``state.user`` on EVERY row (the prefix replicated, its KDA
+                        # entries mesh-wide): whatever the other rows retained in that index is gone
+                        for r in range(self.geometry.rows):
+                            if r != state.row:
+                                apc.forget(r, state.user)
                     if mm is None:
                         first, last_logits = self._prefill_one(
                             ids,
@@ -1882,6 +1893,8 @@ class GLM53FlashForCausalLM:
                     else:
                         state.prefilled_to = m.end
                         state.position = m.end
+                if apc is not None:
+                    self._snapshot_wave(call)
                 logger.info(
                     f"GLM53 vLLM: wave of {len(call.members)} ({'traced' if call.traced_length else 'eager'}, "
                     f"t_pad {call.t_pad}, slot index {call.user}) rows "
@@ -2815,11 +2828,63 @@ class GLM53FlashForCausalLM:
         if sync:
             self._sync()
         mark = self._apc_alloc_mark()
-        self.model.snapshot_kda(state.user, entry)
+        self.model.snapshot_kda(state.user, self._save_target(state, entry, kind))
         self._apc_alloc_check(
             f"the {kind} snapshot of user {state.user} (row {state.row}) at {position} into entry {entry}", mark
         )
         return True
+
+    def _save_target(self, state, entry: int, kind: str):
+        """What ``snapshot_kda`` writes: entry ``entry`` on every row when every row holds this slot's state (rows
+        not independent, or a sequence-parallel chunk end: the prefix replicated on every row), else entry
+        ``entry`` on the slot's own row and the scratch entry elsewhere (per-row ownership: slot index ``user`` on
+        the other rows belongs to other requests, whose entries a mesh-wide write would overwrite)."""
+        if not self.geometry.rows_independent or (kind == "prefill" and state.sp_only):
+            return entry
+        return [entry if r == state.row else SCRATCH for r in range(self.geometry.rows)]
+
+    def _snapshot_wave(self, call) -> bool:
+        """The KDA snapshots of a wave step: every member whose chunk ends on a restorable position (a multiple of
+        the hit alignment, the device chunk) gets the entry the ring policy grants it, in ONE per-row save (row
+        ``r`` writes its member's entry, the other rows the scratch entry: a wave member's carry is one row of the
+        batched state, and slot index ``call.user`` on the other rows belongs to other requests). Without it a
+        wave-prefilled prompt had no snapshot at all and its repeat missed the prefix cache from 0 (the 32 x 1 M
+        round-2 miss, 2026-11-01)."""
+        apc = self.apc
+        align = apc.hit_align or TILE
+        chosen = {}
+        for m in call.members:
+            if m.end % align:
+                continue
+            entry = apc.plan_snapshot(m.row, call.user, m.end, "prefill")
+            if entry is not None:
+                chosen[m.row] = entry
+        if not chosen:
+            return False
+        if call.traced_length is not None:
+            self._sync()
+        mark = self._apc_alloc_mark()
+        self.model.snapshot_kda(call.user, [chosen.get(r, SCRATCH) for r in range(self.geometry.rows)])
+        self._apc_alloc_check(f"the wave snapshot of slot index {call.user} at {sorted(chosen.items())}", mark)
+        return True
+
+    def _shield_live_rows(self, hit) -> None:
+        """Before a hit's restore under per-row ownership: ``restore_kda`` loads ring entry ``hit.entry`` of slot
+        index ``hit.user`` on EVERY row (the ring read is one index for the mesh), so a row where that index is
+        live with another request first saves its live carry into that very entry (a per-row save: the hit's row
+        and the idle rows write the scratch entry) and the load hands it straight back; the entry's old records on
+        those rows go (``drop_entry``). Idle rows take the load as is: a retained slot's live carry is never read
+        (a hit restores from an entry)."""
+        if not self.geometry.rows_independent:
+            return
+        rows = self.geometry.rows
+        live = [r for r in range(rows) if r != hit.row and (r, hit.user) in self.slots._occupied]
+        if not live:
+            return
+        self._sync()
+        self.model.snapshot_kda(hit.user, [hit.entry if r in live else SCRATCH for r in range(rows)])
+        for r in live:
+            self.apc.drop_entry(r, hit.user, hit.entry)
 
     # ================================================================================= allocation discipline
     def _dram_allocated(self) -> int:

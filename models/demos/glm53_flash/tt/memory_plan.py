@@ -74,8 +74,14 @@ def kda_state_bytes_per_user(cfg, cols: int) -> float:
 
 
 def snapshot_bytes_per_chip(cfg, cols: int, users_per_row: int, entries: int) -> float:
-    """The KDA snapshot ring of the slot-level prefix cache (``entries`` per user slot) on one chip."""
-    return users_per_row * entries * kda_state_bytes_per_user(cfg, cols)
+    """The KDA snapshot ring of the slot-level prefix cache (``entries`` per user slot plus the one scratch entry
+    of the per-row saves, ``kda_snapshot.SCRATCH``) on one chip; 0 without a ring."""
+    return ring_entries(users_per_row, entries) * kda_state_bytes_per_user(cfg, cols)
+
+
+def ring_entries(users_per_row: int, entries: int) -> int:
+    """Flat ring entries per chip: ``users x entries`` + the scratch entry (none without a ring)."""
+    return users_per_row * int(entries) + 1 if int(entries) > 0 else 0
 
 
 def expert_bytes_per_chip(cfg, rows: int, cols: int, expert_bytes: float = BFP8_BYTES, layers=None) -> float:
@@ -328,7 +334,7 @@ class MemoryPlan:
     def snapshot_bytes(self, users_per_row: int, entries: int | None = None) -> float:
         """The KDA snapshot ring per chip (``entries`` per user slot; the plan's own count when None)."""
         e = self.snapshot_entries if entries is None else int(entries)
-        return users_per_row * e * self.kda_state_bytes
+        return ring_entries(users_per_row, e) * self.kda_state_bytes
 
     def bytes_for(self, users_per_row: int, isl: int) -> float:
         return self.slots_per_chip(users_per_row) * (

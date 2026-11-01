@@ -1415,7 +1415,7 @@ def test_zz_no_ttnn_was_imported_by_the_suite():
     assert "ttnn" not in sys.modules
 
 
-def test_vision_window_bands(expect_error):
+def test_vision_window_bands():
     """An oversized image window is encoded as row bands under the tower call cap (multimodal.split_window_bands):
     whole merge-block rows per band, the patches partitioned in order, a window inside the cap untouched, a block row
     wider than the cap refused."""
