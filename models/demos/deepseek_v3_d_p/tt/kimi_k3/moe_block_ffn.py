@@ -43,6 +43,20 @@ _REPLAY: dict = {}  # (MOE_BLOCK_REPLAY=1: the first MoE call's x, weights and o
 _FACE_MAPS: dict = {}  # (H, I, E, layout) -> flat_face_map: the same every layer
 
 
+def _combine_config(arena_bytes: int):
+    c = ttnn.experimental.moe_block.CombineConfig()
+    c.arena_bytes = arena_bytes
+    return c
+
+
+def _bytes_of(d):
+    """A device shard's values as bytes (bf16 viewed as int16: numpy has no bfloat16)."""
+    t = ttnn.to_torch(d).contiguous()
+    if t.dtype == torch.bfloat16:
+        t = t.view(torch.int16)
+    return t.numpy().tobytes()
+
+
 def _host_all(t):
     """Every chip's shard of t, flattened (a diagnostic)."""
     return torch.cat([ttnn.to_torch(d).float().flatten() for d in ttnn.get_device_tensors(t)])
@@ -229,6 +243,11 @@ class TtK3MoEBlockFfn:
                 layout=mb.FlatLayoutOptions(
                     rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts), x_helpers=1
                 ),
+                # (K3: the arena under the block's own programs' static CBs - at the auto sizing (the head's 1270 KB)
+                # it reached them: a clash at 263744 < 312960 on the row-0 cores. The head planned on 1220 KB (its least: 1199), the
+                # combine on 1180 KB (+ its writers' words). TODO: the auto sizing's reserve for K3; GLM-5.3: auto)
+                combine=_combine_config(1180 * 1024) if self.dims.latent_dim is not None else None,
+                l1_free=1220 * 1024 if self.dims.latent_dim is not None else None,
             )
             logger.info(
                 f"MoE block: built for chunk {chunk} at layer {self.layer_idx} in {time.time() - t0:.1f} s - "
@@ -322,10 +341,48 @@ class TtK3MoEBlockFfn:
             )
         return self.weights
 
+    def _hashes(self, block):
+        """sha1 a chip of every device buffer the block reads (MOE_BLOCK_REPLAY: what changed between two calls)."""
+        import hashlib
+
+        w, h = _REPLAY["w"], block.last_head
+        named = {"x": _REPLAY["x"], "expert_ids": w.expert_ids}
+        for n in ("w", "w_router", "router_bias", "router_index"):
+            named["head." + n] = getattr(w.head, n)
+        for n in ("se", "rows", "xbuf", "route", "counts", "regions", "token_index", "table", "plan", "latent"):
+            t = getattr(h, n, None)
+            if t is not None:
+                named["out." + n] = t
+        if w.w_up is not None:
+            named["w_up"] = w.w_up
+        out = {}
+        for name, t in named.items():
+            devs = ttnn.get_device_tensors(t)
+            out[name] = [hashlib.sha1(_bytes_of(d)).hexdigest()[:10] for d in devs]
+        for name, t in (("gate_up", w.gate_up), ("down", w.down)):  # (large: chips 0 and the last)
+            devs = ttnn.get_device_tensors(t)
+            out[name] = [hashlib.sha1(_bytes_of(d)).hexdigest()[:10] for d in (devs[0], devs[-1])]
+        return out
+
     def _replay(self, block, when):
         """MOE_BLOCK_REPLAY=1: the first MoE call again (its x and weights) - is the block's state intact?"""
         if "y" not in _REPLAY or _REPLAY.get("mesh") is not self.mesh:
             return
+        if when == "before its weights" and not getattr(self, "_replayed_twice", False):
+            self._replayed_twice = True  # (then once more: is only the first call after the model's ops wrong?)
+            self._replay(block, "before its weights (1st)")
+            when = "before its weights (2nd)"
+        if "hashes" in _REPLAY and when == "before its weights":
+            now = self._hashes(block)
+            diff = {
+                n: sum(a != b for a, b in zip(now[n], _REPLAY["hashes"][n]))
+                for n in now
+                if now[n] != _REPLAY["hashes"][n]
+            }
+            logger.info(
+                f"MOE_BLOCK_HASH layer {self.layer_idx}: {len(now)} buffers, changed since layer "
+                f"{_REPLAY['layer']}'s replay (chips): {diff if diff else 'none'}"
+            )
         comp = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 3))
         y_again = block(_REPLAY["x"], _REPLAY["w"])
         again = ttnn.to_torch(y_again, mesh_composer=comp).float()
@@ -368,6 +425,7 @@ class TtK3MoEBlockFfn:
                 **{n: _host_all(getattr(block.last_head, n)) for n in ("rows", "se", "xbuf")},
             )
             self._replay(block, "right after")
+            _REPLAY["hashes"] = self._hashes(block)
         if not getattr(block, "_logged_l1_small", False):  # (the block's persistent words + semaphores, all made)
             from models.demos.moe_block.tt.moe_block import l1_small_bytes
 
