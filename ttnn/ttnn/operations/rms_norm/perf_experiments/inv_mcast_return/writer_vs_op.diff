@@ -1,0 +1,320 @@
+--- ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp	2026-11-01 19:30:09.704440463 +0000
++++ ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/kernels/rms_norm_writer.cpp	2026-11-01 19:56:53.836661611 +0000
+@@ -60,7 +60,7 @@
+ #include "api/dataflow/noc.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+-#ifdef RMS_GAMMA_MCAST
++#if defined(RMS_GAMMA_MCAST) || (defined(RMS_INV_MODE) && (RMS_INV_MODE == 3 || RMS_INV_MODE == 5))
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #endif
+ #include "rms_norm_common.hpp"
+@@ -341,6 +341,198 @@
+     }
+ }
+
++// ---------------------------------------------------------------------------------------------------------------
++// inv_rms return transport (perf experiment inv_mcast_return). RMS_INV_MODE:
++//   0 unicast   : k unicasts (faces 0/2) + k noc_semaphore_inc per owned block (the op's current path).
++//   1 mc_flag   : raw multicast of each owned row to the group's <= 3 member rectangles (+ one unicast to self),
++//                 then ONE flag write per rectangle: owner o writes value blk+1 into its own slot o of the
++//                 cb_inv_flags scratch on every member (set_multicast, same NoC + same static VC as the data =>
++//                 lands after it; no barrier). Members wait slot[o] >= blk+1 for every owner of the block.
++//   2 mc_inc    : raw multicast of the data, one write barrier per block, then a multicast atomic
++//                 increment of the existing sem_inv by `owned` (+ unicast increment of self).
++//   3 mc_helper : kernel_lib ttnn.Mcast channel (rotating senders = the group, Counter data-ready, no handshake):
++//                 one SenderPipe::send per owned row (faces 0..2 contiguous), one receive per block.
++//   4 mc_one    : (run 2) multicast ONLY for single-owner blocks (rows == 1 -> member 0 owns the only row): raw
++//                 multicast of faces 0..2 (RMS_INV_MC_FACES = 1: one transaction; 2: faces 0 and 2) to the group's
++//                 rectangles + unicast to self, then sem_inv := cumulative rows (staged in sem RMS_SEM_INV_STAGE)
++//                 by set_multicast + set_remote(self). Multi-owner blocks keep the unicast path (measured: concurrent
++//                 multicasts from several owners into one rectangle serialize — 1.2-2x slower than k unicasts).
++//   5 mc_one_helper : same regime through kernel_lib ttnn.Mcast (fixed sender = member 0, Flag, no handshake).
++// Raw path (1, 2) bypasses dataflow_kernel_lib::McastArgs/SenderPipe. Why (capability, not ergonomics): the
++//   helper's data-ready contract is "one sender per round" — Flag mode shares ONE semaphore cell between the
++//   rotating senders (concurrent owners would overwrite each other's flag), Counter mode pays a write barrier
++//   (payload ack round-trip) + an atomic barrier on EVERY send. Here all k owners return concurrently, so the
++//   barrier-free form needs one flag slot per owner (k slots) — not expressible through the helper's semaphore
++//   resources (<= 16 semaphores per core, k up to 164).
++// Rectangle args (RT, after the k peer pairs): [n_rects, then per rect: x0, y0, x1, y1 (virtual NoC0 order),
++//   remote (member cores in the rect other than this core), self (1 when this core is inside)]. n_rects == 0:
++//   the group has no <= 3-rectangle cover (or the RT-arg budget is exceeded) -> unicast to every member.
++#ifndef RMS_INV_MODE
++#define RMS_INV_MODE 0
++#endif
++constexpr uint32_t inv_mode = RMS_INV_MODE;
++constexpr uint32_t RECT_ARG_BASE = NOC_XY_ARG_BASE + 2 * w_split_cores;
++constexpr uint32_t RECT_WORDS = 6;
++constexpr uint32_t MAX_RECTS = 3;
++constexpr uint32_t FLAG_STRIDE = 16;  // one L1-aligned slot per owner (+ one staging slot at index k)
++
++struct McRect {
++    uint32_t x0, y0, x1, y1, remote;
++};
++
++#ifndef RMS_INV_MC_FACES
++#define RMS_INV_MC_FACES 2
++#endif
++#ifndef RMS_SEM_INV_STAGE
++#define RMS_SEM_INV_STAGE 0
++#endif
++
++struct InvReturn {
++    uint32_t n_rects = 0;
++    McRect rect[MAX_RECTS];
++    uint32_t flags_base = 0;
++
++    FORCE_INLINE void init() {
++        if constexpr (inv_mode == 1 || inv_mode == 2 || inv_mode == 4) {
++            n_rects = get_arg_val<uint32_t>(RECT_ARG_BASE);
++            for (uint32_t i = 0; i < n_rects && i < MAX_RECTS; ++i) {
++                const uint32_t a = RECT_ARG_BASE + 1 + i * RECT_WORDS;
++                rect[i] = McRect{
++                    get_arg_val<uint32_t>(a),
++                    get_arg_val<uint32_t>(a + 1),
++                    get_arg_val<uint32_t>(a + 2),
++                    get_arg_val<uint32_t>(a + 3),
++                    get_arg_val<uint32_t>(a + 4)};
++            }
++        }
++        if constexpr (inv_mode == 1) {
++            // Zero every owner slot before this member's first partial leaves: an owner writes slot o only after
++            // it received EVERY member's block-0 partial, so the zeroing always precedes the first flag.
++            flags_base = get_write_ptr(cb_inv_flags);
++            for (uint32_t o = 0; o <= w_split_cores; ++o) {
++                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flags_base + o * FLAG_STRIDE)[0] = 0;
++            }
++        }
++    }
++
++    FORCE_INLINE uint64_t mc_addr(const McRect& r, uint32_t l1) const {
++        if (noc_index == 0) {
++            return get_noc_multicast_addr(r.x0, r.y0, r.x1, r.y1, l1);
++        }
++        return get_noc_multicast_addr(r.x1, r.y1, r.x0, r.y0, l1);
++    }
++
++    // One owned inv_rms tile to every member: multicast per rectangle (excludes this core) + unicast to self.
++    FORCE_INLINE void send_tile(uint32_t src, uint32_t dst, uint32_t tb) const {
++        constexpr uint32_t k = w_split_cores;
++        if (n_rects == 0) {
++            for (uint32_t m = 0; m < k; ++m) {
++                send_acc_tile(src, peer_addr(m, dst), tb);
++            }
++            return;
++        }
++        for (uint32_t i = 0; i < n_rects; ++i) {
++            const McRect& r = rect[i];
++            if (r.remote == 0) {
++                continue;
++            }
++            if constexpr (partial_faces_only) {
++                const uint32_t fb = tb / 4;
++                noc_async_write_multicast(src, mc_addr(r, dst), fb, r.remote);
++                noc_async_write_multicast(src + 2 * fb, mc_addr(r, dst + 2 * fb), fb, r.remote);
++            } else {
++                noc_async_write_multicast(src, mc_addr(r, dst), tb, r.remote);
++            }
++        }
++        send_acc_tile(src, get_noc_addr(dst), tb);  // self (unicast VC; its flag follows on the same VC)
++    }
++
++    // mc_one: the single owned row of a rows == 1 block to every member (rectangles exclude self; self by unicast).
++    FORCE_INLINE void send_tile_one(uint32_t src, uint32_t dst, uint32_t tb) const {
++        for (uint32_t i = 0; i < n_rects; ++i) {
++            const McRect& r = rect[i];
++            if (r.remote == 0) {
++                continue;
++            }
++            if constexpr (!partial_faces_only) {
++                noc_async_write_multicast(src, mc_addr(r, dst), tb, r.remote);
++            } else if constexpr (RMS_INV_MC_FACES == 1) {
++                noc_async_write_multicast(src, mc_addr(r, dst), 3 * (tb / 4), r.remote);  // faces 0..2 (1 = don't-care)
++            } else {
++                const uint32_t fb = tb / 4;
++                noc_async_write_multicast(src, mc_addr(r, dst), fb, r.remote);
++                noc_async_write_multicast(src + 2 * fb, mc_addr(r, dst + 2 * fb), fb, r.remote);
++            }
++        }
++        send_acc_tile(src, get_noc_addr(dst), tb);  // self (unicast VC; its semaphore set follows on the same VC)
++    }
++
++    // mc_one: sem_inv := `value` (cumulative rows incl. this block) on every member. Set, not increment: every
++    // earlier increment already landed (a member sends its partial of this block only after observing them).
++    FORCE_INLINE void publish_set(uint32_t sem_inv_addr, uint32_t value) const {
++        const uint32_t stage = get_semaphore(RMS_SEM_INV_STAGE);
++        volatile tt_l1_ptr uint32_t* stage_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
++        stage_ptr[0] = value;
++        (void)stage_ptr[0];
++        for (uint32_t i = 0; i < n_rects; ++i) {
++            const McRect& r = rect[i];
++            if (r.remote > 0) {
++                noc_semaphore_set_multicast(stage, mc_addr(r, sem_inv_addr), r.remote);
++            }
++        }
++        noc_semaphore_set_remote(stage, get_noc_addr(sem_inv_addr));  // self: after the self data write (same VC)
++    }
++
++    // mc_flag: publish "owner o finished block blk" (value blk + 1) into slot o of every member.
++    FORCE_INLINE void publish_flag(uint32_t owner, uint32_t blk) const {
++        constexpr uint32_t k = w_split_cores;
++        const uint32_t stage = flags_base + k * FLAG_STRIDE;
++        const uint32_t slot = flags_base + owner * FLAG_STRIDE;
++        volatile tt_l1_ptr uint32_t* stage_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
++        stage_ptr[0] = blk + 1;
++        (void)stage_ptr[0];  // the store has reached L1 before the NoC reads the staging word
++        if (n_rects == 0) {
++            for (uint32_t m = 0; m < k; ++m) {
++                noc_semaphore_set_remote(stage, peer_addr(m, slot));
++            }
++            return;
++        }
++        for (uint32_t i = 0; i < n_rects; ++i) {
++            const McRect& r = rect[i];
++            if (r.remote > 0) {
++                noc_semaphore_set_multicast(stage, mc_addr(r, slot), r.remote);
++            }
++        }
++        noc_semaphore_set_remote(stage, get_noc_addr(slot));  // self: after the self data write (same VC)
++    }
++
++    // mc_inc: the data has landed everywhere (barrier), then +owned on every member's sem_inv.
++    FORCE_INLINE void publish_inc(uint32_t sem_inv_addr, uint32_t owned) const {
++        constexpr uint32_t k = w_split_cores;
++        if (n_rects == 0) {
++            fence_before_signal();
++            for (uint32_t m = 0; m < k; ++m) {
++                noc_semaphore_inc(peer_addr(m, sem_inv_addr), owned);
++            }
++            return;
++        }
++        noc_async_write_barrier();
++        for (uint32_t i = 0; i < n_rects; ++i) {
++            const McRect& r = rect[i];
++            if (r.remote > 0) {
++                noc_semaphore_inc_multicast(mc_addr(r, sem_inv_addr), owned, r.remote);
++            }
++        }
++        noc_semaphore_inc(get_noc_addr(sem_inv_addr), owned);
++    }
++};
++
++#if RMS_INV_MODE == 3 || RMS_INV_MODE == 5
++constexpr auto inv_mcast = dataflow_kernel_lib::McastArgs<
++    get_named_compile_time_arg_val("inv_mcast_ct_offset"),
++    get_named_compile_time_arg_val("inv_mcast_rt_offset")>();
++#endif
++
+ // Exchange state carried across blocks (k > 1). The semaphores are monotonic: never reset.
+ struct ExchangeState {
+     uint32_t member_idx;
+@@ -350,6 +542,8 @@
+     uint32_t slot_base;  // this block's cb_gathered_sumsq slot base (reserved by the send half)
+     uint32_t partials_expected;
+     uint32_t inv_expected;
++    uint32_t blk = 0;
++    InvReturn ret{};
+ };
+
+ FORCE_INLINE uint32_t owned_rows(uint32_t rows, uint32_t member_idx) {
+@@ -414,22 +608,57 @@
+
+         cb_reserve_back(cb_inv_rms, rows);
+         const uint32_t inv_base = get_write_ptr(cb_inv_rms);
++        // mc_one / mc_one_helper: multicast only when the block has a single owner (rows == 1 -> member 0).
++        [[maybe_unused]] const bool mc_block =
++            rows == 1 && (inv_mode == 5 || (inv_mode == 4 && st.ret.n_rects > 0));
+         if (owned > 0) {
+             // One owned tile at a time from the CB front: members own different row counts per block, so the
+             // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
+             for (uint32_t j = 0; j < owned; ++j) {
+                 const uint32_t r = j * k + st.member_idx;
+-                cb_wait_front(cb_inv_owned, 1);
++                {
++                    MaybeDeviceZoneScope("wr_inv_wait_cmb");  // owner: waits on compute's combine of this row
++                    cb_wait_front(cb_inv_owned, 1);
++                }
++                MaybeDeviceZoneScope("wr_inv_send");  // owner: the return transport only
+                 const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+-                for (uint32_t m = 0; m < k; ++m) {
+-                    send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
++                if (inv_mode == 0 || ((inv_mode == 4 || inv_mode == 5) && !mc_block)) {
++                    for (uint32_t m = 0; m < k; ++m) {
++                        send_acc_tile(inv_src, peer_addr(m, inv_base + r * tb), tb);
++                    }
++                } else if constexpr (inv_mode == 4) {
++                    st.ret.send_tile_one(inv_src, inv_base + r * tb, tb);
++                } else if constexpr (inv_mode == 5) {
++#if RMS_INV_MODE == 5
++                    Noc noc;
++                    const uint32_t bytes = partial_faces_only ? 3 * (tb / 4) : tb;
++                    inv_mcast.sender(noc).send(inv_src, inv_base + r * tb, bytes);
++#endif
++                } else if constexpr (inv_mode == 3) {
++#if RMS_INV_MODE == 3
++                    Noc noc;
++                    // faces 0..2 are contiguous (face 1 is don't-care): one send per owned row
++                    const uint32_t bytes = partial_faces_only ? 3 * (tb / 4) : tb;
++                    inv_mcast.sender(noc).send(inv_src, inv_base + r * tb, bytes);
++#endif
++                } else {
++                    st.ret.send_tile(inv_src, inv_base + r * tb, tb);
+                 }
+                 noc_async_writes_flushed();
+                 cb_pop_front(cb_inv_owned, 1);
+             }
+-            fence_before_signal();
+-            for (uint32_t m = 0; m < k; ++m) {
+-                noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
++            MaybeDeviceZoneScope("wr_inv_signal");
++            if (inv_mode == 0 || ((inv_mode == 4 || inv_mode == 5) && !mc_block)) {
++                fence_before_signal();
++                for (uint32_t m = 0; m < k; ++m) {
++                    noc_semaphore_inc(peer_addr(m, st.sem_inv_addr), owned);
++                }
++            } else if constexpr (inv_mode == 1) {
++                st.ret.publish_flag(st.member_idx, st.blk);
++            } else if constexpr (inv_mode == 2) {
++                st.ret.publish_inc(st.sem_inv_addr, owned);
++            } else if constexpr (inv_mode == 4) {
++                st.ret.publish_set(st.sem_inv_addr, st.inv_expected + rows);
+             }
+         }
+     } else {
+@@ -447,8 +676,28 @@
+     if constexpr (combine_owner) {
+         st.inv_expected += rows;
+         MaybeDeviceZoneScope("wr_wait_inv");  // rendezvous: every owner's inv_rms return
+-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
++        if constexpr (inv_mode == 1) {
++            constexpr uint32_t k = w_split_cores;
++            const uint32_t n_owners = rows < k ? rows : k;
++            for (uint32_t o = 0; o < n_owners; ++o) {
++                noc_semaphore_wait_min(
++                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.ret.flags_base + o * FLAG_STRIDE), st.blk + 1);
++            }
++        } else if constexpr (inv_mode == 3) {
++#if RMS_INV_MODE == 3
++            Noc noc;
++            inv_mcast.receiver(noc).receive(st.inv_expected - 1);  // Counter: >= every row sent so far
++#endif
++        } else if (inv_mode == 5 && rows == 1) {
++#if RMS_INV_MODE == 5
++            Noc noc;
++            inv_mcast.receiver(noc).receive();  // Flag: member 0's multicast of the block's only row
++#endif
++        } else {
++            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
++        }
+         cb_push_back(cb_inv_rms, rows);
++        st.blk++;
+     }
+ }
+
+@@ -535,6 +784,7 @@
+         xs.tile_bytes = get_tile_size(cb_partial_sumsq);
+         if constexpr (combine_owner) {
+             xs.sem_inv_addr = get_semaphore(sem_inv_id);
++            xs.ret.init();
+         }
+     }

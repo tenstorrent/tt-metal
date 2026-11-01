@@ -62,7 +62,7 @@
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
-#ifdef RMS_GAMMA_MCAST
+#if defined(RMS_GAMMA_MCAST) || defined(RMS_INV_MCAST)
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #endif
 #include "rms_norm_common.hpp"
@@ -376,6 +376,21 @@ FORCE_INLINE void exchange_send(uint32_t rows, ExchangeState& st) {
     cb_pop_front(cb_partial_sumsq, rows);
 }
 
+// inv_rms return of a single-owner block (RMS_INV_MCAST, Perf 1): a block of ONE tile-row has one owner, member 0,
+// which returns inv_rms to its k members with one multicast (kernel_lib Mcast, fixed sender = member 0, Flag signal,
+// no handshake, loopback to itself) instead of k unicasts + k semaphore increments: BH p150b, WIDTH k = 28 / 32 decode
+// 8.9 -> 7.6 us / 8.2 -> 6.6 us. Blocks with >= 2 owners keep the unicast return: several owners multicasting into
+// the same members at once serialize (measured 2.1x slower on BLOCK 7168x1024, perf_experiments/inv_mcast_return).
+// Slot reuse is safe without a handshake: a member sends its partial of block b+1 only after it consumed inv(b).
+#ifdef RMS_INV_MCAST
+constexpr auto inv_mcast = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("inv_mcast_ct_offset"),
+    get_named_compile_time_arg_val("inv_mcast_rt_offset")>();
+constexpr bool inv_mcast_on = true;
+#else
+constexpr bool inv_mcast_on = false;
+#endif
+
 // exchange receive, part 1: wait for this member's gathered partials -> cb_gathered_sumsq (compute combines);
 //   owner topology: then return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
 FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
@@ -393,6 +408,19 @@ FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
 
         cb_reserve_back(cb_inv_rms, rows);
         const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+#ifdef RMS_INV_MCAST
+        if (rows == 1) {
+            if (owned > 0) {  // member 0: the block's only owner
+                cb_wait_front(cb_inv_owned, 1);
+                Noc noc;
+                // faces 0..2 are contiguous (face 1 is don't-care): one send covers column 0
+                inv_mcast.sender(noc).send(
+                    get_read_ptr(cb_inv_owned), inv_base, partial_faces_only ? 3 * (tb / 4) : tb);
+                cb_pop_front(cb_inv_owned, 1);
+            }
+            return;
+        }
+#endif
         if (owned > 0) {
             // One owned tile at a time from the CB front: members own different row counts per block, so the
             // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
@@ -424,9 +452,20 @@ FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
 // exchange receive, part 2 (owner topology): wait for every row's inv_rms of the block -> cb_inv_rms.
 FORCE_INLINE void exchange_recv_inv(uint32_t rows, ExchangeState& st) {
     if constexpr (combine_owner) {
-        st.inv_expected += rows;
         MaybeDeviceZoneScope("wr_wait_inv");  // rendezvous: every owner's inv_rms return
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
+        if (inv_mcast_on && rows == 1) {
+#ifdef RMS_INV_MCAST
+            // member 0's multicast of the block's only row (Flag). The sender itself does not wait: its loopback
+            // copy is fenced (write barrier) inside send().
+            Noc noc;
+            if (auto receiver = inv_mcast.optional_receiver(noc); receiver && !inv_mcast.can_send()) {
+                receiver->receive();
+            }
+#endif
+        } else {
+            st.inv_expected += rows;  // the unicast return's semaphore counts only unicast-returned rows
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
+        }
         cb_push_back(cb_inv_rms, rows);
     }
 }

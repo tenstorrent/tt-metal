@@ -77,6 +77,12 @@ GAMMA_MCAST = True
 # multicast applies (one DRAM read of gamma per launch instead of one per Tensix core). WIDTH / BLOCK k > 1 keep the
 # per-core slice load (a shard grid column need not hold a single W slice).
 GAMMA_MCAST_SHARDED_K1 = True
+# Owner combine, single-owner blocks (one tile-row: member 0 owns it): return inv_rms to the k members with ONE
+# multicast (kernel_lib Mcast, fixed sender = member 0, no handshake) instead of k unicasts + k semaphore increments.
+# BH p150b perf cfg: WIDTH [32,256] 7x4 k = 28 8.9 -> 7.6 us, [32,160] 8x4 k = 32 8.2 -> 6.6 us, (32,32768) k = 49
+# 1.05x. Blocks with >= 2 owners keep the unicast return (multicast measured 1.7-2.1x slower there: owners collide).
+INV_MCAST = True
+MAX_MCAST_RECTANGLES = 3  # kernel_lib mcast_protocol.hpp: receiver rectangles per multicast group
 # k > 1, per-core gamma load (no multicast): the writer issues the gamma DRAM reads at kernel start but finishes the
 # load (barrier [+ RM face-1 copy]) only after block 0's partials are sent / its owner duties are done, so the cross-core
 # combine no longer waits on it. Pays when pass 1 is short (few tile-rows per block): BH p150b, perf config,
@@ -630,6 +636,36 @@ def _gamma_mcast_groups(blk: Blocking, grid_x: int):
     return None
 
 
+def _inv_mcast_order(blk: Blocking, all_cores, row_major: bool):
+    """McastCoreOrder for the single-owner inv_rms multicast, or None (unicast return everywhere).
+
+    Only the owner topology has single-owner blocks, and only blocks of one tile-row use them. ttnn.Mcast cuts the
+    ordered active Tensix cores into equal consecutive groups with the fixed sender first: that must reproduce every
+    W-split group with member 0 (the owner of tile-row 0) first, and each group must decompose into at most
+    MAX_MCAST_RECTANGLES member-only rectangles. Otherwise (custom multi-range shard grids) keep the unicast return.
+    """
+    if not (INV_MCAST and blk.k > 1 and blk.opts.owner_combine):
+        return None
+    b = blk.block_row_tiles
+    if not any(b == 1 or (m.core_rows - 1) % b == 0 for grp in blk.groups for m in grp):
+        return None  # no block of exactly one tile-row on any Tensix core
+    order = ttnn.McastCoreOrder.RowMajor if row_major else ttnn.McastCoreOrder.ColumnMajor
+    key = (lambda c: (c[1], c[0])) if row_major else (lambda c: (c[0], c[1]))
+    ordered = sorted(((c.x, c.y) for c in all_cores), key=key)
+    k = blk.k
+    by_first = {}
+    for i in range(0, len(ordered), k):
+        by_first[ordered[i]] = set(ordered[i : i + k])
+    for grp in blk.groups:
+        first = (grp[0].core.x, grp[0].core.y)
+        if by_first.get(first) != {(m.core.x, m.core.y) for m in grp}:
+            return None
+        merged = ttnn.CoreRangeSet([ttnn.CoreRange(m.core, m.core) for m in grp]).merge(ttnn.CoreRangeSet([]))
+        if len(merged.ranges()) > MAX_MCAST_RECTANGLES:
+            return None
+    return order
+
+
 def is_sharded(tensor) -> bool:
     """Any shard scheme (HEIGHT / WIDTH / BLOCK): the shard spec fixes the work split, consumed in place."""
     return tensor.memory_config().is_sharded()
@@ -754,6 +790,13 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     gamma_mcast = gamma_groups is not None
     if gamma_mcast:
         defines.append(("RMS_GAMMA_MCAST", "1"))
+    inv_order = _inv_mcast_order(
+        blk,
+        [mem.core for grp in blk.groups for mem in grp],
+        not sharded or input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    if inv_order is not None:
+        defines.append(("RMS_INV_MCAST", "1"))
 
     x_page = input_tensor.buffer_aligned_page_size()
     out_page = output_tensor.buffer_aligned_page_size()
@@ -905,5 +948,18 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             order,
         )
         mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
+    if inv_order is not None:
+        # Single-owner blocks: member 0 (the group's first Tensix core in `inv_order`) multicasts inv_rms to its group.
+        inv_mc = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # the writer's NoC (WriterConfigDescriptor)
+            core_ranges,
+            k,
+            ttnn.McastFixedSenderConfig(),
+            inv_order,
+        )
+        inv_mc.attach(
+            descriptor, "inv_mcast", [writer], mc.next_semaphore_id() if gamma_mcast else SEM_GAMMA_MCAST_FIRST
+        )
     descriptor.kernels = [reader, writer, compute]
     return descriptor

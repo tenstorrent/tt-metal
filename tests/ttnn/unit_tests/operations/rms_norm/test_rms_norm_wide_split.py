@@ -128,11 +128,15 @@ def test_forced_k_fp32(device, monkeypatch):
 
 
 # Multi-block owner exchange across spanning groups: several blocks per core (OVERLAP_BLOCKS = 2 -> depth 2,
-# x / x_alt alternate), gamma finished after block 0's send only.
-def test_forced_k_multi_block(device, monkeypatch):
+# x / x_alt alternate), gamma finished after block 0's send only. 5 groups of 26 (spanning grid rows) on 13x10:
+#   30 tile-rows -> 6 per group, blocks 3 + 3 (unicast inv_rms return only)
+#   10 tile-rows -> 2 per group, blocks 1 + 1 (Perf 1 single-owner multicast return, flag re-armed per block)
+#   15 tile-rows -> 3 per group, blocks 2 + 1 (unicast block, then a multicast block on the same semaphores)
+@pytest.mark.parametrize("tile_rows", [30, 10, 15])
+def test_forced_k_multi_block(device, monkeypatch, tile_rows):
     force_k(monkeypatch, 26)
     monkeypatch.setattr(pd, "OVERLAP_BLOCKS", 2)
-    shape = (1, 1, 32 * 30, 4096)
+    shape = (1, 1, 32 * tile_rows, 4096)
     blk, _ = blocking(device, shape, ttnn.TILE_LAYOUT)
     rows = blk.groups[0][0].core_rows
     assert pd._div_up(rows, blk.block_row_tiles) > 1, (rows, blk.block_row_tiles)

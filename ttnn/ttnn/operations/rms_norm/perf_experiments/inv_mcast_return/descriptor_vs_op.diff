@@ -1,0 +1,182 @@
+--- ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py	2026-11-01 19:16:24.897990301 +0000
++++ ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/pd_mc.py	2026-11-01 19:57:18.048969132 +0000
+@@ -49,6 +49,17 @@
+ CB_SUMSQ_ACC = 10  # sharded TILE W tail: raw sum-of-squares of the full W tiles (reduce Accumulate CB)
+ CB_TAIL_MASK = 11  # sharded TILE W tail: 0/1 row mask of the valid columns of the last W tile
+ CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows this member owns
++CB_INV_FLAGS = 13  # owner combine, mc_flag return: one 16 B flag slot per owner + 1 staging slot (L1 scratch)
++
++# perf experiment inv_mcast_return: inv_rms return transport of the owner combine.
++#   "unicast" (op's current), "mc_flag", "mc_inc", "mc_helper" — see kernels/rms_norm_writer.cpp InvReturn.
++INV_RETURN = "unicast"
++INV_MODE_ID = {"unicast": 0, "mc_flag": 1, "mc_inc": 2, "mc_helper": 3, "mc_one": 4, "mc_one_helper": 5}
++INV_MC_FACES = 1  # mc_one: 1 = faces 0..2 in one multicast transaction, 2 = faces 0 and 2 separately
++INV_FLAG_SLOT_BYTES = 16
++INV_MAX_RECTS = 3
++INV_RECT_WORDS = 6
++LAST_INV_INFO = {}  # test introspection: per-launch geometry of the return (k, b, rects per group)
+
+ SEM_PARTIALS_ARRIVED = 0
+ SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
+@@ -224,6 +235,8 @@
+             owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member r % k)
+             plan[CB_GATHERED] = (owned * k, sz.T_acc)  # k partials per owned row (uniform -> lockstep slots)
+             plan[CB_INV_OWNED] = (owned, sz.T_acc)
++            if INV_RETURN == "mc_flag":
++                plan[CB_INV_FLAGS] = (1, (k + 1) * INV_FLAG_SLOT_BYTES)
+         else:
+             plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
+     if opts.mask_tail:
+@@ -621,6 +634,38 @@
+     return None
+
+
++def _member_rects(cores):
++    """Cover of a group's logical cores by <= INV_MAX_RECTS member-only rectangles (x0, y0, x1, y1), or None.
++
++    Row spans first (each grid row's members must be one contiguous x range; consecutive rows with the same range
++    merge), then column spans. Every rectangle holds ONLY member cores, so an idle Tensix core inside the group's
++    bounding box is never a multicast destination."""
++    pts = [(int(c.x), int(c.y)) for c in cores]
++
++    def spans(major, minor):
++        lines = {}
++        for p in pts:
++            lines.setdefault(p[major], []).append(p[minor])
++        out = []
++        for a in sorted(lines):
++            v = sorted(lines[a])
++            if v[-1] - v[0] + 1 != len(v):
++                return None
++            if out and out[-1][2] == v[0] and out[-1][3] == v[-1] and out[-1][1] + 1 == a:
++                out[-1][1] = a
++            else:
++                out.append([a, a, v[0], v[-1]])  # major lo, major hi, minor lo, minor hi
++        return out
++
++    for major, minor in ((1, 0), (0, 1)):
++        sp = spans(major, minor)
++        if sp is not None and len(sp) <= INV_MAX_RECTS:
++            if major == 1:
++                return [(s[2], s[0], s[3], s[1]) for s in sp]
++            return [(s[0], s[2], s[1], s[3]) for s in sp]
++    return None
++
++
+ def is_sharded(tensor) -> bool:
+     """Any shard scheme (HEIGHT / WIDTH / BLOCK): the shard spec fixes the work split, consumed in place."""
+     return tensor.memory_config().is_sharded()
+@@ -716,6 +761,7 @@
+         CB_SUMSQ_ACC: t_acc,
+         CB_TAIL_MASK: t_acc,
+         CB_INV_OWNED: t_acc,
++        CB_INV_FLAGS: ttnn.uint32,
+     }
+     plan = cb_plan(sz, k, blk.slice_w_tiles, b, d, opts)
+     cbs = [_cb(idx, pages, page_bytes, cb_dtype[idx], core_ranges) for idx, (pages, page_bytes) in plan.items()]
+@@ -736,6 +782,17 @@
+     if opts.mask_tail:
+         defines.append(("RMS_MASK_TAIL", "1"))
+     defines.extend((name, "1") for name in PERF_ABLATE)
++    inv_mode = INV_MODE_ID[INV_RETURN] if (k > 1 and opts.owner_combine) else 0
++    if inv_mode == 3 and any(len(_member_rects([m.core for m in g]) or []) != 1 for g in blk.groups):
++        # kernel_lib Mcast: "rotating sender requires receiver group to form a rectangle" (TT_FATAL) -> unicast
++        inv_mode = 0
++    defines.append(("RMS_INV_MODE", str(inv_mode)))
++    defines.append(("RMS_INV_MC_FACES", str(INV_MC_FACES)))
++    sem_inv_stage = None
++    if inv_mode == 4:
++        # one more semaphore after the gamma multicast channel's (allocated below; id fixed here)
++        sem_inv_stage = SEM_GAMMA_MCAST_FIRST + 4
++        defines.append(("RMS_SEM_INV_STAGE", str(sem_inv_stage)))
+     gamma_groups = None
+     if opts.gamma_chunk:
+         defines.append(("RMS_GAMMA_CHUNK", str(opts.gamma_chunk)))  # streamed gamma: per-core chunk ring, no mcast
+@@ -796,11 +853,33 @@
+
+     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+     tw = geo.tensor_w_tiles
++    rect_words = 1 + INV_MAX_RECTS * INV_RECT_WORDS if inv_mode in (1, 2, 4) else 0
++    inv_info = {"rows": sorted({m.core_rows for g in blk.groups for m in g}), "k": k, "b": b, "mode": [k for k, v in INV_MODE_ID.items() if v == inv_mode][0], "groups": []}
+     for members in blk.groups:
+         noc_xy = []
+         for mem in members:
+             v = device.worker_core_from_logical_core(mem.core)
+             noc_xy.extend([v.x, v.y])
++        rects = _member_rects([mem.core for mem in members]) if rect_words else None
++        if rects is not None and WRITER_NOC_XY_ARG_BASE + 2 * k + rect_words > MAX_RUNTIME_ARGS:
++            rects = None  # RT budget: unicast fallback
++        if rect_words:
++            members_set = {(int(mem.core.x), int(mem.core.y)) for mem in members}
++            for x0, y0, x1, y1 in rects or []:
++                assert all((x, y) in members_set for x in range(x0, x1 + 1) for y in range(y0, y1 + 1))
++        inv_info["groups"].append(rects)
++
++        def rect_args(c, rects=rects):
++            if not rect_words:
++                return []
++            out = [len(rects) if rects else 0]
++            for x0, y0, x1, y1 in rects or []:
++                lo = device.worker_core_from_logical_core(ttnn.CoreCoord(x0, y0))
++                hi = device.worker_core_from_logical_core(ttnn.CoreCoord(x1, y1))
++                inside = x0 <= c.x <= x1 and y0 <= c.y <= y1
++                size = (x1 - x0 + 1) * (y1 - y0 + 1)
++                out += [lo.x, lo.y, hi.x, hi.y, size - (1 if inside else 0), 1 if inside else 0]
++            return out + [0] * (rect_words - len(out))
+         for mem in members:
+             c = mem.core
+             core_rows = mem.core_rows
+@@ -851,7 +930,7 @@
+                 mem.col0,
+             ]
+             assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
+-            writer_rt[c.x][c.y] = writer_base + noc_xy
++            writer_rt[c.x][c.y] = writer_base + noc_xy + rect_args(c)
+
+     reader = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+@@ -882,6 +961,8 @@
+         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS_ARRIVED, core_ranges=core_ranges, initial_value=0))
+         if opts.owner_combine:
+             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
++        if sem_inv_stage is not None:
++            semaphores.append(ttnn.SemaphoreDescriptor(id=sem_inv_stage, core_ranges=core_ranges, initial_value=0))
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     if gamma_mcast:
+         # Sender = each group's first Tensix core (reads + expands the slice); one-shot, no handshake.
+@@ -895,5 +976,35 @@
+             order,
+         )
+         mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
++    if inv_mode == 5:
++        order5 = ttnn.McastCoreOrder.RowMajor
++        if sharded and input_tensor.memory_config().shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
++            order5 = ttnn.McastCoreOrder.ColumnMajor
++        inv_mc = ttnn.Mcast(
++            device,
++            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),
++            ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_cores]),
++            k,
++            ttnn.McastFixedSenderConfig(),
++            order5,
++        )
++        inv_mc.attach(descriptor, "inv_mcast", [writer], mc.next_semaphore_id() if gamma_mcast else SEM_GAMMA_MCAST_FIRST)
++    if inv_mode == 3:
++        sharded_order = None
++        if sharded:
++            ro = input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
++            sharded_order = ttnn.McastCoreOrder.RowMajor if ro else ttnn.McastCoreOrder.ColumnMajor
++        inv_mc = ttnn.Mcast(
++            device,
++            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False, data_ready=ttnn.McastDataReady.Counter),
++            ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_cores]),
++            k,
++            ttnn.McastRotatingSenderConfig(),
++            sharded_order or ttnn.McastCoreOrder.RowMajor,
++        )
++        first = mc.next_semaphore_id() if gamma_mcast else SEM_GAMMA_MCAST_FIRST
++        inv_mc.attach(descriptor, "inv_mcast", [writer], first)
++    LAST_INV_INFO.clear()
++    LAST_INV_INFO.update(inv_info)
+     descriptor.kernels = [reader, writer, compute]
+     return descriptor
