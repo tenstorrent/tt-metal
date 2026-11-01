@@ -9,8 +9,10 @@ bus, the ego shift and the previous BEV's rotation, is prepared by
 :meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
 buffers are allocated once and refilled in place. It also projects the cameras and queues the
 readback of their visible counts, which size the spatial cross-attention's plan: ahead of the
-backbone, they are back before the encoder needs them. The plan's sizes still follow what the
-cameras see, so the transformer runs live, not under a trace.
+backbone, they are back before the encoder needs them. The plan's sizes follow what the cameras
+see, so a traced caller (``tt_bevformer_trace``) refills the frame with
+:meth:`TTPerceptionTransformer.refill_frame`, reads the counts between traces and hands the
+encoder the plan it builds on the frame's ``cameras``.
 
 The previous BEV's rotation is nearest-neighbour, so it moves whole cells: the host rotates an
 image of cell indices with the reference's own ``rotate``, and the device gathers the previous
@@ -113,8 +115,15 @@ class TTPerceptionTransformer:
 
     def prepare_frame(self, img_metas, frame=None):
         """This frame's :class:`PerceptionFrame` from ``img_metas`` (per sample ``lidar2img``,
-        ``img_shape`` and the relative ``can_bus``). Without ``frame``, a new one; with ``frame``,
-        refilled in place for a frame of the same batch size."""
+        ``img_shape`` and the relative ``can_bus``): :meth:`refill_frame`, then the cameras'
+        projection with their counts' readback queued."""
+        frame = self.refill_frame(img_metas, frame)
+        frame.cameras = self.encoder.project_cameras(img_metas, frame.projection)
+        return frame
+
+    def refill_frame(self, img_metas, frame=None):
+        """The frame's host-derived buffers only, without projecting the cameras. Without ``frame``,
+        a new one; with ``frame``, refilled in place for a frame of the same batch size."""
         host = self._host_frame(img_metas)
         if frame is None:
             frame = PerceptionFrame(
@@ -132,7 +141,6 @@ class TTPerceptionTransformer:
                     tensor.shape
                 ), f"{name}: the frame holds {tuple(buffer.shape)}, not {tuple(tensor.shape)}; prepare a new frame"
                 ttnn.copy_host_to_device_tensor(ttnn.from_torch(tensor, dtype=dtype, layout=layout), buffer)
-        frame.cameras = self.encoder.project_cameras(img_metas, frame.projection)
         return frame
 
     def camera_features(self, mlvl_feats, bs):

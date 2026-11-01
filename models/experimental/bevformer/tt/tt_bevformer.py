@@ -8,7 +8,10 @@ A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the ca
 prepared by :meth:`TTBEVFormer.prepare_frame`. The caller carries the previous BEV between frames,
 as upstream's ``forward_test`` does. Preparing a frame also projects its cameras and queues the
 readback of the counts that size the spatial cross-attention's plan, which follow what the cameras
-see, so the detector runs live, not under a trace.
+see. Through :meth:`TTBEVFormer.prepare_frame` and :meth:`TTBEVFormer.__call__` the detector runs
+live; ``tt_bevformer_trace.TTBEVFormerTrace`` replays it from traces around that readback, through
+the steps those two chain: :meth:`TTBEVFormer.refill_frame`, :meth:`TTBEVFormer.project_cameras`,
+:meth:`TTBEVFormer.features`, :meth:`TTBEVFormer.build_plan` and :meth:`TTBEVFormer.bev`.
 
 :meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device: the coder's top-k, the box
 decoding, the range test as a validity mask and z moved to the box's bottom face, all fixed
@@ -60,12 +63,40 @@ class TTBEVFormer:
         self.bev_pos = bev_pos
         self.coder = TTNMSFreeCoder(device, **vars(params.coder))
 
+    @property
+    def planner(self):
+        """The encoder's ``SCARebatchPlanner``, which sizes every frame's spatial cross-attention plan."""
+        return self.transformer.encoder.rebatch_planner
+
     def prepare_frame(self, img_metas, frame=None):
         """See ``TTPerceptionTransformer.prepare_frame``."""
+        self._check_batch(img_metas)
+        return self.transformer.prepare_frame(img_metas, frame)
+
+    def refill_frame(self, img_metas, frame=None):
+        """See ``TTPerceptionTransformer.refill_frame``."""
+        self._check_batch(img_metas)
+        return self.transformer.refill_frame(img_metas, frame)
+
+    def project_cameras(self, frame):
+        """``frame.cameras``: the cameras projected through ``frame``'s buffers, as device work only;
+        ``planner.read_counts`` queues the counts' readback."""
+        frame.cameras = self.transformer.encoder.project_cameras_on_device(frame.projection)
+        return frame.cameras
+
+    def build_plan(self, frame):
+        """``frame.cameras`` with the spatial cross-attention plan built on it, as device work only;
+        the planner must have sized this frame (``planner.size``)."""
+        cameras = frame.cameras
+        frame.cameras = cameras._replace(
+            rebatch_plan=self.planner.build(cameras.reference_points_cam, cameras.visibility)
+        )
+        return frame.cameras
+
+    def _check_batch(self, img_metas):
         assert (
             len(img_metas) == self.batch_size
         ), f"{len(img_metas)} samples, the detector is built for {self.batch_size}"
-        return self.transformer.prepare_frame(img_metas, frame)
 
     def __call__(self, img, frame, prev_bev=None):
         """``img`` the ``bs * num_cams`` normalized images, ``(1, 1, bs * num_cams * H * W, 3)``
@@ -75,17 +106,30 @@ class TTBEVFormer:
         ``TTBEVFormerHead``'s channel order, and this frame's BEV ``(bs, bev_h * bev_w, C)``. L is
         the number of decoder layers with ``all_layers``, else 1, the last layer. The FPN frees
         the backbone's features, not ``img``."""
-        levels = self.neck(list(self.backbone(img)))
+        return self.bev(self.features(img), frame, prev_bev=prev_bev)
+
+    def features(self, img):
+        """The FPN levels of :meth:`__call__`'s ``img``."""
+        return self.neck(list(self.backbone(img)))
+
+    def bev(self, levels, frame, prev_bev=None):
+        """:meth:`__call__` from the FPN ``levels``. Uses the plan on ``frame.cameras`` when
+        :meth:`build_plan` put one there, and builds it otherwise."""
         bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
         cls_scores, bbox_preds = self.head(bev_embed)
         return _to_dram(cls_scores, bbox_preds) + (bev_embed,)
 
-    def detect(self, cls_scores, bbox_preds):
+    def detect(self, cls_scores, bbox_preds, score_threshold=None):
         """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
-        and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask."""
+        and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask, which also
+        drops scores below ``score_threshold`` when given."""
         signpost(header="TTNN Detect Start")
         scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
         boxes, valid = self.coder.finalize(scores, boxes)
+        if score_threshold is not None:
+            # topk's scores are ROW_MAJOR; valid is tiled.
+            above = ttnn.ge(ttnn.to_layout(scores, ttnn.TILE_LAYOUT), score_threshold)
+            valid = ttnn.logical_and(valid, above)
         outputs = _to_dram(scores, labels, query_index, boxes, valid)
         signpost(header="TTNN Detect End")
         return outputs

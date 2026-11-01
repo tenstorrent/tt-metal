@@ -80,26 +80,35 @@ class SCARebatchPlan:
 
 
 class SCAVisibility(NamedTuple):
-    """One frame's camera visibility on device, its counts on their way to the host.
+    """One frame's camera visibility on device, and once read, its counts on their way to the host.
 
     Attributes:
         seen_by: ``[num_cams, batch_size, num_queries, 1]``, 1 where the camera sees the query.
         visible: Float32 ``[1, 1, num_cams, num_queries]``, the first sample's ``seen_by``.
         visible_count: Float32 ``[1, 1, num_cams, 1]``, the queries each camera sees.
-        host_counts: ``visible_count`` and the most cameras seeing one query, read back without
-            blocking; valid once ``counts_ready`` completes.
+        max_cameras: Float32 scalar, the most cameras seeing one query.
+        host_counts: ``visible_count`` and ``max_cameras`` read back without blocking, valid once
+            ``counts_ready`` completes; None until :meth:`SCARebatchPlanner.read_counts`.
         counts_ready: Event recorded after the readback.
     """
 
     seen_by: ttnn.Tensor
     visible: ttnn.Tensor
     visible_count: ttnn.Tensor
-    host_counts: tuple
-    counts_ready: object
+    max_cameras: ttnn.Tensor
+    host_counts: Optional[tuple] = None
+    counts_ready: object = None
 
 
 class SCARebatchPlanner:
     """Builds each frame's :class:`SCARebatchPlan` on device, at a capacity that only grows.
+
+    A frame takes four steps, so a traced caller can keep the host's readback and sizing out of its
+    traces:
+    :meth:`count_visible` and :meth:`build` only queue device work; :meth:`read_counts` queues the
+    counts' readback and :meth:`size` waits for it. :meth:`visibility` and :meth:`__call__` chain
+    them for an eager caller. While :attr:`generation` holds, :meth:`build` queues the same ops on
+    the same constant tensors and on tensors of the same shapes.
 
     The visibility mask stays on device: a cumulative sum places each camera's visible queries in
     its row block and a scatter compacts their IDs there. The host reads back only the per-camera
@@ -115,6 +124,9 @@ class SCARebatchPlanner:
             like capacity, so the plan's number of tensors and ops stays fixed as well.
         reallocations: How many times a frame outgrew capacity or slots after the first frame; each
             changes the plan's shapes or its number of ops.
+        generation: Changes whenever :meth:`build` would record different ops, shapes or constant
+            tensors: on every growth and every rebuild of the constants. A trace of :meth:`build` is
+            valid while it holds.
     """
 
     def __init__(self, device, headroom: float = REBATCH_HEADROOM):
@@ -124,20 +136,35 @@ class SCARebatchPlanner:
         self.capacity = 0
         self.num_slots = 0
         self.reallocations = 0
+        self.generation = 0
         self._constants_key = None
         self._constants = None
 
+    def reserve(self, capacity: int, num_slots: int):
+        """Grow, as a frame needing them would, to at least ``capacity`` visible queries per camera and
+        ``num_slots`` slots; a frame of the plan's shapes must have been sized. A caller that knows
+        the counts it will see sizes the plan once instead of growing it frame by frame."""
+        assert self._constants_key is not None, "size() a frame before reserve()"
+        self._resize(max(self.capacity, capacity), max(self.num_slots, num_slots))
+        num_cams, bs, num_queries, _ = self._constants_key
+        self._constants_for(num_cams, bs, num_queries, _rebatch_len(self.capacity))
+
     def _grow(self, max_len: int, max_cameras: int):
-        grows = max_len > self.capacity or max_cameras > self.num_slots
-        if grows and self.capacity:
-            self.reallocations += 1
+        if self.capacity and (max_len > self.capacity or max_cameras > self.num_slots):
             logger.info(
                 f"SCA rebatch plan grows: {max_len} visible queries for capacity {self.capacity}, "
                 f"{max_cameras} cameras sharing a query for {self.num_slots} slots"
             )
-        if max_len > self.capacity:
-            self.capacity = math.ceil(max_len * self.headroom)
-        self.num_slots = max(self.num_slots, max_cameras)
+        capacity = math.ceil(max_len * self.headroom) if max_len > self.capacity else self.capacity
+        self._resize(capacity, max(self.num_slots, max_cameras))
+
+    def _resize(self, capacity: int, num_slots: int):
+        if (capacity, num_slots) == (self.capacity, self.num_slots):
+            return
+        if self.capacity:
+            self.reallocations += 1
+        self.generation += 1
+        self.capacity, self.num_slots = capacity, num_slots
 
     def _constants_for(self, num_cams: int, bs: int, num_queries: int, rebatch_len: int):
         """Device constants of one plan shape, rebuilt only when the shape changes."""
@@ -174,13 +201,26 @@ class SCARebatchPlanner:
                 ),
             )
             self._constants_key = key
+            self.generation += 1
         return self._constants
 
     def visibility(self, bev_mask) -> "SCAVisibility":
-        """Count the cameras' visible queries on device and queue the counts' readback.
+        """:meth:`count_visible` and :meth:`read_counts`.
 
         Nothing here waits for the device, so the work queued after it, such as the backbone, runs
         while the counts come back.
+        """
+        return self.read_counts(self.count_visible(bev_mask))
+
+    def read_counts(self, visibility: "SCAVisibility") -> "SCAVisibility":
+        """``visibility`` with its counts' readback queued, without waiting for it."""
+        return visibility._replace(
+            host_counts=(visibility.visible_count.cpu(blocking=False), visibility.max_cameras.cpu(blocking=False)),
+            counts_ready=ttnn.record_event(self.device, 0),
+        )
+
+    def count_visible(self, bev_mask) -> "SCAVisibility":
+        """Count the cameras' visible queries, on device only.
 
         Args:
             bev_mask: Bfloat16 device tensor with shape
@@ -197,16 +237,10 @@ class SCARebatchPlanner:
         visible = ttnn.reshape(visible, (1, 1, num_cams, num_queries))
         visible_count = ttnn.sum(visible, dim=-1, keepdim=True)
         max_cameras = ttnn.max(ttnn.sum(visible, dim=-2, keepdim=True))
-        return SCAVisibility(
-            seen_by=seen_by,
-            visible=visible,
-            visible_count=visible_count,
-            host_counts=(visible_count.cpu(blocking=False), max_cameras.cpu(blocking=False)),
-            counts_ready=ttnn.record_event(self.device, 0),
-        )
+        return SCAVisibility(seen_by=seen_by, visible=visible, visible_count=visible_count, max_cameras=max_cameras)
 
     def __call__(self, reference_points_cam, visibility: "SCAVisibility") -> SCARebatchPlan:
-        """Build a rebatch plan for one frame's camera projections.
+        """Build a rebatch plan for one frame's camera projections: :meth:`size`, then :meth:`build`.
 
         Args:
             reference_points_cam: Bfloat16 device tensor with shape
@@ -217,17 +251,7 @@ class SCARebatchPlanner:
             A plan owned by these frame inputs. If no query-camera pair is valid, ``is_empty`` is true,
             ``rebatch_len`` is zero, and the plan carries no tensors.
         """
-        num_cams, bs, num_queries, num_depth_levels = tuple(reference_points_cam.shape)[:4]
-        seen_by, visible, visible_count = visibility.seen_by, visibility.visible, visibility.visible_count
-
-        # The only readback: these size the plan's tensors. MSDA reads its row counts on device.
-        ttnn.event_synchronize(visibility.counts_ready)
-        host_count, host_max_cameras = visibility.host_counts
-        num_visible = ttnn.to_torch(host_count).flatten().round().to(torch.int64)
-        max_len = int(num_visible.max())
-        if ENABLE_LOGGING:
-            logger.info(f"SCA Valid Queries: {num_visible.tolist()}")
-        if max_len == 0:
+        if not self.size(visibility):
             return SCARebatchPlan(
                 rebatch_len=0,
                 query_index=None,
@@ -237,12 +261,54 @@ class SCARebatchPlanner:
                 count=None,
                 is_empty=True,
             )
+        return self.build(reference_points_cam, visibility)
+
+    def size(self, visibility: "SCAVisibility") -> bool:
+        """Wait for :meth:`read_counts`' counts and grow the plan's capacity and slots to fit them.
+
+        This is the plan's only readback. Growing uploads the constants of the new shapes here, so
+        :meth:`build` queues device work only. Returns whether any camera sees a query.
+        """
+        # The only readback: these size the plan's tensors. MSDA reads its row counts on device.
+        assert visibility.counts_ready is not None, "read_counts() before size()"
+        ttnn.event_synchronize(visibility.counts_ready)
+        host_count, host_max_cameras = visibility.host_counts
+        num_visible = ttnn.to_torch(host_count).flatten().round().to(torch.int64)
+        max_len = int(num_visible.max())
+        if ENABLE_LOGGING:
+            logger.info(f"SCA Valid Queries: {num_visible.tolist()}")
+        if max_len == 0:
+            return False
         self._grow(max_len, int(ttnn.to_torch(host_max_cameras).round().item()))
+        num_cams, bs, num_queries, _ = tuple(visibility.seen_by.shape)
         rebatch_len = _rebatch_len(self.capacity)
-        padding_row = rebatch_len - 1
         if max(num_cams * bs * num_queries, bs * num_cams * rebatch_len) > 2**24:
             raise ValueError("SCA rebatch row IDs are computed in float32, exact only up to 2**24")
-        constants = self._constants_for(num_cams, bs, num_queries, rebatch_len)
+        self._constants_for(num_cams, bs, num_queries, rebatch_len)
+        return True
+
+    def build(self, reference_points_cam, visibility: "SCAVisibility") -> SCARebatchPlan:
+        """The plan at the current capacity and slots, as device work only.
+
+        :meth:`size` must have seen this frame's counts: a camera seeing more queries than the
+        capacity would scatter its compacted IDs past its row block.
+
+        Args:
+            reference_points_cam: Bfloat16 device tensor with shape
+                ``[num_cams, batch_size, num_queries, num_depth_levels, 2]``.
+            visibility: The frame's :meth:`count_visible`.
+        """
+        num_cams, bs, num_queries, num_depth_levels = tuple(reference_points_cam.shape)[:4]
+        seen_by, visible, visible_count = visibility.seen_by, visibility.visible, visibility.visible_count
+        rebatch_len = _rebatch_len(self.capacity)
+        padding_row = rebatch_len - 1
+        assert self.capacity > 0 and self._constants_key == (
+            num_cams,
+            bs,
+            num_queries,
+            rebatch_len,
+        ), "size() a frame of these shapes before build()"
+        constants = self._constants
 
         # Compact each camera to the queries it sees, so MSDA runs on its valid rows, not all of
         # them. A visible query's row in its camera's block is the number of visible queries before
@@ -457,7 +523,12 @@ class TTSpatialCrossAttention:
         if rebatch_plan.is_empty:
             if ENABLE_LOGGING:
                 logger.warning("No valid points found in SCA, returning residual")
-            return inp_residual
+            # As the reference: the output projection of all-zero slots, which is its bias. A traced
+            # frame runs the full plan, all padding, and gets the same.
+            output_proj = getattr(self.params, "output_proj", None)
+            if output_proj is None or output_proj.bias is None:
+                return inp_residual
+            return ttnn.add(inp_residual, output_proj.bias)
 
         rebatch_len = rebatch_plan.rebatch_len
 
