@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, num_faces);
 
-    // sum_reduce_scalar_init -> copy_tile_to_dst_init_short: unpack A only,
+    // sum_reduce_scalar_init -> copy_init: unpack A only,
     // no broadcast/transpose (datacopy A2D source path).
     _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
@@ -160,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // sum_reduce_scalar_init -> copy_tile_to_dst_init_short: datacopy A2D.
+    // sum_reduce_scalar_init -> copy_init: datacopy A2D.
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();

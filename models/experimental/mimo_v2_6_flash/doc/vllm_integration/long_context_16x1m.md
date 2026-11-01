@@ -102,7 +102,8 @@ chip runs all 16 heads over its half of the keys (G 2 / S 15 from 64K) and the p
 
 - Raise `--max-num-batched-tokens` to 4096: half the chunks, and so half the per-chunk host cost of a 1M prompt.
 - Cut host dispatch per chunk:
-  - a traced prefill chunk, or one host thread per lane, as #62562 lists for the standalone model;
+  - a traced prefill chunk, or one host thread per lane, as #62562 lists for the standalone model (traced later
+    chunks are now in the adapter, #62972, and on by default: README, `MIMO_PREFILL_CHUNK_TRACE`);
   - with four lanes busy, this is the bound.
 - Measure c=16 decode at full 1M: 16 x 1M with long outputs (e.g. 2000 tokens), so that all 16 decode together once
   the last prefill ends.

@@ -23,12 +23,12 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/io_window/io_window.hpp>
-#include <umd/device/pcie/tlb_handle.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/io_window_config.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/pcie/tlb_handle.hpp>
+#include <tt-umd/pcie/tlb_window.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"

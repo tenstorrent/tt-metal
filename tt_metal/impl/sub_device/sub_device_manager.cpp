@@ -8,7 +8,7 @@
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <limits>

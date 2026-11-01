@@ -14,7 +14,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"

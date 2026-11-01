@@ -32,7 +32,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     MathOperation,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
@@ -51,7 +50,7 @@ from helpers.test_variant_parameters import (
     DestSync,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # The full ttnn typecast dtype set (analysis doc section 5).
 _TYPECAST_FORMATS = [
@@ -221,6 +220,102 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
         input_dimensions,
         StimuliSpec(distribution=distribution, seed=52787),
         max_ulp=0,
+    )
+
+
+_UINT16_MAX = (1 << 16) - 1
+_UINT32_MAX = (1 << 32) - 1
+
+
+def _uint_to_uint16_saturation_boundaries(input_format: DataFormat) -> list[int]:
+    """Inputs on both sides of the UInt16 saturation edge, plus bit-31-set values."""
+    if input_format == DataFormat.UInt8:
+        return list(range(256))
+    boundaries = [
+        0,
+        1,
+        _UINT16_MAX - 1,
+        _UINT16_MAX,
+        _UINT16_MAX + 1,
+        _UINT16_MAX + 2,
+        1 << 17,
+        (1 << 31) - 1,
+        1 << 31,
+        (1 << 31) + 1,
+        _UINT32_MAX - 1,
+        _UINT32_MAX,
+    ]
+    for bit in range(15, 32):
+        boundaries.extend(((1 << bit) - 1, 1 << bit, (1 << bit) + 1))
+    return boundaries
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format in (DataFormat.UInt32, DataFormat.UInt8)
+        and pair.output_format == DataFormat.UInt16
+    ],
+    dest_acc=_production_dest_acc,
+)
+def test_eltwise_unary_typecast_uint_to_uint16_saturation(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+):
+    # The functional matrix feeds uniform(0, 255), so it never reaches the
+    # saturating lanes; pin x >= 2^16 and bit-31-set inputs to min(x, 65535).
+    input_dimensions = [32, 32]
+    boundaries = _uint_to_uint16_saturation_boundaries(formats.input_format)
+
+    def distribution(size, dtype, generator):
+        # Called once per face. Boundaries take the even lanes; every odd lane
+        # stays below 65535 so no packed 32-bit word of the UInt16 result reads
+        # 0xFFFFFFFF (which BH NOC treats as a readback timeout). UInt8 inputs
+        # cannot saturate, so all 256 of them fill the face directly.
+        if formats.input_format == DataFormat.UInt8:
+            return torch.tensor(boundaries, dtype=torch.int64)[:size].to(dtype)
+        values = torch.randint(
+            0, 1 << 32, (size,), dtype=torch.int64, generator=generator
+        )
+        values[1::2] = torch.randint(
+            0, _UINT16_MAX, (size // 2,), dtype=torch.int64, generator=generator
+        )
+        assert 2 * len(boundaries) <= size
+        values[: 2 * len(boundaries) : 2] = torch.tensor(boundaries, dtype=torch.int64)
+        return values.to(dtype)
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec(distribution=distribution, seed=62824),
+        spec_B=StimuliSpec(distribution=distribution, seed=62824),
+    )
+    src_values = [int(v) & _UINT32_MAX for v in src_A.flatten().tolist()]
+    golden = [min(v, _UINT16_MAX) for v in src_values]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
+    result = [int(v) & _UINT16_MAX for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+    assert set(boundaries) <= set(src_values), "boundary inputs missing from stimuli"
+
+    mismatches = [(x, g, r) for x, g, r in zip(src_values, golden, result) if g != r]
+    assert not mismatches, (
+        f"{len(mismatches)} {formats.input_format.name}->UInt16 mismatches; first "
+        f"(input, expected, got): {[(hex(x), g, r) for x, g, r in mismatches[:16]]}"
     )
 
 
@@ -601,12 +696,7 @@ def _run_typecast(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp

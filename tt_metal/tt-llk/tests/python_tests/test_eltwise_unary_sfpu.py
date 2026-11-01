@@ -80,7 +80,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Rsqrt,
@@ -1500,12 +1500,7 @@ def eltwise_unary_sfpu(
     if not check_golden:
         return res_from_L1
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Gate on the op's tolerance only: its step budgets were measured over the whole
     # format, so only callers whose stimuli they were measured on opt into them.
@@ -1681,12 +1676,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         check_golden=False,
     )
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # clamp_negative=False: require inputs < -88 to be negative (not necessarily
     # correct) and exclude them from the isclose check.

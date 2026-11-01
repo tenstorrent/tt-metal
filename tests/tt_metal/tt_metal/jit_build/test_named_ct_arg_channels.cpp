@@ -180,7 +180,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
 
 // No API includes: the kernel wrapper must supply the accessors to all three TRISCs.
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyComputeArgsWithoutApiIncludes) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*devices_.at(0));
     CreateKernelFromString(
         program,
         R"(

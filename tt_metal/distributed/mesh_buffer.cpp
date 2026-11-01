@@ -511,6 +511,12 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     return device_buffer.get();
 }
 
+uint32_t MeshBuffer::alignment() const { return get_reference_buffer()->alignment(); }
+DeviceAddr MeshBuffer::aligned_page_size() const { return get_reference_buffer()->aligned_page_size(); }
+uint32_t MeshBuffer::num_dev_pages() const { return get_reference_buffer()->num_dev_pages(); }
+DeviceAddr MeshBuffer::aligned_size() const { return get_reference_buffer()->aligned_size(); }
+DeviceAddr MeshBuffer::aligned_size_per_bank() const { return get_reference_buffer()->aligned_size_per_bank(); }
+
 Buffer* MeshBuffer::get_reference_buffer() const {
     for (const auto& buffer : buffers_.values()) {
         if (buffer.is_local()) {

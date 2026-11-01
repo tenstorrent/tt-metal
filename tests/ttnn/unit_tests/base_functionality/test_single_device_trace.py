@@ -357,3 +357,34 @@ def test_trace_allocation_tracking_release_trace_is_idempotent(device):
     ttnn.release_trace(device, trace_id)
 
     assert output.is_allocated()
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_too_large_for_region_leaves_budget_unchanged(device, expect_error):
+    """A capture too large for the trace region fails at end_trace_capture. Once it is released, the region's budget is
+    as it was before it: a trace that fits is still captured and replays (the failed capture's size is not left counted
+    against the region)."""
+    shape = (1, 1, 32, 32)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    input_dev = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.neg(input_dev)  # compile before any capture
+
+    # Thousands of ops: far more commands than 200 KB of trace region holds.
+    too_large = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        for _ in range(4000):
+            ttnn.neg(input_dev)
+        with expect_error(RuntimeError, "allocated for trace region"):
+            ttnn.end_trace_capture(device, too_large, cq_id=0)
+    finally:
+        ttnn.release_trace(device, too_large)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    output = ttnn.neg(input_dev)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert torch.equal(ttnn.to_torch(output), -torch_input)
+    finally:
+        ttnn.release_trace(device, trace_id)

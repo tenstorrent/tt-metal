@@ -6,7 +6,9 @@ without vLLM: the steps a busy lane gets under the plugin's lane-DP scheduler, o
 ``--max-num-batched-tokens`` (``--budget``) tokens per step, every busy lane in each step (one host thread, as the
 plugin's worker). Runs the plugin's warmup order (warmup_model_prefill, the eager then the traced
 warmup_model_decode), then for 1 and for 4 busy lanes one ``--context``-token prompt per lane, eager and with the
-traced later chunks (MIMO_PREFILL_CHUNK_TRACE=1; the eager runs hide the traces), and compares the last logits.
+traced later chunks (MIMO_PREFILL_CHUNK_TRACE, default on; the eager runs hide the traces), and compares the last
+logits. After the warmup it reports each replica's traces and how much of the trace region they use
+(``MIMO_PREFILL_BATCH=1`` adds the prefill-batch traces, as in serving).
 
 ``--users``: requests per busy lane (each its own slot, blocks and prompt). ``--offset``: each lane's first request
 takes ``--budget - offset`` tokens in its first step, so its later steps start off the chunk alignment; prefill_forward
@@ -70,8 +72,17 @@ def main():
     parser.add_argument("--lanes", default="1,4", help="busy-lane counts to run")
     parser.add_argument("--modes", default="eager,traced")
     parser.add_argument("--trace-region-mb", type=int, default=1000)
+    parser.add_argument(
+        "--trace-region-size", type=int, default=None, help="bytes, overrides --trace-region-mb (vLLM's spec: 1e9)"
+    )
     parser.add_argument("--users", type=int, default=1, help="requests per busy lane (at most --per-lane)")
     parser.add_argument("--offset", type=int, default=0, help="the first step is --budget - offset tokens")
+    parser.add_argument(
+        "--force-recapture",
+        action="store_true",
+        help="after the runs, recapture every replica's traces as a prefill that compiled new programs does, then "
+        "replay one idle decode step on each (with a --trace-region-size too small for a chunk trace: the fallback)",
+    )
     args = parser.parse_args()
     assert 1 <= args.users <= args.per_lane and 0 <= args.offset < args.budget
     dp, n = 4, args.context
@@ -106,7 +117,9 @@ def main():
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(
-        ttnn.MeshShape(4, 8), l1_small_size=65536, trace_region_size=args.trace_region_mb << 20
+        ttnn.MeshShape(4, 8),
+        l1_small_size=65536,
+        trace_region_size=args.trace_region_size or args.trace_region_mb << 20,
     )
     try:
         t0 = time.time()
@@ -127,6 +140,15 @@ def main():
             f"warmed up in {time.time() - t0:.0f} s; chunk traces per lane: "
             f"{[list(m.chunk_traces) for m in model.models][0]}"
         )
+        for lane, m in enumerate(model.models):
+            used, total = m.trace_region_bytes()
+            say(
+                f"TRACES replica {lane}: decode {m.decode_trace is not None}, verify {m.verify_trace is not None}, "
+                f"{sum(t['id'] is not None for t in m.prefill_traces.values())} prefill-batch, "
+                f"{sum(t['id'] is not None for t in m.chunk_traces.values())} later-chunk; trace region "
+                f"{used / 2**20:.1f} MB of {total / 2**20:.1f} MB used per device "
+                f"({(total - used) / 2**20:.1f} MB free)"
+            )
         prompts = [
             torch.randint(
                 0, cfg.vocab_size, (n,), generator=torch.Generator().manual_seed(100 + lane), dtype=torch.int32
@@ -194,6 +216,16 @@ def main():
                     f"{busy * n / total:.0f} for the Galaxy), {len(step_times)} steps, median step "
                     f"{1e3 * sorted(step_times)[len(step_times) // 2]:.0f} ms, {passes.get('replays', 0)} chunk replays"
                     f"{cmp}"
+                )
+        if args.force_recapture:
+            model._recapture_after_new_programs([m.mesh_device.num_program_cache_entries() - 1 for m in model.models])
+            for lane, m in enumerate(model.models):
+                idle = torch.full((m.max_batch,), -1, dtype=torch.int32)
+                m.decode_read(m.decode_enqueue(torch.zeros(m.max_batch, dtype=torch.int32), idle))
+                used, total = m.trace_region_bytes()
+                say(
+                    f"RECAPTURED replica {lane}: decode replayed; {len(m.chunk_traces)} later-chunk traces; trace region "
+                    f"{used / 2**20:.1f} MB of {total / 2**20:.1f} MB used per device"
                 )
         say(f"decode recaptures {model.decode_recaptures}")
     finally:

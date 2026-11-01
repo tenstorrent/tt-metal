@@ -36,10 +36,10 @@
 #include "tracy/Tracy.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include <tt-umd/utils/semver.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/firmware/firmware_utils.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/types/arch.hpp>
@@ -442,17 +442,20 @@ void Cluster::get_metal_desc_from_tt_desc() {
         silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     }
     // The 1x3, 2x3 and 2x3_DISPATCH emulator models back less DRAM than their soc descriptor declares.
-    // They are recognised by the simulator directory name and their DRAM size is clamped to what they back.
+    // They are recognised by the simulator directory name and their DRAM size is clamped to what they back,
+    // unless TT_METAL_SIMULATOR_DRAM_UNCAPPED=1 asks for the descriptor's size.
     const tt_metal::quasar_emu::ModelInfo* emulator_model = nullptr;
     std::string simulator_name;
+    const bool dram_uncapped = rtoptions_.get_simulator_dram_uncapped();
     if (this->target_type_ == TargetDevice::Simulator && this->arch_ == tt::ARCH::QUASAR) {
         simulator_name = rtoptions_.get_simulator_name();
         emulator_model = tt_metal::quasar_emu::find_model(simulator_name);
-        if (emulator_model == nullptr && !simulator_name.ends_with(".so")) {
+        if (emulator_model == nullptr && (dram_uncapped || !simulator_name.ends_with(".so"))) {
             log_info(
                 tt::LogDevice,
-                "Quasar simulator '{}' is not a listed emulator model; DRAM size taken from its soc descriptor",
-                simulator_name);
+                "Quasar simulator '{}' is not a listed emulator model; DRAM size taken from its soc descriptor{}",
+                simulator_name,
+                dram_uncapped ? " (TT_METAL_SIMULATOR_DRAM_UNCAPPED: no clamp to lift on this model)" : "");
         }
     }
     for (const auto& id : this->driver_->get_target_device_ids()) {
@@ -461,7 +464,7 @@ void Cluster::get_metal_desc_from_tt_desc() {
             umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
         }
         std::optional<uint64_t> dram_view_size_limit;
-        if (emulator_model != nullptr) {
+        if (emulator_model != nullptr && !dram_uncapped) {
             dram_view_size_limit = emulator_model->dram_size_per_channel;
         }
         metal_SocDescriptor sdesc(
@@ -476,6 +479,14 @@ void Cluster::get_metal_desc_from_tt_desc() {
                 "Quasar emulator model '{}': DRAM limited to {} MiB per channel, the DRAM the model backs",
                 simulator_name,
                 sdesc.dram_view_size >> 20);
+        } else if (emulator_model != nullptr) {
+            log_warning(
+                tt::LogDevice,
+                "Quasar emulator model '{}': DRAM is the descriptor's {} MiB per channel, not the {} MiB the model "
+                "backs (TT_METAL_SIMULATOR_DRAM_UNCAPPED); offsets above the backing wrap onto the low DRAM",
+                simulator_name,
+                sdesc.dram_view_size >> 20,
+                emulator_model->dram_size_per_channel >> 20);
         }
         this->sdesc_per_chip_.emplace(id, std::move(sdesc));
     }

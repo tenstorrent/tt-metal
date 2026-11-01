@@ -143,6 +143,10 @@ void MetalContext::initialize(
     if (MetalEnvAccessor(*env_).impl().consume_force_reinit()) {
         force_reinit_ = true;
     }
+    // After an L1 ECC halt, tear down so the dispatch cores stuck on the halted worker are reset.
+    if (l1_ecc_halt_detected()) {
+        force_reinit_ = true;
+    }
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
@@ -185,6 +189,8 @@ void MetalContext::initialize(
             }
         }
     }
+    // run_launch_phase below releases any BRISC still halted and zeroes every halt record.
+    set_l1_ecc_halt_detected(false);
 
     initialized_ = true;
 

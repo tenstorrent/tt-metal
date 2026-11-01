@@ -155,7 +155,12 @@ void fabric_mux_connection_ct_args(
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
     worker_ct_args.push_back(
         mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
+    // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
+    // status word; every other mux address is then an offset from that address.
+    worker_ct_args.push_back(
+        mux_kernel_config.is_in_program_local_l1()
+            ? mux_kernel_config.get_l1_base_semaphore_id()
+            : mux_kernel_config.get_status_address());  // fabric_mux_status_address or l1_base_semaphore_id
     worker_ct_args.push_back(
         mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
     worker_ct_args.push_back(num_workers_per_link);           // num_mux_clients
@@ -668,19 +673,21 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     }
     tt::tt_metal::CoreRangeSet mux_core_range_set = tt::tt_metal::CoreRangeSet(mux_core_ranges);
 
-    const uint32_t l1_unreserved_base_address =
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
     auto num_full_size_channels = num_workers_per_link;
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device);
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there; its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_per_channel,
         0,
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
+        /*base_l1_address=*/0);
+    if (!mux_core_ranges.empty()) {
+        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set);
+    }
 
     // all gather
     // L1 Scratch CB Creation
@@ -852,9 +859,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             num_buffers_per_channel,
             0,
             buffer_size_bytes_full_size_channel,
-            mux_base_l1_address);
+            /*base_l1_address=*/0);
 
         if (!fsdp_mux_core_ranges.empty()) {
+            fsdp_mux_kernel_config.place_in_program_local_l1(desc, fsdp_mux_core_range_set);
             fsdp_mux_cores = fsdp_mux_core_range_set;
         }
     }
