@@ -77,12 +77,17 @@ from ..reference.spec_decode import (
     planned_drafts,
 )
 from ..reference.spec_inputs import pack_mtp_commits
+from .attention import page_table_width
 from .common import TILE, as_weight, cache_fill, cache_name, compute_config
+from .moe_stream import user_rows
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .proj_stream import BankStreamMatmul
 from .mtp_backfill import MtpHistory
 from .spec_chain import SpecChain
+
+# The MTP blocks' attention decodes compactly (TtMiMoMTP._compact_attention); MIMO_MTP_COMPACT=0 keeps the ttnn ops.
+MTP_COMPACT = os.environ.get("MIMO_MTP_COMPACT", "1") == "1"
 
 
 class TtMtpLayer:
@@ -194,6 +199,18 @@ class TtMiMoMTP:
         self.backfill_trace = None
         self._inputs = None  # the one-layer draft program's inputs (``_trace_inputs``)
 
+    def _compact_attention(self):
+        """Whether the MTP blocks decode their attention compactly (MTP_COMPACT): the qkv bank stream, the model's
+        shared SwaDecodeQkv, the o stream into compact rows and a ReduceExpand with the residual, as the dense layer 0
+        does (TtMiMoDecoderLayer.set_compact_attention), instead of the qkv linear, the head split, RoPE, the slot by slot
+        cache writes, the o linear and its all_reduce."""
+        m = self.model
+        if not MTP_COMPACT or m.swa_qkv is None or m.decode_users > 8:
+            return False
+        return all(
+            layer.block.attn.qkv_stream is not None and layer.block.attn.o_stream is not None for layer in self.layers
+        )
+
     def setup_cache(self):
         """The ring KV caches, their page table, the greedy heads, with every layer the program's LayerInputs, and the
         replica's SpecChain (its result page): persistent, made before any trace capture, after
@@ -212,6 +229,18 @@ class TtMiMoMTP:
                 group_row = mtp_table_row(m.block_size, group=g)[0]
                 table[g * width : (g + 1) * width] = torch.tensor(group_row, dtype=torch.int32)
             self.tables[width] = table
+        if self._compact_attention():
+            # SwaDecodeQkv reads whole 64 B pieces of a table row: widen the rows, repeating each ring's blocks (the
+            # row maps position p to block row[p // block_size], periodic in the ring), so every entry is a valid block.
+            width = page_table_width(len(row))
+            for w, table in self.tables.items():
+                self.tables[w] = table[:, [i % table.shape[1] for i in range(width)]].contiguous()
+            for layer in self.layers:
+                attn = layer.block.attn
+                attn.set_decode_rows(user_rows(m.decode_users))
+                attn.swa_qkv = m.swa_qkv
+                layer.block.set_compact_attention(self.plan)
+                layer.block.mlp.set_compact(attn.rows)
         self.width = WIDTHS[-1]
         self.page_table = ttnn.from_torch(
             self.tables[self.width],
@@ -307,7 +336,9 @@ class TtMiMoMTP:
         positions = {"pos": pos_tt}
         if serial:
             positions["serial"] = serial
-        y = layer.block.forward_decode(x, {True: rot}, positions, self.page_table, layer.kv_cache)
+        # With the compact attention (setup_cache, MTP_COMPACT) the raw cos / sin rows go along for SwaDecodeQkv.
+        mats = rot + (cos, sin) if layer.block.attn_reduce is not None else rot
+        y = layer.block.forward_decode(x, {True: mats}, positions, self.page_table, layer.kv_cache)
         x.deallocate(True)
         for t in rot:
             t.deallocate(True)

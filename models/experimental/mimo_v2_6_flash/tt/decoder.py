@@ -13,7 +13,8 @@ import ttnn
 from .attention import TtMiMoAttention
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .moe import TtMiMoMoE
-from .moe_stream import ReduceExpand, is_dram_interleaved
+from .moe_stream import ReduceExpand, is_dram_interleaved, zero_output
+from .proj_stream import BankStreamMatmul
 from .profiling import zone
 
 
@@ -113,12 +114,68 @@ class TtMiMoDenseMLP:
         self.w_down = ttnn.to_memory_config(w_down, self.down_mm.weight_memory_config)
         for w in (w_gate, w_up, w_down):
             w.deallocate(True)
+        self.reduce = None  # set_compact
+
+    def set_compact(self, rows):
+        """Decode users in rows 0-3 (or 0-7: ``rows``): gate, up and down as bank-local streams (proj_stream), down
+        straight into compact rows that a ReduceExpand all-reduces with the residual (``forward_compact``), in place of
+        the DRAM-sharded matmuls, the all_reduce and the residual add. The weights become DRAM-interleaved (the
+        streams' layout; prefill copies them per call either way); the DRAM-sharded decode path is gone after this."""
+        plan = self.plan
+        hidden, inter = self.w_gate.shape[-2], self.w_gate.shape[-1]
+        self.gate_stream = BankStreamMatmul(plan, hidden, inter, self.config)
+        self.down_stream = BankStreamMatmul(plan, inter, hidden, self.config)
+        for name in ("w_gate", "w_up", "w_down"):
+            w = getattr(self, name)
+            flat = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
+            w.deallocate(True)
+            setattr(self, name, flat)
+        self.w_gate = self.gate_stream.prepare(self.w_gate)
+        self.w_up = self.gate_stream.prepare(self.w_up)
+        self.w_down = self.down_stream.prepare(self.w_down)
+        self.rows = rows
+        self.compact_buf = zero_output(plan, hidden // (TILE // rows))
+        cfg = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+        self.reduce = ReduceExpand(plan, hidden, plan.tp, cfg, rows=rows)
+
+    def forward_compact(self, h, residual):
+        """Decode with ``set_compact``: returns residual + the MLP of h (users in rows 0..rows-1), a new
+        [1, 1, 32, hidden] bf16 DRAM tensor."""
+        gate = self.gate_stream(h, self.w_gate, rows=self.rows)
+        up = self.gate_stream(h, self.w_up, rows=self.rows)
+        act = ttnn.mul(
+            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        gate.deallocate(True)
+        up.deallocate(True)
+        rows = self.down_stream(act, self.w_down, compact_out=self.compact_buf, rows=self.rows)
+        act.deallocate(True)
+        gathered = self.plan.all_gather(rows, dim=3)
+        y = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, TILE, residual.shape[-1]]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.plan.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        res = residual if is_dram_interleaved(residual) else ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
+        self.reduce(gathered, y, residual=res)
+        if res is not residual:
+            res.deallocate(True)
+        gathered.deallocate(True)
+        return y
 
     def forward(self, x, token_mask=None, decode=False):
         """``decode``: a decode step (32 rows), through the DRAM-sharded matmuls. Prefill always takes the
         interleaved linears, whose rows do not depend on the other rows (a prefill row computed in a batch equals
         the same row computed alone)."""
         if decode and x.shape[-2] == TILE:
+            assert self.reduce is None, "a compact MLP decodes through forward_compact"
             gate = self.up_mm(x, self.w_gate)
             up = self.up_mm(x, self.w_up)
             act = ttnn.mul(
@@ -227,6 +284,10 @@ class TtMiMoDecoderLayer:
 
     def _ffn(self, x, token_mask, decode=False):
         h = self.post_norm(x, prefill=not decode)
+        if decode and not self.is_moe and self.mlp.reduce is not None:
+            y = self.mlp.forward_compact(h, x)
+            h.deallocate(True)
+            return y
         if decode and self.is_moe and self.mlp.decode_users is not None:
             out = self.mlp.forward_decode(h, token_mask)
         else:
