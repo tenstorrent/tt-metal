@@ -15,6 +15,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
+    PackUntilizeBenchmark,
     PerfRunType,
 )
 from helpers.param_config import (
@@ -31,7 +32,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
     PACK_UNTILIZE_BENCHMARK,
-    TILE_COUNT,
     TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
@@ -68,12 +68,12 @@ def test_pack_untilize(
     loop_factor=1,
     block_ct_dim=None,
     compile_time_formats=False,
-    benchmark="functional",
+    benchmark=PackUntilizeBenchmark.Functional,
 ):
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
 
-    benchmark_is_perf = benchmark != "functional"
+    benchmark_is_perf = benchmark != PackUntilizeBenchmark.Functional
     if is_perf != benchmark_is_perf:
         raise ValueError(f"is_perf={is_perf} does not match benchmark={benchmark!r}")
     if not is_perf and loop_factor != 1:
@@ -172,12 +172,10 @@ def test_pack_untilize(
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
             PACK_UNTILIZE_BENCHMARK(benchmark),
-        ],
-        "runtimes": [
-            TILE_COUNT(tile_cnt_A),
             NUM_FACES(4),
             LOOP_FACTOR(loop_factor),
         ],
+        "runtimes": [],
         "variant_stimuli": StimuliConfig(
             None if is_perf else src_A,
             formats.input_format,
@@ -191,8 +189,10 @@ def test_pack_untilize(
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": (
+            # Match perf_fast_untilize: its Float32 baseline unpacks through
+            # SrcA and performs A2D datacopy instead of unpacking to Dest.
             False
-            if benchmark == "fast_untilize_baseline"
+            if benchmark == PackUntilizeBenchmark.FastUntilizeBaseline
             else functional_unpack_to_dest
         ),
         "compile_time_formats": compile_time_formats,
