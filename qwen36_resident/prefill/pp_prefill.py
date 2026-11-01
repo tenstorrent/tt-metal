@@ -20,6 +20,9 @@ State per chip: GDN recurrent states fp32 [48, 128, 128] and conv carries (last 
 bf8 KV caches of its attention layers. export_state() converts them into the resident decode's
 TP-sharded State.
 
+run_batch() streams several prompts through one pass (chip p starts the next prompt's first chunk in the tick after
+the previous prompt's last one) and hands each chip's part of a prompt off between ticks, so the pipeline fills and
+drains once per call: the multi-user rows engine's way to prefill a gang of prompts.
 """
 
 import math
@@ -133,6 +136,12 @@ SDPA_EXP_APPROX = os.environ.get("RESIDENT_PP_SDPA_EXP_APPROX", "0") == "1"
 # the handoff's copy engines per chip: one core per fabric link (kernels/handoff.cpp on cores (0, 0), (1, 0), ...), each
 # with its share of the jobs (split by bytes) and its own semaphore count
 HANDOFF_LINKS = int(os.environ.get("RESIDENT_PP_HANDOFF_LINKS", "2"))
+# run_batch: "op" gives a stage's GDN states what the sequential path's masked ticks do to them (see run_batch), "off"
+# skips it (not bit-identical to run + handoff; A/B only)
+BATCH_STATE_ROUND = os.environ.get("RESIDENT_PP_BATCH_STATE_ROUND", "op")
+# run_batch: prompts whose conv carries a pass can stage before it scatters their histories (~7.9 MB per chip each; at
+# least the chips: a pass has that many prompts in flight); 0: no run_batch
+BATCH_STAGES = int(os.environ.get("RESIDENT_PP_BATCH_STAGES", "8"))
 
 
 def rope_cos_sin(positions):
@@ -269,6 +278,24 @@ class PPPrefill:
             else:
                 self.S[j] = dev(torch.zeros(n, NV, DK, DV), ttnn.float32)
                 self.carry[j] = dev(torch.zeros(n, 1, TILE, CONV_CH), ttnn.bfloat16)
+
+        # run_batch's conv-carry staging buffers: per buffer a carry-shaped tensor per GDN stage-layer. Built here, before
+        # any trace capture, because they hold data across tick replays: a DRAM buffer allocated after capture can land
+        # on the traced ticks' intermediates, which every replay overwrites
+        assert BATCH_STAGES == 0 or BATCH_STAGES >= n, f"RESIDENT_PP_BATCH_STAGES {BATCH_STAGES}: 0 or >= {n}"
+        # (and the inputs of run_batch's masked delta-rule step, BATCH_STATE_ROUND "op": one 32-row chunk with g = beta
+        # = 0 and finite q / k / v, read at boundaries between tick replays)
+        self._masked = dict(
+            q=dev(torch.ones(n, TILE, QD), ttnn.bfloat16),
+            k=dev(torch.ones(n, TILE, QD), ttnn.bfloat16),
+            v=dev(torch.ones(n, TILE, VD), ttnn.bfloat16),
+            g=dev(torch.zeros(n, TILE, NV), ttnn.float32),
+            beta=dev(torch.zeros(n, TILE, NV), ttnn.float32),
+        )
+        shape = [1, 1, TILE, CONV_CH]
+        self._stages = [
+            {j: device_zeros(mesh, shape, ttnn.bfloat16, DRAM) for j in self.carry} for _ in range(BATCH_STAGES)
+        ]
 
         # ---- constants and buffers
         c = TILE  # the delta-rule op's chunk
@@ -1130,6 +1157,267 @@ class PPPrefill:
                 self._body()
         ttnn.synchronize_device(self.mesh)
         return n_tokens
+
+    # ------------------------------------------------------------------ several prompts in one pass
+    def run_batch(self, items, model, chunk=None, timings=None):
+        """prefill several prompts in one pipelined pass and hand each to its slot of the rows-mode decode `model`.
+        items: [(token_ids [T >= 1], block_table, slot)], each a prompt's tokens but its last (as run + handoff).
+
+        The items' chunks flow through the pipeline back to back: chip p starts item i + 1's first chunk in the tick
+        after item i's last, so the pipeline fills and drains once per call instead of once per prompt (a prompt of
+        k chunks costs k ticks, not k + n - 1). Between ticks, every chip that has just run an item's last chunk
+        hands its layers' GDN states and KV to the item's slot (handoff.cpp, that chip's jobs only; the states after one
+        masked delta-rule step where the sequential path's drain would have run one), copies its conv carries to a
+        staging buffer, and zeroes its GDN states and carries, so the next item starts from zero as after reset(). The conv histories go to the slots after the pass (staged carries -> host -> hist_scatter, as
+        handoff). Every item's state is that of reset() + run() + handoff() of the prompt alone at the same chunk
+        size: the same programs on the same data (a real chunk only reads its own prompt's states, KV positions and
+        stage inputs; idle chips' chunks exist only in the pass's fill and drain).
+
+        All items at one chunk size (default: pick_chunk of the longest); no taps (a drafter's context is one
+        prompt's); nothing else may use the prefill meanwhile, and no split prompt may be in flight (run_span).
+        timings, if given, gets the seconds of the ticks (with the boundary handoffs) and of the history scatter"""
+        import time
+
+        if self.tap_cache:
+            raise ValueError("run_batch: a prefill with taps (a drafter's context) runs one prompt at a time")
+        items = [(torch.as_tensor(ids).reshape(-1), table, slot) for ids, table, slot in items]
+        Ts = [int(ids.shape[0]) for ids, _, _ in items]
+        if not items or min(Ts) < 1 or max(Ts) > self.max_len:
+            raise ValueError(f"run_batch: prompt lengths {Ts} (each 1 .. max_len {self.max_len})")
+        if not getattr(model, "rows", False):
+            raise ValueError("run_batch: the items go to slots of a rows-mode model")
+        C = chunk or self.pick_chunk(max(Ts))
+        if C not in self._geo:
+            raise ValueError(f"run_batch: chunk {C} is not one of the prefill's chunk sizes {sorted(self._geo)}")
+        t_start = time.perf_counter()
+        self._check_trace_layout()
+        self.reset()
+        self._use(C)
+        self._ho_setup(model)
+        n, mesh = self.n, self.mesh
+        gdn_js = [j for j in range(self.Ls) if not self.kinds[j]]
+        nchunks = [-(-T // C) for T in Ts]
+        sched = [(i, c) for i, k in enumerate(nchunks) for c in range(k)]  # the pass's chunks in order
+        last = {s for s, (i, c) in enumerate(sched) if c == nchunks[i] - 1}
+        S = len(sched)
+        stages = self._stage_buffers()
+        free, stage_of, done_items = list(range(len(stages))), {}, []
+        # the job table of a boundary's handoff: chip p's jobs for its layers of the longest item, and its carry copies
+        tiles = -(-max(Ts) // TILE)
+        rows_max = max(len(self._ho_sel(p, tiles)) for p in range(n))
+        jobs_ts, most = self._jobs_buffer(rows_max + len(gdn_js))
+        shard = ttnn.ShardTensorToMesh(mesh, dim=0)
+
+        def scatter_histories():
+            """the conv histories of the items whose last stage is handed off, from their staged carries"""
+            ttnn.synchronize_device(mesh)
+            for i in done_items:
+                self._ho_hist(model, Ts[i], items[i][2], stages[stage_of[i]])
+                free.append(stage_of.pop(i))
+            done_items.clear()
+
+        for t in range(S + n - 1):
+            work = [(sched[t - p][1], Ts[sched[t - p][0]]) if 0 <= t - p < S else None for p in range(n)]
+            chunk_ids = torch.zeros(n, 1, C, dtype=torch.int32)
+            if t < S:
+                i, c = sched[t]
+                seg = items[i][0][c * C : (c + 1) * C]
+                chunk_ids[0, 0, : seg.shape[0]] = seg.to(torch.int32)
+            writes = self._control_chips(work) + [
+                (
+                    ttnn.from_torch(chunk_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=shard),
+                    self.ids,
+                )
+            ]
+            for host, dev in writes:
+                ttnn.copy_host_to_device_tensor(host, dev)
+            if self.trace_id is not None:
+                ttnn.execute_trace(mesh, self.trace_id, cq_id=0, blocking=False)
+            else:
+                self._body()
+            finished = [(p, sched[t - p][0]) for p in range(n) if 0 <= t - p < S and t - p in last]
+            if not finished:
+                continue
+            jobs = [torch.zeros(0, 8, dtype=torch.int64) for _ in range(n)]
+            pks = [torch.zeros(0, dtype=torch.int64) for _ in range(n)]
+            for p, i in finished:
+                if i not in stage_of:
+                    if not free:  # (with >= n buffers some staged item is complete: n - 1 chips are behind chip 0)
+                        scatter_histories()
+                    stage_of[i] = free.pop(0)
+                rows, pk = self._ho_jobs(model, p, Ts[i], items[i][1], items[i][2])
+                # chip p's carries -> the item's staging buffer (local copies: 2 KB tile pages, no fabric packets)
+                pages = self.carry[gdn_js[0]].buffer_num_pages()
+                copies = torch.tensor(
+                    [
+                        [p, self.carry[j].buffer_address(), 0, 2048, 0, stages[stage_of[i]][j].buffer_address(), 0]
+                        + [pages]
+                        for j in gdn_js
+                    ],
+                    dtype=torch.int64,
+                )
+                jobs[p] = torch.cat([rows, copies])
+                pks[p] = torch.cat([pk, torch.zeros(len(gdn_js), dtype=torch.int64)])
+            # the sequential path (run + handoff) runs n - 1 - p masked ticks on chip p after the prompt's last chunk,
+            # and a fully masked 32-row chunk of the delta rule (g = beta = 0) is not the identity on S: it leaves S
+            # rounded (TF32-exact values; measured idempotent: a prompt whose last chunk ends in masked rows hands off the
+            # same S either way). A last chunk whose final 32 rows hold tokens skipped it, so give those chips' states
+            # one masked step here (not the last stage's: its last chunk ends the sequential run). By construction:
+            # the masked tick's own delta rule and copy on every chip's states, whose results only the finished chips'
+            # GDN jobs read (the other chips' states stay untouched)
+            rnd = [p for p, i in finished if p < n - 1 and Ts[i] - (nchunks[i] - 1) * C > C - 32]
+            masked = {}
+            if rnd and BATCH_STATE_ROUND == "op":
+                masked = self._masked_states(gdn_js)
+                for p in rnd:
+                    src = jobs[p][:, 1]
+                    for addr, t in masked.items():
+                        src[src == addr] = t.buffer_address()
+            lanes = self._ho_lanes(jobs, pks)
+            for (lane_jobs, _), dev in zip(lanes, jobs_ts):
+                ttnn.copy_host_to_device_tensor(self._jobs_host(lane_jobs, most), dev)
+            self._ho_copy(model, jobs_ts, lanes, items[finished[0][1]][2], extra_io=list(masked.values()))
+            for t in masked.values():  # (any later write there is queued after the handoff that reads it)
+                ttnn.deallocate(t)
+            self._zero_chips([p for p, _ in finished], [self.S[j] for j in gdn_js] + [self.carry[j] for j in gdn_js])
+            done_items += [i for p, i in finished if p == n - 1]
+        if timings is not None:
+            ttnn.synchronize_device(mesh)
+            timings["ticks"] = time.perf_counter() - t_start
+        scatter_histories()
+        if timings is not None:
+            timings["total"] = time.perf_counter() - t_start
+            timings["histories"] = timings["total"] - timings["ticks"]
+        return Ts
+
+    def _masked_states(self, gdn_js):
+        """{S[j] address: S[j] after one fully masked 32-row chunk of the delta rule and the tick's copy}, on every chip:
+        what a masked tick (gates g = beta = 0) leaves in a stage's GDN states, whatever the FPU and packer do to them
+        """
+        eye, tril, ones, masks = self.gdn_consts
+        mk, out = self._masked, {}
+        for j in gdn_js:
+            o, S = ttnn.transformer.chunk_gated_delta_rule(
+                mk["q"],
+                mk["k"],
+                mk["v"],
+                mk["g"],
+                mk["beta"],
+                scale=DK**-0.5,
+                initial_state=self.S[j],
+                output_final_state=True,
+                chunk_size=TILE,
+                output_head_major=True,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                eye=eye,
+                tril=tril,
+                ones=ones,
+                masks=masks,
+            )
+            ttnn.deallocate(o)
+            t = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, NV, DK, DV]), ttnn.float32, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.copy(S, t)
+            ttnn.deallocate(S)
+            out[self.S[j].buffer_address()] = t
+        return out
+
+    def _stage_buffers(self):
+        """run_batch's conv-carry staging buffers (built in __init__: see BATCH_STAGES)"""
+        if not self._stages:
+            raise RuntimeError("run_batch needs its staging buffers: RESIDENT_PP_BATCH_STAGES is 0")
+        return self._stages
+
+    def _jobs_buffer(self, rows):
+        """per handoff lane a device job table of at least `rows` 64 B rows per chip (kept for the next calls; grows in
+        powers of 2), and its rows per chip"""
+        have = getattr(self, "_jobs_t", None)
+        if have is None or have[1] < rows:
+            if have is not None:
+                for t in have[0]:
+                    ttnn.deallocate(t)
+            most = 1 << max(10, (rows - 1).bit_length())
+            self._jobs_t = [
+                ttnn.from_torch(
+                    torch.zeros(self.n * most, 16, dtype=torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for _ in self._ho["cores"]
+            ], most
+        return self._jobs_t
+
+    def _jobs_host(self, jobs, most):
+        """host image of a job table: chip c's jobs[c] in the first rows of its `most` (kernels/handoff.cpp)"""
+        return ttnn.from_torch(
+            self._jobs_table(jobs, most),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+
+    def _zero_chips(self, chips, tensors):
+        """zero-fill DRAM tensors on the given chips only (kernels/dram_zero.cpp, as common.zero_dram), without
+        synchronizing"""
+        self._chip_ranges(chips, tensors, f"{PKG_DIR}/kernels/dram_zero.cpp", [1])
+
+    def _chip_ranges(self, chips, tensors, src, extra_ct, cores_per_bank=4, chunk=32768):
+        """a DRAM-range kernel (dram_zero.cpp's arguments) over every bank's part of each tensor, on the given chips
+        only: every chip runs the program, the others with no ranges (one program shape: the cache keeps one)"""
+        mesh, n = self.mesh, self.n
+        banks = mesh.dram_grid_size().x
+        grid = mesh.compute_with_storage_grid_size()
+        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(banks * cores_per_bank)]
+        ranges = [[] for _ in cores]
+        for t in tensors:
+            per_bank = -(-t.buffer_num_pages() // banks) * t.buffer_aligned_page_size()
+            step = -(-per_bank // cores_per_bank // 64) * 64
+            for b in range(banks):
+                for k in range(cores_per_bank):
+                    lo, hi = k * step, min(per_bank, (k + 1) * step)
+                    if lo < hi:
+                        ranges[b * cores_per_bank + k] += [t.buffer_address() + lo, hi - lo]
+        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        width = 2 * len(tensors)
+        pd = ttnn.MeshProgramDescriptor()
+        for chip in range(n):
+            rt = ttnn.RuntimeArgs()
+            for i, c in enumerate(cores):
+                own = ranges[i] if chip in chips else []
+                rt[c.x][c.y] = [i // cores_per_bank, len(own) // 2] + own + [0] * (width - len(own))
+            program = ttnn.ProgramDescriptor(
+                kernels=[
+                    ttnn.KernelDescriptor(
+                        kernel_source=src,
+                        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=core_set,
+                        # (the args' length, then the kernel's own: dram_zero's 1 keeps these per-chip programs apart
+                        # from zero_dram's in the program cache)
+                        compile_time_args=[chunk, len(tensors)] + list(extra_ct),
+                        runtime_args=rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                        ),
+                    )
+                ],
+                semaphores=[],
+                cbs=[
+                    ttnn.CBDescriptor(
+                        total_size=chunk,
+                        core_ranges=core_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=chunk)
+                        ],
+                    )
+                ],
+            )
+            coord = ttnn.MeshCoordinate(0, chip)
+            pd[ttnn.MeshCoordinateRange(coord, coord)] = program
+        ttnn.generic_op(list(tensors), pd)
 
     def tap_rows(self, s0, rows):
         """per tap layer L: [1, 1, rows, HIDDEN] bf16 on every chip, its stage-layer j = L % Ls outputs of the last
