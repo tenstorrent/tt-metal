@@ -1432,5 +1432,5 @@ def test_vision_window_bands(expect_error):
     assert all(int(r[0, 2]) == w and hb * w <= 1024 for (_, r), hb in zip(bands, hbs))
     assert torch.equal(torch.cat([b for b, _ in bands]), pv)
     assert split_window_bands(pv[: 32 * 32], torch.tensor([[1, 32, 32]]), 1024)[0][0].shape[0] == 1024
-    with expect_error(ValueError):
+    with expect_error(ValueError, "banded"):
         split_window_bands(pv, row, 64)  # one block row (2 x 44 = 88 patches) exceeds the cap
