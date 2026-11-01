@@ -385,6 +385,31 @@ def test_without_flip_an_unchanged_tree_is_not_measured(mk):
     assert o.run() == HUMAN and mk.calls == []
 
 
+def test_a_pause_stops_the_ab_between_runs_and_resume_measures_without_an_agent(mk):
+    """F240 (DeepSeek-V4.1 P.17 / P.25): a pause did not stop a task's A/B, so a useless measurement ran to its end
+    (killing it marks every card dirty). The A/B stops before its next run; resume measures the rest, no new agent."""
+    from models.demos.common.bringup.orchestrator import PAUSED
+
+    o = mk([pick(ab_mode="quick")], CHANGE)
+    real = o.run_cmd
+
+    def run_cmd(cmd, env, log):
+        rc = real(cmd, env, log)
+        o.pause_file.write_text("x")  # the overseer pauses during the first run
+        return rc
+
+    o.run_cmd = run_cmd
+    with pytest.raises(SystemExit) as e:
+        o.run()
+    assert e.value.code == PAUSED, mk.lines
+    assert len(mk.calls) == 1 and mk.agents() == ["P.1.perf.1.md bringup-engineer"]
+    o.pause_file.unlink()
+    o.run_cmd = real
+    assert o.run() == HUMAN, mk.lines
+    assert len(mk.calls) == 2 and mk.agents() == ["P.1.perf.1.md bringup-engineer"]  # the rest measured, no agent
+    assert o.led.state()["P.1"]["ab"]["quick"]["new"]["chunk_wall_ms"] == 250.0
+
+
 def before_mode(mk, sandbox, **kw):
     """F230: a pick without a switch (a branch merge): the tree itself is the switch. The fake runner reads the tree
     (src/impl.txt) instead of a variable; positions record their metrics with _p<pos>, as testing/profile.py does."""
