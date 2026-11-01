@@ -122,6 +122,10 @@ VERIFY_VARIANTS = os.environ.get("MIMO_VERIFY_VARIANTS", "1") == "1"
 # grouped 0.46, sequential 0.62. The adapter picks it per step (verify_variant ``sequential``) when one request's
 # context dwarfs the others'. MIMO_VERIFY_SEQUENTIAL: 0 never, 1 always (with two or more groups), auto (default).
 VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
+# A variant attending fewer than all groups returns its slots only: the pair merge (PairSplit.merge_heads) writes the
+# rows past them as zeros, what padding them with idle slots (output 0, NO_KEY_LSE) gave, without the nine small ops.
+# MIMO_VERIFY_PAD_IDLE=1 pads.
+PAD_IDLE_SLOTS = os.environ.get("MIMO_VERIFY_PAD_IDLE", "0") == "1"
 
 
 def verify_variants():
@@ -824,9 +828,22 @@ class TtMiMoAttention:
         self.rows = rows
         self.compact_buf = zero_output(self.plan, self.cfg.hidden_size // (TILE // rows))
 
+    def qkv_prefetch(self, x, start, x_wait):
+        """The compact decode's qkv stream on ``x`` (the reduce output this layer's decode reads next) as a section
+        for the previous block's launch: its weights stream into L1 once ``start`` increments of semaphore
+        BankStreamMatmul.START_SEM say DRAM is free, x is read once its loaders count ``x_wait`` increments of
+        X_READY_SEM. Returns (section, the NoC cores to start, the x loaders); the next compact _decode_qkv on ``x``
+        takes the section's output."""
+        section = self.qkv_stream.section(x, self.wqkv_stream, rows=self.rows, start=start, x_wait=x_wait)
+        self.pending_qkv = (x, section["out"])
+        return section, self.qkv_stream.noc_cores, section["loaders"]
+
     def _decode_qkv(self, x, weight, program_config, compact=False):
         # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
         # stream computes the user rows only, so it serves the compact (users in rows 0-3 or 0-7) decode.
+        pending, self.pending_qkv = getattr(self, "pending_qkv", None), None
+        if compact and weight is self.wqkv and pending is not None and pending[0] is x:
+            return pending[1]  # computed in the previous block's launch (qkv_prefetch)
         if compact and weight is self.wqkv and self.qkv_stream is not None:
             return self.qkv_stream(x, self.wqkv_stream, rows=self.rows)
         return ttnn.linear(
@@ -1244,7 +1261,8 @@ class TtMiMoAttention:
         [1, groups, GROUP_SLOTS * 32, 192], the table ``table`` (a row per slot) as each group's first row, and every
         candidate keeps its SDPA position ``cur_pos`` [SPEC_SLOTS] (-1: no local key or a gap, output 0 and lse
         NO_KEY_LSE). Returns what _paged_mla_decode_lse returns for the slots: output [1, SPEC_SLOTS, 16, 128] in L1,
-        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads).
+        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads);
+        a variant attending fewer groups returns only its slots (PAD_IDLE_SLOTS).
         With GROUPED_PACKED_OPS the op computes two candidates per tile (spec_multi_pos_packed, half the compute) on
         the same views. ``used`` (a verify variant, verify_variants): attend only groups 0 .. used - 1, on all the
         cores; the other slots' output is 0 and their lse NO_KEY_LSE, as for an idle group."""
@@ -1314,7 +1332,7 @@ class TtMiMoAttention:
         dv = attn.shape[-1]
         out = ttnn.reshape(attn, ttnn.Shape([1, slots, nh, dv]), ttnn.Shape([1, slots, TILE, dv]))
         lse = ttnn.reshape(lse, ttnn.Shape([1, slots, nh, 1]), ttnn.Shape([1, slots, TILE, TILE]))
-        if slots < all_slots:
+        if slots < all_slots and PAD_IDLE_SLOTS:
             out, lse = self._pad_idle_slots(out, lse, all_slots - slots)
         return out, lse
 

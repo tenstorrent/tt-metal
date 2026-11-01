@@ -64,12 +64,21 @@ void kernel_main() {
         noc_async_read(const_gen.get_noc_addr(i, 0), const_l1 + i * fp32_tile_bytes, fp32_tile_bytes);
     }
 
+    MOE_MARK(70);
     noc_async_read_barrier();
+    MOE_MARK(71);
     cb_push_back(cb_res, tiles);
     cb_push_back(cb_gamma, tiles);
     cb_push_back(cb_const, 2);
 
     volatile tt_l1_ptr uint32_t* gather_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
+#if defined(PROFILE_KERNEL)
+    // Profiling: the time each packet's increment arrives (marks 81 ..).
+    for (uint32_t k = 1; k <= chips * chip_packets; k++) {
+        noc_semaphore_wait_min(gather_sem, k);
+        MOE_MARK(80 + k);
+    }
+#endif
     noc_semaphore_wait(gather_sem, chips * chip_packets);
     noc_semaphore_set(gather_sem, 0);
     cb_reserve_back(cb_in, tiles * chips);
@@ -79,7 +88,9 @@ void kernel_main() {
     // (32 / rows cores per tile), then increments this core's semaphore.
     cb_reserve_back(cb_gather, gather_tiles);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+    MOE_MARK(72);
     noc_semaphore_wait(sem, cores);
     noc_semaphore_set(sem, 0);
+    MOE_MARK(73);
     cb_push_back(cb_gather, gather_tiles);
 }

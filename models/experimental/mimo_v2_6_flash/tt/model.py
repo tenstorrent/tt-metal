@@ -1593,6 +1593,11 @@ class TtMiMoModel:
                     table = self.page_table_tt[key]
                     sdpa_tables[key] = ttnn.slice(table, (0, 0), (self.decode_users, table.shape[-1]))
                 layer_positions = dict(positions, page_table_sdpa=sdpa_tables[key])
+            nxt = self.layers[i + 1] if i + 1 < len(self.layers) else None
+            # The next layer's compact qkv stream rides in this layer's MoE launch (moe.QKV_PREFETCH).
+            next_attn = None
+            if nxt is not None and nxt.is_swa and nxt._compact_decode() and nxt.attn.qkv_stream is not None:
+                next_attn = nxt.attn
             y, h = layer.forward_decode(
                 x,
                 rot_mats,
@@ -1602,6 +1607,7 @@ class TtMiMoModel:
                 mask_tt,
                 h=h,
                 return_norm=True,
+                next_attn=next_attn,
             )
             x.deallocate(True)
             x = y

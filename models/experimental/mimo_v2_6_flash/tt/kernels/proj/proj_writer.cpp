@@ -11,6 +11,9 @@
 //
 // Only the user rows of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
 // reach only output rows that are written as zeros.
+//
+// ``x_wait`` > 0 (x written by another program of the same launch): roles 0 and 1 read x only once semaphore
+// ``x_sem`` counts that many increments.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -34,6 +37,8 @@ void kernel_main() {
     // rows * c .. of compact tile n % compact_tiles, c = n / compact_tiles), the layout the row reduction moves.
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t rows = get_compile_time_arg_val(10);  // the user rows: 4 or 8
+    constexpr uint32_t x_sem = get_compile_time_arg_val(11);
+    constexpr uint32_t x_wait = get_compile_time_arg_val(12);
     constexpr uint32_t tile_bytes = 2048;                    // bf16 32x32
     constexpr uint32_t face_bytes = 512;                     // bf16 16x16
     constexpr uint32_t user_bytes = rows * 32;               // the user rows of a face
@@ -52,6 +57,11 @@ void kernel_main() {
     const uint32_t sem_addr = get_semaphore(sem_id);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
+    if constexpr (x_wait > 0) {
+        if (role != 2) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(x_sem)), x_wait);
+        }
+    }
     cb_reserve_back(cb_x, num_blocks * block_rows);
     uint32_t x_l1 = get_write_ptr(cb_x);
     uint32_t k = 0;

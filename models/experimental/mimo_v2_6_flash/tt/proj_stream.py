@@ -89,6 +89,7 @@ class BankStreamMatmul:
     BLOCK_BYTES = 18432
     NUM_BUFFERS = 5
     IN_FLIGHT = 3
+    PREFETCH_BLOCKS = 8  # a prefetch's blocks: one NoC transaction id each (ids 1 .. 15)
     MAX_PACKET = 16384
     MAX_DEST = 4  # fp32 tiles in half-sync Dest
     CB_X, CB_W, CB_OUT, CB_ZERO = 0, 1, 2, 3
@@ -178,12 +179,29 @@ class BankStreamMatmul:
         ttnn.generic_op([w, out], program)
         return out
 
+    # A prefetch (``section`` with ``start``): semaphore 0 is the start (what the program before it in the launch
+    # raises), the x hand-off between a bank group's cores moves to 1, and 2 counts the writes of x.
+    START_SEM, PREFETCH_SEM_X, X_READY_SEM = 0, 1, 2
+
     def __call__(self, x, w, compact_out=None, rows=4):
         """``rows``: the user rows of x (4 or 8). ``compact_out``: write them straight into this compact rows tensor
         ([1, 1, 32, n * rows / 32] bf16 DRAM tiles: rows rows * c .. of compact tile t % compact_tiles hold the user
         rows of tile column t, c = t / compact_tiles) and return it."""
+        section = self.section(x, w, compact_out=compact_out, rows=rows)
+        program = ttnn.ProgramDescriptor(
+            kernels=section["kernels"], semaphores=section["semaphores"], cbs=section["cbs"]
+        )
+        ttnn.generic_op(section["tensors"], program)
+        return section["out"]
+
+    def section(self, x, w, compact_out=None, rows=4, start=0, x_wait=0):
+        """The program of ``__call__`` as kernels, CBs, semaphores, tensors and its output ``out``, for a launch of
+        its own or inside another one. ``start`` > 0 (a prefetch): the weights stream into L1 whole once semaphore
+        START_SEM counts ``start`` increments, and x (in DRAM) is read once X_READY_SEM of the bank groups' x
+        loaders (``self.x_loaders(x)``) counts ``x_wait``; compute then runs on the resident weights."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert _is_interleaved(x) and rows in (4, 8)
+        assert not start or (x.memory_config().buffer_type == ttnn.BufferType.DRAM and self.can_share and x_wait)
         compact_tiles = 0
         if compact_out is not None:
             compact_tiles = self.n // TILE // (TILE // rows)
@@ -201,8 +219,17 @@ class BankStreamMatmul:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         w_tile, row_bytes, block_rows = self._sizes(w.dtype)
+        num_buffers, in_flight = self.NUM_BUFFERS, self.IN_FLIGHT
+        if start:
+            # The whole slice resident: at most PREFETCH_BLOCKS blocks (one transaction id each), all in flight.
+            block_rows = max(block_rows, -(-self.kt // self.PREFETCH_BLOCKS))
+            while self.kt % block_rows:
+                block_rows += 1
         num_blocks = self.kt // block_rows
         block_tiles = block_rows * self.cpc
+        if start:
+            num_buffers = in_flight = num_blocks
+        sem_x = self.PREFETCH_SEM_X if start else self.SEM_X
         x_dram = 1 if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
         w_addr, x_addr, out_addr = w.buffer_address(), x.buffer_address(), out.buffer_address()
         nt = self.n // TILE
@@ -237,15 +264,17 @@ class BankStreamMatmul:
                 block_tiles,
                 row_bytes,
                 self.cpb * w_tile,
-                self.NUM_BUFFERS,
-                self.IN_FLIGHT,
+                num_buffers,
+                in_flight,
+                self.START_SEM,
+                start,
             ],
             reader_rt,
             ttnn.ReaderConfigDescriptor(),
         )
         cbs = [
             _cb(self.CB_X, x.dtype, self.kt, ranges),
-            _cb(self.CB_W, w.dtype, self.NUM_BUFFERS * block_tiles, ranges),
+            _cb(self.CB_W, w.dtype, num_buffers * block_tiles, ranges),
             _cb(self.CB_OUT, x.dtype, self.cpc, ranges),
             _cb(self.CB_ZERO, x.dtype, 1, ranges),
         ]
@@ -261,9 +290,11 @@ class BankStreamMatmul:
                 block_rows,
                 self.cpc,
                 self.banks,
-                self.SEM_X,
+                sem_x,
                 compact_tiles,
                 rows,
+                self.X_READY_SEM,
+                x_wait if start else 0,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -276,9 +307,19 @@ class BankStreamMatmul:
             self.compute_config,
         )
         semaphores = [_semaphore(ranges)] if loaders is not None else []
-        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
-        ttnn.generic_op([x, w, out], program)
-        return out
+        if start:
+            semaphores = [
+                ttnn.SemaphoreDescriptor(id=i, core_ranges=ranges, initial_value=0)
+                for i in (self.START_SEM, self.PREFETCH_SEM_X, self.X_READY_SEM)
+            ]
+        return dict(
+            kernels=[reader, writer, compute],
+            cbs=cbs,
+            semaphores=semaphores,
+            tensors=[x, w, out],
+            out=out,
+            loaders=[c for c in loaders if c is not None] if loaders is not None else [],
+        )
 
 
 class RouterScoreStream:
@@ -359,8 +400,21 @@ class RouterScoreStream:
             and tuple(mc.shard_spec.shape) == (self.k, TILE)
         )
 
+    X_SEM = 1  # with ``wait``: the reduce cores' "x landed" increments
+
     def __call__(self, x, w):
         """Returns the persistent (scores, biased); every call rewrites their rows 0-3."""
+        section = self.section(x, w)
+        program = ttnn.ProgramDescriptor(
+            kernels=section["kernels"], semaphores=section["semaphores"], cbs=section["cbs"]
+        )
+        ttnn.generic_op(section["tensors"], program)
+        return self.scores, self.biased
+
+    def section(self, x, w, wait=0):
+        """The program's kernels, CBs, semaphores and tensors, for a launch of its own or inside another one.
+        ``wait`` > 0: x is read only after semaphore X_SEM of every core counts ``wait`` increments (the producer of
+        x raises it on ``self.noc_cores``); the weights prefetch at launch either way."""
         w_tile = ttnn.Tile([TILE, TILE]).get_tile_size(w.dtype)
         packet = self.BLOCK_TILES * w_tile
         assert packet <= BankStreamMatmul.MAX_PACKET
@@ -379,7 +433,7 @@ class RouterScoreStream:
         reader = _kernel(
             "proj_reader.cpp",
             self.cores,
-            [self.CB_W, num_blocks, 1, self.BLOCK_TILES, packet, packet, num_blocks + 1, num_blocks],
+            [self.CB_W, num_blocks, 1, self.BLOCK_TILES, packet, packet, num_blocks + 1, num_blocks, 0, 0],
             [[b, vc, w_addr, q * self.kq * w_tile] for (b, q), vc in zip(self.slots, self.vcs)],
             ttnn.ReaderConfigDescriptor(),
         )
@@ -403,6 +457,8 @@ class RouterScoreStream:
                 self.GROUP,
                 self.SEM,
                 self.rows,
+                self.X_SEM,
+                wait,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -425,6 +481,12 @@ class RouterScoreStream:
             [[1 if q == 0 else 0] for _, q in self.slots],
             self.compute_config,
         )
-        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[_semaphore(ranges)], cbs=cbs)
-        ttnn.generic_op([x, w, self.bias, self.scores, self.biased], program)
-        return self.scores, self.biased
+        semaphores = [_semaphore(ranges)]
+        if wait:
+            semaphores.append(ttnn.SemaphoreDescriptor(id=self.X_SEM, core_ranges=ranges, initial_value=0))
+        return dict(
+            kernels=[reader, writer, compute],
+            cbs=cbs,
+            semaphores=semaphores,
+            tensors=[x, w, self.bias, self.scores, self.biased],
+        )

@@ -990,34 +990,44 @@ class ReduceExpand:
         ttnn.generic_op(io, program)
         return out
 
-    def call_fabric(self, compact, out, residual, norm, fabric):
+    def call_fabric(self, compact, out, residual, norm, fabric, consumer=None):
         if isinstance(compact, PendingCompact):  # the producer runs in the same launch
-            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact)
-        return self._call_fabric(compact, out, residual, norm, fabric)
+            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact, consumer=consumer)
+        return self._call_fabric(compact, out, residual, norm, fabric, consumer=consumer)
 
-    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None):
+    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None, consumer=None):
         """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
         chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
         (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``producer``
-        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores."""
+        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores. ``consumer`` (a
+        PendingConsumer): a program reading ``norm_out`` runs in this one too, on other cores; each reduce core
+        signals it once its rows of ``norm_out`` landed."""
         gamma, norm_out, eps = norm
         for t in (compact, out, residual, gamma, norm_out):
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
         assert compact.shape[-1] == self.compact_width
         phase = fabric.next_phase()
         kernels, cbs, semaphores = self._norm_kernels(
-            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase), fabric=fabric
+            out,
+            residual,
+            gamma,
+            norm_out,
+            eps,
+            gather_sem=fabric.sem_addr(phase),
+            fabric=fabric,
+            signal=(consumer.sem, consumer.cores) if consumer is not None else None,
         )
         # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
         cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
             self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
         )
         extra_tensors = []
-        if producer is not None:
-            kernels = kernels + producer.section["kernels"]
-            cbs = cbs + producer.section["cbs"]
-            semaphores = semaphores + producer.section["semaphores"]
-            extra_tensors = producer.section["tensors"]
+        for part in (producer, consumer):
+            if part is not None:
+                kernels = kernels + part.section["kernels"]
+                cbs = cbs + part.section["cbs"]
+                semaphores = semaphores + part.section["semaphores"]
+                extra_tensors = extra_tensors + part.section["tensors"]
         waits = producer.signals if producer is not None else 0
         mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits)
         io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
@@ -1035,10 +1045,13 @@ class ReduceExpand:
         ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
         return out, norm_out
 
-    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None, fabric=None):
+    def _norm_kernels(
+        self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None, fabric=None, signal=None
+    ):
         """Kernels, CBs and semaphores of the fused reduce + residual + RMSNorm on the bank cores. The chips' copies
         come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the gather buffer of
-        ``fabric`` (its FabricRowGather)."""
+        ``fabric`` (its FabricRowGather). ``signal`` = (semaphore id, NoC cores): each core raises that semaphore of
+        every one of those cores once its rows of ``norm_out`` landed."""
         assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
         assert gamma.shape[-1] == self.compact_width
         cores = len(self.cores)
@@ -1057,13 +1070,20 @@ class ReduceExpand:
                 gamma.buffer_address(),
                 self.norm_consts.buffer_address(),
             ]
-            writer_rt[core.x][core.y] = [
-                out.buffer_address(),
-                first,
-                residual.buffer_address(),
-                norm_out.buffer_address(),
-                i,
-            ] + noc
+            sig = [0, 0]
+            if signal is not None:
+                sig = [len(signal[1]), signal[0]] + [v for c in signal[1] for v in (c.x, c.y)]
+            writer_rt[core.x][core.y] = (
+                [
+                    out.buffer_address(),
+                    first,
+                    residual.buffer_address(),
+                    norm_out.buffer_address(),
+                    i,
+                ]
+                + noc
+                + sig
+            )
             compute_rt[core.x][core.y] = []
         sem_id = 0
         reader_ct = [
@@ -1288,6 +1308,15 @@ class FabricRowGather:
 def fabric_transport_noc(device):
     """NoC coordinates of FabricRowGather's transport cores (what a producer signals)."""
     return [device.worker_core_from_logical_core(ttnn.CoreCoord(*c)) for c in FabricRowGather.TRANSPORT_CORES]
+
+
+class PendingConsumer:
+    """A program that reads the reduce's ``norm_out`` and has not launched yet: ``section`` (kernels, cbs,
+    semaphores, tensors) waits until semaphore ``sem`` of each of its ``cores`` (NoC coordinates) counts one increment
+    per reduce core. ReduceExpand.call_fabric runs it in the same launch as the reduce."""
+
+    def __init__(self, section, sem, cores):
+        self.section, self.sem, self.cores = section, sem, cores
 
 
 class PendingCompact:

@@ -6,6 +6,9 @@
 // The DRAM-interleaved w [K, 8 * cpb * 32] puts tile column n in bank n % 8, so bank b holds kt rows of cpb tiles
 // (columns b, b + 8, ...), contiguous per row. The cores of bank b split the cpb slots: this core reads its row_bytes
 // at col_offset of every row as one packet, a block of block_rows rows landing as [rows][cols].
+//
+// ``start_count`` > 0 (a prefetch inside another program's launch, BankStreamMatmul.section): the reads start once
+// semaphore ``start_sem`` counts that many increments (the program before it in the launch is done with DRAM).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -18,6 +21,8 @@ void kernel_main() {
     constexpr uint32_t bank_row_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_buffers = get_compile_time_arg_val(6);
     constexpr uint32_t in_flight = get_compile_time_arg_val(7);
+    constexpr uint32_t start_sem = get_compile_time_arg_val(8);
+    constexpr uint32_t start_count = get_compile_time_arg_val(9);
     constexpr uint32_t block_bytes = block_rows * row_bytes;
 
     const uint32_t bank_id = get_arg_val<uint32_t>(0);
@@ -27,6 +32,9 @@ void kernel_main() {
 
     // Block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks are issued
     // but not pushed, and each reserve covers them plus the new block.
+    if constexpr (start_count > 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(start_sem)), start_count);
+    }
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     const uint64_t w_noc_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
     noc_async_read_one_packet_set_state<true>(w_noc_base, row_bytes, vc);

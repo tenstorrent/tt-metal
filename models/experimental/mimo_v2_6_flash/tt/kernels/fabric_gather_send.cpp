@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "moe_stream_common.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -50,8 +51,10 @@ void kernel_main() {
         core_y[i] = get_arg_val<uint32_t>(arg++);
     }
 
+    MOE_MARK(60);
     auto connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
     connection.open_start();
+    MOE_MARK(61);
     if constexpr (wait_count > 0) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(wait_sem)), wait_count);
     }
@@ -71,6 +74,7 @@ void kernel_main() {
     }
     connection.open_finish();
     noc_async_read_barrier();
+    MOE_MARK(62);
 
     if constexpr (whole) {
         // Slot (chip c, tile j) of a core's gather buffer: gather_addr + (c * tiles_per_core + j) * tile_bytes.
@@ -86,6 +90,7 @@ void kernel_main() {
                 1,
                 range);
         }
+        MOE_MARK(63);
         if constexpr (local_copy) {
             for (uint32_t i = 0; i < cores; i++) {
                 noc_async_write(
@@ -99,8 +104,10 @@ void kernel_main() {
             }
             noc_async_atomic_barrier();
         }
+        MOE_MARK(64);
         connection.close();
         noc_async_full_barrier();
+        MOE_MARK(65);
         cb_push_back(cb_scratch, cores * tiles_per_core);
         return;
     }
