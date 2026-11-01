@@ -27,6 +27,17 @@ _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose M
 # L1_SMALL a mesh needs for the block's persistent words + packed semaphores (4608 B measured on GLM-5.3, 5376 B on
 # Kimi-K3) on top of the model's own L1_SMALL users.
 MOE_BLOCK_L1_SMALL = 5888
+# Kimi-K3: exactly what the block needs on top of the model (5376 B measured in its L24 tests) + 32 B. Not more: L1_SMALL
+# is carved from the top of L1, and MLA's chunked attention (ring_mla) puts its static CBs up to a fixed L1 ceiling -
+# at 5888 they reached the model's top-most L1 buffer (a clash 448 B deep: the ceiling is L1_SMALL 5440). TODO: pack
+# the block's words of disjoint core sets into one range (its footprint is lockstep: every words tensor on every core).
+_MOE_BLOCK_L1_SMALL_BY_MODEL = {"KimiK3Config": 5408}
+
+
+def moe_block_l1_small(model_cfg) -> int:
+    """L1_SMALL a mesh of this model opens with when the MoE block is its MoE."""
+    name = model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
+    return _MOE_BLOCK_L1_SMALL_BY_MODEL.get(name, MOE_BLOCK_L1_SMALL)
 
 
 def moe_impl_of(model_cfg=None, moe_impl: Optional[str] = None) -> str:
@@ -60,7 +71,7 @@ def moe_block_mesh_params(
     if not moe_block_enabled(model_cfg, moe_impl):
         return fabric_payload, l1_small_size
     width = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
-    return max(fabric_payload, moe_block_fabric_payload(width)), max(l1_small_size, MOE_BLOCK_L1_SMALL)
+    return max(fabric_payload, moe_block_fabric_payload(width)), max(l1_small_size, moe_block_l1_small(model_cfg))
 
 
 def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:
@@ -86,5 +97,5 @@ def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> 
     router = out.get("fabric_router_config")
     if router is None or router.max_packet_payload_size_bytes < payload:
         out["fabric_router_config"] = create_fabric_router_config(payload)
-    out["l1_small_size"] = max(int(out.get("l1_small_size", 0)), MOE_BLOCK_L1_SMALL)
+    out["l1_small_size"] = max(int(out.get("l1_small_size", 0)), moe_block_l1_small("KimiK3Config"))
     return out
