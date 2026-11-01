@@ -40,7 +40,12 @@ def test_decode_e2e(mesh_device):
     )
     args = model.args
     logger.info(f"Model load: {time.time() - t0:.1f}s")
-    ref = torch.load(f"models/tt_transformers/tests/reference_outputs/{args.model_name}.refpt")
+    # BONSAI_E2E_REF=<path.refpt> scores against another reference with the same tokens (e.g.
+    # shared/refs/pq2_0.llamacpp.refpt, llama.cpp on the GGUF); default is the HF reference.
+    ref_path = os.environ.get(
+        "BONSAI_E2E_REF", f"models/tt_transformers/tests/reference_outputs/{args.model_name}.refpt"
+    )
+    ref = torch.load(ref_path)
     tokens = ref["reference_tokens"][0]
     top5 = ref["top5_tokens"]  # top5[i]: the reference's top-5 for token i + 1 given tokens[: i + 1]
     n = top5.shape[0]
@@ -83,6 +88,7 @@ def test_decode_e2e(mesh_device):
         # interpretable next to the exact flags that produced it, and listing a fixed four silently
         # mislabelled earlier runs (FUSED_QKV / OPROJ_1D / ALL_BFP4 appeared only in the log header).
         "flags": {k: v for k, v in sorted(os.environ.items()) if k.startswith("QWEN36_")},
+        "reference": os.path.realpath(ref_path),
         "top1_top5_second_half": acc(scored),
         "top1_top5_all": acc(range(n)),
         "ms_per_token_median": 1e3 * statistics.median(step_s[WARMUP_STEPS:]),
