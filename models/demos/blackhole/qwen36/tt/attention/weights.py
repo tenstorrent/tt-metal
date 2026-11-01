@@ -6,6 +6,16 @@ from dataclasses import dataclass, replace
 import torch
 import ttnn
 
+def _dense_wdtype(default):
+    """Weight dtype for a dense projection. QWEN36_1C_ALL_BFP4=1 forces bfloat4_b everywhere, which is
+    the dense-bfp4 bar the exact-ternary path has to beat. Default returns `default` unchanged."""
+    import os
+
+    import ttnn
+
+    return ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else default
+
+
 
 @dataclass(frozen=True)
 class AttentionWeights:
@@ -22,7 +32,7 @@ def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> A
     def load_2d(name):
         return ttnn.as_tensor(
             state_dict[f"{name}.weight"],
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -59,7 +69,7 @@ def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> A
             w,
             fused_qkv=ttnn.as_tensor(
                 fused,
-                dtype=ttnn.bfloat8_b,
+                dtype=_dense_wdtype(ttnn.bfloat8_b),
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

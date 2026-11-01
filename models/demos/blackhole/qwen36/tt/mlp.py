@@ -152,10 +152,11 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy) unless the all-bfp4 experiment is on.
+    _down_dtype = ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else ttnn.bfloat8_b
     return MLPWeights(
         w1=load("gate_proj", ttnn.bfloat4_b),
-        w2=load("down_proj", ttnn.bfloat8_b),
+        w2=load("down_proj", _down_dtype),
         w3=load("up_proj", ttnn.bfloat4_b),
     )
 

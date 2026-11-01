@@ -15,6 +15,16 @@ from tqdm import tqdm
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+
+def _dense_wdtype(default):
+    """Weight dtype for a dense projection. QWEN36_1C_ALL_BFP4=1 forces bfloat4_b everywhere, which is
+    the dense-bfp4 bar the exact-ternary path has to beat. Default returns `default` unchanged."""
+    import os
+
+    import ttnn
+
+    return ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else default
+
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
@@ -199,7 +209,7 @@ class Qwen36Model:
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
-            dtype=ttnn.bfloat8_b,
+            dtype=_dense_wdtype(ttnn.bfloat8_b),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

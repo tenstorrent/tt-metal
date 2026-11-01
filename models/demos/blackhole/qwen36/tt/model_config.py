@@ -425,7 +425,10 @@ class Qwen36ModelArgs(ModelArgs):
             dtype = self.weight_dtype
         import ttnn
 
-        if dtype == ttnn.bfloat8_b:
+        if os.environ.get("QWEN36_1C_ALL_BFP4") == "1":
+            # All-dense-bfp4 experiment: own directory so the bfp8 cache is neither read nor written.
+            suffix = "tensor_cache_all_bfp4"
+        elif dtype == ttnn.bfloat8_b:
             suffix = "tensor_cache_bfp8"
         else:
             suffix = "tensor_cache_bf16"
