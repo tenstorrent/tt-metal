@@ -91,8 +91,11 @@ def test_flat_routed_expert_pcc(device):
     wq = [tuple(q(w) for w in ws) for ws in wsets]
     pinned = []
     entries = None
-    for call, seed in enumerate((1, 2)):
-        x, c_, r_, _, spans = cases.case_inputs(model, chunk, seed)
+    # (the dispatch buffer's spec is the program's: both calls' x padded to one row count - only the counts differ)
+    calls = [cases.case_inputs(model, chunk, seed) for seed in (1, 2)]
+    rows = max(c[0].shape[0] for c in calls)
+    for call, (x, c_, r_, _, spans) in enumerate(calls):
+        x = torch.nn.functional.pad(x, (0, 0, 0, rows - x.shape[0]))
         y = op(_rm(x, ttnn.bfloat16, device), _rm(c_, ttnn.uint32, device), _rm(r_, ttnn.uint32, device))
         y = ttnn.to_torch(y).float()
         for e, (o, c) in enumerate(spans):
