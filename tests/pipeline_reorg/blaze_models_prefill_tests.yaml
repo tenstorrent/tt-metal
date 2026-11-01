@@ -406,7 +406,6 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
-      # Last, so a regression here cannot hide the two gates above. Traced and untraced, ~20 s of test.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py -vvv --tb=short
     '
   test_type: k3_mla_perf
@@ -414,7 +413,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 12
+      timeout: 10
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak

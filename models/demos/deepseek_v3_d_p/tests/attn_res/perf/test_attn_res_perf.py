@@ -81,7 +81,8 @@ _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 # boundary layer (4596-4664) and 4% on the ordinary one (313-326). Untraced is host-dispatch bound here, with
 # the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Off the pool,
 # bh-glx-120-b07u02 measures the traced boundary layer 6% high, so a run there may need
-# ATTN_RES_PERF_REPORT_ONLY=1.
+# ATTN_RES_PERF_REPORT_ONLY=1. Those runs ended the walk in `handoff`, whose add the boundary layer then carried;
+# it now ends in `discard`, so the boundary references sit high by that add until re-baselined.
 _REFERENCE_E2E_US = {
     "traced": {"boundary": 1720.0, "ordinary": 141.0},
     "untraced": {"boundary": 4620.0, "ordinary": 323.0},
@@ -124,11 +125,19 @@ class _Prepared:
         if not traced:
             self.call = fn
             return
+        # The caller only holds this object once construction returns, so a failure past this point must
+        # close the capture and release the trace here, or it would leave the mesh unusable for later params.
         self.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        fn()
-        ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
+        try:
+            try:
+                fn()
+            finally:
+                ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
+            ttnn.execute_trace(mesh_device, self.trace_id, cq_id=0, blocking=True)
+        except BaseException:
+            self.release()
+            raise
         self.call = lambda: ttnn.execute_trace(mesh_device, self.trace_id, cq_id=0, blocking=False)
-        ttnn.execute_trace(mesh_device, self.trace_id, cq_id=0, blocking=True)
 
     def release(self):
         if self.trace_id is not None:
@@ -149,12 +158,11 @@ def _interleaved_walls_us(mesh_device, calls) -> dict[str, list[float]]:
 
 
 def _split(programs, num_layers):
-    """One forward's programs -> (each layer's AttnRes programs, the handoff's).
+    """One forward's programs -> each layer's AttnRes programs.
 
-    The forward dispatches `[setup] [m] open(0) [m] read(0) [m] open(1) ... read(L-1) [m] handoff`. What
-    precedes the first stand-in is test setup. Layer `l` is the two segments after stand-ins `2l` and `2l + 1`.
-    The handoff settles the last deferred write with a plain add, which mid-rank is folded into the next layer's
-    read instead, so it is kept apart.
+    The forward dispatches `[setup] [m] open(0) [m] read(0) [m] open(1) ... read(L-1) [m]`. What precedes
+    the first stand-in is test setup. Layer `l` is the two segments after stand-ins `2l` and `2l + 1`. The
+    walk ends in `discard`, which only frees, so nothing follows the last stand-in.
     """
     segments, current, started = [], [], False
     for p in programs:
@@ -166,7 +174,9 @@ def _split(programs, num_layers):
         current.append(p)
     segments.append(current)
     assert len(segments) == 2 * num_layers + 1, f"expected {2 * num_layers + 1} segments, got {len(segments)}"
-    return [segments[2 * l] + segments[2 * l + 1] for l in range(num_layers)], segments[-1]
+    trailing = [p["op"] for p in segments[-1]]
+    assert not trailing, f"programs after the last stand-in, not attributed to a layer: {trailing}"
+    return [segments[2 * l] + segments[2 * l + 1] for l in range(num_layers)]
 
 
 def _log_ops(name, programs):
@@ -224,8 +234,10 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
             pre_ffn = residual.read()
             residual.write(module(pre_ffn))
             residual.release(pre_ffn)
-        for tensor in residual.handoff():
-            ttnn.deallocate(tensor)
+        # Not `handoff`: its add settles the last deferred write, which mid-rank the next layer's read folds
+        # in instead. Layer 72 does not end a rank, and `baseline` has no counterpart, so it would bias the
+        # boundary layer. `discard` only frees.
+        residual.discard()
 
     def baseline(num_layers):
         """`forward` without AttnRes: the same setup and stand-ins, so the difference is AttnRes alone."""
@@ -268,13 +280,12 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     # Per sample: the boundary layer, and the ordinary layers' mean, in device time (us).
     per_sample = []
     for programs in samples:
-        layers, handoff = _split(programs, walked)
+        layers = _split(programs, walked)
         layer_us = [sum(p["ns"] for p in layer) / 1e3 for layer in layers]
-        per_sample.append(((layer_us[0], statistics.mean(layer_us[1:])), layers, sum(p["ns"] for p in handoff) / 1e3))
-    totals = [sum(us) for us, _, _ in per_sample]
+        per_sample.append(((layer_us[0], statistics.mean(layer_us[1:])), layers))
+    totals = [sum(us) for us, _ in per_sample]
     median_layers = per_sample[totals.index(sorted(totals)[len(totals) // 2])][1]
-    device_us = {name: statistics.median(us[i] for us, _, _ in per_sample) for i, name in enumerate(LAYERS)}
-    handoff_us = statistics.median(handoff for _, _, handoff in per_sample)
+    device_us = {name: statistics.median(us[i] for us, _ in per_sample) for i, name in enumerate(LAYERS)}
 
     _log_ops("boundary", median_layers[0])
     _log_ops("ordinary", median_layers[1])
@@ -286,22 +297,21 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     )
     failures = []
     for name, label in zip(LAYERS, (f"layer {LAYER}", f"mean of {LAYER + 1}-{LAYER + ORDINARY_LAYERS}")):
-        line = f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
         reference = references[name]
-        if reference is not None:
-            lower, upper = reference * (1 - margin), reference * (1 + margin)
-            ok = lower <= e2e_us[name] <= upper
-            line += f"   ref {reference:9.1f} ±{margin:.0%}  {'ok' if ok else 'OUT OF BAND'}"
-            if not ok:
-                failures.append(f"{name} layer e2e {e2e_us[name]:.1f} us outside [{lower:.1f}, {upper:.1f}] us")
-        logger.info(line)
+        lower, upper = reference * (1 - margin), reference * (1 + margin)
+        ok = lower <= e2e_us[name] <= upper
+        logger.info(
+            f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
+            f"   ref {reference:9.1f} ±{margin:.0%}  {'ok' if ok else 'OUT OF BAND'}"
+        )
+        if not ok:
+            failures.append(f"{name} layer e2e {e2e_us[name]:.1f} us outside [{lower:.1f}, {upper:.1f}] us")
         logger.info(f"    device {device_us[name]:9.1f} us   (sum of slowest-chip program windows)")
     logger.info(
         "  host clock medians: "
         + ", ".join(f"{name} {us:.1f}" for name, us in wall.items())
         + f" us (of {_WALL_SAMPLES} each, interleaved)"
     )
-    logger.info(f"  handoff add {handoff_us:.1f} us   (in the forwards, cancels between them)")
 
     result = {
         "mode": mode,
@@ -314,13 +324,12 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
         "e2e_us": e2e_us,
         "device_us": device_us,
         "wall_us": walls,
-        "device_samples_us": [us for us, _, _ in per_sample],
-        "handoff_add_us": handoff_us,
+        "device_samples_us": [us for us, _ in per_sample],
         "reference_e2e_us": references,
         "margin_pct": margin * 100.0,
     }
     print("ATTN_RES_PERF=" + json.dumps(result, sort_keys=True))
-    gated = not _REPORT_ONLY and tp_axis_is_wrapped(mesh_device) and all(v is not None for v in references.values())
+    gated = not _REPORT_ONLY and tp_axis_is_wrapped(mesh_device)
     emit_perf_metrics(
         f"kimi_k3_attn_res_layer_{mode}_SP8xTP4",
         f"Kimi-K3 AttnRes layer perf ({mode}, SP8xTP4)",
