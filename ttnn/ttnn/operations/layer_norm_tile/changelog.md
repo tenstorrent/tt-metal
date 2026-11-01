@@ -229,3 +229,18 @@ The affine-overlap reader and the split-reader gate use only helpers or host cod
 | helper | kind | what was missing / hard | site |
 |---|---|---|---|
 | reduce (`reduce_mean`, AccumulateViaAdd) | capability | No policy waits a resident block incrementally without popping it; the streaming policy pops, the Accumulate mode pops, and none carries a second (sum-of-squares) accumulator. The raw window is the same pairwise add + sfpu_reduce datapath. Resident mode (one window per row) measured equal to the helper (focus rows within noise). | kernels/layer_norm_tile_compute.cpp `row_stats_window` |
+
+## Refinement 4 — Half-tile (16-row) band work split: balance 128 rows on 110 cores
+- Date: 2026-11-01
+- What was done:
+  - Work unit `BAND_ROWS = 16` (regime R3). Reused: compute kernel, every CB, the chunk / trid-ring stream, the Perf 1 NoC plan and affine multicast. Added: `RowSources` in `layer_norm_tile_stream.hpp` walks a core's contiguous run of valid bands and pairs them into compute tile-rows; `read_row_chunk` / `write_row_chunk` move whole tiles for a (top, bottom) pair of one tile-row and half tiles (1 KiB at offset 0 / 1024) otherwise. An odd run takes one lone band (first if it starts on a bottom band, so the rest pair whole). All-padding bands (`H % 32 in [1, 16]`) are not counted, read or written. R1 is the same walker with a whole tile-row per unit, so both regimes share one reader / writer path.
+  - Host: `_split_units` (unit runs, `assignment` now `(core, unit_start, unit_count, compute_rows)`), `_half_band_split` gate, `_even_count_first` run order, band CT args `(half_band, image_row_tiles, image_bands)`. Knobs, single source in the descriptor: `BAND_ROWS`, `HALF_BAND_EVEN_FIRST` (None = measured gate), parked `HALF_BAND_NOC_PLAN`, `HEAVY_READER_NOC_BY_Y`, `HALF_BAND_STREAM`.
+  - Gate (measured): R3 when tile-rows exceed the grid and are not a multiple of it, or when every band fits on its own core. R1 elsewhere: on 8x384 / 64x17 R3 turns a balanced split into a 1/2-band split and loses the streamed stats path.
+- Accuracy achieved: unchanged precision (`test_layer_norm_tile_precision_baseline.py`: PCC >= 0.99999, rel-RMS 0.0019-0.0024 fp32 DEST, 0.0043-0.0046 bf16 DEST on (32,1,32,768), (64,1,17,768), (3,1,500,768), (8,1,512,768)).
+- Golden test progress: targeted slice 234/234 (every cell of 8x512, 32x32, 128x32, 8x511, 16x200, 11x100, 5x257: R3 whole, one-band-per-core and skipped-band paths); unit dir 210/210.
+- Perf (device kernel us, BH p100a, R1 -> R3, medians of 5; focus2 pooled n=16): focus1 36.7 -> 35.7, focus2 47.9 -> 47.25, focus3 33.9 -> 33.5, L1 no-residual 22.3 -> 20.9, focus1 bf16 36.5 -> 35.1, 32x32 19.9 -> 18.7, 3x500 22.1 -> 18.7, 2x512 14.7 -> 13.3, all-L1 residual 24.6 -> 24.7 (flat), affine TILE 48.3 -> 48.75 (flat), 8x384 / 64x17 on R1. Variant table: `perf_experiments/half_band/README.md`.
+- Issues encountered:
+  - focus2 target (-3 us) not met. The op is DRAM-aggregate bound there (~400 of ~448 GB/s). The 3-band cores' lone band reads late (23.6 -> 42 us) under the light cores' output writes, then pays a full-tile compute for half a tile of rows.
+  - Run order matters more than the split: even-first vs heavy-first moves focus2 by 2 us and focus3 by 7 us, both through the Perf 1 per-core NoC plan; turning the plan off costs 5-15 us. The gate encodes the measured winner per residual placement.
+  - Refinement 3's streamed path on the R3 split was worse on every row; parked.
+- Tests added: `test_layer_norm_tile_half_band.py` (gate branches pinned per shape on the 110-core grid, whole / split / lone / skipped-band pairings, multi-block runs, run-order / stream / NoC-plan / residual-on-reader knobs, both DEST modes).

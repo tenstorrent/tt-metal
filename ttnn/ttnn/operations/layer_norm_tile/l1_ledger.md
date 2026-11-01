@@ -88,6 +88,11 @@ Totals per tier, headline:
 | all DRAM, no residual | 12.58 MB | 0.34 MB |
 | all DRAM with residual, affine TILE DRAM | 18.87 MB + 0.68 MB | 0 |
 
+> Refinement 4: R3 `half_band_split` is built and selected per shape (op_design.md Regimes). Same CBs and
+> page counts (a compute tile-row holds up to two bands); DRAM crossings per tensor unchanged at 1, minus the
+> all-padding bands (`H % 32 in [1, 16]`) R3 never reads or writes. Half-tile (1 KiB) transactions only on
+> split pairs and one lone band per odd-count core (headline: 36 lone bands of 24 tiles).
+>
 > Cheapest-traffic split considered: R1 `row_resident` (tile-rows across cores, whole row resident), tied
 > on bytes with R3 `half_band_split` (same bytes, 2x NoC transactions, less when all-pad bands are
 > skipped). Implemented: R1. It is the cheapest-traffic split. R3 is deferred because its gain is load

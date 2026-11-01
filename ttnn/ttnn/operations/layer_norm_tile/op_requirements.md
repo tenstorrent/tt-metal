@@ -103,7 +103,7 @@ Levers:
 
 **Outcome**: device kernel us, base -> after (BH p100a, medians of 5-8): flagged #1 36.5 -> 36.45 (flat, target not met), #2 47.6 -> 47.15, #3 34.0 -> 34.15; balanced rows 8x384 38.6 -> 36.3, 32x32 21.4 -> 19.7, 3x500 24.9 -> 21.9, 64x17 24.4 -> 22.2; L1 no-residual 22.6 -> 21.9. Built: streamed one-pass row stats (`row_stats_window`, partial sums via an UnpackToDestFp32 CB), a per-row shift on the residual add (unshifted one-pass with a residual went negative-variance at |mean| = 100), and per-window normalize + affine. Gated by measurement to balanced splits (residual from DRAM) and unbalanced L1 inputs without a residual; flagged #1/#2/#3 keep the base path. Why #1 does not move: streaming cut the 2-row cores' first-row tail by ~5 us, but the end then sits on one-row cores' ~10 us output write tail (DRAM writes at 200-290 GB/s after 28 us). Earlier light-core writes stretch the heavy cores' row-1 reads (residual 5.6 -> 16 us under per-window normalize; focus2 +1.3 us under streaming). The shifted add's extra DEST-reuse pass costs more on the heavy cores' resident row 1 than streaming saves (37.9 us). Next: Refinement 4's half-band split removes the heavy/light imbalance this lever collides with. Re-test the streamed path there (ungate it on unbalanced splits); it already wins on every balanced split measured. Not tried here: cutting the per-window pack-drain overhead (~1 us/row) with packer L1 accumulation of the partial sums.
 
-### [ ] Refinement 4 — Half-tile (16-row) band work split: balance 128 rows on 110 cores
+### [x] Refinement 4 — Half-tile (16-row) band work split: balance 128 rows on 110 cores
 
 **Type**: perf
 
@@ -122,6 +122,8 @@ Non-aligned S: all-padding bands (H % 32 in [1, 16]) are skipped, not read.
 - flagged #1 improves or stays flat.
 - 8x384 and the non-aligned INPUTS rows do not regress.
 - Golden 545/545.
+
+**Outcome**: device kernel us, R1 -> R3 gate (BH p100a, medians of 5, focus2 pooled n=16): focus1 36.7 -> 35.7, focus2 47.9 -> 47.25 (target -3 us not met), focus3 33.9 -> 33.5, L1 no-residual 22.3 -> 20.9, focus1 bf16 DEST 36.5 -> 35.1, 32x32 19.9 -> 18.7, 3x500 22.1 -> 18.7, 2x512 14.7 -> 13.3; all-L1 residual 24.6 -> 24.7 and affine TILE 48.3 -> 48.75 flat (noise band); 8x384 and 64x17 stay on R1 (R3 measured 38.4 / 22.7, it unbalances their balanced split and loses the streamed stats). Built: 16-row band work unit (`RowSources`, whole-tile transfers for aligned pairs, half tiles for split pairs / lone bands, all-padding bands skipped), gate `_half_band_split` (T > grid and not a multiple; or one band per core) and run order `_even_count_first` (residual in DRAM: 3-band cores at the grid bottom), both measured. Why focus2 barely moves: it is DRAM-aggregate bound (18.9 MB in ~47 us = ~400 of ~448 GB/s). The 3-band cores' lone band reads 23.6 -> 42 us while light cores' writes hold DRAM, then a full-tile compute (~7 us) for half a tile of rows and the write end the op. Combining with Refinement 3 (streamed stats + per-window normalize on the 2/3-band split) was worse on every row (focus1 38-40, focus2 48-52) and is parked (`HALF_BAND_STREAM`). Next would be cutting the lone band's compute (2-face partial-tile LLK ops, half the FPU work) or prioritizing the heavy cores' second-block reads (issue them before block 0 retires); not tried: the first is an LLK-level change outside the helper set, the second only shifts the same DRAM bytes.
 
 ### [ ] Refinement 5 — Fixed per-call overhead (~4.6 us "sync only")
 

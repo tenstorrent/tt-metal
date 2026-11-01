@@ -1,0 +1,12 @@
+alt_r3 [] k=focus2 or allL1_res or affineTILE
+   [46.8, 24.3, 48.7, 13.2]
+   [46.8, 24.8, 48.4, 13.5]
+  median [46.8, 24.55, 48.55, 13.35]
+alt_r3 [] k=focus2 or allL1_res or affineTILE
+   [47.2, 25.8, 48.4, 13.2]
+   [47.6, 24.6, 49.2, 13.2]
+  median [47.4, 25.2, 48.8, 13.2]
+alt_r3 [] k=focus2 or allL1_res or affineTILE
+   [47.4, 24.7, 48.7, 13.3]
+   [48.4, 24.5, 48.8, 13.3]
+  median [47.9, 24.6, 48.75, 13.3]

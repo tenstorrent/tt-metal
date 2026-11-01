@@ -1,0 +1,12 @@
+alt_r1 [BAND_ROWS=32] k=focus2 or allL1_res or affineTILE
+   [47.5, 24.5, 50.6, 14.9]
+   [49.7, 24.7, 46.6, 14.7]
+  median [48.6, 24.6, 48.6, 14.8]
+alt_r1 [BAND_ROWS=32] k=focus2 or allL1_res or affineTILE
+   [51.7, 24.7, 47.2, 14.7]
+   [46.3, 24.7, 47.4, 14.7]
+  median [49.0, 24.7, 47.3, 14.7]
+alt_r1 [BAND_ROWS=32] k=focus2 or allL1_res or affineTILE
+   [51.0, 24.4, 47.5, 14.7]
+   [50.8, 24.3, 50.2, 14.8]
+  median [50.9, 24.35, 48.85, 14.75]
