@@ -19,6 +19,7 @@ padding rows of the last chunk.
 State per chip: GDN recurrent states fp32 [48, 128, 128] and conv carries (last 3 conv inputs), and paged
 bf8 KV caches of its attention layers. export_state() converts them into the resident decode's
 TP-sharded State.
+
 """
 
 import math
@@ -125,6 +126,13 @@ TICK_MS = {128: (22.4, 1.6), 256: (32.5, 2.9), 512: (45.5, 3.2), 1024: (81.0, 3.
 # not bit-identical; the ttnn TP prefill's fidelity): 1024 queries at a 255K context 155 -> 125 ms on P300
 # (sweep_pp_matmul --sdpa; 256-token k chunks were another -5%, 256-token q chunks 1.8x slower)
 SDPA_FIDELITY = os.environ.get("RESIDENT_PP_SDPA_FIDELITY", "HiFi4")
+# the chunked SDPA's k chunk (RESIDENT_PP_SDPA_KCHUNK=256: opt-in, not bit-identical; -5% at long context, -25% with
+# HiFi2 at 32K-130K on P300) and exp approximation (RESIDENT_PP_SDPA_EXP_APPROX=1, opt-in)
+SDPA_KCHUNK = int(os.environ.get("RESIDENT_PP_SDPA_KCHUNK", "128"))
+SDPA_EXP_APPROX = os.environ.get("RESIDENT_PP_SDPA_EXP_APPROX", "0") == "1"
+# the handoff's copy engines per chip: one core per fabric link (kernels/handoff.cpp on cores (0, 0), (1, 0), ...), each
+# with its share of the jobs (split by bytes) and its own semaphore count
+HANDOFF_LINKS = int(os.environ.get("RESIDENT_PP_HANDOFF_LINKS", "2"))
 
 
 def rope_cos_sin(positions):
@@ -279,8 +287,8 @@ class PPPrefill:
         self.sdpa_pc = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
             q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
+            k_chunk_size=SDPA_KCHUNK,
+            exp_approx_mode=SDPA_EXP_APPROX,
         )
         self._geo = {}
         for c in self.chunks:
@@ -929,8 +937,12 @@ class PPPrefill:
     # ------------------------------------------------------------------ ticks
     def _control(self, t, n_tokens):
         """host control tensors of tick t: chip p runs chunk t - p"""
+        chunks = (n_tokens + self.C - 1) // self.C
+        return self._control_chips([(t - p, n_tokens) if 0 <= t - p < chunks else None for p in range(self.n)])
+
+    def _control_chips(self, work):
+        """host control tensors of a tick: work[p] = (chunk c, the prompt's tokens) chip p runs, or None (idle)"""
         n, C, blk = self.n, self.C, self.block
-        chunks = (n_tokens + C - 1) // C
         ctrl = torch.zeros(n, 1, 1, 8, dtype=torch.int32)
         cos = torch.zeros(n, 1, C, ROT)
         sin = torch.zeros(n, 1, C, ROT)
@@ -939,8 +951,8 @@ class PPPrefill:
         cstart = torch.zeros(n, dtype=torch.int32)
         taps = torch.arange(self.tap_ring, self.tap_ring + C // blk, dtype=torch.int32)[None].repeat(n, 1)
         for p in range(n):
-            c = t - p
-            if 0 <= c < chunks:
+            if work[p] is not None:
+                c, n_tokens = work[p]
                 if self.tap_cache:
                     taps[p] = torch.arange(c * C // blk, (c + 1) * C // blk) % self.tap_ring
                 valid = min(C, n_tokens - c * C)
@@ -1169,8 +1181,6 @@ class PPPrefill:
         timings, if given, gets the seconds of each part"""
         import time
 
-        import numpy as np
-
         mark = [time.perf_counter()]
 
         def lap(name):
@@ -1179,115 +1189,196 @@ class PPPrefill:
                 mark.append(time.perf_counter())
                 timings[name] = mark[-1] - mark[-2]
 
+        self._ho_setup(model)
+        lanes = self._ho_lanes(*zip(*(self._ho_jobs(model, p, n_tokens, block_table, slot) for p in range(self.n))))
+        lap("jobs")
+        jobs_ts = [self._ho_upload(jobs) for jobs, _ in lanes]
+        lap("upload")
+        self._ho_copy(model, jobs_ts, lanes, slot)
+        lap("copy")
+        self._ho_hist(model, n_tokens, slot, self.carry, lap)
+        for t in jobs_ts:
+            ttnn.deallocate(t)
+
+    def _ho_lanes(self, jobs, pks):
+        """per copy engine (lane) its (jobs per chip, packets per chip): every chip's job list cut into HANDOFF_LINKS
+        consecutive parts of about equal bytes (each job writes its own destination: any order is the same handoff)"""
+        lanes = [([], []) for _ in self._ho["cores"]]
+        L = len(lanes)
+        for jb, pk in zip(jobs, pks):
+            if L == 1 or not len(jb):
+                cut = [0] * (L - 1) + [len(jb)]
+            else:
+                ends = torch.cumsum(jb[:, 3] * jb[:, 7], 0)
+                cut = torch.searchsorted(ends, ends[-1] * torch.arange(1, L) // L, right=True).tolist() + [len(jb)]
+            lo = 0
+            for k, hi in enumerate(cut):
+                lanes[k][0].append(jb[lo:hi])
+                lanes[k][1].append(pk[lo:hi])
+                lo = hi
+        return lanes
+
+    def _ho_setup(self, model):
+        """every handoff job of a max_len prompt into `model`, once per decode model: per chip [m, 8] rows, each row's
+        KV tile (-1: a GDN state, always sent), the packets it sends to another chip, and its (K or V, attention
+        layer) ((-1, -1) for GDN)"""
         n, Ls, d = self.n, self.Ls, model.d
         mesh = self.mesh
         if not hasattr(self, "_ho"):
-            core = ttnn.CoreCoord(0, 0)
+            # (an L1 buffer: made by the first handoff, the build's warm-up before any trace capture)
+            cores = [ttnn.CoreCoord(k, 0) for k in range(HANDOFF_LINKS)]
             self._ho = dict(
-                core=core, sem=ttnn.create_global_semaphore(mesh, ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), 0)
+                cores=cores,
+                sem=ttnn.create_global_semaphore(mesh, ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]), 0),
             )
-        core, sem = self._ho["core"], self._ho["sem"]
+        if self._ho.get("model") is model:
+            return
         banks = d.banks
         kv_row = (HD // TILE) * 1088
-        if self._ho.get("model") is not model:
-            # every job for a max_len prompt, once per decode model: per chip [m, 8] rows, each row's KV tile
-            # (-1: a GDN state, always sent) and the packets it sends to another chip
-            rows, tile_of, pk = [[] for _ in range(n)], [[] for _ in range(n)], [[] for _ in range(n)]
-            kv_of = [[] for _ in range(n)]  # per row (K or V, attention layer) of a KV job, (-1, -1) for GDN
-            tiles_max = self.max_len // TILE
-            per_block = self.block // TILE
-            t = torch.arange(tiles_max, dtype=torch.int64)
-            bk, rt = t // per_block, t % per_block
-            g_i = a_i = 0
-            for i in range(self.layers):
-                p, j = divmod(i, Ls)
-                if self.kinds[j]:
-                    for src, dst in ((self.K[j], model.K_t), (self.V[j], model.V_t)):
-                        for c in range(n):
-                            r = torch.empty(tiles_max, 8, dtype=torch.int64)
-                            r[:, 0] = c
-                            r[:, 1] = src.buffer_address()
-                            r[:, 2] = ((bk * NKV + c) * per_block + rt) * (HD // TILE)
-                            r[:, 3] = 1088
-                            r[:, 4] = 1
-                            r[:, 5] = dst.buffer_address() + (a_i * model.rpb + t // banks) * kv_row
-                            r[:, 6] = t % banks
-                            r[:, 7] = HD // TILE
-                            rows[p].append(r)
-                            tile_of[p].append(t)
-                            pk[p].append(torch.full((tiles_max,), -(-kv_row // 4096) if c != p else 0))
-                            kv_of[p].append(torch.tensor([[int(dst is model.V_t), a_i]]).expand(tiles_max, 2))
-                    a_i += 1
-                else:
-                    pages = d.nv * 16
-                    # (verify: a head's 16 pages per state slot, slot 0; rows mode: per user row, row 0 here,
-                    # moved to the slot's row per call)
-                    per_head = getattr(model, "verify", False) or getattr(model, "rows", False)
-                    per = [(hh * 16, 16) for hh in range(d.nv)] if per_head else [(0, pages)]
+        rows, tile_of, pk = [[] for _ in range(n)], [[] for _ in range(n)], [[] for _ in range(n)]
+        kv_of = [[] for _ in range(n)]
+        tiles_max = self.max_len // TILE
+        per_block = self.block // TILE
+        t = torch.arange(tiles_max, dtype=torch.int64)
+        bk, rt = t // per_block, t % per_block
+        g_i = a_i = 0
+        for i in range(self.layers):
+            p, j = divmod(i, Ls)
+            if self.kinds[j]:
+                for src, dst in ((self.K[j], model.K_t), (self.V[j], model.V_t)):
                     for c in range(n):
-                        for off, cnt in per:
-                            dst_page = (
-                                g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * model.batch * 16
+                        r = torch.empty(tiles_max, 8, dtype=torch.int64)
+                        r[:, 0] = c
+                        r[:, 1] = src.buffer_address()
+                        r[:, 2] = ((bk * NKV + c) * per_block + rt) * (HD // TILE)
+                        r[:, 3] = 1088
+                        r[:, 4] = 1
+                        r[:, 5] = dst.buffer_address() + (a_i * model.rpb + t // banks) * kv_row
+                        r[:, 6] = t % banks
+                        r[:, 7] = HD // TILE
+                        rows[p].append(r)
+                        tile_of[p].append(t)
+                        pk[p].append(torch.full((tiles_max,), -(-kv_row // 4096) if c != p else 0))
+                        kv_of[p].append(torch.tensor([[int(dst is model.V_t), a_i]]).expand(tiles_max, 2))
+                a_i += 1
+            else:
+                pages = d.nv * 16
+                # (verify: a head's 16 pages per state slot, slot 0; rows mode: per user row, row 0 here,
+                # moved to the slot's row per call)
+                per_head = getattr(model, "verify", False) or getattr(model, "rows", False)
+                per = [(hh * 16, 16) for hh in range(d.nv)] if per_head else [(0, pages)]
+                for c in range(n):
+                    for off, cnt in per:
+                        dst_page = g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * model.batch * 16
+                        rows[p].append(
+                            torch.tensor(
+                                [
+                                    [c, self.S[j].buffer_address(), c * pages + off, 4096, 0]
+                                    + [model.state_t.buffer_address(), dst_page, cnt]
+                                ],
+                                dtype=torch.int64,
                             )
-                            rows[p].append(
-                                torch.tensor(
-                                    [
-                                        [c, self.S[j].buffer_address(), c * pages + off, 4096, 0]
-                                        + [model.state_t.buffer_address(), dst_page, cnt]
-                                    ],
-                                    dtype=torch.int64,
-                                )
-                            )
-                            tile_of[p].append(torch.tensor([-1]))
-                            pk[p].append(torch.tensor([cnt if c != p else 0]))
-                            kv_of[p].append(torch.tensor([[-1, -1]]))
-                    g_i += 1
-            cat = lambda xs: [torch.cat(x) for x in xs]
-            self._ho.update(model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk), kv_of=cat(kv_of))
-        tiles = (n_tokens + TILE - 1) // TILE
-        paged = getattr(model, "kv_paged", False)
+                        )
+                        tile_of[p].append(torch.tensor([-1]))
+                        pk[p].append(torch.tensor([cnt if c != p else 0]))
+                        kv_of[p].append(torch.tensor([[-1, -1]]))
+                g_i += 1
+        # per chip its row segments in order: (first row, rows, KV: a block of tiles_max position tiles, else GDN rows),
+        # so a prompt's jobs are a gather of whole GDN segments and each KV segment's first tiles (no scan of all rows)
+        segs = [[] for _ in range(n)]
+        for p in range(n):
+            first = 0
+            for tt in tile_of[p]:
+                kv = bool(tt[0] >= 0)
+                if not kv and segs[p] and not segs[p][-1][2] and sum(segs[p][-1][:2]) == first:
+                    segs[p][-1] = (segs[p][-1][0], segs[p][-1][1] + len(tt), False)  # (consecutive GDN rows: one)
+                else:
+                    segs[p].append((first, len(tt), kv))
+                first += len(tt)
+        cat = lambda xs: [torch.cat(x) for x in xs]
+        self._ho.update(
+            model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk), kv_of=cat(kv_of), segs=segs, sel={}
+        )
+
+    def _ho_sel(self, p, tiles):
+        """the indices of chip p's job rows of a prompt of `tiles` position tiles (in row order: every GDN row, each KV
+        block's first `tiles`), cached per (chip, tiles)"""
+        key = (p, tiles)
+        if key not in self._ho["sel"]:
+            if len(self._ho["sel"]) > 4096:
+                self._ho["sel"].clear()
+            self._ho["sel"][key] = torch.cat(
+                [torch.arange(f, f + (min(tiles, m) if kv else m)) for f, m, kv in self._ho["segs"][p]]
+            )
+        return self._ho["sel"][key]
+
+    def _ho_target(self, model, slot):
+        """(rows mode, slot, row, the slot's launch tensors) of a handoff into `model`"""
         rows_mode = getattr(model, "rows", False)
         slot = (slot or 0) if rows_mode else 0
         launch, row = divmod(slot, model.batch)
-        target = model.subs[launch]
+        return rows_mode, slot, row, model.subs[launch]
+
+    def _ho_jobs(self, model, p, n_tokens, block_table=None, slot=None):
+        """chip p's jobs of a handoff of n_tokens prompt tokens (its layers' GDN states and KV) into `model` (see
+        handoff): [m, 8] int64 rows (a copy) and the fabric packets of each"""
+        tiles = (n_tokens + TILE - 1) // TILE
+        paged = getattr(model, "kv_paged", False)
+        rows_mode, slot, row, target = self._ho_target(model, slot)
         assert not rows_mode or paged, "rows mode: the KV goes into pool pages"
+        sel = self._ho_sel(p, tiles)
+        jobs = self._ho["rows"][p][sel]  # (a copy: the cached rows keep their contiguous-mode targets)
         if paged:
             # position tile t of attention layer a -> page a * copy_pages + table[t / tpb] * tpb + t % tpb
             # (attn_paged.hpp): bank page % banks, at row page / banks of the pool's shard
             table = torch.as_tensor(list(model.block_tables[slot] if block_table is None else block_table))
             assert len(table) * model.kv_tpb >= tiles, "the block table does not cover the prompt"
-            pools = [model.K_t.buffer_address(), model.V_t.buffer_address()]
-        jobs, packets_in = [], torch.zeros(n, dtype=torch.int64)
-        for p in range(n):
-            sel = self._ho["tile_of"][p] < tiles
-            jobs.append(self._ho["rows"][p][sel])
-            if paged:  # (jobs[p] is a copy: the cached rows keep their contiguous-mode targets)
-                kv, t = self._ho["kv_of"][p][sel], self._ho["tile_of"][p][sel]
-                is_kv = kv[:, 0] >= 0
-                t, which, a = t[is_kv], kv[is_kv, 0], kv[is_kv, 1] % model._attn_copies
-                page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
-                jobs[p][is_kv, 5] = torch.tensor(pools)[which] + (page // banks) * kv_row
-                jobs[p][is_kv, 6] = page % banks
-                if rows_mode:  # GDN state jobs: the slot's launch and row
-                    jobs[p][~is_kv, 5] = target["state"].buffer_address()
-                    jobs[p][~is_kv, 6] += row * 16
-            packets_in += torch.bincount(jobs[p][:, 0], weights=self._ho["pk"][p][sel].double(), minlength=n).long()
-        packets_in = packets_in.tolist()
+            pools = torch.tensor([model.K_t.buffer_address(), model.V_t.buffer_address()])
+            banks, kv_row = model.d.banks, (HD // TILE) * 1088
+            kv, t = self._ho["kv_of"][p][sel], self._ho["tile_of"][p][sel]
+            is_kv = kv[:, 0] >= 0
+            t, which, a = t[is_kv], kv[is_kv, 0], kv[is_kv, 1] % model._attn_copies
+            page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
+            jobs[is_kv, 5] = pools[which] + (page // banks) * kv_row
+            jobs[is_kv, 6] = page % banks
+            if rows_mode:  # GDN state jobs: the slot's launch and row
+                jobs[~is_kv, 5] = target["state"].buffer_address()
+                jobs[~is_kv, 6] += row * 16
+        return jobs, self._ho["pk"][p][sel]
+
+    def _ho_upload(self, jobs):
+        """the job table on device: chip c's jobs[c] as 64 B rows (kernels/handoff.cpp)"""
+        n = self.n
         most = max(1, max(len(jb) for jb in jobs))
-        table = torch.zeros(n, most, 16, dtype=torch.int64)
-        for p in range(n):
-            table[p, : len(jobs[p]), :8] = jobs[p]
-        table = (table & 0xFFFFFFFF).to(torch.int64).numpy().astype(np.uint32).view(np.int32)
-        lap("jobs")
-        jobs_t = ttnn.from_torch(
-            torch.from_numpy(table.reshape(n * most, 16).copy()),
+        return ttnn.from_torch(
+            self._jobs_table(jobs, most),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            device=self.mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    def _jobs_table(self, jobs, most):
+        """[n * most, 16] int32: chip c's jobs[c] (int64 job words, uint32 on device) in the first rows of its `most`"""
+        table = torch.zeros(self.n, most, 16, dtype=torch.int32)
+        for p in range(self.n):
+            # (the low 32 bits, as the device's uint32 words: torch's int64 -> int32 cast wraps)
+            table[p, : len(jobs[p]), :8] = (jobs[p] & 0xFFFFFFFF).to(torch.int32)
+        return table.reshape(self.n * most, 16)
+
+    def _ho_copy(self, model, jobs_ts, lanes, slot, extra_io=()):
+        """run the handoff program: on every chip, lane k's core walks its jobs of lanes[k] (jobs_ts[k] on device) over
+        fabric link k, and waits for the packets the other chips' lane-k jobs send it"""
+        n, mesh = self.n, self.mesh
+        cores, sem = self._ho["cores"], self._ho["sem"]
+        target = self._ho_target(model, slot)[3]
+        packets_in = torch.zeros(len(lanes), n, dtype=torch.int64)
+        for k, (jobs, pks) in enumerate(lanes):
+            for p in range(n):
+                if len(jobs[p]):
+                    packets_in[k] += torch.bincount(jobs[p][:, 0], weights=pks[p].double(), minlength=n).long()
+        grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         cbs = [
             ttnn.CBDescriptor(
                 total_size=8 * 4096,
@@ -1304,13 +1395,14 @@ class PPPrefill:
         for chip in range(n):
             coord = ttnn.MeshCoordinate(0, chip)
             rt = ttnn.RuntimeArgs()
-            rt[core.x][core.y] = [
-                jobs_t.buffer_address(),
-                len(jobs[chip]),
-                chip,
-                ttnn.get_global_semaphore_address(sem),
-                packets_in[chip],
-            ]
+            for k, core in enumerate(cores):
+                rt[core.x][core.y] = [
+                    jobs_ts[k].buffer_address(),
+                    len(lanes[k][0][chip]),
+                    chip,
+                    ttnn.get_global_semaphore_address(sem),
+                    int(packets_in[k, chip]),
+                ]
             kernel = ttnn.KernelDescriptor(
                 kernel_source=KDIR + "handoff.cpp",
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -1322,37 +1414,43 @@ class PPPrefill:
                 ),
             )
             program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
-            args = program.kernels[0].runtime_args[core.x][core.y]
-            for nb in (chip + 1, chip - 1):
-                if 0 <= nb < n:
-                    args.append(1)
-                    args.extend(
-                        ttnn.setup_fabric_connection(
-                            mesh.get_fabric_node_id(coord),
-                            mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, nb)),
-                            0,
-                            program,
-                            core,
+            for k, core in enumerate(cores):
+                args = program.kernels[0].runtime_args[core.x][core.y]
+                for nb in (chip + 1, chip - 1):
+                    if 0 <= nb < n:
+                        args.append(1)
+                        args.extend(
+                            ttnn.setup_fabric_connection(
+                                mesh.get_fabric_node_id(coord),
+                                mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, nb)),
+                                k,
+                                program,
+                                core,
+                            )
                         )
-                    )
-                else:
-                    args.append(0)
+                    else:
+                        args.append(0)
             mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = program
         io = (
-            [jobs_t, model.state_t, model.K_t, model.V_t, target["state"]]
+            list(jobs_ts)
+            + [model.state_t, model.K_t, model.V_t, target["state"]]
+            + list(extra_io)
             + list(self.S.values())
             + list(self.K.values())
             + list(self.V.values())
         )
-        lap("upload")
         ttnn.generic_op(io, mesh_pd)
-        lap("copy")
 
-        # conv histories: the carries' 3 history rows to the host (a few MB), each chip's columns packed
-        # compactly in the decode's ring-slot order, scattered into its history tensor on device
+    def _ho_hist(self, model, n_tokens, slot, carry, lap=lambda name: None):
+        """conv histories: the carries' (carry: GDN stage-layer -> its carry tensor, every chip its own layers') 3
+        history rows to the host (a few MB), each chip's columns packed compactly in the decode's ring-slot order,
+        scattered into its history tensor on device"""
+        n, Ls, d = self.n, self.Ls, model.d
+        mesh = self.mesh
+        rows_mode, slot, row, target = self._ho_target(model, slot)
         gdn_js = [j for j in range(Ls) if not self.kinds[j]]
         rows3 = [
-            ttnn.slice(ttnn.to_layout(self.carry[j], ttnn.ROW_MAJOR_LAYOUT), [0, 0, 0, 0], [1, 1, CONV_K - 1, CONV_CH])
+            ttnn.slice(ttnn.to_layout(carry[j], ttnn.ROW_MAJOR_LAYOUT), [0, 0, 0, 0], [1, 1, CONV_K - 1, CONV_CH])
             for j in gdn_js
         ]
         cat = ttnn.to_torch(ttnn.concat(rows3, dim=2), mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).reshape(
@@ -1462,7 +1560,6 @@ class PPPrefill:
         ttnn.generic_op([compact_t, target["hist"]], hist_pd)
         ttnn.synchronize_device(mesh)
         lap("hist_write")
-        ttnn.deallocate(jobs_t)
         ttnn.deallocate(compact_t)
 
     def export_state(self, d, n_tokens, max_pos):
