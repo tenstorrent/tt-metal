@@ -229,7 +229,7 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
+    (61, 11, 10): [0.347, 0.355, 0.390, 0.417, 0.449, 0.479, 0.502, 0.533, 0.573, 0.609, 0.643],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -243,8 +243,8 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport. CI run 41205106009 / job 124580284086.
-    (78, 11, 10): [0.388, 0.386, 0.392, 0.390, 0.397, 0.396, 0.392, 0.394, 0.400, 0.405, 0.411],
+    # Scaled-FP8 KV cache, fabric2d MoE transport.
+    (78, 11, 10): [0.388, 0.387, 0.392, 0.391, 0.397, 0.396, 0.393, 0.394, 0.401, 0.406, 0.412],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -285,29 +285,29 @@ MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] 
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 36924348392. Host-dispatch bound and flat with depth, so this
-    # row catches an eager-dispatch regression and cannot see MLA.
+    # Cut on bh_sc1_high_power, median of two CI runs (11-01). Host-dispatch bound and flat with
+    # depth, so this row catches an eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.380,
-        0.379,
-        0.379,
-        0.377,
-        0.376,
-        0.376,
-        0.380,
-        0.383,
-        0.393,
-        0.379,
-        0.379,
-        0.383,
-        0.381,
-        0.381,
-        0.378,
-        0.384,
-        0.378,
-        0.381,
-        0.386,
-        0.381,
+        0.278,
+        0.279,
+        0.277,
+        0.276,
+        0.275,
+        0.280,
+        0.278,
+        0.280,
+        0.284,
+        0.283,
+        0.287,
+        0.279,
+        0.276,
+        0.277,
+        0.280,
+        0.279,
+        0.277,
+        0.279,
+        0.276,
+        0.276,
     ],
 }
 
