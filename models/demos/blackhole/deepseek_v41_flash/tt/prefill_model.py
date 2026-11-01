@@ -207,6 +207,11 @@ class DSV41PrefillModel:
         self._bufs[C] = (tok, er, vb)
         return self._bufs[C]
 
+    def vis_mark_dirty(self):
+        """Conservative: the next upload into any vision buffer clears it first (clearing a clean buffer is only a wasted copy). Used when recorded upload ops were discarded unreplayed."""
+        for k in list(self._vis_dirty):
+            self._vis_dirty[k] = True
+
     def _own_layout(self, x):
         """[B, C, *tail] (user-major per mesh row) -> [rows * n8 * T, cols * prod(tail)]: the layout of the column-split ``tok`` upload (chunk 8g + c of a row -> column c)."""
         B, C = x.shape[:2]

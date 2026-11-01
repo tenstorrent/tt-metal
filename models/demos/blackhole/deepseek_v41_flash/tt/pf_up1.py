@@ -55,3 +55,20 @@ def eligible(items, chunk, rows, U, Up, final, vis=None, has_hit=None, owned=Non
         if has_hit is not None and has_hit(b, t, e):
             return False
     return True
+
+
+def prebuild_other_ctx(pm, up1, rows, U, spec_enq):
+    """Last window of a call: prebuild the position / mask tables of the first window of a FRESH prompt (all starts 0) for every OTHER prefill context (and with ``spec_enq`` copy them in place), so the
+    call after a context switch finds them valid. ``pm``: the prefill model (``dyn``, ``dyn_stash``, ``_win_count``), ``up1``: the one-slot context record {"S": ...}, ``U``: slots per mesh row of the
+    Up = U context. Without it that call re-copied all tables inside its first window (+70 ms for a 512-token prompt after a one-slot call).
+    """
+    if up1 is None:
+        return
+    cur = None if pm.dyn is None else pm.dyn.S_pad
+    for S, st in pm.dyn_stash.items():
+        d = st["pm"].get("dyn")
+        if d is None or S == cur:
+            continue
+        d.prebuild([0] * (rows * (1 if S == up1["S"] else U)))
+        if spec_enq:
+            d.enqueue_prebuilt(pm._win_count)

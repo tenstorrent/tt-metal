@@ -1890,6 +1890,13 @@ class Model:
         self.timing = tm
         return res
 
+    def _prebuild_other_ctx(self, spec_enq):
+        """Last window of a call: the position / mask tables of the first window of a FRESH prompt (all starts 0) are prebuilt (and, with ``spec_enq``, copied in place) for every OTHER prefill
+        context too. Without it the call after a context switch (an Up = U call right after a one-slot call, or the reverse) found its prebuilt tables stale (the epoch moved on while the other context
+        ran) and re-copied them all inside its first window: +70 ms (``w_dynupd`` 0.03 -> 0.10 s) for a 512-token prompt.
+        """
+        PU1.prebuild_other_ctx(self.prefill_model, self.__dict__.get("_up1"), self.rows, self.U, spec_enq)
+
     def _up1_pick(self, items, chunk, final, vis):
         """DSV41_PF_UP1_SHORT: True when the whole call may run on the one-slot-per-mesh-row context (tt/pf_up1.py: every user from scratch, whole prompt in one window, final, one per mesh row, no prefix hit)."""
         up1 = self._up1
@@ -1949,7 +1956,8 @@ class Model:
             if sl is not None and owner is not None and owner[sl] == b:
                 owner[sl] = None
         saved = (self.Up, self.__dict__.pop("pf_slot_owner", None), self.__dict__.pop("pf_slot_of", None))
-        self.__dict__.pop("_look", None)
+        if self.__dict__.pop("_look", None) is not None:
+            pm.vis_mark_dirty()  # (a recorded-but-never-replayed lookahead upload may have carried the clear of a vision buffer)
         pm.use_dyn(up1["S"])
         t_sw = time.perf_counter() - t_in
         self.Up = 1
@@ -2258,7 +2266,15 @@ class Model:
                     look = self.__dict__.pop(
                         "_look", None
                     )  # (hashes / Engram rows of this window built during the previous call's last replay: ``_look_build``)
-                    if look is not None and vw is None and look[0] == _look_key(part, k):
+                    look_ok = (
+                        look is not None
+                        and vw is None
+                        and look[0] == _look_key(part, k)
+                        and look[5] == pm.dyn.S_pad  # (built for THIS context's input buffers)
+                    )
+                    if look is not None and not look_ok:
+                        pm.vis_mark_dirty()  # (discarded: its recorded upload ops, possibly a vision-buffer clear, never run)
+                    if look_ok:
                         pm.timing["lookahead_hits"] = pm.timing.get("lookahead_hits", 0) + 1
                         in_place = look[4] is not None and look[4] == getattr(pm, "_win_count", None)
                         return (
@@ -2404,7 +2420,7 @@ class Model:
                     ):  # the copies go into the queue right behind the trace being replayed: the next call's first window finds the inputs in place
                         replay(ops_l)
                         enq_l = pm._win_count
-                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, ops_l, enq_l)
+                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, ops_l, enq_l, pm.dyn.S_pad)
                     pm.timing["lookahead_build"] = pm.timing.get("lookahead_build", 0.0) + time.perf_counter() - t_l0
 
                 ahead = {}
@@ -2482,6 +2498,7 @@ class Model:
                             pm.dyn.prebuild(nxt)
                             if spec_enq:
                                 pm.dyn.enqueue_prebuilt(pm._win_count)
+                            self._prebuild_other_ctx(spec_enq)
                             if lookahead:
                                 _look_build()
                         if build_ahead > 1:  # hash (serial, in window order) + start the gathers of the next windows
