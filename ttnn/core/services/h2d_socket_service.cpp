@@ -83,6 +83,7 @@ ttnn::Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const 
                 ttsl::Span<uint16_t>(reinterpret_cast<uint16_t*>(raw), bytes.size() / sizeof(uint16_t)),
                 shape,
                 MemoryPin{});
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
         case DataType::UINT32:

@@ -25,7 +25,8 @@ struct D2HStreamServiceDescriptor {
     // global_dtype is serialized as a raw DataType ordinal, so the bump forces a version mismatch (hard error)
     // between old/new processes instead of an old peer decoding ordinal 9 as INVALID rather than INT8.
     // v4: the MX formats were added to DataType at ordinals 10-17, moving INVALID 10->18.
-    static constexpr uint32_t kVersion = 4;
+    // v5: BFLOAT2_B was added to DataType at ordinal 18, moving INVALID 18->19.
+    static constexpr uint32_t kVersion = 5;
 
     tt::tt_metal::Shape global_shape;
     DataType global_dtype = DataType::INVALID;

@@ -56,6 +56,7 @@
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
 
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -215,14 +216,24 @@ HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const Ten
 
     const auto& tile = tensor_spec.tile();
     ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
-    auto float_unpacked_data =
-        tt_dtype == DataType::BFLOAT8_B
-            ? unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-            : unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    auto float_unpacked_data = [&]() {
+        switch (tt_dtype) {
+            case DataType::BFLOAT8_B:
+                return unpack_bfp8_tiles_into_float_vec(
+                    uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            case DataType::BFLOAT4_B:
+                return unpack_bfp4_tiles_into_float_vec(
+                    uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            case DataType::BFLOAT2_B:
+                return ::unpack_bfp2_tiles_into_float_vec(
+                    uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            default: TT_THROW("Unsupported block-float dtype {}", tt_dtype);
+        }
+    }();
     return HostBuffer(std::move(float_unpacked_data));
 }
 
-// Unpacks BFLOAT8_B / BFLOAT4_B tiles to float, then untilizes / strips padding to logical RM.
+// Unpacks BFLOAT8_B / BFLOAT4_B / BFLOAT2_B tiles to float, then untilizes / strips padding to logical RM.
 // Kept separate from the generic path: HostTensor::to_vector would re-unpack if the TensorSpec
 // still reported a block-float dtype over a float buffer.
 RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
@@ -294,6 +305,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
+            case DataType::BFLOAT2_B:
             case DataType::MXFP8_E4M3:
             case DataType::MXFP8_E5M2:
             case DataType::MXFP6_E2M3:
@@ -352,6 +364,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tt_tensor);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::MXFP8_E4M3:
         case DataType::MXFP8_E5M2:
         case DataType::MXFP6_E2M3:
@@ -484,6 +497,8 @@ void pytensor_module_types(nb::module_& mod) {
         |            |                                                        |                           | ttnn.DataType.BFLOAT8_B            |          |
         |            |                                                        |                           |                                    |          |
         |            |                                                        |                           | ttnn.DataType.BFLOAT4_B            |          |
+        |            |                                                        |                           |                                    |          |
+        |            |                                                        |                           | ttnn.DataType.BFLOAT2_B            |          |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
         | layout     | Layout of tensor data in memory                        | ttnn.Layout               | ttnn.Layout.ROW_MAJOR              | Yes      |
         |            |                                                        |                           |                                    |          |
@@ -778,8 +793,7 @@ void pytensor_module(nb::module_& mod) {
                 auto src_dtype = get_PyDType_from_dtype(py_tensor_dtype);
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
-                const bool tile_layout_by_default =
-                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B || is_mx(dst_dtype));
+                const bool tile_layout_by_default = is_block_float(dst_dtype) || is_mx(dst_dtype);
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
                 const auto shape = CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor);
@@ -881,7 +895,7 @@ void pytensor_module(nb::module_& mod) {
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
-            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
+            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B, BFLOAT2_B (in TILE layout) are supported on device.
 
             If ``arg1`` is not supplied, memory config from the source tensor will be used.
 
@@ -908,7 +922,7 @@ void pytensor_module(nb::module_& mod) {
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
-            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
+            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B, BFLOAT2_B (in TILE layout) are supported on device.
 
             If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
 
@@ -932,7 +946,7 @@ void pytensor_module(nb::module_& mod) {
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
-            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
+            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B, BFLOAT2_B (in TILE layout) are supported on device.
 
             If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
 
@@ -977,6 +991,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::BFLOAT16: return static_cast<float>(self.to_vector<bfloat16>()[0]);
                         case DataType::BFLOAT8_B:
                         case DataType::BFLOAT4_B:
+                        case DataType::BFLOAT2_B:
                         case DataType::MXFP8_E4M3:
                         case DataType::MXFP8_E5M2:
                         case DataType::MXFP6_E2M3:
@@ -1759,7 +1774,8 @@ void pytensor_module(nb::module_& mod) {
                     auto data_vec = [&self]() {
                         if constexpr (
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
-                            std::is_same_v<T, mx_tiles> || std::is_same_v<T, bfloat16>) {
+                            std::is_same_v<T, bfloat2_b> || std::is_same_v<T, mx_tiles> ||
+                            std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
                         } else if constexpr (std::is_same_v<T, float8_e4m3>) {
                             // to_vector<float>() doesn't yet handle FP8 source (see

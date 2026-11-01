@@ -343,6 +343,13 @@ HostTensor pad_impl<tensor_impl::mx_tiles>(
     TT_THROW("pad: {} is not supported", tensor.dtype());
 }
 
+template <>
+HostTensor pad_impl<tensor_impl::bfloat2_b>(
+    const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
+    // pad() requires ROW_MAJOR and BFLOAT2_B tensors are TILE-only, so this is unreachable in practice.
+    TT_THROW("pad: {} is not supported", tensor.dtype());
+}
+
 template <typename T>
 HostTensor unpad_impl(
     const HostTensor& tensor,
@@ -427,6 +434,13 @@ template <>
 HostTensor unpad_impl<tensor_impl::mx_tiles>(
     const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
     // See pad_impl<mx_tiles>: unpad() requires ROW_MAJOR and MX tensors are TILE-only.
+    TT_THROW("unpad: {} is not supported", tensor.dtype());
+}
+
+template <>
+HostTensor unpad_impl<tensor_impl::bfloat2_b>(
+    const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
+    // See pad_impl<bfloat2_b>: unpad() requires ROW_MAJOR and BFLOAT2_B tensors are TILE-only.
     TT_THROW("unpad: {} is not supported", tensor.dtype());
 }
 

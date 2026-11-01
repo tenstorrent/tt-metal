@@ -20,6 +20,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -86,6 +87,30 @@ std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& sh
     auto packed =
         pack_as_bfp4_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     return {std::move(floats), std::move(packed)};
+}
+
+std::pair<PackedBfp, UnpackedBfp> generate_bfp2_dataset(const Shape& shape, const Tile& tile) {
+    const auto src = make_bfp_data(shape, tile);
+    auto packed = pack_as_bfp2_tiles(ttsl::make_const_span(src), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+    auto unpacked = unpack_bfp2_tiles_into_float_vec(packed, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(packed), std::move(unpacked)};
+}
+
+std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp2_dataset(const Shape& shape, const Tile& tile) {
+    auto floats = make_bfp_data(shape, tile);
+    auto packed =
+        pack_as_bfp2_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(floats), std::move(packed)};
+}
+
+// Ternary values {-1, 0, +1}: every face row holds a +-1 so its shared exponent is 2^0, which makes the data
+// exactly representable in BFP2.
+std::vector<float> make_ternary_data(size_t count) {
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i) {
+        data[i] = static_cast<float>(static_cast<int>(i % 3) - 1);
+    }
+    return data;
 }
 
 // MX -> float golden for an MX dtype: packed tiles plus their reference unpack.
@@ -232,6 +257,71 @@ TEST(HostTensorToDtype, Float32ToTileBfp4ValueCheck) {
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 
     EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), packed_golden));
+}
+
+TEST(HostTensorToDtype, TileBfp2ToFloat32ValueCheck) {
+    const Shape shape{32, 32};
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_bfp2_dataset(shape, tile);
+
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT2_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, source_spec);
+
+    auto result = to_dtype(source, DataType::FLOAT32);
+
+    auto expected_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(result.layout(), Layout::TILE);
+    EXPECT_EQ(result.tensor_spec().tile(), tile);
+
+    EXPECT_THAT(host_buffer::get_as<float>(result), Pointwise(Eq(), unpacked_golden));
+}
+
+TEST(HostTensorToDtype, Float32ToTileBfp2ValueCheck) {
+    const Shape shape{32, 32};
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [floats, packed_golden] = CMAKE_UNIQUE_NAMESPACE::generate_float_to_bfp2_dataset(shape, tile);
+
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, source_spec);
+
+    auto result = to_dtype(source, DataType::BFLOAT2_B);
+
+    auto expected_spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT2_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::BFLOAT2_B);
+    EXPECT_EQ(result.layout(), Layout::TILE);
+    EXPECT_EQ(result.tensor_spec().tile(), tile);
+
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), packed_golden));
+}
+
+// A 32x32 BFP2 tile is 320 bytes, and ternary data survives float -> BFLOAT2_B -> float exactly.
+TEST(HostTensorToDtype, TernaryFloat32ToBfp2RoundTripIsExact) {
+    const Shape shape{64, 96};
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto tile = Tile({32, 32});
+    const auto ternary = CMAKE_UNIQUE_NAMESPACE::make_ternary_data(shape.volume());
+
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config));
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(ternary, source_spec);
+
+    auto packed = to_dtype(source, DataType::BFLOAT2_B);
+    EXPECT_EQ(packed.dtype(), DataType::BFLOAT2_B);
+    EXPECT_EQ(host_buffer::get_as<uint32_t>(packed).size() * sizeof(uint32_t), (64 / 32) * (96 / 32) * 320u);
+
+    auto round_trip = to_dtype(packed, DataType::FLOAT32);
+    EXPECT_THAT(host_buffer::get_as<float>(round_trip), Pointwise(Eq(), ternary));
 }
 
 TEST(HostTensorToDtype, Float32ToBfloat16RowMajorValueCheck) {

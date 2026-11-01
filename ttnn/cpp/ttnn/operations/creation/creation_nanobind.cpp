@@ -89,10 +89,10 @@ void bind_full(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
             ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
             TILE requires width and height dimensions to be multiples of 32.
         )doc";
@@ -152,10 +152,10 @@ void bind_zeros(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
             ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
             TILE requires width and height dimensions to be multiples of 32.
         )doc";
@@ -203,10 +203,10 @@ void bind_ones(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
             ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
             TILE requires width and height dimensions to be multiples of 32.
         )doc";
@@ -271,10 +271,10 @@ void bind_full_like(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
             ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
             TILE requires width and height dimensions to be multiples of 32.
         )doc";
@@ -336,10 +336,10 @@ void bind_zeros_like(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
             ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
             TILE requires width and height dimensions to be multiples of 32.
         )doc";
@@ -390,10 +390,10 @@ void bind_ones_like(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
             ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
             TILE requires width and height dimensions to be multiples of 32.
         )doc";
@@ -518,10 +518,10 @@ void bind_empty(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"empty">(
@@ -569,10 +569,10 @@ void bind_empty_like(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, UINT8, UINT16, UINT32, INT8, INT32
                  - TILE, ROW_MAJOR
 
-            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            BFLOAT8_B, BFLOAT4_B and BFLOAT2_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"empty_like">(
@@ -631,6 +631,7 @@ Tensor from_buffer_impl(
                 "prefill ops for now; host-side construction via from_buffer is not supported.");
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::MXFP8_E4M3:
         case DataType::MXFP8_E5M2:
         case DataType::MXFP6_E2M3:
@@ -674,7 +675,7 @@ void bind_from_buffer(nb::module_& mod) {
                  - TILE, ROW_MAJOR
 
             The buffer element type must be compatible with `dtype`.
-            BFLOAT8_B, BFLOAT4_B, and FP8_E4M3 are not supported for host-side construction.
+            BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, and FP8_E4M3 are not supported for host-side construction.
         )doc";
 
     ttnn::bind_function<"from_buffer">(

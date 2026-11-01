@@ -23,6 +23,7 @@ TEST(TensorTypesTileSizeTest, MatchesDataFormatTileSize) {
         DataType::UINT32,
         DataType::BFLOAT8_B,
         DataType::BFLOAT4_B,
+        DataType::BFLOAT2_B,
         DataType::UINT8,
         DataType::UINT16,
         DataType::INT32,
@@ -71,8 +72,19 @@ TEST(TensorTypesMxTest, DataFormatRoundTripAndPredicates) {
     }
 
     EXPECT_FALSE(is_mx(DataType::BFLOAT8_B));
+    EXPECT_FALSE(is_mx(DataType::BFLOAT2_B));
     EXPECT_FALSE(is_mx(DataType::BFLOAT16));
     EXPECT_FALSE(is_mx(DataType::INVALID));
+}
+
+// BFLOAT2_B maps to Bfp2_b and back, is a block float, and uses the 320-byte Bfp2_b tile
+// (64 B of shared exponents + 256 B of 2-bit data for a 32x32 tile).
+TEST(TensorTypesBfp2Test, DataFormatRoundTripAndPredicates) {
+    EXPECT_EQ(datatype_to_dataformat_converter(DataType::BFLOAT2_B), tt::DataFormat::Bfp2_b);
+    EXPECT_EQ(dataformat_to_datatype_converter(tt::DataFormat::Bfp2_b), DataType::BFLOAT2_B);
+    EXPECT_TRUE(is_block_float(DataType::BFLOAT2_B));
+    EXPECT_TRUE(is_floating_point(DataType::BFLOAT2_B));
+    EXPECT_EQ(tt::tt_metal::tile_size(DataType::BFLOAT2_B), 320u);
 }
 
 }  // namespace

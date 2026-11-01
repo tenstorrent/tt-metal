@@ -191,9 +191,7 @@ Tensor full_impl(
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
     auto get_default_layout = [dtype_value]() {
-        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B || is_mx(dtype_value))
-                   ? ttnn::TILE_LAYOUT
-                   : ttnn::ROW_MAJOR_LAYOUT;
+        return (is_block_float(dtype_value) || is_mx(dtype_value)) ? ttnn::TILE_LAYOUT : ttnn::ROW_MAJOR_LAYOUT;
     };
 
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().layout()
@@ -246,6 +244,7 @@ Tensor full_impl(
         case DataType::INT32: return concrete_full.template operator()<int32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
         case DataType::MXFP8_E4M3:
@@ -381,7 +380,7 @@ Tensor from_buffer(
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-    TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+    TT_ASSERT(!is_block_float(dtype), "Unsupported DataType!");
     tt::tt_metal::TensorSpec spec(
         shape,
         TensorLayout(
@@ -398,7 +397,7 @@ Tensor from_buffer(
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-    TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+    TT_ASSERT(!is_block_float(dtype), "Unsupported DataType!");
     tt::tt_metal::TensorSpec spec(
         shape,
         TensorLayout(

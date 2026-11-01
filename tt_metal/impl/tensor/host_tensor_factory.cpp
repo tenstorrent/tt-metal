@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -120,7 +121,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B || is_mx(spec.data_type())) {
+    if (is_block_float(spec.data_type()) || is_mx(spec.data_type())) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float and MX types are only supported in TILE layout");
     }
     if (auto packed = detail::try_encode_bfp_matrix(buffer, spec)) {
@@ -176,7 +177,7 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, Tenso
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
 
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B || is_mx(spec.data_type())) {
+    if (is_block_float(spec.data_type()) || is_mx(spec.data_type())) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float and MX types only supported in TILE layout");
     }
     if (auto packed = detail::try_encode_bfp_matrix(ttsl::make_const_span(buffer), spec)) {
@@ -247,13 +248,23 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             return tensor_impl::decode_tensor_data(buffer, tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: {
             const auto& tile = tensor.tensor_spec().tile();
             auto buffer = host_buffer::get_as<uint32_t>(tensor);
-            std::vector<float> unpacked_data =
-                tensor.dtype() == DataType::BFLOAT8_B
-                    ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            std::vector<float> unpacked_data = [&]() {
+                switch (tensor.dtype()) {
+                    case DataType::BFLOAT8_B:
+                        return unpack_bfp8_tiles_into_float_vec(
+                            buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                    case DataType::BFLOAT4_B:
+                        return unpack_bfp4_tiles_into_float_vec(
+                            buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                    default:
+                        return ::unpack_bfp2_tiles_into_float_vec(
+                            buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                }
+            }();
             return tensor_impl::decode_tensor_data(ttsl::make_const_span(unpacked_data), tensor.tensor_spec());
         }
         case DataType::MXFP8_E4M3:

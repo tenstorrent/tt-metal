@@ -67,6 +67,9 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::MXINT2:
             // https://github.com/tenstorrent/tt-metal/issues/58157 (typecast/tilize don't produce MX yet;
             // MX tensors are packed on the host)
+        case DataType::BFLOAT2_B:
+            // https://github.com/tenstorrent/tt-metal/issues/63666 (typecast doesn't produce BFLOAT2_B;
+            // BFLOAT2_B tensors are packed on the host)
             return false;
         default: return true;
     }
@@ -337,7 +340,8 @@ Tensor create_tt_tensor_from_host_data(
 
     switch (src_dtype) {
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return create_tensor_from_host_buffer.operator()<float>();
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
@@ -372,9 +376,8 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
 
     // Block formats are packed from a plain host buffer. MX goes through FLOAT32 because the MX packers only
     // take float, and a BFLOAT16 hop would round twice.
-    const DataType mapped_dst_type = (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)
-                                         ? DataType::BFLOAT16
-                                         : (is_mx(dst_dtype) ? DataType::FLOAT32 : dst_dtype);
+    const DataType mapped_dst_type =
+        is_block_float(dst_dtype) ? DataType::BFLOAT16 : (is_mx(dst_dtype) ? DataType::FLOAT32 : dst_dtype);
 
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
@@ -408,8 +411,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     bool col_tilize,
     bool enable_bfloat_opt) {
     ZoneScoped;
-    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
-        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
+    if (is_block_float(dst_dtype)) {
+        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for {}!", dst_dtype);
     }
     if (is_mx(dst_dtype)) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for {}!", dst_dtype);
