@@ -117,3 +117,104 @@ def test_glm_moe_block(mesh_device, device_params):
         f"{(t2 - t0) / calls * 1e3:.2f} ms with the device"
     )
     assert ok, f"MoE block vs the CPU MoE: {msg} (need {FINAL_PCC})"
+
+
+def _k3_moe_reference(x, gate, routed, shared, latent):
+    """Kimi-K3's MoE in fp32 on the host - what TorchMoe computes for test_kimi_k3_moe: the noaux_tc router (sigmoid
+    scores, + the correction bias for the pick, one group), top-16 weights renormalized x ROUTE_SCALE; the routed
+    experts at the latent width (down_proj in, SiTU-GLU, the sum, the latent RMSNorm, up_proj out); the SiTU-GLU shared
+    expert at emb_dim."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config as K
+
+    b, lb = K.ACTIVATION_SITU_BETA, K.ACTIVATION_SITU_LINEAR_BETA
+    situ = lambda g, u: b * torch.tanh(g / b) * torch.sigmoid(g) * lb * torch.tanh(u / lb)  # noqa: E731
+    x = x.float()
+    scores = torch.sigmoid(x @ gate["weight"].float().T)
+    ids = (scores + gate["e_score_correction_bias"].float()).topk(K.NUM_EXPERTS_PER_TOKEN, dim=-1).indices
+    w = scores.gather(-1, ids)
+    w = w / w.sum(-1, keepdim=True) * K.ROUTE_SCALE
+    h = x @ latent["down_proj"].float().T
+    acc = torch.zeros(x.shape[0], h.shape[1])
+    for e in torch.unique(ids).tolist():
+        tok, kk = (ids == e).nonzero(as_tuple=True)
+        r = routed[e]
+        a = situ(h[tok] @ r["gate_proj"].float().T, h[tok] @ r["up_proj"].float().T)
+        acc.index_add_(0, tok, (a @ r["down_proj"].float().T) * w[tok, kk].unsqueeze(1))
+    acc = acc * torch.rsqrt(acc.pow(2).mean(-1, keepdim=True) + K.RMS_NORM_EPS) * latent["norm"].float()
+    y = acc @ latent["up_proj"].float().T
+    return y + situ(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
+
+
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config  # noqa: E402
+
+_K3_PAYLOAD, _K3_L1_SMALL = moe_block_mesh_params(KimiK3Config, moe_fabric_payload(KimiK3Config), 0, moe_impl="block")
+K3_FINAL_PCC = 0.965  # (test_kimi_k3_moe's final-output bar)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=_K3_PAYLOAD,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=_K3_L1_SMALL,
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1800)
+def test_k3_moe_block(mesh_device, device_params):
+    """Kimi-K3 on the MoE block (TtK3MoEBlockFfn from host weights) vs the K3 MoE math on the host: test_kimi_k3_moe's
+    weight creators and seeds, its 0.965 bar. The routed experts: one chip's worth (28) of create_torch_expert_weights
+    repeated on every chip (896 distinct experts would take the host ~120 GB to lay out); the router, latent pair and
+    shared expert as test_kimi_k3_moe's."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
+    from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+        create_gate_weights,
+        create_latent_weights,
+        create_shared_expert_weights,
+        create_torch_expert_weights,
+    )
+
+    R, C = tuple(mesh_device.shape)
+    K = KimiK3Config
+    H, Hr, E = K.EMB_SIZE, K.ROUTED_EXPERT_HIDDEN_SIZE, K.NUM_ROUTED_EXPERTS
+    epc = E // (R * C)
+    pool = create_torch_expert_weights(epc, Hr, K.MOE_INTERMEDIATE_SIZE, seed=1234)
+    routed = [pool[e % epc] for e in range(E)]
+    shared = create_shared_expert_weights(H, K.SHARED_EXPERT_INTERMEDIATE_SIZE, seed=5678)
+    gate = create_gate_weights(E, H, seed=9012)
+    latent = create_latent_weights(H, Hr, seed=3456)
+    sd = {
+        "gate_weights": gate,
+        "routed_expert_weights": routed,
+        "shared_expert_weights": shared,
+        "latent_weights": latent,
+    }
+    ffn = TtK3MoEBlockFfn(mesh_device, KimiK3Config, layer_idx=1, state_dict=sd)
+
+    x = torch.randn(1, 1, CHUNK, H, generator=torch.Generator().manual_seed(7)).to(torch.bfloat16)
+    x_tt = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3)),
+    )
+    y_tt = ffn(x_tt)
+    ttnn.synchronize_device(mesh_device)
+    comp = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    y = ttnn.to_torch(y_tt, mesh_composer=comp).float()
+    ttnn.deallocate(y_tt)
+
+    want = _k3_moe_reference(x[0, 0], gate, routed, shared, latent)
+    ok, msg = comp_pcc(want.reshape(-1, H), y.reshape(-1, H), K3_FINAL_PCC)
+    logger.info(f"MoE block (Kimi-K3, random weights, {CHUNK} tokens) vs the host K3 MoE: {msg}")
+    assert ok, f"MoE block vs the host K3 MoE: {msg} (need {K3_FINAL_PCC})"

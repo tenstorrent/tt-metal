@@ -322,13 +322,16 @@ class TtK3MoEBlockFfn:
         rw = self.host_sd["routed_expert_weights"]
         assert len(rw) == E, f"MoE block: {len(rw)} routed experts in the state dict, the model has {E}"
         f = lambda t: t.float().T.contiguous()  # noqa: E731  ((out, in) Linear weights -> the flat op's [in, out])
+        same = N > 1 and all(rw[n * epc + i] is rw[i] for n in range(1, N) for i in range(epc))
         per_dev = [
             [(f(rw[e]["gate_proj"]), f(rw[e]["up_proj"]), f(rw[e]["down_proj"])) for e in range(n * epc, (n + 1) * epc)]
-            for n in range(N)
+            for n in range(1 if same else N)
         ]
+        # (every chip the same expert objects - a test's pool repeated: pack once, replicate; K3's 896 distinct
+        # experts packed a chip each would hold ~120 GB of fp32)
         packed = [fw.flat_weight_regions(W_l, lay) for W_l in per_dev]
-        w_gu = fw.bank_sharded([p[0] for p in packed], lay["banks"], ttnn.bfloat4_b, self.mesh)
-        w_d = fw.bank_sharded([p[1] for p in packed], lay["banks"], ttnn.bfloat4_b, self.mesh)
+        w_gu = fw.bank_sharded([p[0] for p in packed], lay["banks"], ttnn.bfloat4_b, self.mesh, replicate=same)
+        w_d = fw.bank_sharded([p[1] for p in packed], lay["banks"], ttnn.bfloat4_b, self.mesh, replicate=same)
         gidx = ttnn.from_torch(
             torch.arange(E, dtype=torch.int32).reshape(N, 1, epc),
             dtype=ttnn.uint32,
