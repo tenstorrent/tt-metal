@@ -278,8 +278,8 @@ void kernel_main() {
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
     const bool seg_active = seg_accum_enabled && q_per_core == 1;
     bool seg_state_valid = false;
-    // Largest valid K chunk count over the ring iterations: a slice is non-empty on some iteration iff it is non-empty
-    // at the largest count, so the reducer knows which senders have state.
+    // Sliding K split: the largest work plan over the ring iterations, from which the reducer knows which senders have
+    // state.
     [[maybe_unused]] uint32_t ksplit_max_valid = 0;
     // Bands below the reducer's that had K chunks in some ring step (dense K split): the senders whose state follows.
     [[maybe_unused]] uint32_t ksplit_sender_bands_with_work = 0;
@@ -614,9 +614,6 @@ void kernel_main() {
                         donated_has_state |= !ksplit_k_range.empty();
                         ksplit_k_range.end = ksplit_k_range.begin;
                     }
-                }
-                if (ksplit_active) {
-                    ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
                 }
             }
         }

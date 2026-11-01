@@ -67,19 +67,23 @@ inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t
 }
 
 // Band split_idx of ring_id's slice as the gather splits it into split_chunks (its readiness bands), clipped to the
-// num_valid chunks this core's causal mask keeps; valid chunks past the split stay with the last band, which holds the
-// diagonal. With slice readiness the receiver's valid count can differ from the gather's split by a few chunks (a KV
-// pad rotation moves the causal end), so cutting the bands where the gather cut them keeps each band's chunks in the
-// readiness parts the band reads first.
+// num_valid chunks this core's causal mask keeps. The last valid chunk (the diagonal) and any valid chunks past the
+// split stay with the last band, so the reducer always has state. With slice readiness the receiver's valid count can
+// differ from the gather's split by a few chunks (a KV-pad rotation moves the causal end), so cutting the bands where
+// the gather cut them keeps each band's chunks in the readiness parts the band reads first. Equal counts give exactly
+// ksplit_range(num_valid, ...).
 inline KSplitRange ksplit_band_range(
     uint32_t split_chunks, uint32_t num_valid, uint32_t split_idx, uint32_t split_count, uint32_t ring_id) {
-    KSplitRange r = ksplit_range(split_chunks, split_idx, split_count, ring_id);
-    r.begin = r.begin < num_valid ? r.begin : num_valid;
-    r.end = split_idx + 1 == split_count || r.end > num_valid ? num_valid : r.end;
-    if (r.end < r.begin) {
-        r.end = r.begin;
+    if (num_valid == 0) {
+        return {0, 0};
     }
-    return r;
+    const uint32_t last = num_valid - 1;
+    const KSplitRange r = ksplit_range(split_chunks, split_idx, split_count, ring_id);
+    const uint32_t begin = r.begin < last ? r.begin : last;
+    if (split_idx + 1 == split_count) {
+        return {begin, num_valid};
+    }
+    return {begin, r.end < last ? r.end : last};
 }
 
 // Sliding split of a (head, Q chunk) unit's work plan. A plan shorter than two chunks per band (the first window of the
