@@ -180,7 +180,14 @@ class Qwen36DecoderLayer:
 
         if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
             # Exact-ternary projections from the PQ2_0 GGUF (bonsai2/native/a3), decode only.
-            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, attn_qkv_rows, gdn_in_rows, sites
+            from models.demos.blackhole.bonsai2.native.a3.linear import (
+                TernaryLinear,
+                attn_qkv_rows,
+                attn_qkv_shape,
+                gdn_in_rows,
+                gdn_in_shape,
+                sites,
+            )
             from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
 
             _sh = shared_for(mesh_device)
@@ -193,7 +200,11 @@ class Qwen36DecoderLayer:
                     self.attention.weights = dataclasses.replace(
                         self.attention.weights,
                         fused_qkv=TernaryLinear(
-                            _sh, f"blk.{layer_num}.attn_qkv_fused", _cache, rows=attn_qkv_rows(_sh, layer_num)
+                            _sh,
+                            f"blk.{layer_num}.attn_qkv_fused",
+                            _cache,
+                            rows=lambda: attn_qkv_rows(_sh, layer_num),
+                            shape=attn_qkv_shape(_sh, layer_num),
                         ),
                     )
                 if "attn_o" in sites():
@@ -212,7 +223,11 @@ class Qwen36DecoderLayer:
                     import torch
 
                     self.attention._native_in = TernaryLinear(
-                        _sh, f"blk.{layer_num}.gdn_in", _cache, rows=gdn_in_rows(_sh, layer_num)
+                        _sh,
+                        f"blk.{layer_num}.gdn_in",
+                        _cache,
+                        rows=lambda: gdn_in_rows(_sh, layer_num),
+                        shape=gdn_in_shape(_sh, layer_num),
                     )
                     _g = substate(state_dict, f"layers.{layer_num}.linear_attn")
                     _ab = torch.cat([_g["in_proj_a.weight"], _g["in_proj_b.weight"]], 0)  # [2*Nv, dim], bf16 in the GGUF
