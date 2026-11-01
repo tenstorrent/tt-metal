@@ -98,6 +98,32 @@ def test_bfp2_to_dtype_from_row_major_switches_to_tile():
     assert torch.equal(ttnn.to_torch(converted), x)
 
 
+def test_bfp2_to_layout_tile_is_no_op():
+    x = _ternary((64, 64))
+    tt_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT)
+
+    result = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+
+    assert result.dtype == ttnn.bfloat2_b
+    assert result.layout == ttnn.TILE_LAYOUT
+    assert torch.equal(ttnn.to_torch(result), x)
+
+
+def test_bfp2_to_layout_row_major_rejected_on_host(expect_error):
+    # BFLOAT2_B is TILE-only, so ROW_MAJOR is an error rather than the silent no-op BFLOAT8_B/BFLOAT4_B get (#43763).
+    tt_tensor = ttnn.from_torch(_ternary((32, 32)), dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "supports TILE layout only"):
+        ttnn.to_layout(tt_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def test_bfp2_to_layout_row_major_rejected_on_device(device, expect_error):
+    # Untilize keeps the BFLOAT2_B dtype and a ROW_MAJOR BFLOAT2_B tensor is invalid, so the request is rejected before
+    # any kernel runs.
+    tt_tensor = ttnn.from_torch(_ternary((32, 32)), dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Only TILE layout is supported"):
+        ttnn.to_layout(tt_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+
 def test_bfp2_serialization(tmp_path):
     x = _ternary((64, 96))
     tt_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT)
