@@ -70,9 +70,13 @@ def test_moe_prefill_paths(mesh_device):
         if path == "dispatch" and rows < 2:
             logger.info("path dispatch needs a multi-row mesh: skipped")
             continue
+        # the path is resolved at construction from the environment (``prefill_experts_mode``, 2026-10-26); the
+        # module constant alone no longer selects it (both instances built the blocks path: 2026-11-01 07:17)
         moe_mod.PREFILL_EXPERTS = path
+        os.environ["GLM53_PREFILL_EXPERTS"] = path
         t0 = time.perf_counter()
         moe = TtMoE(mesh_device, cfg, mlp_sd, mesh=mesh)
+        assert moe.experts.prefill_experts == path, (path, moe.experts.prefill_experts)
         logger.info(f"path {path}: layer {LAYER} MoE built in {time.perf_counter() - t0:.0f} s")
         y = moe(x_tt)  # compile
         ttnn.synchronize_device(mesh_device)
