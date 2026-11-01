@@ -58,8 +58,12 @@ def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
     """
     K = q.shape[-1]
     f32 = ttnn.float32
-    qn = ttnn.rms_norm(ttnn.typecast(q, f32), epsilon=1e-6 / K)
-    kn = l2_norm_ttnn(ttnn.typecast(k, f32), dim=-1)
+    ckc = _gdn_norm_ckc()
+    qn = ttnn.rms_norm(ttnn.typecast(q, f32), epsilon=1e-6 / K, compute_kernel_config=ckc)
+    if ckc is None:
+        kn = l2_norm_ttnn(ttnn.typecast(k, f32), dim=-1)
+    else:
+        kn = ttnn.multiply(ttnn.rms_norm(ttnn.typecast(k, f32), epsilon=1e-6 / K, compute_kernel_config=ckc), K**-0.5)
     return ttnn.transformer.fused_recurrent_gated_delta_rule(
         qn,
         kn,
@@ -69,6 +73,16 @@ def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
         scale=scale * K**-0.5,
         output_final_state=True,
         **op_kwargs,
+    )
+
+
+def _gdn_norm_ckc():
+    """QWEN36_1C_GDN_NORM_HIFI=1: GDN decode q/k l2norms and gated norm with HiFi4 + fp32 accumulation. Isolated,
+    rms_norm on fp32 [16,128] lands 2.1e-4 from exact instead of 2.5e-3 with the default config."""
+    if os.environ.get("QWEN36_1C_GDN_NORM_HIFI") != "1":
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
     )
 
 
@@ -1716,7 +1730,9 @@ class TPGatedDeltaNet:
             self._write_recurrent_state_prefix(new_rec, B)
 
         if self._gdn_hmo:
-            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # o: [Nv, 1, Dv]
+            out_n = ttnn.rms_norm(  # o: [Nv, 1, Dv]
+                o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1, compute_kernel_config=_gdn_norm_ckc()
+            )
             ttnn.deallocate(o)
             out_f = head_major_flat_view(out_n)
         else:
