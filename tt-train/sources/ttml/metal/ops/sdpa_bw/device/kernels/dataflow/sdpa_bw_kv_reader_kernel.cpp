@@ -127,19 +127,35 @@ void kernel_main() {
             const uint32_t vo_addr = get_write_ptr(cb_grad_output);
             const uint32_t u_addr = get_write_ptr(cb_u_scalar_row);
             if (is_injector) {
+                // The chunk's Q / lse / dO / u tile reads all in flight, one barrier (iteration 22: four barriers
+                // per row, serial with the forwarding, were a large part of the injector's time).
+                uint32_t qa = q_addr;
+                uint32_t ia = i_addr;
+                uint32_t voa = vo_addr;
+                uint32_t ua = u_addr;
+                const uint32_t u_tile_bytes = get_tile_size(cb_u_scalar_row);
                 for (uint32_t h = h0; h < h0 + chain_chunk; ++h) {
-                    read_tiles_by_row(cb_query, query_address_generator, q_offset + h * qWt, qWt, tile_bytes, qWt);
-                    read_tiles_by_row(
-                        cb_intermediates,
-                        intermediates_address_generator,
-                        interm_offset + h * num_of_interm_tiles,
-                        num_of_interm_tiles,
-                        interm_tile_bytes,
-                        num_of_interm_tiles);
-                    read_tiles_by_row(
-                        cb_grad_output, grad_output_address_generator, vo_offset + h * vWt, vWt, tile_bytes, vWt);
-                    read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_offset + h);
+                    for (uint32_t t = 0; t < qWt; ++t) {
+                        noc_async_read_page(q_offset + h * qWt + t, query_address_generator, qa);
+                        qa += tile_bytes;
+                    }
+                    for (uint32_t t = 0; t < num_of_interm_tiles; ++t) {
+                        noc_async_read_page(
+                            interm_offset + h * num_of_interm_tiles + t, intermediates_address_generator, ia);
+                        ia += interm_tile_bytes;
+                    }
+                    for (uint32_t t = 0; t < vWt; ++t) {
+                        noc_async_read_page(vo_offset + h * vWt + t, grad_output_address_generator, voa);
+                        voa += tile_bytes;
+                    }
+                    noc_async_read_page(u_offset + h, u_scaler_address_generator, ua);
+                    ua += u_tile_bytes;
                 }
+                noc_async_read_barrier();
+                cb_push_back(cb_query, q_chunk_tiles);
+                cb_push_back(cb_intermediates, one_chunk_tiles);
+                cb_push_back(cb_grad_output, vo_chunk_tiles);
+                cb_push_back(cb_u_scalar_row, one_chunk_tiles);
             } else {
                 receiver_sem.set(INVALID);
                 sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);

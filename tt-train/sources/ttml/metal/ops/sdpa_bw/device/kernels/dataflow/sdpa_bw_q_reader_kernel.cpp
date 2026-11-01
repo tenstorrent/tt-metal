@@ -174,10 +174,23 @@ void kernel_main() {
             const uint32_t k_addr = get_write_ptr(cb_key);
             const uint32_t v_addr = get_write_ptr(cb_value);
             if (is_injector) {
+                // The chunk's tile reads all in flight, one barrier (iteration 22: a barrier per row cost the
+                // injector ~45 us per call, serial with the forwarding).
+                uint32_t ka = k_addr;
+                uint32_t va = v_addr;
                 for (uint32_t h = h0; h < h0 + chain_chunk; ++h) {
-                    read_tiles_by_row(cb_key, key_addr_generator, key_offset + h * qWt, qWt, tile_bytes, qWt);
-                    read_tiles_by_row(cb_value, value_addr_generator, value_offset + h * vWt, vWt, tile_bytes, vWt);
+                    for (uint32_t t = 0; t < qWt; ++t) {
+                        noc_async_read_page(key_offset + h * qWt + t, key_addr_generator, ka);
+                        ka += tile_bytes;
+                    }
+                    for (uint32_t t = 0; t < vWt; ++t) {
+                        noc_async_read_page(value_offset + h * vWt + t, value_addr_generator, va);
+                        va += tile_bytes;
+                    }
                 }
+                noc_async_read_barrier();
+                cb_push_back(cb_key, k_chunk_tiles);
+                cb_push_back(cb_value, v_chunk_tiles);
             } else {
                 receiver_sem.set(INVALID);
                 sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);

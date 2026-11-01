@@ -1,0 +1,341 @@
+2026-10-31 20:28:34.384 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 47 items / 43 deselected / 4 selected
+
+tests/python/test_mistral.py::test_attention_forward_and_gradients 2026-10-31 20:28:35.160 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-31 20:28:35.160 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-31 20:28:35.161 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-31 20:28:35.161 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-31 20:28:35.171 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-31 20:28:35.172 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-31 20:28:35.251 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-31 20:28:35.251 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-31 20:28:35.251 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-31 20:28:35.251 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-31 20:28:35.253 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-31 20:28:35.443 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-31 20:28:35.477 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-31 20:28:35.477 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-31 20:28:35.477 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-31 20:28:35.517 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+attention (qkv, heads, rope, causal GQA sdpa, concat, out-proj): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999989 4.81e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       nan inf  (>= 0.98, <= 0.08) FAIL
+  d w_qkv                      (6144, 5120)             nan inf  (>= 0.98, <= 0.08) FAIL
+  d w_out                      (5120, 4096)             0.999989 4.83e-03  (>= 0.99, <= 0.05) ok
+FAILED
+tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[tp4-shard] sdpa causal GQA q8 kv2 S1024: tensor | shape | PCC | rel err | bar
+  out                          (1, 8, 1024, 128)        0.999997 2.52e-03  (>= 0.999, <= 0.02) ok
+  dQ                           (1, 8, 1024, 128)        nan inf  (>= 0.99, <= 0.05) FAIL
+  dK                           (1, 2, 1024, 128)        0.999996 2.86e-03  (>= 0.99, <= 0.05) ok
+  dV                           (1, 2, 1024, 128)        0.999997 2.76e-03  (>= 0.99, <= 0.05) ok
+FAILED
+tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[two-rows-per-core] sdpa causal GQA q8 kv2 S2048: tensor | shape | PCC | rel err | bar
+  out                          (1, 8, 2048, 128)        0.999994 3.48e-03  (>= 0.999, <= 0.02) ok
+  dQ                           (1, 8, 2048, 128)        nan inf  (>= 0.99, <= 0.05) FAIL
+  dK                           (1, 2, 2048, 128)        0.999995 3.17e-03  (>= 0.99, <= 0.05) ok
+  dV                           (1, 2, 2048, 128)        0.999995 3.04e-03  (>= 0.99, <= 0.05) ok
+FAILED
+tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[one-group] sdpa causal GQA q4 kv1 S1024: tensor | shape | PCC | rel err | bar
+  out                          (1, 4, 1024, 128)        0.999997 2.57e-03  (>= 0.999, <= 0.02) ok
+  dQ                           (1, 4, 1024, 128)        nan inf  (>= 0.99, <= 0.05) FAIL
+  dK                           (1, 1, 1024, 128)        0.999996 2.82e-03  (>= 0.99, <= 0.05) ok
+  dV                           (1, 1, 1024, 128)        0.999996 2.83e-03  (>= 0.99, <= 0.05) ok
+FAILED
+
+=================================== FAILURES ===================================
+_____________________ test_attention_forward_and_gradients _____________________
+
+    def test_attention_forward_and_gradients():
+        rng = seeded(3)
+        x_np = rand_x(rng)
+        w_qkv = rand_weight(rng, (HEADS + 2 * KV_HEADS) * HEAD_DIM, HIDDEN)
+        w_out = rand_weight(rng, HIDDEN, HEADS * HEAD_DIM)
+        dout_np = rand_x(rng, std=0.01)
+
+        attn = GroupedQueryAttention(HIDDEN, HEADS, KV_HEADS, 0.0, rope_params(), head_dim=HEAD_DIM)
+        assign(attn.qkv_linear.weight.tensor, w_qkv)
+        assign(attn.out_linear.weight.tensor, w_out)
+        x = to_device(x_np, requires_grad=True)
+        out = attn(x, None)
+        out_val = to_host(out)
+        _backward(out, dout_np)
+
+        xr, wq, wo = t(x_np, True), t(w_qkv[0, 0], True), t(w_out[0, 0], True)
+        ref = ref_attention(xr, wq, wo)
+        ref.backward(t(dout_np))
+
+        rep = Report("attention (qkv, heads, rope, causal GQA sdpa, concat, out-proj)")
+        rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+        rep.check("dx", grad_of(x), xr.grad.numpy(), ATTN_GRAD_PCC, ATTN_GRAD_REL)
+        rep.check("d w_qkv", grad_of(attn.qkv_linear.weight.tensor)[0, 0], wq.grad.numpy(), ATTN_GRAD_PCC, ATTN_GRAD_REL)
+        rep.check("d w_out", grad_of(attn.out_linear.weight.tensor)[0, 0], wo.grad.numpy(), GRAD_PCC, GRAD_REL)
+>       rep.done()
+
+tests/python/test_mistral.py:569:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x70fe409ef2f0>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: attention (qkv, heads, rope, causal GQA sdpa, concat, out-proj): below the bar: ['dx', 'd w_qkv']
+E       assert not ['dx', 'd w_qkv']
+
+tests/python/test_mistral.py:143: AssertionError
+____________ test_sdpa_causal_gqa_forward_and_gradients[tp4-shard] _____________
+
+q_heads = 8, kv_heads = 2, seq = 1024
+
+    @pytest.mark.parametrize(
+        "q_heads, kv_heads, seq",
+        [(8, 2, 1024), (8, 2, 2048), (4, 1, 1024)],
+        ids=["tp4-shard", "two-rows-per-core", "one-group"],
+    )
+    def test_sdpa_causal_gqa_forward_and_gradients(q_heads, kv_heads, seq):
+        """The SDPA kernels alone (LPT row lists; head-split KV backward with the per-head reduce) against torch
+        fp64 causal GQA attention: the TP=4 shard shape, a shape with several rows per core, a one-group shape."""
+        rng = seeded(11)
+        q_np = bf16(rng.normal(0, 1, (1, q_heads, seq, HEAD_DIM)))
+        k_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+        v_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+        dout_np = bf16(rng.normal(0, 0.01, (1, q_heads, seq, HEAD_DIM)))
+        q, k, v = (to_device(a, requires_grad=True) for a in (q_np, k_np, v_np))
+        out = ttml.ops.attention.scaled_dot_product_attention(q, k, v)
+        out_val = to_host(out)
+        _backward(out, dout_np)
+
+        qr, kr, vr = t(q_np, True), t(k_np, True), t(v_np, True)
+        group = q_heads // kv_heads
+        kk, vv = kr.repeat_interleave(group, dim=1), vr.repeat_interleave(group, dim=1)
+        scores = (qr @ kk.transpose(-1, -2)) / math.sqrt(HEAD_DIM)
+        mask = torch.triu(torch.ones(seq, seq, dtype=torch.bool), diagonal=1)
+        ref = torch.softmax(scores.masked_fill(mask, float("-inf")), dim=-1) @ vv
+        ref.backward(t(dout_np))
+
+        rep = Report(f"sdpa causal GQA q{q_heads} kv{kv_heads} S{seq}")
+        rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+        rep.check("dQ", grad_of(q), qr.grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check("dK", grad_of(k), kr.grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check("dV", grad_of(v), vr.grad.numpy(), GRAD_PCC, GRAD_REL)
+>       rep.done()
+
+tests/python/test_mistral.py:603:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x70fe5417cf50>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: sdpa causal GQA q8 kv2 S1024: below the bar: ['dQ']
+E       assert not ['dQ']
+
+tests/python/test_mistral.py:143: AssertionError
+________ test_sdpa_causal_gqa_forward_and_gradients[two-rows-per-core] _________
+
+q_heads = 8, kv_heads = 2, seq = 2048
+
+    @pytest.mark.parametrize(
+        "q_heads, kv_heads, seq",
+        [(8, 2, 1024), (8, 2, 2048), (4, 1, 1024)],
+        ids=["tp4-shard", "two-rows-per-core", "one-group"],
+    )
+    def test_sdpa_causal_gqa_forward_and_gradients(q_heads, kv_heads, seq):
+        """The SDPA kernels alone (LPT row lists; head-split KV backward with the per-head reduce) against torch
+        fp64 causal GQA attention: the TP=4 shard shape, a shape with several rows per core, a one-group shape."""
+        rng = seeded(11)
+        q_np = bf16(rng.normal(0, 1, (1, q_heads, seq, HEAD_DIM)))
+        k_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+        v_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+        dout_np = bf16(rng.normal(0, 0.01, (1, q_heads, seq, HEAD_DIM)))
+        q, k, v = (to_device(a, requires_grad=True) for a in (q_np, k_np, v_np))
+        out = ttml.ops.attention.scaled_dot_product_attention(q, k, v)
+        out_val = to_host(out)
+        _backward(out, dout_np)
+
+        qr, kr, vr = t(q_np, True), t(k_np, True), t(v_np, True)
+        group = q_heads // kv_heads
+        kk, vv = kr.repeat_interleave(group, dim=1), vr.repeat_interleave(group, dim=1)
+        scores = (qr @ kk.transpose(-1, -2)) / math.sqrt(HEAD_DIM)
+        mask = torch.triu(torch.ones(seq, seq, dtype=torch.bool), diagonal=1)
+        ref = torch.softmax(scores.masked_fill(mask, float("-inf")), dim=-1) @ vv
+        ref.backward(t(dout_np))
+
+        rep = Report(f"sdpa causal GQA q{q_heads} kv{kv_heads} S{seq}")
+        rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+        rep.check("dQ", grad_of(q), qr.grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check("dK", grad_of(k), kr.grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check("dV", grad_of(v), vr.grad.numpy(), GRAD_PCC, GRAD_REL)
+>       rep.done()
+
+tests/python/test_mistral.py:603:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x70fe406fe780>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: sdpa causal GQA q8 kv2 S2048: below the bar: ['dQ']
+E       assert not ['dQ']
+
+tests/python/test_mistral.py:143: AssertionError
+____________ test_sdpa_causal_gqa_forward_and_gradients[one-group] _____________
+
+q_heads = 4, kv_heads = 1, seq = 1024
+
+    @pytest.mark.parametrize(
+        "q_heads, kv_heads, seq",
+        [(8, 2, 1024), (8, 2, 2048), (4, 1, 1024)],
+        ids=["tp4-shard", "two-rows-per-core", "one-group"],
+    )
+    def test_sdpa_causal_gqa_forward_and_gradients(q_heads, kv_heads, seq):
+        """The SDPA kernels alone (LPT row lists; head-split KV backward with the per-head reduce) against torch
+        fp64 causal GQA attention: the TP=4 shard shape, a shape with several rows per core, a one-group shape."""
+        rng = seeded(11)
+        q_np = bf16(rng.normal(0, 1, (1, q_heads, seq, HEAD_DIM)))
+        k_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+        v_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+        dout_np = bf16(rng.normal(0, 0.01, (1, q_heads, seq, HEAD_DIM)))
+        q, k, v = (to_device(a, requires_grad=True) for a in (q_np, k_np, v_np))
+        out = ttml.ops.attention.scaled_dot_product_attention(q, k, v)
+        out_val = to_host(out)
+        _backward(out, dout_np)
+
+        qr, kr, vr = t(q_np, True), t(k_np, True), t(v_np, True)
+        group = q_heads // kv_heads
+        kk, vv = kr.repeat_interleave(group, dim=1), vr.repeat_interleave(group, dim=1)
+        scores = (qr @ kk.transpose(-1, -2)) / math.sqrt(HEAD_DIM)
+        mask = torch.triu(torch.ones(seq, seq, dtype=torch.bool), diagonal=1)
+        ref = torch.softmax(scores.masked_fill(mask, float("-inf")), dim=-1) @ vv
+        ref.backward(t(dout_np))
+
+        rep = Report(f"sdpa causal GQA q{q_heads} kv{kv_heads} S{seq}")
+        rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+        rep.check("dQ", grad_of(q), qr.grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check("dK", grad_of(k), kr.grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check("dV", grad_of(v), vr.grad.numpy(), GRAD_PCC, GRAD_REL)
+>       rep.done()
+
+tests/python/test_mistral.py:603:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x70fe406feff0>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: sdpa causal GQA q4 kv1 S1024: below the bar: ['dQ']
+E       assert not ['dQ']
+
+tests/python/test_mistral.py:143: AssertionError
+=============================== warnings summary ===============================
+tt-train/tests/python/test_mistral.py::test_attention_forward_and_gradients
+tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[tp4-shard]
+tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[two-rows-per-core]
+tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[one-group]
+  /home/ttuser/agobeljic/tt-metal/python_env/lib/python3.12/site-packages/numpy/core/_methods.py:152: RuntimeWarning: invalid value encountered in reduce
+    arrmean = umr_sum(arr, axis, dtype, keepdims=True, where=where)
+
+tt-train/tests/python/test_mistral.py::test_attention_forward_and_gradients
+tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[tp4-shard]
+tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[two-rows-per-core]
+tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[one-group]
+  /home/ttuser/agobeljic/tt-metal/python_env/lib/python3.12/site-packages/numpy/core/_methods.py:118: RuntimeWarning: invalid value encountered in reduce
+    ret = umr_sum(arr, axis, dtype, out, keepdims, where=where)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+4.08s call     tt-train/tests/python/test_mistral.py::test_attention_forward_and_gradients
+0.55s call     tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[two-rows-per-core]
+0.17s call     tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[tp4-shard]
+0.09s call     tt-train/tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[one-group]
+
+(8 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED tests/python/test_mistral.py::test_attention_forward_and_gradients - A...
+FAILED tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[tp4-shard]
+FAILED tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[two-rows-per-core]
+FAILED tests/python/test_mistral.py::test_sdpa_causal_gqa_forward_and_gradients[one-group]
+================= 4 failed, 43 deselected, 8 warnings in 5.04s =================
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function "compute_output_specs"
+ - leaked function ""
+ - leaked function "clear_program_cache"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "invoke"
+ - leaked function "get_submeshes"
+ - leaked function ""
+ - leaked function "override_tensor"
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-31 20:28:40.512 | info     |    BuildKernels | JIT cache stats: 206/206 hits (100.0%) [206 cached, 31 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-31 20:28:40.512 | info     |    BuildKernels | JIT telemetry: 30 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-31 20:28:40.525 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-31 20:28:40.525 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-31 20:28:40.681 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-31 20:28:40.681 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-31 20:28:40.681 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

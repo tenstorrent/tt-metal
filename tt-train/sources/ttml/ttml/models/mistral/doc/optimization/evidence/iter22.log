@@ -1,0 +1,36 @@
+=== iter22 harness 2026-11-01T09:03:45Z
+harness rc=0
+================== 47 passed, 2 warnings in 256.99s (0:04:16) ==================
+=== iter22 TP=4 gradient check 2026-11-01T09:08:06Z
+tp4 rc=0
+tp 4: transposed 3, fused 2
+PASS
+=== iter22_tp TP=4 MFU after 600s cool-down 2026-11-01T09:08:56Z
+rc=0
+40 of 40 layers, tp 4: 494.5 ms/step over 6 steps (best 486.9), 194.9 TFLOP/s, MFU 32.81%
+=== iter22_tp TP=4 Tracy 4 layers 2026-11-01T09:22:24Z
+rc=0
+4 of 40 layers, tp 4: 61.0 ms/step over 2 steps (best 60.8), 198.5 TFLOP/s, MFU 33.42%
+=== done 2026-11-01T09:23:56Z
+=== iter22 MFU chain finished 2026-11-01T09:23:57Z
+=== iter22 8 layers real weights, host loss 2026-11-01T09:23:57Z
+rc=0
+compare rc=0
+max |diff| 0.0292 (tol 0.1), mean +0.0059, signs +7/-3
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+PASS
+=== iter22 TP=4 40 layers real weights 2026-11-01T09:25:03Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+step    1/10  loss 0.4434     741.9 ms
+step    2/10  loss 0.3281     503.4 ms
+step    3/10  loss 0.2520     498.5 ms
+step    4/10  loss 0.2070     501.7 ms
+step    5/10  loss 0.1436     502.8 ms
+step    6/10  loss 0.2754     507.9 ms
+step    7/10  loss 0.3418     503.6 ms
+step    8/10  loss 0.2715     503.7 ms
+step    9/10  loss 0.3125     509.2 ms
+step   10/10  loss 0.4492     511.5 ms
+40 of 40 layers, tp 4: 504.9 ms/step over 8 steps (best 498.5), 190.9 TFLOP/s, MFU 32.14%
+=== iter22 chain finished 2026-11-01T09:34:17Z

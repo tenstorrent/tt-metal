@@ -36,15 +36,15 @@
 //
 // Note: Does NOT pop the mask tile - caller must pop explicitly when done with the tile.
 // This allows reusing the same mask tile for causal masks.
-void apply_mask_on_reg(
+void apply_mask_on_reg_at(
     const uint32_t register_idx,
+    const uint32_t mask_register,
     const uint32_t cb_attn_mask,
     const uint32_t scaler_bits,
     const uint32_t minus_one_bits,
     const uint32_t custom_inf_bits) {
     /* The DST register buffer must be in acquired state via *acquire_dst* call.*/
 
-    const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
     copy_init(cb_attn_mask);
     copy_tile(
@@ -67,6 +67,16 @@ void apply_mask_on_reg(
     // unmasked positions remain unchanged
     add_binary_tile_init();
     add_binary_tile(register_idx, mask_register, register_idx);
+}
+
+// The mask tile goes to the register after the data register.
+void apply_mask_on_reg(
+    const uint32_t register_idx,
+    const uint32_t cb_attn_mask,
+    const uint32_t scaler_bits,
+    const uint32_t minus_one_bits,
+    const uint32_t custom_inf_bits) {
+    apply_mask_on_reg_at(register_idx, register_idx + 1U, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
 }
 
 // Recomputes attention weights from pre-softmax scores using stored logsumexp.
@@ -104,6 +114,26 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 // Loads lse from cb_intermediates via column-broadcast and computes in-place using SFPU.
 // Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
 // Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
+// Same for the n score tiles in DST[first_reg .. first_reg + n): the lse tile is loaded once into lse_reg.
+void apply_softmax_statistics_on_dst_n(
+    const uint32_t first_reg, const uint32_t n, const uint32_t lse_reg, const uint32_t cb_intermediates) {
+    reconfig_data_format_srcb(cb_intermediates);
+    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, cb_intermediates)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
+        cb_intermediates)));
+    unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile_idx */ 0, lse_reg);
+
+    sub_binary_tile_init();
+    for (uint32_t i = 0; i < n; ++i) {
+        sub_binary_tile(first_reg + i, lse_reg, first_reg + i);
+    }
+    sdpa_exp_tile_init();
+    for (uint32_t i = 0; i < n; ++i) {
+        sdpa_exp_tile(first_reg + i);
+    }
+}
+
 void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
     const uint32_t lse_reg = scores_reg + 1U;
 

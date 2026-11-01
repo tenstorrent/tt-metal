@@ -1,0 +1,8 @@
+baseline | q8 kv2 S1024 D128: wall us fw 149 fw+bw 666 bw 517 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2373 bw 1952
+no_exp | q8 kv2 S1024 D128: wall us fw 149 fw+bw 657 bw 508 || q32 kv8 S1024 D128: wall us fw 420 fw+bw 2315 bw 1895
+no_A_matmul | q8 kv2 S1024 D128: wall us fw 149 fw+bw 660 bw 511 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2336 bw 1915
+no_B_matmul | q8 kv2 S1024 D128: wall us fw 149 fw+bw 658 bw 509 || q32 kv8 S1024 D128: wall us fw 420 fw+bw 2347 bw 1927
+no_D_matmul | q8 kv2 S1024 D128: wall us fw 148 fw+bw 659 bw 510 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2339 bw 1918
+no_C_math | q8 kv2 S1024 D128: wall us fw 150 fw+bw 656 bw 506 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2334 bw 1913
+no_mask_scale | q8 kv2 S1024 D128: wall us fw 149 fw+bw 657 bw 509 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2305 bw 1884
+restored

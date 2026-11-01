@@ -1,0 +1,4 @@
+chain default | q8 kv2 S1024 D128: wall us fw 149 fw+bw 667 bw 517 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2385 bw 1963
+chain injector no DRAM reads | q8 kv2 S1024 D128: wall us fw 149 fw+bw 621 bw 472 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2277 bw 1855
+chain no flush before relay | q8 kv2 S1024 D128: wall us fw 151 fw+bw 663 bw 512 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2381 bw 1959
+restored

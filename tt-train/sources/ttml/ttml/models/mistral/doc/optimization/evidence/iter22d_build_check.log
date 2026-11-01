@@ -1,0 +1,39 @@
+=== build skipped
+=== sdpa check vs the iteration-21 baseline outputs 2026-11-01T08:52:44Z
+tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter22_build_check.sh: line 17: 3117736 Killed                  timeout 900 ../python_env/bin/python $O/iter11_sdpa_check.py --ref $SP/iter21_sdpa_baseline.npz > $O/${TAG}_sdpa_check.log 2>&1
+check rc=137
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+case q8 kv2 S1024 D128: wall us fw 154 fw+bw 688 bw 534
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dQ: pcc 1.00000000 max|diff| 9.766e-04 differing 139/1048576
+    dK: pcc 1.00000000 max|diff| 0.000e+00 differing 0/262144
+    dV: pcc 1.00000000 max|diff| 0.000e+00 differing 0/262144
+case q32 kv8 S1024 D128: wall us fw 429 fw+bw 2396 bw 1968
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/4194304
+    dQ: pcc 1.00000000 max|diff| 1.953e-03 differing 555/4194304
+    dK: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dV: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+case q8 kv8 S1024 D128: wall us fw 151 fw+bw 670 bw 520
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dQ: pcc 1.00000000 max|diff| 9.766e-04 differing 144/1048576
+    dK: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+    dV: pcc 1.00000000 max|diff| 0.000e+00 differing 0/1048576
+case q4 kv1 S1024 D128: wall us fw 112 fw+bw 684 bw 572
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+    dQ: pcc 1.00000000 max|diff| 4.883e-04 differing 76/524288
+    dK: pcc 1.00000000 max|diff| 0.000e+00 differing 0/131072
+    dV: pcc 1.00000000 max|diff| 0.000e+00 differing 0/131072
+case q8 kv2 S2048 D128: wall us fw 454 fw+bw 2095 bw 1642
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/2097152
+    dQ: pcc 1.00000000 max|diff| 9.766e-04 differing 390/2097152
+    dK: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+    dV: pcc 1.00000000 max|diff| 0.000e+00 differing 0/524288
+case q6 kv2 S512 D64: wall us fw 81 fw+bw 632 bw 551
+    out: pcc 1.00000000 max|diff| 0.000e+00 differing 0/196608
+    dQ: pcc 1.00000000 max|diff| 4.883e-04 differing 18/196608
+    dK: pcc 1.00000000 max|diff| 0.000e+00 differing 0/65536
+    dV: pcc 1.00000000 max|diff| 0.000e+00 differing 0/65536
+=== attention harness tests 2026-11-01T08:53:37Z
+tests rc=0
+====================== 4 passed, 43 deselected in 38.70s =======================
+=== done 2026-11-01T08:54:28Z

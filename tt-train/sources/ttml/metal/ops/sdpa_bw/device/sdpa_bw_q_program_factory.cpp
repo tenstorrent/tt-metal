@@ -4,9 +4,12 @@
 
 #include "sdpa_bw_q_program_factory.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <hostdevcommon/common_values.hpp>
+#include <string>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -72,6 +75,7 @@ const std::string kWorkListDefKey = "WORK_LIST";
 const std::string kChainDefKey = "CHAIN";
 constexpr uint32_t kChainLength = 14U;    // cores per forwarding chain
 constexpr uint32_t kChainChunk = 4U;      // tile rows of the stream per handshake
+constexpr uint32_t kDefaultKvBlock = 4U;  // K/V rows per compute block without the chain (at most four)
 constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no item this round" in a chain-mode list
 
 // Chain schedule: per stream a contiguous run of cores, the stream's items LPT-scheduled over them, chains of
@@ -298,7 +302,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const bool causal = (args.mask_type == AttentionMaskType::Causal) && (St > 0);
     const uint32_t num_streams = qB * kv_heads;
     const uint32_t chain_chunk = (St % kChainChunk == 0U) ? kChainChunk : ((St % 2U == 0U) ? 2U : 1U);
-    const bool use_chain = causal && (num_available_cores >= 2U * num_streams);
+    // TTML_SDPA_BW_Q_STREAM=list: work lists without the K/V forwarding chain (attribution experiments).
+    const char* stream_mode = std::getenv("TTML_SDPA_BW_Q_STREAM");
+    const bool use_chain = causal && (num_available_cores >= 2U * num_streams) &&
+                           !(stream_mode != nullptr && std::string(stream_mode) == "list");
     const bool use_work_list = causal && !use_chain;
     const bool use_balanced_parallelism = false;
 
@@ -312,23 +319,24 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     LptSchedule work_list;
     ChainSchedule chain;
 
+    const auto items_of_stream = [&](uint32_t stream) {
+        const uint32_t b = stream / kv_heads;
+        const uint32_t kv = stream % kv_heads;
+        std::vector<uint32_t> items;
+        std::vector<uint32_t> weights;
+        for (uint32_t h = kv * heads_per_group; h < (kv + 1U) * heads_per_group; ++h) {
+            for (uint32_t q = 0; q < St; ++q) {
+                items.push_back((b * qNH + h) * St + q);
+                weights.push_back(q + 2U);
+            }
+        }
+        return std::make_pair(items, weights);
+    };
     if (use_chain) {
         num_cores = std::min(num_available_cores, total_rows_to_process);
         all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;
-        chain = chain_schedule(num_cores, num_streams, [&](uint32_t stream) {
-            const uint32_t b = stream / kv_heads;
-            const uint32_t kv = stream % kv_heads;
-            std::vector<uint32_t> items;
-            std::vector<uint32_t> weights;
-            for (uint32_t h = kv * heads_per_group; h < (kv + 1U) * heads_per_group; ++h) {
-                for (uint32_t q = 0; q < St; ++q) {
-                    items.push_back((b * qNH + h) * St + q);
-                    weights.push_back(q + 2U);
-                }
-            }
-            return std::make_pair(items, weights);
-        });
+        chain = chain_schedule(num_cores, num_streams, items_of_stream);
         num_rows_per_core_group_1 = chain.rounds;
     } else if (use_work_list) {
         num_cores = std::min(num_available_cores, total_rows_to_process);
@@ -395,8 +403,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         bfloat16_single_tile_size_bytes,
         2 * qWt);
 
-    // Chain mode forwards K/V in chunks of chain_chunk rows: two chunks resident.
-    const uint32_t kv_cb_rows = use_chain ? 2U * chain_chunk : 2U;
+    // The compute kernel works on K/V blocks of kv_block rows (the chain chunk under CHAIN, else up to four
+    // rows): two blocks resident, and the P / dP / dS CBs hold one block each.
+    const uint32_t kv_block = use_chain ? chain_chunk : std::min(St, kDefaultKvBlock);
+    const uint32_t kv_cb_rows = 2U * kv_block;
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(
             program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, kv_cb_rows * kWt);
@@ -447,25 +457,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kAttentionWeightsCbIndex,
             precise_data_format,
             float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+            kv_block);
 
     [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_10
         create_circular_buffer(
-            program,
-            all_cores,
-            kGradAttentionCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+            program, all_cores, kGradAttentionCbIndex, precise_data_format, float32_single_tile_size_bytes, kv_block);
 
     [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_11
         create_circular_buffer(
-            program,
-            all_cores,
-            kGradScoresCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+            program, all_cores, kGradScoresCbIndex, precise_data_format, float32_single_tile_size_bytes, kv_block);
 
     [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_12
         create_circular_buffer(
@@ -641,7 +641,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             minus_one,           // 5: used to transform mask from 1/0 to 0/-1
             custom_inf,          // 6: used to transform mask from 0/-1 to 0/-inf
             block_size,          // 7: block size
-            chain_chunk          // 8: chain mode K/V rows per handshake
+            kv_block             // 8: K/V rows per compute block (the chain chunk under CHAIN)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -666,7 +666,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
             custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
             block_size,                 // 7: block size
-            chain_chunk                 // 8: chain mode K/V rows per handshake
+            kv_block                    // 8: K/V rows per compute block (the chain chunk under CHAIN)
         };
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
             program,
@@ -691,7 +691,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                 minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
                 block_size,                 // 7: block size
-                chain_chunk                 // 8: chain mode K/V rows per handshake
+                kv_block                    // 8: K/V rows per compute block (the chain chunk under CHAIN)
             };
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(
                 program,

@@ -1,0 +1,5 @@
+full chain | q8 kv2 S1024 D128: wall us fw 149 fw+bw 667 bw 518 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2377 bw 1955
+full no-chain | q8 kv2 S1024 D128: wall us fw 149 fw+bw 665 bw 516 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2374 bw 1953
+skeleton chain | q8 kv2 S1024 D128: wall us fw 148 fw+bw 654 bw 506 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2288 bw 1867
+skeleton no-chain | q8 kv2 S1024 D128: wall us fw 149 fw+bw 654 bw 505 || q32 kv8 S1024 D128: wall us fw 420 fw+bw 2295 bw 1875
+restored

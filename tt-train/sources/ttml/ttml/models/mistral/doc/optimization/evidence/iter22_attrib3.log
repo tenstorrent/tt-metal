@@ -1,0 +1,7 @@
+full mcast | q8 kv2 S1024 D128: wall us fw 148 fw+bw 675 bw 526 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2427 bw 2006
+skeleton mcast | q8 kv2 S1024 D128: wall us fw 149 fw+bw 662 bw 513 || q32 kv8 S1024 D128: wall us fw 421 fw+bw 2354 bw 1934
+full chain | q8 kv2 S1024 D128: wall us fw 149 fw+bw 665 bw 516 || q32 kv8 S1024 D128: wall us fw 424 fw+bw 2379 bw 1955
+skeleton chain | q8 kv2 S1024 D128: wall us fw 149 fw+bw 655 bw 506 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2295 bw 1873
+full list | q8 kv2 S1024 D128: wall us fw 149 fw+bw 697 bw 548 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2633 bw 2210
+skeleton list | q8 kv2 S1024 D128: wall us fw 149 fw+bw 684 bw 535 || q32 kv8 S1024 D128: wall us fw 422 fw+bw 2599 bw 2177
+restored

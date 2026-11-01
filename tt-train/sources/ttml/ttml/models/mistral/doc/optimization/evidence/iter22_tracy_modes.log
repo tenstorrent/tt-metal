@@ -1,0 +1,10 @@
+== mcast
+SDPAForwardDeviceOperation   n=102 cores= 110 kernel us median   137.9  per-core avg     0.0 min     0.0 max     0.0
+SDPABackwardQDeviceOperation n= 54 cores= 110 kernel us median   192.7  per-core avg     0.0 min     0.0 max     0.0
+SDPABackwardKVDeviceOperation n= 54 cores= 110 kernel us median   285.7  per-core avg     0.0 min     0.0 max     0.0
+SDPABackwardKVReduceDeviceOperation n= 45 cores= 110 kernel us median    29.6  per-core avg     0.0 min     0.0 max     0.0
+== chain
+SDPAForwardDeviceOperation   n=102 cores= 110 kernel us median   137.9  per-core avg     0.0 min     0.0 max     0.0
+SDPABackwardQDeviceOperation n= 54 cores= 110 kernel us median   178.0  per-core avg     0.0 min     0.0 max     0.0
+SDPABackwardKVDeviceOperation n= 54 cores= 110 kernel us median   284.5  per-core avg     0.0 min     0.0 max     0.0
+SDPABackwardKVReduceDeviceOperation n= 45 cores= 110 kernel us median    29.9  per-core avg     0.0 min     0.0 max     0.0

@@ -57,11 +57,14 @@
 //   for each query row q:
 //     compute u_scalar = rowsum(dY[q] ⊙ Y[q])
 //     [HAS_GATE] compute dO[q] = dY[q] ⊙ σ(G[q]), dG[q] = dY[q] ⊙ Y[q] ⊙ (1 − σ(G[q]))
-//     for each K/V row k:
-//       P[q,k] = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed
-//       dP[q,k] = dO[q] @ V[k]^T
-//       dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale
-//       dQ[q] += dS[q,k] @ K[k]                                 // accumulate
+//     for each block of kv_block K/V rows k0 .. k0 + cols (the chain chunk under CHAIN):
+//       P[q,k]  = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed, two columns per DEST pass
+//       dP[q,k] = dO[q] @ V[k]^T                                 // two columns per DEST pass
+//       dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale          // two columns per DEST pass
+//       dQ[q] += dS[q, k0..] @ K[k0.., :]                        // one DEST pass per output block (iteration 22)
+// The fp32 DEST holds four tiles: two score tiles plus the mask / lse tile, or two dP and two P tiles. The
+// dQ pass accumulates the block's columns in DEST and adds to the L1 accumulator once per block instead of
+// once per column.
 // ----------------------------------------------------------------------
 
 // For standard mode: num_rows_per_core = rows to process
@@ -74,6 +77,8 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-inf
 constexpr uint32_t block_size = get_compile_time_arg_val(7);       // block size for update_grad_query (divides qWt)
+constexpr uint32_t kv_block = get_compile_time_arg_val(8);         // K/V rows per block (the chain chunk under CHAIN)
+static_assert(kv_block >= 1U && kv_block <= 4U, "a K/V block is at most four rows");
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;  // (Gated) attention output from forward pass
@@ -156,77 +161,173 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
     cb_wait_front(cb_intermediates, num_of_interm_tiles);
 
-    const uint32_t matmul_accum_reg = 0;
-    for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
-        cb_wait_front(cb_key, qk_tiles);
-        cb_wait_front(cb_value, v_tiles);
-
-        reconfig_data_format(cb_query, cb_key);
-        matmul_init(cb_query, cb_key, /*transpose*/ 1);
-        tile_regs_acquire();
-        for (uint32_t tile_idx = 0; tile_idx < qk_tiles; ++tile_idx) {
-            matmul_tiles(
-                cb_query,
-                cb_key,
-                /* tile_idx */ tile_idx,
-                /* tile_idx */ tile_idx,
-                /* dst_reg_idx*/ matmul_accum_reg);
-        }
-
-#ifdef CAUSAL_MASK
-        if (h == q_row_tile) {
-            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-        } else {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(matmul_accum_reg, scaler_bits);
-        }
-#elif defined(USE_ATTN_MASK)
-        apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-        cb_pop_front(cb_attn_mask, onetile);
+    // K/V rows in blocks of kv_block: the P, dP and dS tiles of a block's columns are produced two per
+    // DEST pass and kept in fixed kv_block-tile CB slots (a partial last block leaves its tail slots
+    // unused, so every push / pop moves kv_block tiles and never straddles the CB end).
+    for (uint32_t h0 = 0; h0 < num_kv_tiles_to_process; h0 += kv_block) {
+        const uint32_t cols = (num_kv_tiles_to_process - h0 < kv_block) ? (num_kv_tiles_to_process - h0) : kv_block;
+#ifdef CHAIN
+        cb_wait_front(cb_key, kv_block * qk_tiles);  // the whole chunk arrives at once
+        cb_wait_front(cb_value, kv_block * v_tiles);
 #else
-        binop_with_scalar_tile_init();
-        mul_unary_tile(matmul_accum_reg, scaler_bits);
+        cb_wait_front(cb_key, cols * qk_tiles);
+        cb_wait_front(cb_value, cols * v_tiles);
 #endif
 
-        // Fused softmax: scores are still in DST at full FP32 from the matmul.
-        // Apply exp(S - lse) directly on DST — no CB roundtrip, no TF32 truncation.
-        apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates);
+        // (A) P = exp(scale * Q K^T [+ mask] - lse): scores in DST[0 .. n), the mask then the lse tile in DST[n].
+        cb_reserve_back(cb_attention_weights, kv_block);
+        for (uint32_t c0 = 0; c0 < cols; c0 += 2U) {
+            const uint32_t n = (cols - c0 < 2U) ? (cols - c0) : 2U;
+            reconfig_data_format(cb_query, cb_key);
+            matmul_init(cb_query, cb_key, /*transpose*/ 1);
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < n; ++j) {
+                for (uint32_t f = 0; f < qk_tiles; ++f) {
+                    matmul_tiles(cb_query, cb_key, /* in0 */ f, /* in1 */ (c0 + j) * qk_tiles + f, /* dst */ j);
+                }
+            }
+            for (uint32_t j = 0; j < n; ++j) {
+#ifdef CAUSAL_MASK
+                if (h0 + c0 + j == q_row_tile) {
+                    apply_mask_on_reg_at(j, n, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                } else {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(j, scaler_bits);
+                }
+#elif defined(USE_ATTN_MASK)
+                apply_mask_on_reg_at(j, n, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                cb_pop_front(cb_attn_mask, onetile);
+#else
+                binop_with_scalar_tile_init();
+                mul_unary_tile(j, scaler_bits);
+#endif
+            }
+            // Fused softmax on DST: P = exp(S - lse), full fp32, no CB round trip.
+            apply_softmax_statistics_on_dst_n(/* first_reg */ 0, n, /* lse_reg */ n, cb_intermediates);
+            tile_regs_commit();
+            tile_regs_wait();
+            // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+            pack_reconfig_data_format(cb_grad_query_accum, cb_attention_weights);
+            for (uint32_t j = 0; j < n; ++j) {
+                pack_tile(j, cb_attention_weights);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_attention_weights, kv_block);
 
-        tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(cb_attention_weights, onetile);
-        // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
-        pack_reconfig_data_format(cb_grad_query_accum, cb_attention_weights);
-        pack_tile(matmul_accum_reg, cb_attention_weights);
-        tile_regs_release();
-        cb_push_back(cb_attention_weights, onetile);
+        // (B) dP = dO V^T, two columns per DEST pass.
+        cb_reserve_back(cb_grad_attn_weights, kv_block);
+        reconfig_data_format(cb_dp_grad_output, cb_value);
+        matmul_init(cb_dp_grad_output, cb_value, /* transpose */ 1);
+        for (uint32_t c0 = 0; c0 < cols; c0 += 2U) {
+            const uint32_t n = (cols - c0 < 2U) ? (cols - c0) : 2U;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < n; ++j) {
+                for (uint32_t f = 0; f < v_tiles; ++f) {
+                    matmul_tiles(
+                        cb_dp_grad_output, cb_value, /* in0 */ f, /* in1 */ (c0 + j) * v_tiles + f, /* dst */ j);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_attention_weights, cb_grad_attn_weights);
+            for (uint32_t j = 0; j < n; ++j) {
+                pack_tile(j, cb_grad_attn_weights);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_grad_attn_weights, kv_block);
 
-        compute_grad_attn_weights(
-            cb_dp_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
+        // (C) dS = P * (dP - u) * scale: DST[0 .. n) = dP - u, DST[2 .. 2 + n) = P (fp32 copy), product in place.
+        cb_wait_front(cb_attention_weights, kv_block);
+        cb_wait_front(cb_grad_attn_weights, kv_block);
+        cb_wait_front(cb_u_scalar_row, onetile);
+        cb_reserve_back(cb_grad_scores, kv_block);
+        for (uint32_t c0 = 0; c0 < cols; c0 += 2U) {
+            const uint32_t n = (cols - c0 < 2U) ? (cols - c0) : 2U;
+            tile_regs_acquire();
+            reconfig_data_format(cb_grad_attn_weights, cb_u_scalar_row);
+            sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar_row);
+            for (uint32_t j = 0; j < n; ++j) {
+                sub_tiles_bcast_cols(cb_grad_attn_weights, cb_u_scalar_row, /* tile_idx */ c0 + j, /* tile_idx */ 0, j);
+            }
+            reconfig_data_format_srca(cb_grad_attn_weights, cb_attention_weights);
+            copy_init(cb_attention_weights, /*transpose=*/0);
+            for (uint32_t j = 0; j < n; ++j) {
+                copy_tile(cb_attention_weights, /* tile_idx */ c0 + j, /* register idx */ 2U + j);
+            }
+            mul_binary_tile_init();
+            for (uint32_t j = 0; j < n; ++j) {
+                mul_binary_tile(j, 2U + j, j);
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t j = 0; j < n; ++j) {
+                mul_unary_tile(j, scaler_bits);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
+            for (uint32_t j = 0; j < n; ++j) {
+                pack_tile(j, cb_grad_scores);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_grad_scores, kv_block);
+        cb_pop_front(cb_attention_weights, kv_block);
+        cb_pop_front(cb_grad_attn_weights, kv_block);
 
-        compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
-
-        update_grad_query(
-            cb_grad_scores,
-            cb_key,
-            cb_grad_query_accum,
-            qk_tiles,
-            block_size,
-            /* do_accumulate */ (h > 0));
+        // (D) dQ += dS[1 x cols] @ K[cols x qWt]: the block's columns accumulate in DST, the L1 accumulator
+        //     is added to once per block (first block: plain write).
+        cb_wait_front(cb_grad_scores, kv_block);
+        pack_reconfig_data_format(cb_grad_scores, cb_grad_query_accum);
+        const bool accumulate = (h0 > 0);
+        if (!accumulate) {
+            cb_reserve_back(cb_grad_query_accum, qk_tiles);
+        } else {
+            pack_reconfig_l1_acc(true);
+        }
+        // matmul in1 (K, bf16) is unpacked through SrcA, in0 (dS, fp32) through SrcB.
+        reconfig_data_format(/* srca */ cb_key, /* srcb */ cb_grad_scores);
+        matmul_init(cb_grad_scores, cb_key, /*transpose*/ 0);
+        for (uint32_t t0 = 0; t0 < qk_tiles; t0 += block_size) {
+            tile_regs_acquire();
+            for (uint32_t b = 0; b < block_size; ++b) {
+                for (uint32_t j = 0; j < cols; ++j) {
+                    matmul_tiles(cb_grad_scores, cb_key, /* in0 */ j, /* in1 */ j * qk_tiles + t0 + b, /* dst */ b);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t b = 0; b < block_size; ++b) {
+                pack_tile(b, cb_grad_query_accum);
+            }
+            tile_regs_release();
+        }
+        if (accumulate) {
+            pack_reconfig_l1_acc(false);
+            cb_pop_front(cb_grad_query_accum, qk_tiles);
+            cb_reserve_back(cb_grad_query_accum, qk_tiles);
+        }
+        cb_push_back(cb_grad_query_accum, qk_tiles);
         cb_wait_front(cb_grad_query_accum, qk_tiles);
+        cb_pop_front(cb_grad_scores, kv_block);
 
-        cb_pop_front(cb_key, qk_tiles);
-        cb_pop_front(cb_value, v_tiles);
-        cb_pop_front(cb_attention_weights, onetile);
-        cb_pop_front(cb_grad_attn_weights, onetile);
+#ifdef CHAIN
+        // The whole chunk goes: its rows past the diagonal are dropped with it.
+        cb_pop_front(cb_key, kv_block * qk_tiles);
+        cb_pop_front(cb_value, kv_block * v_tiles);
+#else
+        cb_pop_front(cb_key, cols * qk_tiles);
+        cb_pop_front(cb_value, cols * v_tiles);
+#endif
     }
 #ifdef CHAIN
-    // Chain mode streams every K/V row of the sequence through this core: drop the ones past the diagonal.
-    for (uint32_t h = num_kv_tiles_to_process; h < Ht; ++h) {
-        cb_wait_front(cb_key, qk_tiles);
-        cb_pop_front(cb_key, qk_tiles);
-        cb_wait_front(cb_value, v_tiles);
-        cb_pop_front(cb_value, v_tiles);
+    // Chain mode streams every K/V chunk of the sequence through this core: drop the ones past the diagonal.
+    for (uint32_t h = ((num_kv_tiles_to_process + kv_block - 1U) / kv_block) * kv_block; h < Ht; h += kv_block) {
+        cb_wait_front(cb_key, kv_block * qk_tiles);
+        cb_pop_front(cb_key, kv_block * qk_tiles);
+        cb_wait_front(cb_value, kv_block * v_tiles);
+        cb_pop_front(cb_value, kv_block * v_tiles);
     }
 #endif
 
@@ -274,11 +375,11 @@ void kernel_main() {
         const uint32_t row = get_arg_val<uint32_t>(1U + i);
 #ifdef CHAIN
         if (row == 0xFFFFFFFFU) {
-            for (uint32_t h = 0; h < Ht; ++h) {
-                cb_wait_front(cb_key, qk_tiles);
-                cb_pop_front(cb_key, qk_tiles);
-                cb_wait_front(cb_value, v_tiles);
-                cb_pop_front(cb_value, v_tiles);
+            for (uint32_t h = 0; h < Ht; h += kv_block) {
+                cb_wait_front(cb_key, kv_block * qk_tiles);
+                cb_pop_front(cb_key, kv_block * qk_tiles);
+                cb_wait_front(cb_value, kv_block * v_tiles);
+                cb_pop_front(cb_value, kv_block * v_tiles);
             }
             continue;
         }

@@ -118,16 +118,20 @@ void kernel_main() {
             const uint32_t k_addr = get_write_ptr(cb_key);
             const uint32_t v_addr = get_write_ptr(cb_value);
             if (is_injector) {
+                // K (transposed block) and V reads of the chunk in flight together, one barrier (iteration 22).
                 const uint32_t h_start = k_chunk * Sk_chunk_t;
-                read_tile_block_transposed(
+                read_tile_block_transposed</* UseBarrier */ false>(
                     cb_key, key_address_generator, key_offset + h_start * qWt, Sk_chunk_t, qWt, tile_bytes);
-                read_tiles_by_row(
+                read_tiles_by_row</* UseBarrier */ false>(
                     cb_value,
                     value_address_generator,
                     value_offset + h_start * vWt,
                     v_chunk_tiles,
                     tile_bytes,
                     v_chunk_tiles);
+                noc_async_read_barrier();
+                cb_push_back(cb_key, k_chunk_tiles);
+                cb_push_back(cb_value, v_chunk_tiles);
             } else {
                 receiver_sem.set(INVALID);
                 sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
