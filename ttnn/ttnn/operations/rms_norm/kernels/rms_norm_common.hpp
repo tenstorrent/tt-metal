@@ -18,7 +18,7 @@ constexpr uint32_t cb_inv_rms = 6;         // per tile-row rsqrt(mean + eps) (co
 constexpr uint32_t cb_out = 7;             // normalized tiles
 constexpr uint32_t cb_out_rm = 8;          // RM: untilized stick pieces
 constexpr uint32_t cb_x_alt = 9;           // resident x block (pong), x_block_depth == 2 only
-constexpr uint32_t cb_sumsq_acc = 10;      // sharded TILE W tail: raw sum x^2 of the full W tiles (Accumulate CB)
 constexpr uint32_t cb_tail_mask = 11;      // sharded TILE W tail: 0/1 row mask of the tail tile's valid columns
 constexpr uint32_t cb_inv_owned = 12;      // owner combine (k > K_SYM_MAX_*): inv_rms of the rows this member owns
+constexpr uint32_t cb_ones = 13;           // 1.0 reduce scaler tile of the FPU row collapse (reduce_tile ROW)
 }  // namespace rms_norm_cb

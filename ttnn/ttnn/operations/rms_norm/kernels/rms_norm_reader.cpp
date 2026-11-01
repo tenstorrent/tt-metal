@@ -25,9 +25,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
-#ifdef RMS_MASK_TAIL
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#endif
 #include "rms_norm_common.hpp"
 
 using namespace rms_norm_cb;
@@ -105,6 +103,14 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t valid_sticks = get_arg_val<uint32_t>(9);  // RM sharded: valid sticks in shard
     [[maybe_unused]] const uint32_t owns_tail = get_arg_val<uint32_t>(10);    // sharded TILE: owns the W tail tile
 
+    // 1.0 scaler of compute's FPU row collapse (reduce_tile ROW). Built after block 0 of x is published —
+    // compute needs it only after pass 1 of block 0 — so it never delays x.
+    auto prep_ones = [](uint32_t blk) {
+        if (blk == 0) {
+            dataflow_kernel_lib::
+                calculate_and_prepare_reduce_scaler<cb_ones, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        }
+    };
 #ifdef RMS_MASK_TAIL
     // The tail tile's x^2 is masked (columns >= w_valid_in_last_tile) inside compute's collapse reduce.
     if (owns_tail) {
@@ -148,6 +154,7 @@ void kernel_main() {
                 cb_push_back(cb_x_rm, rm_chunk_w_tiles);
             }
         }
+        prep_ones(blk);
     }
 #elif defined(RMS_SHARDED)
     // ---- TILE shard: cb_x is backed on the resident shard (zero-copy) — publish its tile-rows to compute ----
@@ -155,6 +162,7 @@ void kernel_main() {
         const uint32_t shard_rows = (num_blocks - 1) * block_row_tiles + last_block_row_tiles;
         cb_reserve_back(cb_x, shard_rows * x_row_pitch);
         cb_push_back(cb_x, shard_rows * x_row_pitch);
+        prep_ones(0);
     }
 #elif defined(RMS_RM)
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
@@ -200,6 +208,7 @@ void kernel_main() {
                 }
             }
         }
+        prep_ones(blk);
     }
 #else
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
@@ -232,6 +241,7 @@ void kernel_main() {
             }
             cb_push_back(cb_id, x_row_pitch);
         }
+        prep_ones(blk);
     }
 #endif
 }

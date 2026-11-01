@@ -1,0 +1,364 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-01 19:59:56] SAFE_PYTEST: waiting for device (20s) — holder pid=2964057 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_perf -s --import-mode=prepend " parent pid=2964056 cmd="timeout 2400 scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_p"
+[2026-11-01 20:00:17] SAFE_PYTEST: waiting for device (40s) — holder pid=2964057 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_perf -s --import-mode=prepend " parent pid=2964056 cmd="timeout 2400 scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_p"
+[2026-11-01 20:00:38] SAFE_PYTEST: waiting for device (60s) — holder pid=2964057 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_perf -s --import-mode=prepend " parent pid=2964056 cmd="timeout 2400 scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_p"
+[2026-11-01 20:00:59] SAFE_PYTEST: waiting for device (80s) — holder pid=2979156 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=2979155 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r5_domain "
+[2026-11-01 20:01:20] SAFE_PYTEST: waiting for device (100s) — holder pid=2979156 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=2979155 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r5_domain "
+[2026-11-01 20:01:41] SAFE_PYTEST: waiting for device (120s) — holder pid=2989311 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /tmp/rns_bench/test_rns_bench.py -s -p conftest " parent pid=2989310 cmd="/bin/bash ./run.sh r9 "
+[2026-11-01 20:02:03] SAFE_PYTEST: waiting for device (140s) — holder pid=3054228 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_mixed -s --import-mode=prepend " parent pid=3054225 cmd="timeout 1200 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_mixed -s --"
+[2026-11-01 20:02:24] SAFE_PYTEST: waiting for device (160s) — holder pid=3053663 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=3053662 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r5_domain "
+[2026-11-01 20:02:45] SAFE_PYTEST: waiting for device (180s) — holder pid=3053663 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=3053662 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r5_domain "
+[2026-11-01 20:03:07] SAFE_PYTEST: waiting for device (200s) — holder pid=3053663 cmd="/bin/bash scripts/run_safe_pytest.sh --profile /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_norm/perf_expe" parent pid=3053662 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/dram_noc_balance/run.sh r5_domain "
+[2026-11-01 20:03:28] SAFE_PYTEST: waiting for device (220s) — holder pid=2945109 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1/test_gs_bench.py::test_bench --import-mode=prepend " parent pid=2945108 cmd="/bin/bash -c source /home/adamjanovic/.claude/shell-snapshots/snapshot-bash-1793560189035-l5gdbw.sh 2>/dev/null || true && shopt -u extglob 2>/dev/nul
+p="ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1/test_gs_bench.py"
+s=open(p).read()
+a='"'"''"'"''"'"'    "compact_sf_g32_d4":'"'"''"'"''"'"'
+s=s.replace(a,'"'"''"'"''"'"'    "compact_g32_rv": (("GS_COMPACT", "GS_RM_SCATTER_RISCV"), {"GAMMA_STREAM_CHUNK_CAP": 32}),
+    "res": (("GS_RES_LOCAL",), {}),
+    "res_split": (("GS_RES_LOCAL", "GS_SPLIT"), {}),
+    "lean": (("GS_COMPACT", "GS_RES_LOCAL"), {"GAMMA_STREAM_CHUNK_CAP": 32}),
+    "full": (("GS_COMPACT", "GS_SPLIT", "GS_RES_LOCAL"), {}),
+    "full_g32": (("GS_COMPACT", "GS_SPLIT", "GS_RES_LOCAL"), {"GAMMA_STREAM_CHUNK_CAP": 32}),
+'"'"''"'"''"'"'+a)
+open(p,"w").write(s)
+EOF
+source python_env/bin/activate && D=ttnn/ttnn/operations/rms_norm/perf_experiments/gamma_stream_l1; R=$D/runs; N=5; export GS_LOG=$PWD/$R/log_run$N.tx"
+[2026-11-01 20:03:49] SAFE_PYTEST: waiting for device (240s) — holder pid=2957084 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/owner_raw_partials/bench_raw_partials.py::test_perf ttnn/ttnn/operations/rms_norm/perf_experimen" parent pid=2957083 cmd="timeout 1500 scripts/run_safe_pytest.sh --run-all --profile ttnn/ttnn/operations/rms_norm/perf_experiments/owner_raw_partials/bench_raw_partials.py::t"
+[2026-11-01 20:04:10] SAFE_PYTEST: waiting for device (260s) — holder pid=3070112 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_mixed -s --import-mode=prepend " parent pid=3070109 cmd="timeout 1200 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/inv_mcast_return/bench_inv_mcast.py::test_mixed -s --"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — compile step -> JIT server bgdepyc04:12345 when >= 10 programs, else local (real pass always local)
+SAFE_PYTEST: env UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS=10 TT_METAL_JIT_SERVER_ENDPOINT=bgdepyc04:12345 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1 UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=128 PYTHONPATH=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal:/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py
+========================================
+2026-11-01 20:04:32.438 | INFO     | __main__:main:374 - Using port 8086
+2026-11-01 20:04:32.438 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-01 20:04:32.490 | INFO     | __main__:run_workload:409 - Test process started
+2026-11-01 20:04:34.328 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/adamjanovic/.cache/ttnn,model_cache_path=/home/adamjanovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.20, pytest-9.0.3, pluggy-1.7.0 -- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal
+configfile: pytest.ini
+plugins: xdist-3.8.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, split-0.11.0, repeat-0.9.4, anyio-4.16.0, timeout-2.4.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 7 items
+2026-11-01 20:04:37.790 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-11-01 20:04:37.790 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-11-01 20:04:37.790 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-01 20:04:37.790 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-01 20:04:37.794 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:654)
+2026-11-01 20:04:37.794 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-01 20:04:37.828 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:176)
+2026-11-01 20:04:37.828 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-11-01 20:04:37.828 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:153)
+2026-11-01 20:04:37.828 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-11-01 20:04:37.829 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-11-01 20:04:37.917 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-11-01 20:04:38.056 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-11-01 20:04:38.056 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-11-01 20:04:38.057 | info     |          Fabric | Loaded physical groupings from: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-01 20:04:38.057 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-11-01 20:04:38.058 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-11-01 20:04:38.058 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-11-01 20:04:38.058 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 1x1_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-11-01 20:04:38.058 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-11-01 20:04:38.117 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_tile_f32_128x8192 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_tile_f32_128x8192 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+2026-11-01 20:04:42.400 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_f32_2048x1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_f32_2048x1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+2026-11-01 20:04:42.760 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF wid_perf_32x7168 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF wid_perf_32x7168 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+2026-11-01 20:04:42.978 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_bf8_2048x1024_bf16dst v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_bf8_2048x1024_bf16dst v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+2026-11-01 20:04:43.327 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_mid_7168 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_mid_7168 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+2026-11-01 20:04:43.916 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF hgt_perf_8192x1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF hgt_perf_8192x1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+2026-11-01 20:04:44.924 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_prefill_1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=5 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=op pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+FRF int_prefill_1024 v=7 pcc=0.00000000 maxabs_vs_first=0 maxabs_vs_torch=0 ok
+
+UP_FRONT_INLINE: collect pass over 7 item(s) took 8.1s
+UP_FRONT_INLINE: compile route farm (programs=21, farm_min=10)
+
+UP_FRONT_COLLECT: 56 ops stashed across 7 bodies -> 21 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=14 fallback=0
+2026-11-01 20:04:45.918 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 20:04:46.009 | info     |           Metal | Enabling program cache on MeshDevice 15 (mesh_device.cpp:1222)
+UP_FRONT_COLLECT: 21 collected · 21 built · 0 already compiled in 0.1s (workers=128, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=21 programs=21 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=21 compile_s=0.2 collect_s=8.1 route=farm
+UP_FRONT_INLINE: compile step took 0.2s; starting the real pass
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_tile_f32_128x8192] 2026-11-01 20:04:46.171 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_tile_f32_128x8192 v=op pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02496 ok
+FRF int_tile_f32_128x8192 v=7 pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02496 ok
+FRF int_tile_f32_128x8192 v=5 pcc=0.99999974 maxabs_vs_first=0.01379 maxabs_vs_torch=0.02678 ok
+FRF int_tile_f32_128x8192 v=op pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02496 ok
+FRF int_tile_f32_128x8192 v=7 pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02496 ok
+FRF int_tile_f32_128x8192 v=5 pcc=0.99999974 maxabs_vs_first=0.01379 maxabs_vs_torch=0.02678 ok
+FRF int_tile_f32_128x8192 v=op pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02496 ok
+FRF int_tile_f32_128x8192 v=7 pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02496 ok
+PASSED2026-11-01 20:04:46.823 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:04:46.849 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=26220ns, avg=27372.1ns, max=28324ns (profiler_analysis.cpp:729)
+2026-11-01 20:04:46.849 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=300ns, range=[26100..29100), underflow(<26100ns)=0, overflow(>=29100ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       26100 ..        26400) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       26400 ..        26700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       26700 ..        27000) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       27000 ..        27300) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       27300 ..        27600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       27600 ..        27900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       27900 ..        28200) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       28200 ..        28500) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       28500 ..        28800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:46.849 | info     |           Metal |   [       28800 ..        29100) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_f32_2048x1024] 2026-11-01 20:04:46.929 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_f32_2048x1024 v=op pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02664 ok
+FRF int_f32_2048x1024 v=7 pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02664 ok
+FRF int_f32_2048x1024 v=5 pcc=0.99999974 maxabs_vs_first=0.01422 maxabs_vs_torch=0.02792 ok
+FRF int_f32_2048x1024 v=op pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02664 ok
+FRF int_f32_2048x1024 v=7 pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02664 ok
+FRF int_f32_2048x1024 v=5 pcc=0.99999974 maxabs_vs_first=0.01422 maxabs_vs_torch=0.02792 ok
+FRF int_f32_2048x1024 v=op pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02664 ok
+FRF int_f32_2048x1024 v=7 pcc=0.99999974 maxabs_vs_first=0 maxabs_vs_torch=0.02664 ok
+PASSED2026-11-01 20:04:48.035 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:04:48.061 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=48370ns, avg=49221.5ns, max=49944ns (profiler_analysis.cpp:729)
+2026-11-01 20:04:48.061 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=200ns, range=[48200..50200), underflow(<48200ns)=0, overflow(>=50200ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       48200 ..        48400) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       48400 ..        48600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       48600 ..        48800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       48800 ..        49000) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       49000 ..        49200) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       49200 ..        49400) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       49400 ..        49600) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       49600 ..        49800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       49800 ..        50000) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.061 | info     |           Metal |   [       50000 ..        50200) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[wid_perf_32x7168] 2026-11-01 20:04:48.155 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF wid_perf_32x7168 v=op pcc=0.99998394 maxabs_vs_first=0 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=7 pcc=0.99998610 maxabs_vs_first=0.09375 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=5 pcc=0.99998559 maxabs_vs_first=0.09375 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=op pcc=0.99998394 maxabs_vs_first=0 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=7 pcc=0.99998610 maxabs_vs_first=0.09375 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=5 pcc=0.99998559 maxabs_vs_first=0.09375 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=op pcc=0.99998394 maxabs_vs_first=0 maxabs_vs_torch=0.125 ok
+FRF wid_perf_32x7168 v=7 pcc=0.99998610 maxabs_vs_first=0.09375 maxabs_vs_torch=0.125 ok
+PASSED2026-11-01 20:04:48.479 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:04:48.484 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=7677ns, avg=8145.6ns, max=8903ns (profiler_analysis.cpp:729)
+2026-11-01 20:04:48.484 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=200ns, range=[7600..9600), underflow(<7600ns)=0, overflow(>=9600ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        7600 ..         7800) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        7800 ..         8000) |###########################             |        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        8000 ..         8200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        8200 ..         8400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        8400 ..         8600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        8600 ..         8800) |###########################             |        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        8800 ..         9000) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        9000 ..         9200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        9200 ..         9400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:48.484 | info     |           Metal |   [        9400 ..         9600) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_bf8_2048x1024_bf16dst] 2026-11-01 20:04:48.536 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_bf8_2048x1024_bf16dst v=op pcc=0.99991802 maxabs_vs_first=0 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=7 pcc=0.99991795 maxabs_vs_first=0.125 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=5 pcc=0.99991802 maxabs_vs_first=0 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=op pcc=0.99991802 maxabs_vs_first=0 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=7 pcc=0.99991795 maxabs_vs_first=0.125 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=5 pcc=0.99991802 maxabs_vs_first=0 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=op pcc=0.99991802 maxabs_vs_first=0 maxabs_vs_torch=0.25 ok
+FRF int_bf8_2048x1024_bf16dst v=7 pcc=0.99991795 maxabs_vs_first=0.125 maxabs_vs_torch=0.25 ok
+PASSED2026-11-01 20:04:49.472 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:04:49.505 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=15984ns, avg=16869.4ns, max=18570ns (profiler_analysis.cpp:729)
+2026-11-01 20:04:49.505 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=300ns, range=[15900..18900), underflow(<15900ns)=0, overflow(>=18900ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       15900 ..        16200) |########################################|        4 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       16200 ..        16500) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       16500 ..        16800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       16800 ..        17100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       17100 ..        17400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       17400 ..        17700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       17700 ..        18000) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       18000 ..        18300) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       18300 ..        18600) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:49.505 | info     |           Metal |   [       18600 ..        18900) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_mid_7168] 2026-11-01 20:04:49.601 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_mid_7168 v=op pcc=0.99998380 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_mid_7168 v=7 pcc=0.99998497 maxabs_vs_first=0.25 maxabs_vs_torch=0.25 ok
+FRF int_mid_7168 v=5 pcc=0.99998488 maxabs_vs_first=0.25 maxabs_vs_torch=0.25 ok
+FRF int_mid_7168 v=op pcc=0.99998380 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_mid_7168 v=7 pcc=0.99998497 maxabs_vs_first=0.25 maxabs_vs_torch=0.25 ok
+FRF int_mid_7168 v=5 pcc=0.99998488 maxabs_vs_first=0.25 maxabs_vs_torch=0.25 ok
+FRF int_mid_7168 v=op pcc=0.99998380 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_mid_7168 v=7 pcc=0.99998497 maxabs_vs_first=0.25 maxabs_vs_torch=0.25 ok
+PASSED2026-11-01 20:04:51.995 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:04:52.031 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=52351ns, avg=52852.1ns, max=53379ns (profiler_analysis.cpp:729)
+2026-11-01 20:04:52.031 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=200ns, range=[52200..54200), underflow(<52200ns)=0, overflow(>=54200ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       52200 ..        52400) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       52400 ..        52600) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       52600 ..        52800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       52800 ..        53000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       53000 ..        53200) |########################################|        3 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       53200 ..        53400) |#############                           |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       53400 ..        53600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       53600 ..        53800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       53800 ..        54000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:52.031 | info     |           Metal |   [       54000 ..        54200) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[hgt_perf_8192x1024] 2026-11-01 20:04:52.142 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF hgt_perf_8192x1024 v=op pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=7 pcc=0.99998373 maxabs_vs_first=0.25 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=5 pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=op pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=7 pcc=0.99998373 maxabs_vs_first=0.25 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=5 pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=op pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF hgt_perf_8192x1024 v=7 pcc=0.99998373 maxabs_vs_first=0.25 maxabs_vs_torch=0.1875 ok
+PASSED2026-11-01 20:04:57.427 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:04:57.444 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=19930ns, avg=19999.1ns, max=20133ns (profiler_analysis.cpp:729)
+2026-11-01 20:04:57.444 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[19900..20900), underflow(<19900ns)=0, overflow(>=20900ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       19900 ..        20000) |########################################|        5 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20000 ..        20100) |################                        |        2 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20100 ..        20200) |########                                |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20200 ..        20300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20300 ..        20400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20400 ..        20500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20500 ..        20600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20600 ..        20700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20700 ..        20800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:04:57.444 | info     |           Metal |   [       20800 ..        20900) |                                        |        0 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_prefill_1024] 2026-11-01 20:04:57.510 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+FRF int_prefill_1024 v=op pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=7 pcc=0.99998373 maxabs_vs_first=0.25 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=5 pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=op pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=7 pcc=0.99998373 maxabs_vs_first=0.25 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=5 pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=op pcc=0.99998338 maxabs_vs_first=0 maxabs_vs_torch=0.1875 ok
+FRF int_prefill_1024 v=7 pcc=0.99998373 maxabs_vs_first=0.25 maxabs_vs_torch=0.1875 ok
+PASSED2026-11-01 20:05:02.887 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 20:05:02.915 | info     |           Metal | Device kernel duration perf summary (device=0): count=8, min=86611ns, avg=88531.1ns, max=89841ns (profiler_analysis.cpp:729)
+2026-11-01 20:05:02.915 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=400ns, range=[86400..90400), underflow(<86400ns)=0, overflow(>=90400ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       86400 ..        86800) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       86800 ..        87200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       87200 ..        87600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       87600 ..        88000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       88000 ..        88400) |########################################|        4 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       88400 ..        88800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       88800 ..        89200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       89200 ..        89600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       89600 ..        90000) |##############################          |        3 (profiler_analysis.cpp:777)
+2026-11-01 20:05:02.915 | info     |           Metal |   [       90000 ..        90400) |                                        |        0 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 16.8s
+
+
+- generated xml file: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+5.25s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_prefill_1024]
+5.17s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[hgt_perf_8192x1024]
+2.27s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_mid_7168]
+0.96s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_f32_2048x1024]
+0.80s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_bf8_2048x1024_bf16dst]
+0.48s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_tile_f32_128x8192]
+0.21s call     ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[wid_perf_32x7168]
+0.16s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_tile_f32_128x8192]
+0.15s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_mid_7168]
+0.15s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_bf8_2048x1024_bf16dst]
+0.15s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_f32_2048x1024]
+0.12s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_prefill_1024]
+0.12s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[wid_perf_32x7168]
+0.12s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_tile_f32_128x8192]
+0.12s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_bf8_2048x1024_bf16dst]
+0.12s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_mid_7168]
+0.12s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_f32_2048x1024]
+0.11s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[hgt_perf_8192x1024]
+0.10s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[hgt_perf_8192x1024]
+0.10s setup    ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[int_prefill_1024]
+0.05s teardown ttnn/ttnn/operations/rms_norm/perf_experiments/fused_rowsum_finalize/bench_fused_rowsum_finalize.py::test_bench[wid_perf_32x7168]
+============================== 7 passed in 26.10s ==============================
+2026-11-01 20:05:04.966 | info     |    BuildKernels | JIT cache stats: 123/123 hits (100.0%) [10 cached, 92 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 20:05:04.966 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 20:05:04.975 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-11-01 20:05:04.975 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-11-01 20:05:05.021 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-11-01 20:05:05.021 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-11-01 20:05:05.021 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)
+2026-11-01 20:05:05.372 | INFO     | __main__:main:483 - Copying /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/bench_fused_rowsum_finalize_2026_11_01_20_05_05.tracy
+2026-11-01 20:05:05.394 | INFO     | __main__:main:486 - Copied /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/bench_fused_rowsum_finalize_2026_11_01_20_05_05.tracy
+2026-11-01 20:05:05.395 | INFO     | __main__:main:495 - embed.tracy -> traces/bench_fused_rowsum_finalize_2026_11_01_20_05_05.tracy
+2026-11-01 20:05:05.395 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-01 20:05:05.395 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-01 20:05:05.395 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-01 20:05:08.145 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-01 20:05:08.265 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-01 20:05:08.266 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-01 20:05:14.798 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-01 20:05:14.798 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-01 20:05:15.988 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-01 20:05:15.989 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-01 20:05:16.127 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-01 20:05:16.186 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_20_05_15/ops_perf_results_2026_11_01_20_05_15.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 7 item(s) took 8.1s
+PRECOMPILE: UP_FRONT_INLINE: compile route farm (programs=21, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 56 ops stashed across 7 bodies -> 21 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=14 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 21 collected · 21 built · 0 already compiled in 0.1s (workers=128, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 0.2s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 16.8s
+SAFE_PYTEST: PROFILER CSV: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_20_05_15/ops_perf_results_2026_11_01_20_05_15.csv
+SAFE_PYTEST_RESULT: PASS

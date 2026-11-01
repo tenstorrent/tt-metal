@@ -46,9 +46,9 @@ CB_INV_RMS = 6  # per tile-row rsqrt(mean + eps) (column 0)
 CB_OUT = 7  # normalized tiles (TILE: -> writer; RM: -> untilize)
 CB_OUT_RM = 8  # RM: untilized stick pieces -> writer
 CB_X_ALT = 9  # resident x block (pong) — only when x_block_depth == 2
-CB_SUMSQ_ACC = 10  # sharded TILE W tail: raw sum-of-squares of the full W tiles (reduce Accumulate CB)
 CB_TAIL_MASK = 11  # sharded TILE W tail: 0/1 row mask of the valid columns of the last W tile
 CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows this member owns
+CB_ONES = 13  # 1.0 reduce scaler tile of the FPU row collapse (reduce_tile ROW)
 
 SEM_PARTIALS_ARRIVED = 0
 SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
@@ -202,7 +202,7 @@ class PlanOpts:
     shard_backed: bool = False  # TILE sharded: cb_x / cb_out alias the shards (tensor buffers, not CB budget)
     owner_combine: bool = False  # k > K_SYM_MAX_*: per-row owner gather + return instead of the all-gather
     gather_depth: int = 2  # symmetric all-gather: blocks of cb_gathered (1 when every core runs one block)
-    mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
+    mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside pass 1 (0/1 row mask)
     gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
     rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
 
@@ -220,6 +220,7 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
     plan = {
         CB_SUMSQ: (b, sz.T_acc),
         CB_INV_RMS: (b, sz.T_acc),
+        CB_ONES: (1, ttnn.tile_size(ttnn.bfloat16)),
     }
     if not opts.shard_backed:
         plan[CB_X] = (b * pitch, sz.T_in)  # resident x block
@@ -236,7 +237,6 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
         else:
             plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
     if opts.mask_tail:
-        plan[CB_SUMSQ_ACC] = (b, sz.T_acc)
         plan[CB_TAIL_MASK] = (1, sz.T_acc)
     if sz.is_rm:
         plan[CB_X_RM] = (RM_IN_DEPTH * c, sz.T_in)
@@ -722,7 +722,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         CB_X_RM: x_dtype,
         CB_OUT: x_dtype,
         CB_OUT_RM: x_dtype,
-        CB_SUMSQ_ACC: t_acc,
+        CB_ONES: ttnn.bfloat16,
         CB_TAIL_MASK: t_acc,
         CB_INV_OWNED: t_acc,
     }

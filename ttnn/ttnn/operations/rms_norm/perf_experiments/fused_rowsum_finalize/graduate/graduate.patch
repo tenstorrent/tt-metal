@@ -1,0 +1,364 @@
+--- a/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_common.hpp
++++ b/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_common.hpp
+@@ -18,7 +18,7 @@
+ constexpr uint32_t cb_out = 7;             // normalized tiles
+ constexpr uint32_t cb_out_rm = 8;          // RM: untilized stick pieces
+ constexpr uint32_t cb_x_alt = 9;           // resident x block (pong), x_block_depth == 2 only
+-constexpr uint32_t cb_sumsq_acc = 10;      // sharded TILE W tail: raw sum x^2 of the full W tiles (Accumulate CB)
+ constexpr uint32_t cb_tail_mask = 11;      // sharded TILE W tail: 0/1 row mask of the tail tile's valid columns
+ constexpr uint32_t cb_inv_owned = 12;      // owner combine (k > K_SYM_MAX_*): inv_rms of the rows this member owns
++constexpr uint32_t cb_ones = 13;           // 1.0 reduce scaler tile of the FPU row collapse (reduce_tile ROW)
+ }  // namespace rms_norm_cb
+--- a/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp
++++ b/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp
+@@ -3,16 +3,25 @@
+ 
+ // rms_norm compute (TRISC0/1/2). Block operations (op_design.md -> Block Operation Realization):
+ //   tilize_x_block      (RM)   compute_kernel_lib::tilize<C>        cb_x_rm -> cb_x
+-//   sum_squares_block          eltwise_chain BinaryFpu(x*x, PerRow DEST accumulation) -> cb_sumsq_tiles
+-//   collapse_sumsq_block       reduce<SUM, ROW, AccumulateViaAdd, Collapse>  -> cb_inv_rms (k==1, + finalize)
+-//                                                                           -> cb_partial_sumsq (k>1)
++//   sum_squares_block          raw: x*x DEST-accumulated (FPU) per tile-row, DEST_AUTO_LIMIT tile-rows per acquire
++//                              (masked W tail folded first) -> cb_sumsq_tiles
++//   collapse_sumsq_block       reduce<SUM, ROW, ReduceTile> (FPU, 1.0 scaler cb_ones) -> cb_inv_rms (k==1, + finalize)
++//                                                                                  -> cb_partial_sumsq (k>1)
+ //   combine_partials_block     reduce<SUM, ROW, AccumulateViaAdd, Skip>(rows x k) + finalize -> cb_inv_rms
+ //   normalize_block            eltwise_chain BinaryFpu(x * inv_rms, bcast Col) [-> DestReuse * gamma] -> cb_out
+ //   untilize_out_block  (RM)   compute_kernel_lib::untilize<C>      cb_out -> cb_out_rm
+ //
+-// Raw API (documented exception): the finalize post-op (mul 1/W, add eps, rsqrt) runs on DST inside the
+-// reduce() helper's post_reduce_op hook — reduce() exposes that hook as a uint32_t dst callable, not a chain,
+-// so an eltwise_chain Rsqrt would need the reduced tile packed to L1 and re-read (extra CB + pass).
++// Raw API (documented exceptions):
++//  * finalize (FinalizeInvRms): column-0-scoped SFPU body (x * 1/W + eps -> rsqrt over the 8 even-parity vectors of
++//    faces 0/2 only, one DEST store) run through the reduce() post_reduce_op hook. The stock SFPU entry points scope
++//    only by face (VectorMode) / ITERATIONS, never by column parity, and binop_with_scalar + rsqrt_tile are three
++//    full-tile passes (32 vectors each) — catalog sfpu_tile_scope c_skip. Capability gap, not ergonomics.
++//  * pass 1 (sum_squares_block): eltwise_chain's DestAccumulation::PerRow cannot fold the masked W-tail tile into
++//    the DEST accumulation (x*mask bcast-row, then DEST-reuse * x) and packs one tile-row per acquire. Capability gap
++//    for the tail; the batching is a measured ~1 % extra.
++//  * the within-tile row collapse uses the reduce() helper's ReduceTile (FPU) datapath, not AccumulateViaAdd's
++//    copy_tile + sfpu_reduce: at one input tile per output the SFPU row reduce costs ~200 ns per tile-row (BH p150b)
++//    against ~55 ns for unpack + GAPOOL (perf_experiments/fused_rowsum_finalize).
+ //
+ // cb_x indexing: a tile-row occupies x_row_pitch pages in cb_x (uniform across the program; the last W member
+ // may own fewer tiles, its gap pages are never read), so cb_x is addressed Strided{base, x_row_pitch}.
+@@ -29,9 +38,8 @@
+ // the peers' slot addressing in lockstep) are popped unread.
+ //
+ // Sharded TILE W tail (RMS_MASK_TAIL): cb_x is the caller's shard and is never written, so the tail tile's
+-// padding columns are masked instead of zero-filled: pass 1 of the full W tiles collapses into the reduce
+-// Accumulate CB (raw sum), pass 1 of the tail tile is folded in with the 0/1 row mask (only_partial) and the
+-// finalize runs on that last chunk.
++// padding columns are masked instead of zero-filled: pass 1 seeds each tile-row's DEST tile with
++// (x_tail * mask_row0) * x_tail before the full W tiles accumulate on top (cb_tail_mask, 0/1 row mask).
+ 
+ #include <cstdint>
+ 
+@@ -47,6 +55,13 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+ #endif
+ #include "rms_norm_common.hpp"
++#include "api/compute/eltwise_binary.h"
++#include "api/compute/bcast.h"
++#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
++#ifdef TRISC_MATH
++#include "ckernel_sfpu_sqrt.h"
++#include "sfpu/ckernel_sfpu_converter.h"
++#endif
+ 
+ using namespace compute_kernel_lib;
+ using namespace rms_norm_cb;
+@@ -58,71 +73,108 @@
+ constexpr bool combine_lookahead = get_compile_time_arg_val(4) != 0;
+ constexpr bool combine_owner = get_compile_time_arg_val(5) != 0;
+ 
+-// rsqrt(sum * (1/W) + eps) on DST[dst] — the reduce() post_reduce_op.
++// rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op. Column 0 lives only in the
++// EVEN-parity SFPU vectors of faces 0 and 2: VectorMode::C visits faces 0/2, the body visits offsets 0,2,4,6
++// (dst_reg += 2). mul + add stay in fp32 LREGs (one DEST store instead of three).
++#ifdef TRISC_MATH
++sfpi_inline void finalize_col0_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
++#pragma GCC unroll 0
++    for (int rg = 0; rg < 4; rg++) {
++        const sfpi::vFloat inv_w = ckernel::sfpu::Converter::as_float(inv_w_bits);
++        const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
++        sfpi::vFloat y =
++            ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(sfpi::dst_reg[0] * inv_w + eps);
++        if constexpr (!DST_ACCUM_MODE) {
++            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
++        }
++        sfpi::dst_reg[0] = y;
++        sfpi::dst_reg += 2;  // skip the odd-parity vector (columns 1,3,..,15 - never column 0)
++    }
++}
++#endif
++
+ struct FinalizeInvRms {
+     uint32_t inv_w_bits;
+     uint32_t eps_bits;
+     ALWI void operator()(uint32_t dst) const {
+-        binop_with_scalar_tile_init();
+-        mul_unary_tile(dst, inv_w_bits);
+-        add_unary_tile(dst, eps_bits);
+-        rsqrt_tile_init();
+-        rsqrt_tile(dst);
++        rsqrt_tile_init();  // sqrt-body constants
++        MATH((_llk_math_eltwise_unary_sfpu_params_(finalize_col0_body, dst, VectorMode::C, inv_w_bits, eps_bits)));
+     }
+ };
+ 
+-// ---- sum_squares_block: per tile-row, sum_j x[r][j]^2 accumulated in DEST, one fp32 tile per tile-row ----
+-// base_col / width: the tile-column window of the block walked (sharded W tail: full tiles, then the tail).
++// ---- sum_squares_block: per tile-row, sum_j x[r][j]^2 accumulated in DEST, one tile per tile-row ----
++// Up to DEST_AUTO_LIMIT tile-rows per DEST acquire (DEST[i] = tile-row r0 + i; ELWMUL accumulates into DEST, as
++// eltwise_chain's DestAccumulation::PerRow does). full_w: unmasked W tiles; with_tail: tile full_w is the masked
++// W tail (sharded), folded FIRST: DEST[i] = x_t * mask (bcast row 0), DEST[i] = DEST[i] * x_t (DEST reuse -> srcA).
+ template <uint32_t cb_x_blk>
+-ALWI void sum_squares_block(uint32_t rows, uint32_t base_col, uint32_t width) {
++ALWI void sum_squares_block(uint32_t rows, uint32_t full_w, [[maybe_unused]] bool with_tail) {
+     {
+         MaybeDeviceZoneScope("cmp_wait_x");  // starved on the reader (interleaved) / tilize (RM)
+         cb_wait_front(cb_x_blk, rows * x_row_pitch);
+     }
+     MaybeDeviceZoneScope("cmp_pass1");  // sum x^2 (DEST-accumulated), one pack per tile-row
+-    constexpr auto x_in = input(
+-        cb_x_blk,
+-        WaitPolicy::None,
+-        PopPolicy::None,
+-        InputTileMapping::Block,
+-        DataFormatReconfig::Enabled,
+-        TileAddressing::Strided);
+-    using Square = BinaryFpu<BinaryFpuOp::Mul, x_in, x_in, Dst::D0, DestAccumulation::PerRow>;
+-    using PackRowSum = PackTile<output(
+-        cb_sumsq_tiles,
+-        ReservePolicy::PerOuter,
+-        PushPolicy::PerOuter,
+-        DataFormatReconfig::Enabled,
+-        TileAddressing::Direct,
+-        DestAccumulation::PerRow)>;
+-    eltwise_chain(
+-        IterationShape::grid(rows, width),
+-        Square{StridedTileRange{base_col, x_row_pitch}, StridedTileRange{base_col, x_row_pitch}},
+-        PackRowSum{});
++    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
++    reconfig_data_format(cb_x_blk, cb_x_blk);
++    pack_reconfig_data_format(cb_sumsq_tiles);
++#ifdef RMS_MASK_TAIL
++    if (with_tail) {
++        cb_wait_front(cb_tail_mask, 1);
++    } else
++#endif
++    {
++        mul_init(cb_x_blk, cb_x_blk, true);
++    }
++    for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
++        const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
++        cb_reserve_back(cb_sumsq_tiles, n);
++        tile_regs_acquire();
++#ifdef RMS_MASK_TAIL
++        if (with_tail) {
++            reconfig_data_format_srcb(cb_x_blk, cb_tail_mask);
++            mul_bcast_rows_init(cb_x_blk, cb_tail_mask);
++            for (uint32_t i = 0; i < n; ++i) {
++                mul_tiles_bcast_rows(cb_x_blk, cb_tail_mask, (r0 + i) * x_row_pitch + full_w, 0, i);
++            }
++            reconfig_data_format_srcb(cb_tail_mask, cb_x_blk);
++            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_x_blk);
++            for (uint32_t i = 0; i < n; ++i) {
++                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
++                    cb_x_blk, (r0 + i) * x_row_pitch + full_w, i);
++            }
++            mul_init(cb_x_blk, cb_x_blk, true);
++        }
++#endif
++        for (uint32_t i = 0; i < n; ++i) {
++            const uint32_t base = (r0 + i) * x_row_pitch;
++            for (uint32_t j = 0; j < full_w; ++j) {
++                mul_tiles(cb_x_blk, cb_x_blk, base + j, base + j, i);
++            }
++        }
++        tile_regs_commit();
++        tile_regs_wait();
++        for (uint32_t i = 0; i < n; ++i) {
++            pack_tile(i, cb_sumsq_tiles);
++        }
++        tile_regs_release();
++        cb_push_back(cb_sumsq_tiles, n);
++    }
+ }
+ 
+-// ---- collapse_sumsq_block: within-tile row collapse (column 0 = row sum) [+ finalize] ----
+-// scaler_cb: cb_x (never read: no partial tile, default reload — must only be distinct) or, for the masked
+-// W tail, cb_tail_mask (the 0/1 row mask folded into the last tile).
+-template <uint32_t out_cb, uint32_t scaler_cb = cb_x, typename AccumulateT = NoAccumulation, typename PostOp = NoOp>
+-ALWI void collapse_sumsq_block(
+-    uint32_t rows,
+-    PostOp post_op,
+-    AccumulateT acc = AccumulateT{},
+-    ReducePartialScaler partial = ReducePartialScaler::none()) {
++// ---- collapse_sumsq_block: within-tile row collapse on the FPU (column 0 = row sum) [+ finalize] ----
++template <uint32_t out_cb, typename PostOp = NoOp>
++ALWI void collapse_sumsq_block(uint32_t rows, PostOp post_op) {
+     MaybeDeviceZoneScope("cmp_collapse");  // within-tile row collapse [+ finalize]
+     reduce<
+         PoolType::SUM,
+         ReduceDim::REDUCE_ROW,
+         cb_sumsq_tiles,
+-        scaler_cb,
++        cb_ones,
+         out_cb,
+         ReduceInputPolicy::BulkWaitBulkPop,
+         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+         ReduceFp32Mode::Fast,
+-        ReduceAlgorithm::AccumulateViaAdd,
+-        ReduceWithinTile::Collapse>(
+-        ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), acc, post_op, partial);
++        ReduceAlgorithm::ReduceTile>(
++        ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post_op);
+ }
+ 
+ // ---- combine_partials_block: sum the k gathered column-0 partials per tile-row + finalize ----
+@@ -231,25 +283,8 @@
+ 
+ // pass 1 + collapse of one block into out_cb (+ post_op).
+ template <uint32_t cb_x_blk, uint32_t out_cb, typename PostOp>
+-ALWI void sum_and_collapse(uint32_t rows, uint32_t core_w_tiles, PostOp post_op, [[maybe_unused]] bool owns_tail) {
+-#ifdef RMS_MASK_TAIL
+-    if (owns_tail) {
+-        const uint32_t full = core_w_tiles - 1;  // W tiles before the tail tile
+-        if (full > 0) {
+-            sum_squares_block<cb_x_blk>(rows, 0, full);
+-            collapse_sumsq_block<cb_sumsq_acc, cb_tail_mask>(rows, NoOp{}, Accumulate::at(cb_sumsq_acc, 0));
+-            sum_squares_block<cb_x_blk>(rows, full, 1);
+-            collapse_sumsq_block<out_cb, cb_tail_mask>(
+-                rows, post_op, Accumulate::at_last(cb_sumsq_acc, 1), ReducePartialScaler::only_partial());
+-        } else {
+-            sum_squares_block<cb_x_blk>(rows, 0, 1);
+-            collapse_sumsq_block<out_cb, cb_tail_mask>(
+-                rows, post_op, NoAccumulation{}, ReducePartialScaler::only_partial());
+-        }
+-        return;
+-    }
+-#endif
+-    sum_squares_block<cb_x_blk>(rows, 0, core_w_tiles);
++ALWI void sum_and_collapse(uint32_t rows, uint32_t core_w_tiles, PostOp post_op, bool owns_tail) {
++    sum_squares_block<cb_x_blk>(rows, owns_tail ? core_w_tiles - 1 : core_w_tiles, owns_tail);
+     collapse_sumsq_block<out_cb>(rows, post_op);
+ }
+ 
+@@ -413,7 +448,7 @@
+ #endif
+ #ifdef RMS_MASK_TAIL
+     if (owns_tail) {
+-        cb_pop_front(cb_tail_mask, 1);  // reduce() waits the mask but never pops it
++        cb_pop_front(cb_tail_mask, 1);  // pass 1 waits the mask per block, pops it once here
+     }
+ #endif
+ }
+--- a/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_reader.cpp
++++ b/ttnn/ttnn/operations/rms_norm/kernels/rms_norm_reader.cpp
+@@ -25,9 +25,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+-#ifdef RMS_MASK_TAIL
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+-#endif
+ #include "rms_norm_common.hpp"
+ 
+ using namespace rms_norm_cb;
+@@ -105,6 +103,14 @@
+     [[maybe_unused]] const uint32_t valid_sticks = get_arg_val<uint32_t>(9);  // RM sharded: valid sticks in shard
+     [[maybe_unused]] const uint32_t owns_tail = get_arg_val<uint32_t>(10);    // sharded TILE: owns the W tail tile
+ 
++    // 1.0 scaler of compute's FPU row collapse (reduce_tile ROW). Built after block 0 of x is published —
++    // compute needs it only after pass 1 of block 0 — so it never delays x.
++    auto prep_ones = [](uint32_t blk) {
++        if (blk == 0) {
++            dataflow_kernel_lib::
++                calculate_and_prepare_reduce_scaler<cb_ones, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
++        }
++    };
+ #ifdef RMS_MASK_TAIL
+     // The tail tile's x^2 is masked (columns >= w_valid_in_last_tile) inside compute's collapse reduce.
+     if (owns_tail) {
+@@ -148,6 +154,7 @@
+                 cb_push_back(cb_x_rm, rm_chunk_w_tiles);
+             }
+         }
++        prep_ones(blk);
+     }
+ #elif defined(RMS_SHARDED)
+     // ---- TILE shard: cb_x is backed on the resident shard (zero-copy) — publish its tile-rows to compute ----
+@@ -155,6 +162,7 @@
+         const uint32_t shard_rows = (num_blocks - 1) * block_row_tiles + last_block_row_tiles;
+         cb_reserve_back(cb_x, shard_rows * x_row_pitch);
+         cb_push_back(cb_x, shard_rows * x_row_pitch);
++        prep_ones(0);
+     }
+ #elif defined(RMS_RM)
+     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
+@@ -200,6 +208,7 @@
+                 }
+             }
+         }
++        prep_ones(blk);
+     }
+ #else
+     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
+@@ -232,6 +241,7 @@
+             }
+             cb_push_back(cb_id, x_row_pitch);
+         }
++        prep_ones(blk);
+     }
+ #endif
+ }
+--- a/ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py
++++ b/ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py
+@@ -46,9 +46,9 @@
+ CB_OUT = 7  # normalized tiles (TILE: -> writer; RM: -> untilize)
+ CB_OUT_RM = 8  # RM: untilized stick pieces -> writer
+ CB_X_ALT = 9  # resident x block (pong) — only when x_block_depth == 2
+-CB_SUMSQ_ACC = 10  # sharded TILE W tail: raw sum-of-squares of the full W tiles (reduce Accumulate CB)
+ CB_TAIL_MASK = 11  # sharded TILE W tail: 0/1 row mask of the valid columns of the last W tile
+ CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows this member owns
++CB_ONES = 13  # 1.0 reduce scaler tile of the FPU row collapse (reduce_tile ROW)
+ 
+ SEM_PARTIALS_ARRIVED = 0
+ SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
+@@ -193,7 +193,7 @@
+     shard_backed: bool = False  # TILE sharded: cb_x / cb_out alias the shards (tensor buffers, not CB budget)
+     owner_combine: bool = False  # k > K_SYM_MAX_*: per-row owner gather + return instead of the all-gather
+     gather_depth: int = 2  # symmetric all-gather: blocks of cb_gathered (1 when every core runs one block)
+-    mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside the collapse reduce
++    mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside pass 1 (0/1 row mask)
+     gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
+     rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
+ 
+@@ -211,6 +211,7 @@
+     plan = {
+         CB_SUMSQ: (b, sz.T_acc),
+         CB_INV_RMS: (b, sz.T_acc),
++        CB_ONES: (1, ttnn.tile_size(ttnn.bfloat16)),
+     }
+     if not opts.shard_backed:
+         plan[CB_X] = (b * pitch, sz.T_in)  # resident x block
+@@ -227,7 +228,6 @@
+         else:
+             plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
+     if opts.mask_tail:
+-        plan[CB_SUMSQ_ACC] = (b, sz.T_acc)
+         plan[CB_TAIL_MASK] = (1, sz.T_acc)
+     if sz.is_rm:
+         plan[CB_X_RM] = (RM_IN_DEPTH * c, sz.T_in)
+@@ -713,7 +713,7 @@
+         CB_X_RM: x_dtype,
+         CB_OUT: x_dtype,
+         CB_OUT_RM: x_dtype,
+-        CB_SUMSQ_ACC: t_acc,
++        CB_ONES: ttnn.bfloat16,
+         CB_TAIL_MASK: t_acc,
+         CB_INV_OWNED: t_acc,
+     }
