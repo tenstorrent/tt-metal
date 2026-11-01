@@ -1504,6 +1504,11 @@ class Orchestrator:
             return self._human(task, rec["why"])
         if rec:
             return self._human(task, rec["why"])
+        pending = self.led.state().get(tid, {}).get("ab_pending")
+        if pending is not None:  # F240: the agent finished; a pause (or a crash) cut the A/B: measure, no new attempt
+            rec = self.ab_report(task, sorted(set(pending) | set(self.changed_under(task))))
+            self.led.update(tid, ab=rec, ab_pending=None, status="TODO", reason=[rec["why"]])
+            return self._human(task, rec["why"])
         if ab_before(task):  # F230: a change without a switch (a branch merge): 'before' runs on the tree as it is now
             why = self.ab_measure_before(task)
             if why:
@@ -1512,8 +1517,9 @@ class Orchestrator:
         if changed is None:
             return STOPPED
         # F108: the change is everything uncommitted under the task's paths, an earlier attempt's work included
+        self.led.update(tid, ab_pending=sorted(changed))  # F240: a pause in the A/B resumes it, not the agent
         rec = self.ab_report(task, sorted(set(changed) | set(self.changed_under(task))))
-        self.led.update(tid, ab=rec, status="TODO", reason=[rec["why"]])
+        self.led.update(tid, ab=rec, ab_pending=None, status="TODO", reason=[rec["why"]])
         return self._human(task, rec["why"])
 
     def perf_agent(self, task: dict) -> list[str] | None:
@@ -1754,6 +1760,7 @@ class Orchestrator:
                 continue
             if not run:
                 continue
+            self.pause_point(tid, f"A/B {'on' if side == 'new' else 'off'}: {name}")  # F240: between runs, not mid-run
             stamp["code"] = stamp.get("code") or self.ab_code_key(task)
             res = d / name
             M.reset(tid, res)
