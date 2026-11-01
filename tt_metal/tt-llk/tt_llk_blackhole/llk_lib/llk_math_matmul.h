@@ -1153,6 +1153,8 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t rt_dim         = 1)
 {
     // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
+    // a 1x1 block runs without the end fold: the fold's ADDR_MOD_3 write costs more than the slot it saves when the block is re-initialised
+    constexpr bool run_end_fold = end_fold && !(key_ct == 1 && key_rt == 1);
     constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
     const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
     const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
@@ -1202,7 +1204,7 @@ inline void _llk_math_matmul_init_(
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
@@ -1222,7 +1224,7 @@ inline void _llk_math_matmul_init_(
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
@@ -1408,6 +1410,8 @@ inline void _llk_math_matmul_init_switch_(
     const std::uint32_t rt_dim         = 1)
 {
     // the block keys, when given, fold the dimension dependent work of the init (strides, MOP words) into constants
+    // a 1x1 block runs without the end fold: the fold's ADDR_MOD_3 write costs more than the slot it saves when the block is re-initialised
+    constexpr bool run_end_fold = end_fold && !(key_ct == 1 && key_rt == 1);
     constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
     const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
     const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
@@ -1436,7 +1440,7 @@ inline void _llk_math_matmul_init_switch_(
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
         matmul_configure_addrmod_switch<math_fidelity, THROTTLE_LEVEL, false>();
-        matmul_configure_mop_switch<math_fidelity, in1_order, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop_switch<math_fidelity, in1_order, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
@@ -1456,7 +1460,7 @@ inline void _llk_math_matmul_init_switch_(
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(blk_ct, blk_rt));
