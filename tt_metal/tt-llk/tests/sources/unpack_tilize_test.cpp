@@ -91,8 +91,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const bool is_int_fpu_en                    = false;
-    const ckernel::TensorShape tensor_shape     = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    const bool is_int_fpu_en                = false;
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
     LLK_ASSERT(
         NUM_BLOCKS > 0 && NUM_BLOCKS * NUM_TILES_IN_BLOCK >= TILE_CNT && (NUM_BLOCKS - 1) * NUM_TILES_IN_BLOCK < TILE_CNT,
         "Block configuration must cover TILE_CNT with one partial-or-full final block");

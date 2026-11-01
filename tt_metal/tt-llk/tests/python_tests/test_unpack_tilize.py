@@ -173,14 +173,15 @@ def unpack_tilize(
     test_config_kwargs = {
         "test_name": "sources/unpack_tilize_test.cpp",
         "formats": formats,
-        "templates": [],
-        "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILE_COUNT(tile_cnt_A),
+        "templates": [
+            LOOP_FACTOR(loop_factor),
             NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            LOOP_FACTOR(loop_factor),
+        ],
+        "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
