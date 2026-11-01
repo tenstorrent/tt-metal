@@ -192,7 +192,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const Operand& buffer_Res = params.buffer_Res;
+    const Operand& buffer_Res                          = params.buffer_Res;
+    [[maybe_unused]] const std::uint32_t perf_tile_cnt = params.BLOCK_RT_DIM * params.BLOCK_CT_DIM;
+#else
+    [[maybe_unused]] static constexpr std::uint32_t perf_tile_cnt = TILE_CNT;
 #endif
     // Repeated perf runs recycle Dest-local slots in the PERF_ADDRESS ring; functional runs use real L1 buffers.
     static constexpr bool is_repeated_perf = LOOP_FACTOR > 1;
@@ -228,19 +231,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            // Keep the legacy flat loop for stable perf comparisons; align its block traversal
+            // with L1_TO_L1 after the Wormhole instability is resolved (tt-metal #63690).
+            static constexpr std::uint32_t max_tiles_dest = get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
+                for (std::uint32_t tile = 0; tile < perf_tile_cnt; ++tile)
                 {
-                    const std::uint32_t block_start      = block * NUM_TILES_IN_BLOCK;
-                    const std::uint32_t tiles_this_block = std::min(NUM_TILES_IN_BLOCK, TILE_CNT - block_start);
-                    for (std::uint32_t tile = 0; tile < tiles_this_block; ++tile)
-                    {
-                        LLK_ASSERT(
-                            (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
-                    }
+                    const std::uint32_t tile_index = tile % max_tiles_dest;
+                    LLK_ASSERT((tile_index < max_tiles_dest), "Tile index exceeds maximum destination tiles");
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
             }
         }
