@@ -49,9 +49,10 @@ from .moe_prefill import PrefillExperts
 from .profiling import zone
 from .proj_stream import BankStreamMatmul, RouterScoreStream
 
-# The router's launch inside the attention reduce's (its weights stream in while the reduce waits for the fabric
-# gather): MIMO_ROUTER_IN_REDUCE=0 launches it on its own.
-ROUTER_IN_REDUCE = os.environ.get("MIMO_ROUTER_IN_REDUCE", "1") == "1"
+# MIMO_ROUTER_IN_REDUCE=1 runs the router inside the attention reduce's launch (its weights stream in while the reduce
+# waits for the fabric gather). Off: after h lands the router still takes ~8 us (compute, x read, partial gather), and
+# its 2 MB weight read at the launch's start delays the reduce's own DRAM reads (VSB 150K: no gain).
+ROUTER_IN_REDUCE = os.environ.get("MIMO_ROUTER_IN_REDUCE", "0") == "1"
 # The next layer's qkv stream inside the MoE launch (its weights stream in once the experts are read, while the
 # reduce waits for the fabric gather): MIMO_QKV_PREFETCH=0 launches it on its own.
 QKV_PREFETCH = os.environ.get("MIMO_QKV_PREFETCH", "1") == "1"

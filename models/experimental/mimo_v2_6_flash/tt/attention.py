@@ -690,7 +690,9 @@ class TtMiMoAttention:
             fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1",
             packer_l1_acc=False,
         )
-        self.decode_sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
+        # MIMO_DECODE_SDPA_FIDELITY (HiFi4 default) for the decode / verify SDPA, as MIMO_PREFILL_SDPA_FIDELITY.
+        fidelity = getattr(ttnn.MathFidelity, os.environ.get("MIMO_DECODE_SDPA_FIDELITY", "HiFi4"))
+        self.decode_sdpa_config = compute_config(fidelity, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=0,
