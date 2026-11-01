@@ -180,7 +180,7 @@ def layer_norm(
 
     blocking = select_blocking(
         input_tensor,
-        has_residual=residual_input_tensor is not None,
+        residual=residual_input_tensor,
         fp32_dest_acc_en=bool(compute_kernel_config.fp32_dest_acc_en),
     )
     if blocking is None:

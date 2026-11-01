@@ -19,6 +19,16 @@ TILE = 32
 # Blocking-model host constants (op_design.md, Blocking Model).
 MIN_BLOCKS_PER_CORE = 2
 IO_CHUNK_TARGET_TILES = 8
+# Stream knobs (Refinement 1, measured on BH p100a). READ_TRID_DEPTH > 1 slowed L1-sourced rows and
+# left DRAM rows flat; WRITE_CHUNKS_PER_FLUSH and BANK_STAGGER were flat (7 DRAM banks already
+# spread the 24 * t row starts). All three are parked at their trivial settings.
+READ_TRID_DEPTH = 1  # chunks kept in flight on the read trid ring, <= 15
+WRITE_CHUNKS_PER_FLUSH = 1  # output chunks issued per flush + pop
+BANK_STAGGER = False  # rotate each core's in-chunk tile order by its core index
+# split_reader: the residual stream moves to the writer RISC / NoC1. Gated to input and residual on
+# the same memory tier with at least half the grid active; it lost ~2 us on input-L1 / residual-DRAM
+# and ~1.5 us on a 32-core grid.
+RESIDUAL_ON_WRITER = True
 OUT_DEPTH = 1
 L1_HEADROOM_BYTES = 64 * 1024
 
@@ -49,6 +59,10 @@ class Blocking:
     tensor_w_tiles: int  # Wt
     has_residual: bool
     fp32_dest_acc_en: bool
+    read_trid_depth: int
+    write_chunks_per_flush: int
+    bank_stagger: bool
+    residual_on_writer: bool
     all_cores: object
     assignment: tuple  # ((core, row_tile_start, core_row_tiles), ...)
 
@@ -116,13 +130,22 @@ def _io_chunk_tiles(Wt):
     return max(c for c in range(1, min(Wt, IO_CHUNK_TARGET_TILES) + 1) if Wt % c == 0)
 
 
-def select_blocking(input_tensor, *, has_residual, fp32_dest_acc_en):
-    """Single source of every block knob (R, C, in_depth). Returns None when R1's predicate fails."""
+def _residual_on_writer(input_tensor, residual, num_active_cores, num_grid_cores):
+    if not RESIDUAL_ON_WRITER or residual is None:
+        return False
+    same_tier = input_tensor.memory_config().buffer_type == residual.memory_config().buffer_type
+    return same_tier and 2 * num_active_cores >= num_grid_cores
+
+
+def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
+    """Single source of every block knob (R, C, in_depth, stream knobs). None when R1's predicate fails."""
+    has_residual = residual is not None
     shape = list(input_tensor.shape)
     if shape[-1] % TILE != 0:
         return None
     Wt = shape[-1] // TILE
     device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
     all_cores, assignment, core_row_tiles_max = _split_rows(device, tensor_row_tiles(shape))
 
     formats = _cb_page_formats(fp32_dest_acc_en)
@@ -145,6 +168,10 @@ def select_blocking(input_tensor, *, has_residual, fp32_dest_acc_en):
         tensor_w_tiles=Wt,
         has_residual=has_residual,
         fp32_dest_acc_en=fp32_dest_acc_en,
+        read_trid_depth=READ_TRID_DEPTH,
+        write_chunks_per_flush=WRITE_CHUNKS_PER_FLUSH,
+        bank_stagger=BANK_STAGGER,
+        residual_on_writer=_residual_on_writer(input_tensor, residual, len(assignment), grid.x * grid.y),
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -208,6 +235,8 @@ def create_program_descriptor(
         input_tile_bytes,
         gamma.buffer_aligned_page_size(),
         gamma.element_size(),
+        blocking.read_trid_depth,
+        int(blocking.residual_on_writer),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -218,8 +247,25 @@ def create_program_descriptor(
     reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
 
-    writer_ct_args = [CB_OUTPUT_TILES, R, Wt, C, output_tile_bytes]
+    writer_ct_args = [
+        CB_OUTPUT_TILES,
+        R,
+        Wt,
+        C,
+        output_tile_bytes,
+        blocking.write_chunks_per_flush,
+        int(blocking.residual_on_writer),
+        CB_RESIDUAL_TILES,
+        blocking.in_depth,
+        blocking.read_trid_depth,
+        input_tile_bytes,
+    ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(
+        ttnn.TensorAccessorArgs(residual).get_compile_time_args()
+        if blocking.residual_on_writer
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
 
     compute_ct_args = [
         CB_INPUT_TILES,
@@ -248,9 +294,18 @@ def create_program_descriptor(
     gamma_addr = gamma.buffer_address()
     beta_addr = beta.buffer_address()
     out_addr = output_tensor.buffer_address()
-    for core, row_tile_start, core_row_tiles in blocking.assignment:
-        reader_rt[core.x][core.y] = [in_addr, res_addr, gamma_addr, beta_addr, row_tile_start, core_row_tiles]
-        writer_rt[core.x][core.y] = [out_addr, row_tile_start, core_row_tiles]
+    for core_idx, (core, row_tile_start, core_row_tiles) in enumerate(blocking.assignment):
+        rotation = core_idx % C if blocking.bank_stagger else 0
+        reader_rt[core.x][core.y] = [
+            in_addr,
+            res_addr,
+            gamma_addr,
+            beta_addr,
+            row_tile_start,
+            core_row_tiles,
+            rotation,
+        ]
+        writer_rt[core.x][core.y] = [out_addr, row_tile_start, core_row_tiles, rotation, res_addr]
         compute_rt[core.x][core.y] = [core_row_tiles]
 
     kernels = [

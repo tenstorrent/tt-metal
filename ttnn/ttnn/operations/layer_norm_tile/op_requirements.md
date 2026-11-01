@@ -44,7 +44,7 @@ Measured Phase 0 device kernel time (Tracy `DEVICE KERNEL DURATION`, two runs, u
 
 Reading: the DRAM rows are data-movement bound (skip-compute keeps ~90% of the time) at ~310 GB/s aggregate against the ~470 GB/s the 40 us floor implies. The L1 rows lose 9-11 us when chain compute is skipped, so compute is on the critical path there. Every core runs one tile-row's read -> compute -> write in lockstep with the rest of the grid, so compute time is not hidden behind DRAM traffic. A tail probe (T = 110 vs T = 128 tile-rows) scales with bytes (1.17-1.19x for 1.16x bytes) in all three placements, so the 18 two-row cores do not set the kernel end; load-balancing regimes (R3 half-band, R2 w-split) are not filed (verification_report.md).
 
-### [ ] Refinement 1 - DRAM stream efficiency on the flagged headline rows
+### [x] Refinement 1 - DRAM stream efficiency on the flagged headline rows
 
 **Type**: perf
 
@@ -58,6 +58,8 @@ No SUPPORTED change.
 **Verifier notes**: do this before Refinement 2. The DRAM rows are the headline (1.47 ms per forward), and any change to the reader's issue pattern alters the overlap that Refinement 2's compute numbers are measured against. Flagged #1 (input in L1, residual DRAM) shares the residual DRAM stream and the output DRAM write, so it should move with these levers too. The 8x384 all-DRAM row (stock 47.0 us, ours 48.4) is the same DM-bound profile at 96 cores.
 
 **Done when**: measured device-ns improves on flagged #2 and #3 (toward the 40 us floor) and on flagged #1, which must beat stock 55.0 us by more than run-to-run noise (>= 2 us); the 8x384 all-DRAM reference row beats 47.0 us; the golden suite is green with the `(0.999, 0.02)` fp32-DEST precision gate unchanged; no regression across the config-spanning guard set (one representative each of residual / no-residual x input DRAM / L1 x output DRAM / L1 x affine ROW_MAJOR-L1 / TILE-DRAM, plus one h_non_aligned shape and the 32x32 under-filled shape).
+
+**Outcome**: device kernel us, before -> after (shipped knobs, two runs each): flagged #1 54.0 -> 48.6 (stock 55.0), flagged #2 66.2 -> 52.2 (stock 70.0), flagged #3 39.8 -> 40.4 (flat, stock 48.3), 8x384 all DRAM 48.8 -> 44.5 (stock 47.0), 8x512 all L1 47.5 -> 31.4, 8x512 L1 no-residual 32.3 -> 29.1, 32x32 22.6 -> 23.1 (noise band), affine TILE DRAM 90.8 -> 77.5. Winning levers: split_reader (residual stream on writer RISC / NoC1, path-gated to same-tier input/residual with >= half the grid active; it lost ~2 us on input-L1/residual-DRAM and ~1.5 us on the 32-core grid), and staging the affine fix-up behind the block's last chunk instead of the first chunk's push. Parked at trivial settings as live knobs: trid ring (`READ_TRID_DEPTH`; depth 3 slowed L1-sourced rows by 10-20 us and left DRAM rows flat), grouped writer flush (`WRITE_CHUNKS_PER_FLUSH`, flat), bank stagger (`BANK_STAGGER`, flat: 7 DRAM banks already spread the `24 t` row starts), chunk size (`IO_CHUNK_TARGET_TILES` 4/12/24 flat or worse). Remaining bottleneck: the grid runs read -> compute -> write in lockstep with one tile-row per core, so read phase, ~6 us of compute and write phase add up; flagged #2 at 52 us is ~42 us of DRAM traffic at ~450 GB/s plus compute. Flagged #3 already carries one stream per NoC, so splitting its input across both RISCs was estimated at <2 us (DRAM-bound) and not built. Next lever is overlap (shorter compute after the last chunk, Refinement 2), not more DM issue tricks.
 
 ### [ ] Refinement 2 - Compute critical path on the L1-resident rows
 

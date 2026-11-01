@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // layer_norm reader (RISCV_1, NoC0).
-//   load_block   : R_b x Wt tiles of x (and residual) in C-tile chunks, one barrier per chunk.
-//   stage_affine : once, behind block 0's first chunk (shared barrier). Only row 0 of each gamma/beta
+//   load_block   : R_b x Wt tiles of x (and residual, unless the writer RISC streams it) in C-tile
+//                  chunks on a trid ring of `read_trid_depth` chunks (layer_norm_tile_stream.hpp).
+//   stage_affine : once, issued untagged behind block 0's last chunk. Only row 0 of each gamma/beta
 //                  tile is staged: face-0 row 0 at slot offset 0, face-1 row 0 at slot offset FACE_BYTES.
 //                  Every DRAM read is 64 B at a 64 B-aligned offset (BH DRAM alignment).
 //
@@ -14,6 +15,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "layer_norm_tile_stream.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
@@ -29,7 +31,9 @@ void kernel_main() {
     constexpr uint32_t input_tile_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t affine_page_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t affine_elem_bytes = get_compile_time_arg_val(12);
-    constexpr auto input_args = TensorAccessorArgs<13>();
+    constexpr uint32_t read_trid_depth = get_compile_time_arg_val(13);
+    constexpr bool residual_on_writer = get_compile_time_arg_val(14) != 0;
+    constexpr auto input_args = TensorAccessorArgs<15>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -40,6 +44,9 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(3);
     const uint32_t row_tile_start = get_arg_val<uint32_t>(4);
     const uint32_t core_row_tiles = get_arg_val<uint32_t>(5);
+    const uint32_t rotation = get_arg_val<uint32_t>(6);
+
+    constexpr bool read_residual = has_residual && !residual_on_writer;
 
     static_assert(tensor_w_tiles % io_chunk_tiles == 0, "every block push must be a whole number of chunks");
 
@@ -90,48 +97,56 @@ void kernel_main() {
         }
     };
 
+    const Noc noc;
     bool affine_pending = true;
     for (uint32_t block_row = 0; block_row < core_row_tiles; block_row += block_row_tiles) {
         const uint32_t rows =
             (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
         const uint32_t first_page = (row_tile_start + block_row) * tensor_w_tiles;
-        const uint32_t block_tiles = rows * tensor_w_tiles;
+        const uint32_t num_chunks = rows * tensor_w_tiles / io_chunk_tiles;
 
-        for (uint32_t chunk_start = 0; chunk_start < block_tiles; chunk_start += io_chunk_tiles) {
-            const uint32_t chunk_page = first_page + chunk_start;
-            input_tiles.reserve_back(io_chunk_tiles);
-            uint32_t input_l1 = input_tiles.get_write_ptr();
-            for (uint32_t tile = 0; tile < io_chunk_tiles; ++tile) {
-                noc_async_read(input_accessor.get_noc_addr(chunk_page + tile), input_l1, input_tile_bytes);
-                input_l1 += input_tile_bytes;
+        // Whole-block reserve: the CB holds a whole number of blocks, so the block is contiguous.
+        input_tiles.reserve_back(rows * tensor_w_tiles);
+        const uint32_t input_base = input_tiles.get_write_ptr();
+        uint32_t residual_base = 0;
+        if constexpr (read_residual) {
+            residual_tiles.reserve_back(rows * tensor_w_tiles);
+            residual_base = residual_tiles.get_write_ptr();
+        }
+
+        auto issue = [&](uint32_t chunk) {
+            const uint32_t page = first_page + chunk * io_chunk_tiles;
+            const uint32_t offset = chunk * io_chunk_tiles * input_tile_bytes;
+            layer_norm_tile::read_chunk<io_chunk_tiles, input_tile_bytes>(
+                input_accessor, page, input_base + offset, rotation);
+            if constexpr (read_residual) {
+                layer_norm_tile::read_chunk<io_chunk_tiles, input_tile_bytes>(
+                    residual_accessor, page, residual_base + offset, rotation);
             }
-            if constexpr (has_residual) {
-                residual_tiles.reserve_back(io_chunk_tiles);
-                uint32_t residual_l1 = residual_tiles.get_write_ptr();
-                for (uint32_t tile = 0; tile < io_chunk_tiles; ++tile) {
-                    noc_async_read(residual_accessor.get_noc_addr(chunk_page + tile), residual_l1, input_tile_bytes);
-                    residual_l1 += input_tile_bytes;
-                }
-            }
-            if (affine_pending) {
+            if (affine_pending && chunk + 1 == num_chunks) {
+                dataflow_kernel_lib::set_read_trid(noc, 0);
                 issue_affine_reads(gamma_accessor, gamma_tiles);
                 issue_affine_reads(beta_accessor, beta_tiles);
             }
-            noc_async_read_barrier();
+        };
+        auto retire = [&]() {
             input_tiles.push_back(io_chunk_tiles);
-            if constexpr (has_residual) {
+            if constexpr (read_residual) {
                 residual_tiles.push_back(io_chunk_tiles);
             }
-            if (affine_pending) {
-                if constexpr (!affine_is_tile) {
-                    finish_affine(gamma_tiles);
-                    finish_affine(beta_tiles);
-                    noc_async_read_barrier();
-                }
-                gamma_tiles.push_back(tensor_w_tiles);
-                beta_tiles.push_back(tensor_w_tiles);
-                affine_pending = false;
+        };
+        layer_norm_tile::read_block_chunks<read_trid_depth>(noc, num_chunks, issue, retire);
+
+        if (affine_pending) {
+            noc_async_read_barrier();
+            if constexpr (!affine_is_tile) {
+                finish_affine(gamma_tiles);
+                finish_affine(beta_tiles);
+                noc_async_read_barrier();
             }
+            gamma_tiles.push_back(tensor_w_tiles);
+            beta_tiles.push_back(tensor_w_tiles);
+            affine_pending = false;
         }
     }
 }
