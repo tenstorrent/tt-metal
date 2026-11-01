@@ -195,21 +195,17 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None):
 def device_sources(mesh, layer_idx: int, epc: int, cache):
     """TtMoe's cached routed experts of a layer straight to DRAM (bfp4 as stored, interleaved): flat_gather's sources,
     s = le * 3 + (0 gate, 1 up, 2 down) - each [1, 1, in, out] a chip (W^T: the flat op's orientation)."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    paths = []
+    srcs = []
     for le in range(epc):
         for proj in ("gate", "up", "down"):
             hits = sorted(Path(cache).glob(f"layer_{layer_idx}.routed_expert.local_{le}_{proj}_dtype_*.tensorbin"))
             assert hits, f"MoE block: no layer_{layer_idx}.routed_expert.local_{le}_{proj} in {cache}"
             assert "BFLOAT4_B" in hits[0].name, f"flat_gather copies bfp4 faces: {hits[0].name}"
-            paths.append(str(hits[0]))
-    # (the files read in parallel - NFS-bound, ~37 s a K3 layer one at a time; each to DRAM in order as it lands)
-    srcs = []
-    with ThreadPoolExecutor(max_workers=int(os.environ.get("MOE_BLOCK_LOAD_THREADS", "8"))) as pool:
-        for host in pool.map(ttnn.load_tensor, paths):
-            srcs.append(ttnn.to_device(host, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            del host
+            # (straight to the device, as TtMoe loads its cache - no host tensor of all 32 chips in Python)
+            t = ttnn.load_tensor(str(hits[0]), device=mesh)
+            if t.memory_config().buffer_type != ttnn.BufferType.DRAM or t.memory_config().is_sharded():
+                t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+            srcs.append(t)
     return srcs
 
 
@@ -377,26 +373,32 @@ class TtK3MoEBlockFfn:
             mb = ttnn.experimental.moe_block
             res = block.resources
             t0 = time.time()
-            if self.host_sd is not None:
-                w = self._host_sd_weights()
+            cached = None if self.host_sd is not None else self._load_head_cache(block)
+            if cached is not None:
+                head, w_up = cached
             else:
-                w = host_weights(self.mesh, self.dims, self.layer_idx, self.hf_config)
-            host = lambda k: ttnn.from_torch(w[k], dtype=ttnn.float32)  # noqa: E731
-            head = mb.prepare_fused_head_weights(
-                host("gate"),
-                host("up"),
-                host("down"),
-                host("latent_down") if "latent_down" in w else None,
-                host("router_weight"),
-                host("router_bias"),
-                resources=res,
-                dtypes=block.dtypes,
-                accumulators=block.accumulators,
-                l1_free=block.l1_free,
-            )
-            w_up = None
-            if "latent_up" in w:
-                w_up = mb.prepare_fused_tail_weights(host("latent_up"), host("latent_norm"), resources=res)
+                if self.host_sd is not None:
+                    w = self._host_sd_weights()
+                else:
+                    w = host_weights(self.mesh, self.dims, self.layer_idx, self.hf_config)
+                host = lambda k: ttnn.from_torch(w[k], dtype=ttnn.float32)  # noqa: E731
+                head = mb.prepare_fused_head_weights(
+                    host("gate"),
+                    host("up"),
+                    host("down"),
+                    host("latent_down") if "latent_down" in w else None,
+                    host("router_weight"),
+                    host("router_bias"),
+                    resources=res,
+                    dtypes=block.dtypes,
+                    accumulators=block.accumulators,
+                    l1_free=block.l1_free,
+                )
+                w_up = None
+                if "latent_up" in w:
+                    w_up = mb.prepare_fused_tail_weights(host("latent_up"), host("latent_norm"), resources=res)
+                if self.host_sd is None:
+                    self._save_head_cache(block, head, w_up)
             t1 = time.time()
             gidx, w_gu, w_d = self._routed_host(block) if self.host_sd is not None else self._routed(block)
             self.weights = MoEBlockWeights(head=head, expert_ids=gidx, gate_up=w_gu, down=w_d, w_up=w_up)
@@ -404,6 +406,69 @@ class TtK3MoEBlockFfn:
                 f"MoE block layer {self.layer_idx}: checkpoint weights {t1 - t0:.0f} s, routed {time.time() - t1:.0f} s"
             )
         return self.weights
+
+    def _head_cache_dir(self, block):
+        """Where this layer's head / tail weights in the ops' layouts are kept (device-ready tensorbins), so the
+        checkpoint is dequantized once: $MOE_BLOCK_WEIGHT_CACHE (unset: none). Keyed by the checkpoint, the mesh, the layer and everything the layouts depend on (the
+        head's plan, the dtypes, the accumulators)."""
+        import hashlib
+
+        root = os.environ.get("MOE_BLOCK_WEIGHT_CACHE")
+        if not root:  # (opt-in until the hit path has run in CI: TODO default next to the TtMoe cache)
+            return None
+        mb = ttnn.experimental.moe_block
+        fit = mb.plan_fused_head(block.resources, block.dtypes, block.accumulators, block.l1_free)
+        lay = fit.planned[0].lay if fit.ok and len(fit.planned) else None
+        ckpt = (
+            os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or os.environ.get("GLM53_HF_MODEL", "")
+        )
+        key = repr(
+            (
+                "v1",
+                Path(ckpt).name,
+                tuple(self.mesh.shape),
+                self.dims.num_experts,
+                self.dims.emb_dim,
+                self.dims.latent_dim,
+                block.accumulators,
+                str(block.dtypes.shared_weights),
+                str(block.dtypes.router_weights),
+                str(block.dtypes.projection_weights),
+                None if lay is None else (lay.GX, lay.GY, lay.MT, lay.NCH, lay.KB, lay.on_engine, lay.xdram),
+            )
+        )
+        return Path(root) / hashlib.sha1(key.encode()).hexdigest()[:16] / f"layer_{self.layer_idx}"
+
+    _HEAD_FIELDS = ("w", "w_router", "router_bias", "router_index")
+
+    def _load_head_cache(self, block):
+        d = self._head_cache_dir(block)
+        if d is None or not (d / "done").exists():
+            return None
+        mb = ttnn.experimental.moe_block
+        load = lambda n: ttnn.load_tensor(str(d / f"{n}.tensorbin"), device=self.mesh)  # noqa: E731
+        head = mb.FusedHeadWeights(*(load(n) for n in self._HEAD_FIELDS))
+        w_up = load("w_up") if (d / "w_up.tensorbin").exists() else None
+        return head, w_up
+
+    def _save_head_cache(self, block, head, w_up):
+        d = self._head_cache_dir(block)
+        if d is None:
+            return
+        if d.exists():
+            return
+        tmp = d.with_name(f"{d.name}.tmp{os.getpid()}")
+        try:
+            # (written aside, then renamed into place: a concurrent run never reads a half-written layer)
+            tmp.mkdir(parents=True, exist_ok=True)
+            for n in self._HEAD_FIELDS:
+                ttnn.dump_tensor(str(tmp / f"{n}.tensorbin"), getattr(head, n))
+            if w_up is not None:
+                ttnn.dump_tensor(str(tmp / "w_up.tensorbin"), w_up)
+            (tmp / "done").touch()
+            os.rename(tmp, d)
+        except OSError as e:  # (read-only, full, or another run renamed first: the cache is optional)
+            logger.warning(f"MoE block layer {self.layer_idx}: head weights not cached in {d}: {e}")
 
     def _hashes(self, block):
         """sha1 a chip of every device buffer the block reads (MOE_BLOCK_REPLAY: what changed between two calls)."""
