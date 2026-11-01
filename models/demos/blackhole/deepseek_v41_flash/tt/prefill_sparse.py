@@ -25,6 +25,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import fuse_attn as FA
 from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PG
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
@@ -232,6 +233,7 @@ def _col_sharded(md, host, dtype, layout):
 
 
 _SORT_OK = [True]
+_DUMPN = [0]
 
 
 def perm_table(first, n=WINDOW, k=WINDOW + TOPK):
@@ -1285,7 +1287,8 @@ class DSV41PrefillSparse:
                 else visibility_mask(ctx.pcol[r], ctx.off[r], ctx.lim[r], ctx.C, ctx.L[r])
             )
 
-    def attend_dyn(self, qh, kv, halo, lat, lat_pre, h, qr):
+    def attend_dyn(self, qh, kv, halo, lat, lat_pre, h, qr, qbufs=None, raw=False):
+        """qbufs: U persistent padded row-major [1,32,C,512] q buffers (DSV41_FA_QPRE, qh is None); raw: return the U row-major sparse_sdpa outputs [1,32,C,512] (DSV41_FA_POST)."""
         pa, ctx, U = self.pa, self.ctx, self.U
         r, L, C = pa.ratio, ctx.L[pa.ratio], ctx.C
         Cc = C // r
@@ -1376,17 +1379,44 @@ class DSV41PrefillSparse:
 
         _TD.put("ids", ids)
         win = ctx.sp_win[r]
-        zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
+        zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM]) if qbufs is None else None
         outs = []
+        ids_pre = None
+        if paged and FA.on(
+            "DSV41_FA_IDS"
+        ):  # all U index rows [C,640] (window ids + selected ids, first-chunk compaction) in one program
+            ids_pre = FA.ids_build(
+                ctx.pg.win_b if getattr(ctx, "back", False) else ctx.pg.win,
+                ids,
+                ctx.sp_perm_b if getattr(ctx, "back", False) else ctx.sp_perm,
+                U,
+                C,
+            )
         for u in range(U):
             pgw = ctx.pg.win_b if getattr(ctx, "back", False) else ctx.pg.win
-            wu = ttnn.slice(pgw, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if paged else win
+            wu = ttnn.slice(pgw, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if (paged and ids_pre is None) else win
             perm = ctx.sp_perm_b if getattr(ctx, "back", False) else ctx.sp_perm
-            if int(perm.shape[0]) > 1:  # per-slot perm (DSV41_PREFILL_UP_BATCH)
+            if int(perm.shape[0]) > 1 and ids_pre is None:  # per-slot perm (DSV41_PREFILL_UP_BATCH)
                 perm = ttnn.slice(perm, [u, 0, 0, 0], [u + 1, 1, int(perm.shape[2]), int(perm.shape[3])])
-            idx = compact_rows(ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), perm)
-            qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
-            qu = ttnn.concat([qu, zero_heads], dim=1)
+            if ids_pre is not None:
+                idx = ids_pre[u]
+            else:
+                idx = compact_rows(ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), perm)
+            if (
+                os.environ.get("FA_DUMP_IDS") and not PS.CAPTURING[0] and u == 0
+            ):  # diagnostics: the [C,640] row ids of device 0 (eager passes only)
+                _DUMPN[0] += 1
+                torch.save(
+                    ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).to(torch.int64),
+                    f"{os.environ['FA_DUMP_IDS']}/ids_{_DUMPN[0]:04d}_r{pa.ratio}.pt",
+                )
+            if qbufs is not None:
+                qu = qbufs[u]
+            else:
+                qu = ttnn.to_layout(
+                    ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT
+                )
+                qu = ttnn.concat([qu, zero_heads], dim=1)
             o = ttnn.transformer.sparse_sdpa(
                 qu,
                 ctx.pg.pool.pool if paged else kt,
@@ -1399,10 +1429,17 @@ class DSV41PrefillSparse:
                 attention_sink=self.sink,
                 **({} if paged else {"cache_batch_idx": u}),
             )
-            ttnn.deallocate(qu)
-            ttnn.deallocate(idx)
+            if qbufs is None:
+                ttnn.deallocate(qu)
+            if ids_pre is None:
+                ttnn.deallocate(idx)
+            if raw:
+                outs.append(o)
+                continue
             outs.append(ttnn.to_layout(ttnn.slice(o, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.TILE_LAYOUT))
             ttnn.deallocate(o)
+        if raw:
+            return outs
         res = outs[0] if U == 1 else ttnn.concat(outs, dim=0)
         _TD.put("sdpa", res)
         return res

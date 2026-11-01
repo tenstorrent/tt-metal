@@ -17,6 +17,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import fuse_attn as FA
 from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     HEAD_DIM,
@@ -386,6 +387,13 @@ class DSV41PrefillAttention:
         """Attach the per-chunk context and allocate this layer's persistent halo (+ latent FIFO for kv-source layers)."""
         self.dyn = ctx
         a, U = self.a, self.U
+        if FA.on("DSV41_FA_QPRE") or FA.on(
+            "DSV41_FA_POST"
+        ):  # persistent fused-glue buffers: allocated here, before any trace capture
+            FA.q_pad_bufs(self.md, U, ctx.C)
+            FA.post_buf(self.md, U * ctx.C, LOCAL_HEADS)
+        if FA.on("DSV41_FA_IDS"):
+            FA.idx_bufs(self.md, U, ctx.C)
         z = lambda shape: ttnn.from_torch(
             torch.zeros(*shape),
             device=self.md,
@@ -439,21 +447,32 @@ class DSV41PrefillAttention:
         dyn_sp = sp is not None and sp.dyn_on
         if not (dyn_sp and sp.indexer is not None):
             ttnn.deallocate(qr)
-        q = ttnn.reshape(q, [U, 1, C, LOCAL_HEADS * HEAD_DIM])
-        qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
-        )
-        ttnn.deallocate(q)
-        qh = self._rope(qh, tabs)
-        kv = self._rope(ttnn.reshape(kvn, [U, 1, C, HEAD_DIM]), tabs)
+        qbufs = None
+        if FA.on("DSV41_FA_QPRE"):  # fused q heads + RoPE (+ the padded row-major sparse_sdpa input): tt/fuse_attn.py
+            qh = FA.qprep(q, tabs, pf_tune.p64(self.md), U, C, LOCAL_HEADS, sparse=dyn_sp)
+            if dyn_sp:
+                qbufs, qh = qh, None
+            ttnn.deallocate(q)
+        else:
+            q = ttnn.reshape(q, [U, 1, C, LOCAL_HEADS * HEAD_DIM])
+            qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
+            )
+            ttnn.deallocate(q)
+            qh = self._rope(qh, tabs)
+        if FA.on("DSV41_FA_KV"):
+            kv = FA.kv_rope(kvn, tabs, pf_tune.p64(self.md), U, C)
+        else:
+            kv = self._rope(ttnn.reshape(kvn, [U, 1, C, HEAD_DIM]), tabs)
         lat = cs = None
         if dyn_sp:  # indexer top-512 + sparse_sdpa (tt/prefill_sparse.py), all per-chunk values are device tensors
             if a.source is None:
                 lat, cs = self._compress_dyn(h, C)
-            o = sp.attend_dyn(qh, kv, self.halo, lat, self._lat_pre, h, qr)
+            o = sp.attend_dyn(qh, kv, self.halo, lat, self._lat_pre, h, qr, qbufs=qbufs, raw=FA.on("DSV41_FA_POST"))
             if sp.indexer is not None:
                 ttnn.deallocate(qr)
-            ttnn.deallocate(qh)
+            if qh is not None:
+                ttnn.deallocate(qh)
             return self._finish_dyn(o, kv, lat, cs, h, tabs, a, U, C, R)
         keys = ttnn.concat([self.halo, kv], dim=2)  # [U,1,128+C,512]
         if self.compressed:
@@ -497,11 +516,18 @@ class DSV41PrefillAttention:
         ttnn.copy(new_halo, self.halo)
         ttnn.deallocate(new_halo)
         ttnn.deallocate(kv)
-        o = self._rope_inv(o, tabs)
-        c = ttnn.experimental.nlp_concat_heads(o)
-        ttnn.deallocate(o)
-        zero = zeros(self.md, [U, 1, C, HEAD_DIM])
-        c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
+        if isinstance(
+            o, list
+        ):  # DSV41_FA_POST: the raw sparse_sdpa outputs (row-major [1,32,C,512] per user): inverse RoPE + head concat + zero slot in one program
+            c = FA.post(o, tabs, pf_tune.p64(self.md), U, C, LOCAL_HEADS)
+            for t in o:
+                ttnn.deallocate(t)
+        else:
+            o = self._rope_inv(o, tabs)
+            c = ttnn.experimental.nlp_concat_heads(o)
+            ttnn.deallocate(o)
+            zero = zeros(self.md, [U, 1, C, HEAD_DIM])
+            c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
         part = self._lin(self._lin(c, a.wo_a), a.wo_b)
         return self._allreduce(part)
 
