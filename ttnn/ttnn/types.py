@@ -17,6 +17,8 @@ float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
+# 2-bit block float, TILE layout only. Exact for {-1, 0, +1} times a power of two.
+bfloat2_b = DataType.BFLOAT2_B
 fp8_e4m3 = DataType.FP8_E4M3
 # OCP microscaling (MX) formats, Quasar only, TILE layout only.
 mxfp8_e4m3 = DataType.MXFP8_E4M3
