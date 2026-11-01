@@ -21,6 +21,7 @@ class MLPWeights:
     # QWEN36_MLP_GU_FUSED: "1d" | "dsmc" when decode runs the fused [gate|up] matmul (w1/w3 are then None); None = off.
     gu_fused: str = None
     w_gu_dec: ttnn.Tensor = None  # QWEN36_MLP_GU_FUSED=dsmc: DRAM-width-sharded copy of w_gate_up for decode
+    w2_dec: ttnn.Tensor = None  # QWEN36_BFP4_LAYOUT (down=dsmc): DRAM-width-sharded decode twin of a bfloat4_b w2
 
 
 def mlp_gu_fused_decode_mode(args, w_gate_up):
@@ -208,11 +209,24 @@ def load_mlp_weights(
             ),
             _w2_pc,
         )
+        # QWEN36_BFP4_LAYOUT (down=dsmc): a DRAM-width-sharded decode twin of a bfloat4_b w2 made on device (prefill keeps
+        # the interleaved w2). Only the dense 1D-decode MLP takes it.
+        w2_dec = None
+        if (
+            getattr(args, "mlp_w2_dsmc_progcfg_bfp4", None) is not None
+            and getattr(args, "mlp_1d_decode", False)
+            and w2.dtype == ttnn.bfloat4_b
+        ):
+            w2_dec = ttnn.to_memory_config(w2, args.mlp_w2_dsmc_weight_memcfg_bfp4)
         if gu_mode is None:
-            return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu)
+            return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu, w2_dec=w2_dec)
         # dsmc: width-shard the AGMM weight's tiles across the DRAM banks on device (a copy, no host round trip).
-        w_gu_dec = ttnn.to_memory_config(wgu, args.mlp_gu_dsmc_weight_memcfg) if gu_mode == "dsmc" else None
-        return MLPWeights(w1=None, w2=w2, w3=None, w_gate_up=wgu, gu_fused=gu_mode, w_gu_dec=w_gu_dec)
+        w_gu_dec = None
+        if gu_mode == "dsmc" and not (
+            wgu.dtype == ttnn.bfloat4_b and getattr(args, "mlp_gu_decode_1d_progcfg_bfp4", None) is not None
+        ):  # (QWEN36_BFP4_LAYOUT gateup=1d decodes from wgu itself: no copy)
+            w_gu_dec = ttnn.to_memory_config(wgu, args.mlp_gu_dsmc_weight_memcfg)
+        return MLPWeights(w1=None, w2=w2, w3=None, w_gate_up=wgu, gu_fused=gu_mode, w_gu_dec=w_gu_dec, w2_dec=w2_dec)
 
     def load(name, dtype):
         return ttnn.as_tensor(
@@ -294,6 +308,12 @@ class Qwen36MLP:
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+        # QWEN36_BFP4_LAYOUT_LOFI: decode matmuls on bfloat4_b weights in LoFi (bit-identical to HiFi2 there).
+        self.compute_kernel_config_decode_bfp4 = (
+            ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True)
+            if tpc.bfp4_layout_lofi(ttnn.bfloat4_b) and down_dtype is None
+            else None
         )
 
     def forward(self, x, mode=None, decode_ar=None):
@@ -455,7 +475,10 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_rows_ok(x.shape[-2])))
             else mc
         )
-        partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
+        if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
+            partial = self._down_decode(hidden, ckc)
+        else:
+            partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
         ttnn.deallocate(hidden)
 
         if decode_ar is not None:
@@ -475,6 +498,53 @@ class Qwen36MLP:
         )
         return out
 
+    def _bfp4_ckc(self, weight, ckc):
+        """`ckc`, or the LoFi decode config for a bfloat4_b `weight` under QWEN36_BFP4_LAYOUT_LOFI (decode only)."""
+        lofi = getattr(self, "compute_kernel_config_decode_bfp4", None)
+        return lofi if (lofi is not None and weight.dtype == ttnn.bfloat4_b) else ckc
+
+    def _down_decode(self, hidden, ckc, decode_ar=None):
+        """Decode down projection (M <= 1 tile) of an L1-interleaved `hidden` into an L1-interleaved partial for the
+        all-reduce: the 1D matmul (the QWEN36_BFP4_LAYOUT down=1d config when w2 is bfloat4_b), or under
+        QWEN36_BFP4_LAYOUT down=dsmc the multi-core DRAM-sharded pipeline on the w2 decode twin.
+        QWEN36_VERIFY_OUT_RES40 (default off; needs `decode_ar`): the partial comes back in the all-reduce's RES40 layout
+        instead (QWEN36_VERIFY_OUT_RES40_DOWN: dsmc + one reshard, or the RES40-out 1D matmul), so the all-reduce skips
+        its reshard. Not with QWEN36_WEIGHT_PREFETCH on w2 (its registered twin is keyed to mlp_w2_decode_1d_progcfg)."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+        from models.demos.blackhole.qwen36.tt import weight_prefetch
+
+        w = self.weights
+        args = self.args
+        ckc = self._bfp4_ckc(w.w2, ckc)
+        res40_mode = (
+            tpc.verify_out_res40_down_mode()
+            if decode_ar is not None and tpc.verify_out_res40_enabled() and not weight_prefetch.is_registered(w.w2)
+            else "off"
+        )
+        if res40_mode == "1d" or (res40_mode == "auto" and w.w2_dec is None):
+            res40 = tpc.res40_out_matmul(hidden, w.w2, ckc, decode_ar, site="mlp_down_1d")
+            if res40 is not None:
+                return res40
+        if w.w2_dec is not None:
+            h_sh = ttnn.to_memory_config(hidden, args.mlp_w2_dsmc_act_shard_bfp4)
+            y = ttnn.linear(
+                h_sh,
+                w.w2_dec,
+                program_config=args.mlp_w2_dsmc_progcfg_bfp4,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(h_sh)
+            partial = tpc.res40_pack(y, decode_ar, site="mlp_down_dsmc") if res40_mode == "auto" else None
+            if partial is None:
+                partial = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(y)
+            return partial
+        pc = args.mlp_w2_decode_1d_progcfg
+        if w.w2.dtype == ttnn.bfloat4_b and getattr(args, "mlp_w2_decode_1d_progcfg_bfp4", None) is not None:
+            pc = args.mlp_w2_decode_1d_progcfg_bfp4
+        return weight_prefetch.linear(hidden, w.w2, pc, compute_kernel_config=ckc, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     def _forward_tp_gu_fused_decode(self, x, ckc, decode_ar):
         """QWEN36_MLP_GU_FUSED decode (M <= 1 tile): ONE [gate|up] matmul on the pair-interleaved AGMM weight, the
         split-SwiGLU kernel, then the down projection and all-reduce exactly as _forward_tp's 1D decode path.
@@ -488,13 +558,16 @@ class Qwen36MLP:
 
         w = self.weights
         args = self.args
-        if self._gu_fused == "dsmc":
+        if self._gu_fused == "dsmc" and w.w_gu_dec is not None:
             x_sh = x if x.memory_config() == args.act_shard_hidden else ttnn.to_memory_config(x, args.act_shard_hidden)
+            gu_pc = args.mlp_gu_dsmc_progcfg
+            if w.w_gu_dec.dtype == ttnn.bfloat4_b and getattr(args, "mlp_gu_dsmc_progcfg_bfp4", None) is not None:
+                gu_pc = args.mlp_gu_dsmc_progcfg_bfp4  # QWEN36_BFP4_LAYOUT (gateup)
             gu = ttnn.linear(
                 x_sh,
                 w.w_gu_dec,
-                program_config=args.mlp_gu_dsmc_progcfg,
-                compute_kernel_config=ckc,
+                program_config=gu_pc,
+                compute_kernel_config=self._bfp4_ckc(w.w_gu_dec, ckc),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
             if x_sh is not x:
@@ -504,16 +577,19 @@ class Qwen36MLP:
             gu = ttnn.linear(
                 x_il,
                 w.w_gate_up,
-                program_config=args.mlp_gu_decode_1d_progcfg,
-                compute_kernel_config=ckc,
+                program_config=(
+                    args.mlp_gu_decode_1d_progcfg
+                    if self._gu_fused == "1d"
+                    else args.mlp_gu_decode_1d_progcfg_bfp4  # dsmc mode, QWEN36_BFP4_LAYOUT gateup=1d (no w_gu_dec)
+                ),
+                compute_kernel_config=self._bfp4_ckc(w.w_gate_up, ckc),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(x_il)
         hidden = self._swiglu(gu)  # [M, hidden/tp] L1 interleaved: the 1D down projection's in0, as r5's mul output
         ttnn.deallocate(gu)
-        partial = weight_prefetch.linear(
-            hidden, w.w2, args.mlp_w2_decode_1d_progcfg, compute_kernel_config=ckc, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        # QWEN36_VERIFY_OUT_RES40 (default off): the partial may come back already in RES40 (no reshard before the AR)
+        partial = self._down_decode(hidden, ckc, decode_ar)
         ttnn.deallocate(hidden)
         if decode_ar is not None:
             return decode_ar.all_reduce(partial)

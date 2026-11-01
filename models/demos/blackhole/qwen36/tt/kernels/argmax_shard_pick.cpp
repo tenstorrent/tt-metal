@@ -12,6 +12,12 @@
 // Per row: the device with the strictly greatest order value, scanning d upward, so the lowest device (whose ids are
 // all lower) wins a tie; id = d * SHARD + its local column. Together with stage 1 this is torch.argmax over the whole
 // vocab row: the lowest global id among the maxima.
+//
+// REMAP_IDS_CB defined (QWEN36_DRAFT_VOCAB_TOPK, tt/draft_vocab.py): the shards hold a pruned vocab and d * SHARD + col
+// is an index p into the kept-id table, uint32 ROW_MAJOR [P/16, 16] (one 64 B page per table row, replicated on every
+// device; its accessor follows the output's, its address is common arg 2). The id is table[p]: page p / 16 is read
+// into slot r of CB REMAP_IDS_CB and word p % 16 of it replaces the index. The table is ascending, so the lowest
+// index among the maxima is still the lowest token id among them.
 
 #include <cstdint>
 
@@ -52,6 +58,11 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     const auto in = TensorAccessor(in_args, in_addr);
     const auto out = TensorAccessor(out_args, out_addr);
+#ifdef REMAP_IDS_CB
+    constexpr auto map_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const auto map = TensorAccessor(map_args, get_common_arg_val<uint32_t>(2));
+    const uint32_t mb = align64(get_write_ptr(REMAP_IDS_CB));
+#endif
 
     const uint32_t l1 = align64(get_write_ptr(CB_IN));
     for (uint32_t d = 0; d < D; ++d) {
@@ -89,7 +100,17 @@ void kernel_main() {
         } else {
             o[r * 16] = id;  // one 64 B slot per output page
         }
+#ifdef REMAP_IDS_CB
+        noc_async_read(map.get_noc_addr(id >> 4), mb + r * 64, 64);  // the table page holding entry id
+#endif
     }
+#ifdef REMAP_IDS_CB
+    noc_async_read_barrier();
+    for (uint32_t r = 0; r < R; ++r) {
+        const uint32_t slot = MODE == 0 ? r : r * 16;
+        o[slot] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mb + r * 64)[o[slot] & 15];
+    }
+#endif
     if constexpr (MODE == 0) {
         noc_async_write(ob, out.get_noc_addr(0), 32 * 4);
     } else {

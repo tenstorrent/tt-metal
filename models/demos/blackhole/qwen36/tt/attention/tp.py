@@ -299,6 +299,9 @@ class TPAttention:
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
+        # Per-instance decode SDPA sliding window (None = whole context). Only the MTP drafter sets it
+        # (QWEN36_MTP_SDPA_WINDOW, r9 drafter track); see Qwen36MTP.__init__.
+        self.decode_sdpa_window = None
         # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
         self.lean_decode = True
         # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the split context of the verify replay / drafter step being
@@ -420,6 +423,10 @@ class TPAttention:
             self.args.prefill_progcfg,
             self.args.dim,
         )
+
+    def _wo_res40_ok(self, x):
+        """QWEN36_VERIFY_OUT_RES40 applies only where _wo_proj would take its 1D decode matmul (interleaved wo)."""
+        return tpc.verify_out_res40_enabled() and getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE
 
     def _wo_proj(self, x, weight):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
@@ -1230,6 +1237,7 @@ class TPAttention:
                     # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
                     # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
                     memory_config=_L1,
+                    **self._decode_window_kw(),
                 )
                 ttnn.deallocate(q)
         else:
@@ -1290,9 +1298,14 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
-        ttnn.deallocate(gated_flat)
-        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        # QWEN36_VERIFY_OUT_RES40 (default off -> None): wo written straight into RES40 [1,1,B,dim], no reshard
+        wo_partial = tpc.res40_out_matmul(gated_flat, tw["wo"], self.wo_cfg, decode_ar, site="attn_wo") if self._wo_res40_ok(gated_flat) else None
+        if wo_partial is None:
+            wo_partial = self._wo_proj(gated_flat, tw["wo"])
+            ttnn.deallocate(gated_flat)
+            wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        else:
+            ttnn.deallocate(gated_flat)
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
@@ -1594,9 +1607,14 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
-        ttnn.deallocate(gated_flat)
-        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        # QWEN36_VERIFY_OUT_RES40 (default off -> None): wo written straight into RES40 [1,1,B,dim], no reshard
+        wo_partial = tpc.res40_out_matmul(gated_flat, tw["wo"], self.wo_cfg, decode_ar, site="attn_wo") if self._wo_res40_ok(gated_flat) else None
+        if wo_partial is None:
+            wo_partial = self._wo_proj(gated_flat, tw["wo"])
+            ttnn.deallocate(gated_flat)
+            wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        else:
+            ttnn.deallocate(gated_flat)
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
@@ -1701,6 +1719,7 @@ class TPAttention:
             scale=self.scale,
             program_config=sdpa_dec_cfg,
             memory_config=_L1,
+            **self._decode_window_kw(),
         )
         ttnn.deallocate(q)
 
@@ -1722,9 +1741,14 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
-        ttnn.deallocate(gated_flat)
-        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        # QWEN36_VERIFY_OUT_RES40 (default off -> None): wo written straight into RES40 [1,1,B,dim], no reshard
+        wo_partial = tpc.res40_out_matmul(gated_flat, tw["wo"], self.wo_cfg, decode_ar, site="attn_wo") if self._wo_res40_ok(gated_flat) else None
+        if wo_partial is None:
+            wo_partial = self._wo_proj(gated_flat, tw["wo"])
+            ttnn.deallocate(gated_flat)
+            wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        else:
+            ttnn.deallocate(gated_flat)
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
@@ -1751,10 +1775,18 @@ class TPAttention:
             return False
         return self._spec_sdpa_plan(ctx["T"], ctx["consts"]["n_own"]) is not None
 
+    def _decode_window_kw(self):
+        """sliding_window_size kwarg of a decode SDPA call: {} (today's call) unless this instance has a window
+        (QWEN36_MTP_SDPA_WINDOW: the MTP drafter's TPAttention only)."""
+        w = getattr(self, "decode_sdpa_window", None)  # a TPAttention built without __init__ (host tests) has none
+        return {"sliding_window_size": int(w)} if w else {}
+
     def _kv_split_draft_ok(self, B, page_table):
         """A drafter step (lean decode, one row per user) takes the split: a context for exactly B users at T = 1."""
         ctx = self._kv_split_ctx
         if ctx is None or not self._kv_split_ready or page_table is None or not self.use_paged:
+            return False
+        if getattr(self, "decode_sdpa_window", None):  # QWEN36_MTP_SDPA_WINDOW: the window replaces the split
             return False
         if ctx["n_users"] != B or ctx["T"] != 1 or not self._kv_fused_cores_ok(B):
             return False

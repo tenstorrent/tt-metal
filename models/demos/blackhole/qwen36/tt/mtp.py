@@ -10,6 +10,7 @@ cache, separate from the base. forward_decode returns ``(logits, next_hidden)``;
 fed back as ``hidden`` for the next chained draft (EAGLE-style K>1). Spec feed contract
 (Qwen36Model.spec_feed_rows) is POST-NORM: the base feeds its final-norm output (fractured to dim/tp)
 and the chain feeds back mtp.norm's output, re-fractured to dim/tp, so hnorm sees the same kind of tensor at every step."""
+import contextlib
 import os
 
 import torch
@@ -56,7 +57,14 @@ def draft_argmax(mtp, logits):
     happened; off, ``logits`` is the gathered full-vocab row and this is exactly argmax_last.
     With the sharded form, QWEN36_SPEC_ARGMAX_FUSED=1 (``mtp._fused_argmax``) picks the same ids through the fused
     per-shard argmax (tt/spec_argmax_fused.py) instead of _argmax_sharded.
+    QWEN36_DRAFT_VOCAB_TOPK (``mtp._vocab_prune``, tt/draft_vocab.py): ``logits`` K/TP wide come from the pruned head
+    and go through its fused argmax, which maps the pruned index back to the full token id (same contract).
     """
+    vp = getattr(mtp, "_vocab_prune", None)  # absent on a __new__-built test head
+    if vp is not None and vp.owns(logits):
+        from models.demos.blackhole.qwen36.tt.spec_argmax_fused import ROWS
+
+        return vp.ids_of(logits, ROWS)
     if mtp._sharded_argmax:
         fused = getattr(mtp, "_fused_argmax", None)  # QWEN36_SPEC_ARGMAX_FUSED (tt/spec_argmax_fused.py)
         if fused is not None:
@@ -110,6 +118,7 @@ class Qwen36MTP:
             self.draft_lm_head_weight = parent._build_lm_head_weight(
                 state_dict["output.weight"], tensor_cache_path, ttnn.bfloat4_b, cache_tag=".draft_bfp4"
             )
+            parent.register_draft_head_dshard(self.draft_lm_head_weight)  # QWEN36_DRAFT_HEAD_DSHARD (default off)
 
         mtp_cache = (tensor_cache_path / "mtp") if tensor_cache_path is not None else None
 
@@ -206,6 +215,15 @@ class Qwen36MTP:
         # token — that only shifts acceptance, never correctness: every draft is arbitrated by verify.
         # QWEN36_MTP_SDPA_MAX_CORES pins it (the bucket equivalence tests set 13: every row count then resolves to the same split).
         self.attention.decode_sdpa_max_cores = int(os.environ.get("QWEN36_MTP_SDPA_MAX_CORES", "64"))
+        if self.num_devices > 1:
+            # QWEN36_MTP_SDPA_WINDOW (r9 drafter track, default off): sliding-window draft-step SDPA on this TPAttention
+            # only (tp_common.mtp_sdpa_window). Off: decode_sdpa_window stays None and every SDPA call is today's.
+            from models.demos.blackhole.qwen36.tt.tp_common import mtp_sdpa_window
+
+            _win = mtp_sdpa_window()
+            if _win:
+                self.attention.decode_sdpa_window = _win
+                logger.info(f"MTP drafter: decode SDPA sliding window {_win} (QWEN36_MTP_SDPA_WINDOW)")
 
         # QWEN36_MTP_KV_ONLY=1 (TP only; default off): a need_logits=False forward (reseed / join warm / catch-up) stops
         # after the drafter layer's paged KV write and returns (None, None). See tp_common.mtp_kv_only_enabled.
@@ -244,6 +262,24 @@ class Qwen36MTP:
         # (verify arbitrates every draft, so correctness holds); measured acceptance was identical.
         if bool(int(os.environ.get("QWEN36_DRAFT_SHARDED_ARGMAX", "1"))):
             self._init_sharded_argmax(parent)
+
+        # QWEN36_DRAFT_VOCAB_TOPK=K (default 0): the drafter's sharded-argmax head holds only K token ids
+        # (tt/draft_vocab.py). Off: nothing is built and forward_decode / draft_argmax run exactly as before.
+        # _draft_full (full_draft_head, the engine's QWEN36_DRAFT_VOCAB_FALLBACK switch): the full head even so.
+        self._vocab_prune = None
+        self._draft_full = False
+        from models.demos.blackhole.qwen36.tt.draft_vocab import draft_vocab_topk
+
+        if draft_vocab_topk() > 0:
+            self._init_vocab_prune(parent, state_dict, tensor_cache_path, draft_vocab_topk())
+
+        # QWEN36_MTP_REPL_RESIDUAL (K5; TP only, default off): the decode forwards run on the replicated RES40 residual
+        # (tp_common block comment). Off: nothing below is built and forward_decode is the class method, unchanged.
+        self.repl_residual = False
+        from models.demos.blackhole.qwen36.tt.tp_common import mtp_repl_residual_enabled
+
+        if self.num_devices > 1 and mtp_repl_residual_enabled():
+            self._init_repl_residual(state_dict, mtp_cache)
 
     def _init_sharded_argmax(self, parent):
         """Resolve QWEN36_DRAFT_SHARDED_ARGMAX and allocate the two persistent constants it needs.
@@ -332,6 +368,48 @@ class Qwen36MTP:
         if spec_argmax_fused_enabled():
             self._fused_argmax = FusedShardArgmax(self.mesh_device, vocab, nd)
             logger.info("MTP drafter: fused per-shard argmax (QWEN36_SPEC_ARGMAX_FUSED=1)")
+
+    def _init_vocab_prune(self, parent, state_dict, tensor_cache_path, k_req):
+        """Build the pruned drafter head (QWEN36_DRAFT_VOCAB_TOPK, tt/draft_vocab.py): the K selected ids (sorted), K
+        rows of the drafter head weight gathered into a second vocab-sharded weight at the drafter head's dtype (cached
+        under its own name), the replicated id table and the remapping fused argmax. Needs the per-shard drafter argmax
+        with QWEN36_SPEC_ARGMAX_FUSED=1; otherwise it logs why and stays off."""
+        from models.demos.blackhole.qwen36.tt import draft_vocab as dv
+
+        nd, vocab = self.num_devices, int(self.args.vocab_size)
+        if not (self._sharded_argmax and self._fused_argmax is not None):
+            logger.warning(
+                f"{dv.DRAFT_VOCAB_TOPK_ENV} ignored: needs the per-shard drafter argmax (QWEN36_DRAFT_SHARDED_ARGMAX) "
+                f"with QWEN36_SPEC_ARGMAX_FUSED=1 on a vocab-sharded TP head"
+            )
+            return
+        k = dv.round_topk(k_req, vocab, nd)
+        if k == 0:
+            logger.warning(f"{dv.DRAFT_VOCAB_TOPK_ENV}={k_req} keeps the whole vocab ({vocab}): drafter head unchanged")
+            return
+        ids = dv.select_draft_vocab(k, vocab)
+        dtype = self.draft_lm_head_weight.dtype  # BFP8, or BFP4 under QWEN36_DRAFT_LMHEAD_BFP4
+        tag = f".draft_top{k}_{dv.ids_digest(ids)}"  # the cache file name adds the dtype
+        weight = parent._build_lm_head_weight(
+            state_dict["output.weight"], tensor_cache_path, dtype, cache_tag=tag, rows=ids
+        )
+        self._vocab_prune = dv.DraftVocabPrune(self.mesh_device, ids, weight, nd, vocab_size=vocab)
+        parent.register_draft_head_dshard(weight)  # QWEN36_DRAFT_HEAD_DSHARD (default off): the pruned head on mc too
+        dv.log_coverage(ids)
+        logger.info(
+            f"MTP drafter: pruned LM head {dv.DRAFT_VOCAB_TOPK_ENV}={k_req} -> K={k} ({k // nd} ids per device, "
+            f"{dtype}), fused argmax with id remap"
+        )
+
+    @contextlib.contextmanager
+    def full_draft_head(self):
+        """Within the block the drafter head is the full one even with a pruned head built (the engine's
+        QWEN36_DRAFT_VOCAB_FALLBACK warms and captures its full-head drafter traces in it)."""
+        prev, self._draft_full = getattr(self, "_draft_full", False), True
+        try:
+            yield
+        finally:
+            self._draft_full = prev
 
     def _maxval_dev(self, shard):
         """Max over ONE device's [1,1,B,vocab/tp] fp32 logit shard -> [1,1,B,1] fp32 TILE (per row).
@@ -628,15 +706,26 @@ class Qwen36MTP:
             next_hidden = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             next_hidden = ttnn.clone(normed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = self._draft_logits(normed, sharded_lm_head)
+        ttnn.deallocate(normed)
+        return logits, next_hidden
+
+    def _draft_logits(self, normed, sharded_lm_head=False):
+        """The drafter's LM head on mtp.norm's full-width output ``normed`` [1,1,B,dim] (replicated, DRAM): one of the
+        three forms below. Shared by forward_decode and the replicated-residual step (_forward_decode_repl); the caller
+        owns and frees ``normed``."""
         if self._sharded_argmax and not sharded_lm_head:
             # Per-shard drafter argmax (QWEN36_DRAFT_SHARDED_ARGMAX): keep this device's
             # [1,1,B,vocab/tp] fp32 shard and skip the vocab all-gather entirely — _argmax_sharded
             # turns it into the global id with two 32-lane gathers instead of one 993 KB one. Same
             # matmul math as the _lm_head fp32 branch below (HiFi2 + fp32 dest accumulation), minus
             # the collective, so the drafter keeps the fp32 tie-breaking it was given fp32 for.
+            vp = getattr(self, "_vocab_prune", None)  # QWEN36_DRAFT_VOCAB_TOPK: K/TP-wide shard, draft_argmax remaps it
+            if getattr(self, "_draft_full", False):
+                vp = None  # QWEN36_DRAFT_VOCAB_FALLBACK: this draft runs the full head (draft_argmax routes by width)
             logits = self._lm_head_linear(
                 normed,
-                weight=self.draft_lm_head_weight,
+                weight=self.draft_lm_head_weight if vp is None else vp.weight,
                 dtype=ttnn.float32,
                 compute_kernel_config=self._fp32_cfg,
             )
@@ -647,8 +736,7 @@ class Qwen36MTP:
             # losslessness is defined by the base argmax). The drafter's argmax consumes these
             # directly, so bf16 ties that used to discard a good draft are broken correctly.
             logits = self._lm_head(normed, out_dtype=ttnn.float32, weight=self.draft_lm_head_weight)
-        ttnn.deallocate(normed)
-        return logits, next_hidden
+        return logits
 
     def forward_prefill(
         self,
@@ -692,3 +780,273 @@ class Qwen36MTP:
         )
         ttnn.deallocate(fused)
         return out
+
+    # ------------------------------------------------------------------------------------------------------------ #
+    # QWEN36_MTP_REPL_RESIDUAL (K5): the decode forwards on the replicated RES40 residual (tp_common block comment)
+    # ------------------------------------------------------------------------------------------------------------ #
+    def _init_repl_residual(self, state_dict, mtp_cache):
+        """Build the replicated-residual drafter (called from __init__ when QWEN36_MTP_REPL_RESIDUAL=1, TP only).
+
+        Allocates, at construction (never inside a trace): the row-parallel fc ``_fc_rp`` ([2*dim/tp, dim] BFP8 per
+        device, the K rows device d's [enorm_d | hnorm_d] multiplies, cache stem fc_rp_tp<tp>) and, for
+        QWEN36_MTP_REPL_ENORM=table, the per-token stats table ``_enorm_stats`` ([1,1,vocab,32] bf16 replicated,
+        ~16 MB per device) and the sharded-norm configs ``_enorm_cfg``. The column-parallel ``fc`` stays for
+        forward_prefill. Then every decode forward is routed through _forward_decode_repl by an instance attribute over
+        forward_decode, so the class method (and every head built without __init__) keeps today's fractured path
+        verbatim. Stays off, with a warning, without the replicated decode residual (QWEN36_DECODE_ALLREDUCE=1 on a
+        supported mesh)."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        dar = tpc.get_decode_allreduce(self.args, self.tt_ccl)
+        if dar is None:
+            logger.warning(
+                f"{tpc.MTP_REPL_ENV}=1 ignored: the drafter needs the replicated decode residual "
+                f"({tpc.DECODE_AR_ENV}=1 on a supported mesh); keeping the fractured drafter"
+            )
+            return
+        nd, dim = self.num_devices, int(self.args.dim)
+        enorm = tpc.mtp_repl_enorm_mode()
+        perm = tpc.mtp_fc_rp_input_order(dim, nd)
+        self._fc_rp = ttnn.as_tensor(
+            state_dict["mtp.fc.weight"],
+            # [dim, 2*dim] -> inputs in device-major [e span d | h span d] order -> [2*dim, dim], split into tp row
+            # blocks (row-parallel). Runs on a tensor-cache miss only, like tp_common.shard_w.
+            preprocess=lambda t: t[:, perm].to(torch.bfloat16).T.contiguous(),
+            dtype=ttnn.bfloat8_b,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=(str(mtp_cache / f"fc_rp_tp{nd}") if mtp_cache is not None else None),
+        )
+        self._fc_rp_pc = tpc.mtp_repl_fc_progcfg(2 * dim // nd, dim, getattr(self.args, "decode_grid_w", 8))
+        self._enorm_stats = None
+        self._enorm_cfg = None
+        if enorm == "table":
+            self._enorm_cfg = tpc.mtp_enorm_sharded_configs(dim // nd)
+            if self._enorm_cfg is None:
+                logger.warning(f"{tpc.MTP_REPL_ENORM_ENV}=table: dim/tp={dim // nd} does not shard; using 'gather'")
+                enorm = "gather"
+        if enorm == "table":
+            prefix = self.args.get_state_dict_prefix("", None) if hasattr(self.args, "get_state_dict_prefix") else ""
+            tbl = tpc.mtp_enorm_stats_table(state_dict[prefix + "tok_embeddings.weight"])
+            self._enorm_stats = ttnn.from_torch(
+                tbl.reshape(1, 1, tbl.shape[0], tbl.shape[1]),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        self._repl_dar = dar
+        self._repl_enorm = enorm
+        self.repl_residual = True
+        self.forward_decode = self._forward_decode_repl
+        logger.info(
+            f"MTP drafter: replicated-residual decode ({tpc.MTP_REPL_ENV}=1): row-parallel fc "
+            f"[{2 * dim // nd}, {dim}] per device, embedding norm '{enorm}', one all-reduce per fc / wo / down"
+        )
+        if getattr(self, "_fc_decode_pc", None) is not None:
+            logger.info(
+                "QWEN36_MTP_FC_PROGCFG has no decode effect under QWEN36_MTP_REPL_RESIDUAL: the decode fc is the "
+                "row-parallel weight with its own program config (QWEN36_MTP_REPL_FC_CORES / _IBW); prefill keeps auto"
+            )
+
+    def replicate_hidden(self, x):
+        """[1,1,R,dim/tp] fractured -> [1,1,R,dim] replicated (DRAM), one all-gather (exact: every element is copied);
+        a replicated [1,1,R,dim] input is returned as is (the caller owns it either way: free the result only when it
+        ``is not x``). Same gather call as DecodeResidualAllReduce.enter, minus the RES40 reshard."""
+        if int(x.shape[-1]) == int(self.args.dim):
+            return x
+        dar = self._repl_dar
+        return ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=dar.num_links,
+            topology=dar.topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+    def _drafter_embed(self, token_ids):
+        """This device's token embedding rows [1,1,R,dim/tp] TILE: the r6 bundle's one-tile-row lookup when that flag is
+        on in this tree (QWEN36_MTP_EMBED_ROW), else today's lookup + reshape (forward_decode's own two lines)."""
+        if getattr(self, "_embed_row", False) and hasattr(self, "_embed_rows"):
+            return self._embed_rows(token_ids)
+        tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
+        return ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
+
+    def _stats_rows(self, token_ids):
+        """QWEN36_MTP_REPL_ENORM=table: each row's stats tile row ([hi, lo, 0, ...] of the full-dim mean(e**2)) for
+        rms_norm_post_all_gather: token_ids [R,1] uint32 -> [1,1,R,32] bf16 TILE (DRAM). Row-major lookup, a
+        [1,1,R,32] view, zero rows up to whole tiles, one tilize, a view back to R logical rows: the op sequence of the
+        r6 bundle's _embed_rows on the stats table (the TILE lookup over [R,1] ids would give every id its own tile)."""
+        rows = int(token_ids.shape[0]) * int(token_ids.shape[-1])
+        from models.demos.blackhole.qwen36.tt.tp_common import MTP_ENORM_STATS_W as w
+        from models.demos.blackhole.qwen36.tt.tp_common import aliases
+
+        rm = ttnn.embedding(
+            token_ids, self._enorm_stats, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        view = ttnn.reshape(rm, (1, 1, rows, w))  # same pages (a row per id): a metadata view
+        pad_rows = -rows % ttnn.TILE_SIZE
+        if pad_rows:
+            full = ttnn.pad(view, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+            tiled = ttnn.to_layout(full, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.reshape(tiled, ttnn.Shape([1, 1, rows, w]), ttnn.Shape([1, 1, rows + pad_rows, w]))
+            if out is not tiled and not aliases(out, tiled):
+                ttnn.deallocate(tiled)
+            ttnn.deallocate(full)
+        else:
+            out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # A reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed buffer.
+        ttnn.deallocate(view)
+        ttnn.deallocate(rm)
+        return out
+
+    def _local_span(self, x_res):
+        """RES40 [1,1,R,dim] (replicated) -> this device's [1,1,R,dim/tp] span in DRAM (exact slice). Frees ``x_res``."""
+        x_dram = ttnn.to_memory_config(x_res, ttnn.DRAM_MEMORY_CONFIG)
+        if x_dram is not x_res:
+            ttnn.deallocate(x_res)
+        out = ttnn.mesh_partition(x_dram, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if out is not x_dram:
+            ttnn.deallocate(x_dram)
+        return out
+
+    def _fuse_repl(self, tok_emb, hidden_rep, token_ids):
+        """enorm(e) ⊕ hnorm(h) -> row-parallel fc -> one all-reduce -> replicated RES40 [1,1,R,dim].
+
+        ``tok_emb`` [1,1,R,dim/tp] this device's embedding rows; ``hidden_rep`` [1,1,R,dim] replicated (DRAM). Neither is
+        freed. hnorm: the local RES40 norm of the replicated hidden (DecodeResidualAllReduce.rms_norm, the main layers'
+        norm), then this device's span. enorm, table: the sharded rms_norm_post_all_gather (the distributed norm's post
+        stage, 10 cores) on the fractured rows with each token's full-dim mean of squares from ``_enorm_stats`` in place
+        of the stats all-gather; gather: all-gather + the local RES40 norm + this device's span. The concat order
+        [e span | h span] matches the K rows of ``_fc_rp`` (tp_common.mtp_fc_rp_input_order)."""
+        dar = self._repl_dar
+        h_res = ttnn.to_memory_config(hidden_rep, dar.res_mem)
+        hn = dar.rms_norm(h_res, self.pre_fc_norm_hidden.norm)
+        if h_res is not hidden_rep:
+            ttnn.deallocate(h_res)
+        hn_d = self._local_span(hn)
+        if self._repl_enorm == "table":
+            norm = self.pre_fc_norm_embedding.norm
+            x_mem, st_mem, pc = self._enorm_cfg
+            st = self._stats_rows(token_ids)
+            st_sh = ttnn.to_memory_config(st, st_mem)  # the [rows, 32] stats tile on one core
+            ttnn.deallocate(st)
+            e_sh = ttnn.to_memory_config(tok_emb, x_mem)  # this device's embedding rows, width-sharded
+            en_sh = ttnn.rms_norm_post_all_gather(
+                e_sh,
+                stats=st_sh,
+                epsilon=norm.eps,
+                weight=norm.weight_distributed,
+                program_config=pc,
+                compute_kernel_config=norm.compute_kernel_config_hifi2,
+            )
+            ttnn.deallocate(st_sh)
+            if e_sh is not tok_emb:
+                ttnn.deallocate(e_sh)
+            en_d = ttnn.to_memory_config(en_sh, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(en_sh)
+        else:
+            e_rep = self.replicate_hidden(tok_emb)
+            e_res = ttnn.to_memory_config(e_rep, dar.res_mem)
+            if e_res is not e_rep:
+                ttnn.deallocate(e_rep)
+            en = dar.rms_norm(e_res, self.pre_fc_norm_embedding.norm)
+            ttnn.deallocate(e_res)
+            en_d = self._local_span(en)
+        cat = ttnn.concat([en_d, hn_d], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1,1,R,2*dim/tp]
+        ttnn.deallocate(en_d)
+        ttnn.deallocate(hn_d)
+        kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
+        partial = ttnn.linear(
+            cat, self._fc_rp, program_config=self._fc_rp_pc, memory_config=ttnn.L1_MEMORY_CONFIG, **kw
+        )  # [1,1,R,dim]: this device's K-slice partial
+        ttnn.deallocate(cat)
+        # x0 starts the residual stream: nothing may be fused into this all-reduce (QWEN36_DECODE_AR_FUSE_RESIDUAL arms
+        # only inside a layer and consumes or disarms there; dropping a stray armed residual keeps it out of x0).
+        dar.disarm()
+        return dar.all_reduce(partial)  # frees ``partial``
+
+    def _forward_decode_repl(
+        self,
+        hidden_states,
+        token_ids,
+        position_idxs,
+        cos,
+        sin,
+        page_table,
+        sharded_lm_head=False,
+        need_logits=True,
+        alias_kv_write=False,
+        spec_n_users=1,
+    ):
+        """forward_decode on the replicated RES40 residual (QWEN36_MTP_REPL_RESIDUAL; installed over forward_decode by
+        _init_repl_residual). Same arguments and contract as forward_decode, except:
+
+        * ``hidden_states`` may be fractured [1,1,R,dim/tp] (all-gathered here, exact) or replicated [1,1,R,dim]
+          (used as is: the previous step's next_hidden, or the drafter body's gathered feed / anchor rows);
+        * a need_logits=True step returns mtp.norm's REPLICATED output [1,1,R,dim] (DRAM) as next_hidden, the very
+          tensor its LM head read: the chain feeds it straight back (no mesh_partition, no re-gather);
+        * need_logits=False returns the raw replicated block output (RES40), which every caller drops; kv_only
+          (QWEN36_MTP_KV_ONLY) returns (None, None) as before.
+        The decoder layer takes the main layers' replicated path on its own: Qwen36DecoderLayer.forward dispatches on
+        the input width (local norms, one all-reduce after wo and after down).
+
+        RES40 holds one tile of rows: a forward over more than 32 rows (only a maintenance forward can be that wide, e.g.
+        an adaptive-K reseed of B x T = 64 rows) keeps today's fractured path (a replicated hidden is first sliced back
+        to this device's span)."""
+        if int(hidden_states.shape[-2]) > ttnn.TILE_SIZE:
+            h = hidden_states
+            if int(h.shape[-1]) == int(self.args.dim):
+                h = ttnn.mesh_partition(h, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = Qwen36MTP.forward_decode(
+                self,
+                h,
+                token_ids,
+                position_idxs,
+                cos,
+                sin,
+                page_table,
+                sharded_lm_head=sharded_lm_head,
+                need_logits=need_logits,
+                alias_kv_write=alias_kv_write,
+                spec_n_users=spec_n_users,
+            )
+            if h is not hidden_states:
+                ttnn.deallocate(h)
+            return out
+        h_rep = self.replicate_hidden(hidden_states)
+        tok_emb = self._drafter_embed(token_ids)
+        fused = self._fuse_repl(tok_emb, h_rep, token_ids)
+        ttnn.deallocate(tok_emb)
+        if h_rep is not hidden_states:
+            ttnn.deallocate(h_rep)
+
+        kv_only = not need_logits and getattr(self, "kv_only_maint", False)
+        next_hidden = self.decoder.forward(
+            fused,
+            cos=cos,
+            sin=sin,
+            mode="decode",
+            position_tensor=position_idxs,
+            page_table=page_table,
+            alias_kv_write=alias_kv_write,
+            n_users=spec_n_users,
+            **({"kv_only": True} if kv_only else {}),
+        )
+        ttnn.deallocate(fused)
+        if kv_only:
+            return None, None
+        if not need_logits:
+            return None, next_hidden
+        normed = self._repl_dar.final_norm(next_hidden, self.head_norm.norm)  # [1,1,R,dim] DRAM, replicated
+        ttnn.deallocate(next_hidden)
+        return self._draft_logits(normed, sharded_lm_head), normed

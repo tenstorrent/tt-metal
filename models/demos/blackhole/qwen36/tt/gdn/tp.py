@@ -633,6 +633,10 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
                 ),
                 _pc,
             )
+            if getattr(args, "gdn_qkvz_dsmc_progcfg_bfp4", None) is not None and _in_dtype == ttnn.bfloat4_b:
+                # QWEN36_BFP4_LAYOUT (gdn_in=dsmc): DRAM-width-sharded decode twin made on device (prefill keeps the
+                # interleaved weight for its AGMM).
+                tw["qkvz_dec"] = ttnn.to_memory_config(tw["qkvz"], args.gdn_qkvz_dsmc_weight_memcfg_bfp4)
     else:
         fused = torch.cat(
             [
@@ -682,6 +686,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             ),
             _pc,
         )
+        if getattr(args, "gdn_out_dsmc_progcfg_bfp4", None) is not None and _out_dtype == ttnn.bfloat4_b:
+            # QWEN36_BFP4_LAYOUT (gdn_out=dsmc): DRAM-width-sharded decode twin made on device.
+            tw["out_dec"] = ttnn.to_memory_config(tw["out"], args.gdn_out_dsmc_weight_memcfg_bfp4)
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
         # Decode keeps the row-sharded tw["out"] (matmul + all-reduce).
@@ -754,6 +761,19 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     return tw
 
 
+
+def _dsmc_decode(x, weight, compute_cfg, progcfg, act_shard, out_memory_config):
+    """QWEN36_BFP4_LAYOUT dsmc decode matmul (M <= 1 tile): x -> its K width shard (unless already in it), the
+    multi-core DRAM-sharded pipeline into L1 width-sharded, then `out_memory_config` (interleaved)."""
+    x_sh = x if x.memory_config() == act_shard else ttnn.to_memory_config(x, act_shard)
+    y = ttnn.linear(x_sh, weight, compute_kernel_config=compute_cfg, program_config=progcfg,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+    if x_sh is not x:
+        ttnn.deallocate(x_sh)
+    out = ttnn.to_memory_config(y, out_memory_config)
+    ttnn.deallocate(y)
+    return out
+
 class TPGatedDeltaNet:
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
 
@@ -785,6 +805,8 @@ class TPGatedDeltaNet:
         self.cfg = tpc.COMPUTE_HIFI2
         # In-proj decode matmul only (prefill keeps self.cfg = HiFi2)
         self.cfg_in = tpc.COMPUTE_LOFI if tpc.bfp4_gdn_in_enabled() else self.cfg
+        # QWEN36_BFP4_LAYOUT_LOFI: the decode out-proj on a bfloat4_b weight in LoFi (bit-identical to HiFi2 there).
+        self.cfg_out_dec = tpc.COMPUTE_LOFI if tpc.bfp4_layout_lofi(self.tw["out"].dtype) else self.cfg
         # Must match load_gdn_weights_tp gates
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
         self._fuse_ab = self._dram_sharded
@@ -2033,11 +2055,8 @@ class TPGatedDeltaNet:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         assert 1 <= B <= self._decode_B == self.B
         # the fused [qkv|z|a|b] decode projection (1D matmul) straight into L1; the op consumes the whole row.
-        qkvzab = tpc.matmul_1d_decode(
+        qkvzab = self._qkvz_decode(
             x,
-            tw["qkvz"],
-            self.args.gdn_qkvz_decode_1d_progcfg,
-            self.cfg_in,
             out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))
@@ -2155,14 +2174,37 @@ class TPGatedDeltaNet:
             ttnn.deallocate(t)
         return tuple(outs)
 
+    def _qkvz_decode(self, x, out_memory_config):
+        """The decode [qkv|z|a|b] projection (M <= 1 tile) into `out_memory_config` (interleaved): the 1D matmul on the
+        interleaved fused weight (QWEN36_BFP4_LAYOUT gdn_in=1d config when it is bfloat4_b), or under
+        QWEN36_BFP4_LAYOUT gdn_in=dsmc the multi-core DRAM-sharded pipeline on its decode twin."""
+        args = self.args
+        if "qkvz_dec" in self.tw:
+            return _dsmc_decode(
+                x, self.tw["qkvz_dec"], self.cfg_in, args.gdn_qkvz_dsmc_progcfg_bfp4, args.gdn_qkvz_dsmc_act_shard_bfp4,
+                out_memory_config,
+            )
+        pc = args.gdn_qkvz_decode_1d_progcfg
+        if self.tw["qkvz"].dtype == ttnn.bfloat4_b and getattr(args, "gdn_qkvz_decode_1d_progcfg_bfp4", None) is not None:
+            pc = args.gdn_qkvz_decode_1d_progcfg_bfp4
+        return tpc.matmul_1d_decode(x, self.tw["qkvz"], pc, self.cfg_in, out_memory_config=out_memory_config)
+
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+            if weight is self.tw["out"] and "out_dec" in self.tw:
+                # QWEN36_BFP4_LAYOUT (gdn_out=dsmc): multi-core DRAM-sharded pipeline on the decode twin -> DRAM.
+                return _dsmc_decode(
+                    x, self.tw["out_dec"], self.cfg_out_dec, self.args.gdn_out_dsmc_progcfg_bfp4,
+                    self.args.gdn_out_dsmc_act_shard_bfp4, ttnn.DRAM_MEMORY_CONFIG,
+                )
+            pc = self.args.gdn_out_decode_1d_progcfg
+            if weight.dtype == ttnn.bfloat4_b and getattr(self.args, "gdn_out_decode_1d_progcfg_bfp4", None) is not None:
+                pc = self.args.gdn_out_decode_1d_progcfg_bfp4  # QWEN36_BFP4_LAYOUT (gdn_out=1d)
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
-            return tpc.matmul_1d_decode(
-                x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            ck = self.cfg_out_dec if weight is self.tw["out"] else self.cfg
+            return tpc.matmul_1d_decode(x, weight, pc, ck, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if not self._out_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill non-fused arm (single device, or out-sharded): tuned 2D config vs ttnn-auto.
@@ -2268,11 +2310,8 @@ class TPGatedDeltaNet:
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
                 # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
-                qkvzab = tpc.matmul_1d_decode(
+                qkvzab = self._qkvz_decode(
                     x,
-                    self.tw["qkvz"],
-                    self.args.gdn_qkvz_decode_1d_progcfg,
-                    self.cfg_in,
                     out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
                 )
             else:
@@ -3673,11 +3712,8 @@ class TPGatedDeltaNet:
             "the fused GDN spec op needs the fused [qkv|z|a|b] weight and the 1D decode projection "
             f"(fuse_ab={self._fuse_ab}, proj_1d_decode={getattr(self.args, 'proj_1d_decode', False)}, S={S})"
         )
-        qkvzab = tpc.matmul_1d_decode(
+        qkvzab = self._qkvz_decode(
             x,
-            self.tw["qkvz"],
-            self.args.gdn_qkvz_decode_1d_progcfg,
-            self.cfg_in,
             out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         return ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
@@ -4327,6 +4363,14 @@ class TPGatedDeltaNet:
         decode_ar (QWEN36_VERIFY_DAR): all-reduce into the replicated RES40 residual (no zero pad: bucket == R)."""
         tw = self.tw
         mc, rm = ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
+        if decode_ar is not None and R == bucket and getattr(self.args, "proj_1d_decode", False) and "out_dec" not in tw:
+            # QWEN36_VERIFY_OUT_RES40 (default off -> None): out-proj written straight into RES40, no reshard.
+            # cfg_out_dec = self.cfg unless QWEN36_BFP4_LAYOUT_LOFI runs a bfloat4_b out-proj in LoFi (== HiFi2 there).
+            # Not over a QWEN36_BFP4_LAYOUT gdn_out=dsmc twin (out_dec; not in the tuned table): that keeps _row_proj.
+            res40 = tpc.res40_out_matmul(gated, tw["out"], self.cfg_out_dec, decode_ar, site="gdn_out")
+            if res40 is not None:
+                ttnn.deallocate(gated)
+                return decode_ar.all_reduce(res40, keep_fp32=True)
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))

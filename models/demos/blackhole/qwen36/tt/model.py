@@ -41,6 +41,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     verify_attn_lean_enabled,
     verify_dar_enabled,
     verify_device_topk_m,
+    spec_vfy_outs_prealloc_enabled,
 )
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -80,6 +81,7 @@ class _VfyBucket:
         self.standins = []  # tensors freed once the bucket is captured
         # QWEN36_ATTN_KV_SPLIT gate: a split variant of width b (b == B allowed), not a row bucket
         self.kv_split = False
+        self.pre = {}  # QWEN36_SPEC_VFY_OUTS_PREALLOC: "normed" / "logits_rm" -> pre-capture destination (kept warm output)
 
 
 class _ShortPrefillTrace:
@@ -766,11 +768,28 @@ class Qwen36Model:
             return 0
         return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
 
-    def _build_lm_head_weight(self, lm_head_weight, tensor_cache_path, dtype, cache_tag=""):
+    def _build_lm_head_weight(self, lm_head_weight, tensor_cache_path, dtype, cache_tag="", rows=None):
         """LM-head weight [dim, vocab] on device, vocab-sharded (or replicated, see __init__) at ``dtype``.
         ``cache_tag`` is appended to the cache file name so a second copy (the MTP drafter's BFP4 head,
         QWEN36_DRAFT_LMHEAD_BFP4) gets its own cache files; the base call passes "" and keeps the
-        existing names, so existing caches stay valid."""
+        existing names, so existing caches stay valid.
+        ``rows`` (QWEN36_DRAFT_VOCAB_TOPK's pruned drafter head): only these vocab rows, in this order, so the result is
+        [dim, len(rows)] sharded over the devices like the full head (len(rows) must divide by the device count).
+        The gather runs on a cache miss only; the cache tag must name the row set."""
+        if rows is not None:
+            assert cache_tag, "a row subset needs its own cache tag"
+            assert self._lmhead_vocab_sharded and int(rows.shape[0]) % self.num_devices == 0, "rows must shard evenly"
+            lm_cache = tensor_cache_path / f"output.weight.vshard{cache_tag}" if tensor_cache_path else None
+            return ttnn.as_tensor(
+                lm_head_weight,
+                preprocess=lambda t: t.index_select(0, rows).T.contiguous(),  # [dim, len(rows)]
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=lm_cache,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            )
         if self._lmhead_vocab_sharded:
             # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
             lm_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
@@ -803,6 +822,9 @@ class Qwen36Model:
         exists only for the base BFP8 weight. The drafter always passes its weight and the base calls never do,
         which is what QWEN36_LMHEAD_DSHARD_SCOPE routes on."""
         if weight is not None and weight is not self.lm_head_weight:
+            xd = (getattr(self, "_lm_head_dshard_extra", None) or {}).get(id(weight))  # QWEN36_DRAFT_HEAD_DSHARD
+            if xd is not None and xd[1].applies(x):
+                return xd[1].linear(x, **kw)
             return ttnn.linear(x, weight, **kw)
         d = getattr(self, "_lm_head_dshard", None)  # absent on __new__-built test doubles
         if (
@@ -812,6 +834,24 @@ class Qwen36Model:
         ):
             return d.linear(x, **kw)
         return ttnn.linear(x, self.lm_head_weight, **kw)
+
+    def register_draft_head_dshard(self, weight):
+        """QWEN36_DRAFT_HEAD_DSHARD=1 (r9, default off): give a drafter-owned head copy ``weight`` (vocab-sharded like
+        lm_head_weight; any vocab width the DRAM-sharded plan takes) its own DRAM-sharded copy, used by
+        _lm_head_linear for its decode-shaped calls. Needs QWEN36_LMHEAD_DSHARD on and the base copy built (same
+        mode / readers / K6 knobs). Off, or the base copy absent: nothing is built and the copy keeps ttnn.linear."""
+        if weight is None or weight is self.lm_head_weight or not _tpc.draft_head_dshard_enabled():
+            return False
+        if getattr(self, "_lm_head_dshard", None) is None:
+            logger.warning(f"{_tpc.DRAFT_HEAD_DSHARD_ENV} ignored: QWEN36_LMHEAD_DSHARD is off or the head is not vocab-sharded")
+            return False
+        if getattr(self, "_lm_head_dshard_extra", None) is None:
+            self._lm_head_dshard_extra = {}
+        mode = _tpc.lm_head_dshard_mode()
+        d = _tpc.LMHeadDShard(weight, self.mesh_device, mode, _tpc.lm_head_dshard_readers(mode))
+        self._lm_head_dshard_extra[id(weight)] = (weight, d)  # holds the weight: its id stays unique
+        logger.info(f"{_tpc.DRAFT_HEAD_DSHARD_ENV}: drafter head copy {list(weight.shape)} {weight.dtype} DRAM-sharded ({mode})")
+        return True
 
     def _lm_head(self, x, out_dtype=None, gather=True, weight=None):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
@@ -2883,6 +2923,9 @@ class Qwen36Model:
             for t in bk.standins:
                 ttnn.deallocate(t)
             bk.standins, bk.handoff = [], {}
+            for t in bk.pre.values():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: warmed, never captured (captured ones are {} here)
+                ttnn.deallocate(t)
+            bk.pre = {}
             if bk.dl is not None:
                 bk.dl.release()
                 bk.dl = None
@@ -3134,32 +3177,100 @@ class Qwen36Model:
         outs = self._forward_verify_bucket_tp(n_users=B)
         # Shape / dtype / layout / memory config of the shared B-row outputs, for the row buckets' warm stand-ins.
         self._vfy_specs = {"ids": self._tensor_spec(outs[2]), "rows": self._tensor_spec(outs[1])}
+        # QWEN36_SPEC_VFY_OUTS_PREALLOC: the warm outputs below are kept as the pre-capture destinations (sharded verify only)
+        _pre = self._vfy_pre_reset() if (spec_vfy_outs_prealloc_enabled() and self._vfy_sharded) else None
+        if _pre is not None:
+            self._vfy_pre_keep(_pre, "ids", outs[2])
+            self._vfy_pre_keep(_pre, "rows", outs[1])
         if self._vfy_sharded:
             # Compile the logits trace's programs too (cache misses are disallowed during capture).
             self._vfy_normed_out = outs[4]
             _lg = self._forward_verify_logits_body()
             self._vfy_warm_narrow(_lg[1])
+            if _pre is not None:
+                self._vfy_pre_keep(_pre, "logits_rm", _lg[1])
             for t in _lg:
-                ttnn.deallocate(t)
-            ttnn.deallocate(self._vfy_normed_out)
+                if not self._vfy_pre_has(_pre, t):
+                    ttnn.deallocate(t)
+            if _pre is not None:
+                self._vfy_pre_keep(_pre, "normed", self._vfy_normed_out)
+            if not self._vfy_pre_has(_pre, self._vfy_normed_out):
+                ttnn.deallocate(self._vfy_normed_out)
             self._vfy_normed_out = None
             if self._vfy_topk:
                 # ... and the topk trace's (pad, stable top-k, typecast, two all-gathers) on the kept shard logits.
                 self._vfy_shard_logits_out = outs[5]
                 _tk = self._forward_verify_topk_body()
                 self._vfy_specs["topk_vals"], self._vfy_specs["topk_ids"] = (self._tensor_spec(t) for t in _tk)
+                if _pre is not None:
+                    self._vfy_pre_keep(_pre, "topk_vals", _tk[0])
+                    self._vfy_pre_keep(_pre, "topk_ids", _tk[1])
                 for t in _tk:
-                    ttnn.deallocate(t)
+                    if not self._vfy_pre_has(_pre, t):
+                        ttnn.deallocate(t)
                 ttnn.deallocate(self._vfy_shard_logits_out)
                 self._vfy_shard_logits_out = None
         if not self._vfy_sharded:
             self._vfy_warm_narrow(outs[3])
         for t in outs[:4]:
-            if t is not None:
+            if t is not None and not self._vfy_pre_has(_pre, t):
                 ttnn.deallocate(t)
+        if _pre is not None:
+            self._vfy_pre_warm(_pre)
+            self._vfy_pre_log("B-row", _pre)
         ttnn.synchronize_device(dev)
         self._vfy_att0 = _att0
         self._vfy_prepared_key = key
+
+    # ---- QWEN36_SPEC_VFY_OUTS_PREALLOC: verify outputs allocated before any trace capture
+    def _vfy_pre_reset(self):
+        """A fresh B-row destination dict ``_vfy_pre`` (name -> tensor). A re-prepare (its trace was released) frees the
+        previous set: those tensors were the live shared outputs of the released traces."""
+        for t in (getattr(self, "_vfy_pre", None) or {}).values():
+            ttnn.deallocate(t)
+        self._vfy_pre = {}
+        return self._vfy_pre
+
+    @staticmethod
+    def _vfy_pre_keep(pre, name, t):
+        """Keep warm output ``t`` as the pre-capture destination ``name`` when it is interleaved (a sharded output keeps
+        the in-capture path: ttnn.copy into a sharded destination is not the proven hand-off)."""
+        if t is None:
+            return
+        if t.memory_config().is_sharded():
+            logger.warning(f"[vfy_prealloc] {name} is sharded ({t.memory_config()}): left on the in-capture path")
+            return
+        pre[name] = t
+
+    @staticmethod
+    def _vfy_pre_warm(pre):
+        """Compile the in-capture hand-off copies (capture_decode forbids program-cache misses): one ttnn.copy into each
+        destination from a same-spec clone, outside any trace. The destinations keep their addresses and content."""
+        for t in (pre or {}).values():
+            tmp = ttnn.clone(t, memory_config=t.memory_config())
+            ttnn.copy(tmp, t)
+            ttnn.deallocate(tmp)
+
+    @staticmethod
+    def _vfy_pre_has(pre, t):
+        return bool(pre) and t is not None and any(t is x for x in pre.values())
+
+    @staticmethod
+    def _vfy_pre_into(pre, name, t):
+        """Inside a capture: copy the body's output ``t`` into the pre-capture destination ``name`` (in place, the address
+        the traces bake in does not move) and free ``t`` (it becomes trace scratch). No destination: ``t`` itself."""
+        dst = (pre or {}).get(name)
+        if dst is None or t is None:
+            return t
+        ttnn.copy(t, dst)
+        ttnn.deallocate(t)
+        return dst
+
+    def _vfy_pre_log(self, label, pre):
+        logger.info(
+            f"[vfy_prealloc] {label}: {len(pre)} verify output(s) allocated before any capture: "
+            + ", ".join(f"{n}@{hex(int(t.buffer_address()))}" for n, t in pre.items())
+        )
 
     def record_verify_trace(self):
         """Capture the verify trace over the buffers prepare_verify_trace allocated (warmup phase 2).
@@ -3174,6 +3285,7 @@ class Qwen36Model:
         _spec_groups = self._vfy_spec_groups
         _kv_grouped = self._vfy_kv_grouped
 
+        _pre = getattr(self, "_vfy_pre", None) if spec_vfy_outs_prealloc_enabled() else None
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         (
             self._vfy_logits_out,
@@ -3183,12 +3295,18 @@ class Qwen36Model:
             self._vfy_normed_out,
             self._vfy_shard_logits_out,
         ) = self._forward_verify_bucket_tp(n_users=B)
+        if _pre:  # QWEN36_SPEC_VFY_OUTS_PREALLOC: hand the persistent outputs over to the pre-capture buffers
+            self._vfy_rows_out = self._vfy_pre_into(_pre, "rows", self._vfy_rows_out)
+            self._vfy_ids_out = self._vfy_pre_into(_pre, "ids", self._vfy_ids_out)
+            self._vfy_normed_out = self._vfy_pre_into(_pre, "normed", self._vfy_normed_out)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
         if self._vfy_sharded:
             # Sampled requests (read_logits) need the full logits, which the main trace no longer gathers:
             # a second, small trace (lm_head + all-gather + untilize on the persistent normed rows).
             self._vfy_logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             self._vfy_logits_out, self._vfy_logits_rm_out = self._forward_verify_logits_body()
+            if _pre:
+                self._vfy_logits_rm_out = self._vfy_pre_into(_pre, "logits_rm", self._vfy_logits_rm_out)
             ttnn.end_trace_capture(dev, self._vfy_logits_trace_id, cq_id=0)
             if self._vfy_topk:
                 # QWEN36_VERIFY_DEVICE_TOPK: a third, smaller trace replaces the logits trace on sampled steps
@@ -3196,7 +3314,12 @@ class Qwen36Model:
                 # the fallback, replayed lazily by fetch_verify_logits).
                 self._vfy_topk_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
                 self._vfy_topk_vals_out, self._vfy_topk_ids_out = self._forward_verify_topk_body()
+                if _pre:
+                    self._vfy_topk_vals_out = self._vfy_pre_into(_pre, "topk_vals", self._vfy_topk_vals_out)
+                    self._vfy_topk_ids_out = self._vfy_pre_into(_pre, "topk_ids", self._vfy_topk_ids_out)
                 ttnn.end_trace_capture(dev, self._vfy_topk_trace_id, cq_id=0)
+        if _pre:
+            self._vfy_pre_log(f"V{B} captured", _pre)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         if getattr(self, "_vfy_bk", None):
             self._log_trace_memory(f"V{B}")
@@ -3324,9 +3447,16 @@ class Qwen36Model:
         bk.normed = outs[4]
         _lg = self._forward_verify_logits_body(bk)
         bk.narrow_ready = self._vfy_warm_narrow(_lg[1], b)
+        bk.pre = {}
+        if spec_vfy_outs_prealloc_enabled():  # QWEN36_SPEC_VFY_OUTS_PREALLOC: keep the lazily read outputs as destinations
+            self._vfy_pre_keep(bk.pre, "logits_rm", _lg[1])
+            self._vfy_pre_keep(bk.pre, "normed", bk.normed)
+            self._vfy_pre_warm(bk.pre)
         for t in _lg:
-            ttnn.deallocate(t)
-        ttnn.deallocate(bk.normed)
+            if not self._vfy_pre_has(bk.pre, t):
+                ttnn.deallocate(t)
+        if not self._vfy_pre_has(bk.pre, bk.normed):
+            ttnn.deallocate(bk.normed)
         bk.normed = None
         if self._vfy_topk:
             bk.shard_logits = outs[5]
@@ -3357,13 +3487,18 @@ class Qwen36Model:
             "topk_vals": getattr(self, "_vfy_topk_vals_out", None),
             "topk_ids": getattr(self, "_vfy_topk_ids_out", None),
         }
+        _pre = bk.pre if spec_vfy_outs_prealloc_enabled() else None
         bk.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         outs = self._forward_verify_bucket_tp(n_users=b, bk=bk, **({"kv_split": True} if kv_split else {}))
+        _normed = self._vfy_pre_into(_pre, "normed", outs[4]) if _pre else outs[4]  # QWEN36_SPEC_VFY_OUTS_PREALLOC
         ttnn.end_trace_capture(dev, bk.trace_id, cq_id=0)
-        bk.normed, bk.shard_logits = outs[4], outs[5]
+        bk.normed, bk.shard_logits = _normed, outs[5]
         bk.logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         bk.logits_out, bk.logits_rm_out = self._forward_verify_logits_body(bk)
+        if _pre:
+            bk.logits_rm_out = self._vfy_pre_into(_pre, "logits_rm", bk.logits_rm_out)
         ttnn.end_trace_capture(dev, bk.logits_trace_id, cq_id=0)
+        bk.pre = {}  # captured: the destinations are bk.normed / bk.logits_rm_out now (freed by release_verify_buckets)
         if self._vfy_topk:
             bk.topk_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             self._forward_verify_topk_body(bk)

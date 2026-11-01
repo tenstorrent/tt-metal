@@ -101,6 +101,8 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_fused_audit_every,
     spec_fused_enabled,
     spec_fused_sampled_enabled,
+    spec_dr_outs_prealloc_enabled,
+    spec_dr_readback_tolerant_enabled,
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
@@ -885,6 +887,10 @@ class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
     _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
+    # QWEN36_DRAFT_VOCAB_FALLBACK (tt/draft_vocab.py) class defaults: no guard, no full-head drafter traces (set in __init__)
+    _dv_guard = None
+    _dv_full_now = False
+    _dr_traces_full = None
 
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
@@ -997,6 +1003,14 @@ class MTPSpecEngine:
         )  # "8" = off at any engine width
         self._dr_traces = {}  # bucket b < B -> drafter trace id of b rows (filled when a per-bucket capture exists)
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
+        # QWEN36_DRAFT_VOCAB_TOPK + QWEN36_DRAFT_VOCAB_FALLBACK (tt/draft_vocab.py): the per-row guard, the full-head drafter
+        # traces (bucket -> trace id, B included) and the head of the current step; None / {} / False without a pruned head.
+        from models.demos.blackhole.qwen36.tt.draft_vocab import guard_for
+
+        self._dv_guard = guard_for(self.mtp, self.B)
+        self._dr_traces_full = {}
+        self._dv_full_now = False
+        self.dv_head_steps = {"pruned": 0, "full": 0}  # decode steps per drafter head (fallback on)
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
@@ -1131,10 +1145,28 @@ class MTPSpecEngine:
         return kw
 
     def _dr_trace_for(self, b):
-        """Drafter trace id for bucket ``b`` (B, None or no per-bucket capture: the B-row trace)."""
+        """Drafter trace id for bucket ``b`` (B, None or no per-bucket capture: the B-row trace). A step _dv_decide put on
+        the full head (QWEN36_DRAFT_VOCAB_FALLBACK) takes it from the full-head set."""
+        if self._dv_full_now and self._dr_traces_full:
+            return self._dr_traces_full.get(b, self._dr_traces_full[self.B])
         if b is None or b == self.B or not self._dr_traces:
             return self._dr_trace
         return self._dr_traces.get(b, self._dr_trace)
+
+    def _dv_decide(self):
+        """QWEN36_DRAFT_VOCAB_FALLBACK: the drafter head of the step about to run, full while any active row is off-vocab
+        (DraftVocabGuard). Sets the MTP switch the eager drafter paths read; _dr_trace_for picks the trace set from it."""
+        full = self._dv_guard.any_off(self._active)
+        self._dv_full_now = full
+        self.mtp._draft_full = full
+        self.dv_head_steps["full" if full else "pruned"] += 1
+
+    def _dv_note_text(self):
+        """Tail of the periodic fused line / the drain line: decode steps per drafter head (QWEN36_DRAFT_VOCAB_FALLBACK)."""
+        if self._dv_guard is None:
+            return ""
+        h = self.dv_head_steps
+        return f"; drafter head steps: pruned {h['pruned']}, full {h['full']} (QWEN36_DRAFT_VOCAB_FALLBACK)"
 
     def _bucket_note_text(self):
         """Tail of the periodic fused line: steps per bucket, fallbacks, row swaps (flag on only); the KV-split gate's
@@ -1367,7 +1399,10 @@ class MTPSpecEngine:
         if self._ksp_on("draft"):
             n = self.__dict__.setdefault("kv_split_steps", {"verify": 0, "draft": 0})
             n["draft"] += 1
-            return self._dr_traces[("ksp", self._ksp_width())]
+            w = self._ksp_width()
+            if self._dv_full_now and ("ksp", w) in (self._dr_traces_full or {}):  # r9: full-head split variant
+                return self._dr_traces_full[("ksp", w)]
+            return self._dr_traces[("ksp", w)]
         return self._dr_trace_for(self._vb)
 
     def kv_split_engaged(self):
@@ -1414,6 +1449,7 @@ class MTPSpecEngine:
     _hp_bufs = None  # bucket b < B -> persistent anchor hidden [1,1,b,dim/tp] of its drafter body
     _dr_bks = ()  # the buckets < B whose verify + drafter traces this engine builds (descending), see _bucket_plan
     _dr_standins = ()  # warm-pass stand-ins of the shared K ids outputs, freed after the captures
+    _dr_outs_pre = ()  # QWEN36_SPEC_DR_OUTS_PREALLOC: the K shared ids outputs, allocated before any trace capture
     _addr_snap = None
     _vb_fell = False  # the last _bucket_step chose a bucket that has no trace yet and ran at B
     bucket_fallbacks = row_swaps = 0
@@ -1830,6 +1866,8 @@ class MTPSpecEngine:
         assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare_decode after capture"
         # a B == 1 prefill trace replay may overwrite buffers allocated after it was recorded
         assert not (B == 1 and self.prefill_recorded), "prepare_decode after record_prefill"
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the pruned programs warm as the pruned head
+            self._dv_full_now = self.mtp._draft_full = False
         t0 = time.perf_counter()
         # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
         _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
@@ -1925,8 +1963,24 @@ class MTPSpecEngine:
         self._join_warm_warmup()
         self._mtp_warm_prepare()
         self._draft_warmup([0] * B, self._hp_buf, [0] * B)
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the full-head drafter programs as well
+            with self.mtp.full_draft_head():
+                self._draft_warmup([0] * B, self._hp_buf, [0] * B)
         if self.recorded_drafter:
             self._alloc_drafter_inputs()
+            if spec_dr_outs_prealloc_enabled() and not self._dr_outs_pre:
+                # QWEN36_SPEC_DR_OUTS_PREALLOC: the persistent K ids outputs, born here (before the prefill traces are
+                # captured, and before every decode capture) so no earlier trace's scratch can overlap them
+                self._dr_outs_pre = tuple(
+                    ttnn.zeros(
+                        [1, 1, B, 1],
+                        device=self.mesh,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(self.K)
+                )
             z = ttnn.zeros(
                 [1, 1, B * T, self._dim_frac],
                 device=self.mesh,
@@ -1939,8 +1993,11 @@ class MTPSpecEngine:
             feed = self.model.spec_feed_rows(z)
             if feed is not z:
                 ttnn.deallocate(z)
-            for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
-                ttnn.deallocate(o)
+            if self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: the B-row body with its in-place ids copy, as captured
+                self._drafter_body(feed, self.B, list(self._dr_outs_pre))
+            else:
+                for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
+                    ttnn.deallocate(o)
             self._ksp_dr_widths = self._ksp_drafter_widths()  # QWEN36_ATTN_KV_SPLIT gate: split drafter variants
             if self._dr_bks or self._ksp_dr_widths:  # each bucket / variant body once, ids handed to stand-ins
                 self._dr_standins = tuple(
@@ -1957,6 +2014,23 @@ class MTPSpecEngine:
                     self._drafter_body(feed, b, list(self._dr_standins))
                 for b in self._ksp_dr_widths:
                     self._drafter_body(feed, b, list(self._dr_standins), kv_split=True)
+            if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: every full-head body, ids handed over in place
+                if not self._dr_standins:
+                    self._dr_standins = tuple(
+                        ttnn.zeros(
+                            [1, 1, B, 1],
+                            device=self.mesh,
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        for _ in range(self.K)
+                    )
+                with self.mtp.full_draft_head():
+                    for b in (B, *self._dr_bks):
+                        self._drafter_body(feed, b, list(self._dr_standins))
+                    for b in self._ksp_dr_widths:  # r9: the full-head split variants (QWEN36_ATTN_KV_SPLIT)
+                        self._drafter_body(feed, b, list(self._dr_standins), kv_split=True)
             ttnn.synchronize_device(self.mesh)
             ttnn.deallocate(feed)
             if spec_fused_enabled():
@@ -2203,6 +2277,8 @@ class MTPSpecEngine:
         assert self.prepared, "capture_decode before prepare_decode"
         if self.captured:
             return
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the D traces capture the pruned head
+            self._dv_full_now = self.mtp._draft_full = False
         # Verify outputs are read right after a verify replay, before any prefill replay can overwrite them.
         # Cache misses disallowed: a program not compiled by the warm passes fails here, not inside a capture.
         self.mesh.set_program_cache_misses_allowed(False)
@@ -2224,7 +2300,10 @@ class MTPSpecEngine:
                 if self.recorded_drafter:  # ids outputs are read right after each replay
                     feed = self.model._vfy_rows_out
                     self._dr_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-                    self._dr_outs = self._drafter_body(feed)
+                    if self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: copy into the pre-capture buffers in place
+                        self._dr_outs = self._drafter_body(feed, self.B, list(self._dr_outs_pre))
+                    else:
+                        self._dr_outs = self._drafter_body(feed)
                     ttnn.end_trace_capture(self.mesh, self._dr_trace, cq_id=0)
                     ttnn.synchronize_device(self.mesh)
                     logger.info(f"[spec_engine] drafter trace captured (anchor + reseed + {self.K} draft steps)")
@@ -2247,6 +2326,25 @@ class MTPSpecEngine:
                         ttnn.synchronize_device(self.mesh)
                         logger.info(f"[spec_engine] split drafter variant captured (b={b}, QWEN36_ATTN_KV_SPLIT)")
                         self._log_trace_memory(f"D{b}s")
+                    if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the same bodies over the full head
+                        with self.mtp.full_draft_head():
+                            for b in (self.B, *self._dr_bks):  # into the shared K ids outputs in place
+                                tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                                self._drafter_body(feed, b, self._dr_outs)
+                                ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                                self._dr_traces_full[b] = tid
+                                ttnn.synchronize_device(self.mesh)
+                            for b in self._ksp_dr_widths:  # r9: full-head split variants, same in-place handoff
+                                tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                                self._drafter_body(feed, b, self._dr_outs, kv_split=True)
+                                ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                                self._dr_traces_full[("ksp", b)] = tid
+                                ttnn.synchronize_device(self.mesh)
+                        logger.info(
+                            f"[spec_engine] full-head drafter traces captured for buckets {sorted(self._dr_traces_full)} "
+                            f"(QWEN36_DRAFT_VOCAB_FALLBACK)"
+                        )
+                        self._log_trace_memory("F")
                     self._check_shared_addrs(snap, "after the drafter buckets")
                     for t in self._dr_standins:  # warm-pass stand-ins of the shared K ids, used by no trace
                         ttnn.deallocate(t)
@@ -2410,11 +2508,21 @@ class MTPSpecEngine:
         for tid in (self._dr_traces or {}).values():  # the drafter bucket traces (D4, D2, D1)
             ttnn.release_trace(self.mesh, tid)
         self._dr_traces = {}
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the full-head drafter traces
+            for tid in (self._dr_traces_full or {}).values():
+                ttnn.release_trace(self.mesh, tid)
+            self._dr_traces_full = {}
+            self._dv_full_now = self.mtp._draft_full = False
+            logger.info("[spec_engine] shutdown" + self._dv_note_text())
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
         for t in (*self._dr_outs, *self._dr_bufs, *(self._hp_bufs or {}).values(), *self._dr_standins):
             ttnn.deallocate(t)
+        for t in self._dr_outs_pre:  # QWEN36_SPEC_DR_OUTS_PREALLOC: not yet captured (prepared only): free them here
+            if not any(t is o for o in self._dr_outs):
+                ttnn.deallocate(t)
+        self._dr_outs_pre = ()
         self._dr_outs, self._dr_bufs, self._hp_bufs, self._dr_standins, self._dr_bks = [], [], None, (), ()
         self._addr_snap = None
         for t in (self._mtpw_pack, self._mtpw_pt):
@@ -2613,6 +2721,10 @@ class MTPSpecEngine:
         _record_row_delta(self, slot, None)  # the row's M-RoPE delta goes with its request (text rows are 0)
         self._fresh_dirty.discard(slot)
         reset_draft_skip(self, slot)
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the row's recent tokens go with its request
+            self._dv_guard.reset(slot)
+            if not self._active:  # drained: one line per idle transition
+                logger.info("[spec_engine] all rows released" + self._dv_note_text())
         # the leaving request may be why other rows' drafts were withheld: offer them again
         self._no_draft.clear()
         self._withheld_streak.clear()
@@ -2641,6 +2753,8 @@ class MTPSpecEngine:
         new_of = {old: new for new, old in enumerate(idx)}
         self.__dict__["_row_vision_map"] = {new_of[u]: v for u, v in _row_vision_of(self).items()}
         self._last_hidden = [self._last_hidden[j] for j in idx]
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: per-row recent tokens move with the rows
+            self._dv_guard.remap(idx)
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
         self._parked = {new_of[u]: v for u, v in self._parked.items()}
@@ -2728,6 +2842,9 @@ class MTPSpecEngine:
             self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
                 () if start_pos is None else (int(start_pos),)
             )
+            if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: a new request starts from its prompt tail
+                self._dv_guard.reset(slot)
+                self._dv_guard.observe(slot, prompt_list[-self._dv_guard.window :])
         else:
             assert vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
             assert Tp % 128 == 0, f"non-final prefill chunk end {Tp} is not a multiple of 128"
@@ -3990,6 +4107,8 @@ class MTPSpecEngine:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         if spec_sampling is not None and spec_mode != "fused_sample":
             raise ValueError(f"spec_sampling needs spec_mode 'fused_sample', got {spec_mode!r}")
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the drafter head of this step
+            self._dv_decide()
         if defer_read:
             if (
                 spec_sampling is not None
@@ -4174,6 +4293,7 @@ class MTPSpecEngine:
                 + self._bucket_note_text()
                 + self._masked_big_note_text()
                 + self._intrace_note_text()
+                + self._dv_note_text()
             )
 
     def _join_trace_note_text(self):
@@ -5118,6 +5238,10 @@ class MTPSpecEngine:
         d = self._def_data(h, engine_thread=True)
         committed, counts, p0 = d["committed"], d["counts"], d["p0"]
         c32, n32 = committed.to(torch.int32), counts.to(torch.int32)
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the commit, rows still holding the step's request
+            gens = self._row_gens()
+            live = {u for u in range(B) if bool(h.active[u]) and (h.gen is None or h.gen[u] == gens[u])}
+            self._dv_guard.observe_block(committed, counts, rows=live)
         anchor = (p0 + counts - 1).tolist()
         fit = draft_rows_fit(anchor, K, h.cap)
         want = [(not bool(a)) or bool(s) or (not f) for a, s, f in zip(h.active.tolist(), h.skip, fit)]
@@ -5465,7 +5589,25 @@ class MTPSpecEngine:
 
     def _drafts_from_steps(self, steps):
         B, K = self.B, self.K
-        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+        if not spec_dr_readback_tolerant_enabled():
+            return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+        # QWEN36_SPEC_DR_READBACK_TOLERANT: built through int64. Rows a bucketed step did not write hold what the buffer last
+        # held; any word outside int32 becomes 0 (the callers zero those declined / padding rows anyway). Written rows
+        # hold token ids and pass unchanged.
+        d = torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int64)
+        bad = (d < -(2**31)) | (d >= 2**31)
+        if bool(bad.any()):
+            n = self.__dict__.get("_dr_readback_oob", 0) + 1
+            self._dr_readback_oob = n
+            if n <= 8 or n % 1000 == 0:
+                rows = sorted({int(u) for u in bad.nonzero()[:, 0].tolist()})
+                logger.warning(
+                    f"[spec_engine] draft readback #{n}: out-of-int32 words in rows {rows} (width {self._ksp_width()}, "
+                    f"steps {[list(map(int, st)) for st in steps]}, "
+                    f"dr_outs at {[hex(int(t.buffer_address())) for t in self._dr_outs]}); zeroed"
+                )
+            d = torch.where(bad, torch.zeros_like(d), d)
+        return d.to(torch.int32)
 
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
@@ -5487,6 +5629,9 @@ class MTPSpecEngine:
                 num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, None
             )
             return h.draft_result
+        if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the commit the runner reports, in engine rows
+            tok, acc = self._to_rows(committed_tokens, accepted_counts)
+            self._dv_guard.observe_block(tok, acc)
         hit = self._fused_cache_take(num_drafts, committed_tokens, committed_positions, accepted_counts, page_table)
         if (
             self._ch_g is not None
@@ -5737,7 +5882,10 @@ class MTPSpecEngine:
 
         ``kv_split`` (QWEN36_ATTN_KV_SPLIT=user): True = the split variant of width b (the context gate's second drafter
         trace; with ``dst_outs`` it hands its ids over like a bucket, at b == B too), False = never split, None = the
-        canonical trace (split only in the gate's "always" mode, as the K1 commit captured every even width)."""
+        canonical trace (split only in the gate's "always" mode, as the K1 commit captured every even width).
+
+        Given ``dst_outs`` at b == B (the full-head set of QWEN36_DRAFT_VOCAB_FALLBACK, or a full-width split variant)
+        its ids are copied into ``dst_outs`` in place and ``dst_outs`` is returned."""
         B, mtp = self.B, self.mtp
         b = B if b is None or int(b) == B else int(b)
         bucket = b < B
@@ -5755,9 +5903,21 @@ class MTPSpecEngine:
             hp = self._hp_bufs[b]
         else:
             rs_pt, mtp_pt, hp = self._dr_rs_pt, self._mtp_pt, self._hp_buf
+        # QWEN36_MTP_REPL_RESIDUAL: gather the feed ONCE (exact) for the reseed, and take the step-0 anchor rows from the
+        # gathered feed (the same one-hot matmul, so [1,1,b,dim] is the gather of today's anchor rows); the persistent
+        # fractured anchor buffer is then unused here (the eager _draft refills it with _set_anchor before reading it).
+        # A feed wider than one tile of rows (RES40's height) keeps today's anchor copy; its reseed stays fractured.
+        repl = getattr(mtp, "repl_residual", False) and int(feed.shape[-2]) <= ttnn.TILE_SIZE
+        if repl:
+            feed = mtp.replicate_hidden(feed)
+            owned.append(feed)
         Hp = ttnn.matmul(d["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
-        ttnn.copy(Hp, hp)
-        ttnn.deallocate(Hp)
+        if repl:
+            h0 = Hp  # freed after step 0 by the loop below (it is not hp)
+        else:
+            ttnn.copy(Hp, hp)
+            ttnn.deallocate(Hp)
+            h0 = hp
         _, hn = mtp.forward_decode(
             feed,
             d["rs_tok"],
@@ -5777,7 +5937,7 @@ class MTPSpecEngine:
         _ksp_pt = None
         if (kv_split or getattr(self, "_mtp_pt_own", None) is not None) and self._dr_ksp_want(b, kv_split):
             _ksp_pt = self._mtp_pt_own if b == B else ttnn.slice(self._mtp_pt_own, [0, 0], [b // 2, self.nb])
-        h, tok, outs = hp, d["tok0"], []
+        h, tok, outs = h0, d["tok0"], []
         for k in range(self.K):
             _ksp = self.model.kv_split_ctx(b, 1, d["pos"][k], _ksp_pt) if _ksp_pt is not None else None
             if _ksp is not None:

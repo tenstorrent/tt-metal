@@ -24,6 +24,10 @@ Exactness. The id of every row is torch.argmax over the full vocab row (the lowe
 shipped tails implement: ranking is on raw bits (order value |v| or -|v|, +0 == -0), so it is exact in the logits'
 own dtype (bf16 verify, fp32 drafter) and needs no float reduce at all. Rows are independent. NaN is the only input
 where it can differ (see the kernel header). Flag off: no instance is built, so no program and no buffer.
+
+Pruned vocab (QWEN36_DRAFT_VOCAB_TOPK, tt/draft_vocab.py): an instance built with ``remap`` (a replicated uint32 table
+[K/16, 16] of the K kept token ids, ascending) treats its shards as K pruned columns; stage 2 returns table[d * K/TP +
+local column] instead of the pruned index (kernel define REMAP_IDS_CB). Without ``remap`` the program is unchanged.
 """
 
 import os
@@ -41,6 +45,7 @@ LANES = 0  # output [1,1,1,32] uint32 RM, lane r = row r's id, lanes >= R = 0 (t
 ROWS = 1  # output [1,1,R,1] uint32 RM, one id per row (draft_argmax)
 
 _CB_IN0, _CB_IN1, _CB_PART1, _CB_PART2, _CB_OUT = 0, 1, 2, 3, 4  # stage 1
+_CB_MAP = 2  # stage 2 with ``remap``: one 64 B id-table page per row
 _SLOT_BYTES = 32 * 16  # stage-1 partial slot: 32 rows x (order, col, 0, 0)
 _TILE = 32
 
@@ -84,17 +89,23 @@ class FusedShardArgmax:
     ``gather(t)`` all-gathers the [1,1,32,32] uint32 TILE stage-1 tile along dim 3 across the TP devices in mesh order
     (device d's tile lands at tile column d, as the vocab shards are laid out) and may free ``t``; default
     all_gather_dim3. ``max_cores`` caps the stage-1 grid (QWEN36_SPEC_ARGMAX_FUSED_CORES, default the full compute
-    grid)."""
+    grid). ``remap`` (pruned vocab, see the module docstring): the uint32 RM [vocab_size/16, 16] id table, replicated
+    and persistent (its address is baked into captured traces); stage 2 then returns table entries."""
 
     _unsupported = set()  # reasons already logged by ids() (process-wide: one line per reason)
 
-    def __init__(self, mesh_device, vocab_size, num_devices, gather=all_gather_dim3, max_cores=None):
+    def __init__(self, mesh_device, vocab_size, num_devices, gather=all_gather_dim3, max_cores=None, remap=None):
         self.mesh = mesh_device
         self.num_devices = int(num_devices)
         self.vocab_size = int(vocab_size)
         assert self.vocab_size % self.num_devices == 0, (vocab_size, num_devices)
         self.shard = self.vocab_size // self.num_devices
         self.gather = gather
+        self.remap = remap
+        if remap is not None:
+            assert tuple(int(s) for s in remap.shape) == (self.vocab_size // 16, 16), f"id table {remap.shape}"
+            assert remap.dtype == ttnn.uint32 and remap.layout == ttnn.ROW_MAJOR_LAYOUT, (remap.dtype, remap.layout)
+            assert int(remap.buffer_aligned_page_size()) == 64, f"id table page {remap.buffer_aligned_page_size()} B"
         grid = mesh_device.compute_with_storage_grid_size()
         self.grid = ttnn.CoreCoord(grid.x, grid.y)
         cap = grid.x * grid.y
@@ -246,15 +257,32 @@ class FusedShardArgmax:
         cta = [rows, nd, self.shard, mode, 0, 1, out_page]
         cta += list(ttnn.TensorAccessorArgs(gathered).get_compile_time_args())
         cta += list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+        common = [gathered.buffer_address(), out.buffer_address()]
+        io, extra = [gathered, out], {}
+        if self.remap is not None:  # pruned vocab: the id table's accessor, address and a page slot per row
+            cta += list(ttnn.TensorAccessorArgs(self.remap).get_compile_time_args())
+            common.append(self.remap.buffer_address())
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=rows * 64 + 64,
+                    core_ranges=core,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(buffer_index=_CB_MAP, data_format=ttnn.uint32, page_size=rows * 64 + 64)
+                    ],
+                )
+            )
+            io = [gathered, self.remap, out]
+            extra = dict(defines=[("REMAP_IDS_CB", str(_CB_MAP))])
         kernel = ttnn.KernelDescriptor(
             kernel_source=PICK_KERNEL,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core,
             compile_time_args=cta,
-            common_runtime_args=[gathered.buffer_address(), out.buffer_address()],
+            common_runtime_args=common,
             config=ttnn.ReaderConfigDescriptor(),
+            **extra,
         )
-        return ttnn.generic_op([gathered, out], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
+        return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
 
     def __call__(self, logits, mode):
         """Global argmax ids of every row of the vocab-sharded ``logits`` (not freed), in the ``mode`` contract."""

@@ -361,12 +361,26 @@ MTP_FC_IBW_ENV = "QWEN36_MTP_FC_IBW"
 MTP_FC_CORES_ENV = "QWEN36_MTP_FC_CORES"
 MTP_LAYER_BFP4_ENV = "QWEN36_MTP_LAYER_BFP4"
 MTP_EMBED_ROW_ENV = "QWEN36_MTP_EMBED_ROW"
+MTP_SDPA_WINDOW_ENV = "QWEN36_MTP_SDPA_WINDOW"
 
 
 def _env_int(name, default=0):
     """Integer env value; unset or blank -> ``default``. A non-integer raises ValueError (no silent default)."""
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
+
+
+def mtp_sdpa_window():
+    """QWEN36_MTP_SDPA_WINDOW (r9 drafter track; default 0 = off): W > 0 gives the MTP drafter's draft-step decode SDPA
+    a sliding window: each row attends the W positions [pos + 1 - W, pos] (ttnn sliding_window_size; the kernel starts
+    its K-chunk loop at the window) instead of the whole context. Ported from the r6 drafter bundle (db.diff), which
+    measured one 32K x 8 drafter SDPA call at 399.3 us full vs 35.5 / 48.5 / 89.2 / 134.8 us for W = 1024 / 2048 / 4096 /
+    8192 (d21u20). The drafter KV cache, its writes and the verify are untouched; a context of <= W positions attends
+    exactly what it did before. Drafts can change once the context is longer than W, so only acceptance can move.
+    With a window the drafter never takes the QWEN36_ATTN_KV_SPLIT user split (TPAttention._kv_split_draft_ok): the
+    window already removes the long-context read the split halves. Returns W, or 0 when off."""
+    w = _env_int(MTP_SDPA_WINDOW_ENV, 0)
+    return w if w > 0 else 0
 
 
 def mtp_fc_decode_progcfg(k, n, grid_w):
@@ -463,6 +477,38 @@ def spec_chain_sampled_enabled():
     ``spec_sampling``. Off, decode_forward raises ValueError for it: sampled overflow is not handled for deferred steps yet, so
     the plugin runs a sampled step as the synchronous S2 step and defers only greedy-only steps."""
     return os.environ.get("QWEN36_SPEC_CHAIN_SAMPLED", "0") == "1"
+
+
+def spec_dr_outs_prealloc_enabled():
+    """QWEN36_SPEC_DR_OUTS_PREALLOC (default "0"; "1" opts in): the drafter's K shared ids outputs (``_dr_outs``) are allocated
+    in prepare_decode, BEFORE the prefill traces are captured, and the B-row drafter trace copies its ids into them (as the
+    row buckets and split variants already do) instead of creating them inside its own capture. Off, the ids outputs are
+    born inside capture_decode, after the prefill / verify / split-variant captures freed their scratch: they can sit on
+    a range one of those earlier traces still writes on every replay. A bucketed step writes only rows < b and the host
+    reads all B rows, so a prefill replay leaves rows >= b with any 32-bit pattern (the K1-gate serving crash: the
+    QWEN36_ATTN_KV_SPLIT gated variants shift the allocation layout onto such a range). Off: byte-identical to before."""
+    return os.environ.get("QWEN36_SPEC_DR_OUTS_PREALLOC", "0") == "1"
+
+
+def spec_vfy_outs_prealloc_enabled():
+    """QWEN36_SPEC_VFY_OUTS_PREALLOC (default "0"; "1" opts in): the verify traces' persistent outputs that hold data past
+    their own replay -- the shared B-row ids / drafter-feed rows / top-k pair, the B-row and per-bucket normed rows (the lazy
+    fetch_verify_logits input) and the ROW_MAJOR logits copies (read at the deferred sync) -- are the warm-pass outputs of
+    prepare_verify_trace / prepare_verify_bucket, kept alive, i.e. allocated BEFORE the prefill traces are captured. The
+    captured bodies copy into them in place (ttnn.copy, as the row buckets already hand off) instead of creating them inside
+    their own capture, where they can land on a range an earlier-captured (prefill) trace still uses as scratch on every
+    replay: a prefill replay between a deferred verify replay and its readback (QWEN36_SPEC_PREFILL_OVERLAP) would then
+    overwrite them. The QWEN36_SPEC_DR_OUTS_PREALLOC rule applied to the verify side. Interleaved (non-sharded) outputs
+    only; a sharded one keeps the old path (logged). Off: byte-identical to before."""
+    return os.environ.get("QWEN36_SPEC_VFY_OUTS_PREALLOC", "0") == "1"
+
+
+def spec_dr_readback_tolerant_enabled():
+    """QWEN36_SPEC_DR_READBACK_TOLERANT (default "0"; "1" opts in): the host readback of the draft ids (_drafts_from_steps)
+    goes through int64 and zeroes any word outside int32 (rows a bucketed step did not write; the callers zero those
+    declined / padding rows anyway), logging the rows and the ids buffer addresses, instead of raising in the int32 cast.
+    Off: byte-identical to before."""
+    return os.environ.get("QWEN36_SPEC_DR_READBACK_TOLERANT", "0") == "1"
 
 
 def spec_prefill_overlap_enabled():
@@ -938,6 +984,17 @@ def lm_head_dshard_scope():
     if raw not in LMHEAD_DSHARD_SCOPES:
         raise ValueError(f"{LMHEAD_DSHARD_SCOPE_ENV}={raw!r} invalid ({'|'.join(LMHEAD_DSHARD_SCOPES)})")
     return raw
+
+
+DRAFT_HEAD_DSHARD_ENV = "QWEN36_DRAFT_HEAD_DSHARD"
+
+
+def draft_head_dshard_enabled():
+    """QWEN36_DRAFT_HEAD_DSHARD (r9 drafter track, default 0 = today's behaviour): with QWEN36_LMHEAD_DSHARD on, the
+    MTP drafter's OWN head copies (the pruned QWEN36_DRAFT_VOCAB_TOPK head, the QWEN36_DRAFT_LMHEAD_BFP4 head) get a
+    DRAM-sharded copy of their own and run the same mc / exact program as the base head, instead of the plain
+    interleaved ttnn.linear. Each copy costs its weight's size in DRAM once more."""
+    return os.environ.get(DRAFT_HEAD_DSHARD_ENV, "0") == "1"
 
 
 def lm_head_dshard_scope_takes(scope, draft):
@@ -1523,6 +1580,88 @@ def mlp_gu_dsmc_settings():
         int(os.environ.get("QWEN36_MLP_GU_DSMC_IBW", "8")),
         int(os.environ.get("QWEN36_MLP_GU_DSMC_PCN", "4")),
     )
+
+
+# QWEN36_BFP4_LAYOUT (default 0 = off, today's decode program configs everywhere): decode program configs tuned for
+# BFP4 weights on the four projections QWEN36_GPTQ_BFP4=1 stores in bfloat4_b. A target is retuned only when its
+# weight really is bfloat4_b, so BFP8 runs are unchanged with the flag on. With 1 every target takes BFP4_LAYOUT_TUNED;
+# QWEN36_BFP4_LAYOUT_<TARGET> (GATEUP / DOWN / GDN_IN / GDN_OUT) overrides one target:
+#   off                    keep today's config for this target
+#   1d:<cores>:<ibw cap>   the 1D mcast decode matmul on the interleaved weight (same weight, new grid / K block)
+#   dsmc:<W>:<ibw>:<pcn>   the multi-core DRAM-sharded pipeline (W readers per bank, ibw K tiles per block, pcn output
+#                          tiles per core). gateup: K3's QWEN36_MLP_GU_FUSED=dsmc copy (no extra DRAM); down / gdn_in /
+#                          gdn_out: a DRAM-width-sharded decode twin made on device at load (prefill keeps the
+#                          interleaved weight; +6.3 / +6.0 / +2.2 MB per layer per chip at BFP4).
+BFP4_LAYOUT_ENV = "QWEN36_BFP4_LAYOUT"
+BFP4_LAYOUT_TARGETS = ("gateup", "down", "gdn_in", "gdn_out")
+# Tuned on the 8-chip TP mesh, in trace, BFP4 weights, M = 32 (bfp4-layout/pod/bl_mesh.py; us per op incl. dispatch,
+# r7 config -> tuned): gateup dsmc W2 ibw8 49.7 -> W4 ibw2 + LoFi 36.1; down 1D 84c ibw4 25.9 -> dsmc W3 ibw4 + LoFi
+# (incl. both reshards) 21.5; gdn_in 1D 84c ibw8 32.0 -> 1D 44c ibw20 23.6. BFP4 decode matmuls are compute-bound on
+# few cores at HiFi2, not DRAM-bound: LoFi, more readers per bank and SHORT K blocks win. Every entry keeps the decode
+# tokens bit-identical to the flag-off path (greedy AND sampled, 8 users x 400 tokens through the production loop).
+# Left out because they change the sampled tokens: gateup W3 (any ibw; 32.8 us, a further -0.38 ms per verify), gdn_out
+# dsmc W4 ibw8 (10.1 us, also slower in-model) and gdn_out 1D 44c ibw12 (11.8 us). Opt in per target with
+# QWEN36_BFP4_LAYOUT_<TARGET> after an acceptance check.
+BFP4_LAYOUT_TUNED = {
+    "gateup": ("dsmc", 4, 2, 4),
+    "down": ("dsmc", 3, 4, 4),
+    "gdn_in": ("1d", 44, 20),
+    "gdn_out": None,
+}
+# QWEN36_BFP4_LAYOUT_LOFI (default 1 with QWEN36_BFP4_LAYOUT=1): decode matmuls on a bfloat4_b weight of these targets in
+# LoFi. The weight sits in srcA (3-bit mantissa), which LoFi already multiplies in full, so the HiFi2 second pass adds
+# nothing: LoFi == HiFi2 bit for bit (mesh sweep, every target and config; in-model greedy and sampled token identity).
+BFP4_LAYOUT_LOFI_ENV = "QWEN36_BFP4_LAYOUT_LOFI"
+_BFP4_LAYOUT_LOGGED = set()
+
+
+def parse_bfp4_layout(value):
+    """One QWEN36_BFP4_LAYOUT_<T> value -> None | ("1d", cores, ibw) | ("dsmc", W, ibw, pcn)."""
+    v = (value or "").strip().lower()
+    if v in ("", "0", "off", "none"):
+        return None
+    parts = v.split(":")
+    try:
+        nums = tuple(int(x) for x in parts[1:])
+    except ValueError:
+        nums = ()
+    if parts[0] == "1d" and len(nums) == 2 and min(nums) >= 1:
+        return ("1d",) + nums
+    if parts[0] == "dsmc" and len(nums) == 3 and min(nums) >= 1:
+        return ("dsmc",) + nums
+    raise ValueError(f"{BFP4_LAYOUT_ENV}_<TARGET>={value!r} invalid (off | 1d:<cores>:<ibw> | dsmc:<W>:<ibw>:<pcn>)")
+
+
+def bfp4_layout_lofi(weight_dtype):
+    """Whether QWEN36_BFP4_LAYOUT runs a decode matmul on a `weight_dtype` weight in LoFi (bfloat4_b only)."""
+    if weight_dtype != ttnn.bfloat4_b:
+        return False
+    if os.environ.get(BFP4_LAYOUT_ENV, "0").strip().lower() not in ("1", "on", "true", "yes"):
+        return False
+    raw = os.environ.get(BFP4_LAYOUT_LOFI_ENV, "1").strip().lower()
+    if raw not in ("0", "1"):
+        raise ValueError(f"{BFP4_LAYOUT_LOFI_ENV}={raw!r} invalid (0|1)")
+    return raw == "1"
+
+
+def bfp4_layout(target, weight_dtype):
+    """The decode config QWEN36_BFP4_LAYOUT picks for `target` (one of BFP4_LAYOUT_TARGETS) whose weight is stored as
+    `weight_dtype`: None (today's config) unless the flag is on and the weight is bfloat4_b."""
+    if target not in BFP4_LAYOUT_TARGETS:
+        raise ValueError(f"{BFP4_LAYOUT_ENV}: unknown target {target!r}")
+    flag = os.environ.get(BFP4_LAYOUT_ENV, "0").strip().lower()
+    if flag in ("", "0", "off", "false", "no"):
+        return None
+    if flag not in ("1", "on", "true", "yes"):
+        raise ValueError(f"{BFP4_LAYOUT_ENV}={flag!r} invalid (0|1)")
+    if weight_dtype != ttnn.bfloat4_b:
+        return None
+    raw = os.environ.get(f"{BFP4_LAYOUT_ENV}_{target.upper()}")
+    cfg = parse_bfp4_layout(raw) if raw is not None else BFP4_LAYOUT_TUNED[target]
+    if target not in _BFP4_LAYOUT_LOGGED:
+        _BFP4_LAYOUT_LOGGED.add(target)
+        logger.info(f"{BFP4_LAYOUT_ENV}: {target} decode config {cfg if cfg else 'unchanged'}")
+    return cfg
 
 
 # Grid helpers
@@ -2276,6 +2415,115 @@ def decode_ar_live_rows_enabled():
 _DAR_GRID = (10, 4)  # RES40 core grid (x, y)
 _DAR_UNSET = object()
 
+# QWEN36_VERIFY_OUT_RES40 (r9 persistent-layer; default "0" = off, byte-identical tree): the row-parallel out-projections
+# feeding a decode all-reduce (GDN out-proj, attention wo, dense-MLP down) run their 1D-mcast matmul on the RES40 grid
+# itself (10x4, per_core_N = dim/32/40) and write the RES40 width-sharded layout the all-reduce consumes, so the
+# all-reduce's to_memory_config(partial, RES40) reshard program disappears (one program per block, 128 per verify).
+# The K loop (in0_block_w = the largest divisor <= 8 of K tiles, as create_matmul_1d_decode_progcfg) is unchanged:
+# only the N split over cores moves, so every output tile is computed by the same instruction sequence.
+VERIFY_OUT_RES40_ENV = "QWEN36_VERIFY_OUT_RES40"
+_RES40_PC_CACHE = {}
+
+
+def verify_out_res40_enabled():
+    return os.environ.get(VERIFY_OUT_RES40_ENV, "0") == "1"
+
+
+# QWEN36_VERIFY_OUT_RES40_DOWN (only read with QWEN36_VERIFY_OUT_RES40=1; r9 joint tuning with QWEN36_BFP4_LAYOUT):
+#   auto (default) the MLP down keeps the QWEN36_BFP4_LAYOUT dsmc pipeline when it has a decode twin (w2_dec) and its
+#                  width-sharded output is resharded straight into RES40 (one program instead of y -> L1 interleaved ->
+#                  RES40); otherwise the RES40-out 1D matmul.
+#   1d             always the RES40-out 1D matmul on the 10x4 grid (even when a dsmc twin exists).
+#   off            the MLP down keeps its own path (the RES40 flag then covers only GDN out and attention wo).
+VERIFY_OUT_RES40_DOWN_ENV = "QWEN36_VERIFY_OUT_RES40_DOWN"
+# Engagement record (site -> calls; each traced call = one capture): every RES40 site that really ran notes itself here,
+# logs one line the first time, and prints the totals at exit, so an identity log proves the flag engaged.
+_RES40_ENGAGED = {}
+
+
+def verify_out_res40_down_mode():
+    raw = os.environ.get(VERIFY_OUT_RES40_DOWN_ENV, "auto").strip().lower()
+    if raw not in ("auto", "1d", "off"):
+        raise ValueError(f"{VERIFY_OUT_RES40_DOWN_ENV}={raw!r} invalid (auto|1d|off)")
+    return raw
+
+
+def res40_engaged():
+    """{site: calls} of the RES40 sites that ran in this process (empty with QWEN36_VERIFY_OUT_RES40 off)."""
+    return dict(_RES40_ENGAGED)
+
+
+def _res40_note(site, detail):
+    if not _RES40_ENGAGED:
+        import atexit
+
+        atexit.register(lambda: print(f"[res40] {VERIFY_OUT_RES40_ENV} engaged totals {res40_engaged()}", flush=True))
+    if site not in _RES40_ENGAGED:
+        logger.info(f"{VERIFY_OUT_RES40_ENV} engaged: site={site} {detail}")
+    _RES40_ENGAGED[site] = _RES40_ENGAGED.get(site, 0) + 1
+
+
+def res40_out_progcfg(k, n):
+    """1D-mcast decode progcfg (M = one tile) whose width-sharded output is exactly the RES40 layout of an [*, n]
+    tensor; None when n does not split into whole tiles over the 40 RES40 cores."""
+    key = (k, n)
+    if key not in _RES40_PC_CACHE:
+        ncores = _DAR_GRID[0] * _DAR_GRID[1]
+        k_tiles, n_tiles = math.ceil(k / TILE_SIZE), n // TILE_SIZE
+        pc = None
+        if n % (TILE_SIZE * ncores) == 0:
+            per_core_n = n_tiles // ncores
+            pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=_DAR_GRID,
+                in0_block_w=_find_largest_divisor(k_tiles, 8),
+                out_subblock_h=1,
+                out_subblock_w=max(i for i in range(1, 5) if per_core_n % i == 0),
+                per_core_M=1,
+                per_core_N=per_core_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        _RES40_PC_CACHE[key] = pc
+    return _RES40_PC_CACHE[key]
+
+
+def res40_out_matmul(x, weight, compute_cfg, decode_ar, site="out"):
+    """QWEN36_VERIFY_OUT_RES40: row-parallel out-projection straight into the RES40 layout of `decode_ar`.
+
+    x: [.., M <= 32, K] activation (L1/DRAM interleaved); weight: interleaved [K, dim]. Returns the [1, 1, M, dim]
+    RES40 width-sharded partial, ready for decode_ar.all_reduce without a reshard; None (caller keeps its own path)
+    when the flag is off, there is no decode all-reduce, or the shapes do not fit."""
+    if decode_ar is None or not verify_out_res40_enabled():
+        return None
+    m, k, n = x.shape[-2], x.shape[-1], weight.shape[-1]
+    if m > TILE_SIZE or n != decode_ar.dim or x.is_sharded():
+        return None
+    pc = res40_out_progcfg(k, n)
+    if pc is None:
+        return None
+    x4 = x if len(x.shape) == 4 else ttnn.reshape(x, (1, 1, m, k))  # leading-dim view of an interleaved tile tensor
+    _res40_note(site, f"1d 10x4 K={k} N={n} ibw={getattr(pc, 'in0_block_w', '?')} w={getattr(weight, 'dtype', '?')} "
+                      f"fid={getattr(compute_cfg, 'math_fidelity', '?')}")
+    return ttnn.linear(x4, weight, program_config=pc, compute_kernel_config=compute_cfg, memory_config=decode_ar.res_mem)
+
+
+def res40_pack(y, decode_ar, site="out"):
+    """QWEN36_VERIFY_OUT_RES40 with a width-sharded out-projection result `y` ([1, 1, M <= 32, dim], e.g. the
+    QWEN36_BFP4_LAYOUT dsmc pipeline's L1 output): ONE reshard straight into the RES40 layout of `decode_ar` (data
+    movement only, so bit-identical) instead of y -> L1 interleaved -> RES40. None (caller keeps its own path) when the
+    flag is off, there is no decode all-reduce, or the shape does not fit."""
+    if decode_ar is None or not verify_out_res40_enabled():
+        return None
+    shape = list(y.shape)
+    if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[-2] > TILE_SIZE or shape[-1] != decode_ar.dim:
+        return None
+    if not y.is_sharded():
+        return None
+    mcfg = y.memory_config()
+    _res40_note(site, f"pack {getattr(mcfg, 'memory_layout', '?')} shard {getattr(mcfg, 'shard_spec', None)} -> RES40")
+    return ttnn.to_memory_config(y, decode_ar.res_mem)
+
 
 class DecodeResidualAllReduce:
     """Replicated 40-core L1 decode residual + its norm / all-reduce / entry-gather helpers.
@@ -2476,7 +2724,10 @@ class DecodeResidualAllReduce:
         shape = list(partial.shape)
         if shape[0] != 1 or shape[1] != 1:
             partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
-        packed = ttnn.to_memory_config(partial, self.res_mem)
+        if verify_out_res40_enabled() and partial.memory_config() == self.res_mem:
+            packed = partial  # QWEN36_VERIFY_OUT_RES40: the out-projection already wrote RES40 (no reshard program)
+        else:
+            packed = ttnn.to_memory_config(partial, self.res_mem)
         if packed is not partial:
             ttnn.deallocate(partial)
         if packed.dtype != dtype:
@@ -2565,6 +2816,155 @@ def get_decode_allreduce(args, tt_ccl):
             )
     tt_ccl._qwen36_decode_ar = inst
     return inst
+
+
+# -------------------------------------------------------------------------------------------------------------------- #
+# QWEN36_MTP_REPL_RESIDUAL (K5): the MTP drafter's DECODE forwards on the replicated RES40 residual of the main decode
+# (DecodeResidualAllReduce) instead of the hidden-fractured one. Default "0" = today's drafter, byte for byte.
+#
+# Today each draft step runs 8 CCLs on 80 KB tensors (~26 us each): an all-gather in front of each of the 5 norms
+# (pre-fc embedding / hidden norms, attention / ffn norms, head norm), a reduce-scatter after wo and after down, and the
+# fused argmax's candidate gather; the KV-only reseed runs 3 (27 per K=3 step, 0.70 ms on the 32K / 8-user profile).
+# With the flag:
+#   * hidden in: a replicated [1,1,R,dim] hidden (the previous step's head-norm output) is used as is; a fractured one
+#     (verify feed, anchor buffer, join rows) is all-gathered once (exact). The traced drafter body gathers the feed
+#     once and takes the step-0 anchor rows from the gathered feed (spec_engine._drafter_body).
+#   * pre-fc norms are local: the hidden norm is the RES40 sharded norm of the replicated hidden; the embedding norm
+#     runs on this device's fractured embedding rows with each token's mean of squares looked up in a resident
+#     per-token table (the sharded rms_norm_post_all_gather; QWEN36_MTP_REPL_ENORM=table, the default) or, with
+#     QWEN36_MTP_REPL_ENORM=gather, on an all-gathered embedding (one more CCL per forward, no table).
+#   * fc (eh_proj) is row-parallel: device d multiplies its [embedding span d | hidden span d] (2*dim/tp wide) by the
+#     matching K rows of the fc (its own cache stem "fc_rp") and one all_reduce_async sums the partials into RES40.
+#   * the decoder layer then takes the main layers' replicated path (Qwen36DecoderLayer.forward dispatches on the
+#     input width): local RES40 norms and one all_reduce_async after wo and after down (QWEN36_DECODE_AR_FUSE_RESIDUAL
+#     folds the residual adds into them, as in the main layers).
+#   * the head norm is the local RES40 norm; the LM head reads its DRAM copy, which is also the next step's hidden
+#     (no mesh_partition, no re-gather).
+# Per K=3 step: 1 feed gather + 1 reseed fc all-reduce + 3 x (3 all-reduces + the argmax gather) = 14 CCLs (was 27).
+# Prefill (forward_prefill, the prompt warm-up) is unchanged and keeps the column-parallel fc. Not bit-identical: the
+# fc partials are rounded to bf16 per device before the all-reduce and the wo / down partials are summed in the
+# all-reduce's order instead of the reduce-scatter's (the same change the main layers took with
+# QWEN36_DECODE_ALLREDUCE). The verify arbitrates every draft, so only acceptance can move.
+#   QWEN36_MTP_REPL_FC_CORES (default 84) / QWEN36_MTP_REPL_FC_IBW (default 40): the row-parallel fc's 1D-mcast decode
+#   program config ([rows, 2*dim/tp] x [2*dim/tp, dim], like attn wo / MLP down). The r6 drafter bundle's
+#   QWEN36_MTP_FC_PROGCFG targets the column-parallel [2*dim, dim/tp] fc; under this flag no decode forward runs that
+#   fc (prefill never used the bundle config), so the two do not conflict.
+# -------------------------------------------------------------------------------------------------------------------- #
+MTP_REPL_ENV = "QWEN36_MTP_REPL_RESIDUAL"
+MTP_REPL_ENORM_ENV = "QWEN36_MTP_REPL_ENORM"
+MTP_REPL_FC_CORES_ENV = "QWEN36_MTP_REPL_FC_CORES"
+MTP_REPL_FC_IBW_ENV = "QWEN36_MTP_REPL_FC_IBW"
+MTP_REPL_ENORM_MODES = ("table", "gather")
+# Width of a per-token stats row: one tile column, so the lookup tilizes into the [rows, 32] stats tile that
+# rms_norm_post_all_gather reads (column 0 = high bf16 part of the mean of squares, column 1 = the low part).
+MTP_ENORM_STATS_W = TILE_SIZE
+
+
+def mtp_repl_residual_enabled():
+    """QWEN36_MTP_REPL_RESIDUAL (default "0"): the MTP drafter's decode forwards run on the replicated RES40 residual
+    (see the block comment above). Read once when the MTP head is built (TP only, needs QWEN36_DECODE_ALLREDUCE)."""
+    return os.environ.get(MTP_REPL_ENV, "0") == "1"
+
+
+def mtp_repl_enorm_mode():
+    """QWEN36_MTP_REPL_ENORM (default "table"): how the replicated-residual drafter normalizes the token embedding.
+    "table": local norm of this device's fractured embedding rows, the row sum of squares from a per-token table
+    (no CCL). "gather": all-gather the embedding, then the local RES40 norm (one more all-gather per forward)."""
+    raw = os.environ.get(MTP_REPL_ENORM_ENV, "table").strip().lower() or "table"
+    if raw not in MTP_REPL_ENORM_MODES:
+        raise ValueError(f"{MTP_REPL_ENORM_ENV}={raw!r}: expected one of {MTP_REPL_ENORM_MODES}")
+    return raw
+
+
+def mtp_repl_fc_progcfg(k_local, n, grid_w):
+    """The row-parallel MTP fc's decode program config: 1D mcast over QWEN36_MTP_REPL_FC_CORES (default 84, the TP8
+    attn-wo / MLP-down / GDN-out budget for a 5120-wide output) cores, in0_block_w capped at QWEN36_MTP_REPL_FC_IBW
+    (default 40 = the whole K of 2*dim/tp = 40 tiles, one in0 multicast), for [32 rows, k_local] x [k_local, n].
+    ttsim-perf, 8 rows, BFP8, one chip: 84 cores ibw 8 20.0 us, ibw 20 12.5-14.1 us, ibw 40 10.7 us (the column-parallel
+    fc: auto 84 us / 143 measured, the r6 bundle's 20-core ibw 32 23.4 us / 28 measured)."""
+    cores = _env_int_or(MTP_REPL_FC_CORES_ENV, 84)
+    ibw = _env_int_or(MTP_REPL_FC_IBW_ENV, 40)
+    if cores <= 0 or ibw <= 0:
+        raise ValueError(f"{MTP_REPL_FC_CORES_ENV}={cores} / {MTP_REPL_FC_IBW_ENV}={ibw}: both must be > 0")
+    return create_matmul_1d_decode_progcfg(TILE_SIZE, k_local, n, num_cores=cores, grid_w=grid_w, max_in0_block_w=ibw)
+
+
+def _env_int_or(name, default):
+    """Integer env value; unset or blank -> ``default``; a non-integer raises ValueError."""
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
+def mtp_fc_rp_input_order(dim, tp):
+    """Input-feature order of the row-parallel MTP fc: the fc consumes concat([enorm(e), hnorm(h)]) (2*dim wide) and
+    device d holds [e span d | h span d] (span d = columns [d*dim/tp, (d+1)*dim/tp) of the fractured layout). Returns
+    the LongTensor perm such that fc_w[:, perm], transposed to [2*dim, dim] and split into tp row blocks, gives device d
+    exactly the K rows its local [enorm_d | hnorm_d] multiplies."""
+    assert dim % tp == 0, f"dim {dim} not divisible by tp {tp}"
+    s = dim // tp
+    blocks = []
+    for d in range(tp):
+        blocks.append(torch.arange(d * s, (d + 1) * s))
+        blocks.append(torch.arange(dim + d * s, dim + (d + 1) * s))
+    return torch.cat(blocks)
+
+
+def mtp_enorm_stats_table(embedding, chunk=16384):
+    """Per-token statistics row for the replicated-residual drafter's embedding norm: [vocab, MTP_ENORM_STATS_W] bf16.
+
+    Column 0 + column 1 = mean(e_t ** 2) over the FULL hidden dim, split into a high and a low bf16 part (hi = bf16(v),
+    lo = bf16(v - hi): ~16 significant bits, where one bf16 holds 8), every other column 0. e_t is the token's embedding
+    row as the device stores it (bf16). The sharded rms_norm_post_all_gather reduces its one-core stats tile over the
+    whole row and scales it by 1 / (number of stats tiles) = 1, i.e. it reads a MEAN (the distributed pre-all-gather
+    stage hands it per-device means), so the post stage sees the full-dim mean of squares. The embedding op takes only
+    bf16 tables, hence the split. ttsim-perf checked the scaling: mean -> the full-row RMSNorm to bf16 rounding; sum/tp
+    -> wrong by sqrt(8)."""
+    vocab, dim = int(embedding.shape[0]), int(embedding.shape[1])
+    out = torch.zeros(vocab, MTP_ENORM_STATS_W, dtype=torch.bfloat16)
+    for r0 in range(0, vocab, chunk):
+        blk = embedding[r0 : r0 + chunk].to(torch.bfloat16).double()
+        v = blk.square().sum(-1) / dim
+        hi = v.to(torch.bfloat16)
+        lo = (v - hi.double()).to(torch.bfloat16)
+        out[r0 : r0 + chunk, 0] = hi
+        out[r0 : r0 + chunk, 1] = lo
+    return out
+
+
+# Core grid of the sharded embedding norm (QWEN36_MTP_REPL_ENORM=table): this device's [rows, dim/tp] embedding rows
+# width-sharded over MTP_ENORM_CORES cores of one row, the stats tile on one core. ttsim-perf, 8 rows: the sharded post
+# stage 3.3 us on 10 cores (+ 0.7 + 0.5 + 0.7 us reshards) vs 20.0 us for the interleaved op (one core per tile row).
+MTP_ENORM_CORES = 10
+
+
+def mtp_enorm_sharded_configs(width):
+    """(input memcfg, stats memcfg, LayerNormShardedMultiCoreProgramConfig) of the sharded embedding norm for a
+    [rows <= 32, width] input (width = dim/tp): width-sharded over MTP_ENORM_CORES cores (0,0)..(n-1,0), the [32, 32]
+    stats tile on core (0,0). None when width does not split into whole tiles over the cores."""
+    n = MTP_ENORM_CORES
+    if width % (n * TILE_SIZE):
+        return None
+    block_w = width // n // TILE_SIZE
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n - 1, 0))})
+    one = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    x_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, [TILE_SIZE, width // n], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    st_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(one, [TILE_SIZE, MTP_ENORM_STATS_W], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(n, 1),
+        subblock_w=max(i for i in range(1, 5) if block_w % i == 0),
+        block_h=1,
+        block_w=block_w,
+        inplace=False,
+    )
+    return x_mem, st_mem, pc
 
 
 def sharded_decode_matmul(
