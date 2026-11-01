@@ -9,8 +9,9 @@ Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3: $
 default.
 
 A mesh that runs the block needs room for its persistent words and semaphores in L1_SMALL (MOE_BLOCK_L1_SMALL) and a
-fabric payload that holds one combine row (moe_block_fabric_payload). Paths that cannot give it that (the runner, MTP,
-the synthetic-weight block tests, the TtMoe cache build) pass moe_impl="ttmoe".
+fabric payload that holds one combine row (moe_block_fabric_payload); moe_block_mesh_params gives both for any model
+(the prefill runner's mesh open). Paths that cannot give it that (the synthetic-weight block tests, the TtMoe cache
+build) pass moe_impl="ttmoe".
 """
 
 from __future__ import annotations
@@ -47,6 +48,18 @@ def moe_block_enabled(model_cfg=None, moe_impl: Optional[str] = None) -> bool:
 def moe_block_fabric_payload(emb_dim: int) -> int:
     """Fabric payload bytes the block's combine needs: one row (emb_dim bf16) plus its trailer, 64-B aligned."""
     return max(7232, (2 * emb_dim + 32 + 63) // 64 * 64)
+
+
+def moe_block_mesh_params(
+    model_cfg, fabric_payload: int, l1_small_size: int, moe_impl: Optional[str] = None
+) -> tuple[int, int]:
+    """(fabric payload, L1_SMALL) a mesh of this model opens with: the model's own, raised to what the MoE block needs
+    when it is the model's MoE - one combine row of the routed width (Kimi-K3: the latent) and L1_SMALL room for the
+    block's persistent words and semaphores. Unchanged on TtMoe. Model-generic: the prefill runner's mesh open."""
+    if not moe_block_enabled(model_cfg, moe_impl):
+        return fabric_payload, l1_small_size
+    width = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
+    return max(fabric_payload, moe_block_fabric_payload(width)), max(l1_small_size, MOE_BLOCK_L1_SMALL)
 
 
 def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:

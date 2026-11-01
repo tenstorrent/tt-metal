@@ -129,7 +129,11 @@ def _glm_nonrouted(layer_idx: int, hf_config):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_tensors
     from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict
 
-    ckpt = Path(os.environ.get("GLM53_HF_MODEL", "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"))
+    ckpt = Path(
+        os.environ.get("GLM53_HF_MODEL")
+        or os.environ.get("PREFILL_HF_MODEL")  # (the prefill runner's)
+        or "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"
+    )
     with (ckpt / "model.safetensors.index.json").open(encoding="utf-8") as f:
         wm = json.load(f)["weight_map"]
     p = f"model.layers.{layer_idx}.mlp."
