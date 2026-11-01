@@ -152,6 +152,45 @@
 #ifndef SKIP_SPILL_BARRIER
 #define SKIP_SPILL_BARRIER 0
 #endif
+// DRAM_READ_BOTH_NOCS: a timing experiment. Every DRAM read of the reader
+// (column loads, packet loads, prefetches, the dQ reload) issues its pages
+// alternately on the two NoCs, so that one core pulls a packet through both
+// of its NoC ports; needs the dynamic NoC mode (DIRECTIONAL_NOC).
+#ifndef DRAM_READ_BOTH_NOCS
+#define DRAM_READ_BOTH_NOCS 0
+#endif
+#if DRAM_READ_BOTH_NOCS && !DIRECTIONAL_NOC
+// A read on the other NoC is accounted for only in the dynamic NoC mode; in
+// the dedicated mode its barrier would wait on a counter that also sees the
+// writer's traffic and never settle. So the knob is ignored there.
+#undef DRAM_READ_BOTH_NOCS
+#define DRAM_READ_BOTH_NOCS 0
+#endif
+template <typename Accessor>
+FORCE_INLINE void dram_read_pages(const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t l1, uint32_t bytes) {
+    for (uint32_t k = 0; k < n; ++k) {
+#if DRAM_READ_BOTH_NOCS
+        noc_async_read_page(first_page + k, acc, l1 + k * bytes, 0, static_cast<uint8_t>(k & 1u));
+#else
+        noc_async_read_page(first_page + k, acc, l1 + k * bytes);
+#endif
+    }
+}
+FORCE_INLINE void dram_read_barrier() {
+#if DRAM_READ_BOTH_NOCS
+    noc_async_read_barrier(0);
+    noc_async_read_barrier(1);
+#else
+    noc_async_read_barrier();
+#endif
+}
+template <typename Accessor>
+FORCE_INLINE void dram_read_tiles_by_row(uint32_t cb, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t bytes) {
+    cb_reserve_back(cb, n);
+    dram_read_pages(acc, first_page, n, get_write_ptr(cb), bytes);
+    dram_read_barrier();
+    cb_push_back(cb, n);
+}
 constexpr bool dram_access(bool reload, uint32_t t) {
     return (DRAM_SKIP == 0) || (DRAM_SKIP == 1 && !reload) || (DRAM_SKIP == 2 && t == 0u);
 }
@@ -516,8 +555,8 @@ void kernel_main() {
         if (column_changed) {
             DeviceZoneScopedN("LOAD-COL");
             if (dram_access(column_revisit, t)) {
-                read_tiles_by_row(cb_key, key, col_row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
-                read_tiles_by_row(cb_value, value, col_val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+                dram_read_tiles_by_row(cb_key, key, col_row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes);
+                dram_read_tiles_by_row(cb_value, value, col_val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes);
             } else {
                 cb_reserve_back(cb_key, row_tiles);
                 cb_push_back(cb_key, row_tiles);
@@ -550,11 +589,10 @@ void kernel_main() {
                 WAYPOINT("COLD");
                 DeviceZoneScopedN("LOAD-COL-SEEDS");
                 if (dram_access(column_revisit, t)) {
-                    read_tiles_by_row(
-                        cb_grad_key_seed, grad_key, col_row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
-                    read_tiles_by_row(
-                        cb_grad_value_seed, grad_value, col_val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes,
-                        val_tiles);
+                    dram_read_tiles_by_row(
+                        cb_grad_key_seed, grad_key, col_row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes);
+                    dram_read_tiles_by_row(
+                        cb_grad_value_seed, grad_value, col_val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes);
                 } else {
                     cb_reserve_back(cb_grad_key_seed, row_tiles);
                     cb_push_back(cb_grad_key_seed, row_tiles);
@@ -628,18 +666,12 @@ void kernel_main() {
 #endif
             DeviceZoneScopedN("LOAD-IMM-DRAM");
             if (!prefetched && dram_access(sched.is_later_streak_start(i, t), t)) {
-                for (uint32_t k = 0; k < row_tiles; ++k) {
-                    noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
-                }
-                for (uint32_t k = 0; k < val_tiles; ++k) {
-                    noc_async_read_page(val_base + (i - 1u) * val_tiles + k, grad_output, os + k * tile_bytes);
-                }
-                for (uint32_t k = 0; k < Bt; ++k) {
-                    noc_async_read_page(stat_base + (i - 1u) * Bt + k, lse, ls + k * interm_bytes);
-                    noc_async_read_page(stat_base + (i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
-                }
+                dram_read_pages(query, row_base + (i - 1u) * row_tiles, row_tiles, qs, tile_bytes);
+                dram_read_pages(grad_output, val_base + (i - 1u) * val_tiles, val_tiles, os, tile_bytes);
+                dram_read_pages(lse, stat_base + (i - 1u) * Bt, Bt, ls, interm_bytes);
+                dram_read_pages(u_scalar, stat_base + (i - 1u) * Bt, Bt, ds, interm_bytes);
             }
-            noc_async_read_barrier();
+            dram_read_barrier();
             // The writer makes the statistic block from L and D, into this
             // slot; it then travels with the packet, so this happens only
             // here, where the row entered from DRAM. A prefetched packet was
@@ -728,20 +760,14 @@ void kernel_main() {
             const uint32_t nds = base_u_scalar + nslot * stride_interm;
             const bool next_reload = sched.is_later_streak_start(ni, t + 1u);
             if (dram_access(next_reload, t + 1u)) {
-            for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, query, nqs + k * tile_bytes);
-            }
-            for (uint32_t k = 0; k < val_tiles; ++k) {
-                noc_async_read_page(val_base + (ni - 1u) * val_tiles + k, grad_output, nos + k * tile_bytes);
-            }
-            for (uint32_t k = 0; k < Bt; ++k) {
-                noc_async_read_page(stat_base + (ni - 1u) * Bt + k, lse, nls + k * interm_bytes);
-                noc_async_read_page(stat_base + (ni - 1u) * Bt + k, u_scalar, nds + k * interm_bytes);
-            }
+            dram_read_pages(query, row_base + (ni - 1u) * row_tiles, row_tiles, nqs, tile_bytes);
+            dram_read_pages(grad_output, val_base + (ni - 1u) * val_tiles, val_tiles, nos, tile_bytes);
+            dram_read_pages(lse, stat_base + (ni - 1u) * Bt, Bt, nls, interm_bytes);
+            dram_read_pages(u_scalar, stat_base + (ni - 1u) * Bt, Bt, nds, interm_bytes);
             }
             // Complete the reads now and hand L and D to the writer, which
             // has the rest of this timestep to make the statistic tiles.
-            noc_async_read_barrier();
+            dram_read_barrier();
             cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
             cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
             prefetched_next = true;
@@ -763,9 +789,7 @@ void kernel_main() {
                 DeviceZoneScopedN("PREFETCH-DQ");
                 const uint32_t ngs = base_grad_query + nslot * stride_grad_query;
                 if (dram_access(next_reload, t + 1u)) {
-                for (uint32_t k = 0; k < row_tiles; ++k) {
-                    noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, grad_query, ngs + k * grad_bytes);
-                }
+                dram_read_pages(grad_query, row_base + (ni - 1u) * row_tiles, row_tiles, ngs, grad_bytes);
                 }
                 prefetched_dq_next = true;
             }
@@ -784,12 +808,10 @@ void kernel_main() {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
             if (!prefetched_dq && dram_access(sched.is_later_streak_start(i, t), t) &&
                 !(SKIP_RELOAD_READ && sched.is_later_streak_start(i, t))) {
-                for (uint32_t k = 0; k < row_tiles; ++k) {
-                    noc_async_read_page(row_base + (i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
-                }
+                dram_read_pages(grad_query, row_base + (i - 1u) * row_tiles, row_tiles, gs, grad_bytes);
             }
             // Completes this read, or the one prefetched a timestep ago.
-            noc_async_read_barrier();
+            dram_read_barrier();
         }
         cb_push_back(cb_grad_query_seed, row_tiles);
 
