@@ -306,15 +306,14 @@ def hadamard_tensor(device, had, width: int):
 
 
 def masked_input_buffer(device, workers, k: int):
-    """The persistent A3 input: [workers*8, K] 8x32 tiles, one zeroed [8, K] shard per worker."""
-    import torch
-
+    """The A3 input: [workers*8, K] 8x32 tiles, one [8, K] shard per worker, no fill
+    (prep() writes every tile whole). Allocate per call and free once A3 has read it."""
     cores = [c for c, _, _ in workers]
-    return ttnn.from_torch(torch.zeros(1, 1, 8 * len(workers), k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                           tile=ttnn.Tile([8, 32]), device=device,
-                           memory_config=ttnn.MemoryConfig(
-                               ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
-                               ttnn.ShardSpec(core_set(cores), [8, k], ttnn.ShardOrientation.ROW_MAJOR)))
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                            ttnn.ShardSpec(core_set(cores), [8, k], ttnn.ShardOrientation.ROW_MAJOR))
+    spec = ttnn.TensorSpec(ttnn.Shape([1, 1, 8 * len(workers), k]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mem,
+                           ttnn.Tile([8, 32]))
+    return ttnn.allocate_tensor_on_device(spec, device)
 
 
 def prep_cores(device, num_units: int, units_per_core: int):
@@ -353,7 +352,8 @@ def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, sc
             buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
 
     t1 = ttnn.Tile([1, 32])
-    cbs = [cb(0, ttnn.bfloat16, t1, 32), cb(1, m.dtype, ttnn.Tile([32, 32]), 64), cb(2, ttnn.bfloat16, t1, 2)]
+    cbs = [cb(0, ttnn.bfloat16, t1, 32), cb(1, m.dtype, ttnn.Tile([32, 32]), 64), cb(2, ttnn.bfloat16, t1, 2),
+           cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1)]
     x_is_dram = x.memory_config().buffer_type == ttnn.BufferType.DRAM
     uk = UnifiedKernelDescriptor(
         kernel_source=KERNEL_PREP,
@@ -381,7 +381,11 @@ def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, sc
 KERNEL_V2 = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_v2_kernel.cpp"
 
 
-def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0):
+def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: bool = True):
+    """cache=False when x8 is a fresh allocation: a cached descriptor would re-bind a freed buffer."""
+    if not cache:
+        ttnn.generic_op([x8, w, s, out], _v2_prog(x8, w, s, out, workers, gu, k))
+        return out
     """x8: masked_input_buffer filled by prep(). w/s: from weights_for_device().
     out: L1 interleaved, [.., 32, N] 32x32 tiles (row 0 written, rest zero) or [1, 1, 1, N] 1x32 tiles.
     gu: w/s hold (gate, up) column pairs; out gets silu(gate) * up."""
