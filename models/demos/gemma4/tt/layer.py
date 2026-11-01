@@ -361,6 +361,7 @@ class Gemma4DecoderLayer:
         chunk_page_table=None,
         mm_attn_mask=None,
         traced_short_bucket=False,
+        continuation=None,
     ):
         """
         Decoder layer forward pass.
@@ -416,6 +417,7 @@ class Gemma4DecoderLayer:
             chunk_page_table=chunk_page_table,
             mm_attn_mask=mm_attn_mask,
             traced_short_bucket=traced_short_bucket,
+            continuation=continuation,
         )
 
         if (
