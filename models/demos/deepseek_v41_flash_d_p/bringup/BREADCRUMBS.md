@@ -5180,3 +5180,6 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.tests.bringup.contract.official_kv` (only for
   a new golden); `PYTHONPATH=$PWD python /scratch/dnijemcevic/fix19/predict.py`; gate `gate FIX.19 --check`.
+
+## P.26 perf (8x4, 2026-11-01): WINDOW_KV_FORMAT=bf16_tiles; contract err_*_wkv_* diagnostics
+- Detail: known_issues_detail.md "P.26 WINDOW_KV_BF16" (this file is at the 500 KB hook limit, DS41-194).

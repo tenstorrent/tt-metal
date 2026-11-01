@@ -466,3 +466,61 @@ The device sits about as far from the golden as the reference at its own precisi
 window's margin. Check: `caches.GoldenKV(window="drift")`, `GoldenKV.limits` (drift._float_entry per channel,
 e2e_limits.pcc_limit, floor R.PREFILL_GOLDEN_PCC); a noise input fails (pcc ~0). Analysis:
 /scratch/dnijemcevic/fix19/predict.py, predict.log.
+
+## P.26 WINDOW_KV_BF16
+
+P.26 perf (galaxy 8x4, attempt 1, 2026-11-01): a 16-bit window KV switch + contract relative-error diagnostics (the BREADCRUMBS section; BREADCRUMBS.md is at the 500 KB hook limit, DS41-194).
+
+- **Setting** WINDOW_KV_FORMAT gains `bf16_tiles` (made the default for the A/B as the brief says; `bfp8_tiles` = P.18's
+  path, unchanged; `bf16` = the pre-P.18 row table, unchanged). It is above the reference's e4m3 window KV (rule 7):
+  owner's comparison switch (2026-11-01), not a realistic default. The owner decides from the A/B.
+- **What bf16_tiles is** (tt/attention.py `region_bf16`, `region_geometry`, `_window_region`, `_put_rows`, `_sdpa`):
+  the same per-chip region [carry 128 | own q_rows] per layer, the same load-time region index lists, the same single
+  neighbour send (last chip's kept tail -> chip 0), non-chunk-aligned starts as before. Kept as bfloat16 with no
+  rounding step: region [1, 1, 128 + q_rows, 512] bf16 ROW_MAJOR (one row a page), kept tail [1, 1, 128, 512] bf16.
+  Step 2: own rows mask_chip -> to_rm -> `ttnn.bringup.slice_write` at row 128 (in place of ckv_bfp4). Step 3: the
+  carry rows (served slab slice or `cache.carry`) slice_written into the tail as they are (no to_layout / ckv_bfp4).
+  Step 4: `WindowSend(mesh, 128 + q_rows, 1024, carry_pages=128)`.
+- **Send** (tt/window_send.py): page count of the carry is a parameter (`carry_pages`, default 4 = P.18). New
+  compile-time arg B: pages read per NoC barrier into L1 before their packets go out (16 for 1 KiB row pages, 16 KiB of
+  L1; 1 when a page takes more than one packet, so the bfp8 path's loop is the P.18 loop). Still one core a chip, prepared
+  (patch count 2 a chip asserted, OV-23).
+- **sparse_sdpa**: no fork change. Deviation from the brief's wording ("dense band read in the sparse_sdpa fork ... if
+  it needs a bf16 key option, add it"): a bf16 ROW_MAJOR region is read by the existing bf16 row reader (one 1 KiB row a
+  page, interleaved over the banks, so one NoC read per row is the layout's densest read; DS41-182 for why not TILE
+  layout): compressed layers via the fork's ROW_BFP4 `kv_window` (bf16 rows, the pre-P.18 bf16 kv_window path);
+  window-only layers via `ttnn.bringup.sparse_sdpa(kv_format=BF16, max_grid=...)` (the source program with every fork
+  option off) instead of stock `ttnn.transformer.sparse_sdpa`, because the stock op takes no core cap (rule 18); the
+  old `bf16` path keeps its stock call, unchanged.
+- **Memory a chip** (bytes of the allocated buffers, tt/perf_window_tiles.py on the 8x4): region per layer bfp8_tiles
+  166464 B (9 x 18496) vs bf16_tiles 294912 B (288 x 1024): 40 layers 6.66 MB vs 11.80 MB (+5.14 MB); kept tail per
+  layer per slot 73984 B vs 131072 B. (2x4 geometry, q_rows 640: 443904 vs 786432 B a layer.)
+- **Byte test** `tt/perf_window_tiles.py` now parametrized over fmt bfp8 / bf16 x q_rows 160 / 640: 4 passed on the 8x4
+  (19.9 s). Warm send, enqueue + sync: bfp8 374-437 us, bf16 384-702 us (dominated by the sync; host enqueue 209-343 us).
+- **Rule 18 / cores**: send 1 core; slice_write and to_rm (untilize_with_unpadding) under max_grid / sub_core_grids;
+  sparse_sdpa fork max_grid (110). No ckv_bfp4 on the bf16 path.
+- **Contract diagnostics** (tests/bringup/contract/caches.py `GoldenKV.note_err` / `record_errors` / `official_rows`,
+  `channels`, `rel_err`; test_adapter_acks, test_runner_contract): next to every window-KV PCC check (drift mode of the
+  dumped layers, every position; the ring snapshots of the other layers; the last-block device-vs-device checks), the
+  relative L2 error ||device - ref|| / ||ref|| per channel (nope / pe), and where the check compares with the golden and
+  official_kv has the rows (the dumped layers, FIX.19's window_kv.safetensors), the official reference's relative error
+  on the same rows. Recorded per (test, kind, layer, channel), the worst device value and the official on that same
+  range: `err_acks_wkv_<kind>_L<ll>_<ch>` / `..._official`, `err_runner_wkv_...` (kind drift / ring / last / full /
+  lastblock). Never gated: no limit, no threshold (names miss the gate's err_layer_L* / err_state_*_L* patterns); PCC
+  checks and waivers unchanged. A missing official file only drops the *_official values (drift mode still needs it).
+- OV-3: nothing padded. OV-23: WindowSend stays prepared. OV-25: no fork suite run (no fork changed).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_window_tiles.py -s`; `python -m models.demos.common.bringup.orchestrator
+  measure --task P.26 --spec <spec> [--part last|test_adapter_acks|test_runner_contract]`; old path:
+  DS41_WINDOW_KV_FORMAT=bfp8_tiles.
+- **Accuracy (change on, measure parts, this code)**: rung `last` every layer / state within its limit: L00 0.02471
+  (bfp8_tiles P.18 0.025307), L03 0.07680 (0.07673), L20 0.16476 (0.16442), L39 0.6691 / 1.533, final hidden 0.19066 /
+  0.24219, top5 1.0. test_adapter_acks: 0 failures; test_runner_contract (tt-d-gen engine feeder): 0 failures.
+  Relative error, worst range (both tests alike; the served 0_window_kv cache is bf16 in both formats, DS41-143, so
+  these move only through the downstream layers): drift L20 nope 0.2088 (official 0.1838), pe 0.1164 (0.1067);
+  L14 nope 0.2064 (0.1755); L00 nope 0.0054 (0.0314); last block L35 nope 0.1349, L38 nope 0.1380 (device vs device).
+  The A/B against bfp8_tiles (and its speed at 51200 / 512000) is the orchestrator's.
+- **Final measure** (`orchestrator measure --task P.26`, change on, rc 0 every run; contract tests and rung reused on
+  the same code): profile rung chunk_wall_ms 198.7 / device_ms_total 161.92; p51200 wall 202.8 (spread 31.1), device
+  172.31, attention section 45.0 ms; p512000 wall 233.7 (spread 10.8), device 211.43, attention 45.19 ms. No change-off
+  side measured here (the orchestrator's A/B).
