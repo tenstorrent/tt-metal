@@ -37,6 +37,7 @@ NO_MEASURE = tuple(
     for p in (
         "orchestrator.py",
         "watch.py",
+        "devjob.py",  # F238: starts a device command detached; measures nothing itself
         "testing/settings_lint.py",  # F234: checks an agent's diff; no test or measurement reads it
         "testing/ops_lint.py",
         "overseer.py",

@@ -195,6 +195,34 @@ def test_a_queued_fix_runs_before_the_next_task_under_until(orch):  # noqa: F811
     assert o.led.state()["FIX.1"]["status"] == "PASS" and "FIX.1" in o.led.task("C.2")["deps"]
 
 
+def test_a_queued_fix_runs_before_the_scopes_next_task_not_an_open_task_outside_it(orch):  # noqa: F811
+    """F237: an open task outside the --until scope (DeepSeek-V4.1 FIX.13, never run) came first in the ledger, the fix
+    was placed before it, and the scope's next task (P.21) ran ahead of the fix. The fix goes before the scope's next
+    open task."""
+    stale = impl_task(id="C.0")
+    o = orch(
+        [stale, impl_task(), impl_task(id="C.2", deps=["C.1"])],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}},
+            "FIX.1.overseer.1.md": {"write": {"src/impl.txt": "0.9995"}},
+            "C.2.implement.1.md": {"write": {"src/impl.txt": "0.9995"}},
+        },
+    )
+    real = o.run_agent
+
+    def overseer_queues_meanwhile(task, role, attempt, brief, **kw):
+        if task["id"] == "C.1":
+            led = {t: o.led.task(t) for t in o.led.tasks()}
+            OV.queue_fix(o.spec.bringup_dir, "Change the default.", ["C.1"], tasks=led)
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = overseer_queues_meanwhile
+    assert o.run(until="C.2") == DONE
+    order = [x.split("]")[0].strip("[ ") for x in orch.lines if x.startswith("[")]
+    assert "FIX.1" in order and order.index("FIX.1") < order.index("C.2"), order
+    assert "C.0" not in order and "FIX.1" not in (o.led.task("C.0").get("deps") or []), order
+
+
 def test_a_fix_needs_known_gate_tasks(tmp_path):
     with pytest.raises(SystemExit):
         OV.queue_fix(tmp_path, "x", [])

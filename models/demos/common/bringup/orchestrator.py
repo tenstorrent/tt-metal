@@ -374,6 +374,10 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
             elif Path(w[0]).name.startswith("python"):
                 if "-c" in w:
                     code = w[w.index("-c") + 1] if w.index("-c") + 1 < len(w) else ""
+                elif "-m" in w and w[w.index("-m") + 1 :][:1] == ["models.demos.common.bringup.devjob"] and "--" in w:
+                    # F238: a detached device job is checked by the command it wraps
+                    out += command_violations([shlex.join(w[w.index("--") + 1 :])], repo)
+                    continue
                 elif "-m" in w:
                     mod = w[w.index("-m") + 1] if w.index("-m") + 1 < len(w) else ""
                     base = repo / Path(*mod.split("."))
@@ -2157,6 +2161,7 @@ class Orchestrator:
 
     def run(self, until: str | None = None, only: str | None = None) -> int:
         """until (F152): run that task and what it needs, then stop; only: just that task."""
+        self.scope_until = until  # F237: queued fixes are placed inside this scope
         while True:
             decided = self.decided_picks()
             # F235: a perf pick the owner (or the overseer) already decided is applied before a queued fix is placed:
@@ -2272,9 +2277,13 @@ def _first_open(orch: Orchestrator) -> str | None:
     decision or decided): the tree holds its uncommitted change, and a fix placed first would work on it and sweep it
     into its own commit (DeepSeek-V4.1 FIX.9 before the accepted P.6). Such a pick keeps its place."""
     state = orch.led.state()
+    # F237: within the running scope (`--until`): a fix released mid-run went before FIX.13, an old open task outside
+    # the scope, so the scope's next task (P.21) ran first (DeepSeek-V4.1 FIX.16, 2026-10-31)
+    until = getattr(orch, "scope_until", None)
+    scope = set(orch.led.upstream(until)) if until and until in orch.led.tasks() else None
     for t in orch.led.topo_order():
         e = state.get(t, {})
-        if satisfied(e.get("status")):
+        if satisfied(e.get("status")) or (scope is not None and t not in scope):
             continue
         if orch.led.task(t).get("step") == "perf" and (e.get("waiting") or e.get("ab")):
             continue
