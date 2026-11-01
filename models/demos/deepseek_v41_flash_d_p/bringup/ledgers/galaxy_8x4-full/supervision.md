@@ -1284,3 +1284,10 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   official / device 0.0175 / 0.0197 / 0.0238 (s10240), 0.0258 / 0.0272 / 0.0306 (last); p99 KL 2.5-3.5x the official.
   The prompt is near-fully predictable (NLL ~0.02-0.03): a harder text would show more. Run stopped at --until FIX.20.
   Framework to fix: F241 (a switch-only perf pick keeps the default). Pushed.
+
+## 2026-11-01 20:30 FIX.21 FORMAT_ATTRIBUTION PASS (4118b90b442), CPU only
+- Emulation of 13 device format sites matches the device: 26 metrics on layers 0-9 at 0.89-1.01x (median 0.986); end to end KL 0.0046 vs device 0.0051.
+- Routed expert weights in bfloat4_b (EXPERTS_IMPL=bfp4) cause 0.96 of the L09 gap (leave-one-out; add-one 0.95). Without them (40 layers, CPU): KL 0.0014 vs official 0.0024, final_norm rel 0.100 vs 0.121, i.e. the rest of the device is better than DeepSeek's reference. Second: CKV_FORMAT bfp4_rows 0.18-0.28.
+- Side finding: index keys scored as bfloat4_b miss more top-k than the reference's fp4 (0.168 / 0.152 vs 0.108 / 0.086 at L02 / L08), cheap at the layer outputs (0.018).
+- Overseer: renamed the detail heading to match DS41-196 (the gate's one problem for review). The agent's knowledge report had one malformed entry (DS41-150), ignored.
+- Discussed with owner: fp4 storage + in-op decode to bfp8 is too slow on Blackhole (~+30-100 ms a chunk, estimate); bfloat4_b + extra scales cannot be exact (3 linear magnitude bits vs e2m1's 0.5..6 in one block). Next candidate: device A/B EXPERTS_IMPL=bfp8 (needs MOE_IMPL=block to accept bfp8 weights), awaiting the owner's word. Leak 253 GiB: reboot before any device job.

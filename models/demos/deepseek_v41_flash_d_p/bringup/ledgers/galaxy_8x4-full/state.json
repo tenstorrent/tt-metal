@@ -2573,6 +2573,9 @@
   },
   "rc": 0,
   "reason": [],
+  "review": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md: entry \"- **[DS41-196] The device's extra error over DeepSeek's refe\" points at known_issues_detail.md, which has no '## The device's extra error over DeepSeek's reference is its bfloat4_b routed-expert weights' section"
+  ],
   "role": "overseer",
   "stamp": {
    "reused": [
