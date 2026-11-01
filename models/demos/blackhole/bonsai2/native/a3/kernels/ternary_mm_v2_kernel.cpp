@@ -15,8 +15,10 @@
 //     (tm_out_tile32=1, what the model's residual add expects).
 //
 // Runtime args, per core:
-//   NCRISC: w_addr          BRISC: s_addr, out_addr, out_tile0 (first output tile of this core),
-//                                  out_tiles (real output tiles; the rest are padding columns)
+//   NCRISC: w_addr, bank, vc     BRISC: s_addr, out_addr, out_tile0 (first output tile of this core),
+//                                       out_tiles (real output tiles; the rest are padding columns), bank
+// Bank and vc are runtime, not per-core compile-time: per-core CT args split the program into
+// one kernel binary per (bank, vc) group, and the extra dispatch cost ate the GDN out-proj gain.
 
 #include "../../../../../deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
 #include "../../../../../deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
@@ -117,11 +119,11 @@ void kernel_main() {
         constexpr uint32_t page = get_named_compile_time_arg_val("tm_in1_page_size");
         constexpr uint32_t pages = get_named_compile_time_arg_val("tm_in1_num_pages");
         constexpr uint32_t block = get_named_compile_time_arg_val("tm_in1_block_bytes");  // 32 tiles
-        constexpr uint32_t bank = get_named_compile_time_arg_val("tm_bank_id");
-        constexpr uint32_t vc = get_named_compile_time_arg_val("tm_vc");
         constexpr uint32_t nbuf = 3;
         unified_kernels::setup_sharded_buffer(cb_in0, kt);
         const uint32_t w_addr = get_arg_val<uint32_t>(0);
+        const uint32_t bank = get_arg_val<uint32_t>(1);
+        const uint32_t vc = get_arg_val<uint32_t>(2);
         const uint64_t base = get_noc_addr_from_bank_id<true>(bank, w_addr);
         reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
         noc_async_read_one_packet_set_state<true>(base, page, vc);
@@ -157,7 +159,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     if constexpr (is_active) {
         constexpr bool out_tile32 = get_named_compile_time_arg_val("tm_out_tile32") == 1;
-        constexpr uint32_t bank = get_named_compile_time_arg_val("tm_bank_id");
+        const uint32_t bank = get_arg_val<uint32_t>(4);
         constexpr uint32_t s_bytes = cols * s_tiles * 4096;  // fp32 32x32 scale tiles per output tile
         constexpr uint32_t out_page = out_tile32 ? 2048 : 64;
         uint32_t s_addr = get_arg_val<uint32_t>(0);

@@ -63,7 +63,7 @@ class TernaryLinear:
 
 
 # Sites that passed their e2e gate; each joins in its own commit.
-VALIDATED = {"mlp"}
+VALIDATED = {"mlp", "gdn_out", "gdn_in", "attn_qkv", "attn_o", "lm_head"}
 WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head"}
 
 
