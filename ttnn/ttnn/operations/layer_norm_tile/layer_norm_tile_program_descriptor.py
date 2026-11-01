@@ -25,9 +25,9 @@ IO_CHUNK_TARGET_TILES = 8
 READ_TRID_DEPTH = 1  # chunks kept in flight on the read trid ring, <= 15
 WRITE_CHUNKS_PER_FLUSH = 1  # output chunks issued per flush + pop
 BANK_STAGGER = False  # rotate each core's in-chunk tile order by its core index
-# split_reader: the residual stream moves to the writer RISC / NoC1. Gated to input and residual on
-# the same memory tier with at least half the grid active; it lost ~2 us on input-L1 / residual-DRAM
-# and ~1.5 us on a 32-core grid.
+# split_reader: the residual stream moves to the writer RISC, on the NoC opposite the reader's. Gated to
+# at least half the grid active (it lost ~1.5 us on a 32-core grid). Any memory tiers: under the per-core
+# NoC plan it measured flat on input-L1 / residual-DRAM and -7% on input-DRAM / residual-L1 (BH p100a).
 RESIDUAL_ON_WRITER = True
 OUT_DEPTH = 1
 # COMPUTE_DEST_LANES is the tiles per DEST acquire on the streaming passes, clamped on device to DEST
@@ -44,7 +44,6 @@ CB_BETA_TILES = 3
 CB_ROW_WORK_A = 4
 CB_ROW_WORK_B = 5
 CB_ROW_MEAN = 6
-CB_ROW_SUMSQ = 7
 CB_INV_STD = 8
 CB_AFFINE_SCRATCH = 9  # reader-private landing block of the gamma/beta multicast
 CB_OUTPUT_TILES = 16
@@ -93,7 +92,6 @@ def _cb_pages(R, in_depth, *, Wt, has_residual):
         CB_BETA_TILES: Wt,
         CB_ROW_WORK_A: R * Wt,  # alias group with CB_ROW_WORK_B: one allocation
         CB_ROW_MEAN: R,
-        CB_ROW_SUMSQ: R,
         CB_INV_STD: R,
         CB_OUTPUT_TILES: OUT_DEPTH * R * Wt,
     }
@@ -114,7 +112,6 @@ def _cb_page_formats(fp32_dest_acc_en):
         CB_ROW_WORK_A: work,
         CB_ROW_WORK_B: work,
         CB_ROW_MEAN: work,
-        CB_ROW_SUMSQ: work,
         CB_INV_STD: work,
         CB_OUTPUT_TILES: io,
     }
@@ -142,11 +139,10 @@ def _io_chunk_tiles(Wt):
     return max(c for c in range(1, min(Wt, IO_CHUNK_TARGET_TILES) + 1) if Wt % c == 0)
 
 
-def _residual_on_writer(input_tensor, residual, num_active_cores, num_grid_cores):
+def _residual_on_writer(residual, num_active_cores, num_grid_cores):
     if not RESIDUAL_ON_WRITER or residual is None:
         return False
-    same_tier = input_tensor.memory_config().buffer_type == residual.memory_config().buffer_type
-    return same_tier and 2 * num_active_cores >= num_grid_cores
+    return 2 * num_active_cores >= num_grid_cores
 
 
 def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
@@ -184,7 +180,7 @@ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
         read_trid_depth=READ_TRID_DEPTH,
         write_chunks_per_flush=WRITE_CHUNKS_PER_FLUSH,
         bank_stagger=BANK_STAGGER,
-        residual_on_writer=_residual_on_writer(input_tensor, residual, len(assignment), grid.x * grid.y),
+        residual_on_writer=_residual_on_writer(residual, len(assignment), grid.x * grid.y),
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -327,7 +323,6 @@ def create_program_descriptor(
         CB_ROW_WORK_A,
         CB_ROW_WORK_B,
         CB_ROW_MEAN,
-        CB_ROW_SUMSQ,
         CB_INV_STD,
         CB_OUTPUT_TILES,
         R,

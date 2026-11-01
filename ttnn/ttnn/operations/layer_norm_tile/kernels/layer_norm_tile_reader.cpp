@@ -10,11 +10,16 @@
 //                  multicasts it with one linked McastArgs send (no receiver handshake: the block lands
 //                  in a reader-private scratch CB untouched before the flag). Every core then scatters
 //                  row 0 of faces 0/1 into its gamma/beta tile slots with local self-NoC reads.
+//                  A receiver with a next block does this right after issuing that block's first chunk,
+//                  so the receive overlaps the block's DRAM reads (the scatter has its own trid; a plain
+//                  barrier would also wait on the chunk). Compute needs gamma/beta only at block 0's
+//                  affine pass, and in_depth = 2 lets block 1 be reserved before block 0 is popped.
 //                  Every DRAM read is 64 B at a 64 B-aligned offset (BH DRAM alignment).
 //
 // The whole-CB multicast (2 x 48 KB, 3 KB live) held the NoC0 path for ~2-4.7 us and per-row
 // multicasts cost ~250 ns each, hence compact + local scatter. The scatter is a strided self-NoC
-// read with a per-tile source address; the local_copy_helpers stateful read pins one source address.
+// read with a per-tile source address (~2 us for Wt = 24). A stateful read (one set_read_state, per-read
+// source/destination only) measured ~0.3 us slower and an L1 word copy on the RISC ~3.6x slower.
 
 #include <cstdint>
 
@@ -67,6 +72,8 @@ void kernel_main() {
     constexpr uint32_t affine_tile_bytes = 4 * face_bytes;
     constexpr uint32_t entry_bytes = affine_is_tile ? 2 * affine_row_bytes : affine_row_bytes;
     constexpr uint32_t tensor_block_bytes = tensor_w_tiles * entry_bytes;
+    constexpr uint32_t affine_trid = read_trid_depth + 1;  // outside the chunk ring's ids 1..depth
+    static_assert(affine_trid <= NOC_MAX_TRANSACTION_ID, "affine scatter trid out of the NoC id range");
     static_assert(affine_is_tile || affine_page_elems % TILE_DIM == 0, "RM affine stick must hold whole tile rows");
 
     DataflowBuffer input_tiles(cb_input_tiles);
@@ -99,6 +106,8 @@ void kernel_main() {
         }
     };
 
+    const Noc noc;
+
     // Entry -> slot: face-0 row 0 at slot+0, face-1 row 0 at slot+FACE_BYTES.
     constexpr uint32_t face1_src = affine_is_tile ? affine_row_bytes : face_row_bytes;
     auto scatter = [&](uint32_t block, DataflowBuffer& dst) {
@@ -112,14 +121,15 @@ void kernel_main() {
         }
     };
     auto scatter_and_push = [&]() {
+        dataflow_kernel_lib::set_read_trid(noc, affine_trid);
         scatter(gamma_block, gamma_tiles);
         scatter(beta_block, beta_tiles);
-        noc_async_read_barrier();
+        dataflow_kernel_lib::async_read_barrier_with_trid(noc, affine_trid);
+        dataflow_kernel_lib::set_read_trid(noc, 0);
         gamma_tiles.push_back(tensor_w_tiles);
         beta_tiles.push_back(tensor_w_tiles);
     };
 
-    const Noc noc;
     const bool is_sender = affine_mc.can_send();
 
     auto issue_stage = [&]() {
@@ -176,6 +186,10 @@ void kernel_main() {
                 dataflow_kernel_lib::set_read_trid(noc, 0);
                 issue_stage();
             }
+            if (receive_pending && block_row != 0 && chunk == 0) {
+                receive_affine();
+                receive_pending = false;
+            }
         };
         auto retire = [&]() {
             input_tiles.push_back(io_chunk_tiles);
@@ -192,7 +206,7 @@ void kernel_main() {
             complete_and_send();
             send_pending = false;
         }
-        if (receive_pending) {
+        if (receive_pending && block_row + rows >= core_row_tiles) {
             receive_affine();
             receive_pending = false;
         }
