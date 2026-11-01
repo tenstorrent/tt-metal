@@ -146,8 +146,8 @@ class GoldenCheck:
 
     def check_pipeline(self, config: FuserConfig) -> bool:
         result = True
-        for operation in config.pipeline:
-            operation.golden(config.global_config)
+        for operation, blocks in zip(config.pipeline, config.pipeline_plans):
+            operation.golden(config.global_config, blocks)
             self._accumulate_tolerance(operation)
             passed = self.check_operation(operation)
             if not passed:

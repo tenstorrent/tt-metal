@@ -44,11 +44,11 @@
 #include "impl/device/device_impl.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_core_common.hpp"
-#include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
@@ -69,8 +69,8 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/dispatch/vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
@@ -3372,9 +3372,8 @@ uint32_t program_base_addr_on_core(
     HalProgrammableCoreType programmable_core_type) {
     auto* cq = mesh_workload.get_last_used_command_queue();
     if (cq == nullptr) {
-        return MetalContext::instance(extract_context_id(mesh_device))
-            .hal()
-            .get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        return mesh_device->impl().metal_env().get_hal().get_dev_addr(
+            programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
     const auto& sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device);

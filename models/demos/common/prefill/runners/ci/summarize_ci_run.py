@@ -182,8 +182,20 @@ def _occupancy(kept):
 
 
 def _publish(lines, name):
-    print(f"disaggregated prefill perf -- {name or 'run'}")
+    title = f"disaggregated prefill perf -- {name or 'run'}"
+    print(title)
     print("\n".join(lines))
+    root = os.environ.get("PREFILL_SUMMARIES")
+    if not root or not name:
+        return
+    # perf/*.md is concatenated into the job summary by the workflow's publish step.
+    try:
+        out = os.path.join(root, "perf")
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, f"{name}.md"), "w") as fh:
+            fh.write(f"### {title}\n\n```text\n" + "\n".join(lines) + "\n```\n")
+    except OSError as exc:
+        print(f"perf summary not persisted ({exc})")
 
 
 def _publish_json(rec, name):

@@ -44,6 +44,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -356,11 +357,15 @@ std::map<ChipId, CoreArrivals> group_arrivals(const std::vector<Arrival>& arriva
     for (const Arrival& arrival : arrivals) {
         by_chip[arrival.chip][CoreCoord{arrival.logical_x, arrival.logical_y}].push_back(&arrival);
     }
-    std::erase_if(by_chip, [&](auto& chip_arrivals) {
-        auto& [chip, by_core] = chip_arrivals;
-        bool counts_ok = by_core.size() == cores.size();
+    for (auto& [chip, by_core] : by_chip) {
         for (auto& [core, core_arrivals] : by_core) {
             std::ranges::sort(core_arrivals, {}, &Arrival::cycles);
+        }
+    }
+    std::erase_if(by_chip, [&](const auto& chip_arrivals) {
+        const auto& [chip, by_core] = chip_arrivals;
+        bool counts_ok = by_core.size() == cores.size();
+        for (const auto& [core, core_arrivals] : by_core) {
             const size_t expected = core == cores.start_coord || core == cores.end_coord ? kRounds / 2 : kRounds;
             if (core_arrivals.size() != expected) {
                 std::printf(
@@ -516,8 +521,8 @@ std::vector<Pair> find_pairs(distributed::MeshDevice& mesh_device, const Chips& 
             if (id_a >= id_b || !tt::tt_fabric::are_intra_mesh_neighbors(mesh_device, chip_a.node, chip_b.node)) {
                 continue;
             }
-            const auto links_ab = tt::tt_fabric::get_forwarding_link_indices(chip_a.node, chip_b.node);
-            const auto links_ba = tt::tt_fabric::get_forwarding_link_indices(chip_b.node, chip_a.node);
+            const auto links_ab = tt::tt_fabric::get_forwarding_link_indices(mesh_device, chip_a.node, chip_b.node);
+            const auto links_ba = tt::tt_fabric::get_forwarding_link_indices(mesh_device, chip_b.node, chip_a.node);
             TT_FATAL(!links_ab.empty() && !links_ba.empty(), "no fabric link between chips {} and {}", id_a, id_b);
             pairs.push_back(
                 {End{.chip = id_a, .core = take_worker(id_a), .link = links_ab.front()},
@@ -651,7 +656,7 @@ struct Run {
 Run run(distributed::MeshDevice& mesh_device, uint32_t runtime_id) {
     Chips chips;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
-        IDevice* device = mesh_device.get_device(coord);
+        IDevice* device = tt::tt_metal::internal::get_device(mesh_device, coord);
         chips.emplace(device->id(), Chip{coord, device, mesh_device.get_fabric_node_id(coord)});
     }
     Run result{.pairs = find_pairs(mesh_device, chips)};

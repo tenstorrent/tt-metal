@@ -21,8 +21,9 @@
 #include "impl/allocator/allocator.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include <tt_stl/reflection.hpp>
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 
 namespace tt::tt_metal {
@@ -63,7 +64,7 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
     // lost due to device skew.
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto& mesh_device = device();
-    const auto& rtoptions = MetalContext::instance(extract_context_id(&mesh_device)).rtoptions();
+    const auto& rtoptions = mesh_device.impl().metal_env().get_rtoptions();
     bool using_fast_dispatch = rtoptions.get_fast_dispatch();
     bool using_simulator = rtoptions.get_simulator_enabled();
     if (using_fast_dispatch && !using_simulator) {

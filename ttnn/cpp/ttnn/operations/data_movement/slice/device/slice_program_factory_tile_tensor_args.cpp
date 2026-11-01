@@ -41,10 +41,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input buffer should be allocated on device!");
-    TT_FATAL(start_tensor.buffer() != nullptr, "Start buffer should be allocated on device!");
-    TT_FATAL(end_tensor.buffer() != nullptr, "End buffer should be allocated on device!");
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input buffer should be allocated on device!");
+    TT_FATAL(start_tensor.is_allocated(), "Start buffer should be allocated on device!");
+    TT_FATAL(end_tensor.is_allocated(), "End buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);

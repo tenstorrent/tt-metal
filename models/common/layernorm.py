@@ -60,6 +60,7 @@ class LayerNorm(LightweightModule):
         super().__init__()
         self.device = device
         self.eps = eps
+        self._short_prefill_configs = {}
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl

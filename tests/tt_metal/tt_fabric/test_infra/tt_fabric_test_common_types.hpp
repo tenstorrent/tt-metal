@@ -17,7 +17,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
@@ -42,8 +42,65 @@ using DeviceIdentifier = std::variant<
     >;
 
 using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
+
+// Write chunks of a unicast_scatter_write without chunk options, split equally.
+inline constexpr uint32_t kDefaultScatterWriteChunks = 2;
+
+// Options of a unicast_scatter_write. The test infra defaults flush to false (the fabric header API defaults to true).
+struct ScatterWriteOptions {
+    // Relative size of each write chunk (2-4 entries, scaled to the payload size). Empty means
+    // kDefaultScatterWriteChunks equal chunks.
+    std::vector<uint32_t> chunk_weights;
+    bool atomic_inc = false;  // A semaphore increment follows the write chunks (fused scatter write + atomic inc)
+    bool flush = false;       // Flush the write chunks before the increment (requires atomic_inc)
+
+    bool operator==(const ScatterWriteOptions&) const = default;
+};
+
+// Options of a fused_atomic_inc. The test infra defaults flush to false (the fabric header API defaults to true).
+struct FusedAtomicIncOptions {
+    bool flush = false;  // Flush the write before the increment
+
+    bool operator==(const FusedAtomicIncOptions&) const = default;
+};
+
+// The options of an ntype. std::monostate stands for an ntype without options and for one whose options are all
+// defaults, so a spec parsed from a plain name compares equal to one parsed from a map that sets only defaults.
+using NocSendTypeOptions = std::variant<std::monostate, ScatterWriteOptions, FusedAtomicIncOptions>;
+
+// A YAML ntype: either a plain name ("unicast_write") or a map with the name and its options
+// ({type: unicast_scatter_write, atomic_inc: true}). The options are part of the value, so they always travel
+// (merge, parametrize, serialize) together with the type.
+struct NocSendTypeSpec {
+    NocSendType type;
+    NocSendTypeOptions options;
+
+    // The options as T, or T's defaults when none are set.
+    template <typename T>
+    T options_or_default() const {
+        const auto* set_options = std::get_if<T>(&options);
+        return set_options != nullptr ? *set_options : T{};
+    }
+
+    bool operator==(const NocSendTypeSpec&) const = default;
+};
+
+// Sizes of the write chunks of a scatter write with the given options: the chunk weights scaled to the payload,
+// each rounded down to `alignment`, with the last chunk taking the remainder.
+std::vector<uint32_t> scatter_chunk_sizes(
+    const ScatterWriteOptions& options, uint32_t payload_size_bytes, uint32_t alignment);
+
+// The non-default options of an ntype as short tags (e.g. {"atomic_inc", "flush"}, {"chunks_4"},
+// {"weights_1_2_4_1"}), for test names and result labels.
+std::vector<std::string> noc_send_type_option_tags(const NocSendTypeSpec& spec);
+
+// Label used in the results CSVs: the NocSendType name, plus each non-default option (e.g.
+// "NOC_UNICAST_SCATTER_WRITE+atomic_inc+flush").
+std::string noc_send_type_label(const NocSendTypeSpec& spec);
+
 // A map to hold various parametrization options parsed from the YAML.
-using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
+using ParametrizationValues =
+    std::variant<std::vector<std::string>, std::vector<uint32_t>, std::vector<NocSendTypeSpec>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
 
 // Sentinel for a per-direction hop count of "max": resolved to (axis_dim - 1) from the global mesh
@@ -65,7 +122,7 @@ struct ParsedDestinationConfig {
 
 struct ParsedTrafficPatternConfig {
     std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
+    std::optional<NocSendTypeSpec> ntype;
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<ParsedDestinationConfig> destination;
@@ -101,7 +158,7 @@ struct SenderCreditInfo {
 
 struct TrafficPatternConfig {
     std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
+    std::optional<NocSendTypeSpec> ntype;
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<DestinationConfig> destination;
@@ -113,6 +170,15 @@ struct TrafficPatternConfig {
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender
     std::optional<uint32_t> credit_return_batch_size;    // For receivers
 };
+
+// Whether the receiver of this pattern needs an atomic counter allocated.
+inline bool pattern_needs_atomic_inc(const TrafficPatternConfig& pattern) {
+    const auto& ntype = pattern.ntype.value();
+    return ntype.type == NocSendType::NOC_UNICAST_ATOMIC_INC ||
+           ntype.type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+           (ntype.type == NocSendType::NOC_UNICAST_SCATTER_WRITE &&
+            ntype.options_or_default<ScatterWriteOptions>().atomic_inc);
+}
 
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);

@@ -22,7 +22,7 @@
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
 #if defined(UCK_CHLKC_MATH)
@@ -132,6 +132,8 @@ using namespace ckernel;
 #if defined(UCK_CHLKC_MATH)
 thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
     ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+// Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
+thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 void init_sync_registers() {

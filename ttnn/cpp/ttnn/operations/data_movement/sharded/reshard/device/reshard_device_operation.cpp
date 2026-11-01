@@ -129,7 +129,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
     if (!input_tensor.is_sharded()) {

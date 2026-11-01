@@ -25,7 +25,7 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     const auto& backing = tensor_args.backing;
     TT_FATAL(
         backing.storage_type() == StorageType::DEVICE, "inbound_socket_service_sync: backing tensor must be on device");
-    TT_FATAL(backing.buffer() != nullptr, "inbound_socket_service_sync: backing tensor must be allocated");
+    TT_FATAL(backing.is_allocated(), "inbound_socket_service_sync: backing tensor must be allocated");
     TT_FATAL(args.page_size > 0 && args.num_pages > 0, "inbound_socket_service_sync: backing tensor has no pages");
     TT_FATAL(
         !args.consumed_addrs.empty() && args.service_core_x.size() == args.consumed_addrs.size() &&

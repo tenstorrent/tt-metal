@@ -24,6 +24,7 @@
 #include <optional>
 #include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <internal/mesh_device.hpp>
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
@@ -385,7 +386,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
             if (!mesh_device->is_local(local_core.device_coord)) {
                 continue;  // Another rank owns this core and reports it itself.
             }
-            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            auto* local_device = internal::get_device(*mesh_device, local_core.device_coord);
             if (local_device == nullptr) {
                 continue;
             }

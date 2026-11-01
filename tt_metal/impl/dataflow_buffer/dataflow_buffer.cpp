@@ -151,6 +151,10 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
         (void)alloc_addr;
         const auto& hw_risc_configs = dfb->groups[group_idx].hw_risc_configs;
 
+        // A side with no transaction ids never reaches the DM0 ISR (a Tensix side, or explicit
+        // sync), so its tile counters are neither listed nor held to the ISR image limit.
+        const bool producer_live = dfb->producer_txn_descriptor.num_txn_ids > 0;
+        const bool consumer_live = dfb->consumer_txn_descriptor.num_txn_ids > 0;
         std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
         std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
         for (int bit = 0; bit < 16; bit++) {
@@ -169,8 +173,10 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
             }
             for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
                 if (rc->is_producer) {
-                    blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
-                } else {
+                    if (producer_live) {
+                        blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
+                    }
+                } else if (consumer_live) {
                     blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
                 }
             }
@@ -178,10 +184,16 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
 
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
-        const auto prod_desc = build_dm0_txn_descriptor_image(
-            num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
-        const auto cons_desc = build_dm0_txn_descriptor_image(
-            num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        const auto prod_desc =
+            producer_live
+                ? build_dm0_txn_descriptor_image(
+                      num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc)
+                : dfb_dm0_txn_descriptor_image_t{};
+        const auto cons_desc =
+            consumer_live
+                ? build_dm0_txn_descriptor_image(
+                      num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc)
+                : dfb_dm0_txn_descriptor_image_t{};
 
         for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
             const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];

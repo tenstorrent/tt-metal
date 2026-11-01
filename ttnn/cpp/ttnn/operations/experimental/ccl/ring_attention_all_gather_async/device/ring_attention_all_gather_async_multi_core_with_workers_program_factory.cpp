@@ -245,7 +245,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     const CoreRangeSet workers(worker_core_range);
 
     const uint32_t page_size = op_config.get_page_size();
-    const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t pages_per_packet = std::min(packet_buffer_bytes / page_size, kMaxHaloPagesPerPacket);
     const uint32_t cb_pages = kDoubleBufferingFactor * kPrefetchPackets * pages_per_packet;
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.front().dtype());

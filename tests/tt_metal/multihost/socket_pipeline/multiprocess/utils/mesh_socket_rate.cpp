@@ -22,6 +22,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <internal/mesh_device.hpp>
 
 using namespace tt::constants;
 
@@ -52,7 +53,7 @@ tt::tt_metal::Program create_send_async_rate_program(
     tt::tt_fabric::FabricNodeId receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
         tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     auto max_alignment = std::max(
         mesh_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
@@ -60,7 +61,8 @@ tt::tt_metal::Program create_send_async_rate_program(
     auto input_page_size = input_buffer->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
 
-    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+    auto link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
     uint32_t num_links = 2;
 
@@ -164,7 +166,7 @@ tt::tt_metal::Program create_socket_forward_rate_program(
         tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         "Socket forward only supports BLACKHOLE_GALAXY cluster");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
     const auto& recv_socket_conn = recv_socket.get_config().socket_connection_config[0];
@@ -195,8 +197,10 @@ tt::tt_metal::Program create_socket_forward_rate_program(
 
     auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
-    auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, upstream_fabric_node_id);
+    auto fwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, downstream_fabric_node_id);
     TT_FATAL(
         fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
     TT_FATAL(!bwd_link_indices.empty(), "No link indices found from downstream to upstream core in SocketForward.");
@@ -287,7 +291,7 @@ tt::tt_metal::Program create_recv_async_rate_program(
         tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         "Socket pipeline recv only supports BLACKHOLE_GALAXY cluster");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     const auto& recv_socket_conn = recv_socket.get_config().socket_connection_config[0];
 
@@ -304,7 +308,8 @@ tt::tt_metal::Program create_recv_async_rate_program(
         mesh_device->allocator()->get_alignment(recv_socket.get_config().socket_mem_config.socket_storage_type);
     auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, upstream_fabric_node_id);
     TT_FATAL(!bwd_link_indices.empty(), "No link indices found from receiver to upstream core.");
     uint32_t num_bwd_links = 1;
 
@@ -373,7 +378,7 @@ void send_async_rate(
 
     const auto& device_coord = socket_connections[0].sender_core.device_coord;
     TT_FATAL(
-        mesh_device->get_device(device_coord) != nullptr,
+        internal::get_device(*mesh_device, device_coord) != nullptr,
         "Sender device for socket connection is not local to this mesh device");
 
     distributed::MeshWorkload workload;
@@ -397,7 +402,7 @@ void socket_forward_rate(
     TT_FATAL(recv_socket_connections.size() == 1, "SocketForward only supports one sender and one receiver core.");
 
     const auto& device_coord = send_socket_connections[0].sender_core.device_coord;
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = internal::get_device(*mesh_device, device_coord);
     TT_FATAL(target_device != nullptr, "SocketForward device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;
@@ -417,7 +422,7 @@ void recv_async_rate(
     TT_FATAL(recv_socket_connections.size() == 1, "recv_async_rate only supports one connection.");
 
     const auto& device_coord = recv_socket_connections[0].receiver_core.device_coord;
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = internal::get_device(*mesh_device, device_coord);
     TT_FATAL(target_device != nullptr, "Receiver device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;

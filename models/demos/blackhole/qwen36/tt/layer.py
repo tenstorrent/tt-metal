@@ -13,7 +13,7 @@ from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36Ga
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
-from models.tt_transformers.tt.common import LayerNormTypes, Mode
+from models.ttt_compat.tt.common import LayerNormTypes, Mode
 
 
 class _FusedDistRMSNorm(LayerNorm):
@@ -28,7 +28,6 @@ class _FusedDistRMSNorm(LayerNorm):
         self.weight_fused = ttnn.as_tensor(
             kwargs["state_dict"][name].unsqueeze(0).view(1, 1, dim) + 1.0,  # same +1 as the base weight
             device=device,
-            norm_type=LayerNormTypes.RMSNORM,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

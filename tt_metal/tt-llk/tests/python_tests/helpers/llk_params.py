@@ -317,6 +317,21 @@ class MathOperation(Enum):
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
     SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
+    # The 8-bit quant entry points of quantization.h: uint8 / int8 output and int8 input.
+    # Named after the compute-API *_tile_init wrapper each one mirrors.
+    SfpuQuantUint8 = OpSpec("QUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuQuantInt8 = OpSpec("QUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantUint8 = OpSpec("REQUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8 = OpSpec("REQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8In = OpSpec("REQUANT_INT8_IN", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8InUint8Out = OpSpec(
+        "REQUANT_INT8_IN_UINT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuRequantInt8InInt8Out = OpSpec(
+        "REQUANT_INT8_IN_INT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuDequantInt8 = OpSpec("DEQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuFloatToInt32Positive = OpSpec("FLOAT_TO_INT32_POSITIVE", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
@@ -453,6 +468,9 @@ class DestAccumulation(Enum):
         return str(self.value).lower()
 
 
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+
+
 class L1Accumulation(Enum):
     Yes = 1
     No = 0
@@ -524,13 +542,11 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuSrcsImpl(Enum):
-    LoadMacro = True
-    Sfpi = False
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
 
 
 class DstRoundingMode(Enum):
@@ -563,6 +579,14 @@ class MathFidelity(Enum):
     @property
     def cpp_enum_value(self):
         return f"ckernel::MathFidelity::{self.name}"
+
+
+ALL_MATH_FIDELITIES = [
+    MathFidelity.LoFi,
+    MathFidelity.HiFi2,
+    MathFidelity.HiFi3,
+    MathFidelity.HiFi4,
+]
 
 
 class DestSync(Enum):

@@ -127,7 +127,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    TT_ASSERT(output_tensor.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output_tensor.is_allocated(), "Output buffer should be allocated on device!");
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
     const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
