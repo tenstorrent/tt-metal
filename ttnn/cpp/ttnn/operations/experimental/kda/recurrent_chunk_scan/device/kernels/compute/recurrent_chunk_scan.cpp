@@ -71,11 +71,9 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // Whole output rows per destination acquire when they fit, else column groups of one row (the summary's
-    // two-path rows are twice the state width).
-    constexpr uint32_t group_columns = Nt <= dst_tiles ? Nt : dst_tiles;
-    static_assert(Nt % group_columns == 0, "column groups must tile an output row");
-    constexpr uint32_t group_rows = Nt <= dst_tiles ? (dst_tiles / Nt < Mt ? dst_tiles / Nt : Mt) : 1;
-    static_assert(Mt % group_rows == 0);
+    // two-path rows are twice the state width). Both divide their dimension.
+    constexpr uint32_t group_columns = kda::largest_divisor_at_most(Nt, dst_tiles);
+    constexpr uint32_t group_rows = group_columns == Nt ? kda::largest_divisor_at_most(Mt, dst_tiles / Nt) : 1;
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t operand_id = operand.get_id();

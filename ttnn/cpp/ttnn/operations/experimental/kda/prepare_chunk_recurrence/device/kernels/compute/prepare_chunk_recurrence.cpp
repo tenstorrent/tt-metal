@@ -586,10 +586,11 @@ KDA_PREP_HELPER void prepare_v_beta(DFB0& v, DFB1& beta, DFB2& v_beta, uint32_t 
 }
 
 // out_i = a @ b_i - c_i for a shared one-tile a and each item's row of Nt tiles b_i: the product stays in DST and the
-// subtraction takes it as srcA (in FP32, c's format), so it never round-trips through a buffer.
+// subtraction takes it as srcA (in FP32, c's format), so it never round-trips through a buffer. A row wider than one
+// DST acquire runs in column groups.
 template <uint32_t Nt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
 KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32_t items) {
-    static_assert(Nt <= max_dst_tiles, "the product row fills one DST acquire");
+    constexpr uint32_t group = kda::largest_divisor_at_most(Nt, max_dst_tiles);
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t c_id = c.get_id();
@@ -598,19 +599,21 @@ KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t base = item * Nt;
         c.wait_front(base + Nt);
-        reconfig_tracked(b_id, a_id);
-        matmul_tiles_block_init(a_id, b_id, false, Nt, 1, 1);
-        tile_regs_acquire();
-        matmul_tiles_block(a_id, b_id, 0, base, 0, false, Nt, 1, 1);
-        reconfig_tracked(c_id, c_id);
-        sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id);
-        for (uint32_t tile = 0; tile < Nt; ++tile) {
-            sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id, base + tile, tile);
+        for (uint32_t first = base; first < base + Nt; first += group) {
+            reconfig_tracked(b_id, a_id);
+            matmul_tiles_block_init(a_id, b_id, false, group, 1, 1);
+            tile_regs_acquire();
+            matmul_tiles_block(a_id, b_id, 0, first, 0, false, group, 1, 1);
+            reconfig_tracked(c_id, c_id);
+            sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id);
+            for (uint32_t tile = 0; tile < group; ++tile) {
+                sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id, first + tile, tile);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tiles(0, o_id, first, group);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tiles(0, o_id, base, Nt);
-        tile_regs_release();
         o.push_back(Nt);
     }
 }
@@ -646,7 +649,7 @@ KDA_PREP_HELPER void gate_exponentials(
         copy_tile(anchor_id, tile, 2);
         exp_tile<false, false, InputClamping::ClampToNegative, 2>(2, VectorMode::R);
         copy_dest_values_init();
-        copy_dest_values<DataFormat::Float32>(0, 1);
+        copy_dest_values<DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b>(0, 1);
         recip_tile_init<recip_dest, ReciprocalApproxMode::Precise>();
         recip_tile<recip_dest, ReciprocalApproxMode::Precise>(1);
         tile_regs_commit();

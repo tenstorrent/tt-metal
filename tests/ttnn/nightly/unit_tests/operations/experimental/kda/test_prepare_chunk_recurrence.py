@@ -48,6 +48,8 @@ _T_INV_MAX_ABS = 0.01
 _UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
 _PRODUCTION_CASE = _TestCase("h24-n20-k128-v128", 24, 20, 128, 128)
+# Keys wider than one FP32 DST acquire (four tiles), so the gate's prefix sum runs in column groups.
+_WIDE_KEY_CASE = _TestCase("wide-h2-n2-k160-v32", 2, 2, 160, 32)
 
 
 def _prepare_chunk_recurrence_ops(
@@ -356,7 +358,7 @@ def _assert_t_inv_strict_lower_accurate(
 
 @pytest.mark.parametrize(
     "case",
-    [_UNIT_TEST_CASE, _PRODUCTION_CASE],
+    [_UNIT_TEST_CASE, _PRODUCTION_CASE, _WIDE_KEY_CASE],
     ids=lambda case: case.case_id,
 )
 def test_prepare_chunk_recurrence_contract_accuracy_and_determinism(

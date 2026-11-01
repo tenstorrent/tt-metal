@@ -58,9 +58,9 @@ ALWI void sub_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode 
 #endif
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void mul_unary_tile(uint32_t idst, uint32_t param1, [[maybe_unused]] VectorMode vector_mode = VectorMode::RC) {
+ALWI void mul_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1, vector_mode)));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
