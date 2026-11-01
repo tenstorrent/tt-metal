@@ -76,7 +76,24 @@ def out_mem(cores, n: int):
                              ttnn.ShardSpec(core_set(cores), (1, n // len(cores)), ttnn.ShardOrientation.ROW_MAJOR))
 
 
+_progs = {}
+
+
+def _sig(t):
+    """Cache key part: a freed tensor's address is reused by the next allocation, so the
+    dtype and shape go in too (a bfp4 weight landing on a freed bfp2 one segfaulted)."""
+    return (t.buffer_address(), str(t.dtype), tuple(t.shape))
+
+
 def ternary_mm(x, w, y, workers, subblock_k: int):
+    key = (_sig(x), _sig(w), _sig(y), subblock_k, len(workers))
+    if key not in _progs:
+        _progs[key] = _ternary_mm_prog(x, w, y, workers, subblock_k)
+    ttnn.generic_op([x, w, y], _progs[key])
+    return y
+
+
+def _ternary_mm_prog(x, w, y, workers, subblock_k: int):
     """x: [len(workers), K] 1x32 tiles, height-sharded (act_mem). w: shuffled, weight_mem.
     y: [1, N] 1x32 tiles, out_mem. ``workers`` from worker_cores()."""
     device = x.device()
@@ -130,6 +147,105 @@ def ternary_mm(x, w, y, workers, subblock_k: int):
                 other_value=0),
         ],
     )
-    prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
-    ttnn.generic_op([x, w, y], prog)
+    return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
+
+
+# ---------------------------------------------------------------------------------------------
+# Step (b): per-128-group scales applied inside the kernel.
+
+KERNEL_SCALED = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_scaled_kernel.cpp"
+GROUP = 128  # weights per scale
+SUPER = 8  # groups per custom_mm pass (rows of the masked in0 tile)
+
+
+def mask_x(x):
+    """x [K] -> [8, K]: row r keeps the groups g with g % 8 == r (block-masked in0)."""
+    import torch
+
+    k = x.shape[-1]
+    rows = (torch.arange(k) // GROUP) % SUPER
+    return torch.where(rows[None, :] == torch.arange(SUPER)[:, None], x.reshape(1, k), torch.zeros(1, k))
+
+
+def scale_rows(s):
+    """s [K/128, N] -> [s_tiles*32, N] for the kernel's DST layout: super-group G's 8 rows
+    sit at rows (G%4)*8 of 32x32 tile G//4; the bank shuffle then makes each n's tiles contiguous."""
+    import torch
+
+    groups, n = s.shape
+    num_g = groups // SUPER
+    s_tiles = (num_g + 3) // 4
+    out = torch.zeros(s_tiles * 32, n, dtype=torch.float32)
+    for G in range(num_g):
+        r0 = (G // 4) * 32 + (G % 4) * 8
+        out[r0:r0 + SUPER] = s[G * SUPER:(G + 1) * SUPER]
+    return out
+
+
+def ternary_mm_scaled(x8, w, s, y, workers):
+    key = ("s", _sig(x8), _sig(w), _sig(s), _sig(y), len(workers))
+    if key not in _progs:
+        _progs[key] = _ternary_mm_scaled_prog(x8, w, s, y, workers)
+    ttnn.generic_op([x8, w, s, y], _progs[key])
     return y
+
+
+def _ternary_mm_scaled_prog(x8, w, s, y, workers):
+    """x8: [workers*8, K] 8x32 tiles, height-sharded [8, K] per worker (mask_x per shard).
+    w: codes, shuffle_for_banks + weight_mem. s: scale_rows(...), shuffled, fp32 TILE, weight_mem-style.
+    y: [1, N] 1x32 tiles, out_mem."""
+    device = x8.device()
+    k = x8.memory_config().shard_spec.shape[1]
+    kt = k // 32
+    assert kt % 32 == 0, "K must be a multiple of 1024 (8 groups of 128)"
+    num_g = kt // 32
+    s_tiles = (num_g + 3) // 4
+    banks = device.dram_grid_size().x
+    wpb = len(workers) // banks
+    pcn = w.memory_config().shard_spec.shape[1] // 32 // wpb
+    tile_bytes = w.get_tile().get_tile_size(w.dtype)
+    page, pages = get_max_page_size_and_num_pages(device, 32, tile_bytes)
+    grid = core_set([c for c, _, _ in workers])
+
+    def cb(idx, fmt, nbytes, tile_bytes_, tile):
+        return ttnn.CBDescriptor(total_size=nbytes, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(
+            buffer_index=idx, data_format=fmt, page_size=tile_bytes_, tile=ttnn.TileDescriptor(tile))])
+
+    cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, x8),
+           cb(1, w.dtype, 3 * 32 * tile_bytes, tile_bytes, w.get_tile()),
+           cb(2, ttnn.float32, 2 * s_tiles * 4096, 4096, ttnn.Tile([32, 32])),
+           ttnn.cb_descriptor_from_sharded_tensor(4, y)]
+
+    vcs, seen = [], []
+    for core, bank, _ in workers:
+        vc = bank & 0x3
+        if any(c.y == core.y and (b & 0x3) == vc for c, b in seen):
+            vc = (vc + 1) & 0x3
+        seen.append((core, bank))
+        vcs.append((core, vc))
+    common = [("tm_per_core_n", pcn), ("tm_num_subblocks_k", num_g), ("tm_num_tiles_k", kt)]
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
+                                       math_approx_mode=False, dst_full_sync_en=True)
+    cfg.unpack_to_dest_mode = modes
+    per_core = lambda name, vals: PerCoreCompileTimeDescriptor(  # noqa: E731
+        named_compile_time_arg=name, core_values=vals, other_value=0)
+    uk = UnifiedKernelDescriptor(
+        kernel_source=KERNEL_SCALED,
+        core_ranges=grid,
+        ncrisc_named_compile_time_args=common + [
+            ("tm_in1_page_size", page), ("tm_in1_num_pages", pages), ("tm_in1_block_bytes", 32 * tile_bytes)],
+        brisc_named_compile_time_args=common,
+        trisc_named_compile_time_args=common,
+        trisc_compute_config=cfg,
+        unified_compile_time_core_descriptors=[UnifiedCompileTimeCoreDescriptor(
+            named_compile_time_arg="tm_is_active_core", core_range=grid, value=1, other_value=0)],
+        per_core_compile_time_descriptors=[
+            per_core("tm_bank_id", [(c, b) for c, b, _ in workers]),
+            per_core("tm_vc", vcs),
+            per_core("tm_in1_addr", [(c, w.buffer_address() + i * pcn * kt * tile_bytes) for c, _, i in workers]),
+            per_core("tm_s_addr", [(c, s.buffer_address() + i * pcn * s_tiles * 4096) for c, _, i in workers]),
+        ],
+    )
+    return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)

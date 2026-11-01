@@ -35,9 +35,10 @@ def main() -> int:
     ap.add_argument("--wpb", default="1,2")
     ap.add_argument("--subblock-k", default="34,68")
     ap.add_argument("--calls", type=int, default=9)
+    ap.add_argument("--wall", type=int, default=0, help="no profiler: host wall clock over this many back-to-back calls")
     ap.add_argument("--xint", action="store_true", help="x = small integers, so the exact answer is known")
     args = ap.parse_args()
-    for key, val in (("TT_METAL_DEVICE_PROFILER", "1"), ("TT_METAL_PROFILER_CPP_POST_PROCESS", "1"),
+    for key, val in () if args.wall else (("TT_METAL_DEVICE_PROFILER", "1"), ("TT_METAL_PROFILER_CPP_POST_PROCESS", "1"),
                      ("TT_METAL_PROFILER_MID_RUN_DUMP", "1")):
         os.environ.setdefault(key, val)
 
@@ -81,11 +82,19 @@ def main() -> int:
                                  workers=np.array([(c.x, c.y, b, s) for c, b, s in workers]))
                         pcc = float(np.corrcoef(y, ref)[0, 1])
                         rel = float(np.abs(y - ref).max() / np.abs(ref).max())
-                        device_kernel_us(ttnn, device)  # drain
-                        for _ in range(args.calls):
-                            a3.ternary_mm(xt, w, yt, workers, sbk)
-                        ttnn.synchronize_device(device)
-                        devs = all_kernel_us(ttnn, device)
+                        if args.wall:
+                            import time
+                            t0 = time.perf_counter()
+                            for _ in range(args.wall):
+                                a3.ternary_mm(xt, w, yt, workers, sbk)
+                            ttnn.synchronize_device(device)
+                            devs = [(time.perf_counter() - t0) / args.wall * 1e6]
+                        else:
+                            device_kernel_us(ttnn, device)  # drain
+                            for _ in range(args.calls):
+                                a3.ternary_mm(xt, w, yt, workers, sbk)
+                            ttnn.synchronize_device(device)
+                            devs = all_kernel_us(ttnn, device)
                         dev = float(np.median(devs))
                         print(f"{fmt:5s} wpb={wpb} sbk={sbk:3d} {mb:7.2f} MB {dev:7.1f} us {mb * 1e3 / dev:6.1f} GB/s "
                               f"pcc {pcc:.7f} maxrel {rel:.2e} n={len(devs)} [{min(devs):.1f}-{max(devs):.1f}]",
