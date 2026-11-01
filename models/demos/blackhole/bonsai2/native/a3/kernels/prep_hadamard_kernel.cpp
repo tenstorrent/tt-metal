@@ -4,10 +4,10 @@
 // A3 input prep: x' = H(D x) per 1024-block, scattered straight into the A3 workers'
 // block-masked input buffer.
 //
-// The A3 input is a persistent [8, K] buffer of 8x32 tiles on every A3 worker, where
-// K-tile k carries x'[k] in row (k/4) % 8 and zeros elsewhere. Row r of tile k is always
-// the same row, so the zero rows are written once at allocation and never again; this
-// kernel only writes the one live row per tile.
+// The A3 input is an [8, K] buffer of 8x32 tiles on every A3 worker, where K-tile k
+// carries x'[k] in row (k/4) % 8 and zeros elsewhere. This kernel writes every tile whole,
+// so the buffer can be a fresh per-call allocation (a persistent L1 buffer clashes with
+// the model's large-CB ops: L1 buffers are reserved on every core).
 //
 // Work unit (b, r): block b, output K-tiles k = 32 b + j for j in [4r, 4r+4), all of
 // which land in row r. M_b = diag(d_b) H / 32 is stored bfp2 (entries +-1/32, exact) as
@@ -15,7 +15,7 @@
 //
 // NCRISC: x_b row -> 32 1x32 tiles (cb 0), M_b column sticks (cb 1).
 // TRISC:  custom_mm over 32 tiles per output, LoFi (exact for +-1/32), fp32 DST.
-// BRISC:  each output row (64 B) -> 2 x 32 B writes into every worker's buffer.
+// BRISC:  each output row as a whole 8x32 tile (zeros + live row) into every worker's buffer.
 //
 // Runtime args, per core:
 //   NCRISC: x_addr, m_addr, num_units, then (b, r) per unit
@@ -85,25 +85,40 @@ void kernel_main() {
         }
     }
 #elif defined(COMPILE_FOR_BRISC)
+    // Each output row goes out as a whole 8x32 tile (live row + 7 zero rows) to every
+    // worker, so the masked buffer needs no zero invariant and can be allocated per call.
+    constexpr uint32_t cb_stage = 3;
     const uint32_t x8_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
     const uint32_t nw_idx = 2 + 2 * num_units;
     const uint32_t num_workers = get_arg_val<uint32_t>(nw_idx);
+    cb_reserve_back(cb_stage, 1);
+    const uint32_t stage = get_write_ptr(cb_stage);
+    volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
+    for (uint32_t i = 0; i < 128; ++i) {
+        st[i] = 0;
+    }
     for (uint32_t u = 0; u < num_units; ++u) {
         const uint32_t b = get_arg_val<uint32_t>(2 + 2 * u);
         const uint32_t r = get_arg_val<uint32_t>(3 + 2 * u);
         for (uint32_t j = 4 * r; j < 4 * r + 4; ++j) {
             const uint32_t k = b * KT + j;
-            const uint32_t dst0 = x8_addr + k * 512 + r * 32;  // 8x32 bf16 tile: face 0 row r
             cb_wait_front(cb_o, 1);
-            const uint32_t src = get_read_ptr(cb_o);
+            volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_o));
+            for (uint32_t i = 0; i < 8; ++i) {
+                st[r * 8 + i] = row[i];           // face 0 row r (8x16 face: 32 B per row)
+                st[64 + r * 8 + i] = row[8 + i];  // face 1 row r (+256 B)
+            }
+            cb_pop_front(cb_o, 1);
             for (uint32_t w = 0; w < num_workers; ++w) {
                 const uint32_t xy = get_arg_val<uint32_t>(nw_idx + 1 + w);
-                noc_async_write(src, get_noc_addr(xy >> 16, xy & 0xffff, dst0), 32);
-                noc_async_write(src + 32, get_noc_addr(xy >> 16, xy & 0xffff, dst0 + 256), 32);  // face 1 row r
+                noc_async_write(stage, get_noc_addr(xy >> 16, xy & 0xffff, x8_addr + k * 512), 512);
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_o, 1);
+            for (uint32_t i = 0; i < 8; ++i) {
+                st[r * 8 + i] = 0;
+                st[64 + r * 8 + i] = 0;
+            }
         }
     }
 #elif defined(COMPILE_FOR_TRISC)
