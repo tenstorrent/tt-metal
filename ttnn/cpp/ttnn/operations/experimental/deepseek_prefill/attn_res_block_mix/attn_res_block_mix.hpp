@@ -12,7 +12,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix {
 
 // The sealed half of an AttnRes block's mixture, for R read sites, from the block's
-// statistics as an all-gather across the tensor-parallel axis leaves them:
+// statistics as `attn_res_block_stats` gathers them across the tensor-parallel axis:
 //
 //   s[r][c][n]   = stats[c][n][1 + r] * rsqrt(stats[c][n][0] * inv_hidden_size + eps)
 //                  (stats summed over the P partials side by side on the last dim)

@@ -40,8 +40,8 @@ def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
     num_candidates = sum(planes)
     snapshots = [torch.randn(1, s, num_tokens, SHARD_WIDTH).bfloat16() for s in planes]
     stats = random_stats(num_candidates, num_tokens, num_sites)
-    # Partials side by side on the last dim, as an all-gather across the tensor-parallel axis
-    # leaves them: random shares of the statistics.
+    # Partials side by side on the last dim, as the tensor-parallel gather leaves them:
+    # random shares of the statistics.
     shares = torch.rand(num_partials, *stats.shape)
     gathered = torch.cat(list(stats * shares / shares.sum(dim=0)), dim=-1)
 
@@ -94,8 +94,9 @@ def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):
     reads = partials[:num_closed] / mass[:num_closed]
     passed, pcc = comp_pcc(reads, closed, 0.9999)
     assert passed, f"closed reads PCC {pcc}"
-    # A weighted mean of unit-scale values, its weights bf16 at the MAC: ~2^-8 of a few units.
-    torch.testing.assert_close(closed, reads, rtol=2e-2, atol=3e-2)
+    # A weighted mean of unit-scale values, its weights bf16 at the MAC: ~2^-8 of a few units,
+    # and a weight's rounding flips one bf16 step either way.
+    torch.testing.assert_close(closed, reads, rtol=2e-2, atol=5e-2)
     torch.testing.assert_close(out, partials[num_closed:], rtol=2e-2, atol=1e-1)
     torch.testing.assert_close(shift_out, shift[num_closed:], rtol=3e-3, atol=3e-3)
     torch.testing.assert_close(mass_out, mass[num_closed:], rtol=3e-2, atol=3e-2)

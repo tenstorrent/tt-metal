@@ -137,9 +137,13 @@ void score_row() {
     CircularBuffer cb_mass_out_obj(cb_mass_out);
     CircularBuffer cb_mass_obj(cb_mass);
 
+    // The previous run left both unpackers on the mixture's bf16 operands, and copy_init
+    // does not reconfigure formats.
+    reconfig_data_format(cb_stats, cb_summed);
     pack_reconfig_data_format(cb_summed);
 
-    // The statistics, summed across ranks in fp32 dest.
+    // The statistics, summed across ranks in fp32 dest. They unpack straight to dest, so
+    // srcA goes back to the summed statistics' format after.
     cb_stats_obj.wait_front(num_candidates * num_partials);
     cb_summed_obj.reserve_back(num_candidates);
     copy_init(cb_stats);
@@ -153,6 +157,7 @@ void score_row() {
     });
     cb_summed_obj.push_back(num_candidates);
     cb_stats_obj.pop_front(num_candidates * num_partials);
+    reconfig_data_format_srca(cb_stats, cb_summed);
 
     // Reciprocal RMS per candidate. Only column 0 means anything.
     cb_summed_obj.wait_front(num_candidates);
@@ -182,6 +187,8 @@ void score_row() {
     cb_scores_obj.wait_front(num_candidates);
     cb_shift_obj.reserve_back(1);
     cb_shift_out_obj.reserve_back(1);
+    // The scores and shift unpack to dest in fp32, where the multiply left srcA on tf32.
+    reconfig_data_format_srca(cb_summed, cb_scores);
     copy_init(cb_scores);
     tile_regs_acquire();
     copy_tile(cb_scores, 0, dst_a);
@@ -268,8 +275,7 @@ void mix_run(uint32_t num_tiles) {
 
     cb_values_obj.wait_front(num_tiles * num_candidates);
     for (uint32_t group = 0; group < num_groups; ++group) {
-        const uint32_t first_site = group * sites_per_group;
-        const uint32_t sites = first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
+        const uint32_t sites = sites_in_group(group, sites_per_group, num_sites);
         cb_weights_obj.wait_front(sites * num_candidates);
         for (uint32_t w = 0; w < num_tiles; ++w) {
             tile_regs_acquire();
@@ -280,7 +286,7 @@ void mix_run(uint32_t num_tiles) {
             }
             tile_regs_commit();
             // Odd groups go out on the reader's NoC; see attn_res_block_mix_partials.hpp.
-            const bool odd = group % 2 == 1;
+            const bool odd = reader_writes_group(group);
             CircularBuffer& out_obj = odd ? cb_partials_odd_obj : cb_partials_obj;
             const auto out = odd ? cb_partials_odd : cb_partials;
             out_obj.reserve_back(sites);

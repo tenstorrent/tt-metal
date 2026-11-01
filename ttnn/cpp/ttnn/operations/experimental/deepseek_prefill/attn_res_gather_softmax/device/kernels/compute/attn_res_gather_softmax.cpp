@@ -58,7 +58,7 @@ constexpr auto cb_tmp = tt::CBIndex::c_6;          // transformed row, drained b
 constexpr auto cb_local_stats = tt::CBIndex::c_7;  // this rank's pair, handed to the sender
 constexpr auto cb_pending = tt::CBIndex::c_10;     // a residual write not yet in the stream
 constexpr auto cb_total = tt::CBIndex::c_11;       // the settled stream, reduced here
-constexpr auto cb_total_out = tt::CBIndex::c_12;   // the same row again, for the writer
+constexpr auto cb_total_out = tt::CBIndex::c_12;   // the same run again, for the writer
 constexpr auto cb_chunk_stats = tt::CBIndex::c_14;  // a row leader's: its other chunks' pairs
 constexpr auto cb_row_stats = tt::CBIndex::c_15;    // a row leader's: the row's summed pair
 constexpr auto cb_out = tt::CBIndex::c_16;
@@ -94,7 +94,7 @@ constexpr uint32_t dst_max = 3;
 constexpr uint32_t dst_acc = 0;
 
 // The reduce drains `cb_tmp`, so the same buffer carries both transforms of the
-// row: fill it, reduce it, fill it again. `init` re-establishes the unpack and
+// run: fill it, reduce it, fill it again. `init` re-establishes the unpack and
 // pack configuration the previous reduce left changed.
 template <typename DFB, typename Init, typename TransformOne>
 ALWI void reduce_transformed_run(DFB& tmp_buf, Init init, TransformOne transform_one) {

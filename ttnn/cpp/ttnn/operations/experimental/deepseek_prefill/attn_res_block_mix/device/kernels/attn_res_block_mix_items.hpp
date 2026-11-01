@@ -41,3 +41,14 @@ inline void for_each_attn_res_block_mix_item(Body body) {
             .end = (chunk + 1) * Wt / chunks_per_row});
     }
 }
+
+// Sites in `group` when the sites are split into groups of `sites_per_group`: all but the
+// last group are full.
+constexpr uint32_t sites_in_group(uint32_t group, uint32_t sites_per_group, uint32_t num_sites) {
+    const uint32_t first_site = group * sites_per_group;
+    return first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
+}
+
+// Which data-movement core writes a group's partials: the reader the odd groups, the writer
+// the even ones (see attn_res_block_mix_partials.hpp).
+constexpr bool reader_writes_group(uint32_t group) { return group % 2 == 1; }

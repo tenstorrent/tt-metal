@@ -53,15 +53,15 @@ CoreRangeSet gather_cores_of(const CoreCoord& grid, uint32_t num_gather_cores) {
 
 // The most runs a row is cut into: a row's leader holds a partial per run and candidate.
 constexpr uint32_t kMaxChunksPerRow = 8;
+// Pages the gather core stages behind one read barrier: its staging buffer's size.
+constexpr uint32_t kGatherBatch = 16;
 
-}  // namespace
-
-namespace {
-
-// Semaphores: a row leader's per-run counts, and the gather core's per-candidate counts of
-// parked rows, which take as many semaphore words as their fields need.
+// Semaphores: a row leader's per-run counts, and the gather cores' per-row counts of
+// parked candidates, which take as many semaphore words as their fields need.
 constexpr uint32_t kChunkSem = 0;
 constexpr uint32_t kRowSem = 1;
+// Semaphore ids a program can hold.
+constexpr uint32_t kMaxSemaphores = 16;
 
 ProgramDescriptor build_descriptor_at(
     const AttnResBlockStatsParams& operation_attributes,
@@ -89,21 +89,16 @@ ProgramDescriptor build_descriptor_at(
     const bool gathers = operation_attributes.cluster_axis.has_value();
     const auto mesh_view = device->get_view();
     const uint32_t cluster_axis = operation_attributes.cluster_axis.value_or(0);
-    const auto axis_nodes = !gathers            ? std::vector<tt::tt_fabric::FabricNodeId>{}
-                            : cluster_axis == 0 ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
-                                                : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
-    const uint32_t ring_size = gathers ? static_cast<uint32_t>(axis_nodes.size()) : 1;
+    const uint32_t ring_size = !gathers ? 1 : cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
     const uint32_t rank = gathers ? mesh_coord[cluster_axis] : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     // A unit is a run of one token row across every candidate (see
-    // `kernels/attn_res_block_stats_items.hpp`). The op is bound by how fast the grid pulls
-    // the sealed set in, so rows are cut into as many runs as the grid seats and every core
-    // reads the same share; whole (candidate, row) items left a grid that does not divide
-    // them reading a second wave on a few cores. Where rows outnumber the cores, a core
-    // takes several whole rows.
+    // `kernels/attn_res_block_stats_items.hpp`). Rows are cut into as many runs as the grid
+    // seats so every core reads the same share; where rows outnumber the cores, a core takes
+    // several whole rows.
     const auto grid = device->compute_with_storage_grid_size();
     // Where the op gathers, the grid's last cores hold the fabric connections instead, one
     // per link: a core opens one connection per direction, a link admits a single sender, and
@@ -140,19 +135,27 @@ ProgramDescriptor build_descriptor_at(
             make_cb(CBIndex::c_5, all_cores, (chunks_per_row - 1) * num_candidates, out_tile_size, out_format));
     }
     // A row leader counts each other run's candidates, one field per run; the gather cores
-    // count each row's parked candidates, one field per row.
-    const uint32_t chunk_field_width = std::bit_width(num_candidates);
+    // count each row's parked candidates, one field per row. A count reaches at most
+    // num_candidates, so a field of its bit width never carries.
+    const uint32_t field_width = std::bit_width(num_candidates);
     TT_FATAL(
-        (chunks_per_row - 1) * chunk_field_width <= 32,
+        (chunks_per_row - 1) * field_width <= 32,
         "a row leader counts {} runs' candidates in one semaphore",
         chunks_per_row - 1);
     desc.semaphores.push_back(SemaphoreDescriptor{.id = kChunkSem, .core_ranges = all_cores, .initial_value = 0});
-    const uint32_t row_field_width = chunk_field_width;
-    const uint32_t row_sem_words = (Ht + 32 / row_field_width - 1) / (32 / row_field_width);
+    const uint32_t fields_per_word = 32 / field_width;
+    const uint32_t row_sem_words = (Ht + fields_per_word - 1) / fields_per_word;
     const CoreRangeSet gather_core_set = gather_cores_of(grid, num_gather_cores);
     const auto gather_cores = corerange_to_cores(gather_core_set, std::nullopt, /*row_wise=*/true);
     if (gathers) {
-        TT_FATAL(kRowSem + row_sem_words <= 16, "the gather cores count {} rows' candidates", Ht);
+        // Bounds Ht to (kMaxSemaphores - kRowSem) * fields_per_word rows; the gather kernel
+        // keeps its per-row sent counts in as many words.
+        TT_FATAL(
+            kRowSem + row_sem_words <= kMaxSemaphores,
+            "AttnResBlockStats gathers at most {} row tiles for {} candidates, got {}",
+            (kMaxSemaphores - kRowSem) * fields_per_word,
+            num_candidates,
+            Ht);
         TT_FATAL(!all_cores.intersects(gather_core_set), "the gather cores must hold no rows");
         for (uint32_t w = 0; w < row_sem_words; ++w) {
             desc.semaphores.push_back(
@@ -166,13 +169,13 @@ ProgramDescriptor build_descriptor_at(
     // A core finds its units from its own position, so a launch ships no per-core args.
     const std::vector<uint32_t> split_ct_args = {grid.x, units_per_core, num_units, chunks_per_row, Wt};
 
-    std::vector<uint32_t> reader_ct_args = {Ht, num_candidates};
+    std::vector<uint32_t> reader_ct_args = {num_candidates};
     reader_ct_args.insert(reader_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
     TensorAccessorArgs(*first.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*tensor_args.queries.buffer()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
-        Ht, num_candidates, kChunkSem, kRowSem, ring_size, row_field_width, chunk_field_width, num_gather_cores};
+        Ht, num_candidates, kChunkSem, kRowSem, ring_size, field_width, num_gather_cores};
     writer_ct_args.insert(writer_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
 
@@ -247,10 +250,10 @@ ProgramDescriptor build_descriptor_at(
     desc.kernels.push_back(std::move(compute));
 
     if (gathers) {
-        // A payload header and an increment header per direction, and a candidate's rows staged.
+        // A payload header and an increment header per direction, and a batch of pages staged.
         const auto header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         desc.cbs.push_back(make_cb(CBIndex::c_8, gather_core_set, 2 * 2, header_size, DataFormat::UInt32));
-        desc.cbs.push_back(make_cb(CBIndex::c_9, gather_core_set, Ht, out_tile_size, out_format));
+        desc.cbs.push_back(make_cb(CBIndex::c_9, gather_core_set, kGatherBatch, out_tile_size, out_format));
 
         // A multicast route each way along the axis, as far as the peers that lie that way:
         // a page crosses each link once however many peers are beyond it, and every peer is
@@ -266,7 +269,7 @@ ProgramDescriptor build_descriptor_at(
             mesh_coord, forward, backward, forward_targets, backward_targets, device);
 
         std::vector<uint32_t> gather_ct_args = {
-            ring_size, Ht, num_candidates, kRowSem, row_field_width, ring_size - 1, num_gather_cores};
+            ring_size, Ht, num_candidates, kRowSem, field_width, ring_size - 1, num_gather_cores, kGatherBatch};
         TensorAccessorArgs(*tensor_return_value.buffer()).append_to(gather_ct_args);
         KernelDescriptor gather;
         gather.kernel_source = std::string(kKernelDir) + "gather_attn_res_block_stats.cpp";

@@ -30,9 +30,8 @@ void fill_column_of_ones(uint32_t tile_addr, uint32_t tile_bytes) {
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(1);
-    constexpr uint32_t kSplitArgs = 2;
+    constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
+    constexpr uint32_t kSplitArgs = 1;
     using Split = AttnResBlockStatsSplit<kSplitArgs>;
     constexpr uint32_t Wt = Split::Wt;
     constexpr auto sealed_args = TensorAccessorArgs<kSplitArgs + 5>();

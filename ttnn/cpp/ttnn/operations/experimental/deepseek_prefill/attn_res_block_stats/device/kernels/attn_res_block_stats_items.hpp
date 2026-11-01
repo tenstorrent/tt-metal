@@ -7,9 +7,8 @@
 //
 // A unit is a run of one token row-tile, across every candidate: chunk `c` of a row covers
 // its tiles [c * Wt / chunks, (c + 1) * Wt / chunks). The op is bound by how fast the grid
-// pulls the sealed set in, so the split spreads it evenly — a row is cut into as many runs
-// as the grid seats — rather than handing out whole (candidate, row) items, of which a
-// grid seats a whole number. Units go out in order, `units_per_core` to a core, so a row's
+// pulls the sealed set in, so rows are cut into as many runs as the grid seats, giving
+// every core the same share. Units go out in order, `units_per_core` to a core, so a row's
 // runs sit on consecutive cores; where a row is cut, its chunk 0 core leads it and sums
 // the row's partial statistics.
 //

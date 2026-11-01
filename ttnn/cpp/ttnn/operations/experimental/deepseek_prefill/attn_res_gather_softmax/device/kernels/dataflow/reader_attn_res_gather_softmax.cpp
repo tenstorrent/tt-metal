@@ -26,9 +26,8 @@ void kernel_main() {
     constexpr uint32_t chunk_tiles = Split::chunk_tiles;
     const auto [first_unit, num_units] = Split::core_units();
 
-    // Everything else is common: the partial's read site, in whole Ht*Wt planes, and
-    // the buffer addresses. A program-cache hit patches these
-    // once per program instead of once per core, and dispatch multicasts them.
+    // Everything else is common: the partial's read site, in whole Ht*Wt planes, and the
+    // buffer addresses. A program-cache hit patches these once per program.
     const auto partial_page_offset = get_common_arg_val<uint32_t>(0);
     const auto prefix_addr = get_common_arg_val<uint32_t>(1);
     const auto partial_addr = get_common_arg_val<uint32_t>(2);

@@ -11,11 +11,10 @@
 // `units_per_core` to a core, so a row's chunks sit on consecutive cores and its chunk 0
 // core is the row's leader, which sums the row's partial statistics.
 //
-// The split is a function of the shapes alone, so as runtime args it would be the
-// same few words shipped to every core at every launch: on Galaxy, ~110 cores times
-// three kernels times 32 chips, most of what dispatching a read cost the host. Cores
-// are handed out row-wise from the origin, which makes a core's run a closed form in
-// its linear index; the host checks the closed form against the cores it chose.
+// The split is a function of the shapes alone, so it rides in compile-time args and a
+// launch ships no per-core runtime args. Cores are handed out row-wise from the origin,
+// which makes a core's run a closed form in its linear index; the host checks the
+// closed form against the cores it chose.
 //
 // Include after the kernel's API header, which supplies the logical coordinates.
 

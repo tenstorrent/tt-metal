@@ -50,9 +50,9 @@ void kernel_main() {
     constexpr uint32_t chunks_per_row = Split::chunks_per_row;
     const auto [first_unit, num_units] = Split::core_units();
 
-    // Everything else is common: the site's offsets into
-    // shift and mass, the buffer addresses, and this chip's rank and gather core. A
-    // program-cache hit patches these once per program instead of once per core.
+    // Everything else is common: the site's offsets into shift and mass, the buffer
+    // addresses, and this chip's rank and gather core. A program-cache hit patches these
+    // once per program.
     const auto shift_page_offset = get_common_arg_val<uint32_t>(0);
     const auto mass_page_offset = get_common_arg_val<uint32_t>(1);
     const auto stats_addr = get_common_arg_val<uint32_t>(2);

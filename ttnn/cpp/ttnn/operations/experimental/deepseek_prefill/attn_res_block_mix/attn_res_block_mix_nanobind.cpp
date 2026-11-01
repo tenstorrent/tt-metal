@@ -35,7 +35,7 @@ void bind_attn_res_block_mix(nb::module_& mod) {
             `sealed` is a list of `[1, S_i, N, d]` bfloat16 tensors whose planes in order are
             the C candidates. `stats` is `[1, C, N, 32 * P]` float32: P tensor-parallel
             partials side by side, each with the sum of squares in column 0 and query r's
-            dot in column 1 + r — `attn_res_block_stats` after an all-gather. `partials` is
+            dot in column 1 + r, as `attn_res_block_stats` gathers them. `partials` is
             `[R, 1, N, d]` and `shift` and `mass` are `[R, 1, N, 1]` float32, the layouts
             `attn_res_gather_softmax` reads. The leading `num_closed_sites` sites have
             nothing live to fold in, so their read is `partial / mass` itself: it comes back

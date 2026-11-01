@@ -50,8 +50,7 @@ void AttnResBlockMixDeviceOperation::validate_on_program_cache_miss(
         num_candidates += snapshot_shape[1];
     }
 
-    // fp32, because shift and mass come out fp32 and their consumer reads them through the
-    // same circular buffer as fp32 statistics.
+    // fp32: the statistics' format is also the shift and mass outputs', which are fp32.
     operations::check_tensor(stats, "AttnResBlockMix", "stats", {DataType::FLOAT32});
     const auto& stats_shape = stats.padded_shape();
     TT_FATAL(

@@ -2,20 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The gather across the tensor-parallel axis, on the one core per chip that holds a fabric
-// connection. A link admits a single worker, so every row's statistics are funnelled here.
+// The gather across the tensor-parallel axis, on the gather cores: one per fabric link,
+// since a link admits a single worker.
 //
 // What crosses is this rank's tile column of the gathered statistics, written into the same
 // column on each peer; peers fill this chip's other columns symmetrically, so the gathered
 // tensor is complete once every peer's arrivals have landed. It goes out as it is parked: a
 // row's leader parks the row's candidates in order and counts them here, and whatever is
-// parked is sent, so the rows of cores that finish early are on the wire while the slowest
-// are still reducing.
+// parked is sent, so early rows are on the wire while the slowest are still reducing.
 //
 // A route is a multicast along one direction of the axis, reaching every peer that lies
 // that way, so a page crosses each link once however many peers are beyond it. A core opens
-// one connection per direction, so each link has a gather core of its own, and a
-// candidate's pages alternate between them.
+// one connection per direction; pages alternate between the links' cores.
 //
 // Ordering: each route's arrival increment follows every payload on that route, and the
 // fabric preserves order per connection, so a peer that has counted an arrival from each of
@@ -48,7 +46,9 @@ void kernel_main() {
     // The arrivals this core waits for: one from the same link's gather core of each peer.
     constexpr uint32_t num_arrivals = get_compile_time_arg_val(5);
     constexpr uint32_t num_links = get_compile_time_arg_val(6);
-    constexpr auto gathered_args = TensorAccessorArgs<7>();
+    // Pages staged behind one read barrier; the staging buffer holds exactly this many.
+    constexpr uint32_t kBatch = get_compile_time_arg_val(7);
+    constexpr auto gathered_args = TensorAccessorArgs<8>();
 
     const auto gathered_addr = get_arg_val<uint32_t>(0);
     const auto my_rank = get_arg_val<uint32_t>(1);
@@ -104,26 +104,32 @@ void kernel_main() {
 
     // Whatever is parked and not yet sent, in batches: read back behind one barrier, then
     // multicast both ways at the same page. A page is this core's when it falls to its link.
-    constexpr uint32_t kBatch = 16;
     stage_buf.reserve_back(kBatch);
     const uint32_t stage_base = stage_buf.get_write_ptr();
-    uint32_t sent[Ht] = {};
-    uint32_t pending = 0;
-    for (uint32_t page = 0; page < num_candidates * Ht; ++page) {
-        pending += page % num_links == link;
-    }
+    // Each row's count of candidates sent, packed like the parked counts (a field never
+    // exceeds its parked count, so it cannot carry). The host bounds these words by the
+    // row semaphores', so the stack footprint stays small for any Ht.
+    constexpr uint32_t num_row_words = row_fields.word(Ht - 1) + 1;
+    uint32_t sent_words[num_row_words] = {};
+    // This core's pages: those of the num_candidates * Ht that fall to its link.
+    constexpr uint32_t num_pages = num_candidates * Ht;
+    uint32_t pending = num_pages / num_links + (link < num_pages % num_links ? 1 : 0);
     uint32_t batch_pages[kBatch];
     while (pending > 0) {
         uint32_t batch = 0;
         for (uint32_t g = 0; g < Ht && batch < kBatch; ++g) {
-            const uint32_t parked = row_fields.count(
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(row_sem_id + row_fields.word(g))), g);
-            for (; sent[g] < parked && batch < kBatch; ++sent[g]) {
-                const uint32_t index = sent[g] * Ht + g;
+            const uint32_t w = row_fields.word(g);
+            const uint32_t parked =
+                row_fields.count(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(row_sem_id + w)), g);
+            const uint32_t already_sent = row_fields.count(sent_words[w], g);
+            uint32_t sent = already_sent;
+            for (; sent < parked && batch < kBatch; ++sent) {
+                const uint32_t index = sent * Ht + g;
                 if (index % num_links == link) {
                     batch_pages[batch++] = index * ring_size + my_rank;
                 }
             }
+            sent_words[w] += (sent - already_sent) * row_fields.increment(g);
         }
         if (batch == 0) {
             invalidate_l1_cache();

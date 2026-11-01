@@ -46,8 +46,7 @@ constexpr uint32_t kMaxStageTiles = 64;
 // once and hold them, so more chunks shorten every core's share of the reads; the
 // row's leader then sums one partial pair per chunk, which is what bounds it.
 constexpr uint32_t kMaxChunksPerRow = 4;
-// The common runtime args. Everything a cache hit patches is here, so a hit costs a
-// handful of writes per program rather than a handful per core.
+// The common runtime args: everything a program-cache hit patches.
 enum ReaderCommonArg : uint32_t {
     kReaderSite,
     kReaderPrefixAddr,
@@ -334,8 +333,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     //                              Kernels
     ////////////////////////////////////////////////////////////////////////////
     // Each core derives its units from its own position (see
-    // `kernels/attn_res_core_runs.hpp`), so the split rides in compile-time args and a
-    // launch ships no per-core runtime args at all.
+    // `kernels/attn_res_core_runs.hpp`), so the split rides in compile-time args.
     const std::array<uint32_t, 5> split_ct_args = {grid.x, units_per_core, num_units, chunks_per_row, chunk_tiles};
 
     // `pending` aliases running_sum where no write was handed in, so the accessor list is

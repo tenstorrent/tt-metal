@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr uint32_t cb_values = 6;
     constexpr uint32_t cb_weights = 7;
     constexpr uint32_t cb_closed_mask = 9;
-    constexpr uint32_t cb_partials = 19;
+    constexpr uint32_t cb_partials_odd = 19;
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_stats);
     constexpr uint32_t value_tile_bytes = get_tile_size(cb_values);
 
@@ -50,13 +50,13 @@ void kernel_main() {
     CircularBuffer cb_exp_obj(cb_exp);
     CircularBuffer cb_values_obj(cb_values);
     CircularBuffer cb_weights_obj(cb_weights);
-    CircularBuffer cb_partials_obj(cb_partials);
+    CircularBuffer cb_partials_odd_obj(cb_partials_odd);
     auto stats_accessor = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(0));
     auto partials_accessor = TensorAccessor(partials_args, get_common_arg_val<uint32_t>(1));
     auto closed_accessor = TensorAccessor(closed_args, get_common_arg_val<uint32_t>(2));
 
     if constexpr (num_closed_sites > 0) {
-        // 1.0f in every token's closed-site columns, 1 + r for site r, and 0 elsewhere: compute
+        // 1.0f in every row of a closed site's column (1 + r for site r), 0 elsewhere. Compute
         // holds it for every row.
         constexpr uint32_t kFaceDim = 16;
         CircularBuffer cb_mask_obj(cb_closed_mask);
@@ -118,14 +118,19 @@ void kernel_main() {
         cb_exp_obj.wait_front(num_candidates);
         const uint32_t exp_base = cb_exp_obj.get_read_ptr();
         auto write_group = [&](uint32_t group) {
-            const uint32_t first_site = group * sites_per_group;
-            const uint32_t sites = first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
             write_partials_group<Ht, Wt, num_closed_sites>(
-                noc, cb_partials_obj, partials_accessor, closed_accessor, value_tile_bytes, item, first_site, sites);
+                noc,
+                cb_partials_odd_obj,
+                partials_accessor,
+                closed_accessor,
+                value_tile_bytes,
+                item,
+                group * sites_per_group,
+                sites_in_group(group, sites_per_group, num_sites));
         };
         for (uint32_t group = 0; group < num_groups; ++group) {
             const uint32_t first_site = group * sites_per_group;
-            const uint32_t sites = first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
+            const uint32_t sites = sites_in_group(group, sites_per_group, num_sites);
             cb_weights_obj.reserve_back(sites * num_candidates);
             const uint32_t weights_base = cb_weights_obj.get_write_ptr();
             for (uint32_t s = 0; s < sites; ++s) {

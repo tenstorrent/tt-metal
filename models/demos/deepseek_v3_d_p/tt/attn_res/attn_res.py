@@ -104,7 +104,7 @@ class TtAttnRes(LightweightModule):
             and there is no exchange to absorb at `tp_factor == 1`.
         num_links: fabric links for the statistics collective. Defaults to every link the
             box has on the tensor-parallel axis: the block's statistics are the largest
-            payload AttnRes moves, and one link left the all-gather half idle.
+            payload AttnRes moves.
         topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Defaults to
             what the opened fabric actually wraps, which is the only source that
             cannot disagree with it: naming `Ring` on an axis the fabric does not
@@ -478,19 +478,18 @@ class TtAttnRes(LightweightModule):
     def _score_columns(self, queries):
         """R folded queries -> one `[1, 1, d/tp, 32]` operand whose column 1 + r is query r.
 
-        Column 0 and the columns past the last site are zero, so the matmul against it
+        Column 0 and the columns past the last site are zero, so `attn_res_block_stats`
         lands each site's dot in the column `attn_res_block_mix` reads it from and leaves
-        column 0 free for the sum of squares — which `rms_norm_pre_all_gather` writes to
-        column 0 of an otherwise zero tile, so one `add` packs both statistics into a
-        single tile column and one collective carries them.
+        column 0 free for the sum of squares it accumulates there: both statistics share a
+        single tile column and one gather carries them.
 
         Built on first use and held, like `_query_columns`, so it never lands in a trace.
         """
         key = tuple(id(q) for q in queries)
         if key not in self._score_stack_by_query_ids:
             columns = [self._query_column(q) for q in queries]
-            # Zeros allocated outright and one concat. `zeros_like` of a column and a
-            # `ttnn.pad` up to the tile both left garbage in the stack on a mesh.
+            # Explicit `ttnn.zeros` and one concat: `zeros_like` and `ttnn.pad` leave
+            # garbage in the stack on a mesh.
             zeros = lambda width: ttnn.zeros(
                 [1, 1, self.shard_width, width],
                 dtype=columns[0].dtype,
@@ -521,16 +520,11 @@ class TtAttnRes(LightweightModule):
         gathered across the tensor-parallel axis in the same program, then the scoring and
         the mixture in a second pass.
 
-        Each pass reads every sealed tile once, for all the block's read sites. The composed
-        chain reads the set three times and adds a dozen more dispatches — typecasts around
-        the collective, a second collective, the folds, the composite max and sum, the
-        site-major permutes — each billed to the host when the walk runs untraced, which is
-        how prefill runs. The scores are also kept in fp32 the whole way here, where the
-        composed chain narrowed the reduced statistics to bf16.
+        Each pass reads every sealed tile once, for all the block's read sites, and the
+        scores stay in fp32 throughout.
         """
-        # Gathered rather than reduced: the mixture sums the ranks' partials in fp32 dest, so
-        # the exchange only has to move them — and moves each candidate's rows while the
-        # pass is still reducing the next, rather than after it as a separate collective.
+        # Gathered, not reduced: the mixture sums the ranks' partials in fp32 dest, so the
+        # exchange only moves them, overlapped with the reduction of the next candidate.
         stats = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
             sealed,
             self._score_columns(queries),
@@ -648,6 +642,15 @@ class TtAttnRes(LightweightModule):
         exchange buffer: peers write into it by address, so it has to sit at the same
         address on every chip and must not be freed and reallocated while a chip that has
         not caught up could still be using that memory.
+
+        Reuse has no receiver-ready handshake: a peer's `attn_res_block_stats` writes here
+        whenever it runs. That is safe only because the walk issues at least one
+        `attn_res_gather_softmax` read after every `inter_block`, before the next one with
+        the same `(C, N)`. That read's tensor-parallel exchange needs this chip's
+        statistics, which this chip sends only after its `attn_res_block_mix` has finished
+        reading this buffer, so no peer can reach the next `attn_res_block_stats` into it
+        early. A caller issuing two fused `inter_block`s of the same shape back to back
+        breaks this.
         """
         num_candidates = sum(snapshot.shape[1] for snapshot in sealed)
         key = (num_candidates, num_tokens)
@@ -814,7 +817,7 @@ class TtAttnRes(LightweightModule):
             site=site,
             cluster_axis=self.tp_axis,
             # Omitting this leaves the op on the process-wide fabric topology, which the
-            # sealed half's all_reduce does not use: one read would route its two halves
+            # sealed half's collective does not use: one read would route its two halves
             # by different rules wherever the two disagree.
             topology=self.topology[self.tp_axis],
             inv_hidden_size=1.0 / self.hidden_size,

@@ -71,14 +71,20 @@ void AttnResBlockStatsDeviceOperation::validate_on_program_cache_miss(
         const auto view = queries.device()->get_view();
         TT_FATAL(view.is_mesh_2d() && *args.cluster_axis < 2, "AttnResBlockStats gathers across a 2D mesh axis");
         const uint32_t ring_size = *args.cluster_axis == 0 ? view.num_rows() : view.num_cols();
+        // A gather core per link, on the grid's last row; without one nothing is sent.
+        const auto grid = queries.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            args.num_links >= 1 && args.num_links <= grid.x,
+            "AttnResBlockStats gathers over 1 to {} links, got {}",
+            grid.x,
+            args.num_links);
         operations::check_tensor(gathered, "AttnResBlockStats", "gathered", {DataType::FLOAT32});
         TT_FATAL(!gathered.memory_config().is_sharded(), "AttnResBlockStats gathers into an interleaved buffer");
+        const auto expected = ttnn::Shape({1, num_candidates(tensor_args), shape[2], TILE_WIDTH * ring_size});
         TT_FATAL(
-            gathered.padded_shape() == ttnn::Shape({1, num_candidates(tensor_args), shape[2], TILE_WIDTH * ring_size}),
-            "AttnResBlockStats gathers into [1, {}, {}, {}], got {}",
-            num_candidates(tensor_args),
-            shape[2],
-            TILE_WIDTH * ring_size,
+            gathered.padded_shape() == expected,
+            "AttnResBlockStats gathers into {}, got {}",
+            expected,
             gathered.padded_shape());
     }
 }

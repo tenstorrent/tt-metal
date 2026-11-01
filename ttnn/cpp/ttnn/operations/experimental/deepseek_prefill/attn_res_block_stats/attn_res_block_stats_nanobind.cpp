@@ -29,11 +29,7 @@ void bind_attn_res_block_stats(nb::module_& mod) {
             `sealed` is a list of `[1, S_i, N, d]` bfloat16 tensors whose planes, in order,
             are the C candidates. `queries` is `[1, 1, d, 32]` bfloat16 with column 0 zero.
             The output is `[1, C, N, 32]` float32, not yet summed across the
-            tensor-parallel axis: the layout `attn_res_block_mix` takes after an
-            all-gather. Blackhole only.
-
-            Equivalent to `rms_norm_pre_all_gather(v)` plus `matmul(v, queries)` over the
-            concatenated set, with one read of it instead of two and no concatenation.
+            tensor-parallel axis. Blackhole only.
 
             With `cluster_axis`, the op also gathers the statistics across that mesh axis:
             rank p's land in tile column p of `gathered`, `[1, C, N, 32 * P]` float32, which

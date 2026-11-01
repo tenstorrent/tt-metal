@@ -93,10 +93,15 @@ void kernel_main() {
             if (reader_writes_group(group)) {
                 continue;
             }
-            const uint32_t first_site = group * sites_per_group;
-            const uint32_t sites = first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
             write_partials_group<Ht, Wt, num_closed_sites>(
-                noc, cb_partials_obj, partials_accessor, closed_accessor, value_tile_bytes, item, first_site, sites);
+                noc,
+                cb_partials_obj,
+                partials_accessor,
+                closed_accessor,
+                value_tile_bytes,
+                item,
+                group * sites_per_group,
+                sites_in_group(group, sites_per_group, num_sites));
         }
         noc.async_write_barrier();
     });

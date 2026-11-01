@@ -32,8 +32,8 @@ def test_attn_res_block_stats(device, planes, num_sites, num_tokens):
     sum_squares = (v * v).sum(dim=-1)
     dots = v @ queries.float()[0, 0, :, 1 : 1 + num_sites]
 
-    # The squares are packed through bf16 before they are summed, as the RMSNorm statistics
-    # kernel this replaces does; the dots accumulate in fp32 dest at HiFi4.
+    # The squares are packed through bf16 before they are summed; the dots accumulate in
+    # fp32 dest at HiFi4.
     torch.testing.assert_close(out[..., 0], sum_squares, rtol=5e-3, atol=0)
     passed, pcc = comp_pcc(dots, out[..., 1 : 1 + num_sites], 0.99999)
     assert passed, f"dots PCC {pcc}"

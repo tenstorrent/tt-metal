@@ -481,7 +481,7 @@ class TtKimiK3Transformer(LightweightModule):
         residual = self._residual_factory(hidden, inherited)
         # The regression guard for the bug this handoff exists to fix: a rank that starts with
         # nothing sealed silently believes it is the start of the model and reads every layer
-        # against an empty set. Host metadata only (`block_residual.shape[1]`), so it is safe
+        # against an empty set. Host metadata only (the sealed snapshots' `shape[1]`), so it is safe
         # inside a trace capture.
         assert residual.num_sealed == self.inbound_planes - 1, (
             f"rank starting at layer {self.first_layer_idx} opened with {residual.num_sealed} sealed "

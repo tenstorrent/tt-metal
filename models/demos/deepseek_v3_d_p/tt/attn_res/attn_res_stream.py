@@ -199,8 +199,7 @@ class TtAttnResWalk(object):
         The owed read is taken in `open_layer(0)`, which seals first. The live stream it
         reads arrives complete, and a seal right after the read is what layer 0 owes
         anyway, so scoring `q_pre[0]` against the set *with* that stream sealed is the same
-        read — and it puts `q_pre[0]` in the batch of the block that opens there, over one
-        sealed set, instead of a batch of its own over the set before it.
+        read, and it puts `q_pre[0]` in the batch of the block that opens there.
         """
         self.op = op
         self.block_size = block_size

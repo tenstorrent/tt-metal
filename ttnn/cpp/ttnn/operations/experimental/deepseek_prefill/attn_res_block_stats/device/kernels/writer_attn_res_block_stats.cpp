@@ -12,21 +12,21 @@
 // Where a row is cut into runs, a run's partials go to the row's leader rather than to
 // DRAM: into the leader's copy of `cb_received`, which sits at the same address on every
 // core, followed by an increment of the leader's count for that run. The leader parks each
-// candidate's summed row as soon as it has it — and where the op gathers across ranks,
-// tells the gather core, which sends a candidate's rows to the peers once all are parked.
+// candidate's summed row as soon as it has it and, where the op gathers across ranks,
+// counts it on the gather cores, which send it on to the peers.
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t num_candidates = get_compile_time_arg_val(1);
     constexpr uint32_t chunk_sem_id = get_compile_time_arg_val(2);
-    // Where the op gathers: the first of the gather core's per-candidate count semaphores,
-    // the ranks side by side in the output, and the counts' field width. Otherwise 0, 1, 0.
+    // Where the op gathers: the first of the gather cores' per-row count semaphores, and the
+    // ranks side by side in the output (1 otherwise).
     constexpr uint32_t gather_sem_id = get_compile_time_arg_val(3);
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
-    constexpr AttnResProgressFields row_fields{get_compile_time_arg_val(5)};
-    constexpr AttnResProgressFields chunk_fields{get_compile_time_arg_val(6)};
+    // The per-run counts here and the per-row counts on the gather cores share a field width.
+    constexpr AttnResProgressFields fields{get_compile_time_arg_val(5)};
     // One per fabric link, each counting the rows it sends.
-    constexpr uint32_t num_gather_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t kSplitArgs = 8;
+    constexpr uint32_t num_gather_cores = get_compile_time_arg_val(6);
+    constexpr uint32_t kSplitArgs = 7;
     using Split = AttnResBlockStatsSplit<kSplitArgs>;
     constexpr uint32_t chunks_per_row = Split::chunks_per_row;
     constexpr bool gathers = ring_size > 1;
@@ -74,7 +74,7 @@ void kernel_main() {
                 cb_out_obj.wait_front(1);
                 noc_async_write(cb_out_obj.get_read_ptr(), get_noc_addr(leader_x, leader_y, slot), tile_bytes);
                 noc_async_write_barrier();
-                noc_semaphore_inc(leader_counts, chunk_fields.increment(unit.chunk - 1));
+                noc_semaphore_inc(leader_counts, fields.increment(unit.chunk - 1));
                 cb_out_obj.pop_front(1);
             }
             continue;
@@ -83,7 +83,7 @@ void kernel_main() {
             if constexpr (chunks_per_row > 1) {
                 // Hand compute the row's other runs' partials for this candidate once all are in.
                 for (uint32_t r = 0; r + 1 < chunks_per_row; ++r) {
-                    while (chunk_fields.count(*chunk_counts, r) <= c) {
+                    while (fields.count(*chunk_counts, r) <= c) {
                         invalidate_l1_cache();
                     }
                 }
@@ -106,8 +106,8 @@ void kernel_main() {
                         get_noc_addr(
                             gather_core >> 16,
                             gather_core & 0xFFFF,
-                            get_semaphore(gather_sem_id + row_fields.word(unit.row))),
-                        row_fields.increment(unit.row));
+                            get_semaphore(gather_sem_id + fields.word(unit.row))),
+                        fields.increment(unit.row));
                 }
             } else {
                 noc.async_writes_flushed();

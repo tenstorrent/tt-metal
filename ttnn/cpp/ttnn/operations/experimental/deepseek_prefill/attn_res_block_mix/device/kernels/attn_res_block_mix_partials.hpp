@@ -47,6 +47,3 @@ inline void write_partials_group(
         cb_obj.pop_front(sites);
     }
 }
-
-// Which data-movement core writes a group's partials.
-constexpr bool reader_writes_group(uint32_t group) { return group % 2 == 1; }
