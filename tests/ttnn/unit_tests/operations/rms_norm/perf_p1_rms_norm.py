@@ -84,6 +84,15 @@ CELLS = {
     "int_tile_f32_128x8192": _cell((128, 8192), dtype=ttnn.float32, gdtype=ttnn.float32),
     "int_tile_bf8_128x8192": _cell((128, 8192), dtype=ttnn.bfloat8_b, gdtype=ttnn.bfloat16),
     "int_tile_f32_2x4x128x512": _cell((2, 4, 128, 512), dtype=ttnn.float32, gdtype=ttnn.float32),
+    # RM input + RM gamma (golden resilience / cartesian cells; perf-round regression check)
+    "rm_hgt_224x11008": _cell((1, 224, 11008), layout=RM, ml=ML.HEIGHT_SHARDED, glayout=RM, fp32=False),
+    "rm_hgt_f32_128x8192": _cell((128, 8192), dtype=ttnn.float32, layout=RM, ml=ML.HEIGHT_SHARDED, glayout=RM),
+    "rm_hgt_160x11008": _cell((1, 1, 160, 11008), layout=RM, ml=ML.HEIGHT_SHARDED, glayout=RM, fp32=False),
+    "rm_blk_96x6144": _cell((1, 1, 96, 6144), layout=RM, ml=ML.BLOCK_SHARDED, glayout=RM, fp32=False),
+    "rm_blk_128x4096": _cell((1, 1, 128, 4096), layout=RM, ml=ML.BLOCK_SHARDED, glayout=RM, fp32=False),
+    "rm_int_160x11008": _cell((1, 1, 160, 11008), layout=RM, glayout=RM, fp32=False),
+    "rm_int_99991x64": _cell((99991, 64), layout=RM, glayout=RM, fp32=False),
+    "rm_int_7x224x3072": _cell((7, 224, 3072), layout=RM, glayout=RM, fp32=False),
     # the test_regression cell flagged slower in the R5 snapshot (fp32, no gamma, defaults)
     "reg_f32_2x1x128x256": _cell((2, 1, 128, 256), dtype=ttnn.float32, gdtype=None),
 }

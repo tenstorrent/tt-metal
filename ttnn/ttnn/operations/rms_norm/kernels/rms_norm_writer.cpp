@@ -125,6 +125,18 @@ static_assert(
 
 constexpr uint32_t GAMMA_READ_ALIGN = 64;  // BH DRAM read alignment (also >= one 16-datum face row)
 
+// RM gamma row placement. An RM gamma is ONE DRAM page (one bank). Direct: one 64 B-aligned DRAM read per tile
+// straight into the face rows + one local copy — only when the reading Tensix core is the slice's single reader
+// (the multicast sender). Per-core loads (sharded k > 1, interleaved groups without multicast) and the streamed
+// fallback keep one contiguous read of the slice + the RISC-V scatter: N Tensix cores issuing per-tile reads into
+// the same DRAM page measured 2.0-3.6x slower in the golden suite (BH p150b: RM HEIGHT fp32 (128,8192) 113 -> 409 us,
+// RM HEIGHT (1,224,11008) 122 -> 340 us, RM BLOCK (96,6144) 12.2 -> 27.3 us).
+#ifdef RMS_GAMMA_MCAST
+constexpr bool gamma_rm_direct = true;
+#else
+constexpr bool gamma_rm_direct = false;
+#endif
+
 // RM gamma: bytes of lead-in below the 64 B-aligned read start of the slice.
 FORCE_INLINE uint32_t gamma_rm_lead(uint32_t gamma_col0) {
     return (gamma_col0 * gamma_elem_bytes) & (GAMMA_READ_ALIGN - 1);
@@ -152,7 +164,7 @@ FORCE_INLINE void issue_gamma_reads(
     } else {
         const uint32_t byte0 = gamma_col0 * gamma_elem_bytes;
         const uint32_t lead = gamma_rm_lead(gamma_col0);
-        if (lead == 0) {
+        if (gamma_rm_direct && lead == 0) {
             // one DRAM read of tile j's 32-datum row into face 0 rows 0..1 (finish moves the face-1 half). The last
             // tile may read past W: its padding columns are don't-care output.
             constexpr uint32_t row_bytes = TILE_DIM * gamma_elem_bytes;
@@ -173,7 +185,7 @@ FORCE_INLINE void finish_gamma_slice(uint32_t base, uint32_t core_w_tiles, uint3
         constexpr uint32_t words_per_face_row = FACE_DIM * gamma_elem_bytes / sizeof(uint32_t);
         constexpr uint32_t frow = FACE_DIM * gamma_elem_bytes;
         const uint32_t lead = gamma_rm_lead(gamma_col0);
-        if (lead == 0) {
+        if (gamma_rm_direct && lead == 0) {
             for (uint32_t j = 0; j < core_w_tiles; ++j) {  // face 0 row 1 (the face-1 half of row 0) -> face 1 row 0
                 const uint32_t tile = base + j * g_tile_bytes;
                 noc_async_read(get_noc_addr(tile + frow), tile + face_bytes, frow);
