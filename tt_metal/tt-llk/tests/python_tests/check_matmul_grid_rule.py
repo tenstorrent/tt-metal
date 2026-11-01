@@ -166,7 +166,7 @@ def check_forced() -> int:
 
 
 def check_dense_pack() -> int:
-    """matmul_pack_form_k of the header against matmul_pack_form over the math only sweep's dense pages and the LLK-only sweep's blocks, the shapes of the dense and plain block cells and their neighbours."""
+    """matmul_pack_form_k of the header against matmul_pack_form over the math only sweep's dense pages and the LLK-only sweep's blocks, the shapes of the dense cells and their neighbours."""
     from itertools import product
 
     from helpers.format_config import InputOutputFormat
@@ -191,7 +191,7 @@ def check_dense_pack() -> int:
         for fi, sy, a, b, o, rt, ct, kt, th, dense in cases
     )
     bad = sum(x != y for x, y in zip(cpp, py)) + (len(cpp) != len(py))
-    print(f"dense and plain block pack: {len(cases)} cases, forms {sorted(set(cpp))}, {bad} differ")
+    print(f"dense pack: {len(cases)} cases, forms {sorted(set(cpp))}, {bad} differ")
     return bad
 
 

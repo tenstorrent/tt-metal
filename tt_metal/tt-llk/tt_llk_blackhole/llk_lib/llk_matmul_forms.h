@@ -1317,7 +1317,7 @@ constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool ha
 }
 
 // Blocks of the math only sweep (dense_pages: the perf sweep of math without unpack) where the pack form of the table reads behind main's per-tile pack: the form of the cell instead
-// (0 per tile, 1 one block run), keyed on the operand and output formats, the block and the k steps (any accumulate).
+// (0 per tile; the block run of a block float output writes wrong data), keyed on the operand and output formats, the block and the k steps (any accumulate).
 struct matmul_pack_dense_cell
 {
     MathFidelity fidelity;
@@ -1331,7 +1331,7 @@ inline constexpr matmul_pack_dense_cell matmul_pack_dense_cells[] = {
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 2, 4, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 4, 4, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 4, 4, 0},
-    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 1, 1},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 1, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 3, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 4, 0},
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 1, 0},
@@ -1351,25 +1351,6 @@ constexpr int matmul_pack_dense_form(const MathFidelity fidelity, const std::uin
         }
     }
     return -1;
-}
-
-// Cells of the LLK-only space where the closed block pack of a block float output reads behind the plain block run (any K and accumulate)
-inline constexpr matmul_pack_llkx_cell matmul_pack_llkx_plain_block_cells[] = {
-    {MathFidelity::LoFi, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Bfp8, 1, 4, 0},
-    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 4, 2},
-};
-
-constexpr bool matmul_pack_llkx_plain_block(const MathFidelity fidelity, const DataFormat out, const DataFormat in_a, const DataFormat in_b, const std::uint32_t rt, const std::uint32_t ct,
-                                            const std::uint32_t throttle)
-{
-    for (const matmul_pack_llkx_cell& c : matmul_pack_llkx_plain_block_cells)
-    {
-        if (c.fidelity == fidelity && c.out == out && c.in_a == in_a && c.in_b == in_b && c.rt == rt && c.ct == ct && c.throttle == throttle)
-        {
-            return true;
-        }
-    }
-    return false;
 }
 
 // The output pack form of a matmul block: matmul_pack_form_base_k, and for the blocks it leaves on the per-tile pack at half sync (two or more full tiles, throttle 0, 2 or 3, no packer L1 accumulate,
@@ -1392,7 +1373,7 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
     {
         form = matmul_format_block_float(out) ? 2 : 1;
     }
-    return (form == 2 && half_sync && !dense_pages && matmul_pack_llkx_plain_block(fidelity, out, in_a, in_b, rt, ct, throttle)) ? 1 : form;
+    return form;
 }
 
 
@@ -1571,6 +1552,11 @@ struct matmul_forced_form_cell
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
+    // LoFi, 16-bit DEST, one DEST section, to Bfp8_b over 8 k steps: a 2x4 block of a Float16_b in1 against a Bfp4_b in0 (static throttle 2) reads 0.6 cycles behind main on the table's
+    // form and 0.14 over with the hoisted tile form (the block pack run of a block float output writes wrong data, so the pack form stays closed)
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 4, 2, true, 'h', false, 1, 2, true},
+    // LoFi, 32-bit DEST accumulate, a 1x4 block of a Float16 in1 against a Bfp8 in0 to Bfp8 over 1 to 8 k steps: the hoisted rows form reads 0.5 to 3.8 cycles ahead of the table's form
+    {MathFidelity::LoFi, 0, 1, 8, true, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 4, 4, 1, true, 'R', false, 1, 1, true},
     // LoFi, 16-bit DEST, one DEST section, a 1x8 block of a Float16_b in1 against a Float32 in0 over 8 k steps to Bfp8_b (static throttle 3): the table's form reads 0.28 cycles behind main, the hoisted tile form 0.38 ahead
     {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 8, 8, 1, true, 'h', false, 1, 1, true},
     // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles behind main at half sync
