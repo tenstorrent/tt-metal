@@ -164,3 +164,15 @@ def test_pinned_perf_geometry(device, rows, W, ml, shard):
         pinned=shard,
         pcc=0.9995,
     )
+
+
+@pytest.mark.parametrize(
+    "shape,layout",
+    [
+        ((7136, 736), ttnn.TILE_LAYOUT),  # k = 23 owner combine, 223 tile-rows -> several row blocks
+        ((1, 1, 4064, 160), ttnn.ROW_MAJOR_LAYOUT),  # k = 20 RM stick shards, several row blocks
+    ],
+)
+def test_owner_combine_multi_block(device, shape, layout):
+    """Members own different row counts per block: cb_inv_owned's read pointer must wrap correctly."""
+    _run(device, shape, WS, layout=layout, fp32_dest=False)

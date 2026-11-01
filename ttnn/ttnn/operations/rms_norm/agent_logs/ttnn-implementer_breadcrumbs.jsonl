@@ -6,3 +6,4 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-01T15:13:19+00:00"}
 {"event":"test_run","result":"pass","detail":"R1: numeric_config 41/41, phase0 unit 145/145, golden slice 236 pass / 36 xfail({fp32,False}) / 696 skip / 0 fail","ts":"2026-11-01T15:25:16+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"partial-scaler-reduce","args":"","ts":"2026-11-01T15:36:13+00:00"}
+{"event":"fix_applied","what":"owner combine: writer returns owned inv_rms tiles one at a time from the cb_inv_owned front (members own different row counts per block -> read pointer not block-aligned; multi-tile linear walk read wrong pages)","tests":"golden sharded loose 192/192, cartesian slice 318 pass/90 xfail, interleaved slice 94 pass","ts":"2026-11-01T16:12:42+00:00"}

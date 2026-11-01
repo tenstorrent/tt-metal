@@ -113,19 +113,22 @@ FORCE_INLINE void exchange_via_owners(
     cb_reserve_back(cb_inv_rms, rows);
     const uint32_t inv_base = get_write_ptr(cb_inv_rms);
     if (owned > 0) {
-        cb_wait_front(cb_inv_owned, owned);
-        const uint32_t inv_src = get_read_ptr(cb_inv_owned);
-        for (uint32_t m = 0; m < k; ++m) {
-            for (uint32_t j = 0; j < owned; ++j) {
-                const uint32_t r = j * k + member_idx;
-                send_acc_tile(inv_src + j * tile_bytes, peer_addr(m, inv_base + r * tile_bytes), tile_bytes);
+        // One owned tile at a time from the CB front: members own different row counts per block, so the
+        // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
+        for (uint32_t j = 0; j < owned; ++j) {
+            const uint32_t r = j * k + member_idx;
+            cb_wait_front(cb_inv_owned, 1);
+            const uint32_t inv_src = get_read_ptr(cb_inv_owned);
+            for (uint32_t m = 0; m < k; ++m) {
+                send_acc_tile(inv_src, peer_addr(m, inv_base + r * tile_bytes), tile_bytes);
             }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_inv_owned, 1);
         }
         noc_async_write_barrier();
         for (uint32_t m = 0; m < k; ++m) {
             noc_semaphore_inc(peer_addr(m, sem_inv_addr), owned);
         }
-        cb_pop_front(cb_inv_owned, owned);
     }
     inv_expected += rows;
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_inv_addr), inv_expected);
