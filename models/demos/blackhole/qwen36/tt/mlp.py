@@ -166,10 +166,13 @@ def _down_decode_progcfg(n):
 
     ttnn's auto config picks in0_block_w=2 at K=17408, which stalls at about 53% of DRAM peak;
     in0_block_w=4 reaches about 74% with the same output.
+    QWEN36_1C_DOWN_40C=1: Agent A's 11x4 grid with per_core_N=4 (40 active cores at N=5120);
+    isolated bfp4 161.4 vs 183.3 us.
     """
-    per_core_n = -(-n // (ttnn.TILE_SIZE * 110))
+    grid = (11, 4) if os.environ.get("QWEN36_1C_DOWN_40C") == "1" else (11, 10)
+    per_core_n = 4 if grid == (11, 4) else -(-n // (ttnn.TILE_SIZE * 110))
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(11, 10),
+        compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
         out_subblock_w=max(i for i in range(1, 5) if per_core_n % i == 0),
