@@ -67,7 +67,7 @@
 
 **Landed**: both values in SUPPORTED (TILE + ROW_MAJOR, all alignments). Golden WIDTH/BLOCK slice: 642 pass / 126 xfail (exclusions) / 0 fail; all 192 sharded loose cells pass (+3 harness `INFEASIBLE_L1`). TILE cb_x / cb_out are backed on the shards; RM stick shards are copied locally into the tilize staging (16 B-granular shard widths are not a tile-page layout). The combine is the R3 owner topology for every sharded k > 1 (measured 2.2× over the all-gather on tall BLOCK shards). Remaining sharded headroom vs `achievable_ns` (tall BLOCK 32.3 vs 18.9 µs, decode WIDTH 5.7–9.6 vs 4.1–5.5 µs) is per-tile-row SFPU work (full-tile rsqrt finalize + within-tile collapse) — see changelog; next levers: finalize SFPU scope, row-partial + multicast return.
 
-### [ ] Refinement 3 — Speed up the large interleaved cells: fill the grid at mid tile-row counts, overlap the one-block prefill
+### [x] Refinement 3 — Speed up the large interleaved cells: fill the grid at mid tile-row counts, overlap the one-block prefill
 
 **Type**: perf
 
@@ -77,6 +77,8 @@
 Use the relevant entries of `ttnn/ttnn/operations/examples/master.md`. No SUPPORTED change.
 
 **Done when**: measured device-ns improves on the most-impacted shape of each class at its own config, the soft PCC 0.9995 gate of the perf profiles still holds, the golden suite is green, and no regression across the config-spanning guard set (one representative per distinct kernel path × layout × placement).
+
+**Outcome**: (BH p150b, perf config, device ns) (a) per-core-cost W split `_choose_k`: (640,6144) 99 683 → 45 884, (640,7168) 116 090 → 52 039, (1024,1024) 22 710 → 15 226. (b) ablation showed the binding stage was the reader's serial per-core gamma load (131 µs of 771 µs at (8192,7168)), not overlap. Gamma moved to the writer and multicast once per W slice (`GAMMA_MCAST`): (8192,7168) 771 298 → 628 756, (7168,1024) 90 816 → 77 611, (8192,2304) 235 847 → 194 893. The overlap knob `OVERLAP_BLOCKS` is built and parked at 1 (2 measured 630 → 673 µs). Writer unit / depth measured flat. Every guard shape (interleaved TILE/RM, sharded WIDTH/BLOCK) is faster. Now: k = 1 prefill is DRAM-write-bound: compute stubbed = same time; write-only 438 µs (268 GB/s) vs read-only 313 µs at (8192,7168). Next: split output writes across both NoCs (needs a second output CB and a compute pack split, a scheme change). Mid tile-row cells serialize read → pass 1 → write inside each Tensix core (45.9 vs ≈ 37 µs ceiling). Next: stream pass 1 per W chunk. Neither was attempted here: both are restructurings beyond this knob-turn heading.
 
 ### [ ] Refinement 4 — HEIGHT_SHARDED: consume the resident row shard in place
 

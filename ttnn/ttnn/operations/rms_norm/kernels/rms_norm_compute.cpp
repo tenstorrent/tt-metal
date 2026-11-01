@@ -270,9 +270,14 @@ ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms final
 
 // norm_w: tiles normalized per tile-row (interleaved: core_w_tiles; sharded TILE: the whole shard row, so the
 // shard-backed cb_out advances by x_row_pitch per tile-row — padding tiles of a ragged shard are don't-care).
+// gamma_tiles: cb_gamma pages (waited here, not at kernel start: the writer loads gamma while pass 1 runs; the
+// wait is a no-op after the first block — gamma is popped only at kernel exit).
 template <uint32_t cb_x_blk>
-ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this) {
+ALWI void apply_back(uint32_t rows, uint32_t norm_w, uint32_t chunks_this, [[maybe_unused]] uint32_t gamma_tiles) {
     cb_wait_front(cb_inv_rms, rows);
+#ifdef RMS_HAS_GAMMA
+    cb_wait_front(cb_gamma, gamma_tiles);
+#endif
 #ifdef RMS_RM
     for (uint32_t c = 0; c < chunks_this; ++c) {
         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles);
@@ -303,13 +308,10 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_x, cb_x, cb_out);
 #endif
 
-#ifdef RMS_HAS_GAMMA
 #ifdef RMS_RM
-    const uint32_t gamma_tiles = chunks_this * rm_chunk_w_tiles;
+    [[maybe_unused]] const uint32_t gamma_tiles = chunks_this * rm_chunk_w_tiles;
 #else
-    const uint32_t gamma_tiles = core_w_tiles;
-#endif
-    cb_wait_front(cb_gamma, gamma_tiles);
+    [[maybe_unused]] const uint32_t gamma_tiles = core_w_tiles;
 #endif
 
     auto rows_of = [&](uint32_t blk) { return (blk + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles; };
@@ -324,7 +326,7 @@ void kernel_main() {
         if constexpr (w_split_cores > 1) {
             combine_block(rows, member_idx, finalize);
         }
-        apply_back<cb_x>(rows, core_w_tiles, chunks_this);
+        apply_back<cb_x>(rows, core_w_tiles, chunks_this, gamma_tiles);
     }
 #else
     if constexpr (w_split_cores > 1 && combine_lookahead) {
@@ -340,9 +342,9 @@ void kernel_main() {
             }
             combine_partials_block(rows, finalize);
             if (use_alt(blk)) {
-                apply_back<cb_x_alt>(rows, norm_w, chunks_this);
+                apply_back<cb_x_alt>(rows, norm_w, chunks_this, gamma_tiles);
             } else {
-                apply_back<cb_x>(rows, norm_w, chunks_this);
+                apply_back<cb_x>(rows, norm_w, chunks_this, gamma_tiles);
             }
         }
     } else {
@@ -353,13 +355,13 @@ void kernel_main() {
                 if constexpr (w_split_cores > 1) {
                     combine_block(rows, member_idx, finalize);
                 }
-                apply_back<cb_x_alt>(rows, norm_w, chunks_this);
+                apply_back<cb_x_alt>(rows, norm_w, chunks_this, gamma_tiles);
             } else {
                 reduce_front<cb_x>(rows, core_w_tiles, finalize, owns_tail);
                 if constexpr (w_split_cores > 1) {
                     combine_block(rows, member_idx, finalize);
                 }
-                apply_back<cb_x>(rows, norm_w, chunks_this);
+                apply_back<cb_x>(rows, norm_w, chunks_this, gamma_tiles);
             }
         }
     }

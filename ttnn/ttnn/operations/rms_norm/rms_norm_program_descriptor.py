@@ -51,7 +51,8 @@ CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows t
 
 SEM_PARTIALS_ARRIVED = 0
 SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
-WRITER_NOC_XY_ARG_BASE = 11  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
+SEM_GAMMA_MCAST_FIRST = 2  # gamma multicast channel (ttnn.Mcast allocates its semaphores from this id)
+WRITER_NOC_XY_ARG_BASE = 13  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
 
 # Knob constants (design Phase 0 values).
 K_CAP_MAX = 8  # unicast all-gather mechanism cap (interleaved W split)
@@ -62,6 +63,11 @@ K_CAP_MAX = 8  # unicast all-gather mechanism cap (interleaved W split)
 # tile-rows instead of all of them); 1- and 2-tile-row shards flat (<= 3%).
 K_SYM_MAX_INTERLEAVED = 8
 K_SYM_MAX_SHARDED = 1
+# Interleaved: the Tensix cores sharing a W slice get gamma by one multicast (one DRAM read per slice) instead
+# of each reading it (the writer loads it, off the reader's x stream). BH p150b, perf config: the per-core load
+# was a 131 us serial prefix of (8192,7168) (130 Tensix cores reading the same 224 gamma tiles, 2 x 64 B reads
+# each); measured 771 -> 630 us (8192,7168), 90.8 -> 76.3 us (7168,1024), (640,6144) k=6 51.9 -> 45.7 us.
+GAMMA_MCAST = True
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
 OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
 RM_IN_DEPTH = 2  # cb_x_rm buffer depth
@@ -69,7 +75,11 @@ OUT_UNIT_CAP = 16  # TILE writer batch (tiles per wait/flush/pop)
 RM_CHUNK_CAP = 32  # balanced RM streaming chunk cap (tiles)
 RM_PIECE_FLOOR_BYTES = 512  # occupancy split must keep RM stick pieces >= this
 OCC_TILES_PER_MEMBER = 4  # occupancy split keeps >= 4 W tiles per member
-OCC_ROWS_FRACTION = 8  # occupancy split only when 8 * tensor_row_tiles <= G
+COMBINE_TILE_COST = 3  # k > 1: per-tile-row collapse + exchange + combine cost, in x-tile equivalents
+# Whole assignment fits: split it into this many depth-2 blocks (1 = one block per core). Measured 2 on BH p150b
+# (perf config): (8192,7168) 630 -> 673 us, (7168,1024) 76 -> 81 us — the k = 1 prefill shapes are DRAM-write-
+# bound (compute stubbed: same time; write-only 438 vs read-only 313 us at 8192x7168), so 1 stays the default.
+OVERLAP_BLOCKS = 1
 
 
 def _f32_bits(v: float) -> int:
@@ -239,11 +249,23 @@ def _pitch(sz: _Sizes, slice_w: int):
     return _rm_chunk(slice_w) if sz.is_rm else (1, slice_w)
 
 
-def _solve_rows(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts, allow_depth2: bool):
+def _solve_rows(
+    sz: _Sizes,
+    k: int,
+    slice_w: int,
+    crt_max: int,
+    budget: int,
+    opts: PlanOpts,
+    allow_depth2: bool,
+    overlap_blocks: int = 1,
+):
     """Largest block_row_tiles (and x_block_depth) whose CB plan fits `budget`.
 
-    One block per core (the whole assignment) when it fits; else the largest sub-block at depth 2 (TILE
-    interleaved) / 1. The symmetric all-gather needs a 2-block cb_gathered only when a core runs > 1 block.
+    When the whole assignment fits: overlap_blocks > 1 (and depth 2 allowed) splits it into ceil(crt_max /
+    overlap_blocks)-row blocks at depth 2, so the read of block b+1 overlaps compute + write of block b
+    (design perf lamp "Overlap (one-block assignment)"); overlap_blocks == 1 keeps one block per core.
+    Otherwise the largest sub-block at depth 2 (TILE interleaved) / 1. The symmetric all-gather needs a
+    2-block cb_gathered only when a core runs > 1 block.
     """
 
     def fits(b, d):
@@ -251,6 +273,11 @@ def _solve_rows(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opt
         o = PlanOpts(opts.shard_backed, opts.owner_combine, 1 if single else 2, opts.mask_tail)
         return _plan_bytes(cb_plan(sz, k, slice_w, b, d, o)) <= budget, o
 
+    if allow_depth2 and overlap_blocks > 1 and crt_max > 1:
+        b_ov = _div_up(crt_max, min(overlap_blocks, crt_max))
+        ok, o = fits(b_ov, 2)
+        if ok:
+            return b_ov, 2, o
     ok, o = fits(crt_max, 1)
     if ok:
         return crt_max, 1, o
@@ -265,9 +292,41 @@ def _solve_rows(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opt
     return 1, 1, o
 
 
+def _occ_cost(trt: int, tw: int, k: int, grid_x: int, grid_y: int) -> int:
+    """Per-core critical-path work of a W split k, in x-tile equivalents.
+
+    Rows of the busiest group x (its slice width + the per-tile-row cost of the k > 1 collapse / exchange /
+    combine). Row-groups of one split fill the grid as (grid_x // k) groups per grid row.
+    """
+    groups = min((grid_x // k) * grid_y, trt)
+    rows = _div_up(trt, groups)
+    return rows * (_div_up(tw, k) + (COMBINE_TILE_COST if k > 1 else 0))
+
+
+def _choose_k(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, k_fit: int, k_cap: int, elem_bytes: int) -> int:
+    """w_split_cores: the k >= k_fit that minimizes the busiest Tensix core's work (catalog width_split).
+
+    A split is a candidate only while every member keeps >= OCC_TILES_PER_MEMBER W tiles (RM: stick pieces
+    >= RM_PIECE_FLOOR_BYTES). Ties keep the smaller k (fewer combine members).
+    """
+    tw, trt = geo.tensor_w_tiles, geo.tensor_row_tiles
+    best_k, best = k_fit, _occ_cost(trt, tw, _normalize_k(tw, k_fit)[0], grid_x, grid_y)
+    if tw < 2 * OCC_TILES_PER_MEMBER:
+        return best_k
+    for cand in range(k_fit + 1, k_cap + 1):
+        kk, s = _normalize_k(tw, cand)
+        if s < OCC_TILES_PER_MEMBER:
+            break
+        if sz.is_rm and s * TILE * elem_bytes < RM_PIECE_FLOOR_BYTES:
+            break
+        c = _occ_cost(trt, tw, kk, grid_x, grid_y)
+        if c < best:
+            best_k, best = kk, c
+    return best_k
+
+
 def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget: int, elem_bytes: int) -> Blocking:
     """INTERLEAVED: row-groups over the whole grid x a W split over k consecutive cores of one grid row."""
-    G = grid_x * grid_y
     k_cap = min(K_CAP_MAX, grid_x)
     tw, trt = geo.tensor_w_tiles, geo.tensor_row_tiles
 
@@ -281,13 +340,7 @@ def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget:
             f"rms_norm: W={geo.W} too wide — even w_split_cores={k_cap} does not fit L1 ({budget} B per core)"
         )
 
-    k_occ = 1
-    if OCC_ROWS_FRACTION * trt <= G and tw >= 8:
-        k_occ = min(k_cap, G // trt, tw // OCC_TILES_PER_MEMBER)
-        if sz.is_rm:
-            k_occ = min(k_occ, max(1, (geo.W * elem_bytes) // RM_PIECE_FLOOR_BYTES))
-        k_occ = max(1, k_occ)
-    k, slice_w = _normalize_k(tw, max(k_fit, k_occ))
+    k, slice_w = _normalize_k(tw, _choose_k(geo, sz, grid_x, grid_y, k_fit, k_cap, elem_bytes))
     c, pitch = _pitch(sz, slice_w)
 
     groups_per_grid_row = grid_x // k
@@ -312,7 +365,14 @@ def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget:
     crt_max = base + (1 if rem else 0)
 
     b, d, opts = _solve_rows(
-        sz, k, slice_w, crt_max, budget, PlanOpts(owner_combine=k > K_SYM_MAX_INTERLEAVED), allow_depth2=not sz.is_rm
+        sz,
+        k,
+        slice_w,
+        crt_max,
+        budget,
+        PlanOpts(owner_combine=k > K_SYM_MAX_INTERLEAVED),
+        allow_depth2=not sz.is_rm,
+        overlap_blocks=1 if sz.is_rm else OVERLAP_BLOCKS,
     )
     return Blocking(
         k=k,
@@ -434,6 +494,24 @@ def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int
     )
 
 
+def _gamma_mcast_groups(blk: Blocking, grid_x: int):
+    """(receiver_group_size, core order) of the interleaved gamma multicast, or None (per-core gamma load).
+
+    ttnn.Mcast cuts the ordered active cores into equal consecutive groups, and a group must share one W slice.
+    k == 1: every Tensix core holds the same slice -> one group of all of them. k > 1: member m of row-group g sits
+    in grid column (g % gpr) * k + m, so a grid column holds a single slice; when the row-groups fill whole grid
+    rows every column has the same count -> one group per column (column-major order). Otherwise (a partial last
+    grid row of row-groups) the columns differ in size and each Tensix core loads its own slice.
+    """
+    n = len(blk.groups)
+    if blk.k == 1:
+        return n, ttnn.McastCoreOrder.RowMajor
+    gpr = grid_x // blk.k
+    if n % gpr == 0:
+        return n // gpr, ttnn.McastCoreOrder.ColumnMajor
+    return None
+
+
 def is_sharded_wb(tensor) -> bool:
     return tensor.memory_config().memory_layout in (
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -550,6 +628,12 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         defines.append(("RMS_SHARDED", "1"))
     if opts.mask_tail:
         defines.append(("RMS_MASK_TAIL", "1"))
+    gamma_groups = None
+    if GAMMA_MCAST and has_gamma and not sharded:
+        gamma_groups = _gamma_mcast_groups(blk, grid.x)
+    gamma_mcast = gamma_groups is not None
+    if gamma_mcast:
+        defines.append(("RMS_GAMMA_MCAST", "1"))
 
     x_page = input_tensor.buffer_aligned_page_size()
     out_page = output_tensor.buffer_aligned_page_size()
@@ -559,25 +643,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     x_acc_args = ttnn.TensorAccessorArgs() if sharded else ttnn.TensorAccessorArgs(input_tensor)
     out_acc_args = ttnn.TensorAccessorArgs() if sharded else ttnn.TensorAccessorArgs(output_tensor)
 
-    reader_ct = [
-        geo.tensor_w_tiles,
-        geo.W,
-        geo.H,
-        geo.image_row_tiles,
-        pitch,
-        C,
-        x_page,
-        g_page,
-        elem_bytes,
-        g_elem_bytes,
-        1 if gamma_is_tile else 0,
-        d,
-        _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
-    ]
+    reader_ct = [geo.tensor_w_tiles, geo.W, geo.H, geo.image_row_tiles, pitch, C, x_page, elem_bytes, d]
     reader_ct.extend(x_acc_args.get_compile_time_args())
-    reader_ct.extend(
-        (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
-    )
 
     writer_ct = [
         geo.tensor_w_tiles,
@@ -596,8 +663,15 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         1 if PARTIAL_FACES_ONLY else 0,
         SEM_INV_ARRIVED,
         pitch,
+        g_page,
+        g_elem_bytes,
+        1 if gamma_is_tile else 0,
+        _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
     ]
     writer_ct.extend(out_acc_args.get_compile_time_args())
+    writer_ct.extend(
+        (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
+    )
 
     compute_ct = [k, pitch, C, d, combine_lookahead, 1 if opts.owner_combine else 0]
 
@@ -625,7 +699,6 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             norm_w = pitch if opts.shard_backed else mem.core_w
             reader_rt[c.x][c.y] = [
                 x_addr,
-                g_addr,
                 mem.row_start,
                 num_blocks,
                 b,
@@ -633,7 +706,6 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
                 mem.w_tile_start,
                 mem.core_w,
                 chunks_this,
-                mem.col0,
                 mem.valid_cols,
                 mem.valid_sticks,
                 owns_tail,
@@ -662,6 +734,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
                 mem.m,
                 mem.valid_cols,
                 mem.valid_sticks,
+                g_addr,
+                mem.col0,
             ]
             assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
             writer_rt[c.x][c.y] = writer_base + noc_xy
@@ -695,4 +769,18 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS_ARRIVED, core_ranges=core_ranges, initial_value=0))
         if opts.owner_combine:
             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+    if gamma_mcast:
+        # Sender = each group's first Tensix core (reads + expands the slice); one-shot, no handshake.
+        group_size, order = gamma_groups
+        mc = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # the writer's NoC (WriterConfigDescriptor)
+            core_ranges,
+            group_size,
+            ttnn.McastFixedSenderConfig(),
+            order,
+        )
+        mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
+    descriptor.kernels = [reader, writer, compute]
+    return descriptor

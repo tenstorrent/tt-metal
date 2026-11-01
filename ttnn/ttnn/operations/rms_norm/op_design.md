@@ -248,7 +248,7 @@ Compute order with `combine_lookahead` (k > 1, ≥ 2 blocks): `sum_squares(0), c
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| Overlap (one-block assignment) | When the whole per-group assignment is one block (`x_block_depth = 1`), the read of x does not overlap pass 1 and the write of the last tiles does not overlap the next read | `block_row_tiles = ceil(core_row_tiles/2)` with `x_block_depth = 2` |
+| Overlap (one-block assignment) | When the whole per-group assignment is one block (`x_block_depth = 1`), the read of x does not overlap pass 1 and the write of the last tiles does not overlap the next read | `block_row_tiles = ceil(core_row_tiles/2)` with `x_block_depth = 2`  — R3: built as `OVERLAP_BLOCKS` (default 1); 2 measured slower on BH prefill (DRAM-write-bound) |
 | Overlap at the fit boundary | Wide-W prefill (e.g. 8192×7168) fits k = 1 only at `x_block_depth = 1` → no inter-block overlap | k = 2 with `x_block_depth = 2` |
 | Grid synchronization (occupancy k) | `k_occ` takes up to 8 members with ≥ 4 tiles each; at small W the combine (~0.5–1.5 µs) may exceed the per-core time saved | k_occ / 2, and k = 1 (catalog: Wt = 8, k = 2 only 1.17×) |
 | Partial payload | Phase 0 ships whole 4 KB fp32 partial tiles; only column 0 (faces 0 and 2) is meaningful | ship faces 0/2 only (2 × 1 KB) — catalog `tensix_all_reduce`: never ship the whole tile |

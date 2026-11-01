@@ -74,3 +74,75 @@
   - every case asserts the caller's input shard is unchanged
 
   Prior-phase acceptance + debug + numeric-config + precision-baseline: 186/186 green.
+
+## Refinement 3 — Speed up the large interleaved cells: fill the grid at mid tile-row counts, overlap the one-block prefill
+- **Date**: 2026-11-01
+- **What was done** (perf; no SUPPORTED change; BH p150b 13×10, perf config = bf16, `fp32_dest_acc_en=False`, HiFi2, TILE x, TILE gamma; device-kernel ns, median of 3–5):
+  - **(a) Occupancy split, `_choose_k`.** The `8·tensor_row_tiles ≤ G` predicate is replaced by a per-core cost model: the k ≥ k_fit that minimizes busiest-group rows × (slice tiles + `COMBINE_TILE_COST` = 3). Same floors as before: ≥ 4 tiles per member, RM pieces ≥ 512 B. For tile-rows ≤ 10 the choice is unchanged. It also fixes the 11–16 tile-row band, where k = 8 left only 10 groups for up to 16 rows (2 rows per core).
+    - (640,6144) k 1 → 6, 20 → 120 Tensix cores
+    - (640,7168) k 1 → 6
+    - (1024,1024) k 1 → 3, 32 → 96 Tensix cores
+    - k alone: 99 683 → 56 847, 116 090 → 64 564, 22 710 → 16 007
+    - ROW_MAJOR (640,6144): 87 433 → 47 846
+  - **Ablation of (b) found that the gamma load, not overlap, was binding.** On (8192,7168), stubbing x read, compute and write still left 131 µs. The reader loaded gamma *before its first x read*: every Tensix core issued 2 × 64 B DRAM reads per gamma tile (224 tiles × 130 Tensix cores, transaction-bound), then did 9 local NoC copies per tile for the row expansion. Compute waited for gamma at kernel start.
+    - Bank-staggering that walk: no change (131 → 129 µs).
+    - One 576 B read per tile: reads 94 → 59 µs, but then 16.8 MB of redundant DRAM bytes.
+  - **Gamma: moved to the writer and multicast once per W slice** (`GAMMA_MCAST`, kernel-lib `ttnn.Mcast` / `McastArgs` helper, one-shot, NoC1):
+    - The writer (BRISC) is idle until the first output tiles, so every reader starts its x stream at once. Compute waits for `cb_gamma` before its first pass 2.
+    - `_gamma_mcast_groups`: k = 1 is one group of all Tensix cores (one DRAM copy of gamma). k > 1 is one group per grid column, since column x holds only slice x % k; this needs the row-groups to fill whole grid rows.
+    - Otherwise (k > 1 with a partial last grid row) it falls back to a per-core load, still on the writer.
+    - A member-major core layout (k groups) was measured and rejected: its longer all-gather cost as much as the multicast saved (1024×1024: 18.2 µs without the multicast vs 17.4 µs for the adjacent layout).
+    - Sharded paths load their gamma slice per core on the writer.
+  - **Overlap knob `OVERLAP_BLOCKS`** (design lamp "Overlap (one-block assignment)"). `_solve_rows` splits a fitting assignment into ceil(rows/N)-row depth-2 blocks. Measured at N = 2:
+    - before the gamma fix: flat (771 → 772, 90.8 → 93.0, 235.8 → 230.3 µs)
+    - after it: worse (630 → 673, 76 → 81, 192 → 204 µs)
+    - The knob stays live, parked at 1. These shapes are DRAM-write-bound (see below), and mixing block-1 reads with block-0 writes does not help.
+  - **Writer unit size (`OUT_UNIT_CAP`) and depth (`OUT_DEPTH`)**: 8/16/32 tiles × depth 2/4 measured on write-only ablations — flat (7168,1024 57.9–58.9 µs; 8192,2304 142–143 µs). Left at 16 × 2.
+  - **Also measured and not kept:**
+    - per-core bank rotation of the x read / out write walk: read-only 313 → 301 µs, full op flat
+    - swapping the reader / writer NoCs: writes on NoC0 much slower (full 629 → 820 µs)
+  - Reused: the whole compute pipeline, the R2 all-gather, the CB plan and the gamma loader. The gamma loader moved verbatim from the reader to the writer, and the reader now owns only cb_x. Added: `_choose_k` / `_occ_cost`, `_gamma_mcast_groups` + one `ttnn.Mcast` attach, the overlap branch in `_solve_rows`, and the compute gamma wait moved into `apply_back`.
+- **Device time, before → after (ns)**:
+  - (a) (640,6144): 99 683 → 45 884 (2.17×)
+  - (a) (640,7168): 116 090 → 52 039 (2.23×)
+  - (a) (1024,1024): 22 710 → 15 226 (1.49×)
+  - (b) (8192,7168): 771 298 → 628 756 (1.23×)
+  - (b) (7168,1024): 90 816 → 77 611 (1.17×)
+  - (b) (8192,2304): 235 847 → 194 893 (1.21×)
+  - (b) (8192,1024): 103 004 → 90 299 (1.14×)
+  - Guard set, interleaved, HEAD → now:
+    - TILE (2048,256): 11 273 → 9 363
+    - TILE (4,1,512,512): 18 576 → 16 721
+    - TILE (32,1024): 6 755 → 5 687
+    - TILE (32,7168): 17 260 → 14 501
+    - TILE (32,16384): 32 916 → 27 616
+    - TILE (352,4096): 27 023 → 25 605
+    - RM (2048,256): 13 299 → 10 270
+    - RM (512,512): 20 103 → 16 250
+    - RM (32,1024): 10 025 → 7 704
+    - RM (32,16384): 36 944 → 30 321
+    - RM (352,4096): 30 059 → 26 116
+  - Sharded pinned geometries, R2 → now (ns):
+    - WIDTH (32,1024): 5 733 → 5 189
+    - WIDTH (32,2304): 7 533 → 6 865
+    - WIDTH (32,5120): 8 663 → 8 133
+    - WIDTH (32,7168): 9 621 → 9 456
+    - BLOCK (640,6144): 22 031 → 19 916
+    - BLOCK (640,7168): 29 035 → 26 352
+    - BLOCK (7168,1024): 32 258 → 30 061
+    - BLOCK (8192,1024): 42 749 → 40 727
+  - No measured regression.
+- **Bottleneck now (finding)**:
+  - **k = 1 prefill (class b): DRAM-write-bound.** At (8192,7168), stubbing compute leaves the time unchanged (635 vs 629 µs).
+    - read-only: 313 µs (374 GB/s)
+    - write-only: 438 µs (268 GB/s, insensitive to unit size / depth / bank order)
+    - full: 629 µs (373 GB/s combined, vs ~559 µs at 420 GB/s)
+    - Next lever: raise write throughput by splitting output writes across both NoCs. The reader is idle once its block is read, but that needs a second output CB (cb_out has one consumer) and a compute pack split. It is a scheme change beyond this refinement.
+  - **Mid tile-row (class a):** one tile-row per Tensix core, so read → pass 1 → combine → pass 2 + write serialize inside each core. 45.9 µs vs ≈ 37 µs DRAM ceiling.
+    - Next lever: stream pass 1 per W chunk as tiles land: per-chunk chain calls plus a (rows × chunks) collapse. The chain's Strided addressing needs caller-managed waits.
+- **Accuracy achieved**: unchanged numerics (same FP order). Perf config: PCC ≥ 0.999983 on all 13 measured shapes. New test: PCC ≥ 0.9995 at the perf config (bf16 gamma), ≥ 0.999 with fp32 / bf8b gamma.
+- **Golden test progress** (targeted slice: every INTERLEAVED `test_op_loose` cell — the perf profiles and resilience cases — plus INTERLEAVED gamma `test_op` cells of 4x1x512x512, 2x1x100x47, 1x1x32x8192, 1x1x2048x256): 257 passed, 40 xfailed (EXCLUSION cells), 386 skipped (INVALID), 0 failed.
+- **Issues encountered**:
+  - `ttnn.Mcast` cuts receivers into equal consecutive groups, which drove the column grouping and the per-core fallback.
+  - A W slice held by a single Tensix core has no receivers: the plain `receiver()` fails a static_assert. Fixed with `optional_sender` / `optional_receiver`.
+- **Tests added**: `test_rms_norm_gamma_share.py` (19 cases). It covers every `_gamma_mcast_groups` regime: k = 1 with a partial grid row, k > 1 column groups, k > 1 per-core fallback, and single-core slices. Each runs across TILE / ROW_MAJOR input, TILE / RM gamma, bf16 / fp32 / bf8b gamma, and a non-aligned W / H tail. It asserts the regime chosen on the 13×10 grid. `perf_r3_rms_norm.py` is the profiling probe (no `test_` prefix, not collected). Unit directory: 259/259 green.

@@ -26,7 +26,7 @@ would carry no extra bits while doubling packer/unpacker/NoC bytes and L1.
 | `cb_x_rm` (RM only) | `rm_in_depth · rm_chunk_w_tiles` (= 2·chunk) | `rm_chunk_w_tiles` (one 32-stick × chunk piece being tilized) | `{row: streams → 1 tile-row, W: streams → rm_chunk_w_tiles}` | input dtype (Float16_b / Float32 — raw input, not an accumulation) | reader | compute | per (tile-row, chunk) | none: live concurrently with `cb_out_rm` (reader of block b+1 runs while the writer drains block b); capacity 2× live set = double buffering (reader one chunk ahead) |
 | `cb_x` | TILE: `x_block_depth · block_row_tiles · slice_w_tiles`; RM: `block_row_tiles · core_w_tiles_padded` (x_block_depth = 1) | `block_rows_this · core_w_tiles` (whole block resident across pass 1 and pass 2); with lookahead two blocks | `{row: spans → block_row_tiles, W: spans → core_w_tiles (≤ slice_w_tiles)}` | input dtype (raw input) | reader (TILE) / compute tilize (RM) | compute | load → end of `normalize_block` | none: live through every compute phase of the block; capacity > live set only by `x_block_depth = 2` (next block in flight / lookahead) and, for the last W member, `slice_w_tiles − core_w_tiles` (one capacity value for all cores) |
 | `cb_x_alt` (implementation, TILE only, `x_block_depth == 2`) | `block_row_tiles · x_row_pitch` | the other block of the depth-2 pair | as `cb_x` | input dtype | reader | compute | blocks of odd parity | none: this IS the second half of `cb_x`'s depth-2 budget, split into its own CB because indexed CB reads cannot wrap a ring (LLK `cb_access_within_bounds`) and the combine lookahead reads block b+1 while block b is resident. Footprint unchanged: `d·b·S_x·T_in` total. |
-| `cb_gamma` | `slice_w_tiles` (RM: padded) | `core_w_tiles` | `{row: absent (gamma has no row extent; reused by every row), W: spans → core_w_tiles}` | gamma dtype (Float16_b / Float32 — raw weight) | reader | compute | program | none: program lifetime, read by every block's `normalize_block` |
+| `cb_gamma` | `slice_w_tiles` (RM: padded) | `core_w_tiles` | `{row: absent (gamma has no row extent; reused by every row), W: spans → core_w_tiles}` | gamma dtype (Float16_b / Float32 — raw weight) | writer (R3; was reader) | compute | program | none: program lifetime, read by every block's `normalize_block` |
 | `cb_sumsq_tiles` | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away (DEST accumulation)}` | T_acc format: Float32 / Float16_b per `fp32_dest_acc_en` (DEST accumulation result) | compute | compute | pass 1 → collapse | not with `cb_inv_rms` / `cb_partial_sumsq`: the collapse reduce reads this CB while writing those (concurrent). Same size and format as `cb_inv_rms`; in R2 their lifetimes are disjoint, but R1 overlaps them, and the saving is `block_row_tiles·4 KB` (< 1% of the footprint) — one design for both regimes kept |
 | `cb_partial_sumsq` (k > 1) | `block_row_tiles` | `block_rows_this` | `{row: spans → block_row_tiles, W: reduced away}` | T_acc format | compute | writer | collapse → exchange (the gathered NoC payload follows `get_tile_size`) | not with `cb_sumsq_tiles` (concurrent in the collapse); not with `cb_gathered_sumsq` (peers write into that one at any time during the previous block) |
 | `cb_gathered_sumsq` (k > 1) | symmetric: `gather_depth · w_split_cores · block_row_tiles` (`gather_depth` = 1 when every core runs one block, else 2 — Refinement 2); owner topology: `ceil(block_row_tiles / k) · k` | symmetric: `w_split_cores · block_rows_this` (one block); capacity 2× only for multi-block = mechanism cap (lockstep slot reuse). Owner: k partials per owned row, uniform count per member (lockstep) | `{row: spans → block_row_tiles, W: reduced to one partial per member → w_split_cores}` | T_acc format | writer (+ peer NoC writes landing in its reserved slot) | compute | exchange → combine | none: remote writes may land at any time during the previous block, so no other buffer may occupy these bytes |
@@ -105,7 +105,7 @@ Chosen split: row-groups over the full grid × W split k (k = 1 in R1).
 |--------|----------------|---------------|--------------------------|
 | x | 1 | cb_x keeps the whole block (row × W share) resident across pass 1 and pass 2 | 0 |
 | out | 1 | written once from cb_out / cb_out_rm | 0 |
-| gamma | `G/k` copies of the W slice (RM: W·elem_bytes per group; TILE gamma: tensor_w_tiles · 128 B per group, row 0 only) | gamma is reuse-shared along the row split; each core reads its slice once and keeps it for the program | 0 |
+| gamma | interleaved (R3, `GAMMA_MCAST`): 1 copy per multicast group — k = 1: one copy total; k > 1: one per grid column (`gpr·k` slices ≈ grid_x); per-core fallback (partial grid row of row-groups, k > 1): `G/k` copies. TILE gamma: 128 B per tile (row 0 only); RM: slice bytes | gamma is reuse-shared along the row split; the group's sender reads + expands its slice once and multicasts the expanded tiles; every core keeps it for the program | expanded slice (`core_w_tiles · T_g`) multicast once per group |
 | sumsq partials (k > 1 only) | 0 | never leave L1 | symmetric (interleaved): per block per group k² · block_rows_this partials; owner topology (sharded): k · block_rows_this partials in + k · block_rows_this inv_rms tiles back. Payload per tile: faces 0 and 2 only (half a tile — column 0 lives there; `PARTIAL_FACES_ONLY`) |
 
 Sharded (Refinement 2): x and out cross DRAM **0** times (resident shards, consumed and produced in place);
@@ -120,7 +120,11 @@ NoC (R2 only) ≈ `k² · tensor_row_tiles · 4 KB`.
 > then also the cheapest); R2 only where R1 cannot fill the grid (tensor_row_tiles ≤ G/8) or cannot keep
 > the slice resident (W too wide), i.e. where the alternative to R2 is idle Tensix cores or a second DRAM
 > crossing of x. The two-pass re-stream (+1 crossing of x) is `rejected`; gamma multicast
-> (−(G/k − 1)·W bytes) is `deferred` because r ≤ 1/32 is in the catalog's measured-null band.
+> (−(G/k − 1)·W bytes) was `deferred` because r ≤ 1/32 is in the catalog's measured-null band — **landed in
+> Refinement 3**: the band is about bandwidth, but the per-core TILE-gamma load (2 × 64 B reads per tile on every
+> Tensix core, before the first x read) was transaction-bound and serial: 131 µs of 771 µs at (8192,7168).
+> Refinement 3 also replaced the `tensor_row_tiles ≤ G/8` occupancy predicate with a per-core cost model
+> (`_choose_k`: min over k of busiest-group rows × (slice + COMBINE_TILE_COST)), so mid tile-row counts split too.
 
 ## Implementation notes (ttnn-implementer)
 
@@ -135,3 +139,6 @@ NoC (R2 only) ≈ `k² · tensor_row_tiles · 4 KB`.
 - `cb_out` (TILE) capacity `out_cb_pages = out_depth · out_unit_tiles`; the writer clamps each unit to the
   ring end (core_w_tiles need not be a multiple of out_unit_tiles).
 - Data-movement budget unchanged: x and out cross DRAM once; gamma once per active Tensix core (its slice).
+- (R3) `cb_gamma` producer moved from the reader to the writer (single producer still): the writer is idle until
+  the first output tiles, so the x stream starts at once; compute waits for gamma before its first pass 2, not at
+  kernel start. Interleaved: loaded by one multicast per W slice (`_gamma_mcast_groups`). No CB added or resized.
