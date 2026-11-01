@@ -31,7 +31,7 @@ No scaler, mask, or zero CB exists: both reduces run `ReduceAlgorithm::Accumulat
 | `R` | `block_row_tiles` | `1 <= R <= min(ceil(core_row_tiles_max / MIN_BLOCKS_PER_CORE), R_fit)` | `select_blocking()` |
 | `R_b` | runtime rows of a block | `1 <= R_b <= R` | `last_block_extent` derivation |
 | `in_depth` | input prefetch depth (blocks) | 1 or 2 | `2 if ceil(core_row_tiles_max / R) >= 2 else 1` |
-| `out_depth` | output depth (blocks) | 1 | host constant `OUT_DEPTH_BLOCKS` |
+| `out_depth` | output depth (blocks) | 1 | host constant `OUT_DEPTH` |
 | `C` | `io_chunk_tiles` | divides `Wt`, `<= 8` | host: largest divisor of `Wt` not above `IO_CHUNK_TARGET_TILES` |
 | `has_res` | residual present | 0 or 1 | call signature |
 | `tb`, `wb` | tile bytes | 2048; 2048 or 4096 | dtype bf16; `fp32_dest_acc_en` |
