@@ -40,15 +40,15 @@ python -m models.experimental.bevformer.demo.demo \
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
-`3b8fca3a8f2cd15e069414a6fb2712d5f403c99e`. The generated `detections.json` artifacts contain
+`585f1adf8c35b8d703600a1ddc4f1ea0389b90c9`. The generated `detections.json` artifacts contain
 these recorded results for ten measured frames. Each row used the corresponding bundled local
 `config/bevformer_<variant>.json` file shown in the commands above:
 
 | Variant | BEV size | Encoder layers | Device-path mean (ms) | Device-path p50 (ms) | E2E mean (ms) | E2E p50 (ms) | Device FPS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 134.3 | 133.1 | 297.6 | 273.9 | 7.45 |
-| small | 150 | 3 | 521.2 | 507.2 | 1112.5 | 1077.4 | 1.92 |
-| base | 200 | 6 | 1149.4 | 1149.6 | 2165.7 | 2161.8 | 0.87 |
+| tiny | 50 | 3 | 139.5 | 142.0 | 333.9 | 330.6 | 7.17 |
+| small | 150 | 3 | 426.6 | 426.8 | 1041.9 | 1041.3 | 2.34 |
+| base | 200 | 6 | 974.0 | 971.5 | 1923.7 | 1915.8 | 1.03 |
 
 These values come from one ten-frame smoke run per variant and validate end-to-end execution only.
 No repeated-run statistics were collected, so they are not statistically characterized benchmark
@@ -61,8 +61,8 @@ Compare runs by Device FPS. It covers the work the TT device does per frame and 
 it. The rest of the end-to-end time is image decoding, preprocessing, host-to-device conversion and
 host box readback: it depends on the host's CPU, and a pipeline can overlap it with the device's
 work on the previous frame. In synthetic mode most of it is generating the random images. The
-table above was recorded before the frame's preparation joined the device-path window, so it is not
-directly comparable with newer runs.
+table above includes the frame's preparation in the device-path window. Results recorded before
+that timing-window change are not directly comparable.
 
 ## Model configuration
 
@@ -296,7 +296,9 @@ The `summary` object contains:
 
 | Field | Meaning |
 | --- | --- |
-| `variant` | Selected model variant. |
+| `variant` | Selected model variant, repeated from `model_config` for quick lookup. |
+| `model_config` | Complete normalized model configuration used for the run. |
+| `seed` | Random seed for synthetic inputs and random checkpoint weights. |
 | `architecture` | TT architecture reported by the runtime, for example `blackhole`. |
 | `device_card` | TT card reported by device discovery, for example `P100`. |
 | `hardware` | Compact architecture and card label, for example `BH P100`. |
