@@ -504,12 +504,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_packer_wait_for_math_done_();
+#ifdef MATMUL_L1_FUNC
+                    // packer L1 accumulate: the blocks of a group pack onto the same result tiles, the first writes and the later ones accumulate (as the ttnn bmm kernels spill partials)
+                    reconfigure_packer_l1_acc(block % MATMUL_L1_FUNC == 0 ? 0 : 1);
+                    constexpr std::uint32_t result_block_stride = 0;
+#else
+                    const std::uint32_t result_block_stride = NUM_TILES_IN_BLOCK;
+#endif
 #if defined(ARCH_BLACKHOLE)
                     if constexpr (matmul_pack_form_v != 0)
                     {
                         matmul_pack_out(
                             DST_INDEX,
-                            L1_ADDRESS(buffer_Res[block * NUM_TILES_IN_BLOCK]),
+                            L1_ADDRESS(buffer_Res[block * result_block_stride]),
                             NUM_TILES_IN_BLOCK,
                             (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4,
                             num_faces,
@@ -520,13 +527,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
-                            const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
+                            const std::uint32_t result_tile = block * result_block_stride + tile;
                             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
                         }
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
+#ifdef MATMUL_L1_FUNC
+            reconfigure_packer_l1_acc(0);
+#endif
         }
         PROFILER_SYNC();
     }

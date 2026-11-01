@@ -223,6 +223,8 @@ def unmeasured_production_forms(in1_format, out_format, fp32_dest, fidelity, h, 
 
 # (fidelity, half sync, accumulate, in1, in0, output, rt, ct, k steps, throttle, packer L1 accumulate, inner blocks)
 _GRID_MAIN_ROWS = (
+    ('LoFi', True, True, 'F16', 'B8x', 'B8x', 1, 4, 3, 0, False, 1),
+    ('LoFi', True, False, 'F16b', 'B4', 'B8', 2, 4, 8, 2, False, 1),
     ('HiFi2', False, False, 'B8', 'F32', 'F32', 1, 1, 3, 0, False, 1),
     ('HiFi2', False, False, 'F32', 'B8', 'F32', 6, 2, 1, 0, True, 1),
     ('HiFi2', False, True, 'B8', 'F32', 'F32', 1, 1, 3, 0, False, 1),

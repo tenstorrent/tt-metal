@@ -175,7 +175,7 @@ def check_dense_pack() -> int:
     fmts = ["B8x", "F16", "F16b", "F32", "B8"]
     outs = ["B8x", "B8", "F16b", "F32"]
     shapes = [(1, 3), (1, 4), (2, 4), (4, 2), (4, 1), (1, 2), (2, 2), (3, 1)]
-    cases = [(fi, sy, a, b, o, rt, ct, kt, th, dense) for fi, sy, a, b, o, (rt, ct), kt, th, dense in product(("LoFi", "HiFi2"), (0, 1), fmts, fmts, outs, shapes, (1, 3, 4, 8), (0, 3), (False, True))]
+    cases = [(fi, sy, a, b, o, rt, ct, kt, th, dense) for fi, sy, a, b, o, (rt, ct), kt, th, dense in product(("LoFi", "HiFi2"), (0, 1), fmts, fmts, outs, shapes, (1, 3, 4, 8), (0, 2, 3), (False, True))]
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "llk_defs.h").write_text(STUB)
         (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
