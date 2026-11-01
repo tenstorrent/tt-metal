@@ -74,7 +74,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < n; j++) {
             const uint32_t s = idx[base + j];
             const uint32_t from = (s < src_rows) ? (ring_base + j * row_bytes) : zero_base;
-            noc.async_write(CoreLocalMem<uint32_t>(from), out_acc, row_bytes, {}, {.page_id = r0 + base + j});
+            noc.async_write(out_acc, CoreLocalMem<uint32_t>(from), row_bytes, {.page_id = r0 + base + j}, {});
         }
     }
     noc.async_write_barrier();
