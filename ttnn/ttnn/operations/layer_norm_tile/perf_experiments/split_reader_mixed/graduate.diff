@@ -1,0 +1,38 @@
+--- ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py	2026-11-01 17:57:38.631800250 +0000
++++ ttnn/ttnn/operations/layer_norm_tile/layer_norm_tile_program_descriptor.py	2026-11-01 18:11:07.795192013 +0000
+@@ -25,9 +25,9 @@
+ READ_TRID_DEPTH = 1  # chunks kept in flight on the read trid ring, <= 15
+ WRITE_CHUNKS_PER_FLUSH = 1  # output chunks issued per flush + pop
+ BANK_STAGGER = False  # rotate each core's in-chunk tile order by its core index
+-# split_reader: the residual stream moves to the writer RISC / NoC1. Gated to input and residual on
+-# the same memory tier with at least half the grid active; it lost ~2 us on input-L1 / residual-DRAM
+-# and ~1.5 us on a 32-core grid.
++# split_reader: the residual stream moves to the writer RISC, on the NoC opposite the reader's. Gated to
++# at least half the grid active (it lost ~1.5 us on a 32-core grid). Any memory tiers: under the per-core
++# NoC plan it measured flat on input-L1 / residual-DRAM and -7% on input-DRAM / residual-L1 (BH p100a).
+ RESIDUAL_ON_WRITER = True
+ OUT_DEPTH = 1
+ # COMPUTE_DEST_LANES is the tiles per DEST acquire on the streaming passes, clamped on device to DEST
+@@ -142,11 +142,10 @@
+     return max(c for c in range(1, min(Wt, IO_CHUNK_TARGET_TILES) + 1) if Wt % c == 0)
+
+
+-def _residual_on_writer(input_tensor, residual, num_active_cores, num_grid_cores):
++def _residual_on_writer(residual, num_active_cores, num_grid_cores):
+     if not RESIDUAL_ON_WRITER or residual is None:
+         return False
+-    same_tier = input_tensor.memory_config().buffer_type == residual.memory_config().buffer_type
+-    return same_tier and 2 * num_active_cores >= num_grid_cores
++    return 2 * num_active_cores >= num_grid_cores
+
+
+ def select_blocking(input_tensor, *, residual, fp32_dest_acc_en):
+@@ -184,7 +183,7 @@
+         read_trid_depth=READ_TRID_DEPTH,
+         write_chunks_per_flush=WRITE_CHUNKS_PER_FLUSH,
+         bank_stagger=BANK_STAGGER,
+-        residual_on_writer=_residual_on_writer(input_tensor, residual, len(assignment), grid.x * grid.y),
++        residual_on_writer=_residual_on_writer(residual, len(assignment), grid.x * grid.y),
+         all_cores=all_cores,
+         assignment=assignment,
+     )

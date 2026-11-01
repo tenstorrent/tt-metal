@@ -105,3 +105,104 @@ No regression beyond noise. Golden: 545/545 after every graduation. Op unit test
 | local_copy_helpers (stateful local NoC read) | capability | The multicast scatter is a strided gather. For each tile column it reads 32 B face rows from the compact block to slot+0 and slot+FACE_BYTES, so both source and destination move every tile. The stateful read pins one source address, so it cannot express a per-transfer source. | n/a (not expressible) | part of the graduated path (affine TILE DRAM 76.1 -> 52.9 us whole op) | kernels/layer_norm_tile_reader.cpp:104 |
 
 The multicast itself uses `ttnn.Mcast` / `McastArgs` / `SenderPipe::send()` unchanged.
+
+## Perf 2
+- Date: 2026-11-01. Device: Blackhole p100a, 110 cores. Focus: LOOSE_CASES #1, the same full config as Perf 1 (8x512 bf16 TILE, input L1, residual DRAM, output DRAM, gamma/beta ROW_MAJOR in L1, fp32 DEST, HiFi4). Times are DEVICE KERNEL DURATION from `run_safe_pytest.sh --profile`.
+- Benches:
+  - `test_perf_bench.py`: all perf rows plus the guard rows.
+  - `test_perf_peel.py` (new): focus1/2/3, 8x384 and 32x32. Its `test_repeat` (`LN_ROW`, `LN_REPEAT`) repeats one row N times in a single process.
+  - `perf_experiments/_coordinator/cores.py` (new): per-core read, compute and write end times.
+
+### Measured breakdown (before = efe8f603ee2)
+- Whole op, us: focus1 36.4-36.8, focus2 48.4-50.5 (8 in-process repeats average 50.4), focus3 33.9-34.6, 8x384 38.8-39.3, 32x32 22.2-22.4.
+- Cumulative peel, us, in the order focus1 / focus2 / focus3 / 8x384 / 32x32. Ablation hooks as in `_coordinator/ablation_hooks.patch`, reverted afterwards:
+
+  | full | no compute | no read | no write | compute only | read only | write only | sync only |
+  |---|---|---|---|---|---|---|---|
+  | 36.8 / 49.8 / 33.7 / 39.1 / 22.1 | 41.3 / 51.1 / 39.7 / 37.7 / 16.0 | 26.9 / 27.2 / 26.0 / 23.2 / 15.5 | 30.6 / 43.4 / 24.4 / 32.9 / 19.3 | 19.5 / 19.5 / 17.2 / 10.6 / 10.9 | 22.9 / 31.9 / 19.0 / 25.7 / 12.3 | 18.7 / 17.7 / 18.2 / 14.0 / 6.4 | 4.7 / 4.6 / 4.6 / 4.6 / 4.8 |
+
+- Reading the peel:
+  - The op is bound by data movement. Per core, the read and write phases run one after the other: full is about read only + write only - sync.
+  - Removing compute makes focus1 and focus3 *slower*. Compute staggers the cores, so without it every core's writes land on top of other cores' reads.
+  - On focus2 the critical path is the 18 two-row cores. They finish reading row 1 at ~42 us, then spend ~8.6 us computing it.
+  - On those cores, `reader_affine` takes ~2 us (the wait for the gamma/beta multicast plus 96 self-NoC scatter reads), and it sits between the row 0 and row 1 reads.
+  - On focus1 the critical path is one-row cores with a long write tail.
+- DRAM floors: focus1 12.6 MB (~27 us + ~4.6 us fixed), focus2 18.9 MB (~40 us + fixed).
+- Ranked headroom:
+  1. focus2's two-row-core tail: the affine scatter, then compute of row 1.
+  2. Read and write phases that don't overlap.
+  3. Compute latency, which helps only where it doesn't push writes into other cores' reads.
+
+### Ideas floated and their verdicts
+Each idea's artifacts are in `perf_experiments/<slug>/`.
+
+| idea | verdict | before -> after | domain / notes |
+|---|---|---|---|
+| `output_chunk_interleave`: normalize, scale and shift run per DEST-lane chunk so output streams earlier (no DEST reuse) | NULL | focus1 37.1 -> 37.3, focus2 50.9 -> 51.9 (raw_g12) | Bit-exact, golden 545/545. Writes do start ~1.2 us earlier per core, but the latest write end is flat. Measured regressions: affineTILE_DRAM +3.5%, L1_nores +22% (helper variant). Needs a third work CB. |
+| `compute_retest` / stats_fusion: sumsq, collapse and rsqrt(S/W + eps) on column 0 in one DEST window | WIN, graduated | on the old reader: focus2 50.6 -> 48.5, 8x384 39.4 -> 38.3, 32x32 22.1 -> 21.5, focus1 37.2 -> 36.7, focus3 33.9 -> 34.4; guard rows flat or faster (affineTILE 51.5 -> 48.5) | Golden 545/545. Same precision (rel-RMS 0.001905 vs 0.001858 under fp32 DEST; under bf16 DEST better, 0.00476 vs 0.00542). |
+| `compute_retest` / normalize_affine and combo | REGRESSION | focus2 51.7 / 51.2 vs stats alone 48.5 | One-row cores start writing ~1.3 us earlier and collide with the two-row cores' row 1 reads. |
+| `split_reader_mixed`: residual on the writer RISC for mixed tiers; dual-NoC reader | NULL on focus1; the gate drop graduated | focus1 37.3 -> 37.6 (flat); input DRAM / residual L1 / output L1 34.3 -> 31.8 (-7.2%) | focus1's read phase is DRAM-bound: the L1 x stream finishes at p50 8.1 us, behind the residual at 16 us. Dual-NoC reader variants: +13 to +55%. |
+| `work_split_pipeline`: 64x2 pipelined split, reversed or spread heavy cores, per-row NoC rules | REGRESSION | k2 focus1 +17%; spreadheavy L1_nores -14% but focus1 +13% | k2 sends the same DRAM bytes through fewer cores. A strided core subset is not expressible (Mcast rectangle limit). Found the affine-receive lead below. |
+| `affine_receive_overlap`: receivers with a next block scatter gamma/beta under their own trid after issuing block 1's first chunk | WIN, graduated | focus2 50.3 -> 46.8 (3 runs each), other rows flat | Golden 545/545. Helpers only (`set_read_trid` / `async_read_barrier_with_trid`). A stateful scatter was ~0.3 us slower and a RISC-V word copy 3.6x slower; both rejected. |
+
+Precision-trading options: none were floated, and none graduated.
+
+### What graduated (85f801f3a57)
+Each change is the op's single path; the code it replaced is deleted.
+1. **stats_fusion**: `row_stats_block` replaces the `row_sumsq` eltwise_chain plus the `reduce(..., Collapse)` post-op.
+   - Deleted with it: `cb_row_sumsq` (CB 7), its compile-time arg, and its L1 (`l1_ledger.md`).
+   - Zone `compute_row_stats` replaces `compute_row_sumsq` and `compute_inv_std`.
+2. **affine_receive_overlap**: reader only. Single-block cores still receive after their block; the injector's scatter also waits on its trid.
+3. **split reader gate**: `_residual_on_writer` drops the same-tier clause. The half-grid clause stays, earned in Perf 0 (-1.5 us on a 32-core grid).
+- No carve-outs were added.
+
+### Measured stats_fusion regressions, accepted
+stats_fusion was measured on top of the graduated reader and gate, against the same op without it (8 in-process repeats each, us):
+
+| row | without stats | with stats |
+|---|---|---|
+| focus1 | 37.4 (37.2-37.6) | 36.6 (36.3-36.9), -2.2% |
+| focus2 | 46.6 (46.2-46.9) | 47.5 (45.6-51.4, 16 samples), +1.9% |
+| focus3 | 33.7 (33.4-34.0) | 34.3 (33.8-35.0), +1.7% |
+
+- focus2 and focus3 regress by a measured amount. The cause is the same as with normalize_affine: one-row cores finish compute earlier, so their writes collide with other cores' reads.
+- It still graduates as the single path:
+  - Weighted by the spec's calls per forward (18x focus1, 6x focus2, 1x focus3), the net is ~-8 us per forward.
+  - Every guard row is flat or faster.
+  - It frees R fp32 tiles of L1.
+  - Against the round-start op, focus2 is still -2.9 us and focus3 is flat.
+- A compute carve-out keyed on placement would encode a scheduling side effect, not a property of the stats path, so none was written.
+
+### Whole op, before (efe8f603ee2) -> after (85f801f3a57)
+Alternating runs, us; stock ttnn.layer_norm in parentheses.
+
+| row | before | after |
+|---|---|---|
+| focus1 in L1 / res DRAM / out DRAM (55.0) | 36.4-36.8 | 36.5-36.9 (flat) |
+| focus2 all DRAM + res (70.0) | 48.4-50.5; 8 in-process repeats average 50.4 | 46.0-52.1, median 46.2; 16 in-process repeats average 47.5 (-6%) |
+| focus3 all DRAM no res (48.3) | 33.9-34.6 | 33.9-34.8 (flat) |
+| all L1 + res (43.3) | 26.1-26.2 | 25.3-27.0 |
+| L1 no res (34.5) | 22.8-23.1 | 22.4-22.6 |
+| 8x384 all DRAM (47.0) | 38.8-39.3 | 38.6-39.2 |
+| 32x32 all DRAM (24.8) | 22.2-22.4 | 21.2-21.9 (-3%) |
+| affine TILE in DRAM (125.4) | 47.2-50.1 | 48.8-50.3 (flat, noisy) |
+| input DRAM / res L1 / out L1 | 34.3 (subagent, 3 runs) | 31.8 (-7%) |
+
+Guard set:
+
+| row | before | after |
+|---|---|---|
+| focus1, bf16 DEST | 37.8 | 36.7-36.8 |
+| 3x500 (h_non_aligned, 48 cores) | 25.5-25.9 | 24.6-24.9 |
+| 64x17 all DRAM no res, TILE affine | 24.9-25.2 | 24.7-25.1 |
+| 2x512 all L1 + res | 15.5 | 14.8-14.9 |
+
+- No guard row regressed. Golden: 545/545. Op unit tests: 102/102.
+- Escaped issue, not from this round: focus1 hangs under `run_safe_pytest.sh --dev`. BRISC writers sit in `ncrisc_noc_nonposted_writes_sent` and NCRISC readers in `nonposted_atomics_flushed`. It reproduced on the pre-round op (split_reader_mixed subagent) and on the graduated op; normal mode passes. This points at the Perf 1 per-core NoC plan, where both RISCs of one core use one NoC, or at the affine multicast under watcher NoC accounting. Needs triage outside the perf pass.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| eltwise_chain (PerRow DEST accumulation) + reduce (ReduceWithinTile::Collapse, post_reduce_op) | capability | eltwise_chain's PerRow accumulation packs the accumulated tile at row end and has no post-accumulation hook. reduce() takes its input only from a CB. So sum-of-squares -> row collapse -> rsqrt cannot stay in one DEST window, and the helper pair forces an fp32 `cb_row_sumsq` round trip plus a reload. The column-0-only rsqrt (`calculate_add_rsqrt_col0`, scale and add folded in) has no helper form either. | 2704 per row (sumsq + inv_std stage) | 2235 per row; whole op focus1 37.4 -> 36.6 us | kernels/layer_norm_tile_compute.cpp:74 (`row_stats_block`) |
+
+The affine-overlap reader and the split-reader gate use only helpers or host code.

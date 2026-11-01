@@ -1,0 +1,12 @@
+focus1_inL1_resDRAM_outDRAM
+focus2_allDRAM_res
+focus3_allDRAM_nores
+8x384_allDRAM_res
+32x32_allDRAM_res
+focus1_bf16dest
+allL1_res
+L1_nores
+affineTILE_DRAM
+3x500_inL1_resDRAM
+64x17_allDRAM_nores_affTILE
+2x512_allL1_res

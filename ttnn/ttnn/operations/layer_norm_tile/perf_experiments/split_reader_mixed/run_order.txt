@@ -1,0 +1,4 @@
+focus1 base
+focus1 ow_dram_y
+focus1 dual_dram_y
+focus1 ow_writer_wins
