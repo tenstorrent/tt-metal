@@ -64,7 +64,7 @@ case $PROFILE in
       # max_num_seqs blocks of output reservation (16 -> 29,456 blocks), and 30,016 + 16 OOMs at build: launch 1's
       # 288 MiB GDN state finds 37.06 MB/bank free of the 37.75 MB it needs; 29,440 passed the card churn (queue_wp8_r3)
       export RESIDENT_PREFILL_CHUNKS=${RESIDENT_PREFILL_CHUNKS:-256,512,1024}
-      export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1921024}
+      export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1884160}
     fi
     SEQS=${MAX_NUM_SEQS:-16}  # the shipped multi profiles: two launches
     # the rows build's attention / GDN core split: 28 attention workers, 4 GDN head groups (accuracy-gated, -6 to -9 %
