@@ -1,0 +1,73 @@
+{
+ "used": [
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md had 43 bytes left under the 500 KB hook: appended a 34-byte pointer, the section went to known_issues_detail.md",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-193",
+   "how": "followed official_kv.py's pattern for the official final norm: CPU, cached in <golden dir>-official with the golden's content_hash",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-90",
+   "how": "expected the official final_norm to sit ~0.12 rel from native; checked the cached file reproduces drift-<rung>.json final_hidden exactly",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the reference's drift replay (reference/drift.py:replay) is the reusable way to run the official reference fed as the ladder feeds the device; no entry says so",
+  "rungs 'last' and 's56320' share one golden dir, so a per-rung derived file in <golden dir>-official needs the rung in its name"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.20",
+   "answer": "done",
+   "evidence": "WINDOW_KV_FORMAT default bfp8_tiles (tt/settings.py, text says switch only); test_logit_kl.py written; gate FIX.20 --check: P.26 PASS, FIX.20 PASS; kl_mean s10240 0.00608 <= 0.01110, last 0.00508 <= 0.00969"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or fork limit met; nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only the model-level gate units P.26 and FIX.20"
+  }
+ ],
+ "cited_only": [
+  "DS41-195"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.20",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-01T16:12:11",
+  "head": "5544ead6176",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.20.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.20.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/official_final_norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_logit_kl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
