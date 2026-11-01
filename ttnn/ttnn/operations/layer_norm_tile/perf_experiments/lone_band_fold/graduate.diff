@@ -1,0 +1,808 @@
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_compute.cpp b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_compute.cpp
+index fc382a855b9..a887972ece6 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_compute.cpp
++++ b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_compute.cpp
+@@ -37,6 +37,8 @@
+
+ #include "api/compute/compute_kernel_hw_startup.h"
+ #include "api/compute/eltwise_binary.h"
++#include "api/compute/bcast.h"
++#include "api/compute/tile_move_copy.h"
+ #include "api/compute/reconfig_data_format.h"
+ #include "api/compute/eltwise_unary/rsqrt.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+@@ -91,6 +93,42 @@ inline void calculate_row_mean_inv_std_col0(uint32_t addend_bits) {
+         }
+     }
+ }
++
++// lone_band_fold: a folded lone row holds one logical row r in tile rows r (faces 0/1) and r + 16 (faces 2/3).
++// Before the row collapse, each element of faces 0/1 and its faces 2/3 partner add and go to both halves, so the
++// collapse and the unchanged column-0 finalize (VectorMode::C) see whole-row sums in rows r and r + 16 alike.
++// Adding before the collapse keeps one rounded row sum, as unfolded: combining two collapsed half sums measured
++// twice the mean error under bf16 DEST (|mean| = 100). Tiles [0, num_tiles) from the call's DEST index. Under bf16
++// DEST the sum is rounded to nearest before the store (a plain store truncates: biased row sums).
++template <bool fp32_dest_acc_en, uint32_t num_tiles>
++inline void fold_row_halves() {
++    constexpr uint32_t tile_rows = 32;
++    constexpr uint32_t half = 16;
++#pragma GCC unroll 1
++    for (uint32_t tile = 0; tile < num_tiles; ++tile) {
++#pragma GCC unroll 16
++        for (uint32_t reg = 0; reg < half; ++reg) {
++            const sfpi::vFloat top = sfpi::dst_reg[tile * tile_rows + reg];
++            const sfpi::vFloat bottom = sfpi::dst_reg[tile * tile_rows + half + reg];
++            sfpi::vFloat sum = top + bottom;
++            if constexpr (!fp32_dest_acc_en) {
++                sum = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
++            }
++            sfpi::dst_reg[tile * tile_rows + reg] = sum;
++            sfpi::dst_reg[tile * tile_rows + half + reg] = sum;
++        }
++    }
++}
++
++// Face 0 -> face 2: the folded row's shift tile takes each logical row's first element (top half) in both halves.
++template <bool unused = true>
++inline void copy_face0_to_face2() {
++#pragma GCC unroll 8
++    for (int reg = 0; reg < 8; ++reg) {
++        const sfpi::vFloat value = sfpi::dst_reg[reg];
++        sfpi::dst_reg[16 + reg] = value;
++    }
++}
+ }  // namespace ckernel::sfpu
+ #endif
+
+@@ -107,18 +145,28 @@ template <
+     uint32_t tensor_w_tiles,
+     uint32_t inv_w_bits,
+     uint32_t epsilon_bits>
+-ALWI void row_stats_block(uint32_t rows, DataflowBuffer& centered, DataflowBuffer& inv_std) {
++ALWI void row_stats_block(
++    uint32_t first_row,
++    uint32_t rows,
++    uint32_t row_tiles,
++    bool folded,
++    DataflowBuffer& centered,
++    DataflowBuffer& inv_std) {
+     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+-    centered.wait_front(rows * tensor_w_tiles);
++    centered.wait_front((first_row + rows) * tensor_w_tiles);
+     reconfig_data_format(cb_centered, cb_centered);
+     pack_reconfig_data_format(cb_inv_std);
+-    for (uint32_t row = 0; row < rows; ++row) {
++    for (uint32_t row = first_row; row < first_row + rows; ++row) {
+         const uint32_t base = row * tensor_w_tiles;
+         tile_regs_acquire();
+         mul_init(cb_centered, cb_centered, true);  // a freshly acquired DEST reads 0: the first mul seeds S
+-        for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
++        for (uint32_t col = 0; col < row_tiles; ++col) {
+             mul_tiles(cb_centered, cb_centered, base + col, base + col, 0);
+         }
++        if (folded) {
++            rsqrt_tile_init();  // any plain SFPU init: fold_row_halves uses no LUT / programmable constants
++            MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, fold_row_halves, (DST_ACCUM_MODE, 1), 0, VectorMode::None));
++        }
+         sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+         sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
+         rsqrt_tile_init();
+@@ -156,16 +204,18 @@ ALWI void row_stats_window(
+     uint32_t row,
+     uint32_t col0,
+     uint32_t window_tiles,
++    uint32_t row_tiles,
++    bool folded,
+     DataflowBuffer& z,
+     DataflowBuffer& partial,
+     DataflowBuffer& row_mean,
+     DataflowBuffer& inv_std) {
+     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+     constexpr uint32_t num_sums = one_pass ? 2 : 1;
+-    ASSERT(window_tiles % 2 == 0 || window_tiles == tensor_w_tiles);
++    ASSERT(window_tiles % 2 == 0 || window_tiles == row_tiles);
+     const uint32_t base = row * tensor_w_tiles + col0;
+     const bool first = col0 == 0;
+-    const bool last = col0 + window_tiles == tensor_w_tiles;
++    const bool last = col0 + window_tiles == row_tiles;
+
+     z.wait_front(base + window_tiles);
+     reconfig_data_format(cb_z, cb_z);
+@@ -196,6 +246,10 @@ ALWI void row_stats_window(
+         }
+     }
+     if (last) {
++        if (folded) {
++            rsqrt_tile_init();  // any plain SFPU init: fold_row_halves uses no LUT / programmable constants
++            MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, fold_row_halves, (DST_ACCUM_MODE, num_sums), 0, VectorMode::None));
++        }
+         sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+         for (uint32_t sum = 0; sum < num_sums; ++sum) {
+             sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(sum, 1, 1);
+@@ -239,6 +293,61 @@ ALWI void row_stats_window(
+     }
+ }
+
++// Folded affine (lone_band_fold): out = in (op) per-face row broadcast of the affine slots 2 * (first + t), whose
++// faces 0/1 row 0 hold column 2j and faces 2/3 row 0 column 2j + 1 (reader scatter_folded). Raw LLK: the helpers'
++// BroadcastDim::Row pairs the ROW unpack MOP, which re-reads B faces 0/1 for the bottom half (it clears the B
++// face counter per face row), with the ROW math. Unpacking B with the NONE MOP walks faces 0-3 instead, and the
++// ROW math still broadcasts row 0 of each unpacked face: one pass, the same instruction count as the row bcast.
++template <EltwiseBinaryType op, uint32_t cb_in, uint32_t cb_affine, uint32_t cb_out, uint32_t lanes>
++ALWI void folded_affine(uint32_t tiles, uint32_t first, DataflowBuffer& in, DataflowBuffer& out) {
++#ifdef TRISC_MATH
++    constexpr MathFidelity fidelity = op == EltwiseBinaryType::ELWMUL ? MATH_FIDELITY : MathFidelity::LoFi;
++#endif
++    reconfig_data_format(cb_in, cb_affine);
++    pack_reconfig_data_format(cb_out);
++    MATH((llk_math_eltwise_binary_init<op, BroadcastType::ROW, fidelity>(cb_in, cb_affine)));
++    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_in, cb_affine)));
++    for (uint32_t tile = 0; tile < tiles; tile += lanes) {
++        const uint32_t count = tiles - tile < lanes ? tiles - tile : lanes;
++        in.wait_front(count);
++        out.reserve_back(count);
++        tile_regs_acquire();
++        for (uint32_t lane = 0; lane < count; ++lane) {
++            MATH((llk_math_eltwise_binary<op, BroadcastType::ROW, DST_ACCUM_MODE, fidelity, EltwiseBinaryReuseDestType::NONE>(
++                cb_in, cb_affine, lane, true)));
++            UNPACK((llk_unpack_AB<BroadcastType::NONE>(cb_in, cb_affine, lane, 2 * (first + tile + lane))));
++        }
++        tile_regs_commit();
++        tile_regs_wait();
++        for (uint32_t lane = 0; lane < count; ++lane) {
++            pack_tile(lane, cb_out);
++        }
++        tile_regs_release();
++        in.pop_front(count);
++        out.push_back(count);
++    }
++}
++
++// Folded row's shift tile: the first x tile with face 0 copied over face 2, so both halves of a logical row
++// subtract its first element.
++template <uint32_t cb_x, uint32_t cb_shift>
++ALWI void folded_shift_copy(DataflowBuffer& x, DataflowBuffer& shift) {
++    x.wait_front(1);
++    shift.reserve_back(1);
++    reconfig_data_format_srca(cb_x);
++    pack_reconfig_data_format(cb_shift);
++    copy_init(cb_x);
++    tile_regs_acquire();
++    copy_tile(cb_x, 0, 0);
++    rsqrt_tile_init();
++    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, copy_face0_to_face2, (true), 0, VectorMode::None));
++    tile_regs_commit();
++    tile_regs_wait();
++    pack_tile(0, cb_shift);
++    tile_regs_release();
++    shift.push_back(1);
++}
++
+ // Streaming-pass operands: one CB handshake per IterationShape::block_size group of DEST lanes.
+ constexpr compute_kernel_lib::InputSpec lane_input(
+     uint32_t cb, DataFormatReconfig reconfig = DataFormatReconfig::Enabled) {
+@@ -291,6 +400,7 @@ void kernel_main() {
+     // mean(d), so the output is unchanged.
+     constexpr uint32_t cb_row_shift = get_compile_time_arg_val(22);
+     constexpr bool shifted = one_pass && has_residual;
++    constexpr bool fold = get_named_compile_time_arg_val("fold_lone") != 0;
+
+     const uint32_t core_row_tiles = get_arg_val<uint32_t>(0);
+     // Per core: the host picks which cores take the per-window normalize (the work pair is allocated whenever
+@@ -323,24 +433,65 @@ void kernel_main() {
+     DataflowBuffer output_tiles(cb_output_tiles);
+     DataflowBuffer& z_tiles = has_residual ? work_a : input_tiles;
+
++    // lone_band_fold: the core's lone band row (NO_LONE_ROW: none) runs folded on Wt / 2 tiles. Its CB slot stays Wt
++    // pages: each producer pushes the unused Wt / 2 pages after the row and each consumer pops them, so the rings, the
++    // work_a / work_b alias and every row * Wt index stay as in the unfolded layout.
++    constexpr uint32_t NO_LONE_ROW = 0xFFFFFFFF;
++    const uint32_t lone_row = fold ? get_arg_val<uint32_t>(2) : NO_LONE_ROW;
++    constexpr uint32_t folded_tiles = tensor_w_tiles / 2;
++    constexpr uint32_t pad_tiles = tensor_w_tiles - folded_tiles;
++    auto pop_pad = [](DataflowBuffer& cb) {
++        cb.wait_front(pad_tiles);
++        cb.pop_front(pad_tiles);
++    };
++    auto push_pad = [](DataflowBuffer& cb) {
++        cb.reserve_back(pad_tiles);
++        cb.push_back(pad_tiles);
++    };
++    // Folded window: the reader's chunk carries C / 2 folded tiles, so a window of G source tiles is G / 2.
++    auto folded_window = [](uint32_t window) { return window == tensor_w_tiles ? folded_tiles : window / 2; };
++
+     for (uint32_t block_row = 0; block_row < core_row_tiles; block_row += block_row_tiles) {
+         const uint32_t rows =
+             (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
+-        // Streaming passes take `dest_lanes` tiles per DEST acquire (one CB handshake per group).
+-        [[maybe_unused]] const auto lane_shape = IterationShape::grid(rows, tensor_w_tiles).block_size(dest_lanes);
++        // Contiguous row runs of one width: fn(first row, rows, folded). The lone row is a core's first or last.
++        auto for_each_segment = [&](auto fn) {
++            if (lone_row >= block_row && lone_row < block_row + rows) {
++                const uint32_t lone = lone_row - block_row;
++                if (lone > 0) {
++                    fn(0u, lone, false);
++                }
++                fn(lone, 1u, true);
++                if (lone + 1 < rows) {
++                    fn(lone + 1, rows - lone - 1, false);
++                }
++            } else {
++                fn(0u, rows, false);
++            }
++        };
++        auto seg_shape = [&](uint32_t seg_rows, bool folded) {
++            return IterationShape::grid(seg_rows, folded ? folded_tiles : tensor_w_tiles).block_size(dest_lanes);
++        };
+
+         // residual_add_block + row_stats_window, interleaved per window so the stats run as tiles land
+         {
+             MaybeDeviceZoneScope("compute_add_and_stats");
+-            const uint32_t window = block_row < streamed_rows ? stats_window_tiles : tensor_w_tiles;
+-            const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
++            const uint32_t block_window = block_row < streamed_rows ? stats_window_tiles : tensor_w_tiles;
+             for (uint32_t row = 0; row < rows; ++row) {
++                const bool folded = block_row + row == lone_row;
++                const uint32_t row_tiles = folded ? folded_tiles : tensor_w_tiles;
++                const uint32_t window = folded ? folded_window(block_window) : block_window;
++                const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
+                 if constexpr (shifted) {
+                     // The row's first x tile (front of the input CB): column 0 is each row's shift.
+-                    copy<input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::None), output(cb_row_shift)>(
+-                        IterationShape::one_tile(), input_tiles, row_shift);
++                    if (folded) {
++                        folded_shift_copy<cb_input_tiles, cb_row_shift>(input_tiles, row_shift);
++                    } else {
++                        copy<input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::None), output(cb_row_shift)>(
++                            IterationShape::one_tile(), input_tiles, row_shift);
++                    }
+                 }
+-                for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += window) {
++                for (uint32_t col0 = 0; col0 < row_tiles; col0 += window) {
+                     if constexpr (shifted) {
+                         eltwise_chain(
+                             window_shape,
+@@ -370,11 +521,18 @@ void kernel_main() {
+                         tensor_w_tiles,
+                         one_pass,
+                         inv_w_bits,
+-                        epsilon_bits>(row, col0, window, z_tiles, stat_partial, row_mean, inv_std);
++                        epsilon_bits>(row, col0, window, row_tiles, folded, z_tiles, stat_partial, row_mean, inv_std);
+                 }
+                 if constexpr (shifted) {
+                     row_shift.pop_front(1);
+                 }
++                if constexpr (has_residual) {
++                    if (folded) {
++                        pop_pad(input_tiles);
++                        pop_pad(residual_tiles);
++                        push_pad(work_a);
++                    }
++                }
+             }
+         }
+
+@@ -384,7 +542,6 @@ void kernel_main() {
+                 // moves one window through a G-page chunk CB; the work alias pair cannot carry it (its ids
+                 // must move whole blocks).
+                 MaybeDeviceZoneScope("compute_stream_normalize");
+-                const auto window_shape = IterationShape::grid(1, stats_window_tiles).block_size(dest_lanes);
+                 constexpr auto col_stat = [](uint32_t cb) {
+                     return input(
+                         cb,
+@@ -408,7 +565,11 @@ void kernel_main() {
+                 gamma_tiles.wait_front(tensor_w_tiles);
+                 beta_tiles.wait_front(tensor_w_tiles);
+                 for (uint32_t row = 0; row < rows; ++row) {
+-                    for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += stats_window_tiles) {
++                    const bool folded = block_row + row == lone_row;
++                    const uint32_t row_tiles = folded ? folded_tiles : tensor_w_tiles;
++                    const uint32_t window = folded ? folded_window(stats_window_tiles) : stats_window_tiles;
++                    const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
++                    for (uint32_t col0 = 0; col0 < row_tiles; col0 += window) {
+                         eltwise_chain(
+                             window_shape,
+                             BinaryFpu<BinaryFpuOp::Sub, lane_input(cb_z), col_stat(cb_row_mean)>{
+@@ -419,20 +580,31 @@ void kernel_main() {
+                             BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_a), col_stat(cb_inv_std)>{
+                                 chunk_a, inv_std, 0, row},
+                             PackTile<lane_output(cb_chunk_b)>{chunk_b});
+-                        eltwise_chain(
+-                            window_shape,
+-                            BinaryFpu<
+-                                BinaryFpuOp::Mul,
+-                                lane_input(cb_chunk_b, same_work_fmt),
+-                                affine_row(cb_gamma_tiles)>{chunk_b, gamma_tiles, 0, col0},
+-                            PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
+-                        eltwise_chain(
+-                            window_shape,
+-                            BinaryFpu<
+-                                BinaryFpuOp::Add,
+-                                lane_input(cb_chunk_a, same_work_fmt),
+-                                affine_row(cb_beta_tiles)>{chunk_a, beta_tiles, 0, col0},
+-                            PackTile<lane_output(cb_output_tiles)>{output_tiles});
++                        if (folded) {
++                            folded_affine<EltwiseBinaryType::ELWMUL, cb_chunk_b, cb_gamma_tiles, cb_chunk_a, dest_lanes>(
++                                window, col0, chunk_b, chunk_a);
++                            folded_affine<EltwiseBinaryType::ELWADD, cb_chunk_a, cb_beta_tiles, cb_output_tiles, dest_lanes>(
++                                window, col0, chunk_a, output_tiles);
++                        } else {
++                            eltwise_chain(
++                                window_shape,
++                                BinaryFpu<
++                                    BinaryFpuOp::Mul,
++                                    lane_input(cb_chunk_b, same_work_fmt),
++                                    affine_row(cb_gamma_tiles)>{chunk_b, gamma_tiles, 0, col0},
++                                PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
++                            eltwise_chain(
++                                window_shape,
++                                BinaryFpu<
++                                    BinaryFpuOp::Add,
++                                    lane_input(cb_chunk_a, same_work_fmt),
++                                    affine_row(cb_beta_tiles)>{chunk_a, beta_tiles, 0, col0},
++                                PackTile<lane_output(cb_output_tiles)>{output_tiles});
++                        }
++                    }
++                    if (folded) {
++                        pop_pad(z_tiles);
++                        push_pad(output_tiles);
+                     }
+                 }
+                 row_mean.pop_front(rows);
+@@ -442,24 +614,40 @@ void kernel_main() {
+             // center_block
+             {
+                 MaybeDeviceZoneScope("compute_center");
+-                sub<lane_input(cb_z),
+-                    input(cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+-                    lane_output(cb_row_work_b)>(lane_shape, z_tiles, row_mean, work_b);
++                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
++                    sub<lane_input(cb_z),
++                        input(
++                            cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
++                        lane_output(cb_row_work_b)>(seg_shape(seg_rows, folded), z_tiles, row_mean, work_b);
++                    if (folded) {
++                        pop_pad(z_tiles);
++                        push_pad(work_b);
++                    }
++                });
+             }
+
+             // row_stats_block (two-pass; c stays resident for normalize_block)
+             if constexpr (!one_pass) {
+                 MaybeDeviceZoneScope("compute_row_stats");
+-                row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(
+-                    rows, work_b, inv_std);
++                for_each_segment([&](uint32_t first, uint32_t seg_rows, bool folded) {
++                    row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(
++                        first, seg_rows, folded ? folded_tiles : tensor_w_tiles, folded, work_b, inv_std);
++                });
+             }
+
+             // normalize_block
+             {
+                 MaybeDeviceZoneScope("compute_normalize");
+-                mul<lane_input(cb_row_work_b),
+-                    input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+-                    lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
++                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
++                    mul<lane_input(cb_row_work_b),
++                        input(
++                            cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
++                        lane_output(cb_row_work_a)>(seg_shape(seg_rows, folded), work_b, inv_std, work_a);
++                    if (folded) {
++                        pop_pad(work_b);
++                        push_pad(work_a);
++                    }
++                });
+             }
+             {
+                 MaybeDeviceZoneScope("compute_wait_affine");
+@@ -470,24 +658,47 @@ void kernel_main() {
+             // affine_scale_block
+             {
+                 MaybeDeviceZoneScope("compute_affine_scale");
+-                mul<lane_input(cb_row_work_a, same_work_fmt),
+-                    input(
+-                        cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+-                    lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
++                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
++                    if (folded) {
++                        folded_affine<EltwiseBinaryType::ELWMUL, cb_row_work_a, cb_gamma_tiles, cb_row_work_b, dest_lanes>(
++                            folded_tiles, 0, work_a, work_b);
++                        pop_pad(work_a);
++                        push_pad(work_b);
++                    } else {
++                        mul<lane_input(cb_row_work_a, same_work_fmt),
++                            input(
++                                cb_gamma_tiles,
++                                BroadcastDim::Row,
++                                WaitPolicy::Upfront,
++                                PopPolicy::None,
++                                InputTileMapping::Row),
++                            lane_output(cb_row_work_b, same_work_fmt)>(
++                            seg_shape(seg_rows, false), work_a, gamma_tiles, work_b);
++                    }
++                });
+             }
+
+             // affine_shift_block
+             {
+                 MaybeDeviceZoneScope("compute_affine_shift");
+-                add<lane_input(cb_row_work_b, same_work_fmt),
+-                    input(
+-                        cb_beta_tiles,
+-                        BroadcastDim::Row,
+-                        WaitPolicy::Upfront,
+-                        PopPolicy::None,
+-                        InputTileMapping::Row,
+-                        same_work_fmt),
+-                    lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
++                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
++                    if (folded) {
++                        folded_affine<EltwiseBinaryType::ELWADD, cb_row_work_b, cb_beta_tiles, cb_output_tiles, dest_lanes>(
++                            folded_tiles, 0, work_b, output_tiles);
++                        pop_pad(work_b);
++                        push_pad(output_tiles);
++                    } else {
++                        add<lane_input(cb_row_work_b, same_work_fmt),
++                            input(
++                                cb_beta_tiles,
++                                BroadcastDim::Row,
++                                WaitPolicy::Upfront,
++                                PopPolicy::None,
++                                InputTileMapping::Row,
++                                same_work_fmt),
++                            lane_output(cb_output_tiles)>(seg_shape(seg_rows, false), work_b, beta_tiles, output_tiles);
++                    }
++                });
+             }
+         }
+     }
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_reader.cpp b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_reader.cpp
+index 1e28d782ac6..417a870fae6 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_reader.cpp
++++ b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_reader.cpp
+@@ -62,6 +62,8 @@ void kernel_main() {
+     // The injector's writer RISC reads beta (on the other NoC) while this RISC reads gamma; the scratch CB's one
+     // page hands the landed beta block over.
+     constexpr bool beta_on_writer = get_named_compile_time_arg_val("affine_beta_on_writer") != 0;
++    // lone_band_fold: the lone band's compute tile-row is folded into Wt / 2 tiles (layer_norm_tile_stream.hpp).
++    constexpr bool fold = get_named_compile_time_arg_val("fold_lone") != 0;
+
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+     [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(1);
+@@ -76,6 +78,11 @@ void kernel_main() {
+     Sources sources(unit_start, unit_count);
+     const uint32_t core_row_tiles = Sources::compute_rows(unit_count);
+     constexpr uint32_t row_chunks = tensor_w_tiles / io_chunk_tiles;
++    // Folded row: each chunk fills C / 2 tiles; the row's page slot stays Wt pages (the last Wt / 2 are pushed
++    // unwritten), so the ring and the compute's row * Wt indexing are unchanged.
++    const uint32_t lone_row = fold ? sources.lone_row() : Sources::NO_LONE_ROW;
++    constexpr uint32_t folded_chunk_tiles = io_chunk_tiles / 2;
++    constexpr uint32_t fold_pad_tiles = tensor_w_tiles - tensor_w_tiles / 2;
+
+     constexpr bool read_residual = has_residual && !residual_on_writer;
+
+@@ -106,6 +113,9 @@ void kernel_main() {
+     auto scatter = [&](uint32_t block, DataflowBuffer& dst) {
+         dst.reserve_back(tensor_w_tiles);
+         Affine::scatter(block, dst.get_write_ptr());
++        if (lone_row != Sources::NO_LONE_ROW) {
++            Affine::scatter_folded(block, dst.get_write_ptr());
++        }
+     };
+     auto scatter_and_push = [&]() {
+         dataflow_kernel_lib::set_read_trid(noc, affine_trid);
+@@ -180,12 +190,23 @@ void kernel_main() {
+             if (col == 0) {
+                 src = sources.next();
+             }
+-            const uint32_t offset = chunk * io_chunk_tiles * input_tile_bytes;
+-            layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+-                input_accessor, src, col, input_base + offset, rotation);
+-            if constexpr (read_residual) {
++            const uint32_t row = chunk / row_chunks;
++            if (block_row + row == lone_row) {
++                const uint32_t offset = (row * tensor_w_tiles + col / 2) * input_tile_bytes;
++                layer_norm_tile::read_folded_chunk<io_chunk_tiles, input_tile_bytes>(
++                    input_accessor, src, col, input_base + offset);
++                if constexpr (read_residual) {
++                    layer_norm_tile::read_folded_chunk<io_chunk_tiles, input_tile_bytes>(
++                        residual_accessor, src, col, residual_base + offset);
++                }
++            } else {
++                const uint32_t offset = chunk * io_chunk_tiles * input_tile_bytes;
+                 layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+-                    residual_accessor, src, col, residual_base + offset, rotation);
++                    input_accessor, src, col, input_base + offset, rotation);
++                if constexpr (read_residual) {
++                    layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
++                        residual_accessor, src, col, residual_base + offset, rotation);
++                }
+             }
+             if (send_pending && chunk + 1 == num_chunks) {
+                 dataflow_kernel_lib::set_read_trid(noc, 0);
+@@ -196,10 +217,19 @@ void kernel_main() {
+                 receive_pending = false;
+             }
+         };
++        uint32_t retired = 0;
+         auto retire = [&]() {
+-            input_tiles.push_back(io_chunk_tiles);
++            uint32_t tiles = io_chunk_tiles;
++            if (block_row + retired / row_chunks == lone_row) {
++                tiles = folded_chunk_tiles;
++                if (retired % row_chunks == row_chunks - 1) {
++                    tiles += fold_pad_tiles;
++                }
++            }
++            ++retired;
++            input_tiles.push_back(tiles);
+             if constexpr (read_residual) {
+-                residual_tiles.push_back(io_chunk_tiles);
++                residual_tiles.push_back(tiles);
+             }
+         };
+         {
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_writer.cpp b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_writer.cpp
+index 8f4ca966da4..b91a2ddf559 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_writer.cpp
++++ b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_writer.cpp
+@@ -38,6 +38,7 @@ void kernel_main() {
+     constexpr uint32_t affine_page_elems = get_named_compile_time_arg_val("affine_page_elems");
+     constexpr uint32_t affine_page_bytes = get_named_compile_time_arg_val("affine_page_bytes");
+     constexpr uint32_t affine_elem_bytes = get_named_compile_time_arg_val("affine_elem_bytes");
++    constexpr bool fold = get_named_compile_time_arg_val("fold_lone") != 0;
+
+     const uint32_t output_addr = get_arg_val<uint32_t>(0);
+     const uint32_t unit_start = get_arg_val<uint32_t>(1);
+@@ -64,6 +65,10 @@ void kernel_main() {
+     [[maybe_unused]] Sources residual_sources(unit_start, unit_count);
+     const uint32_t core_row_tiles = Sources::compute_rows(unit_count);
+     constexpr uint32_t row_chunks = tensor_w_tiles / io_chunk_tiles;
++    // lone_band_fold: the lone row's chunks carry C / 2 folded tiles; its page slot is padded to Wt pages.
++    const uint32_t lone_row = fold ? output_sources.lone_row() : Sources::NO_LONE_ROW;
++    constexpr uint32_t folded_chunk_tiles = io_chunk_tiles / 2;
++    constexpr uint32_t fold_pad_tiles = tensor_w_tiles - tensor_w_tiles / 2;
+
+     auto block_rows = [&](uint32_t block_row) {
+         return (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
+@@ -75,6 +80,7 @@ void kernel_main() {
+         residual_tiles.reserve_back(rows * tensor_w_tiles);
+         const uint32_t residual_base = residual_tiles.get_write_ptr();
+         layer_norm_tile::RowSource src{};
++        uint32_t retired = 0;
+         layer_norm_tile::read_block_chunks<read_trid_depth>(
+             noc,
+             rows * row_chunks,
+@@ -83,10 +89,23 @@ void kernel_main() {
+                 if (col == 0) {
+                     src = residual_sources.next();
+                 }
+-                layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+-                    residual_accessor, src, col, residual_base + chunk * io_chunk_tiles * input_tile_bytes, rotation);
++                const uint32_t row = chunk / row_chunks;
++                if (block_row + row == lone_row) {
++                    layer_norm_tile::read_folded_chunk<io_chunk_tiles, input_tile_bytes>(
++                        residual_accessor, src, col, residual_base + (row * tensor_w_tiles + col / 2) * input_tile_bytes);
++                } else {
++                    layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
++                        residual_accessor, src, col, residual_base + chunk * io_chunk_tiles * input_tile_bytes, rotation);
++                }
+             },
+-            [&]() { residual_tiles.push_back(io_chunk_tiles); });
++            [&]() {
++                uint32_t tiles = io_chunk_tiles;
++                if (block_row + retired / row_chunks == lone_row) {
++                    tiles = folded_chunk_tiles + (retired % row_chunks == row_chunks - 1 ? fold_pad_tiles : 0);
++                }
++                ++retired;
++                residual_tiles.push_back(tiles);
++            });
+     };
+
+     auto store_block = [&](uint32_t block_row) {
+@@ -96,21 +115,31 @@ void kernel_main() {
+         for (uint32_t group = 0; group < num_chunks; group += write_chunks_per_flush) {
+             const uint32_t group_chunks =
+                 (num_chunks - group) < write_chunks_per_flush ? (num_chunks - group) : write_chunks_per_flush;
++            uint32_t group_tiles = 0;
+             for (uint32_t chunk = 0; chunk < group_chunks; ++chunk) {
+                 const uint32_t col = ((group + chunk) % row_chunks) * io_chunk_tiles;
+                 if (col == 0) {
+                     src = output_sources.next();
+                 }
+-                output_tiles.wait_front((chunk + 1) * io_chunk_tiles);
+-                layer_norm_tile::write_row_chunk<io_chunk_tiles, output_tile_bytes>(
+-                    output_accessor,
+-                    src,
+-                    col,
+-                    output_tiles.get_read_ptr() + chunk * io_chunk_tiles * output_tile_bytes,
+-                    rotation);
++                const uint32_t l1 = output_tiles.get_read_ptr() + group_tiles * output_tile_bytes;
++                if (block_row + (group + chunk) / row_chunks == lone_row) {
++                    output_tiles.wait_front(group_tiles + folded_chunk_tiles);
++                    layer_norm_tile::write_folded_chunk<io_chunk_tiles, output_tile_bytes>(output_accessor, src, col, l1);
++                    group_tiles += folded_chunk_tiles;
++                    if (col + io_chunk_tiles == tensor_w_tiles) {
++                        // The row's unwritten pad pages, pushed by compute right after the row.
++                        group_tiles += fold_pad_tiles;
++                        output_tiles.wait_front(group_tiles);
++                    }
++                } else {
++                    output_tiles.wait_front(group_tiles + io_chunk_tiles);
++                    layer_norm_tile::write_row_chunk<io_chunk_tiles, output_tile_bytes>(
++                        output_accessor, src, col, l1, rotation);
++                    group_tiles += io_chunk_tiles;
++                }
+             }
+             noc_async_writes_flushed();
+-            output_tiles.pop_front(group_chunks * io_chunk_tiles);
++            output_tiles.pop_front(group_tiles);
+         }
+     };
+
+diff --git a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_stream.hpp b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_stream.hpp
+index a9c3d348c1e..bd6a3b041c1 100644
+--- a/ttnn/ttnn/operations/layer_norm_tile/kernels/layer_norm_tile_stream.hpp
++++ b/ttnn/ttnn/operations/layer_norm_tile/perf_experiments/lone_band_fold/kernels/layer_norm_tile_stream.hpp
+@@ -73,11 +73,18 @@ public:
+             image_row_ = (unit_start / image_bands) * image_row_tiles;
+             within_ = unit_start % image_bands;
+             lone_first_ = (unit_count % 2 != 0) && (within_ % 2 != 0);
++            if (unit_count % 2 != 0) {
++                lone_row_ = lone_first_ ? 0 : compute_rows(unit_count) - 1;
++            }
+         } else {
+             image_row_ = unit_start;
+         }
+     }
+
++    // Compute tile-row holding the lone band (NO_LONE_ROW: none).
++    static constexpr uint32_t NO_LONE_ROW = 0xFFFFFFFF;
++    uint32_t lone_row() const { return lone_row_; }
++
+     // Compute tile-rows of a run of `unit_count` units.
+     static constexpr uint32_t compute_rows(uint32_t unit_count) {
+         return half_band ? (unit_count + 1) / 2 : unit_count;
+@@ -116,6 +123,7 @@ private:
+     }
+
+     uint32_t remaining_;
++    uint32_t lone_row_ = NO_LONE_ROW;
+     uint32_t image_row_ = 0;  // first tile-row of the cursor's image (R1: the next tile-row)
+     uint32_t within_ = 0;     // valid band index inside the image
+     bool lone_first_ = false;
+@@ -139,6 +147,27 @@ FORCE_INLINE void read_row_chunk(
+     });
+ }
+
++// Folded lone band (lone_band_fold): source columns 2j / 2j + 1 of the band land in the top / bottom half of
++// compute tile j, so a chunk of `chunk_tiles` source columns fills chunk_tiles / 2 tiles. Same reads as the
++// unfolded lone band (one half tile per source column), half the compute tiles. `col` is even.
++template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
++FORCE_INLINE void read_folded_chunk(const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr) {
++    constexpr uint32_t half = tile_bytes / 2;
++    for (uint32_t tile = 0; tile < chunk_tiles; ++tile) {
++        noc_async_read(
++            accessor.get_noc_addr(src.top.page + col + tile, src.top.offset), l1_addr + (tile / 2) * tile_bytes + (tile % 2) * half, half);
++    }
++}
++
++template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
++FORCE_INLINE void write_folded_chunk(const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr) {
++    constexpr uint32_t half = tile_bytes / 2;
++    for (uint32_t tile = 0; tile < chunk_tiles; ++tile) {
++        noc_async_write(
++            l1_addr + (tile / 2) * tile_bytes + (tile % 2) * half, accessor.get_noc_addr(src.top.page + col + tile, src.top.offset), half);
++    }
++}
++
+ template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+ FORCE_INLINE void write_row_chunk(
+     const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr, uint32_t rotation) {
+@@ -221,6 +250,17 @@ struct AffineBlock {
+         });
+     }
+
++    // Folded operand (lone_band_fold): row 0 of faces 2/3 of slot 2j <- column 2j + 1, so a per-face row broadcast
++    // of slot 2j serves folded tile j (top half column 2j, bottom half column 2j + 1). The standard row broadcast
++    // never reads faces 2/3, so the unfolded rows are unaffected.
++    static FORCE_INLINE void scatter_folded(uint32_t block, uint32_t slot) {
++        constexpr uint32_t bottom = 2 * face_bytes;
++        for (uint32_t col = 1; col < tensor_w_tiles; col += 2, slot += 2 * tile_bytes) {
++            const uint32_t entry = block + (col / group_cols) * group_bytes + (col % group_cols) * row_bytes;
++            noc_async_read(get_noc_addr(entry), slot + bottom, face_bytes + face_row_bytes);
++        }
++    }
++
+     // Row 0 of faces 0/1 of `tensor_w_tiles` consecutive tile slots from `slot`.
+     static FORCE_INLINE void scatter(uint32_t block, uint32_t slot) {
+         for_each_group([&](uint32_t, uint32_t cols, uint32_t group) {
+diff --git a/layer_norm_tile_program_descriptor.py b/perf_experiments/lone_band_fold/lbf_descriptor.py
+index 3fb764e0fa4..44ec8efcede 100644
+--- a/layer_norm_tile_program_descriptor.py
++++ b/perf_experiments/lone_band_fold/lbf_descriptor.py
+@@ -1,11 +1,12 @@
+ # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ # SPDX-License-Identifier: Apache-2.0
+
+-"""layer_norm ProgramDescriptor: regime R1 (row_resident), tile-rows split across the compute grid."""
++"""lone_band_fold copy of the layer_norm ProgramDescriptor (base 9daa4c30ecf) + FOLD_LONE_BAND."""
+
+ from __future__ import annotations
+
+ import math
++import os
+ import struct
+ from dataclasses import dataclass
+ from pathlib import Path
+@@ -14,6 +15,11 @@ import ttnn
+
+ KERNEL_DIR = Path(__file__).parent / "kernels"
+
++# lone_band_fold: an R3 core's lone 16-row band runs on Wt / 2 folded tiles (source columns 2j / 2j + 1 in the
++# top / bottom half of tile j) instead of Wt half-stale tiles. LBF_FOLD=0 is the base op.
++FOLD_LONE_BAND = os.environ.get("LBF_FOLD", "1") != "0"
++NO_LONE_ROW = 0xFFFFFFFF
++
+ TILE = 32
+
+ # Blocking-model host constants (op_design.md, Blocking Model).
+@@ -433,6 +439,26 @@ def _compute_config(requested, blocking):
+     return config
+
+
++def _fold(blocking):
++    """Folding pairs source columns (Wt even), splits each reader chunk in two (C even) and halves the stats
++    window, which must stay even unless it is the whole folded row. Odd Wt keeps the unfolded lone row."""
++    Wt, C, G = blocking.tensor_w_tiles, blocking.io_chunk_tiles, blocking.stats_window_tiles
++    return (
++        FOLD_LONE_BAND
++        and blocking.half_band
++        and Wt % 2 == 0
++        and C % 2 == 0
++        and (G == Wt or (G // 2) % 2 == 0)
++    )
++
++
++def _lone_row(blocking, unit_start, unit_count, core_row_tiles):
++    """Compute tile-row of a core's lone band (RowSources): first when the odd run starts on a bottom band."""
++    if not blocking.half_band or unit_count % 2 == 0:
++        return NO_LONE_ROW
++    return 0 if (unit_start % blocking.image_bands) % 2 != 0 else core_row_tiles - 1
++
++
+ def _float_bits(value):
+     return struct.unpack("<I", struct.pack("<f", value))[0]
+
+@@ -556,6 +582,7 @@ def create_program_descriptor(
+         ("affine_scratch_cb", CB_AFFINE_SCRATCH),
+         ("affine_group_cols", _affine_group_cols(affine_is_tile)),
+         ("affine_beta_on_writer", int(AFFINE_BETA_ON_WRITER)),
++        ("fold_lone", int(_fold(blocking))),
+     ]
+     writer_named_ct_args = affine_named_ct_args + [
+         ("affine_is_tile", int(affine_is_tile)),
+@@ -622,7 +649,11 @@ def create_program_descriptor(
+             beta_addr,
+             int(core_idx == _affine_injector(blocking)),
+         ]
+-        compute_rt[core.x][core.y] = [core_row_tiles, int(core_row_tiles >= blocking.stream_normalize_min_rows)]
++        compute_rt[core.x][core.y] = [
++            core_row_tiles,
++            int(core_row_tiles >= blocking.stream_normalize_min_rows),
++            _lone_row(blocking, unit_start, unit_count, core_row_tiles),
++        ]
+
+     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+     kernels = []
+@@ -659,6 +690,7 @@ def create_program_descriptor(
+             kernel_source=str(KERNEL_DIR / "layer_norm_tile_compute.cpp"),
+             core_ranges=cores,
+             compile_time_args=compute_ct_args,
++            named_compile_time_args=[("fold_lone", int(_fold(blocking)))],
+             runtime_args=compute_rt,
+             config=_compute_config(compute_kernel_config, blocking),
+         )

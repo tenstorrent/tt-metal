@@ -62,6 +62,8 @@ void kernel_main() {
     // The injector's writer RISC reads beta (on the other NoC) while this RISC reads gamma; the scratch CB's one
     // page hands the landed beta block over.
     constexpr bool beta_on_writer = get_named_compile_time_arg_val("affine_beta_on_writer") != 0;
+    // lone_band_fold: the lone band's compute tile-row is folded into Wt / 2 tiles (layer_norm_tile_stream.hpp).
+    constexpr bool fold = get_named_compile_time_arg_val("fold_lone") != 0;
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(1);
@@ -76,6 +78,11 @@ void kernel_main() {
     Sources sources(unit_start, unit_count);
     const uint32_t core_row_tiles = Sources::compute_rows(unit_count);
     constexpr uint32_t row_chunks = tensor_w_tiles / io_chunk_tiles;
+    // Folded row: each chunk fills C / 2 tiles; the row's page slot stays Wt pages (the last Wt / 2 are pushed
+    // unwritten), so the ring and the compute's row * Wt indexing are unchanged.
+    const uint32_t lone_row = fold ? sources.lone_row() : Sources::NO_LONE_ROW;
+    constexpr uint32_t folded_chunk_tiles = io_chunk_tiles / 2;
+    constexpr uint32_t fold_pad_tiles = tensor_w_tiles - tensor_w_tiles / 2;
 
     constexpr bool read_residual = has_residual && !residual_on_writer;
 
@@ -106,6 +113,9 @@ void kernel_main() {
     auto scatter = [&](uint32_t block, DataflowBuffer& dst) {
         dst.reserve_back(tensor_w_tiles);
         Affine::scatter(block, dst.get_write_ptr());
+        if (lone_row != Sources::NO_LONE_ROW) {
+            Affine::scatter_folded(block, dst.get_write_ptr());
+        }
     };
     auto scatter_and_push = [&]() {
         dataflow_kernel_lib::set_read_trid(noc, affine_trid);
@@ -180,12 +190,23 @@ void kernel_main() {
             if (col == 0) {
                 src = sources.next();
             }
-            const uint32_t offset = chunk * io_chunk_tiles * input_tile_bytes;
-            layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
-                input_accessor, src, col, input_base + offset, rotation);
-            if constexpr (read_residual) {
+            const uint32_t row = chunk / row_chunks;
+            if (block_row + row == lone_row) {
+                const uint32_t offset = (row * tensor_w_tiles + col / 2) * input_tile_bytes;
+                layer_norm_tile::read_folded_chunk<io_chunk_tiles, input_tile_bytes>(
+                    input_accessor, src, col, input_base + offset);
+                if constexpr (read_residual) {
+                    layer_norm_tile::read_folded_chunk<io_chunk_tiles, input_tile_bytes>(
+                        residual_accessor, src, col, residual_base + offset);
+                }
+            } else {
+                const uint32_t offset = chunk * io_chunk_tiles * input_tile_bytes;
                 layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
-                    residual_accessor, src, col, residual_base + offset, rotation);
+                    input_accessor, src, col, input_base + offset, rotation);
+                if constexpr (read_residual) {
+                    layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+                        residual_accessor, src, col, residual_base + offset, rotation);
+                }
             }
             if (send_pending && chunk + 1 == num_chunks) {
                 dataflow_kernel_lib::set_read_trid(noc, 0);
@@ -196,10 +217,19 @@ void kernel_main() {
                 receive_pending = false;
             }
         };
+        uint32_t retired = 0;
         auto retire = [&]() {
-            input_tiles.push_back(io_chunk_tiles);
+            uint32_t tiles = io_chunk_tiles;
+            if (block_row + retired / row_chunks == lone_row) {
+                tiles = folded_chunk_tiles;
+                if (retired % row_chunks == row_chunks - 1) {
+                    tiles += fold_pad_tiles;
+                }
+            }
+            ++retired;
+            input_tiles.push_back(tiles);
             if constexpr (read_residual) {
-                residual_tiles.push_back(io_chunk_tiles);
+                residual_tiles.push_back(tiles);
             }
         };
         {

@@ -37,6 +37,8 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -91,6 +93,42 @@ inline void calculate_row_mean_inv_std_col0(uint32_t addend_bits) {
         }
     }
 }
+
+// lone_band_fold: a folded lone row holds one logical row r in tile rows r (faces 0/1) and r + 16 (faces 2/3).
+// Before the row collapse, each element of faces 0/1 and its faces 2/3 partner add and go to both halves, so the
+// collapse and the unchanged column-0 finalize (VectorMode::C) see whole-row sums in rows r and r + 16 alike.
+// Adding before the collapse keeps one rounded row sum, as unfolded: combining two collapsed half sums measured
+// twice the mean error under bf16 DEST (|mean| = 100). Tiles [0, num_tiles) from the call's DEST index. Under bf16
+// DEST the sum is rounded to nearest before the store (a plain store truncates: biased row sums).
+template <bool fp32_dest_acc_en, uint32_t num_tiles>
+inline void fold_row_halves() {
+    constexpr uint32_t tile_rows = 32;
+    constexpr uint32_t half = 16;
+#pragma GCC unroll 1
+    for (uint32_t tile = 0; tile < num_tiles; ++tile) {
+#pragma GCC unroll 16
+        for (uint32_t reg = 0; reg < half; ++reg) {
+            const sfpi::vFloat top = sfpi::dst_reg[tile * tile_rows + reg];
+            const sfpi::vFloat bottom = sfpi::dst_reg[tile * tile_rows + half + reg];
+            sfpi::vFloat sum = top + bottom;
+            if constexpr (!fp32_dest_acc_en) {
+                sum = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
+            }
+            sfpi::dst_reg[tile * tile_rows + reg] = sum;
+            sfpi::dst_reg[tile * tile_rows + half + reg] = sum;
+        }
+    }
+}
+
+// Face 0 -> face 2: the folded row's shift tile takes each logical row's first element (top half) in both halves.
+template <bool unused = true>
+inline void copy_face0_to_face2() {
+#pragma GCC unroll 8
+    for (int reg = 0; reg < 8; ++reg) {
+        const sfpi::vFloat value = sfpi::dst_reg[reg];
+        sfpi::dst_reg[16 + reg] = value;
+    }
+}
 }  // namespace ckernel::sfpu
 #endif
 
@@ -107,17 +145,28 @@ template <
     uint32_t tensor_w_tiles,
     uint32_t inv_w_bits,
     uint32_t epsilon_bits>
-ALWI void row_stats_block(uint32_t rows, DataflowBuffer& centered, DataflowBuffer& inv_std) {
+ALWI void row_stats_block(
+    uint32_t first_row,
+    uint32_t rows,
+    uint32_t row_tiles,
+    bool folded,
+    DataflowBuffer& centered,
+    DataflowBuffer& inv_std) {
     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
-    centered.wait_front(rows * tensor_w_tiles);
+    centered.wait_front((first_row + rows) * tensor_w_tiles);
     reconfig_data_format(cb_centered, cb_centered);
     pack_reconfig_data_format(cb_inv_std);
-    for (uint32_t row = 0; row < rows; ++row) {
+    for (uint32_t row = first_row; row < first_row + rows; ++row) {
         const uint32_t base = row * tensor_w_tiles;
         tile_regs_acquire();
         mul_init(cb_centered, cb_centered, true);  // a freshly acquired DEST reads 0: the first mul seeds S
-        for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
+        for (uint32_t col = 0; col < row_tiles; ++col) {
             mul_tiles(cb_centered, cb_centered, base + col, base + col, 0);
+        }
+        if (folded) {
+            rsqrt_tile_init();  // any plain SFPU init: fold_row_halves uses no LUT / programmable constants
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, fold_row_halves, (DST_ACCUM_MODE, 1), 0, VectorMode::None));
         }
         sfpu_reduce_init<PoolType::SUM, dst_fmt>();
         sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
@@ -156,16 +205,18 @@ ALWI void row_stats_window(
     uint32_t row,
     uint32_t col0,
     uint32_t window_tiles,
+    uint32_t row_tiles,
+    bool folded,
     DataflowBuffer& z,
     DataflowBuffer& partial,
     DataflowBuffer& row_mean,
     DataflowBuffer& inv_std) {
     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
     constexpr uint32_t num_sums = one_pass ? 2 : 1;
-    ASSERT(window_tiles % 2 == 0 || window_tiles == tensor_w_tiles);
+    ASSERT(window_tiles % 2 == 0 || window_tiles == row_tiles);
     const uint32_t base = row * tensor_w_tiles + col0;
     const bool first = col0 == 0;
-    const bool last = col0 + window_tiles == tensor_w_tiles;
+    const bool last = col0 + window_tiles == row_tiles;
 
     z.wait_front(base + window_tiles);
     reconfig_data_format(cb_z, cb_z);
@@ -196,6 +247,11 @@ ALWI void row_stats_window(
         }
     }
     if (last) {
+        if (folded) {
+            rsqrt_tile_init();  // any plain SFPU init: fold_row_halves uses no LUT / programmable constants
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, fold_row_halves, (DST_ACCUM_MODE, num_sums), 0, VectorMode::None));
+        }
         sfpu_reduce_init<PoolType::SUM, dst_fmt>();
         for (uint32_t sum = 0; sum < num_sums; ++sum) {
             sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(sum, 1, 1);
@@ -237,6 +293,65 @@ ALWI void row_stats_window(
         tile_regs_release();
         partial.push_back(num_sums);
     }
+}
+
+// Folded affine (lone_band_fold): out = in (op) per-face row broadcast of the affine slots 2 * (first + t), whose
+// faces 0/1 row 0 hold column 2j and faces 2/3 row 0 column 2j + 1 (reader scatter_folded). Raw LLK: the helpers'
+// BroadcastDim::Row pairs the ROW unpack MOP, which re-reads B faces 0/1 for the bottom half (it clears the B
+// face counter per face row), with the ROW math. Unpacking B with the NONE MOP walks faces 0-3 instead, and the
+// ROW math still broadcasts row 0 of each unpacked face: one pass, the same instruction count as the row bcast.
+template <EltwiseBinaryType op, uint32_t cb_in, uint32_t cb_affine, uint32_t cb_out, uint32_t lanes>
+ALWI void folded_affine(uint32_t tiles, uint32_t first, DataflowBuffer& in, DataflowBuffer& out) {
+#ifdef TRISC_MATH
+    constexpr MathFidelity fidelity = op == EltwiseBinaryType::ELWMUL ? MATH_FIDELITY : MathFidelity::LoFi;
+#endif
+    reconfig_data_format(cb_in, cb_affine);
+    pack_reconfig_data_format(cb_out);
+    MATH((llk_math_eltwise_binary_init<op, BroadcastType::ROW, fidelity>(cb_in, cb_affine)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_in, cb_affine)));
+    for (uint32_t tile = 0; tile < tiles; tile += lanes) {
+        const uint32_t count = tiles - tile < lanes ? tiles - tile : lanes;
+        in.wait_front(count);
+        out.reserve_back(count);
+        tile_regs_acquire();
+        for (uint32_t lane = 0; lane < count; ++lane) {
+            MATH((llk_math_eltwise_binary<
+                  op,
+                  BroadcastType::ROW,
+                  DST_ACCUM_MODE,
+                  fidelity,
+                  EltwiseBinaryReuseDestType::NONE>(cb_in, cb_affine, lane, true)));
+            UNPACK((llk_unpack_AB<BroadcastType::NONE>(cb_in, cb_affine, lane, 2 * (first + tile + lane))));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t lane = 0; lane < count; ++lane) {
+            pack_tile(lane, cb_out);
+        }
+        tile_regs_release();
+        in.pop_front(count);
+        out.push_back(count);
+    }
+}
+
+// Folded row's shift tile: the first x tile with face 0 copied over face 2, so both halves of a logical row
+// subtract its first element.
+template <uint32_t cb_x, uint32_t cb_shift>
+ALWI void folded_shift_copy(DataflowBuffer& x, DataflowBuffer& shift) {
+    x.wait_front(1);
+    shift.reserve_back(1);
+    reconfig_data_format_srca(cb_x);
+    pack_reconfig_data_format(cb_shift);
+    copy_init(cb_x);
+    tile_regs_acquire();
+    copy_tile(cb_x, 0, 0);
+    rsqrt_tile_init();
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, copy_face0_to_face2, (true), 0, VectorMode::None));
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_shift);
+    tile_regs_release();
+    shift.push_back(1);
 }
 
 // Streaming-pass operands: one CB handshake per IterationShape::block_size group of DEST lanes.
@@ -291,6 +406,7 @@ void kernel_main() {
     // mean(d), so the output is unchanged.
     constexpr uint32_t cb_row_shift = get_compile_time_arg_val(22);
     constexpr bool shifted = one_pass && has_residual;
+    constexpr bool fold = get_named_compile_time_arg_val("fold_lone") != 0;
 
     const uint32_t core_row_tiles = get_arg_val<uint32_t>(0);
     // Per core: the host picks which cores take the per-window normalize (the work pair is allocated whenever
@@ -323,24 +439,65 @@ void kernel_main() {
     DataflowBuffer output_tiles(cb_output_tiles);
     DataflowBuffer& z_tiles = has_residual ? work_a : input_tiles;
 
+    // lone_band_fold: the core's lone band row (NO_LONE_ROW: none) runs folded on Wt / 2 tiles. Its CB slot stays Wt
+    // pages: each producer pushes the unused Wt / 2 pages after the row and each consumer pops them, so the rings, the
+    // work_a / work_b alias and every row * Wt index stay as in the unfolded layout.
+    constexpr uint32_t NO_LONE_ROW = 0xFFFFFFFF;
+    const uint32_t lone_row = fold ? get_arg_val<uint32_t>(2) : NO_LONE_ROW;
+    constexpr uint32_t folded_tiles = tensor_w_tiles / 2;
+    constexpr uint32_t pad_tiles = tensor_w_tiles - folded_tiles;
+    auto pop_pad = [](DataflowBuffer& cb) {
+        cb.wait_front(pad_tiles);
+        cb.pop_front(pad_tiles);
+    };
+    auto push_pad = [](DataflowBuffer& cb) {
+        cb.reserve_back(pad_tiles);
+        cb.push_back(pad_tiles);
+    };
+    // Folded window: the reader's chunk carries C / 2 folded tiles, so a window of G source tiles is G / 2.
+    auto folded_window = [](uint32_t window) { return window == tensor_w_tiles ? folded_tiles : window / 2; };
+
     for (uint32_t block_row = 0; block_row < core_row_tiles; block_row += block_row_tiles) {
         const uint32_t rows =
             (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
-        // Streaming passes take `dest_lanes` tiles per DEST acquire (one CB handshake per group).
-        [[maybe_unused]] const auto lane_shape = IterationShape::grid(rows, tensor_w_tiles).block_size(dest_lanes);
+        // Contiguous row runs of one width: fn(first row, rows, folded). The lone row is a core's first or last.
+        auto for_each_segment = [&](auto fn) {
+            if (lone_row >= block_row && lone_row < block_row + rows) {
+                const uint32_t lone = lone_row - block_row;
+                if (lone > 0) {
+                    fn(0u, lone, false);
+                }
+                fn(lone, 1u, true);
+                if (lone + 1 < rows) {
+                    fn(lone + 1, rows - lone - 1, false);
+                }
+            } else {
+                fn(0u, rows, false);
+            }
+        };
+        auto seg_shape = [&](uint32_t seg_rows, bool folded) {
+            return IterationShape::grid(seg_rows, folded ? folded_tiles : tensor_w_tiles).block_size(dest_lanes);
+        };
 
         // residual_add_block + row_stats_window, interleaved per window so the stats run as tiles land
         {
             MaybeDeviceZoneScope("compute_add_and_stats");
-            const uint32_t window = block_row < streamed_rows ? stats_window_tiles : tensor_w_tiles;
-            const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
+            const uint32_t block_window = block_row < streamed_rows ? stats_window_tiles : tensor_w_tiles;
             for (uint32_t row = 0; row < rows; ++row) {
+                const bool folded = block_row + row == lone_row;
+                const uint32_t row_tiles = folded ? folded_tiles : tensor_w_tiles;
+                const uint32_t window = folded ? folded_window(block_window) : block_window;
+                const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
                 if constexpr (shifted) {
                     // The row's first x tile (front of the input CB): column 0 is each row's shift.
-                    copy<input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::None), output(cb_row_shift)>(
-                        IterationShape::one_tile(), input_tiles, row_shift);
+                    if (folded) {
+                        folded_shift_copy<cb_input_tiles, cb_row_shift>(input_tiles, row_shift);
+                    } else {
+                        copy<input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::None), output(cb_row_shift)>(
+                            IterationShape::one_tile(), input_tiles, row_shift);
+                    }
                 }
-                for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += window) {
+                for (uint32_t col0 = 0; col0 < row_tiles; col0 += window) {
                     if constexpr (shifted) {
                         eltwise_chain(
                             window_shape,
@@ -370,10 +527,17 @@ void kernel_main() {
                         tensor_w_tiles,
                         one_pass,
                         inv_w_bits,
-                        epsilon_bits>(row, col0, window, z_tiles, stat_partial, row_mean, inv_std);
+                        epsilon_bits>(row, col0, window, row_tiles, folded, z_tiles, stat_partial, row_mean, inv_std);
                 }
                 if constexpr (shifted) {
                     row_shift.pop_front(1);
+                }
+                if constexpr (has_residual) {
+                    if (folded) {
+                        pop_pad(input_tiles);
+                        pop_pad(residual_tiles);
+                        push_pad(work_a);
+                    }
                 }
             }
         }
@@ -384,7 +548,6 @@ void kernel_main() {
                 // moves one window through a G-page chunk CB; the work alias pair cannot carry it (its ids
                 // must move whole blocks).
                 MaybeDeviceZoneScope("compute_stream_normalize");
-                const auto window_shape = IterationShape::grid(1, stats_window_tiles).block_size(dest_lanes);
                 constexpr auto col_stat = [](uint32_t cb) {
                     return input(
                         cb,
@@ -408,7 +571,11 @@ void kernel_main() {
                 gamma_tiles.wait_front(tensor_w_tiles);
                 beta_tiles.wait_front(tensor_w_tiles);
                 for (uint32_t row = 0; row < rows; ++row) {
-                    for (uint32_t col0 = 0; col0 < tensor_w_tiles; col0 += stats_window_tiles) {
+                    const bool folded = block_row + row == lone_row;
+                    const uint32_t row_tiles = folded ? folded_tiles : tensor_w_tiles;
+                    const uint32_t window = folded ? folded_window(stats_window_tiles) : stats_window_tiles;
+                    const auto window_shape = IterationShape::grid(1, window).block_size(dest_lanes);
+                    for (uint32_t col0 = 0; col0 < row_tiles; col0 += window) {
                         eltwise_chain(
                             window_shape,
                             BinaryFpu<BinaryFpuOp::Sub, lane_input(cb_z), col_stat(cb_row_mean)>{
@@ -419,20 +586,39 @@ void kernel_main() {
                             BinaryFpu<BinaryFpuOp::Mul, lane_input(cb_chunk_a), col_stat(cb_inv_std)>{
                                 chunk_a, inv_std, 0, row},
                             PackTile<lane_output(cb_chunk_b)>{chunk_b});
-                        eltwise_chain(
-                            window_shape,
-                            BinaryFpu<
-                                BinaryFpuOp::Mul,
-                                lane_input(cb_chunk_b, same_work_fmt),
-                                affine_row(cb_gamma_tiles)>{chunk_b, gamma_tiles, 0, col0},
-                            PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
-                        eltwise_chain(
-                            window_shape,
-                            BinaryFpu<
-                                BinaryFpuOp::Add,
-                                lane_input(cb_chunk_a, same_work_fmt),
-                                affine_row(cb_beta_tiles)>{chunk_a, beta_tiles, 0, col0},
-                            PackTile<lane_output(cb_output_tiles)>{output_tiles});
+                        if (folded) {
+                            folded_affine<
+                                EltwiseBinaryType::ELWMUL,
+                                cb_chunk_b,
+                                cb_gamma_tiles,
+                                cb_chunk_a,
+                                dest_lanes>(window, col0, chunk_b, chunk_a);
+                            folded_affine<
+                                EltwiseBinaryType::ELWADD,
+                                cb_chunk_a,
+                                cb_beta_tiles,
+                                cb_output_tiles,
+                                dest_lanes>(window, col0, chunk_a, output_tiles);
+                        } else {
+                            eltwise_chain(
+                                window_shape,
+                                BinaryFpu<
+                                    BinaryFpuOp::Mul,
+                                    lane_input(cb_chunk_b, same_work_fmt),
+                                    affine_row(cb_gamma_tiles)>{chunk_b, gamma_tiles, 0, col0},
+                                PackTile<lane_output(cb_chunk_a, same_work_fmt)>{chunk_a});
+                            eltwise_chain(
+                                window_shape,
+                                BinaryFpu<
+                                    BinaryFpuOp::Add,
+                                    lane_input(cb_chunk_a, same_work_fmt),
+                                    affine_row(cb_beta_tiles)>{chunk_a, beta_tiles, 0, col0},
+                                PackTile<lane_output(cb_output_tiles)>{output_tiles});
+                        }
+                    }
+                    if (folded) {
+                        pop_pad(z_tiles);
+                        push_pad(output_tiles);
                     }
                 }
                 row_mean.pop_front(rows);
@@ -442,24 +628,48 @@ void kernel_main() {
             // center_block
             {
                 MaybeDeviceZoneScope("compute_center");
-                sub<lane_input(cb_z),
-                    input(cb_row_mean, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                    lane_output(cb_row_work_b)>(lane_shape, z_tiles, row_mean, work_b);
+                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
+                    sub<lane_input(cb_z),
+                        input(
+                            cb_row_mean,
+                            BroadcastDim::Col,
+                            WaitPolicy::Upfront,
+                            PopPolicy::AtEnd,
+                            InputTileMapping::Col),
+                        lane_output(cb_row_work_b)>(seg_shape(seg_rows, folded), z_tiles, row_mean, work_b);
+                    if (folded) {
+                        pop_pad(z_tiles);
+                        push_pad(work_b);
+                    }
+                });
             }
 
             // row_stats_block (two-pass; c stays resident for normalize_block)
             if constexpr (!one_pass) {
                 MaybeDeviceZoneScope("compute_row_stats");
-                row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(
-                    rows, work_b, inv_std);
+                for_each_segment([&](uint32_t first, uint32_t seg_rows, bool folded) {
+                    row_stats_block<cb_row_work_b, cb_inv_std, tensor_w_tiles, inv_w_bits, epsilon_bits>(
+                        first, seg_rows, folded ? folded_tiles : tensor_w_tiles, folded, work_b, inv_std);
+                });
             }
 
             // normalize_block
             {
                 MaybeDeviceZoneScope("compute_normalize");
-                mul<lane_input(cb_row_work_b),
-                    input(cb_inv_std, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                    lane_output(cb_row_work_a)>(lane_shape, work_b, inv_std, work_a);
+                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
+                    mul<lane_input(cb_row_work_b),
+                        input(
+                            cb_inv_std,
+                            BroadcastDim::Col,
+                            WaitPolicy::Upfront,
+                            PopPolicy::AtEnd,
+                            InputTileMapping::Col),
+                        lane_output(cb_row_work_a)>(seg_shape(seg_rows, folded), work_b, inv_std, work_a);
+                    if (folded) {
+                        pop_pad(work_b);
+                        push_pad(work_a);
+                    }
+                });
             }
             {
                 MaybeDeviceZoneScope("compute_wait_affine");
@@ -470,24 +680,55 @@ void kernel_main() {
             // affine_scale_block
             {
                 MaybeDeviceZoneScope("compute_affine_scale");
-                mul<lane_input(cb_row_work_a, same_work_fmt),
-                    input(
-                        cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                    lane_output(cb_row_work_b, same_work_fmt)>(lane_shape, work_a, gamma_tiles, work_b);
+                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
+                    if (folded) {
+                        folded_affine<
+                            EltwiseBinaryType::ELWMUL,
+                            cb_row_work_a,
+                            cb_gamma_tiles,
+                            cb_row_work_b,
+                            dest_lanes>(folded_tiles, 0, work_a, work_b);
+                        pop_pad(work_a);
+                        push_pad(work_b);
+                    } else {
+                        mul<lane_input(cb_row_work_a, same_work_fmt),
+                            input(
+                                cb_gamma_tiles,
+                                BroadcastDim::Row,
+                                WaitPolicy::Upfront,
+                                PopPolicy::None,
+                                InputTileMapping::Row),
+                            lane_output(cb_row_work_b, same_work_fmt)>(
+                            seg_shape(seg_rows, false), work_a, gamma_tiles, work_b);
+                    }
+                });
             }
 
             // affine_shift_block
             {
                 MaybeDeviceZoneScope("compute_affine_shift");
-                add<lane_input(cb_row_work_b, same_work_fmt),
-                    input(
-                        cb_beta_tiles,
-                        BroadcastDim::Row,
-                        WaitPolicy::Upfront,
-                        PopPolicy::None,
-                        InputTileMapping::Row,
-                        same_work_fmt),
-                    lane_output(cb_output_tiles)>(lane_shape, work_b, beta_tiles, output_tiles);
+                for_each_segment([&](uint32_t, uint32_t seg_rows, bool folded) {
+                    if (folded) {
+                        folded_affine<
+                            EltwiseBinaryType::ELWADD,
+                            cb_row_work_b,
+                            cb_beta_tiles,
+                            cb_output_tiles,
+                            dest_lanes>(folded_tiles, 0, work_b, output_tiles);
+                        pop_pad(work_b);
+                        push_pad(output_tiles);
+                    } else {
+                        add<lane_input(cb_row_work_b, same_work_fmt),
+                            input(
+                                cb_beta_tiles,
+                                BroadcastDim::Row,
+                                WaitPolicy::Upfront,
+                                PopPolicy::None,
+                                InputTileMapping::Row,
+                                same_work_fmt),
+                            lane_output(cb_output_tiles)>(seg_shape(seg_rows, false), work_b, beta_tiles, output_tiles);
+                    }
+                });
             }
         }
     }

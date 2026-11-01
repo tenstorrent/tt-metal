@@ -73,10 +73,17 @@ public:
             image_row_ = (unit_start / image_bands) * image_row_tiles;
             within_ = unit_start % image_bands;
             lone_first_ = (unit_count % 2 != 0) && (within_ % 2 != 0);
+            if (unit_count % 2 != 0) {
+                lone_row_ = lone_first_ ? 0 : compute_rows(unit_count) - 1;
+            }
         } else {
             image_row_ = unit_start;
         }
     }
+
+    // Compute tile-row holding the lone band (NO_LONE_ROW: none).
+    static constexpr uint32_t NO_LONE_ROW = 0xFFFFFFFF;
+    uint32_t lone_row() const { return lone_row_; }
 
     // Compute tile-rows of a run of `unit_count` units.
     static constexpr uint32_t compute_rows(uint32_t unit_count) {
@@ -116,6 +123,7 @@ private:
     }
 
     uint32_t remaining_;
+    uint32_t lone_row_ = NO_LONE_ROW;
     uint32_t image_row_ = 0;  // first tile-row of the cursor's image (R1: the next tile-row)
     uint32_t within_ = 0;     // valid band index inside the image
     bool lone_first_ = false;
@@ -137,6 +145,31 @@ FORCE_INLINE void read_row_chunk(
             noc_async_read(accessor.get_noc_addr(src.bottom.page + col + tile, src.bottom.offset), l1 + half, half);
         }
     });
+}
+
+// Folded lone band (lone_band_fold): source columns 2j / 2j + 1 of the band land in the top / bottom half of
+// compute tile j, so a chunk of `chunk_tiles` source columns fills chunk_tiles / 2 tiles. Same reads as the
+// unfolded lone band (one half tile per source column), half the compute tiles. `col` is even.
+template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+FORCE_INLINE void read_folded_chunk(const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr) {
+    constexpr uint32_t half = tile_bytes / 2;
+    for (uint32_t tile = 0; tile < chunk_tiles; ++tile) {
+        noc_async_read(
+            accessor.get_noc_addr(src.top.page + col + tile, src.top.offset),
+            l1_addr + (tile / 2) * tile_bytes + (tile % 2) * half,
+            half);
+    }
+}
+
+template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
+FORCE_INLINE void write_folded_chunk(const Accessor& accessor, const RowSource& src, uint32_t col, uint32_t l1_addr) {
+    constexpr uint32_t half = tile_bytes / 2;
+    for (uint32_t tile = 0; tile < chunk_tiles; ++tile) {
+        noc_async_write(
+            l1_addr + (tile / 2) * tile_bytes + (tile % 2) * half,
+            accessor.get_noc_addr(src.top.page + col + tile, src.top.offset),
+            half);
+    }
 }
 
 template <uint32_t chunk_tiles, uint32_t tile_bytes, typename Accessor>
@@ -219,6 +252,17 @@ struct AffineBlock {
         for_each_group([&](uint32_t, uint32_t cols, uint32_t group) {
             noc_async_read(get_noc_addr(block + group), block + group + rm_shift, cols * row_bytes);
         });
+    }
+
+    // Folded operand (lone_band_fold): row 0 of faces 2/3 of slot 2j <- column 2j + 1, so a per-face row broadcast
+    // of slot 2j serves folded tile j (top half column 2j, bottom half column 2j + 1). The standard row broadcast
+    // never reads faces 2/3, so the unfolded rows are unaffected.
+    static FORCE_INLINE void scatter_folded(uint32_t block, uint32_t slot) {
+        constexpr uint32_t bottom = 2 * face_bytes;
+        for (uint32_t col = 1; col < tensor_w_tiles; col += 2, slot += 2 * tile_bytes) {
+            const uint32_t entry = block + (col / group_cols) * group_bytes + (col % group_cols) * row_bytes;
+            noc_async_read(get_noc_addr(entry), slot + bottom, face_bytes + face_row_bytes);
+        }
     }
 
     // Row 0 of faces 0/1 of `tensor_w_tiles` consecutive tile slots from `slot`.

@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t affine_page_elems = get_named_compile_time_arg_val("affine_page_elems");
     constexpr uint32_t affine_page_bytes = get_named_compile_time_arg_val("affine_page_bytes");
     constexpr uint32_t affine_elem_bytes = get_named_compile_time_arg_val("affine_elem_bytes");
+    constexpr bool fold = get_named_compile_time_arg_val("fold_lone") != 0;
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t unit_start = get_arg_val<uint32_t>(1);
@@ -64,6 +65,10 @@ void kernel_main() {
     [[maybe_unused]] Sources residual_sources(unit_start, unit_count);
     const uint32_t core_row_tiles = Sources::compute_rows(unit_count);
     constexpr uint32_t row_chunks = tensor_w_tiles / io_chunk_tiles;
+    // lone_band_fold: the lone row's chunks carry C / 2 folded tiles; its page slot is padded to Wt pages.
+    const uint32_t lone_row = fold ? output_sources.lone_row() : Sources::NO_LONE_ROW;
+    constexpr uint32_t folded_chunk_tiles = io_chunk_tiles / 2;
+    constexpr uint32_t fold_pad_tiles = tensor_w_tiles - tensor_w_tiles / 2;
 
     auto block_rows = [&](uint32_t block_row) {
         return (core_row_tiles - block_row) < block_row_tiles ? (core_row_tiles - block_row) : block_row_tiles;
@@ -75,6 +80,7 @@ void kernel_main() {
         residual_tiles.reserve_back(rows * tensor_w_tiles);
         const uint32_t residual_base = residual_tiles.get_write_ptr();
         layer_norm_tile::RowSource src{};
+        uint32_t retired = 0;
         layer_norm_tile::read_block_chunks<read_trid_depth>(
             noc,
             rows * row_chunks,
@@ -83,10 +89,30 @@ void kernel_main() {
                 if (col == 0) {
                     src = residual_sources.next();
                 }
-                layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
-                    residual_accessor, src, col, residual_base + chunk * io_chunk_tiles * input_tile_bytes, rotation);
+                const uint32_t row = chunk / row_chunks;
+                if (block_row + row == lone_row) {
+                    layer_norm_tile::read_folded_chunk<io_chunk_tiles, input_tile_bytes>(
+                        residual_accessor,
+                        src,
+                        col,
+                        residual_base + (row * tensor_w_tiles + col / 2) * input_tile_bytes);
+                } else {
+                    layer_norm_tile::read_row_chunk<io_chunk_tiles, input_tile_bytes>(
+                        residual_accessor,
+                        src,
+                        col,
+                        residual_base + chunk * io_chunk_tiles * input_tile_bytes,
+                        rotation);
+                }
             },
-            [&]() { residual_tiles.push_back(io_chunk_tiles); });
+            [&]() {
+                uint32_t tiles = io_chunk_tiles;
+                if (block_row + retired / row_chunks == lone_row) {
+                    tiles = folded_chunk_tiles + (retired % row_chunks == row_chunks - 1 ? fold_pad_tiles : 0);
+                }
+                ++retired;
+                residual_tiles.push_back(tiles);
+            });
     };
 
     auto store_block = [&](uint32_t block_row) {
@@ -96,21 +122,32 @@ void kernel_main() {
         for (uint32_t group = 0; group < num_chunks; group += write_chunks_per_flush) {
             const uint32_t group_chunks =
                 (num_chunks - group) < write_chunks_per_flush ? (num_chunks - group) : write_chunks_per_flush;
+            uint32_t group_tiles = 0;
             for (uint32_t chunk = 0; chunk < group_chunks; ++chunk) {
                 const uint32_t col = ((group + chunk) % row_chunks) * io_chunk_tiles;
                 if (col == 0) {
                     src = output_sources.next();
                 }
-                output_tiles.wait_front((chunk + 1) * io_chunk_tiles);
-                layer_norm_tile::write_row_chunk<io_chunk_tiles, output_tile_bytes>(
-                    output_accessor,
-                    src,
-                    col,
-                    output_tiles.get_read_ptr() + chunk * io_chunk_tiles * output_tile_bytes,
-                    rotation);
+                const uint32_t l1 = output_tiles.get_read_ptr() + group_tiles * output_tile_bytes;
+                if (block_row + (group + chunk) / row_chunks == lone_row) {
+                    output_tiles.wait_front(group_tiles + folded_chunk_tiles);
+                    layer_norm_tile::write_folded_chunk<io_chunk_tiles, output_tile_bytes>(
+                        output_accessor, src, col, l1);
+                    group_tiles += folded_chunk_tiles;
+                    if (col + io_chunk_tiles == tensor_w_tiles) {
+                        // The row's unwritten pad pages, pushed by compute right after the row.
+                        group_tiles += fold_pad_tiles;
+                        output_tiles.wait_front(group_tiles);
+                    }
+                } else {
+                    output_tiles.wait_front(group_tiles + io_chunk_tiles);
+                    layer_norm_tile::write_row_chunk<io_chunk_tiles, output_tile_bytes>(
+                        output_accessor, src, col, l1, rotation);
+                    group_tiles += io_chunk_tiles;
+                }
             }
             noc_async_writes_flushed();
-            output_tiles.pop_front(group_chunks * io_chunk_tiles);
+            output_tiles.pop_front(group_tiles);
         }
     };
 

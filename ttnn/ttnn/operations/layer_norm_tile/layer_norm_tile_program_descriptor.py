@@ -13,6 +13,7 @@ from pathlib import Path
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+NO_LONE_ROW = 0xFFFFFFFF  # compute runtime arg: the core has no lone band row
 
 TILE = 32
 
@@ -433,6 +434,22 @@ def _compute_config(requested, blocking):
     return config
 
 
+def _fold(blocking):
+    """lone_band_fold (Perf 3): an R3 core's lone 16-row band runs on Wt / 2 folded tiles (source columns 2j / 2j + 1
+    in the top / bottom half of tile j) instead of Wt half-stale tiles. Folding pairs source columns (Wt even), splits
+    each reader chunk in two (C even) and halves the stats window, which must stay even unless it is the whole folded
+    row. Anything else keeps the unfolded lone row."""
+    Wt, C, G = blocking.tensor_w_tiles, blocking.io_chunk_tiles, blocking.stats_window_tiles
+    return blocking.half_band and Wt % 2 == 0 and C % 2 == 0 and (G == Wt or (G // 2) % 2 == 0)
+
+
+def _lone_row(blocking, unit_start, unit_count, core_row_tiles):
+    """Compute tile-row of a core's lone band (RowSources): first when the odd run starts on a bottom band."""
+    if not blocking.half_band or unit_count % 2 == 0:
+        return NO_LONE_ROW
+    return 0 if (unit_start % blocking.image_bands) % 2 != 0 else core_row_tiles - 1
+
+
 def _float_bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
@@ -556,6 +573,7 @@ def create_program_descriptor(
         ("affine_scratch_cb", CB_AFFINE_SCRATCH),
         ("affine_group_cols", _affine_group_cols(affine_is_tile)),
         ("affine_beta_on_writer", int(AFFINE_BETA_ON_WRITER)),
+        ("fold_lone", int(_fold(blocking))),
     ]
     writer_named_ct_args = affine_named_ct_args + [
         ("affine_is_tile", int(affine_is_tile)),
@@ -622,7 +640,11 @@ def create_program_descriptor(
             beta_addr,
             int(core_idx == _affine_injector(blocking)),
         ]
-        compute_rt[core.x][core.y] = [core_row_tiles, int(core_row_tiles >= blocking.stream_normalize_min_rows)]
+        compute_rt[core.x][core.y] = [
+            core_row_tiles,
+            int(core_row_tiles >= blocking.stream_normalize_min_rows),
+            _lone_row(blocking, unit_start, unit_count, core_row_tiles),
+        ]
 
     noc_enum = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
     kernels = []
@@ -659,6 +681,7 @@ def create_program_descriptor(
             kernel_source=str(KERNEL_DIR / "layer_norm_tile_compute.cpp"),
             core_ranges=cores,
             compile_time_args=compute_ct_args,
+            named_compile_time_args=[("fold_lone", int(_fold(blocking)))],
             runtime_args=compute_rt,
             config=_compute_config(compute_kernel_config, blocking),
         )
