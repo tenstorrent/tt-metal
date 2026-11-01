@@ -33,7 +33,7 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
     grid = mesh.compute_with_storage_grid_size()
     G = (T + 3) // 4
     fast = (
-        os.environ.get("DSV41_MHC_EXPAND_FAST", "0") == "1"
+        os.environ.get("DSV41_MHC_EXPAND_FAST", "0") == "1" or os.environ.get("DSV41_MHC_LANEPAR", "0") == "1"
     )  # block matmul per token group + merged core ranges (bit-identical)
     # DSV41_MHC_EXPAND_GRP (default on with EXPAND_FAST): a core handles ONE token group x gpc column tiles (it reads the comb / post rows of its 4 tokens only, not all T)
     grp = fast and os.environ.get("DSV41_MHC_EXPAND_GRP", "1") == "1"

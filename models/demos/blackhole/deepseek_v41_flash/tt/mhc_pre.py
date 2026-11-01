@@ -80,9 +80,12 @@ def mhc_mixes_cn(
     NPROJ = S if par else S * G  # partial-row deliveries per post core
     # DSV41_MHC_FRONT_FAST=1: the projection cores forward the x rows they gathered to the collapse+norm cores (one DRAM read of x instead of two), the collapse+norm writer
     # emits the row-major copy as one chunk per token (identical data, fewer / no small DRAM transactions)
-    ff = os.environ.get("DSV41_MHC_FRONT_FAST", "0") == "1"
+    lp = (
+        os.environ.get("DSV41_MHC_LANEPAR", "0") == "1"
+    )  # lane-parallel front: x-first reads, forwarded to the collapse cores (implies FRONT_FAST), weights stream behind them
+    ff = os.environ.get("DSV41_MHC_FRONT_FAST", "0") == "1" or lp
     TILE = 4096
-    merged = os.environ.get("DSV41_MHC_FRONT_FAST", "0") == "1" or os.environ.get("DSV41_MHC_RANGES", "0") == "1"
+    merged = ff or os.environ.get("DSV41_MHC_RANGES", "0") == "1"
     cs = (
         _merged_set
         if merged
@@ -145,7 +148,7 @@ def mhc_mixes_cn(
     NCONST = int(consts.shape[0])
     kernels += [
         _kernel(
-            "mhc_proj5_reader.cpp" if ff else "mhc_proj3_reader.cpp",
+            "mhc_proj6_reader.cpp" if lp else "mhc_proj5_reader.cpp" if ff else "mhc_proj3_reader.cpp",
             p_set,
             [X, W, TG, plan.NJ, TPJ, G]
             + ([FX, SEM2, gpc, GG, int(p0.x), int(p0.y), GX] if ff else [])
@@ -165,7 +168,7 @@ def mhc_mixes_cn(
             ttnn.WriterConfigDescriptor(),
         ),
         _kernel(
-            "mhc_proj5_compute.cpp" if ff else "mhc_proj3_compute.cpp",
+            "mhc_proj6_compute.cpp" if lp else "mhc_proj5_compute.cpp" if ff else "mhc_proj3_compute.cpp",
             p_set,
             [X, W, ONES, SEL, SQ, Z, Q1, P, TPJ, G],
             crt,
@@ -288,6 +291,7 @@ def mhc_mixes_cn(
         0x5D2,
         int(par),
         int(ff),
+        int(lp),
         int(merged),
         T,
         plan.T,

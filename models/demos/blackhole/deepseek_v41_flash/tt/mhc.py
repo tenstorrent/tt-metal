@@ -304,7 +304,12 @@ class DSV41MHC:
                 pool=pool,
             )
             return _slice_rows(out, T, 0)
-        if pool is not None and _flag("DSV41_MHC_EXPAND_VALID") and _flag("DSV41_MHC_EXPAND_V2", "1") and T <= 32:
+        if (
+            pool is not None
+            and (_flag("DSV41_MHC_EXPAND_VALID") or _flag("DSV41_MHC_LANEPAR"))
+            and _flag("DSV41_MHC_EXPAND_V2", "1")
+            and T <= 32
+        ):
             buf = mhc_stream_pool.get(residual.device(), T, residual.shape[3], pool[0], pool[1])
             return mhc_expand3(y, residual, post, comb, buf, y2)
         if _flag("DSV41_MHC_EXPAND_V2", "1"):

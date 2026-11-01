@@ -184,7 +184,11 @@ def test_mhc_par_bits(mesh_device):
     m.pre_max = int(os.environ.get("DSV41_MHC_PAR_TMAX", "32"))  # the drafter's pre_max path
     w = up(torch.rand(1, 1, 1, D) + 0.5)
     variants = os.environ.get("DSV41_MHC_PAR_VARIANTS", "par").split(",")
-    flags = {"par": {"DSV41_MHC_PAR_SINKHORN": "1"}, "ff": {"DSV41_MHC_FRONT_FAST": "1"}}
+    flags = {
+        "par": {"DSV41_MHC_PAR_SINKHORN": "1"},
+        "ff": {"DSV41_MHC_FRONT_FAST": "1"},
+        "lane": {"DSV41_MHC_LANEPAR": "1"},
+    }
     allk = {k for v in flags.values() for k in v}
     bad = tot = 0
     for T in Ts(",".join(str(t) for t in range(1, 33))):
