@@ -31,14 +31,8 @@
 // Guards the math-side dest addressing of the 32-bit unpack-to-dest broadcast
 // (_llk_math_eltwise_unary_datacopy_, the `unpack_to_dest && is_32bit_input` branch).
 //
-// That branch's MOVD2B/MOVB2D sequence addresses Dst with intra-tile row immediates, and the
-// hardware adds DEST_TARGET_REG_CFG_MATH_Offset to every Dst access. SrcRegs-path datacopies and
-// SFPU ops program that offset to (dest_bank_base + their_tile_index * 64) and leave it there, so
-// the broadcast must program it to its own tile with set_dst_write_addr<..., SrcRegs> (its
-// set_dst_write_addr<..., DestReg> only mailboxes the write address to the UNPACKER). A broadcast
-// that ran on the offset left by an op which targeted a different DST index would be displaced:
-// it would read its source rows from, and write its result over, the WRONG dest tile, while its
-// own dst slot kept the raw unbroadcast tile the unpacker deposited.
+// That branch's MOVD2B/MOVB2D add DEST_TARGET_REG_CFG_MATH_Offset to intra-tile rows, so it must point that offset
+// at its own tile; an offset left by an op on another DST index would move the broadcast onto that tile.
 //
 // Every other in-tree caller broadcasts into dst_index 0 right after an op that also targeted
 // tile 0, so the leftover offset happens to be correct and the bug stays latent. This test is the
@@ -47,14 +41,8 @@
 // walkthrough). Four modes run: the ROW / COL / SCALAR broadcasts (all three sequences in that
 // branch share the same Dst addressing) and NONE, a plain 32-bit unpack-to-dest copy_tile.
 //
-// Only ROW / COL / SCALAR reproduce the bug. NONE is a smoke check that the plain 32-bit copy still
-// lands correctly with a dirty offset, not a regression guard on the fix -- it passes with or
-// without it on both architectures. With the broadcast sequence compiled out, the only instruction
-// left consuming the offset is Blackhole's budabackend/#2730 ZEROACC zero-flag-clear loop, whose
-// CLR_16 block index is relative to the 4-tile 32-bit bank the offset selects: the DST[1] offset
-// left here selects the same bank as DST[0], so the clear still lands on DST[0].
-// Each mode repeats the sequence over several acquires so it runs against both dest banks, i.e.
-// both values of get_dest_buffer_base().
+// Only ROW / COL / SCALAR reproduce the bug; NONE passes with or without the fix, as its only offset consumer is
+// Blackhole's ZEROACC zero-flag clear, which indexes the 32-bit bank DST[1] shares with DST[0].
 //
 //   c_0 (Float16_b): a[r][c] = r + 1               -> copied to DST[1]
 //   c_1 (Float32)  : b[r][c] = 100 + r + 41*c      -> broadcast/copied into DST[0]

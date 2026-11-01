@@ -14,13 +14,8 @@
 // Minimal reproducer for the stale-dest-offset bug in the 32-bit unpack-to-dest datacopy branch
 // (_llk_math_eltwise_unary_datacopy_, unpack_to_dest && is_32bit_input).
 //
-// BCAST_DIM_VAL selects the operation under test: 0 = ROW, 1 = COL, 2 = SCALAR broadcast (all three
-// sequences in that branch address Dst the same way), 3 = NONE, i.e. a plain 32-bit unpack-to-dest
-// copy_tile. Only the broadcast modes reproduce the bug; NONE is a smoke check that the plain copy
-// still lands correctly with a dirty offset, and passes with or without the fix on both
-// architectures. Blackhole's budabackend/#2730 ZEROACC zero-flag-clear loop does run in this branch
-// for every mode including plain copies; its CLR_16 block index is relative to the 4-tile 32-bit bank
-// the offset selects, and the DST[1] offset selects the same bank as DST[0].
+// BCAST_DIM_VAL: 0 = ROW, 1 = COL, 2 = SCALAR broadcast, 3 = NONE, a plain 32-bit unpack-to-dest copy_tile
+// that only smoke-checks the copy and passes with or without the fix.
 //
 // Sequence, repeated NUM_ITERS_VAL times (each iteration is its own acquire, so the run alternates
 // dest banks and, from the second visit of a bank onward, lands on rows the packer has already
@@ -31,11 +26,8 @@
 //       programs DEST_TARGET_REG_CFG_MATH_Offset to dest_bank_base + 1*64 and LEAVES it there.
 //
 //   (2) unary_bcast<DIM>(c_1 [Float32, UnpackToDestFp32], 0, /*idst=*/0)   [or copy_tile for NONE]
-//       The 32-bit unpack-to-dest branch. Its broadcast MOVD2B/MOVB2D carry intra-tile row immediates
-//       and the hardware ADDS the math dest offset to every one of them, so the broadcast programs
-//       that offset to DST[0] with set_dst_write_addr<..., UnpackDestination::SrcRegs> (its
-//       set_dst_write_addr<..., UnpackDestination::DestReg> only mailboxes the write address to the
-//       UNPACKER).
+//       The 32-bit unpack-to-dest branch. Its MOVD2B/MOVB2D add the math dest offset to intra-tile
+//       rows, so it must reprogram that offset to DST[0] first.
 //
 // Expected:  DST[0] = the c_1 tile broadcast along DIM (or copied verbatim for NONE);
 //            DST[1] = the copied c_0 tile, untouched.

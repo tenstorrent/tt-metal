@@ -243,12 +243,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
-            // Column broadcast for 32-bit unpack-to-dest: each source row's datum[0] is
-            // replicated across all 16 datums of that row, preserving per-row uniqueness.
-            // Processes 2 face pairs (row 0: faces 0+1, row 32: faces 2+3). Within
-            // each pair, all 16 source rows are extracted in groups of 4, then broadcast
-            // via MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right
-            // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
+            // Column broadcast for 32-bit unpack-to-dest, one face pair at a time.
             TTI_SETDVALID(0b10);
 
             eltwise_unary_bcast_col_32b_face_pair<0 /*face_base*/>();
