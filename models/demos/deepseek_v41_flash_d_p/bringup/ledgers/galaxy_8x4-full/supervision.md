@@ -1216,3 +1216,13 @@ not memory; Galaxy 110 cores (rule 18); no single-card jobs / back-door resets o
 - 21:15 OWNER: no reboot until ~250 GiB unaccounted; re-tune the matmuls within the cap (P.25, mesh-only), then Paris (K.1R = K.1's gate), push regularly; then stop for the day. Run --until K.1R.
 - 21:25 OWNER: queue the layer tail before Paris, configurable (best effort; reboot tomorrow if memory runs out): FIX.17 DEEP_TAIL (setting DEEP_LAYERS=all|tail, default all; gate = default path unchanged; agent measures tail mode). Order: P.25 -> FIX.17 -> K.1R.
 - 23:05 P.25 REJECTED (delegation): the re-sweep within the cap found one call differing (~0.01 ms a chunk); A/B device 169.8 -> 169.6 / 208.0 -> 208.1. The capped configs were already optimal. Next FIX.17 DEEP_TAIL, then K.1R.
+- 00:28 FIX.17 PASS d2cfe586853 (DEEP_LAYERS=all|tail, default all; tail: 50k chunk 122.6 / 92.8 ms wall / device vs
+  200.7 / 171.1; tail pass 76-100 ms a prompt; prompt tok/s 25.0k -> 40.1k at 128k, 22.4k -> 39.8k at 1M; tail
+  accuracy within the ladder's limits; the serving runner refuses tail). Pushed.
+- 00:49 K.1R: contract PASS, kv_layout PASS, adapter_acks FAIL: 0_window_kv layer 20 last-window nope PCC 0.98947 <
+  0.98957 (calibrated, misses by 1e-4: the DS41-125 / 141 rounding-sensitive check), layers 35 / 38 last block
+  [2496, 2536) 0.98910 / 0.98994 < 0.99 (tt-d-gen's own validation threshold, server_rules LAST_BLOCK_PCC). Likely
+  P.23's summation order (deep window_kv margins). Aborted the fix agent (no precision chase), running
+  test_runner_contract and test_runner_smoke (Paris) by gate --unit; acks to the owner (waiver as DS41-141, or find
+  the change and take it back).
+- 01:25 K.1R: test_runner_contract FAIL (same 3 window_kv checks as adapter_acks, identical values), test_runner_smoke PASS (Paris through tt-d-gen, 833 s). Run stays paused: acks / runner-contract margins are the owner's call (waiver like DS41-141, or locate the tipping change, likely P.23 OWN_ROWS).
