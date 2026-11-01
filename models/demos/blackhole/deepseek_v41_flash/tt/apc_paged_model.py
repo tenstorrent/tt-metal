@@ -450,6 +450,43 @@ class PagedApc:
             for sl, h in hp:
                 ttnn.to_torch(h)
                 ttnn.deallocate(sl)
+            # the save kernels on the STAGING tensors of the copy (their sharding / layout differ from the persistent slabs ``build`` warmed them with) with all-SKIP tables: no data is touched
+            n_u = m.rows * m.U
+            shard = ttnn.ShardTensor2dMesh(m.md, dims=(0, 1), mesh_shape=(m.rows, m.cols))
+            rep0 = ttnn.ShardTensor2dMesh(m.md, dims=(0, None), mesh_shape=(m.rows, m.cols))
+            keep = []
+            self.ks.set_save([None] * n_u)
+            stage = {}
+            for lid in self.ks.store:
+                R = self.ks.geom[lid].nrb * 32
+                stage[lid] = ttnn.from_torch(
+                    torch.zeros(n_u, m.cols, R, APS.IDIM, dtype=torch.bfloat16),
+                    device=m.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=shard,
+                )
+            self.ks.save(stage)
+            keep += list(stage.values())
+            for pn in self.hs.store:
+                self.hs.set_save(pn, [None] * n_u)
+                st_ = {
+                    lid: ttnn.from_torch(
+                        torch.zeros(n_u, 1, APS.WINDOW, APS.HEAD_DIM, dtype=torch.bfloat16),
+                        device=m.md,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=rep0,
+                    )
+                    for lid in self.hs.layers[pn]
+                }
+                self.hs.save(pn, st_)
+                keep += list(st_.values())
+            ttnn.synchronize_device(m.md)
+            for x in keep:
+                ttnn.deallocate(x)
         finally:
             m.release_user(b)
         ttnn.synchronize_device(m.md)
@@ -476,6 +513,7 @@ class PagedApc:
             assert src, "no donor blocks"
             nb = len(src)
             tok = np.ascontiguousarray(torch.as_tensor(tokens).long().reshape(-1).numpy())
+            tp = [time.perf_counter()]
             # 1. read the donor blocks (row sri)
             pt = torch.tensor([p for _, pages, *_ in src for p in pages], dtype=torch.long)
             lat = {}
@@ -519,12 +557,14 @@ class PagedApc:
             for pn, (h, sl) in hpend.items():
                 halos[pn] = ttnn.to_torch(h).reshape(-1, APS.WINDOW, APS.HEAD_DIM).clone()
                 ttnn.deallocate(sl)
+            tp.append(time.perf_counter())
             # 2. this row: the page table first, then the latents into the new pages
             m.pool.allocs[dst].adopt(b, plan.page_ids)
             m.pool.sync_page_table()
             for s_, l_ in lat.items():
                 n_ = l_.shape[0]
                 PC.scatter_rows_mesh(m, m.pool.pool, {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)})
+            tp.append(time.perf_counter())
             # 3. one copy chunk per donor block: key store slot (+ the tip's halo slots) in this row, filled by the save kernels from staging tensors
             cps = []
             for i, (_, _, _, ha, hb, bz) in enumerate(src):
@@ -593,12 +633,13 @@ class PagedApc:
             )
             self.idx.release(rid)
             return None
-        dt = time.perf_counter() - t0
+        t1 = time.perf_counter()
+        dt = t1 - t0
         self.stats["xrow"] += 1
         self.stats["xrow_tokens"] += hit
         self.stats["xrow_s"] += dt
         self.log(
-            f"APC paged: cross-row hit {hit} tokens copied row {sri} -> row {dst} in {dt * 1e3:.0f} ms ({nb} blocks)"
+            f"APC paged: cross-row hit {hit} tokens copied row {sri} -> row {dst} in {dt * 1e3:.0f} ms ({nb} blocks; read {(tp[1] - tp[0]) * 1e3:.0f} ms, latent scatter {(tp[2] - tp[1]) * 1e3:.0f} ms, store writes {(t1 - tp[2]) * 1e3:.0f} ms)"
         )
         return new
 
