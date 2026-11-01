@@ -62,9 +62,9 @@ from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks,
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     LayerNormParameters,
     RotaryTables,
-    activation_memory_config,
     additive_attention_mask,
     layer_norm,
+    norm_output_memory_config,
     pooling_mask,
     prepare_token_ids,
 )
@@ -154,16 +154,10 @@ class TtNomicBertModel(LightweightModule):
     def backbone(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> ttnn.Tensor:
         """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H); see forward."""
         seqlen = input_ids.shape[-1]
-        hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
-        normalized = layer_norm(
-            hidden,
-            self.emb_ln,
-            epsilon=self.config.layer_norm_epsilon,
-            memory_config=activation_memory_config(hidden.shape),
-            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
-        )
-        ttnn.deallocate(hidden)
-
+        # The rotary tables (kept across forwards) and the mask are allocated before any activation, so
+        # they take the top of L1 rather than sitting under an activation's buffer for the rest of
+        # their life, where later programs' circular buffers would run into them.
+        rot_mats = self.rotary_tables(seqlen)
         # dtype is passed explicitly rather than left to the helper's default, so lowering
         # tt_config.activation_dtype moves the mask's fill value with it.
         mask = None
@@ -174,10 +168,21 @@ class TtNomicBertModel(LightweightModule):
                 dtype=self.tt_config.activation_dtype,
                 mask_dtype=self.tt_config.attention_mask_dtype,
             )
-        rot_mats = self.rotary_tables(seqlen)
-        out = self.encoder(normalized, rot_mats, mask)
+
+        hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
+        normalized = layer_norm(
+            hidden,
+            self.emb_ln,
+            epsilon=self.config.layer_norm_epsilon,
+            memory_config=norm_output_memory_config(hidden.shape),
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
+        )
+        ttnn.deallocate(hidden)
+
+        # The encoder frees normalized after block 0, so it does not hold a (B, 1, S, H) buffer for the
+        # whole forward.
+        out = self.encoder(normalized, rot_mats, mask, consume_input=True)
         self.rotary_tables.release(rot_mats)
-        ttnn.deallocate(normalized)
         return out
 
 

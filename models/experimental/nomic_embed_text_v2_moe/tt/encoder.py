@@ -51,6 +51,7 @@ class TtNomicBertEncoder(LightweightModule):
         hidden_states: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         attn_mask: Optional[ttnn.Tensor] = None,
+        consume_input: bool = False,
     ) -> ttnn.Tensor:
         """Run every block in order.
 
@@ -58,15 +59,16 @@ class TtNomicBertEncoder(LightweightModule):
             hidden_states: (B, 1, S, H) post-embedding input.
             rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask, or None.
+            consume_input: free hidden_states once the first block has read it.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H).
         """
         for idx, layer in enumerate(self.layers):
             next_hidden_states = layer(hidden_states, rot_mats, attn_mask)
-            # Every intermediate is freed as soon as the next block has consumed it, but not the
-            # caller's own input: the caller allocated it and may still need it.
-            if idx > 0:
+            # Every intermediate is freed as soon as the next block has consumed it; the caller's own
+            # input only when the caller hands it over, since it may still need it.
+            if idx > 0 or consume_input:
                 ttnn.deallocate(hidden_states)
             hidden_states = next_hidden_states
         return hidden_states

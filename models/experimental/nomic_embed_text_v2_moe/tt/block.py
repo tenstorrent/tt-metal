@@ -21,8 +21,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     LayerNormParameters,
-    activation_memory_config,
     layer_norm,
+    norm_output_memory_config,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
@@ -83,7 +83,7 @@ class TtNomicBertBlock(LightweightModule):
             parameters,
             residual=residual,
             epsilon=self.epsilon,
-            memory_config=activation_memory_config(x.shape) if memory_config is None else memory_config,
+            memory_config=norm_output_memory_config(x.shape) if memory_config is None else memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
 

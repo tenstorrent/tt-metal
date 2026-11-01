@@ -288,6 +288,24 @@ class LayerNormParameters:
         return self.row_major if m_tiles > SMALL_M_TILES else self.tiled
 
 
+# Layer norm outputs stay in L1 up to NORM_OUTPUT_L1_MAX_TILES, past activation_memory_config's limit. They are
+# the next norm's residual and the next sublayer's input: at 8x512 this saves 294 us of norm time and 111 us of the
+# matmuls reading them per forward, for 6.3 MB of L1 held across a sublayer. NOMIC_NORM_OUT=dram restores
+# activation_memory_config placement.
+NORM_OUTPUT_IN_L1 = os.environ.get("NOMIC_NORM_OUT", "l1") != "dram"
+# 4096 tokens, the most whose router intermediates sit in L1 (tt/router.py); past it SDPA's circular
+# buffers run into the held outputs.
+NORM_OUTPUT_L1_MAX_TILES = 128
+
+
+def norm_output_memory_config(shape: ttnn.Shape | tuple[int, ...]) -> ttnn.MemoryConfig:
+    """Where a layer norm writes its output."""
+    m_tiles = shape[0] * ttnn.core.divup(shape[-2], ttnn.TILE_SIZE)
+    if NORM_OUTPUT_IN_L1 and m_tiles <= NORM_OUTPUT_L1_MAX_TILES:
+        return ttnn.L1_MEMORY_CONFIG
+    return activation_memory_config(shape)
+
+
 # The generated single-dispatch layer norm (ttnn/ttnn/operations/layer_norm_tile) is 32-36% faster than
 # ttnn.layer_norm on every placement the 8x512 forward uses. NOMIC_LN_IMPL=stock selects ttnn.layer_norm.
 LAYER_NORM_IMPL = os.environ.get("NOMIC_LN_IMPL", "generated")
