@@ -18,6 +18,8 @@ python -m models.experimental.bevformer.demo.demo \
   --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10 \
+  --trace \
+  --num-command-queues 2 \
   --output-dir generated/demo/bevformer/synthetic_tiny
 
 python -m models.experimental.bevformer.demo.demo \
@@ -25,6 +27,8 @@ python -m models.experimental.bevformer.demo.demo \
   --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10 \
+  --trace \
+  --num-command-queues 2 \
   --output-dir generated/demo/bevformer/synthetic_small
 
 python -m models.experimental.bevformer.demo.demo \
@@ -32,68 +36,35 @@ python -m models.experimental.bevformer.demo.demo \
   --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10 \
+  --trace \
+  --num-command-queues 2 \
   --output-dir generated/demo/bevformer/synthetic_base
 ```
 
 `--variant tiny|small|base` is a shorthand for the corresponding bundled config.
 
-### Traced run
-
-`--trace` replays each frame from traces instead of dispatching it op by op
-(`tt/tt_bevformer_trace.py`). The frame runs as three traces around the readback of the cameras'
-visible counts, which size the spatial cross-attention's plan. While the counts fit the plan's
-capacity, every frame replays; a frame that outgrows it runs live, and the traces are captured
-again after its latencies are taken. The summary records each capture's time in
-`trace_capture_ms`, apart from the frames' latencies. `--trace-region-size` sets the device's trace
-region, 256 MiB by default, which holds base's three traces.
-
-Tracing removes the host's op dispatch from the frame. It helps where dispatch, not the device's
-work, bounds the frame: in ten-frame synthetic runs on a BH P100, tiny's device path drops by about
-a third, while small's and base's stay within a percent of eager.
-
-`--num-command-queues 2`, with `--trace`, pipelines the frames. A host thread loads frames two ahead
-of the device and prepares their inputs as host tensors: the images in bfloat16 and the frame's
-other inputs, its `PerceptionFrame` buffers. Right after frame N is queued, frame N + 1's images upload
-on a second command queue while frame N still runs. Both latencies change meaning:
-
-* `end_to_end_latency_ms` is the interval between two frames' detections, the throughput a stream
-  sees. The first frame's interval also covers the wait for the thread's first frame and that
-  frame's upload.
-* `device_latency_ms` spans this frame's replay and readback and, in between, the next frame's
-  upload, plus any wait for the thread when the host is the slower side. Compare device paths
-  without pipelining.
-
-In the same runs the median end-to-end interval drops against eager by about 3.4x on tiny, 2.0x on
-small and 1.75x on base, to the device path: the host's work is hidden. Two command queues take
-worker cores for dispatch, which slows the device path by up to a few percent. Two command queues
-have been run on Blackhole only. The mode needs ttnn's fast runtime mode, the default: the slow one
-tracks ttnn calls on a process-wide stack that the thread's calls would interleave with.
+These commands replay each frame from traces (`tt/tt_bevformer_trace.py`) and pipeline the frames:
+a host thread prepares the next frames' inputs while the current one runs on the device, and their
+images upload on a second command queue. Drop `--num-command-queues 2` to run the traced frames one
+at a time, and `--trace` as well to dispatch every op from Python. Two command queues have been run
+on Blackhole only.
 
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
-`585f1adf8c35b8d703600a1ddc4f1ea0389b90c9`. The generated `detections.json` artifacts contain
-these recorded results for ten measured frames. Each row used the corresponding bundled local
-`config/bevformer_<variant>.json` file shown in the commands above:
+`6751a2cb94555c40445a62ad09b2aac3f995e47d`, with the commands above:
 
-| Variant | BEV size | Encoder layers | Device-path mean (ms) | Device-path p50 (ms) | E2E mean (ms) | E2E p50 (ms) | Device FPS |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 139.5 | 142.0 | 333.9 | 330.6 | 7.17 |
-| small | 150 | 3 | 426.6 | 426.8 | 1041.9 | 1041.3 | 2.34 |
-| base | 200 | 6 | 974.0 | 971.5 | 1923.7 | 1915.8 | 1.03 |
+| Variant | BEV size | Encoder layers | Device FPS | E2E FPS |
+| --- | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 11.67 | 10.19 |
+| small | 150 | 3 | 2.32 | 2.31 |
+| base | 200 | 6 | 1.10 | 1.10 |
 
-These values come from one ten-frame smoke run per variant and validate end-to-end execution only.
-No repeated-run statistics were collected, so they are not statistically characterized benchmark
-results. The device-path columns report host wall-clock `device_latency_ms`, not profiler device
-duration. The artifacts record random weights, synthetic inputs, `synthetic-0` as the unmeasured
-preparation frame, ten measured frames, the TT architecture and card, and the full tt-metal commit
-SHA. They do not record the firmware version or original command line.
-
-Compare runs by Device FPS. It covers the work the TT device does per frame and how the host feeds
-it, up to the detections' readback and host compaction. The rest of the end-to-end time is image
-decoding, preprocessing and the images' upload: it depends on the host's CPU, and a pipeline can
-overlap it with the device's work on the previous frame. In synthetic mode most of it is
-generating the random images.
+Compare runs by Device FPS (see [Output](#output)). E2E FPS is informative: it depends on the host's
+CPU. On small and base the host keeps up with the device, so E2E FPS matches Device FPS; on tiny the
+host's preparation is the slower side. These come from one ten-frame run per variant with random
+weights and validate end-to-end execution only; they are not statistically characterized benchmark
+results.
 
 ## Model configuration
 
@@ -318,12 +289,12 @@ metrics. The first output frame position is loaded again as measured frame 0. Ma
 the same stored images, while synthetic mode generates fresh deterministic random images. In both
 modes, all reported latencies describe the already-compiled temporal execution path.
 
-`device_latency_ms` measures host wall-clock time around the frame's preparation (host inputs, their
-upload, and the cameras' projection on device), the TT model forward, device-side detection, the
-detections' readback and host compaction, and synchronization. With `--trace` the same work runs
-from the traces, and a frame that outgrows the plan runs live; its recapture is not included.
-`end_to_end_latency_ms` additionally includes image loading, preprocessing and the images' upload.
-With `--num-command-queues 2` both measure the pipeline instead; see the traced run above.
+Each frame records two latencies:
+
+| Field | Meaning |
+| --- | --- |
+| `device_latency_ms` | The device's time for the frame: from queuing it until the device finishes its last work for it. The images are already on the device or uploading on the second command queue by then, so their upload counts only toward `end_to_end_latency_ms`. |
+| `end_to_end_latency_ms` | Adds the frame's host work: image loading, preprocessing, the images' upload and the detections' readback. With `--num-command-queues 2` the host prepares the next frame while the device runs this one, so this is the interval between two frames' detections. |
 
 The `summary` object contains:
 
@@ -341,20 +312,14 @@ The `summary` object contains:
 | `score_threshold` | Device-side minimum detection score. |
 | `preparation_frame` | Unmeasured temporal-state frame token. |
 | `num_frames` | Number of measured output frames. |
-| `mean_device_latency_ms` | Arithmetic mean of device latency samples. |
-| `p50_device_latency_ms` | Median device latency sample. |
-| `mean_end_to_end_latency_ms` | Arithmetic mean of end-to-end samples. |
-| `p50_end_to_end_latency_ms` | Median end-to-end latency sample. |
+| `mean_device_latency_ms`, `p50_device_latency_ms` | Mean and median of the frames' `device_latency_ms`. |
+| `mean_end_to_end_latency_ms`, `p50_end_to_end_latency_ms` | Mean and median of the frames' `end_to_end_latency_ms`. |
 | `execution` | `eager`; `trace` with `--trace`; `trace_2cq_pipelined` with `--num-command-queues 2`. |
-| `device_fps` | `1000 / mean_device_latency_ms`: the device path's throughput, except with `--num-command-queues 2`. |
+| `device_fps` | `1000 / mean_device_latency_ms`. |
 | `end_to_end_fps` | `1000 / mean_end_to_end_latency_ms`. |
 | `trace_capture_ms` | With `--trace` only: the first capture's time, then one per growth of the plan. |
 
-The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
-every measured frame. It excludes image loading, preprocessing, the images' upload, the unmeasured
-preparation frame, cold-start warmup and trace captures; it includes the detections' readback. With
-`--num-command-queues 2` it includes the next frame's upload and any wait for its host inputs instead,
-and is not a device-path figure.
+No field includes the preparation frame, the warmup, filling the pipeline or the trace captures.
 
 ## Visualize detections
 
