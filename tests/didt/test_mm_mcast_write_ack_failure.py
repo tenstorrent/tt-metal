@@ -228,7 +228,103 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device):
     logger.success(f"no hang on chips {[to_physical(r) for r in mesh_device.get_device_ids()]}")
 
 
-def scan_all_chips(iters=None, watchdog=30, work_dir=None):
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param((1, 1), DEVICE_PARAMS, id="1x1"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@skip_for_wormhole_b0("shapes and program config are tuned for Blackhole")
+@pytest.mark.timeout(0)
+def test_mm_mcast_write_ack_failure_duty(mesh_device):
+    """The op that hangs matmul:duty-cycle-bursty-5 on the galaxy mesh, alone on one chip: tests/didt/test_duty_cycle.py
+    [blackhole-duty-5-rep-1000x-all], i.e. [1280,6912] bf16 block-sharded in L1 @ [6912,27648] bf8 in DRAM, LoFi, 2D
+    multicast over the full compute grid, run in bursts of DUTY_REPS x (matmul + DUTY_NON_MM x cos) and one more
+    matmul per iteration. On the mesh the in0 sender's NCRISC parks in noc_async_write_barrier."""
+    if float(os.environ.get(WATCHDOG_ENV, 0)) <= 0:
+        pytest.fail(f"{WATCHDOG_ENV} is non-positive, which disables hang detection entirely")
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    gx, gy = (int(v) for v in os.environ.get("MATMUL_GRID", f"{grid.x}x{grid.y}").split("x"))
+    reps = int(os.environ.get("DUTY_REPS", 1000))
+    non_mm = int(os.environ.get("DUTY_NON_MM", 5))
+    per_core_m, per_core_n = 4, 72
+    in0_shape = [1, 1, 32 * per_core_m * gy, 576 * gx]
+    in1_shape = [1, 1, 576 * gx, 32 * per_core_n * gx]
+
+    identity = chip_identity()
+    for runtime_id in mesh_device.get_device_ids():
+        logger.info(f"participating {describe(runtime_id, identity)}")
+    logger.info(f"duty matmul {in0_shape} @ {in1_shape} on {gx}x{gy} cores, {reps} x (mm + {non_mm} cos) per iteration")
+
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    in0_mem = ttnn.create_sharded_memory_config(
+        in0_shape, ttnn.CoreGrid(y=gy, x=gx), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    in0 = ttnn.from_torch(
+        torch.randn(in0_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=in0_mem,
+        mesh_mapper=replicate,
+    )
+    in1 = ttnn.from_torch(
+        torch.randn(in1_shape),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=dram,
+        mesh_mapper=replicate,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=3,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    compute_config = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+
+    def mm():
+        return ttnn.matmul(
+            in0,
+            in1,
+            program_config=program_config,
+            memory_config=out_mem,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_config,
+        )
+
+    try:
+        for i in range(int(os.environ.get("MATMUL_ITERS", 10))):
+            for _ in range(reps):
+                ttnn.deallocate(mm())
+                for _ in range(non_mm):
+                    ttnn.deallocate(ttnn.cos(in1))
+            ttnn.deallocate(mm())
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"duty iteration {i} done")
+    except Exception:
+        asics = asic_ids()
+        for runtime_id in mesh_device.get_device_ids():
+            logger.error(f"HUNG {describe(runtime_id, identity, asics)}")
+        raise
+    logger.success(f"no hang on chips {[to_physical(r) for r in mesh_device.get_device_ids()]}")
+
+
+WORKLOADS = {"wkv_b1": "test_mm_mcast_write_ack_failure_scan", "duty": "test_mm_mcast_write_ack_failure_duty"}
+
+
+def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
     """Run this test once per chip of the host, one process each with its own cold cache, and report
     which chips hang. Returns the list of hung chip ids.
 
@@ -236,6 +332,7 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
     processes; re-run a failing chip on its own to triage it. This gate detects a hang but cannot
     clear one, so the failing chip stays wedged: reset the box (tt-smi -glx_reset_auto) before any
     re-run, or the wedged chip will fail its neighbours and they will look faulty too."""
+    workload = workload or os.environ.get("MATMUL_WORKLOAD", "wkv_b1")
     work_dir = Path(work_dir or Path(tempfile.gettempdir()) / "mm_mcast_write_ack_failure")
     shutil.rmtree(work_dir, ignore_errors=True)
     chips = sorted(chip_identity())
@@ -253,9 +350,12 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
         if iters:
             env["MATMUL_ITERS"] = str(iters)
         log = (out / "pytest.log").open("w")
-        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--timeout=0", __file__, "-k", "1x1"]
+        test = WORKLOADS[workload]
+        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--timeout=0", f"{__file__}::{test}"]
         running[chip] = (subprocess.Popen(cmd, env=env, stdout=log, stderr=log), log)
-    logger.info(f"scanning {len(chips)} chips, dispatch watchdog={watchdog}s, logs under {work_dir}")
+    logger.info(
+        f"scanning {len(chips)} chips, workload {workload}, dispatch watchdog={watchdog}s, logs under {work_dir}"
+    )
 
     # Poll rather than wait() in spawn order: a hung chip runs several times longer than a healthy
     # one, and a sequential wait holds back every result queued behind it. Chips report as they

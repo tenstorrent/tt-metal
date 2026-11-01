@@ -538,13 +538,16 @@ def core_sweep_step() -> Step:
     return Step(inner.key, inner.title, inner.group, None, True, run, inner.collect)
 
 
-def write_ack_step() -> Step:
+def write_ack_step(workload: str = "wkv_b1") -> Step:
     """One process per chip, each with its own cold cache and dispatch watchdog; logs land in the step dir via
-    TMPDIR."""
-    key = "matmul:mcast-ack"
+    TMPDIR. workload wkv_b1 is the MLA projection the screen was written for (matmul:mcast-ack); duty is the
+    duty-cycle-bursty-5 op alone on each chip (matmul:mcast-ack-duty), which hung 81:00.0 (T4:N1) and c2:00.0
+    (T3:N2) on bh-glx-803 in 3 of 5 resets when wkv_b1 passed them."""
+    key = "matmul:mcast-ack" if workload == "wkv_b1" else f"matmul:mcast-ack-{workload}"
     script = "tests/didt/test_mm_mcast_write_ack_failure.py"
     cmd = f"python {script}"
-    ids = [f"{script}::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]"]
+    test = {"wkv_b1": "test_mm_mcast_write_ack_failure_scan", "duty": "test_mm_mcast_write_ack_failure_duty"}[workload]
+    ids = [f"{script}::{test}[blackhole-1x1]"]
 
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
@@ -556,11 +559,12 @@ def write_ack_step() -> Step:
         state.log = str(log)
         # The script wipes its work dir under TMPDIR, so a rerun gets its own.
         tmp = d if n == 1 else d / f"tmp_{n:02d}"
-        sh(ctx, cmd, log, {"TMPDIR": str(tmp), "MATMUL_ITERS": str(WRITE_ACK_ITERS), **state.env}, timeout=1800)
+        env = {"TMPDIR": str(tmp), "MATMUL_ITERS": str(WRITE_ACK_ITERS), "MATMUL_WORKLOAD": workload, **state.env}
+        sh(ctx, cmd, log, env, timeout=1800)
         save_smi(ctx, d, n)
         return write_ack_result(log.read_text(errors="replace"))
 
-    return Step(key, "matmul mcast-ack", "matmul", None, True, run, lambda ctx: ids)
+    return Step(key, f"matmul {key.removeprefix('matmul:')}", "matmul", None, True, run, lambda ctx: ids)
 
 
 def matmul_steps() -> list[Step]:
@@ -594,6 +598,7 @@ def matmul_steps() -> list[Step]:
         ),
         core_sweep_step(),
         write_ack_step(),
+        write_ack_step("duty"),
     ]
 
 

@@ -182,6 +182,7 @@ MATMUL_KEYS = [
     "matmul:run-to-run",
     "matmul:core-sweep",
     "matmul:mcast-ack",
+    "matmul:mcast-ack-duty",
 ]
 
 
@@ -222,6 +223,7 @@ def test_matmul_commands(tmp_path, monkeypatch):
         "matmul:core-sweep": "pytest -vs -rA 'tests/didt/scratch_core_sweep.py::test_core_sweep[blackhole-galaxy]' "
         "'-p' 'no:randomly' '--timeout=0'",
         "matmul:mcast-ack": "python tests/didt/test_mm_mcast_write_ack_failure.py",
+        "matmul:mcast-ack-duty": "python tests/didt/test_mm_mcast_write_ack_failure.py",
     }
     assert seen[cmds["matmul:duty-cycle-bursty-5"]]["TT_MESH_GRAPH_DESC_PATH"] == (
         "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
@@ -235,9 +237,17 @@ def test_matmul_commands(tmp_path, monkeypatch):
         }.items()
     )
     assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "10"
-    for key in MATMUL_KEYS[:-1]:
+    for key in MATMUL_KEYS[:-2]:
         assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds[key]]
-    assert seen[cmds["matmul:mcast-ack"]] == {"TMPDIR": str(tmp_path / "matmul" / "mcast-ack"), "MATMUL_ITERS": "10"}
+    # Both write-ack steps run the same script, so the last call's env is the duty one; check each via its own run.
+    for key, workload in (("matmul:mcast-ack", "wkv_b1"), ("matmul:mcast-ack-duty", "duty")):
+        seen.clear()
+        steps[key].run(Ctx(tmp_path, tmp_path, False), State())
+        assert seen[cmds[key]] == {
+            "TMPDIR": str(tmp_path / "matmul" / key.removeprefix("matmul:")),
+            "MATMUL_ITERS": "10",
+            "MATMUL_WORKLOAD": workload,
+        }
 
 
 def test_matmul_nd_details_per_device(tmp_path, monkeypatch):
@@ -337,7 +347,7 @@ def test_matmul_fail_reruns_throttled(tmp_path, monkeypatch, key):
     assert first.result.status == Status.FAIL and first.log == str(d / "log_02")
     assert first.env == {"TT_MM_THROTTLE_PERF": "5"} and first.opts == [] and first.end >= first.start
     assert len(state.fallbacks) == (2 if key == "matmul:minimal" else 1)
-    if key == "matmul:mcast-ack":
+    if key.startswith("matmul:mcast-ack"):
         assert seen[4][1]["TMPDIR"] == str(d / "tmp_02")
     else:
         assert seen[4][1]["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"].endswith(
