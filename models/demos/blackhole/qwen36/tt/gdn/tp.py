@@ -646,6 +646,9 @@ class TPGatedDeltaNet:
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
+        _nat = getattr(self, "_native_out", None)
+        if _nat is not None and x.shape[-2] <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0: exact-ternary decode
+            return _nat.forward(x)
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             return tpc.matmul_1d_decode(
@@ -683,6 +686,17 @@ class TPGatedDeltaNet:
         keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
+        _nat = getattr(self, "_native_in", None)
+        if _nat is not None and S <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0 decode
+            qkvz = _nat.forward(x, out_mem=ttnn.L1_MEMORY_CONFIG)
+            qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz), memory_config=_proj_mc)
+            z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az), memory_config=_proj_mc)
+            ttnn.deallocate(qkvz)
+            ab = ttnn.linear(x, self._native_ab, compute_kernel_config=self.cfg, memory_config=_proj_mc)
+            a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=_proj_mc)
+            b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=_proj_mc)
+            ttnn.deallocate(ab)
+            return qkv, z, a, b
         if self._fuse_ab:
             # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
             if self._fuse_agmm and S > tpc.TILE_SIZE:

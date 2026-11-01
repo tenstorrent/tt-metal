@@ -178,6 +178,45 @@ class Qwen36DecoderLayer:
             gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
             self.attention = Qwen36GatedDeltaNet(mesh_device, GDNConfig.from_args(args), gdn_state, gdn_cache)
 
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            # Exact-ternary projections from the PQ2_0 GGUF (bonsai2/native/a3), decode only.
+            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, gdn_in_rows, sites
+            from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
+
+            _sh = shared_for(mesh_device)
+            _cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_linear")
+            os.makedirs(_cache, exist_ok=True)
+            if self.is_full_attention and isinstance(self.attention, Qwen36GatedAttention):
+                if "attn_o" in sites():
+                    import dataclasses
+
+                    self.attention.weights = dataclasses.replace(
+                        self.attention.weights,
+                        o_proj=TernaryLinear(_sh, f"blk.{layer_num}.attn_output.weight", _cache),
+                    )
+            elif self._tp1_gdn:
+                if "gdn_out" in sites():
+                    self.attention._native_out = TernaryLinear(
+                        _sh, f"blk.{layer_num}.ssm_out.weight", _cache, out_mem=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                if "gdn_in" in sites():
+                    import torch
+
+                    self.attention._native_in = TernaryLinear(
+                        _sh, f"blk.{layer_num}.gdn_in", _cache, rows=gdn_in_rows(_sh, layer_num)
+                    )
+                    _g = substate(state_dict, f"layers.{layer_num}.linear_attn")
+                    _ab = torch.cat([_g["in_proj_a.weight"], _g["in_proj_b.weight"]], 0)  # [2*Nv, dim], bf16 in the GGUF
+                    self.attention._native_ab = ttnn.as_tensor(
+                        _ab,
+                        preprocess=lambda t: t.T.contiguous(),
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        cache_file_name=(tensor_cache_path / f"layers.{layer_num}" / "native_ab") if tensor_cache_path else None,
+                    )
+
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
         if args.is_moe_layer(layer_num):

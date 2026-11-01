@@ -217,6 +217,18 @@ class Qwen36Model:
             **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
         )
 
+        # BONSAI_NATIVE=pq2_0: exact-ternary LM head from the PQ2_0 GGUF for single-chip decode.
+        self._native_lm = None
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, sites
+            from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1 and "lm_head" in sites():
+
+            _cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_linear")
+            os.makedirs(_cache, exist_ok=True)
+            self._native_lm = TernaryLinear(shared_for(mesh_device), "output.weight", _cache,
+                                            out_mem=ttnn.DRAM_MEMORY_CONFIG)
+
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
         self._ondev_argmax = False
@@ -563,6 +575,8 @@ class Qwen36Model:
             # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
+        if self._native_lm is not None and out_dtype is None and x.shape[-2] <= ttnn.TILE_SIZE:
+            return self._native_lm.forward(x)
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather

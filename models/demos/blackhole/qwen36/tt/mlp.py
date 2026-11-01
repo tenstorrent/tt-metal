@@ -196,7 +196,14 @@ class Qwen36MLP:
         # BONSAI_NATIVE=pq2_0: exact-ternary decode MLP straight from the PQ2_0 GGUF (bonsai2/native/a3);
         # the dense MLP weights are not loaded. Single chip, decode only.
         self.native = None
-        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and getattr(args, "num_devices", 1) == 1 and layer_num is not None:
+        from models.demos.blackhole.bonsai2.native.a3.linear import sites as _sites
+
+        if (
+            os.environ.get("BONSAI_NATIVE") == "pq2_0"
+            and getattr(args, "num_devices", 1) == 1
+            and layer_num is not None
+            and "mlp" in _sites()
+        ):
             from models.demos.blackhole.bonsai2.native.a3.mlp import TernaryMLP, shared_for
 
             cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_mlp")
