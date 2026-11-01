@@ -45,6 +45,7 @@ auto dispatch(tt::tt_metal::DataType dtype, Func&& func, Args&&... args) {
         case tt::tt_metal::DataType::BFLOAT8_B:
             return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
         case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::BFLOAT2_B:
             return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
         case tt::tt_metal::DataType::FP8_E4M3:
             return (std::forward<Func>(func)).template operator()<float8_e4m3>(std::forward<Args>(args)...);

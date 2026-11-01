@@ -56,6 +56,7 @@
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
 
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -209,10 +210,24 @@ HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const Ten
 
     const auto& tile = tensor_spec.tile();
     ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
-    auto float_unpacked_data =
-        tt_dtype == DataType::BFLOAT8_B
-            ? unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-            : unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    // Three block-float widths, three decoders. Selecting on the dtype here is what
+    // makes every caller correct: an earlier version treated anything that was not
+    // BFLOAT8_B as BFLOAT4_B, which decodes a bf2 tile's bits as bf4 and yields
+    // garbage rather than an error.
+    auto float_unpacked_data = [&]() {
+        switch (tt_dtype) {
+            case DataType::BFLOAT8_B:
+                return unpack_bfp8_tiles_into_float_vec(
+                    uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            case DataType::BFLOAT4_B:
+                return unpack_bfp4_tiles_into_float_vec(
+                    uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            case DataType::BFLOAT2_B:
+                return ::unpack_bfp2_tiles_into_float_vec(
+                    uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            default: TT_THROW("Unsupported block-float dtype {}", tt_dtype);
+        }
+    }();
     return HostBuffer(std::move(float_unpacked_data));
 }
 
@@ -287,7 +302,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(buffer);
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: {
+            case DataType::BFLOAT4_B:
+            case DataType::BFLOAT2_B: {
                 if (!padded_output) {
                     return convert_block_float_to_logical_row_major(buffer, tensor_spec);
                 }
@@ -338,6 +354,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tt_tensor);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
         case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
     }
@@ -955,6 +972,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::BFLOAT16: return static_cast<float>(self.to_vector<bfloat16>()[0]);
                         case DataType::BFLOAT8_B:
                         case DataType::BFLOAT4_B: return self.to_vector<float>()[0];
+                        case DataType::BFLOAT2_B: return self.to_vector<float>()[0];
                         case DataType::INT32: return self.to_vector<int32_t>()[0];
                         case DataType::INT8: return self.to_vector<int8_t>()[0];
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];

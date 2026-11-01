@@ -328,6 +328,7 @@ Tensor create_tt_tensor_from_host_data(
     switch (src_dtype) {
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return create_tensor_from_host_buffer.operator()<float>();
+        case DataType::BFLOAT2_B: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();

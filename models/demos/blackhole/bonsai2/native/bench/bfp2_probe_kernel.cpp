@@ -79,22 +79,40 @@ void kernel_main() {
     constexpr uint32_t cb_o = 17;
     const uint32_t k_tiles = get_arg_val<uint32_t>(2);
 
-#ifdef MODE_BFP2
-    // Force the unpacker to read both operands as Bfp2_b. The CB page size (320)
-    // is already the BFP2 tile size, so only the source-format field needs to
-    // change; the tile descriptor register's low nibble is the unpack format.
-    // Note this must be the *named* register define, not a literal: the address
-    // differs by architecture (64 on Blackhole, 52 on Wormhole).
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(BFP2_B);
-#else
-    reconfig_data_format_srca(cb_a);
-    reconfig_data_format_srcb(cb_b);
-#endif
-
     // compute_kernel_hw_startup is mandatory and must come first; matmul is the
     // one op family that needs SrcOrder::Reverse.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_b, cb_o);
     matmul_init(cb_a, cb_b, cb_o);
+
+#ifdef MODE_BFP2
+    // Force the unpackers to read both operands as Bfp2_b (DataFormat 15).
+    //
+    // This MUST come after matmul_init, not before: matmul_init calls
+    // llk_unpack_AB_matmul_init, which reprograms the tile descriptors from each
+    // CB's declared format and silently overwrites an earlier register write.
+    // That ordering mistake is why an earlier version of this probe returned exact
+    // zeros for every encoding while the bf16 control passed.
+    //
+    // Both THCON contexts are written: SEC0 is the SrcA unpacker and SEC1 the
+    // SrcB one, and matmul feeds both operands through the unpacker. The low
+    // nibble of the tile descriptor is the input format. Use the named register
+    // defines, not literals -- the address is 64 on Blackhole and 52 on Wormhole.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(BFP2_B);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(BFP2_B);
+    // The *destination* format matters just as much: the CB was declared uint8, so
+    // the unpacker's output format says uint8 and the math unit would read integer
+    // register contents. Bfp2_b on the SrcA/SrcB path expands to Float16_b, which
+    // is what these registers have to say for the MVMUL to see floats.
+    constexpr uint32_t FLOAT16_B = 5;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_ADDR32, 0, 0xf>(FLOAT16_B);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_ADDR32, 0, 0xf>(FLOAT16_B);
+    // The out-of-register format must be a width the BFP2 unpacker can produce;
+    // leave it at what the CB declared (bf16), which is the documented target for
+    // Bfp2_b on the SrcA/SrcB path.
+#else
+    reconfig_data_format_srca(cb_a);
+    reconfig_data_format_srcb(cb_b);
+#endif
     tile_regs_acquire();
     for (uint32_t kt = 0; kt < k_tiles; ++kt) {
         cb_wait_front(cb_a, 1);

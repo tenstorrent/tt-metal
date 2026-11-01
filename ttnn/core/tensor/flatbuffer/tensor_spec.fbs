@@ -79,6 +79,7 @@ enum DataType : ubyte {
     UInt32 = 2,
     BFloat8B = 3,
     BFloat4B = 4,
+    BFloat2B = 10,
     UInt8 = 5,
     UInt16 = 6,
     Int32 = 7,

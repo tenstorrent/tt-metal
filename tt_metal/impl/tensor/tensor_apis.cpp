@@ -25,6 +25,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
@@ -376,6 +377,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 struct bfloat4_tag {};
 struct bfloat8_tag {};
+struct bfloat2_tag {};
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
@@ -430,7 +432,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             TT_THROW("to_dtype: FP8_E4M3 cross-type conversion is only supported to/from FLOAT32");
             return input_buffer;  // unreachable, satisfies return type
         }
-    } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
+    } else if constexpr (
+        std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag> ||
+        std::is_same_v<DstType, bfloat2_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
@@ -447,6 +451,11 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                     return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
                     return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
+                } else if constexpr (std::is_same_v<DstType, bfloat2_tag>) {
+                    // Qualified: bfloat2.hpp declares both a global template and a
+                    // tt::tt_metal forwarding overload, so an unqualified call is
+                    // ambiguous inside this namespace.
+                    return ::pack_as_bfp2_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -494,7 +503,9 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
 
     const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT2_B)
+            ? Layout::TILE
+            : input_tensor.layout();
 
     tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
 
@@ -524,6 +535,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             switch (dst_type) {
                 case DataType::BFLOAT4_B:
                     return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat4_tag>();
+                case DataType::BFLOAT2_B:
+                    return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat2_tag>();
                 case DataType::BFLOAT8_B:
                     return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat8_tag>();
                 case DataType::FLOAT32: return with_src_and_dst.operator()<SrcType, float>();
@@ -542,6 +555,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         switch (src_type) {
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
+            case DataType::BFLOAT2_B:
             case DataType::FLOAT32: return with_src.operator()<float>();
             case DataType::BFLOAT16: return with_src.operator()<bfloat16>();
             case DataType::UINT8: return with_src.operator()<uint8_t>();
@@ -586,7 +600,8 @@ void validate_datatype(DataType dtype) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
-            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B,
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or
+                dtype == DataType::BFLOAT2_B,
             "Incorrect data type {}",
             dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {

@@ -156,6 +156,7 @@ std::vector<std::byte> logical_bytes(const tt::tt_metal::HostBuffer& shard, cons
         case tt::tt_metal::DataType::FLOAT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::BFLOAT4_B: return as_bytes(host.to_vector<float>());
+        case tt::tt_metal::DataType::BFLOAT2_B: return as_bytes(host.to_vector<float>());
         case tt::tt_metal::DataType::BFLOAT16: return as_bytes(host.to_vector<bfloat16>());
         case tt::tt_metal::DataType::UINT32: return as_bytes(host.to_vector<uint32_t>());
         case tt::tt_metal::DataType::INT32: return as_bytes(host.to_vector<int32_t>());

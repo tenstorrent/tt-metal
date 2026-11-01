@@ -258,6 +258,7 @@ ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::BFLOAT2_B:
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);

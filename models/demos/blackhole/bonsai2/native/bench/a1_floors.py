@@ -39,6 +39,7 @@ import os
 import torch
 
 from .a1_calib import device_kernel_us
+from .placement import act_mem, describe, out_mem
 from .record import DRAM_PEAK_GBS, append_jsonl, new_record
 from .timing import Timer
 
@@ -50,6 +51,8 @@ SHAPES = [
     ("attn_q_gate", 5120, 12288, 4, 110),
     ("gdn_out", 6144, 5120, 4, 110),
     ("attn_kv", 5120, 1024, 4, 110),
+    ("attn_o", 6144, 5120, 4, 110),
+    ("lm_head", 5120, 248320, 4, 110),
 ]
 
 
@@ -112,12 +115,14 @@ def main() -> int:
             if k_tiles % bw:
                 bw = 2
             w_src = torch.randn((k, n), dtype=torch.bfloat16)
+            # Placement is per shape and comes from the model's own call, because it
+            # changes the cost by more than 2x on the LM head.
             x = ttnn.from_torch(
                 torch.randn((1, 1, 1, k), dtype=torch.bfloat16), dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT, device=device, memory_config=act_mem(ttnn, name),
             )
-            print(f"\n{name} K={k} N={n} ({k_tiles}x{n_tiles} tiles), {cores} cores, in0_block_w={bw}",
-                  flush=True)
+            print(f"\n{name} K={k} N={n} ({k_tiles}x{n_tiles} tiles), {cores} cores, "
+                  f"in0_block_w={bw}, {describe(name)}", flush=True)
             print(f"  {'fmt':5s} {'MB':>8} {'dev us':>9} {'GB/s':>7} {'%pk':>6}")
             times, byts = {}, {}
             for fmt in ("bf16", "bfp8", "bfp4"):
@@ -139,7 +144,7 @@ def main() -> int:
 
                 def once(progcfg=progcfg, wt=wt):
                     y = ttnn.linear(x, wt, compute_kernel_config=ckc, program_config=progcfg,
-                                    memory_config=ttnn.L1_MEMORY_CONFIG)
+                                    memory_config=out_mem(ttnn, name))
                     ttnn.synchronize_device(device)
                     ttnn.deallocate(y)
 
@@ -154,7 +159,7 @@ def main() -> int:
                 mb = weight_mb(n, k, fmt)
                 times[fmt], byts[fmt] = dev, mb
                 rec = new_record(f"floors_{name}", K=k, N=n, fmt=fmt, cores=cores,
-                                 in0_block_w=bw)
+                                 in0_block_w=bw, placement=describe(name))
                 rec.samples = samples
                 append_jsonl(args.out, rec, int(mb * 1e6))
                 print(f"  {fmt:5s} {mb:8.2f} {dev:9.1f} {mb / dev * 1e3:7.1f} "

@@ -35,6 +35,7 @@ inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) 
         case DataType::UINT16:
             return ttnn::Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT8_B:
             // Block-float formats pack a shared exponent per group of datums, so the
             // packed byte count is NOT element_count * sizeof. from_vector requires a

@@ -47,36 +47,48 @@ import os
 import numpy as np
 import torch
 
-def build_tile(values: np.ndarray, encoding: str) -> np.ndarray:
-    """32x32 ternary values -> one 320-byte BFP2_b tile.
+#: Authoritative BFP2 tile layout, read off tt-metal's own encoder
+#: (pack_as_bfp2_tiles in tt_metal/impl/data_format/bfloat2.cpp) rather than guessed.
+#:
+#:   * 320 bytes = 64 exponent bytes + 256 data bytes.
+#:   * The exponent region is 4 faces x 16 bytes, all 0x7f (bias 127) for magnitude-1
+#:     ternary values; a value of 0 has datum 0x00 and needs no exponent.
+#:   * The data region is 4 faces of 128 bytes each, in row-major quadrant order:
+#:     top-left, top-right, bottom-left, bottom-right. (Checked against the encoder
+#:     with a quadrant-marked tile: the top-right quadrant lands at byte 128.)
+#:   * Within a face the 256 values are packed 4 per byte, 2 bits each, LSB first.
+#:   * Value codes, confirmed by round-tripping through the decoder:
+#:         0b01 = +1   (0x55 pattern for a whole face of +1)
+#:         0b11 = -1   (0xff pattern for a whole face of -1)
+#:         0b00 =  0
+#:     0b10 is not produced by the encoder and decodes as -Inf, so it must never be
+#:     emitted.
+EXPONENT_BYTE = 0x7F
 
-    Layout per the format: 64 B of exponents then 256 B of 2-bit data. Each face
-    (16x16) gets its own exponent; with ternary values the exponent is the bias
-    for magnitude 1 and the all-zero datum makes 0 independent of the exponent.
-    """
+
+def build_tile(values: np.ndarray, encoding: str = "plan") -> np.ndarray:
+    """32x32 ternary values -> one 320-byte BFP2_b tile, in the real layout."""
     assert values.shape == (32, 32)
+    if encoding != "plan":
+        raise ValueError(f"only the authoritative 'plan' encoding is meaningful, got {encoding!r}")
     code = np.zeros((32, 32), np.uint8)
-    if encoding == "plan":       # 01=+1, 11=-1, 00=0
-        code[values > 0] = 0b01
-        code[values < 0] = 0b11
-    elif encoding == "sign":     # 10=+1, 11=-1, 00=0 (sign-magnitude, sign high)
-        code[values > 0] = 0b10
-        code[values < 0] = 0b11
-    elif encoding == "compl":    # 01=+1, 10=-1, 00=0 (magnitude low, sign high)
-        code[values > 0] = 0b01
-        code[values < 0] = 0b10
-    else:
-        raise ValueError(encoding)
+    code[values > 0] = 0b01
+    code[values < 0] = 0b11
 
     out = bytearray(320)
-    # 16 exponent bytes, four faces x four 8-row groups, bias 127.
-    for i in range(16):
-        out[i] = 127
+    for i in range(64):
+        out[i] = EXPONENT_BYTE
+
+    # Face order: (0,0), (1,0), (0,1), (1,1) in 16x16 quadrant coordinates.
+    faces = [(0, 0), (0, 1), (1, 0), (1, 1)]
     data = np.zeros(256, np.uint8)
-    flat = code.reshape(-1)
-    for i in range(0, 1024, 4):
-        data[i // 4] = (int(flat[i]) | (int(flat[i + 1]) << 2)
-                        | (int(flat[i + 2]) << 4) | (int(flat[i + 3]) << 6))
+    pos = 0
+    for fr, fc in faces:
+        face = code[fr * 16:(fr + 1) * 16, fc * 16:(fc + 1) * 16].reshape(-1)
+        for i in range(0, 256, 4):
+            data[pos] = (int(face[i]) | (int(face[i + 1]) << 2)
+                         | (int(face[i + 2]) << 4) | (int(face[i + 3]) << 6))
+            pos += 1
     out[64:320] = bytes(data)
     return np.frombuffer(bytes(out), np.uint8).copy()
 
@@ -171,7 +183,7 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"control bf16   FAILED {type(e).__name__}: {str(e)[:300]}", flush=True)
 
-        for enc in ("plan", "sign", "compl"):
+        for enc in ("plan",):
             # Both operands are [rows, K] tiles: A is [M=32, K], B is [N=32, K].
             a_img = b"".join(build_tile(a_vals[:, i * 32:(i + 1) * 32], enc).tobytes() for i in range(kt))
             b_img = b"".join(build_tile(b_vals[i * 32:(i + 1) * 32, :].T, enc).tobytes() for i in range(kt))

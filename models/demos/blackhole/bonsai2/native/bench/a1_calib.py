@@ -28,7 +28,7 @@ the calibration is anchored to them rather than to my re-measurement of them:
     gdn out      6144x5120  bfp8   33 cores    88.4 us
     attn k/v     5120x1024  bfp8   33 cores    73.4 us
     attn o_proj  6144x5120  bfp8   88 cores   123.3 us
-    lm_head     5120x248320 bfp8    ?             (in the CSV; see below)
+    lm_head     5120x248320 bfp8  DRAM -> DRAM   -        3718.0 us (measured, not in CSV)
 
 Usage (on a chip)::
 
@@ -43,6 +43,8 @@ import os
 import numpy as np
 import torch
 
+from .placement import act_mem
+from .placement import out_mem as out_mem_fn
 from .record import DRAM_PEAK_GBS
 from .timing import Timer
 
@@ -56,15 +58,17 @@ SHAPES = [
     ("gdn_out", 6144, 5120, 88.4),
     ("attn_kv", 5120, 1024, 73.4),
     ("attn_o", 6144, 5120, 123.3),
-    ("lm_head", 5120, 248320, None),
+    # The profile CSV has no single lm_head row to quote; 3718 us is my measured
+    # device time for it with the activation in DRAM (logs/a1cal2.log), which is
+    # where the model puts it.
+    ("lm_head", 5120, 248320, 3718.0),
 ]
 
 #: Which dtype the model uses for each shape (mlp gate/up are bfp4, rest bfp8).
 MODEL_DTYPE = {"ffn_gate": "bfp4", "ffn_down": "bfp8"}
 
-#: Activation placement the model uses: L1 for the projections, DRAM for the
-#: LM head and o_proj (they read a pre-normed activation out of DRAM).
-ACT_IN_DRAM = {"lm_head", "attn_o"}
+#: Placement lives in one place (bench/placement.py) so the calibration and the
+#: floors sweep cannot drift apart on it.
 
 
 def device_kernel_us(ttnn, device) -> float | None:
@@ -131,7 +135,7 @@ def main() -> int:
             fmt = MODEL_DTYPE.get(name, "bfp8")
             w_src = torch.randn((k, n), dtype=torch.bfloat16)
             nb = n * k + n * k // 16 if fmt == "bfp8" else n * k // 2 + n * k // 16
-            x_mem = ttnn.DRAM_MEMORY_CONFIG if name in ACT_IN_DRAM else ttnn.L1_MEMORY_CONFIG
+            x_mem = act_mem(ttnn, name)
             for mode in args.mode.split(","):
                 wt = ttnn.from_torch(
                     w_src, dtype=dt[fmt], layout=ttnn.TILE_LAYOUT,
@@ -141,17 +145,21 @@ def main() -> int:
                     torch.randn((1, 1, 1, k), dtype=torch.bfloat16), dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT, device=device, memory_config=x_mem,
                 )
-                out_mem = ttnn.L1_MEMORY_CONFIG if name not in ACT_IN_DRAM else ttnn.DRAM_MEMORY_CONFIG
+                out_mem = out_mem_fn(ttnn, name)
 
                 if mode == "model":
                     # Exactly the model's call: no program config, its compute config,
-                    # output to L1, input already placed as the model has it.
+                    # and the activation/output placement the model uses for this shape
+                    # (bench/placement.py -- L1->L1 for most projections, DRAM in or out
+                    # for attn_o and lm_head).
                     def once():
                         y = ttnn.linear(x, wt, compute_kernel_config=ckc, memory_config=out_mem)
                         ttnn.synchronize_device(device)
                         ttnn.deallocate(y)
                 else:
-                    # What A0/A1 did: no compute config, DRAM output.
+                    # The earlier sweeps' call, kept as a control: no compute config,
+                    # DRAM output. Placement of the input still follows the model so the
+                    # two arms differ only in the call, not in where the data lives.
                     def once():
                         y = ttnn.linear(x, wt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                         ttnn.synchronize_device(device)

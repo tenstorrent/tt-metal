@@ -162,7 +162,8 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             return tensor_impl::decode_tensor_data(buffer, tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: {
             const auto& tile = tensor.tensor_spec().tile();
             auto buffer = host_buffer::get_as<uint32_t>(tensor);
             std::vector<float> unpacked_data =
