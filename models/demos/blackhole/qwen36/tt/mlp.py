@@ -203,6 +203,30 @@ def _down_decode_progcfg(n, dtype=None):
     )
 
 
+def _gateup_prefill_progcfg(s, k, n, force=False):
+    """QWEN36_1C_PF_GATEUP=1: single-chip prefill gate/up (S > 512) on an 8x10 2D-mcast grid, whole per-core N
+    in one out block, out_block_h=1, in0_block_w=4 -- Agent C's config (agentC .../a3/prefill.py wide_pc):
+    [2048,5120]x[5120,17408] 3.80 ms vs 12.12 on ttnn's auto config. None at S <= 512, where auto wins, unless force: ttnn's auto config
+    rejects a DRAM-sharded weight (QWEN36_1C_MLP_DRAMSHARD), and this config takes it as is (PCC 1.0)."""
+    gx, gy = 8, 10
+    pcn = -(-n // ttnn.TILE_SIZE // gx)
+    if (s <= 512 and not force) or (k // ttnn.TILE_SIZE) % 4 or pcn > 68:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=max(d for d in (1, 2, 4) if pcn % d == 0),
+        out_block_h=1,
+        out_block_w=pcn,
+        per_core_M=-(-s // ttnn.TILE_SIZE // gy),
+        per_core_N=pcn,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
 class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
@@ -292,6 +316,21 @@ class Qwen36MLP:
             ttnn.deallocate(w3_out)
             hidden = ttnn.sharded_to_interleaved(hidden_sh, mc)
             ttnn.deallocate(hidden_sh)
+        elif (
+            T > 1
+            and (os.environ.get("QWEN36_1C_PF_GATEUP") == "1" or self._dramshard_1c)
+            and (
+                pf_pc := _gateup_prefill_progcfg(
+                    x.shape[-2], w.w1.shape[-2], w.w1.shape[-1], force=self._dramshard_1c
+                )
+            )
+            is not None
+        ):
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, memory_config=mc, program_config=pf_pc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, program_config=pf_pc)
+            hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
         else:
             w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
