@@ -195,13 +195,19 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None):
 def device_sources(mesh, layer_idx: int, epc: int, cache):
     """TtMoe's cached routed experts of a layer straight to DRAM (bfp4 as stored, interleaved): flat_gather's sources,
     s = le * 3 + (0 gate, 1 up, 2 down) - each [1, 1, in, out] a chip (W^T: the flat op's orientation)."""
-    srcs = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    paths = []
     for le in range(epc):
         for proj in ("gate", "up", "down"):
             hits = sorted(Path(cache).glob(f"layer_{layer_idx}.routed_expert.local_{le}_{proj}_dtype_*.tensorbin"))
             assert hits, f"MoE block: no layer_{layer_idx}.routed_expert.local_{le}_{proj} in {cache}"
             assert "BFLOAT4_B" in hits[0].name, f"flat_gather copies bfp4 faces: {hits[0].name}"
-            host = ttnn.load_tensor(str(hits[0]))
+            paths.append(str(hits[0]))
+    # (the files read in parallel - NFS-bound, ~37 s a K3 layer one at a time; each to DRAM in order as it lands)
+    srcs = []
+    with ThreadPoolExecutor(max_workers=int(os.environ.get("MOE_BLOCK_LOAD_THREADS", "8"))) as pool:
+        for host in pool.map(ttnn.load_tensor, paths):
             srcs.append(ttnn.to_device(host, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             del host
     return srcs
