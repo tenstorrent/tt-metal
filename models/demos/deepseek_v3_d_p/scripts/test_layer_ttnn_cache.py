@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import json
 import os
 import shutil
 import struct
@@ -26,6 +27,7 @@ from layer_ttnn_cache import (
     files_equal,
     format_profile,
     format_summary,
+    format_transformer_check,
     fstype_of,
     install_timers,
     layer_files,
@@ -39,6 +41,7 @@ from layer_ttnn_cache import (
     snapshot_diff,
     split_fileset,
     stage_for_file,
+    transformer_check_layers,
     weka_snapshot,
 )
 
@@ -276,6 +279,43 @@ def test_layer_files_prefix(tmp_path):
     assert layer_files(tmp_path, 1) == {"layer_1.a": 3, "layer_1.b.tensorbin": 5}
     assert layer_files(tmp_path, 10) == {"layer_10.a": 7}
     assert layer_files(tmp_path / "missing", 1) == {}
+
+
+def test_layer_files_embed(tmp_path):
+    for name in ("embed_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin", "layer_0.a"):
+        (tmp_path / name).write_bytes(b"\0" * 4)
+    assert layer_files(tmp_path, "embed") == {"embed_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin": 4}
+
+
+def _guard_args(tmp_path, monkeypatch, layers):
+    import layer_ttnn_cache as script
+
+    home = tmp_path / "home"
+    hf = tmp_path / "hf"
+    (home / "c" / "kimi_k2_7" / "kimi_k2_7_bh_32dev" / "8x4").mkdir(parents=True)
+    hf.mkdir()
+    (hf / "model.safetensors.index.json").write_text("{}")
+    monkeypatch.setattr(script.Path, "home", staticmethod(lambda: home))
+    return home / "c" / "kimi_k2_7" / "kimi_k2_7_bh_32dev" / "8x4", parse_args(
+        ["--model", "kimi_k2_7", "--layers", layers, "--out-root", str(home / "c"), "--hf-model", str(hf)]
+    )
+
+
+def test_guard_refuses_existing_embed_when_layer_0_requested(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    out_cache, args = _guard_args(tmp_path, monkeypatch, "0-1")
+    (out_cache / "embed_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin").write_bytes(b"x")
+    with pytest.raises(GuardError, match=r"out not clean: .*\['embed'\]"):
+        script.guard_phase(args)
+
+
+def test_guard_ignores_existing_embed_without_layer_0(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    out_cache, args = _guard_args(tmp_path, monkeypatch, "1")
+    (out_cache / "embed_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin").write_bytes(b"x")
+    assert script.guard_phase(args).layers == [1]
 
 
 def test_main_rejects_weka_out_root_before_run(monkeypatch):
@@ -747,6 +787,88 @@ def test_format_profile_lists_problems():
     assert "MISSING on weka: layer_1.new" in out
     assert "DATA_DIFF: layer_1.mla.o_proj: first data diff at data offset 9" in out
     assert "\nstartup                  -       -               -\n" in out
+
+
+def _embed_report():
+    r = _layer_report()
+    r.update(layer="embed", kind="embed", called=[], files_built=1, bytes_built=2348813208, deleted_files=1)
+    r["stages"].update(
+        hf_read={"time_s": 3.21, "files": 0, "bytes": 0},
+        build_total={"time_s": 12.34, "files": 0, "bytes": 0},
+        **{"validate.content": {"time_s": 2.0, "files": 0, "bytes": 0}},
+    )
+    r["fileset"] = {"common": 1, "missing_on_weka": [], "weka_only": []}
+    r["content"] = {"EQUAL": 1, "EQUAL_DATA": 0, "DATA_DIFF": 0, "META_DIFF": 0, "COMPARE_ERROR": 0}
+    r["header_only_diffs"] = 0
+    r["files"] = {}
+    return r
+
+
+GOLDEN_EMBED_PROFILE = """\
+=== kimi_k2_7 embedding -> /home/u/ttnn-layer-cache/kimi_k2_7/kimi_k2_7_bh_32dev/8x4 ===
+stage               time_s   files           bytes
+startup               18.0       -               -
+hf_read                3.2       -               -
+build_total           12.3       1   2,348,813,208
+check_complete         0.0   ok
+validate.fileset       0.1   common=1 missing_on_weka=0 weka_only=0
+validate.content       2.0   EQUAL=1 EQUAL_DATA=0 DATA_DIFF=0 META_DIFF=0 COMPARE_ERROR=0 header_only_diffs=0
+cleanup                0.4   deleted 1 files
+peak_rss_gb           72.1
+verdict           PASS"""
+
+
+def test_format_profile_embed_golden():
+    assert format_profile(_embed_report()) == GOLDEN_EMBED_PROFILE
+
+
+@pytest.mark.parametrize(
+    "layers, remove, expected",
+    [
+        ([0], False, 1),
+        (list(range(10)), False, 10),
+        ([0, 1, 2, 5], False, 3),
+        ([1, 2], False, None),
+        ([0, 1], True, None),
+    ],
+)
+def test_transformer_check_layers(layers, remove, expected):
+    assert transformer_check_layers(layers, remove) == expected
+
+
+def test_format_transformer_check():
+    assert format_transformer_check({"num_layers": 10, "complete": True}) == "transformer cache check (L10): ok"
+    assert format_transformer_check({"num_layers": 1, "complete": False}) == "transformer cache check (L1): INCOMPLETE"
+
+
+def test_report_has_transformer_check(tmp_path, monkeypatch):
+    import layer_ttnn_cache as script
+
+    out_cache, args = _guard_args(tmp_path, monkeypatch, "0-1")
+    ctx = script.guard_phase(args)
+    built = []
+
+    def fake_runtime(ctx, t0):
+        mesh = type("Mesh", (), {"get_num_devices": lambda self: 32})()
+        lazy = type("Lazy", (), {"close": lambda self: None})()
+        ttnn_stub = type("T", (), {"close_mesh_device": staticmethod(lambda m: None)})
+        return script.Runtime(ttnn_stub, mesh, None, None, lazy, "", 1.0)
+
+    def fake_build(ctx, rt, n, rep):
+        built.append(n)
+        rep["verdict"] = "PASS"
+
+    monkeypatch.setattr(script, "_start_runtime", fake_runtime)
+    monkeypatch.setattr(script, "build_one_layer", fake_build)
+    monkeypatch.setattr(script, "transformer_cache_complete", lambda ctx, rt, num_layers: num_layers == 2)
+    monkeypatch.setattr(script.sys, "addaudithook", lambda hook: None)
+    monkeypatch.setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", "unused")
+    assert script.run_phase(ctx) == 0
+    assert built == ["embed", 0, 1]
+    (report,) = (ctx.out / "kimi_k2_7" / "reports").glob("*.json")
+    data = json.loads(report.read_text())
+    assert data["transformer_check"] == {"num_layers": 2, "complete": True}
+    assert [r["layer"] for r in data["per_layer"]] == ["embed", 0, 1]
 
 
 def test_format_summary():

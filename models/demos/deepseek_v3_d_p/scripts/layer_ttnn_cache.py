@@ -9,6 +9,10 @@ Runs on a mock 8x4 Blackhole Galaxy (no chips needed), writes only under --out-r
 HF weights read-only, prints a per-stage time profile and writes a JSON report. --compare also checks each
 layer against a reference cache (read-only); --remove deletes the built files after each layer.
 
+When the layers include 0 the embedding is built first and reported like a layer. When the kept files are
+the embedding plus layers 0..N-1, TtPrefillTransformer.check_cache_complete(num_layers=N) runs at the end,
+so `--layers 0-9` gives a folder the smoke test accepts as L10.
+
     python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model kimi_k2_7 --layers 0-9
     python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model glm_5_3 --layers 0-10 --compare --remove
 
@@ -111,6 +115,10 @@ PROFILE_ROWS = (
 )
 STATUSES = ("EQUAL", "EQUAL_DATA", "DATA_DIFF", "META_DIFF", "COMPARE_ERROR")
 MATCH_STATUSES = ("EQUAL", "EQUAL_DATA")
+EMBED = "embed"
+EMBED_ROWS = ("startup", "hf_read", "build_total", "check_complete", "validate.fileset", "validate.content", "cleanup")
+# tp_axis default of load_and_compute_layer_by_layer, which the full cache build uses.
+EMBED_TP_AXIS = 1
 
 AUDIT_PATH_EVENTS = {
     "os.mkdir",
@@ -173,14 +181,20 @@ def parse_layers(spec: str, num_layers: int) -> list[int]:
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--model", required=True, choices=sorted(MODELS), help="Registry key of the model")
-    p.add_argument("--layers", required=True, help="N, A-B (inclusive) or A,B,C")
+    p.add_argument("--layers", required=True, help="N, A-B (inclusive) or A,B,C; including 0 also builds the embedding")
     p.add_argument("--out-root", default="~/ttnn-layer-cache", help="Output root; must be under $HOME, not on Weka")
-    p.add_argument("--compare", action="store_true", help="Check each built layer against the reference cache")
+    p.add_argument(
+        "--compare", action="store_true", help="Check each built layer and the embedding against the reference cache"
+    )
     p.add_argument(
         "--weka-cache", default=None, help="Reference cache root for --compare (read only); default from the adapter"
     )
     p.add_argument("--hf-model", default=None, help="HF checkpoint dir (read only); default from the adapter")
-    p.add_argument("--remove", action="store_true", help="Delete each layer's built files once it is done")
+    p.add_argument(
+        "--remove",
+        action="store_true",
+        help="Delete each layer's (and the embedding's) built files once it is done; skips the transformer check",
+    )
     p.add_argument(
         "--min-free-gb", type=float, default=40, help="Free GiB that must remain on the output fs after a layer"
     )
@@ -253,8 +267,16 @@ def check_env_paths(environ: Mapping, mounts, roots=WEKA_ROOTS) -> None:
             raise GuardError(f"${var}={value} is on Weka")
 
 
-def layer_files(directory: Path, n: int) -> dict[str, int]:
-    prefix = f"layer_{n}."
+def build_units(layers: list[int]) -> list:
+    return ([EMBED] if 0 in layers else []) + layers
+
+
+def unit_prefix(n) -> str:
+    return "embed_weight" if n == EMBED else f"layer_{n}."
+
+
+def layer_files(directory: Path, n) -> dict[str, int]:
+    prefix = unit_prefix(n)
     if not os.path.isdir(directory):
         return {}
     with os.scandir(directory) as it:
@@ -439,8 +461,8 @@ def exit_code(verdicts, weka_changed, interrupted: bool) -> int:
     return 0
 
 
-def weka_snapshot(directory: Path, n: int) -> dict:
-    prefix = f"layer_{n}."
+def weka_snapshot(directory: Path, n) -> dict:
+    prefix = unit_prefix(n)
     files = {}
     with os.scandir(directory) as it:
         for e in it:
@@ -545,12 +567,13 @@ def _content_line(content: Mapping, header_only: int) -> str:
 def format_profile(layer: dict) -> str:
     stages = layer["stages"]
     kind = layer["kind"] + (", indexer" if layer.get("has_indexer") else "")
+    title = "embedding" if layer["layer"] == EMBED else f"layer {layer['layer']} ({kind})"
     lines = [
-        f"=== {layer['model']} layer {layer['layer']} ({kind}) -> {layer['out_dir']} ===",
+        f"=== {layer['model']} {title} -> {layer['out_dir']} ===",
         f"{'stage':<18}{'time_s':>8}{'files':>8}{'bytes':>16}",
     ]
     called = set(layer.get("called", ()))
-    for row in PROFILE_ROWS:
+    for row in EMBED_ROWS if layer["layer"] == EMBED else PROFILE_ROWS:
         s = stages[row]
         t = _fmt_time(s["time_s"])
         if row in SUBMODULES or row == "other":
@@ -585,6 +608,20 @@ def format_profile(layer: dict) -> str:
             lines.append(f"{r['status']}: {name}: {r['detail']}")
     lines += [f"INFO weka_only: {name}" for name in layer["fileset"]["weka_only"]]
     return "\n".join(lines)
+
+
+def transformer_check_layers(layers: list[int], remove: bool) -> int | None:
+    """N when the kept files are the embedding plus layers 0..N-1, else None."""
+    if remove or 0 not in layers:
+        return None
+    n = 0
+    while n in layers:
+        n += 1
+    return n
+
+
+def format_transformer_check(check: Mapping) -> str:
+    return f"transformer cache check (L{check['num_layers']}): {'ok' if check['complete'] else 'INCOMPLETE'}"
 
 
 def _content_short(content: Mapping) -> str:
@@ -665,12 +702,12 @@ def guard_phase(args) -> Ctx:
     if weka_dir is not None:
         if out_cache.resolve() == weka_dir.resolve():
             raise GuardError(f"output dir and reference dir are the same: {out_cache}")
-        for n in layers:
+        for n in build_units(layers):
             files = layer_files(weka_dir, n)
             if not files:
-                raise GuardError(f"no layer_{n}. files in {weka_dir}")
+                raise GuardError(f"no {unit_prefix(n)} files in {weka_dir}")
             weka_bytes[n] = sum(files.values())
-    dirty = [n for n in layers if layer_files(out_cache, n)]
+    dirty = [n for n in build_units(layers) if layer_files(out_cache, n)]
     if dirty:
         raise GuardError(f"out not clean: {out_cache} already holds files for layers {dirty}")
     needed = max(weka_bytes.values(), default=0) if args.remove else sum(weka_bytes.values())
@@ -729,7 +766,7 @@ def _new_layer_report(ctx: Ctx, n: int, weka: dict) -> dict:
         "model": ctx.model,
         "out_dir": str(ctx.out_cache),
         "layer": n,
-        "kind": "dense" if n < MODELS[ctx.model]["num_dense_layers"] else "moe",
+        "kind": EMBED if n == EMBED else "dense" if n < MODELS[ctx.model]["num_dense_layers"] else "moe",
         "has_indexer": any(".mla.indexer_" in name for name in weka),
         "verdict": "FAIL",
         "build_s": 0.0,
@@ -763,7 +800,7 @@ def _timed(stages: dict, label: str):
     return cm()
 
 
-def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
+def build_one_layer(ctx: Ctx, rt: Runtime, n, rep: dict) -> None:
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
@@ -772,6 +809,7 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
     from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+    from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
     from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict
@@ -783,47 +821,60 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
     layer_sd = layer_dequant = state_dict = None
     try:
         try:
+            prefix = "model.embed_tokens." if n == EMBED else f"model.layers.{n}."
             with _timed(stages, "hf_read"):
-                layer_sd = sub_state_dict(rt.lazy, f"{rt.pfx}model.layers.{n}.")
+                layer_sd = sub_state_dict(rt.lazy, f"{rt.pfx}{prefix}")
                 layer_dequant = convert_state_dict(layer_sd, rt.config)
-            is_dense = n < rt.config.first_k_dense_replace
-            if is_dense != (n < rt.model_cfg.NUM_DENSE_LAYERS):
-                raise RuntimeError(
-                    f"dense rule mismatch: first_k_dense_replace={rt.config.first_k_dense_replace}, "
-                    f"NUM_DENSE_LAYERS={rt.model_cfg.NUM_DENSE_LAYERS}"
-                )
-            with _timed(stages, "assemble"):
-                state_dict = block_cache_state_dict(layer_dequant, is_dense, rt.config.n_routed_experts)
-
-            timer = StageTimer()
-            targets = [
-                (TtDistributedRmsNorm, "norms"),
-                (ttMLA, "mla"),
-                (TtIndexer, "indexer"),
-                (TtMoEGatePrefill, "moe_gate"),
-                (TtRoutedExpert, "routed_experts"),
-                (TtSharedExpert, "shared_expert"),
-                (TtFfn, "dense_ffn"),
-            ]
-            saved = install_timers(timer, targets)
-            try:
+            if n == EMBED:
                 with _timed(stages, "build_total"):
-                    TtPrefillBlock.build_ttnn_cache(
-                        state_dict=state_dict,
-                        layer_idx=n,
-                        cache_path=ctx.out_cache,
+                    TtParallelEmbedding.build_ttnn_cache(
+                        torch_weight=layer_dequant["weight"].float(),
+                        vocab_size=rt.config.vocab_size,
+                        emb_dim=rt.config.hidden_size,
                         mesh_device=rt.mesh,
-                        config=rt.config,
-                        model_cfg=rt.model_cfg,
-                        seq_len=SEQ_LEN,
+                        cache_path=ctx.out_cache,
+                        tp_axis=EMBED_TP_AXIS,
+                        dtype=ttnn.bfloat16,
                     )
-            finally:
-                restore_timers(saved)
-                excl = timer.exclusive()
-                for label in SUBMODULES:
-                    stages[label]["time_s"] = excl.get(label, 0.0)
-                rep["called"] = sorted(label for label, c in timer.calls.items() if c)
-                stages["other"]["time_s"] = max(0.0, stages["build_total"]["time_s"] - sum(excl.values()))
+            else:
+                is_dense = n < rt.config.first_k_dense_replace
+                if is_dense != (n < rt.model_cfg.NUM_DENSE_LAYERS):
+                    raise RuntimeError(
+                        f"dense rule mismatch: first_k_dense_replace={rt.config.first_k_dense_replace}, "
+                        f"NUM_DENSE_LAYERS={rt.model_cfg.NUM_DENSE_LAYERS}"
+                    )
+                with _timed(stages, "assemble"):
+                    state_dict = block_cache_state_dict(layer_dequant, is_dense, rt.config.n_routed_experts)
+
+                timer = StageTimer()
+                targets = [
+                    (TtDistributedRmsNorm, "norms"),
+                    (ttMLA, "mla"),
+                    (TtIndexer, "indexer"),
+                    (TtMoEGatePrefill, "moe_gate"),
+                    (TtRoutedExpert, "routed_experts"),
+                    (TtSharedExpert, "shared_expert"),
+                    (TtFfn, "dense_ffn"),
+                ]
+                saved = install_timers(timer, targets)
+                try:
+                    with _timed(stages, "build_total"):
+                        TtPrefillBlock.build_ttnn_cache(
+                            state_dict=state_dict,
+                            layer_idx=n,
+                            cache_path=ctx.out_cache,
+                            mesh_device=rt.mesh,
+                            config=rt.config,
+                            model_cfg=rt.model_cfg,
+                            seq_len=SEQ_LEN,
+                        )
+                finally:
+                    restore_timers(saved)
+                    excl = timer.exclusive()
+                    for label in SUBMODULES:
+                        stages[label]["time_s"] = excl.get(label, 0.0)
+                    rep["called"] = sorted(label for label, c in timer.calls.items() if c)
+                    stages["other"]["time_s"] = max(0.0, stages["build_total"]["time_s"] - sum(excl.values()))
         except Exception:
             rep["error"] = traceback.format_exc()
             print(rep["error"], file=sys.stderr, flush=True)
@@ -834,7 +885,9 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
             try:
                 init_checker(ctx.out_cache)
                 rep["check_complete"] = bool(
-                    TtPrefillBlock.check_cache_complete(
+                    TtParallelEmbedding.check_cache_complete(ctx.out_cache)
+                    if n == EMBED
+                    else TtPrefillBlock.check_cache_complete(
                         ctx.out_cache,
                         n,
                         n < rt.model_cfg.NUM_DENSE_LAYERS,
@@ -853,7 +906,7 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
         rep["has_indexer"] = rep["has_indexer"] or any(".mla.indexer_" in name for name in built)
         rep["fileset"] = {"common": len(fs.common), "missing_on_weka": fs.missing_on_weka, "weka_only": fs.weka_only}
         rep["files_built"], rep["bytes_built"] = len(built), sum(built.values())
-        for name, size in built.items():
+        for name, size in built.items() if n != EMBED else ():
             s = stages[stage_for_file(name)]
             s["files"] += 1
             s["bytes"] += size
@@ -877,7 +930,7 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
     finally:
         changed = snapshot_diff(before, weka_snapshot(ctx.weka_dir, n)) if ctx.weka_dir else []
         if changed:
-            rt.weka_changed += [f"layer_{n}: {line}" for line in changed]
+            rt.weka_changed += [f"{unit_prefix(n).rstrip('.')}: {line}" for line in changed]
             for line in changed:
                 print(f"WEKA CHANGED: {line}", flush=True)
         with _timed(stages, "cleanup"):
@@ -893,6 +946,25 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
         rep["peak_rss_gb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1 << 20)
         rep["build_s"] = sum(stages[k]["time_s"] for k in ("hf_read", "assemble", "build_total"))
         rep["valid_s"] = stages["validate.fileset"]["time_s"] + stages["validate.content"]["time_s"]
+
+
+def transformer_cache_complete(ctx: Ctx, rt: Runtime, num_layers: int) -> bool:
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+
+    try:
+        return bool(
+            TtPrefillTransformer.check_cache_complete(
+                ctx.out_cache,
+                num_layers=num_layers,
+                experts_per_chip=rt.model_cfg.NUM_ROUTED_EXPERTS // rt.mesh.get_num_devices(),
+                first_k_dense=rt.model_cfg.NUM_DENSE_LAYERS,
+                model_cfg=rt.model_cfg,
+                routed_expert_weights_dtype=rt.ttnn.bfloat4_b,
+            )
+        )
+    except Exception:
+        traceback.print_exc()
+        return False
 
 
 def _start_runtime(ctx: Ctx, t0: float) -> Runtime:
@@ -960,6 +1032,7 @@ def run_phase(ctx: Ctx) -> int:
         "interrupted": False,
         "weka_changed": [],
         "per_layer": [],
+        "transformer_check": None,
     }
 
     def finish(code: int, interrupted: bool = False) -> int:
@@ -996,7 +1069,7 @@ def run_phase(ctx: Ctx) -> int:
         report["startup_s"] = rt.startup_s
         reports_dir.mkdir(parents=True, exist_ok=True)
         try:
-            for i, n in enumerate(ctx.layers):
+            for i, n in enumerate(build_units(ctx.layers)):
                 if ctx.args.remove or not ctx.weka_dir:
                     _disk_check(ctx.out_cache, ctx.weka_bytes.get(n, 0), ctx.args.min_free_gb)
                 rep = _new_layer_report(ctx, n, layer_files(ctx.weka_dir, n) if ctx.weka_dir else {})
@@ -1008,6 +1081,14 @@ def run_phase(ctx: Ctx) -> int:
                     report["weka_changed"] = list(rt.weka_changed)
                     _write_json_atomic(report_path, report)
                 print(format_profile(rep), flush=True)
+            num_layers = transformer_check_layers(ctx.layers, ctx.args.remove)
+            if num_layers is not None:
+                report["transformer_check"] = {
+                    "num_layers": num_layers,
+                    "complete": transformer_cache_complete(ctx, rt, num_layers),
+                }
+                _write_json_atomic(report_path, report)
+                print(format_transformer_check(report["transformer_check"]), flush=True)
         except KeyboardInterrupt:
             return finish(exit_code([], report["weka_changed"], True), interrupted=True)
         except GuardError as e:
