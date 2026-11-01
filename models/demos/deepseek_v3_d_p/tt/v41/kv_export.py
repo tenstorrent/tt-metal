@@ -71,6 +71,14 @@ def split_half(group: str, ratio: int, S: int) -> int:
     return ((RING if group == "csa_unified" else 0) + int(S) // int(ratio)) // 2
 
 
+def index_split_chunk() -> int:
+    """The ring's index-key chip-interleave block = 8 x its DSV41_INDEXER_SHARD_ROWS (64 on the 256k / 1M recipes -> 512 rows;
+    the launcher passes it as V41_EXPORT_IDX_SHARD)."""
+    import os
+
+    return 8 * int(os.environ.get("V41_EXPORT_IDX_SHARD", "64"))
+
+
 def _chip_major(rows_t, gran: int):
     """[1, 1, n, W] rows interleaved in ``gran``-row blocks over 2 chips -> [2, 1, n / 2, W] (chip 0's blocks, chip 1's), n a
     multiple of 2 * gran."""
@@ -301,8 +309,9 @@ def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chun
         # DS41F-0138: chip-major export -- entry rows [e0, e0 + n) are 8-row-interleaved over the chips, the index keys in
         # 1024-row blocks (e0 and n are chunk multiples: >= 2048 at ratio 2); each chip's part lands at c * S2 + e0 / 2
         S2 = exp.max_seq_len // ratio // 2
-        assert e0 % 2048 == 0 and n % 2048 == 0, (e0, n)
-        ent_c, idx_c = _chip_major(rows, 8), _chip_major(k8, 1024)
+        ic = index_split_chunk()
+        assert e0 % (2 * ic) == 0 and n % (2 * ic) == 0, (e0, n, ic)
+        ent_c, idx_c = _chip_major(rows, 8), _chip_major(k8, ic)
         for c in range(2):
             er = ttnn.slice(ent_c, [c, 0, 0, 0], [c + 1, 1, n // 2, HEAD_DIM])
             attn._write_rm(ent, er, b, c * S2 + e0 // 2)
