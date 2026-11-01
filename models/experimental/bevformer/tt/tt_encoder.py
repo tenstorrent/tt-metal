@@ -13,9 +13,9 @@ views and temporal modeling.
 
 import ttnn
 import torch
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, NamedTuple
 
-from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
+from .tt_spatial_cross_attention import SCARebatchPlanner, SCAVisibility, TTSpatialCrossAttention
 from .tt_common import layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import camera_rows, image_size, point_sampling_3d_to_2d_ttnn, world_points_ttnn
@@ -25,6 +25,21 @@ from loguru import logger
 
 # Enable/disable logging output
 ENABLE_LOGGING = False
+
+
+class CameraProjection(NamedTuple):
+    """One frame's reference grid projected to the cameras, with the visibility the spatial
+    cross-attention plan is built from.
+
+    Attributes:
+        reference_points_cam: Bfloat16 ``[num_cams, B, num_queries, D, 2]``.
+        bev_mask: Bfloat16 ``[num_cams, B, num_queries, D]``.
+        visibility: The encoder planner's :meth:`SCARebatchPlanner.visibility` of ``bev_mask``.
+    """
+
+    reference_points_cam: ttnn.Tensor
+    bev_mask: ttnn.Tensor
+    visibility: SCAVisibility
 
 
 class TTBEVFormerLayer:
@@ -372,6 +387,8 @@ class TTBEVFormerEncoder:
         )
         # The grid in world coordinates, which every frame projects to the cameras.
         self.world_points = world_points_ttnn(self._reference_points_3d, pc_range, device)
+        # One per encoder, as its capacity is the camera rig's high-water mark.
+        self.rebatch_planner = SCARebatchPlanner(device)
 
         # Build transformer layers
         self.layers = []
@@ -398,6 +415,40 @@ class TTBEVFormerEncoder:
             )
             self.layers.append(layer)
 
+    def project_cameras(self, img_metas, projection=None) -> CameraProjection:
+        """Project the reference grid to the frame's cameras and queue their visible counts' readback.
+
+        Nothing here waits for the device. Called ahead of the backbone, the counts are back long
+        before the encoder needs them to size its rebatch plan.
+
+        Args:
+            img_metas: Camera metadata with each sample's ``lidar2img`` and the images' size.
+            projection: The cameras' projection rows (``tt_point_sampling_3d_2d.camera_rows``) on
+                device, float32 TILE; None builds them from ``img_metas`` and uploads them.
+        """
+        if projection is None:
+            projection = ttnn.from_torch(
+                self.projection_rows(img_metas), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
+        reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
+            reference_points=None,
+            pc_range=self.pc_range,
+            lidar2img=None,
+            device=self.device,
+            # The grid broadcasts over the batch.
+            world_points=self.world_points,
+            projection=projection,
+            # Projected in float32; bfloat16 is the only dtype the rebatch plan's gather takes.
+            output_dtype=ttnn.bfloat16,
+        )
+        return CameraProjection(reference_points_cam, bev_mask, self.rebatch_planner.visibility(bev_mask))
+
+    def projection_rows(self, img_metas) -> torch.Tensor:
+        """Host projection rows (``tt_point_sampling_3d_2d.camera_rows``) of the frame's cameras over
+        this encoder's reference grid."""
+        grid = self.world_points
+        return camera_rows(self._host_lidar2img(img_metas), image_size(img_metas), grid.num_queries, grid.num_points)
+
     @staticmethod
     def _host_lidar2img(img_metas):
         """The cameras' projections from ``img_metas``, torch [B, num_cams, 4, 4]: each sample's
@@ -420,8 +471,8 @@ class TTBEVFormerEncoder:
         # Extrinsic: camera pose in world coordinates (rotation + translation)
         camera_intrinsics = torch.tensor(img_metas[0]["camera_intrinsics"], dtype=torch.float32)
         camera_extrinsics = torch.tensor(img_metas[0]["camera_extrinsics"], dtype=torch.float32)
-        # Combined transformation: world -> camera -> image
-        return camera_intrinsics @ camera_extrinsics  # [num_cams, 4, 4]
+        # Combined transformation: world -> camera -> image, the first sample's for every sample
+        return (camera_intrinsics @ camera_extrinsics).expand(len(img_metas), -1, -1, -1)
 
     def forward(
         self,
@@ -432,7 +483,7 @@ class TTBEVFormerEncoder:
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
-        projection=None,
+        cameras: Optional[CameraProjection] = None,
         **kwargs,
     ):
         """
@@ -449,10 +500,8 @@ class TTBEVFormerEncoder:
                 on the first frame.
             shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
                 with ``prev_bev``.
-            img_metas: Camera metadata for point sampling
-            projection: The cameras' projection rows (``tt_point_sampling_3d_2d.camera_rows``) on
-                device, float32 TILE, as ``TTPerceptionTransformer.prepare_frame`` uploads them;
-                None builds them from ``img_metas`` and uploads them here.
+            img_metas: Camera metadata, projected here with :meth:`project_cameras`; not with ``cameras``.
+            cameras: The frame's :meth:`project_cameras`, made ahead of the forward.
 
         Returns:
             Final BEV features [B, num_queries, embed_dims]
@@ -488,38 +537,14 @@ class TTBEVFormerEncoder:
 
         signpost(header="BEVEncoder Reference Points Start")
 
-        # Project the cached 3D reference points to camera coordinates.
-        # These reference points define where each BEV query will sample features from camera views
-        reference_points_cam = None
-        bev_mask = None
-
+        assert cameras is None or img_metas is None, "pass img_metas or cameras, not both"
         if img_metas is not None:
-            if projection is None:
-                rows = camera_rows(
-                    self._host_lidar2img(img_metas),
-                    image_size(img_metas),
-                    self.world_points.num_queries,
-                    self.world_points.num_points,
-                )
-                projection = ttnn.from_torch(rows, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-            # Project 3D reference points to 2D camera coordinates
-            # This determines where each BEV query will sample from in each camera view
-            # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
-            #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
-            reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
-                reference_points=None,
-                pc_range=self.pc_range,
-                lidar2img=None,
-                device=self.device,
-                # The grid broadcasts over the batch.
-                world_points=self.world_points,
-                projection=projection,
-                # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
-                output_dtype=ttnn.bfloat16,
-            )
-
-        # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
-        rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
+            cameras = self.project_cameras(img_metas)
+        reference_points_cam, bev_mask, rebatch_plan = None, None, None
+        if cameras is not None:
+            reference_points_cam, bev_mask, visibility = cameras
+            # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
+            rebatch_plan = self.rebatch_planner(reference_points_cam, visibility)
 
         signpost(header="BEVEncoder Reference Points End")
 

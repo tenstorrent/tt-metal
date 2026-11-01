@@ -89,7 +89,8 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 - `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module and the fused MSDA op.
 - `test_point_sampling_3d_2d.py`: the BEV pillars' projection into the cameras and the visibility mask.
 - `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first.
-- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch.
+- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch, and
+  the device-built rebatch plan against a host build and its capacity over frame sequences.
 - `test_encoder.py`: the encoder on several presets and layer counts.
 - `test_perception_transformer.py`: the encoder's glue over consecutive frames with ego motion.
 - `test_decoder.py`: the six-layer detection decoder and its reference-point refinement.
@@ -355,5 +356,6 @@ tt/model_preprocessing.py
 - Input (base): 6 cameras at 1600x900, padded to 1600x928; small and tiny scale them by 0.8 and 0.5
   (`VARIANTS` in `model_config.py`)
 - BEV grid (base): 200x200, small 150x150, tiny 50x50; 900 object queries; up to 300 boxes per frame
-- The encoder reads the cameras' visibility on the host inside its forward, so the detector runs
-  live, not under a trace.
+- Preparing a frame projects the cameras on device and reads back only their visible counts, which
+  size the spatial cross-attention's rebatch plan; the plan's shapes follow a capacity that only
+  grows, and the detector runs live, not under a trace.

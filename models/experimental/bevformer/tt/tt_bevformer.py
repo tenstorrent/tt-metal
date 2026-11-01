@@ -6,8 +6,9 @@ the FPN, the perception transformer and the detection head, on device end to end
 
 A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the cameras' metas) are
 prepared by :meth:`TTBEVFormer.prepare_frame`. The caller carries the previous BEV between frames,
-as upstream's ``forward_test`` does. The encoder projects the cameras and reads their visibility on
-the host inside its forward, so the detector runs live, not under a trace.
+as upstream's ``forward_test`` does. Preparing a frame also projects its cameras and queues the
+readback of the counts that size the spatial cross-attention's plan, which follow what the cameras
+see, so the detector runs live, not under a trace.
 
 :meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device: the coder's top-k, the box
 decoding, the range test as a validity mask and z moved to the box's bottom face, all fixed
