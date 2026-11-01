@@ -569,6 +569,41 @@ inline void _llk_pack_uninit_()
 }
 
 /**
+ * @brief Put the default pack program back: the strides, the address modes, the MOP and the X counter of _llk_pack_init_ for full 32x32 tiles.
+ * The uninit of the fast untilize, and what the block packs run once if it was not called (_llk_pack_close_fast_untilize_).
+ */
+inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_format)
+{
+    // set_packer_strides also zeroes the channel-1 Y stride the fast untilize strided path programs.
+    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+}
+
+// Out of line: the call sites of the block packs carry a load, a branch and a call.
+template <DstSync Dst>
+__attribute__((noinline)) void pack_close_fast_untilize_slow_()
+{
+    _llk_pack_restore_default_program_(pack_fast_untilize_src);
+    // The fast untilize moved the DEST offset registers to its strip offsets; the offset id is the one the math thread flips with, so it stays.
+    _llk_init_packer_dest_offset_registers_<Dst>();
+}
+
+/**
+ * @brief Close a fast untilize whose uninit was not called, before a block pack: the default program, strides and DEST offset registers come back, the W offset state goes stale.
+ * Nothing in a kernel that does not run the fast untilize pack: the flag is never written and the call folds away.
+ */
+template <DstSync Dst>
+inline void _llk_pack_close_fast_untilize_()
+{
+    if (pack_fast_untilize_open)
+    {
+        pack_close_fast_untilize_slow_<Dst>();
+    }
+}
+
+/**
  * @brief Pack one tile from the destination register to an L1 address.
  *
  * Selects the source dest tile, programs the L1 destination address, runs the packer MOP, and resets
@@ -617,7 +652,6 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
-    LLK_ASSERT_PACK_NOT_FAST_UNTILIZE();
     static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
 
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
@@ -653,7 +687,6 @@ inline void _llk_pack_block_closed_(
     const std::uint32_t tile_stride,
     const std::uint32_t num_faces = TILE_NUM_FACES)
 {
-    LLK_ASSERT_PACK_NOT_FAST_UNTILIZE();
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(

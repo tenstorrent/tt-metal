@@ -234,11 +234,13 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
 // programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
 inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
     if (pack_w_last != output_id) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         pack_w_last = output_id;
         return false;
     }
     const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr && pack_w_tiles + ntiles <= LLK_PACK_W_MAX_TILES;
     if (!cont) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         program_packer_destination(addr);
         const std::uint32_t stride = page << 4;
         if (stride != pack_ch1_w_stride) {
@@ -315,6 +317,7 @@ inline bool llk_pack_dst_is_bfp(const std::uint32_t output_id) {
 // The per-tile packs of a block that takes none of the block forms: main's loop.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles) {
+    _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, false, llk_pack_rmw_tile<PackMode::Default>>(tile_index, pack_tile_addr);
@@ -327,7 +330,9 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
 template <bool is_fp32_dest_acc_en, bool dense_small = false, bool guard_dest_straddle = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
-    LLK_ASSERT_PACK_NOT_FAST_UNTILIZE();
+#ifndef LLK_PACK_W_OFFSET
+    _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+#endif
     // Full tiles in blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep; tiny tiles read faster as a closed block from two tiles on.
     const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES || (ntiles >= 2 && llk_pack_block_is_small(output_id));
 
@@ -368,6 +373,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             start_tile_index, pack_tile_addr, ntiles);
 #endif
     } else if (dense_small && llk_pack_block_is_dense(output_id)) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr +=

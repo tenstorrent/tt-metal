@@ -224,7 +224,9 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
 {
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
 
-    LLK_ASSERT_BLOCK(llk_assert_pack_fast_untilize = true);
+    pack_fast_untilize_open = true;
+    pack_fast_untilize_src  = pack_src_format;
+    LLK_PACK_W_INVALIDATE();
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
     select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
@@ -415,11 +417,7 @@ inline void _llk_pack_fast_untilize_block_strided_(
 
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
-    // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
-    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
-    // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
-    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        pack_src_format, FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+    _llk_pack_restore_default_program_(pack_src_format);
 }
 
 } // namespace ckernel
