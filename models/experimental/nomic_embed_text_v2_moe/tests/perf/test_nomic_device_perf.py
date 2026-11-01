@@ -27,8 +27,9 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # (tt/router.py), and the routed experts of #60284 with their w2 at LoFi (tt/experts.py,
 # tt/model_config.py), no trace, one command queue. The unoptimized port measured 66.7, the matmul
 # work alone 171.0, with #58503 294.1, before the router 300.0, before the routed experts 312.8,
-# with their w2 at HiFi2 609.1.
-EXPECTED_SEQUENCES_PER_S = 626.7
+# with their w2 at HiFi2 609.1. The generated single-dispatch layer norm (tt/common.py) measured
+# 645.6 on a p100a, where ttnn.layer_norm measured 620.0.
+EXPECTED_SEQUENCES_PER_S = 645.6
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
