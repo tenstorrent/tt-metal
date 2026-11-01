@@ -291,7 +291,7 @@
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "ring" -vvv --tb=short || exit $?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
-    ATTN_RES_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP2xTP2" -vvv --tb=short || exit $?
+    ATTN_RES_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP1xTP4" -vvv --tb=short || exit $?
   skus:
     bh_quietbox_2:
       timeout: 10

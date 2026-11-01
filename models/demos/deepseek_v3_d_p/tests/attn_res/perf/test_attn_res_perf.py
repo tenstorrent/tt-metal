@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3 AttnRes performance: a boundary layer and an ordinary layer, end to end, traced and untraced.
 
-Galaxy (SP8xTP4) runs K3's prefill chunk and is gated. LoudBox (SP2xTP4) and QuietBox (SP2xTP2) run the same walk
-on the 640 rows per chip that Galaxy runs, over a 1280-token chunk: LoudBox at Galaxy's TP width, so every per-chip
-shape matches and only the SP axis is shorter; QuietBox at half of it, the narrowest TP that AttnRes allows. They
-report without gating until they have CI references.
+Galaxy (SP8xTP4) runs K3's prefill chunk and is gated. LoudBox (SP2xTP4, 1280 tokens) and QuietBox (SP1xTP4, 640
+tokens) run the same walk at Galaxy's TP width and 640 rows per chip, so every per-chip shape matches Galaxy's and only
+the SP axis is shorter. QuietBox cannot split TP in two instead: at a 3584-wide shard the read needs more L1 per core
+than a core has. They report without gating until they have CI references.
 
 The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies), with the sealed snapshots the
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
@@ -61,6 +61,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
 )
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    torus_x_device_params,
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
@@ -105,8 +106,8 @@ _PERF_REFERENCE_E2E_US = {
     _LOUDBOX_PERF_SKU: {},
     _QUIETBOX_PERF_SKU: {},
 }
-# LoudBox SP2xTP4 and QuietBox SP2xTP2 have no CI references yet: they report but are not gated.
-_REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP2xTP2")
+# LoudBox SP2xTP4 and QuietBox SP1xTP4 have no CI references yet: they report but are not gated.
+_REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP1xTP4")
 _MARGIN = {"traced": 0.05, "untraced": 0.10}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
@@ -266,19 +267,20 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
-        # Unwrapped 2D, the fabric the AttnRes model suite runs on these boxes. AttnRes takes its route from the
-        # opened fabric and has no 1D coverage, so these do not follow KDA's 1D.
+        # Unwrapped 2D, the fabric the AttnRes model suite runs on LoudBox. AttnRes takes its route from the opened
+        # fabric and has no 1D coverage, so this does not follow KDA's 1D.
         pytest.param(
             (2, 4),
             fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4-fabric-2d",
         ),
+        # QuietBox's four chips as one TP ring, as the model's QuietBox tests open them; the SP axis is one chip.
         pytest.param(
-            (2, 2),
-            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="SP2xTP2-fabric-2d",
+            (1, 4),
+            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
+            id="SP1xTP4-torus-x",
         ),
     ],
     indirect=True,
