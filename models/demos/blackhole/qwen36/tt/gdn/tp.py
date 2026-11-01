@@ -72,6 +72,13 @@ def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
     )
 
 
+def head_major_flat_view(x):
+    """[H, 1, D] TILE -> [1, 1, H*D] without moving data: each head is one tile-row, so the H*D/32 tiles are
+    already in the order [1, 1, H*D] (padded [1, 32, H*D]) stores them."""
+    H, _, D = x.shape
+    return ttnn.experimental.view(x, ttnn.Shape([1, 1, H * D]), ttnn.Shape([1, ttnn.TILE_SIZE, H * D]))
+
+
 def _silu_mul(x, z, memory_config, dtype=None):
     """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
     overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs).
@@ -432,6 +439,10 @@ class TPGatedDeltaNet:
             and os.environ.get("QWEN36_1C_CONV_HM") == "1"
         )
         self._gdn_trim = self._inplace_rec_state and os.environ.get("QWEN36_1C_GDN_TRIM") == "1"
+        # QWEN36_1C_GDN_HMO (with GDN_TRIM, one user): the recurrence hands o back head-major [Nv, 1, Dv]; the
+        # gated norm runs on that, and a view flattens it to [1, 1, Nv*Dv] (same tile sequence), replacing
+        # the op's untilize/permute/tilize and the reshape copy after the norm.
+        self._gdn_hmo = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_HMO") == "1"
         self._conv_state_shape = (
             (1, self.qkv_dim_tp // 128, 128) if self._conv_hm else (1, self.B, self.qkv_dim_tp)
         )
@@ -1653,6 +1664,7 @@ class TPGatedDeltaNet:
                     initial_state=ttnn.reshape(self.rec_state, (B * Nv, Dk, Dv)),  # metadata view
                     initial_state_block_idx=self._ensure_rec_ring_idx(B * Nv),
                     output_per_token_state=True,
+                    **({"head_major_output": True} if self._gdn_hmo else {}),
                 )
             elif rec_in_place:
                 o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
@@ -1703,11 +1715,16 @@ class TPGatedDeltaNet:
         else:
             self._write_recurrent_state_prefix(new_rec, B)
 
-        out_r = ttnn.reshape(o, (B, Nv, Dv))
-        out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
-        ttnn.deallocate(out_r)
-        out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
-        ttnn.deallocate(out_n)
+        if self._gdn_hmo:
+            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # o: [Nv, 1, Dv]
+            ttnn.deallocate(o)
+            out_f = head_major_flat_view(out_n)
+        else:
+            out_r = ttnn.reshape(o, (B, Nv, Dv))
+            out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
+            ttnn.deallocate(out_r)
+            out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
+            ttnn.deallocate(out_n)
         gated = _silu_mul(out_f, z, _L1)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)

@@ -53,7 +53,16 @@ void bind_view(nb::module_& mod) {
             static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttsl::SmallVector<int32_t>&)>(
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
-            nb::arg("shape")));
+            nb::arg("shape")),
+        // Explicit logical + padded shape: a raw reinterpretation of the same pages, no checks. For a TILE
+        // tensor whose tile sequence already matches the target (e.g. [H,1,D] -> [1,1,H*D] with padded
+        // [1,32,H*D]).
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttnn::Shape&, const ttnn::Shape&)>(
+                &ttnn::experimental::view),
+            nb::arg("input_tensor"),
+            nb::arg("logical_shape"),
+            nb::arg("padded_shape")));
 }
 
 }  // namespace ttnn::operations::experimental::reshape::detail
