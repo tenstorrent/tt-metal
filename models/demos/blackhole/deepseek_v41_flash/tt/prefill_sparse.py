@@ -896,8 +896,13 @@ class DSV41PrefillIndexer:
                     ttnn.add(ttnn.multiply(idf, float(cols)), sh["cid"]), ttnn.uint32
                 )  # global slot = local * cols + column
                 tk.tick("gather_vals")
-                cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
-                cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
+                if os.environ.get("DSV41_IDX_AG_TILE", "0") == "1":
+                    # gather in TILE layout (3x faster per byte than 1 KB row-major pages: 81 vs 233 us bf16, 125 vs 252 us uint32 at [512,512]) and untilize the gathered result
+                    cv = ttnn.to_layout(mc.allgather(vals, ccl, axis=1, dim=3), ttnn.ROW_MAJOR_LAYOUT)
+                    cp = ttnn.to_layout(mc.allgather(pg, ccl, axis=1, dim=3), ttnn.ROW_MAJOR_LAYOUT)
+                else:
+                    cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
+                    cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
                 tk.tick("allgathers")
                 pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
                 tk.tick("topk_merge")
