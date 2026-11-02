@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
-import subprocess
 from collections import OrderedDict
 from pathlib import Path
 
@@ -91,13 +89,14 @@ def label_window(df: pd.DataFrame, device_id: int, start: str, end: str) -> pd.D
     return pd.DataFrame(rows)
 
 
-def run_perf_report(tool: str, csv: Path, txt: Path, out_csv: Path, start: str, end: str) -> None:
-    base = [tool, str(csv), "--start-signpost", start, "--end-signpost", end, "--no-advice", "--no-color"]
-    res = subprocess.run(base + ["--csv", str(out_csv), "--no-summary"], capture_output=True, text=True)
-    if res.returncode != 0:
-        raise SystemExit(f"tt-perf-report failed on {csv}: rc={res.returncode}\n{res.stderr[-2000:]}")
-    res = subprocess.run(base + ["--no-summary"], capture_output=True, text=True)
-    txt.write_text(res.stdout + ("\n[stderr]\n" + res.stderr if res.stderr.strip() else ""))
+def run_perf_report(csv: Path, txt: Path, out_csv: Path, start: str, end: str) -> None:
+    """``tt-perf-report`` in this process (``tests.utils.perf_report``): the ops CSV, then the text table."""
+    base = [str(csv), "--start-signpost", start, "--end-signpost", end, "--no-advice", "--no-color"]
+    rc, _, err = perf_report(base + ["--csv", str(out_csv), "--no-summary"])
+    if rc != 0:
+        raise SystemExit(f"tt-perf-report failed on {csv}: rc={rc}\n{err[-2000:]}")
+    rc, text, err = perf_report(base + ["--no-summary"])
+    txt.write_text(text + ("\n[stderr]\n" + err if err.strip() else ""))
 
 
 def _op_class(code: str) -> str:
@@ -113,7 +112,6 @@ def main():
     ap.add_argument("--ids", default="", help="device ids in row-major mesh order (default: id = r * cols + c)")
     ap.add_argument("--window", default="PASS_ATTRIBUTED", help="signpost name; the end is <window>_END")
     ap.add_argument("--counts", default="KDA+dense=3,DSA+MoE=5,KDA+MoE=14", help="layer kinds of the full model")
-    ap.add_argument("--tool", default=shutil.which("tt-perf-report") or "tt-perf-report")
     ap.add_argument("--title", default="")
     ap.add_argument("--top", type=int, default=15)
     args = ap.parse_args()
@@ -140,7 +138,7 @@ def main():
         sub.to_csv(split, index=False)
         txt = out / f"dev{d}_r{r}c{c}_prefill_perf_report.txt"
         ops_csv = out / f"dev{d}_r{r}c{c}_prefill_ops.csv"
-        run_perf_report(args.tool, split, txt, ops_csv, start, end)
+        run_perf_report(split, txt, ops_csv, start, end)
         rep = pd.read_csv(ops_csv)
         rep = rep[rep["OP Code"].astype(str) != "nan"]
         rep = rep[~rep["OP Code"].astype(str).str.startswith(("PERF_", "PASS_", "L"))]

@@ -109,7 +109,8 @@ def main():
         print(f"TT ids: {r['generated_tt']}\nHF ids: {r['generated_hf']}")
         print(f"TT text: {r['text_tt']!r}\nHF text: {r['text_hf']!r}")
         print(f"needle:  TT {'found' if r['needle_tt'] else 'missing'}, HF {'found' if r['needle_hf'] else 'missing'}")
-    sys.exit(0 if r["first_match"] else (2 if not r["same_prompt_length"] else 1))
+    # a different prompt length is never a valid comparison, whatever the first tokens say
+    sys.exit(2 if not r["same_prompt_length"] else (0 if r["first_match"] else 1))
 
 
 if __name__ == "__main__":

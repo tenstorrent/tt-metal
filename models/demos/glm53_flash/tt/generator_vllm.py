@@ -1127,15 +1127,33 @@ class GLM53FlashForCausalLM:
         extra = 0
         if decision.admitted and max_model_len:
             try:
-                from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
-                from models.demos.glm53_flash.tt.config import GLM53FlashConfig
                 from models.demos.glm53_flash.tt.memory_plan import BFP8_BYTES
 
-                cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+                cfg = cls._spec_plan_config(vllm_config)
                 extra = int(vs.spec_resident_bytes(cfg, rows, cols, decision.users_per_row, max_model_len, BFP8_BYTES))
             except Exception as exc:  # pragma: no cover - the byte estimate is advisory (not budgeted by the plugin)
                 logger.warning(f"GLM53 vLLM: spec_plan could not estimate the drafter's bytes ({exc})")
         return vs.make_spec_plan(decision, extra_bytes_per_seq=extra // max(1, decision.users_per_row))
+
+    @staticmethod
+    def _spec_plan_config(vllm_config):
+        """The model config the byte estimate reads: vLLM's ``model_config.hf_config`` (the plugin's call), else the
+        checkpoint on disk, else the packaged GLM-5.3-Flash constants (a host without the checkpoint: the Models CI
+        host suites, 2026-11-02)."""
+        from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+
+        hf = getattr(getattr(vllm_config, "model_config", None), "hf_config", None)
+        if hf is not None and (isinstance(hf, dict) or hasattr(hf, "to_dict")):
+            try:
+                return GLM53FlashConfig.from_hf_config(hf)
+            except (KeyError, TypeError, AttributeError):
+                pass  # not this model's config layout: the snapshot / the constants below
+        try:
+            from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+
+            return GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+        except Exception:
+            return GLM53FlashConfig.glm53_flash()
 
     @staticmethod
     def _snapshot_dir(hf_config, default_snapshot_dir) -> Path:

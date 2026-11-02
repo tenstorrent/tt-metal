@@ -94,3 +94,26 @@ def log_dram(device, when: str) -> tuple[float, float]:
     except Exception as e:  # pragma: no cover - informational only
         logger.info(f"DRAM memory view unavailable ({when}): {e}")
         return float("nan"), float("nan")
+
+
+def perf_report(argv: list[str]) -> tuple[int, str, str]:
+    """``tt-perf-report`` run in this process through its console entry point (``tt_perf_report.perf_report.main``
+    parses ``sys.argv``): ``(rc, stdout, stderr)``. No OS command is spawned; the module comes from the environment
+    the profiler runs in."""
+    import contextlib
+    import io
+    import sys
+
+    from tt_perf_report.perf_report import main
+
+    out, err = io.StringIO(), io.StringIO()
+    saved = sys.argv
+    sys.argv = ["tt-perf-report", *[str(a) for a in argv]]
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main()
+    except SystemExit as e:  # argparse errors and explicit exits
+        rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    finally:
+        sys.argv = saved
+    return int(rc or 0), out.getvalue(), err.getvalue()

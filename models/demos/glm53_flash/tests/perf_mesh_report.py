@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 from collections import OrderedDict
 from pathlib import Path
 
@@ -65,11 +66,23 @@ def eager_labels(df: pd.DataFrame, device_id: int) -> list[list[str]]:
     return out
 
 
-def run_perf_report(tool: str, csv: Path, txt: Path, out_csv: Path, summary: Path | None) -> None:
+def perf_report(args: list[str]) -> tuple[int, str, str]:
+    """Run ``tt-perf-report`` with ``args`` and return ``(rc, stdout, stderr)``: the tool next to this interpreter
+    (the python_env that installed it) or on PATH, by full path (a bare name resolves against the caller PATH)."""
+    tool = Path(sys.executable).with_name("tt-perf-report")
+    if not tool.exists():
+        found = shutil.which("tt-perf-report")
+        if found is None:
+            raise SystemExit("tt-perf-report not found next to the interpreter or on PATH (pip install tt-perf-report)")
+        tool = Path(found)
+    res = subprocess.run([str(tool), *args], capture_output=True, text=True, check=False)
+    return res.returncode, res.stdout, res.stderr
+
+
+def run_perf_report(csv: Path, txt: Path, out_csv: Path, summary: Path | None) -> None:
     """Two passes: ``--csv`` (machine-readable rows; the stacked summary for chip (0,0)) and the plain
     text table (``--csv`` suppresses the table on stdout)."""
     base = [
-        tool,
         str(csv),
         "--start-signpost",
         "PERF_DECODE",
@@ -81,13 +94,13 @@ def run_perf_report(tool: str, csv: Path, txt: Path, out_csv: Path, summary: Pat
     cmd = (
         base + ["--csv", str(out_csv)] + (["--summary-file", str(summary)] if summary is not None else ["--no-summary"])
     )
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        raise SystemExit(f"tt-perf-report failed on {csv}: rc={res.returncode}\n{res.stderr[-2000:]}")
-    res = subprocess.run(base + ["--no-summary"], capture_output=True, text=True)
-    txt.write_text(res.stdout + ("\n[stderr]\n" + res.stderr if res.stderr.strip() else ""))
-    if res.returncode != 0:
-        raise SystemExit(f"tt-perf-report (text) failed on {csv}: rc={res.returncode}\n{res.stderr[-2000:]}")
+    rc, _, err = perf_report(cmd)
+    if rc != 0:
+        raise SystemExit(f"tt-perf-report failed on {csv}: rc={rc}\n{err[-2000:]}")
+    rc, text, err = perf_report(base + ["--no-summary"])
+    txt.write_text(text + ("\n[stderr]\n" + err if err.strip() else ""))
+    if rc != 0:
+        raise SystemExit(f"tt-perf-report (text) failed on {csv}: rc={rc}\n{err[-2000:]}")
 
 
 def main():
@@ -96,7 +109,6 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=4)
-    ap.add_argument("--tool", default=shutil.which("tt-perf-report") or "tt-perf-report")
     ap.add_argument("--title", default="")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument(
@@ -132,7 +144,7 @@ def main():
         txt = out / f"dev{d}_r{r}c{c}_decode_perf_report.txt"
         ops_csv = out / f"dev{d}_r{r}c{c}_decode_ops.csv"
         summary = (out / f"dev{d}_r{r}c{c}_decode_summary") if d == dev_ids[0] else None
-        run_perf_report(args.tool, split, txt, ops_csv, summary)
+        run_perf_report(split, txt, ops_csv, summary)
         rep = pd.read_csv(ops_csv)
         rep = rep[rep["OP Code"].astype(str) != "nan"]
         rep = rep[~rep["OP Code"].astype(str).str.startswith("PERF_")]  # drop signpost rows if present
@@ -144,6 +156,10 @@ def main():
                 print(f"device {d}: traced window has {len(rep)} ops, eager window {len(labels0)}: name-based only")
             rep["Labels"] = ["CCL" if _is_ccl(str(o)) else "" for o in rep["OP Code"]]
         per_dev[d] = rep
+        # the labelled table (ID, op, module labels, device us): what tt/roofline.py's measured column is read from
+        rep[["ID", "OP Code", "Labels", "Device Time", "Cores"]].to_csv(
+            out / f"dev{d}_r{r}c{c}_decode_ops_labelled.csv", index=False
+        )
         split.unlink()  # the per-device raw split is reproducible from the ops CSV
 
     def share(rep: pd.DataFrame, pred) -> tuple[float, int]:

@@ -107,9 +107,31 @@ class GLM53FlashConfig:
         return tuple(i for i, t in enumerate(self.layer_types) if t != KDA)
 
     # ---- construction ----------------------------------------------------------------------
+    # GLM-5.3-Flash's schedule (config.json ``text_config``): a DSA layer every fourth layer from 3 (11 of 45), the
+    # first three MLPs dense, the rest routed
+    LAYER_TYPES: tuple[str, ...] = tuple(DSA if i % 4 == 3 else KDA for i in range(45))
+    MLP_LAYER_TYPES: tuple[str, ...] = tuple("dense" if i < 3 else "sparse" for i in range(45))
+
+    @classmethod
+    def glm53_flash(cls) -> "GLM53FlashConfig":
+        """The released GLM-5.3-Flash: the field defaults plus its layer schedule (no checkpoint read; equal to
+        ``from_snapshot`` on the real config.json, pinned by ``tests/test_serving_spec_host.py``)."""
+        return cls(layer_types=cls.LAYER_TYPES, mlp_layer_types=cls.MLP_LAYER_TYPES)
+
+    @classmethod
+    def from_hf_config(cls, hf_config) -> "GLM53FlashConfig":
+        """A transformers config object (``PretrainedConfig``: vLLM's ``model_config.hf_config``) through its
+        ``to_dict()``; a plain dict is taken as the config.json body."""
+        d = hf_config if isinstance(hf_config, dict) else hf_config.to_dict()
+        return cls.from_hf_dict(d)
+
     @classmethod
     def from_hf_config_json(cls, path: str | Path) -> "GLM53FlashConfig":
-        cfg = json.loads(Path(path).read_text())
+        return cls.from_hf_dict(json.loads(Path(path).read_text()))
+
+    @classmethod
+    def from_hf_dict(cls, cfg: dict) -> "GLM53FlashConfig":
+        """The config.json body (``text_config`` + the top-level ``image_token_id``)."""
         t = cfg["text_config"]
         la = t["linear_attn_config"]
         layer_types = tuple(KDA if lt == KDA else DSA for lt in t["layer_types"])

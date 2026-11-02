@@ -318,6 +318,24 @@ def test_spec_plan_classmethod(monkeypatch):
     assert "GLM53_PARTITION_USERS=0" in GLM53FlashForCausalLM.spec_plan(cfg, 4, 3).reason
 
 
+def test_packaged_config_matches_the_checkpoint():
+    """``GLM53FlashConfig.glm53_flash()`` (what ``spec_plan`` falls back to on a host without the checkpoint) equals the
+    released config.json field for field; skipped where no checkpoint is on the host."""
+    import dataclasses
+
+    from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+
+    try:
+        from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+
+        real = GLM53FlashConfig.from_snapshot(default_snapshot_dir())
+    except Exception as exc:
+        pytest.skip(f"no GLM-5.3-Flash checkpoint on this host ({exc})")
+    packaged = GLM53FlashConfig.glm53_flash()
+    diff = [f.name for f in dataclasses.fields(real) if getattr(real, f.name) != getattr(packaged, f.name)]
+    assert not diff, diff
+
+
 def test_candidate_block_and_the_device_feed():
     """The plugin's row (placeholders past num_valid) -> ``K + 1`` real tokens (the anchor fills the padded columns);
     the feed puts every live slot's block at its physical indices on EVERY mesh row and parks the idle slots."""
