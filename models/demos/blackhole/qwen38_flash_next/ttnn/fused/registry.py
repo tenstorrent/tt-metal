@@ -101,8 +101,9 @@ TP8_READY: frozenset[str] = frozenset(
     }
 )
 
-# QWEN38_MTP_ROWS_TP8=1 (default "0"): also serves gdn_rows_scan at TP=8 (COMPONENT class; its kernels take the
-# per-device head count and projection tile offsets as compile-time args).
+# QWEN38_MTP_ROWS_TP8 (default "1"; "0" turns it off): also serves gdn_rows_scan at TP=8 (COMPONENT class; its kernels
+# take the per-device head count and projection tile offsets as compile-time args).  The verify-path gate
+# (--agreement-verify, accept 4,2,0,3,1) scores 0.9543 top1 / 0.0541 KL with it against 0.9515 / 0.0547 without.
 MTP_ROWS_TP8_ENV = "QWEN38_MTP_ROWS_TP8"
 MTP_ROWS_TP8: frozenset[str] = frozenset({"gdn_rows_scan"})
 
@@ -228,8 +229,8 @@ def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
         return names
     ready = TP8_READY | edge
     if (
-        environ.get(MTP_ROWS_TP8_ENV, "0") == "1"
-    ):  # QWEN38_MTP_ROWS_TP8=1: the MTP verify-rows kernels at TP=8 (default off)
+        environ.get(MTP_ROWS_TP8_ENV, "1") == "1"
+    ):  # QWEN38_MTP_ROWS_TP8: the MTP verify-rows kernels at TP=8 (default on)
         ready = ready | MTP_ROWS_TP8
     return names & ready
 
