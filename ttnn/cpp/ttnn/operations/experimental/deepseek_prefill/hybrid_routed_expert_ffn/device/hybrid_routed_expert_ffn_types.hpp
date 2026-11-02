@@ -312,6 +312,19 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
+    // With no fused pass: run unified_routed_expert_moe's wave-planned program on this op's rows instead of this
+    // op's own unified half. Overlapped with combine, its writers then report each expert as soon as they are done
+    // with it, and combine walks every chip's experts in the order that program is predicted to finish them
+    // (adaptive_chunk::predicted_order) rather than in local order.
+    bool unified_waves = false;
+    // With unified_waves: experts above this many tokens run in a first walk, the rest in a second (0: one walk in
+    // local order). Either 0 or at least 96.
+    uint32_t big_first_threshold = 0;
+    // With unified_waves: the L1 plan (per_core_M, gate/up K-block width) that program sizes its circular buffers
+    // with, picked from the free L1 when the op is called. Hashed, as unified_routed_expert_moe hashes it.
+    uint32_t wave_per_core_M = 0;
+    uint32_t wave_in0_block_w = 0;
+
     // Overlapped with combine in the same program: combine runs on rows 0-1 and takes each expert as soon
     // as this op has written it, and the op returns combine's output. The fields below are combine's and
     // are read only in this mode.
@@ -347,6 +360,10 @@ struct HybridRoutedExpertFfnParams {
         "fuse_bias",
         "compute_kernel_config",
         "hybrid_token_threshold",
+        "unified_waves",
+        "big_first_threshold",
+        "wave_per_core_M",
+        "wave_in0_block_w",
         "overlap_combine",
         "combine_axis",
         "combine_num_links",
@@ -367,6 +384,10 @@ struct HybridRoutedExpertFfnParams {
             fuse_bias,
             compute_kernel_config,
             hybrid_token_threshold,
+            unified_waves,
+            big_first_threshold,
+            wave_per_core_M,
+            wave_in0_block_w,
             overlap_combine,
             combine_axis,
             combine_num_links,

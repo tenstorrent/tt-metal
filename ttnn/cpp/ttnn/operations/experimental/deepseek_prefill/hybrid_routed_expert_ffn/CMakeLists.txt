@@ -46,6 +46,8 @@ target_link_libraries(
         TT::Metalium
         # The fused half's blocking geometry is used as it ships rather than copied.
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
+        # unified_waves builds unified_routed_expert_moe's own program on this op's rows.
+        TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn
     PUBLIC
         TTNN::Core
 )

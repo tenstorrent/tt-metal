@@ -25,6 +25,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "combine_fabric2d_kernel_interface.hpp"
+#ifdef CMBF2D_PREDICTED_ORDER
+#include "../../../../unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+#endif
 
 namespace cmbf2d {
 
@@ -72,6 +75,53 @@ private:
 #ifdef CMBF2D_OVERLAPPED
 #include "api/debug/assert.h"
 
+#ifdef CMBF2D_PREDICTED_ORDER
+// Overlapped with the wave-planned unified program (hybrid_routed_expert_ffn unified_waves): its writers report each
+// expert as soon as they are done with it, at its place in the order it is predicted to finish them
+// (adaptive_chunk::predicted_order), and combine walks the same order. Computed from the replicated counts, so every
+// core derives every ring chip's order alike -- one order per chip on every chip, which the relays' dense forwarding
+// buffer needs. Cached per chip on first use.
+constexpr uint32_t kMaxPredictedChips = 16;
+inline uint8_t predicted_local[kMaxPredictedChips][adaptive_chunk::kMaxPredictedExperts];
+inline uint8_t predicted_step[kMaxPredictedChips][adaptive_chunk::kMaxPredictedExperts];
+inline uint32_t predicted_cached = 0;
+
+inline void predict_chip(const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip) {
+    ASSERT(dg_index < kMaxPredictedChips && experts_per_chip <= adaptive_chunk::kMaxPredictedExperts);
+    if (predicted_cached & (1u << dg_index)) {
+        return;
+    }
+    uint32_t counts[adaptive_chunk::kMaxPredictedExperts];
+    for (uint32_t local = 0; local < experts_per_chip; local++) {
+        counts[local] = ctl.counts[ctl.expert_id(dg_index, local)];
+    }
+    adaptive_chunk::predicted_order(
+        counts, experts_per_chip, CMBF2D_RE_PER_CORE_M, CMBF2D_RE_BIG_FIRST_T, predicted_local[dg_index]);
+    for (uint32_t step = 0; step < experts_per_chip; step++) {
+        predicted_step[dg_index][predicted_local[dg_index][step]] = static_cast<uint8_t>(step);
+    }
+    predicted_cached |= 1u << dg_index;
+}
+
+inline bool in_fused_pass(const ControlTables&, uint32_t, uint32_t, uint32_t) { return false; }
+
+inline uint32_t local_at_step(
+    const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip, uint32_t /*threshold*/, uint32_t step) {
+    predict_chip(ctl, dg_index, experts_per_chip);
+    return predicted_local[dg_index][step];
+}
+
+inline uint32_t expert_at_step(
+    const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip, uint32_t threshold, uint32_t step) {
+    return ctl.expert_id(dg_index, local_at_step(ctl, dg_index, experts_per_chip, threshold, step));
+}
+
+inline uint32_t ready_target(
+    const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip, uint32_t /*threshold*/, uint32_t local) {
+    predict_chip(ctl, dg_index, experts_per_chip);
+    return predicted_step[dg_index][local] + 1;
+}
+#else
 // The global expert a chip handles at walk step `step`, in the order the routed expert finishes them. The
 // routed expert runs two passes, every expert with count > threshold then the rest, each in ascending
 // index, so combine walks that order too and each expert is picked up as soon as it is ready. With no
@@ -121,6 +171,8 @@ inline uint32_t ready_target(
     }
     return local + 1;
 }
+
+#endif
 
 // Blocks until this core's `ready` count reaches `target`.
 inline void wait_for_ready(uint32_t ready_sem, uint32_t target) {

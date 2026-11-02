@@ -626,6 +626,16 @@ Geometry plan_geometry(
     return g;
 }
 
+// PARTIAL_EIGHTH (adaptive_chunk::WavePlanner): let the last 4-7 small experts run one per grid
+// row with per-core weight streams only where a core's weight slice per expert is small enough
+// for one core to stream (gate + up + down bf4 tiles per core). Same define on all three kernels,
+// so their planners agree.
+bool partial_eighth_fits(const Geometry& g) {
+    constexpr uint32_t kPartialEighthMaxCoreWeightTiles = 4200;
+    return (g.K_gate_tiles * g.per_core_N_gu * 2 + g.K_down_tiles_padded * g.per_core_N_d) <=
+           kPartialEighthMaxCoreWeightTiles;
+}
+
 }  // namespace
 
 std::pair<uint32_t, uint32_t> UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(
@@ -634,9 +644,31 @@ std::pair<uint32_t, uint32_t> UnifiedRoutedExpertFfnProgramFactory::select_l1_pl
     return {g.per_core_M, g.in0_block_w_gu};
 }
 
+UnifiedRoutedExpertFfnProgramFactory::WavePlannerConfig UnifiedRoutedExpertFfnProgramFactory::wave_planner_config(
+    const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t) {
+    const Geometry g = plan_geometry(op, t, t.output.dtype());
+    return WavePlannerConfig{.per_core_M_max = g.per_core_M, .partial_eighth = partial_eighth_fits(g)};
+}
+
 tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
     const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t, Tensor& tensor_return_value) {
+    return create_embedded_descriptor(op, t, tensor_return_value, EmbeddedOptions{});
+}
+
+tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_embedded_descriptor(
+    const UnifiedRoutedExpertFfnParams& op,
+    const UnifiedRoutedExpertFfnInputs& t,
+    Tensor& tensor_return_value,
+    const EmbeddedOptions& options) {
     tt::tt_metal::ProgramDescriptor desc;
+    const uint32_t origin_y = options.origin_y;
+    const uint32_t big_first_threshold = options.big_first_threshold;
+    // A partial eighth needs every remaining expert at <= 3 tile-rows (adaptive_chunk::partial_eighth_on_rows),
+    // which a first walk above 96 tokens can never offer.
+    TT_FATAL(
+        big_first_threshold == 0 || big_first_threshold >= 3 * 32,
+        "unified_routed_expert_ffn: big_first_threshold {} must be 0 or at least 96 tokens",
+        big_first_threshold);
 
     const Geometry g = plan_geometry(op, t, tensor_return_value.dtype());
     const uint32_t experts_per_chip = g.experts_per_chip;
@@ -718,7 +750,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
+    const CoreRange core_range({0, origin_y}, {GRID_X - 1, origin_y + GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     // Representative expert-0 buffers: one TensorAccessorArgs layout descriptor
@@ -1138,15 +1170,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // bias tensor accessors (gate, up, down). The reader reads them at the
     // offset after start_args.next_compile_time_args_offset(). Only present when
     // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
-    // PARTIAL_EIGHTH (adaptive_chunk::WavePlanner): let the last 4-7 small experts run one per grid
-    // row with per-core weight streams only where a core's weight slice per expert is small enough
-    // for one core to stream (gate + up + down bf4 tiles per core). Same define on all three kernels,
-    // so their planners agree.
-    constexpr uint32_t kPartialEighthMaxCoreWeightTiles = 4200;
-    const bool partial_eighth =
-        (K_gate_tiles * per_core_N_gu * 2 + K_down_tiles_padded * per_core_N_d) <= kPartialEighthMaxCoreWeightTiles;
+    const bool partial_eighth = partial_eighth_fits(g);
     tt::tt_metal::KernelDescriptor::Defines reader_defines;
     reader_defines.emplace_back("CB_X_TILED", std::to_string(CB_X_TILED));
+    if (big_first_threshold > 0) {
+        reader_defines.emplace_back("URE_BIG_FIRST_T", std::to_string(big_first_threshold));
+    }
     if (partial_eighth) {
         reader_defines.emplace_back("PARTIAL_EIGHTH", "1");
     }
@@ -1244,7 +1273,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
     if (partial_eighth) {
-        writer_kernel_desc.defines = {{"PARTIAL_EIGHTH", "1"}};
+        writer_kernel_desc.defines.emplace_back("PARTIAL_EIGHTH", "1");
+    }
+    if (big_first_threshold > 0) {
+        writer_kernel_desc.defines.emplace_back("URE_BIG_FIRST_T", std::to_string(big_first_threshold));
+    }
+    if (options.report_predicted_order) {
+        writer_kernel_desc.defines.emplace_back("URE_PREDICTED_ORDER", "1");
     }
 
     // Compute kernel compile-time args: positional + named CB ids.
@@ -1332,6 +1367,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     tt::tt_metal::KernelDescriptor::Defines compute_defines;
     compute_defines.emplace_back("PACKER_L1_ACC", "1");
+    if (big_first_threshold > 0) {
+        compute_defines.emplace_back("URE_BIG_FIRST_T", std::to_string(big_first_threshold));
+    }
     if (partial_eighth) {
         compute_defines.emplace_back("PARTIAL_EIGHTH", "1");
     }
@@ -1385,7 +1423,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, gy});
+            cores.push_back(CoreCoord{gx, origin_y + gy});
         }
     }
 
@@ -1430,14 +1468,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gy);
 
         const bool is_in1_sender = (gy == in1_sender_row);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, origin_y + in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, origin_y});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, origin_y + GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -1449,9 +1487,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
         // the whole row for the same reason as the weight column above.
         const bool is_in0_sender = (gx == in0_sender_col);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, origin_y + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, origin_y + gy});
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, origin_y + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -1499,8 +1537,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // spanning the whole worker grid; the non-loopback multicast drops the sender's
         // own copy, so num_dests is one less than the grid.
         {
-            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
-            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
+            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, origin_y});
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, origin_y + GRID_Y - 1});
             reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
             reader_args.push_back(static_cast<uint32_t>(grid_first.x));
             reader_args.push_back(static_cast<uint32_t>(grid_first.y));
@@ -1520,7 +1558,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, origin_y + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
@@ -1529,9 +1567,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         const uint32_t half_base = (gy / kHalfRows) * kHalfRows;
         const uint32_t half_sender_row = half_base + gx % kHalfRows;
         const bool is_half_sender = (gy == half_sender_row);
-        const auto half_sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, half_sender_row});
-        const auto half_first_noc = device->worker_core_from_logical_core(CoreCoord{gx, half_base});
-        const auto half_last_noc = device->worker_core_from_logical_core(CoreCoord{gx, half_base + kHalfRows - 1});
+        const auto half_sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, origin_y + half_sender_row});
+        const auto half_first_noc = device->worker_core_from_logical_core(CoreCoord{gx, origin_y + half_base});
+        const auto half_last_noc =
+            device->worker_core_from_logical_core(CoreCoord{gx, origin_y + half_base + kHalfRows - 1});
         const uint32_t half_num_receivers = kHalfRows - 1;
         reader_args.push_back(static_cast<uint32_t>(is_half_sender));
         reader_args.push_back(half_in1_ready_sem_id);
@@ -1548,10 +1587,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         const uint32_t quarter_base = (gy / kQuarterRows) * kQuarterRows;
         const uint32_t quarter_sender_row = quarter_base + gx % kQuarterRows;
         const bool is_quarter_sender = (gy == quarter_sender_row);
-        const auto quarter_sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, quarter_sender_row});
-        const auto quarter_first_noc = device->worker_core_from_logical_core(CoreCoord{gx, quarter_base});
+        const auto quarter_sender_noc =
+            device->worker_core_from_logical_core(CoreCoord{gx, origin_y + quarter_sender_row});
+        const auto quarter_first_noc = device->worker_core_from_logical_core(CoreCoord{gx, origin_y + quarter_base});
         const auto quarter_last_noc =
-            device->worker_core_from_logical_core(CoreCoord{gx, quarter_base + kQuarterRows - 1});
+            device->worker_core_from_logical_core(CoreCoord{gx, origin_y + quarter_base + kQuarterRows - 1});
         const uint32_t quarter_num_receivers = kQuarterRows - 1;
         reader_args.push_back(static_cast<uint32_t>(is_quarter_sender));
         reader_args.push_back(quarter_in1_ready_sem_id);

@@ -929,6 +929,15 @@ void kernel_main() {
     // reprograms.
     BINARY_ACT_INIT();
 
+#ifdef URE_BIG_FIRST_T
+    // Two walks over the local experts: those above URE_BIG_FIRST_T tokens, then the rest, so the
+    // big experts are written first. All three kernels walk alike.
+    constexpr uint32_t num_passes = 2;
+#else
+    constexpr uint32_t num_passes = 1;
+#endif
+    uint32_t band_min = min_active_tokens;
+    uint32_t band_max = max_active_tokens;
     // Wave planner state (UNPACK only: it is the thread that can read counts/idx).
     constexpr uint32_t per_core_M_max = chunk_M_max / adaptive_chunk::kGridY;
     [[maybe_unused]] adaptive_chunk::WavePlanner planner;
@@ -938,7 +947,16 @@ void kernel_main() {
 
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
+        const uint32_t local_expert_id = walk_step % experts_per_chip;
+#ifdef URE_BIG_FIRST_T
+        if (local_expert_id == 0) {
+            const bool big_pass = walk_step == 0;
+            band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
+            band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
+            planner = adaptive_chunk::WavePlanner{};
+        }
+#endif
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
@@ -954,13 +972,11 @@ void kernel_main() {
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
             // Hybrid dispatch: experts outside this op's band belong to the other
             // routed-expert op and are dropped here exactly like a zero count.
-            count_value =
-                adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+            count_value = adaptive_chunk::count_in_band(counts_ptr[global_expert_id], band_min, band_max);
             // WAVE: same plan as the reader/writer. A grouped expert this core's rows do not
             // run is sent as count 0 (skipped); one it runs carries its layout's flag.
             auto expert_tiles = [&](uint32_t e) -> uint32_t {
-                const uint32_t cv =
-                    adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
+                const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], band_min, band_max);
                 return adaptive_chunk::clamp_count_tiles((cv + 31) / 32, chunk_M_max, num_chunks_max, m_tiles_full);
             };
             const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);

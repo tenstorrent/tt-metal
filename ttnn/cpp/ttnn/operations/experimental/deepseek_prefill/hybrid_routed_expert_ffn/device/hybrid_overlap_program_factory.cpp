@@ -12,6 +12,7 @@
 #include <ttnn/global_semaphore.hpp>
 
 #include "hybrid_program_factory.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 #include "combine/combine_fabric2d_program_factory.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -95,6 +96,26 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     const auto re_descriptor = create_hybrid_program_descriptor(op, t, re_output, arena);
 
     auto combine_args = combine_attributes(op, t);
+    if (op.unified_waves) {
+        // The wave-planned program's writers report each expert at its place in the predicted finish order; combine
+        // predicts the same order for every ring chip, from the same planner configuration and threshold.
+        namespace waves = ::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn;
+        const auto planner =
+            waves::UnifiedRoutedExpertFfnProgramFactory::wave_planner_config(wave_attributes(op), wave_inputs(t));
+        // The prediction tables on the combine cores (combine_fabric2d_group_walk.hpp) and the writers.
+        const uint32_t ring =
+            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::ring_extent(combine_args);
+        TT_FATAL(
+            op.experts_per_chip <= 32 && ring <= 16,
+            "hybrid routed expert: unified_waves overlapped with combine predicts at most 32 experts per chip on a "
+            "ring of at most 16 chips (got {} experts, ring of {})",
+            op.experts_per_chip,
+            ring);
+        combine_args.predicted_walk = true;
+        combine_args.walk_per_core_M_max = planner.per_core_M_max;
+        combine_args.walk_partial_eighth = planner.partial_eighth;
+        combine_args.walk_big_first_threshold = op.big_first_threshold;
+    }
     combine_args.routed_expert_writers = expert_done_writer_count(re_descriptor);
     combine_args.routed_expert_cores = tt::tt_metal::CoreRange(
         tt::tt_metal::CoreCoord{0, kOriginY}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1});
@@ -136,7 +157,8 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
                 .collector_noc_y = static_cast<uint32_t>(collector_noc.y),
                 .collector_counts_addr = collector.counts_addr,
                 .go_addr = go_addr});
-        {
+        // The wave-planned program does not reorder chunks by where combine's walks open.
+        if (!op.unified_waves) {
             namespace cf = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
             const uint32_t extent = cf::ring_extent(combine_args);
             append_far_run(

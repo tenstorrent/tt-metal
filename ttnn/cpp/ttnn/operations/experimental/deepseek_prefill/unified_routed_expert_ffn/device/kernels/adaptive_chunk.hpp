@@ -384,4 +384,72 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t 
     return (need < per_core_M_max) ? need : per_core_M_max;
 }
 
+// PREDICTED ORDER (overlapped with combine). The order this program is expected to finish a chip's local experts
+// in, from the raw counts alone, so the writers and combine (which also walks other chips' experts) agree on it
+// without exchanging anything. Replays the planner over the program's walks (experts above `big_first_t` first
+// when it is set) and runs each group on its rows with the planner's own cost terms -- a fixed cost per layout and
+// chunk plus 10 per tile-row a core computes -- starting when the slowest of its rows is free. Empty experts come
+// first; ties keep local order. Only the order is used, so the cost terms only need to rank, not to time.
+constexpr uint32_t kMaxPredictedExperts = 32;
+template <uint32_t N>
+inline void predicted_order(
+    const uint32_t (&counts)[N], uint32_t n, uint32_t per_core_M_max, uint32_t big_first_t, uint8_t* order) {
+    uint32_t end[N];
+    uint32_t free_at[kGridY];
+    for (uint32_t e = 0; e < n; ++e) {
+        end[e] = 0;
+    }
+    for (uint32_t gy = 0; gy < kGridY; ++gy) {
+        free_at[gy] = 0;
+    }
+    const uint32_t passes = big_first_t != 0 ? 2u : 1u;
+    for (uint32_t pass = 0; pass < passes; ++pass) {
+        const uint32_t lo = (passes == 2 && pass == 0) ? big_first_t + 1 : 0u;
+        const uint32_t hi = (passes == 2 && pass == 1) ? big_first_t : 0xFFFFFFFFu;
+        auto tiles_of = [&](uint32_t e) -> uint32_t { return (count_in_band(counts[e], lo, hi) + 31) / 32; };
+        WavePlanner planner;
+        for (uint32_t e = 0; e < n; ++e) {
+            const uint32_t role = planner.role(e, n, per_core_M_max, tiles_of);
+            if (role == kRoleSkip) {
+                continue;
+            }
+            const uint32_t rows = role_rows(role);
+            const uint32_t fixed = (rows == kGridY)         ? 20u
+                                   : (rows == kHalfRows)    ? 28u
+                                   : (rows == kQuarterRows) ? 50u
+                                                            : 92u;
+            uint32_t start = 0;
+            for (uint32_t gy = 0; gy < kGridY; ++gy) {
+                if (role_runs_here(role, gy) && free_at[gy] > start) {
+                    start = free_at[gy];
+                }
+            }
+            const uint32_t t = tiles_of(e);
+            const uint32_t chunk = per_core_M_max * rows;
+            uint32_t finish = start;
+            for (uint32_t c = 0; c < num_chunks(t, chunk); ++c) {
+                finish += fixed + 10 * per_core_M_for_chunk(c, t, chunk, rows);
+            }
+            for (uint32_t gy = 0; gy < kGridY; ++gy) {
+                if (role_runs_here(role, gy)) {
+                    free_at[gy] = finish;
+                }
+            }
+            end[e] = finish;
+        }
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        order[i] = static_cast<uint8_t>(i);
+    }
+    for (uint32_t i = 1; i < n; ++i) {
+        const uint8_t v = order[i];
+        uint32_t j = i;
+        while (j > 0 && end[order[j - 1]] > end[v]) {
+            order[j] = order[j - 1];
+            --j;
+        }
+        order[j] = v;
+    }
+}
+
 }  // namespace adaptive_chunk

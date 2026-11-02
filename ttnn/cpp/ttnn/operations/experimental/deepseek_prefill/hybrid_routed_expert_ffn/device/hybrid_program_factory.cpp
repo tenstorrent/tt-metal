@@ -11,6 +11,8 @@
 //
 // Order matters: each half is defined before the glue that converts into it and folds it.
 
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
 #include "hybrid_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 
@@ -3038,7 +3040,54 @@ unified::UnifiedRoutedExpertFfnInputs unified_inputs(const HybridRoutedExpertFfn
 
 }  // namespace
 
+namespace waves = ::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn;
+
+waves::UnifiedRoutedExpertFfnParams wave_attributes(const HybridRoutedExpertFfnParams& op) {
+    // No fused pass, so the band is wide open, as unified_routed_expert_moe alone builds it.
+    return waves::UnifiedRoutedExpertFfnParams{
+        .m_tiles = op.m_tiles,
+        .experts_per_chip = op.experts_per_chip,
+        .x_is_row_major = op.x_is_row_major,
+        .activation = op.activation,
+        .fuse_bias = op.fuse_bias,
+        .compute_kernel_config = op.compute_kernel_config,
+        .min_active_tokens = 0,
+        .max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    };
+}
+
+waves::UnifiedRoutedExpertFfnInputs wave_inputs(const HybridRoutedExpertFfnInputs& t) {
+    // The real x and a distinct output, for the same reason as unified_inputs.
+    return waves::UnifiedRoutedExpertFfnInputs{
+        .x = t.x,
+        .gate_projs = t.gate_projs,
+        .up_projs = t.up_projs,
+        .down_projs = t.down_projs,
+        .counts = t.counts,
+        .global_expert_idx_table = t.global_expert_idx_table,
+        .output = t.output,
+        .expert_region_offsets = t.expert_region_offsets,
+        .gate_biases = t.gate_biases,
+        .up_biases = t.up_biases,
+        .down_biases = t.down_biases,
+    };
+}
+
 void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t) {
+    TT_FATAL(
+        !op.unified_waves || op.hybrid_token_threshold == 0,
+        "hybrid routed expert: unified_waves replaces the unified half and has no fused pass, so "
+        "hybrid_token_threshold must be 0 (got {})",
+        op.hybrid_token_threshold);
+    TT_FATAL(
+        op.big_first_threshold == 0 || (op.unified_waves && op.big_first_threshold >= 3 * 32),
+        "hybrid routed expert: big_first_threshold {} needs unified_waves and at least 96 tokens",
+        op.big_first_threshold);
+    if (op.unified_waves) {
+        waves::UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
+            wave_attributes(op), wave_inputs(t));
+        return;
+    }
     // Each half validates what it will actually be handed, including its own band, so a merged
     // dispatch cannot pass a configuration either op alone would reject.
     unified::validate(unified_attributes(op), unified_inputs(t));
@@ -3082,6 +3131,30 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // run in sequence, the unified pass then a grid-wide barrier then the fused pass. Each half therefore sees the
     // whole grid, exactly as it does when the two ops are dispatched back to back.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
+
+    // unified_waves: unified_routed_expert_moe's own program on this op's rows, so combine keeps rows 0-1 when
+    // overlapped. Its writers then report each expert at its place in the predicted finish order.
+    if (op.unified_waves) {
+        const auto plan =
+            waves::UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(wave_attributes(op), wave_inputs(t));
+        TT_FATAL(
+            plan.first == op.wave_per_core_M && plan.second == op.wave_in0_block_w,
+            "hybrid routed expert: unified_waves was called with L1 plan ({}, {}) but would now build ({}, {}); "
+            "the free L1 changed between the call and the program build",
+            op.wave_per_core_M,
+            op.wave_in0_block_w,
+            plan.first,
+            plan.second);
+        return waves::UnifiedRoutedExpertFfnProgramFactory::create_embedded_descriptor(
+            wave_attributes(op),
+            wave_inputs(t),
+            output,
+            waves::UnifiedRoutedExpertFfnProgramFactory::EmbeddedOptions{
+                .origin_y = kOriginY,
+                .big_first_threshold = op.big_first_threshold,
+                .report_predicted_order = op.overlap_combine,
+            });
+    }
 
     tt::tt_metal::ProgramDescriptor unified_descriptor;
     uint32_t next_semaphore_id = 0;

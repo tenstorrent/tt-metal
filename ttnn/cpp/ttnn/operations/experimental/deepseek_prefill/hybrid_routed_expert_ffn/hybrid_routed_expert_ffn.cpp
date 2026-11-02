@@ -4,12 +4,15 @@
 
 #include "hybrid_routed_expert_ffn.hpp"
 
+#include "device/hybrid_program_factory.hpp"
 #include "device/hybrid_routed_expert_ffn_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <algorithm>
+#include <tuple>
 
 #include <tt-metalium/allocator.hpp>
 
@@ -58,7 +61,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& final_arrived_semaphore,
     const std::optional<GlobalSemaphore>& expert_go_semaphore,
     const std::optional<ttnn::Tensor>& forwarding_buffer,
-    const std::vector<GlobalSemaphore>& channel_semaphores) {
+    const std::vector<GlobalSemaphore>& channel_semaphores,
+    bool unified_waves,
+    uint32_t big_first_threshold) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -186,49 +191,58 @@ ttnn::Tensor hybrid_routed_expert_moe(
     }
 
     using OperationType = HybridRoutedExpertFfnDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .m_tiles = m_tiles,
-            .experts_per_chip = experts_per_chip,
-            .x_is_row_major = x_is_row_major,
-            .activation = activation,
-            .fuse_bias = has_bias,
-            .compute_kernel_config = compute_kernel_config.has_value()
-                                         ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
-                                         : std::nullopt,
-            .hybrid_token_threshold = hybrid_token_threshold,
-            .overlap_combine = overlap_combine,
-            .combine_axis = combine_axis,
-            .combine_num_links = combine_num_links,
-            .num_experts_per_tok = num_experts_per_tok,
-            .seq_len_per_chip = seq_len_per_chip,
-            .fwd_arrived = fwd_arrived_semaphore,
-            .final_arrived = final_arrived_semaphore,
-            .expert_go = expert_go_semaphore,
-            .channel_semaphores = channel_semaphores,
-            .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
-            .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
-            .expert_go_addr = semaphore_addr(expert_go_semaphore),
-            .channel_semaphore_addrs = semaphore_addrs(channel_semaphores),
-            .l1_arena_addr =
-                overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u},
-        OperationType::tensor_args_t{
-            .x = dispatched_buffer,
-            .gate_projs = gate_projs,
-            .up_projs = up_projs,
-            .down_projs = down_projs,
-            .counts = expert_token_counts,
-            .global_expert_idx_table = global_expert_idx_table,
-            .output = output,
-            .expert_region_offsets = expert_region_offsets,
-            .gate_biases = has_bias ? *gate_biases : std::vector<ttnn::Tensor>{},
-            .up_biases = has_bias ? *up_biases : std::vector<ttnn::Tensor>{},
-            .down_biases = has_bias ? *down_biases : std::vector<ttnn::Tensor>{},
-            .l1_arena = l1_arena,
-            .dispatched_metadata = dispatched_metadata,
-            .expert_offsets = expert_offsets,
-            .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
-            .forwarding_buffer = forwarding_buffer});
+    OperationType::operation_attributes_t attributes{
+        .m_tiles = m_tiles,
+        .experts_per_chip = experts_per_chip,
+        .x_is_row_major = x_is_row_major,
+        .activation = activation,
+        .fuse_bias = has_bias,
+        .compute_kernel_config = compute_kernel_config.has_value()
+                                     ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
+                                     : std::nullopt,
+        .hybrid_token_threshold = hybrid_token_threshold,
+        .unified_waves = unified_waves,
+        .big_first_threshold = big_first_threshold,
+        .overlap_combine = overlap_combine,
+        .combine_axis = combine_axis,
+        .combine_num_links = combine_num_links,
+        .num_experts_per_tok = num_experts_per_tok,
+        .seq_len_per_chip = seq_len_per_chip,
+        .fwd_arrived = fwd_arrived_semaphore,
+        .final_arrived = final_arrived_semaphore,
+        .expert_go = expert_go_semaphore,
+        .channel_semaphores = channel_semaphores,
+        .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
+        .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
+        .expert_go_addr = semaphore_addr(expert_go_semaphore),
+        .channel_semaphore_addrs = semaphore_addrs(channel_semaphores),
+        .l1_arena_addr =
+            overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u};
+    OperationType::tensor_args_t tensor_args{
+        .x = dispatched_buffer,
+        .gate_projs = gate_projs,
+        .up_projs = up_projs,
+        .down_projs = down_projs,
+        .counts = expert_token_counts,
+        .global_expert_idx_table = global_expert_idx_table,
+        .output = output,
+        .expert_region_offsets = expert_region_offsets,
+        .gate_biases = has_bias ? *gate_biases : std::vector<ttnn::Tensor>{},
+        .up_biases = has_bias ? *up_biases : std::vector<ttnn::Tensor>{},
+        .down_biases = has_bias ? *down_biases : std::vector<ttnn::Tensor>{},
+        .l1_arena = l1_arena,
+        .dispatched_metadata = dispatched_metadata,
+        .expert_offsets = expert_offsets,
+        .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
+        .forwarding_buffer = forwarding_buffer};
+    if (unified_waves) {
+        // The wave-planned program sizes its circular buffers from the free L1, so the plan it picks now is part of
+        // the program-cache key.
+        std::tie(attributes.wave_per_core_M, attributes.wave_in0_block_w) =
+            unified_routed_expert_ffn::UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(
+                wave_attributes(attributes), wave_inputs(tensor_args));
+    }
+    return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 
 uint32_t hybrid_routed_expert_moe_channel_semaphore_count(ttnn::MeshDevice* mesh_device, uint32_t combine_axis) {

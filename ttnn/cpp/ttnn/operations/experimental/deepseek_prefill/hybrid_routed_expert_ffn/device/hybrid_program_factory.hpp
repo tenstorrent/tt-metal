@@ -10,6 +10,13 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
+// unified_waves: the wave-planned unified_routed_expert_ffn program this op runs on its own rows in place of its
+// unified half, given this op's attributes and inputs.
+::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnParams
+wave_attributes(const HybridRoutedExpertFfnParams& op);
+::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnInputs wave_inputs(
+    const HybridRoutedExpertFfnInputs& t);
+
 // Everything the merged op rejects, checked before anything is placed. Each half also validates
 // what it will actually be handed, so a merged dispatch cannot pass a configuration either
 // implementation would reject on its own.

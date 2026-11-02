@@ -432,16 +432,34 @@ void kernel_main() {
     const uint32_t quarter_in1_sender_nx = get_arg_val<uint32_t>(QUARTER_RT + 7);
     const uint32_t quarter_in1_sender_ny = get_arg_val<uint32_t>(QUARTER_RT + 8);
 
+#ifdef URE_BIG_FIRST_T
+    // Two walks over the local experts: those above URE_BIG_FIRST_T tokens, then the rest, so the
+    // big experts are written first. All three kernels walk alike.
+    constexpr uint32_t num_passes = 2;
+#else
+    constexpr uint32_t num_passes = 1;
+#endif
+    uint32_t band_min = min_active_tokens;
+    uint32_t band_max = max_active_tokens;
     // Clamped tile-row count of local expert e (0 = empty or outside the band); the
     // planner looks ahead with it, so it must match the per-expert clamp below exactly.
     auto expert_tiles = [&](uint32_t e) -> uint32_t {
-        const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
+        const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], band_min, band_max);
         return adaptive_chunk::clamp_count_tiles(
             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
     };
     adaptive_chunk::WavePlanner planner;
 
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
+        const uint32_t local_expert_id = walk_step % experts_per_chip;
+#ifdef URE_BIG_FIRST_T
+        if (local_expert_id == 0) {
+            const bool big_pass = walk_step == 0;
+            band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
+            band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
+            planner = adaptive_chunk::WavePlanner{};
+        }
+#endif
         // Wave role of this expert, and the weight-multicast set it runs with.
         const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);
         const bool runs_here = adaptive_chunk::role_runs_here(role, my_mt);
@@ -494,8 +512,7 @@ void kernel_main() {
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
-        const uint32_t count_value =
-            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+        const uint32_t count_value = adaptive_chunk::count_in_band(counts_ptr[global_expert_id], band_min, band_max);
         // counts[] is device-produced and unvalidated: bound it by the capacity
         // this program was built for (num_chunks_max * chunk_M_max tile-rows)
         // BEFORE deriving anything from it. The clamp is arithmetic so it also

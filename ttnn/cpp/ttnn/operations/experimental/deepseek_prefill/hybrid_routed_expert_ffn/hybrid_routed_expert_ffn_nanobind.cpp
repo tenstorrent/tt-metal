@@ -42,6 +42,11 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         the call returns. forwarding_buffer is combine's DRAM staging buffer from
         hybrid_routed_expert_moe_forwarding_buffer; omitted, combine allocates its own at the first
         call and keeps it for the program's lifetime.
+
+        unified_waves (hybrid_token_threshold 0 only) runs unified_routed_expert_moe's wave-planned
+        program instead of this op's unified half; overlapped with combine, combine walks each chip's
+        experts in that program's predicted finish order. big_first_threshold (0, or at least 96
+        tokens) makes it run the experts above that many tokens first.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -70,7 +75,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("final_arrived_semaphore") = nb::none(),
         nb::arg("expert_go_semaphore") = nb::none(),
         nb::arg("forwarding_buffer") = nb::none(),
-        nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{});
+        nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
+        nb::arg("unified_waves") = false,
+        nb::arg("big_first_threshold") = 0);
 
     ttnn::bind_function<
         "hybrid_routed_expert_moe_channel_semaphore_count",

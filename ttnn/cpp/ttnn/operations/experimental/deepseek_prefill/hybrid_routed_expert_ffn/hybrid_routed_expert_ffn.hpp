@@ -38,6 +38,10 @@ using unified::RoutedExpertActivation;
 // `channel_semaphores` (see hybrid_routed_expert_moe_channel_semaphore_count). They outlive the program because
 // neighbouring chips bump them across launches. Everything else the overlap places in L1 -- an arena over every
 // worker core when the fused pass runs -- is allocated per call and freed when it returns.
+//
+// `unified_waves` (threshold 0 only) runs unified_routed_expert_moe's wave-planned program instead of this op's
+// unified half. Overlapped with combine, combine then walks each chip's experts in that program's predicted finish
+// order. `big_first_threshold` (0, or at least 96 tokens) makes that program run the experts above it first.
 ttnn::Tensor hybrid_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
@@ -64,7 +68,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& final_arrived_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& expert_go_semaphore = std::nullopt,
     const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
-    const std::vector<GlobalSemaphore>& channel_semaphores = {});
+    const std::vector<GlobalSemaphore>& channel_semaphores = {},
+    bool unified_waves = false,
+    uint32_t big_first_threshold = 0);
 
 // How many `channel_semaphores` the overlap needs on this mesh. Create that many once, before the first
 // overlapped forward, and pass the same ones every call -- combine's channel credits cross chips and

@@ -41,6 +41,9 @@
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
+// Combine-overlap report hooks (URE_PREDICTED_ORDER): hybrid_routed_expert_ffn's overlap defines
+// HYB_EXPERT_DONE_RT_BASE on this writer when it embeds this program next to combine.
+#include "../../../../hybrid_routed_expert_ffn/device/kernels/hybrid_expert_done.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
@@ -262,15 +265,76 @@ void kernel_main() {
     const uint32_t quarter_in1_num_receivers = get_arg_val<uint32_t>(QUARTER_RT + 5);
     const uint32_t quarter_in1_ready_sem_id = get_arg_val<uint32_t>(QUARTER_RT + 6);
 
+#ifdef URE_BIG_FIRST_T
+    // Two walks over the local experts: those above URE_BIG_FIRST_T tokens, then the rest, so the
+    // big experts are written first. All three kernels walk alike.
+    constexpr uint32_t num_passes = 2;
+#else
+    constexpr uint32_t num_passes = 1;
+#endif
+    uint32_t band_min = min_active_tokens;
+    uint32_t band_max = max_active_tokens;
     // Same clamped per-expert tile count the reader and compute plan with.
     auto expert_tiles = [&](uint32_t e) -> uint32_t {
-        const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
+        const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], band_min, band_max);
         return adaptive_chunk::clamp_count_tiles(
             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
     };
     adaptive_chunk::WavePlanner planner;
 
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+#ifdef URE_PREDICTED_ORDER
+    // Each expert is reported to combine as soon as this writer is done with it, at its place in the order combine
+    // walks (adaptive_chunk::predicted_order) -- at once for the experts this core's rows do not run.
+    static_assert(experts_per_chip <= adaptive_chunk::kMaxPredictedExperts);
+#ifdef URE_BIG_FIRST_T
+    constexpr uint32_t predicted_big_first_t = URE_BIG_FIRST_T;
+#else
+    constexpr uint32_t predicted_big_first_t = 0;
+#endif
+    uint32_t local_counts[adaptive_chunk::kMaxPredictedExperts];
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        local_counts[e] = counts_ptr[idx_ptr[e]];
+    }
+    uint8_t walk_order[adaptive_chunk::kMaxPredictedExperts];
+    adaptive_chunk::predicted_order(local_counts, experts_per_chip, per_core_M_max, predicted_big_first_t, walk_order);
+    uint8_t walk_pos[adaptive_chunk::kMaxPredictedExperts];
+    for (uint32_t k = 0; k < experts_per_chip; ++k) {
+        walk_pos[walk_order[k]] = static_cast<uint8_t>(k);
+    }
+    // The experts this core runs, from the same planner replay as the loop below.
+    uint32_t runs_mask = 0;
+    for (uint32_t pass = 0; pass < num_passes; ++pass) {
+#ifdef URE_BIG_FIRST_T
+        band_min = pass == 0 ? URE_BIG_FIRST_T + 1 : min_active_tokens;
+        band_max = pass == 0 ? max_active_tokens : URE_BIG_FIRST_T;
+#endif
+        adaptive_chunk::WavePlanner replay;
+        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+            const uint32_t role = replay.role(e, experts_per_chip, per_core_M_max, expert_tiles);
+            if (adaptive_chunk::role_runs_here(role, my_mt) && expert_tiles(e) != 0) {
+                runs_mask |= 1u << e;
+            }
+        }
+    }
+    band_min = min_active_tokens;
+    band_max = max_active_tokens;
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        if ((runs_mask & (1u << e)) == 0) {
+            hyb_expert_done_at(walk_pos[e]);
+        }
+    }
+#endif
+
+    for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
+        const uint32_t local_expert_id = walk_step % experts_per_chip;
+#ifdef URE_BIG_FIRST_T
+        if (local_expert_id == 0) {
+            const bool big_pass = walk_step == 0;
+            band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
+            band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
+            planner = adaptive_chunk::WavePlanner{};
+        }
+#endif
         const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);
         const bool runs_here = adaptive_chunk::role_runs_here(role, my_mt);
         const uint32_t grp_rows = adaptive_chunk::role_rows(role);
@@ -306,8 +370,7 @@ void kernel_main() {
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
-        const uint32_t count_value =
-            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+        const uint32_t count_value = adaptive_chunk::count_in_band(counts_ptr[global_expert_id], band_min, band_max);
         // Same capacity clamp the reader and compute apply to the device-produced
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.
@@ -572,7 +635,20 @@ void kernel_main() {
                     cb_out_buf.pop_front(this_tiles);
                 }
             }
+#ifdef URE_PREDICTED_ORDER
+            // Per-chunk release only on the whole grid: every writer runs every chunk of a full-grid
+            // expert, so the collector's per-(step, chunk) count reaches all writers. A wave expert's
+            // chunk runs on its rows only and is released with the whole expert below.
+            if (role == adaptive_chunk::kRoleFull) {
+                hyb_chunk_done_at(walk_pos[local_expert_id], chunk, grp_chunk_M);
+            }
+#endif
         }  // end chunk loop
+#ifdef URE_PREDICTED_ORDER
+        if (effective_chunks > 0) {
+            hyb_expert_done_at(walk_pos[local_expert_id]);
+        }
+#endif
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).

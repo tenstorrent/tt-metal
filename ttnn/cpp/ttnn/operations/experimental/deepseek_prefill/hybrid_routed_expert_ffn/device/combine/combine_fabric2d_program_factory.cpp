@@ -538,6 +538,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // overlapped form, in place of a second copy of each kernel that only added it.
     const auto add_combine_defines = [&](tt::tt_metal::KernelDescriptor& kernel) {
         kernel.defines.emplace_back("CMBF2D_OVERLAPPED", "1");
+        if (args.predicted_walk) {
+            kernel.defines.emplace_back("CMBF2D_PREDICTED_ORDER", "1");
+            kernel.defines.emplace_back("CMBF2D_RE_PER_CORE_M", std::to_string(args.walk_per_core_M_max));
+            kernel.defines.emplace_back("CMBF2D_RE_BIG_FIRST_T", std::to_string(args.walk_big_first_threshold));
+            // The routed expert's own planner switch: adaptive_chunk::WavePlanner reads it, and the prediction
+            // has to plan exactly as that program does.
+            if (args.walk_partial_eighth) {
+                kernel.defines.emplace_back("PARTIAL_EIGHTH", "1");
+            }
+        }
     };
 
     for (const auto& [stream, self] : placement.at(coord).streams) {

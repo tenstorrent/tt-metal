@@ -81,6 +81,33 @@ inline void hyb_expert_done() {
     noc_async_atomic_barrier();
 }
 
+// Explicit-step forms, for a writer that reports each expert when it is done with it rather than in walk order:
+// `step` is the expert's position in the order combine walks.
+inline void hyb_chunk_done_at(uint32_t step, uint32_t chunk, uint32_t chunk_rows) {
+    if (chunk >= HYB_MAX_CHUNKS || step >= HYB_MAX_STEPS) {
+        return;
+    }
+    hyb_wait_go();
+    const uint32_t noc_x = get_arg_val<uint32_t>(HYB_EXPERT_DONE_RT_BASE + 0);
+    const uint32_t noc_y = get_arg_val<uint32_t>(HYB_EXPERT_DONE_RT_BASE + 1);
+    const uint32_t area = get_arg_val<uint32_t>(HYB_EXPERT_DONE_RT_BASE + 2) + HYB_CHUNK_AREA_OFFSET;
+    const uint32_t slot = (step * HYB_MAX_CHUNKS + chunk) * static_cast<uint32_t>(sizeof(uint32_t));
+    noc_async_write_barrier();
+    noc_inline_dw_write(get_noc_addr(noc_x, noc_y, area + HYB_MAX_STEPS * HYB_MAX_CHUNKS * 4 + slot), chunk_rows);
+    noc_async_write_barrier();
+    noc_semaphore_inc(get_noc_addr(noc_x, noc_y, area + slot), 1);
+}
+
+inline void hyb_expert_done_at(uint32_t step) {
+    noc_async_write_barrier();
+    const uint32_t noc_x = get_arg_val<uint32_t>(HYB_EXPERT_DONE_RT_BASE + 0);
+    const uint32_t noc_y = get_arg_val<uint32_t>(HYB_EXPERT_DONE_RT_BASE + 1);
+    const uint32_t counts_addr = get_arg_val<uint32_t>(HYB_EXPERT_DONE_RT_BASE + 2);
+    hyb_wait_go();
+    noc_semaphore_inc(get_noc_addr(noc_x, noc_y, counts_addr + step * static_cast<uint32_t>(sizeof(uint32_t))), 1);
+    noc_async_atomic_barrier();
+}
+
 #define HYB_EXPERT_DONE() hyb_expert_done()
 #define HYB_CHUNK_DONE(chunk, chunk_rows) hyb_chunk_done(chunk, chunk_rows)
 
@@ -93,5 +120,8 @@ inline void hyb_expert_done() {
 #define HYB_EXPERT_DONE() \
     do {                  \
     } while (0)
+
+inline void hyb_chunk_done_at(uint32_t, uint32_t, uint32_t) {}
+inline void hyb_expert_done_at(uint32_t) {}
 
 #endif
