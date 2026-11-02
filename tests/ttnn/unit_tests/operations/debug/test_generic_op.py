@@ -9,7 +9,7 @@ import numpy as np
 from math import prod
 from loguru import logger
 
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Not tested / built for Blackhole")

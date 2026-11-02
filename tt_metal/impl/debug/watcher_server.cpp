@@ -33,9 +33,9 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
@@ -89,6 +89,11 @@ private:
     std::vector<std::string> kernel_names_;
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
+    // Guards kernel_names_, kernel_file_ and kernel_elf_file_. Kernel registration runs on the thread that builds
+    // programs and must not wait for a dump in progress, which holds watch_mutex_ across every device read. The
+    // readers take this lock only around their CPU-side kernel name lookups, never across a device read. When both
+    // locks are needed, take watch_mutex_ first.
+    std::mutex kernel_names_mutex_;
 
     std::thread* server_thread_{};
 
@@ -127,18 +132,19 @@ void WatcherServer::Impl::attach_devices() {
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
-        create_kernel_file();
+        {
+            const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
+            create_kernel_file();
+        }
         auto all_devices = env_.get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
             reset_assert_records(device_id);
-            device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
+            device_id_to_reader_.try_emplace(
+                device_id, logfile_, device_id, kernel_names_, kernel_names_mutex_, env_, watcher_server_);
             log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
             fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
             fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
-
-        // Since dma library is not thread-safe, disable it when watcher runs.
-        rtoptions.set_disable_dma_ops(true);
     }
 
     // Spin off thread to run the server.
@@ -155,6 +161,7 @@ void WatcherServer::Impl::detach_devices() {
     };
     if (!server_thread_ and !server_killed_due_to_error_) {
         close_file(logfile_);
+        const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
         return;
@@ -194,9 +201,8 @@ void WatcherServer::Impl::detach_devices() {
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
         }
 
-        // Watcher server closed, can use dma library again.
-        env_.get_rtoptions().set_disable_dma_ops(false);
         close_file(logfile_);
+        const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
     }
@@ -213,7 +219,8 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
     clear_log();
     read_kernel_ids_from_file();
     for (ChipId device_id : device_ids) {
-        device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
+        device_id_to_reader_.try_emplace(
+            device_id, logfile_, device_id, kernel_names_, kernel_names_mutex_, env_, watcher_server_);
         log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
         fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
     }
@@ -226,7 +233,9 @@ std::string WatcherServer::Impl::log_file_name() {
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
-    const std::lock_guard<std::mutex> lock(watch_mutex_);
+    // Not watch_mutex_: a dump holds that across every device read, and on a multi-chip system with remote chips a
+    // dump can take tens of seconds, which would stall program creation for as long.
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex_);
 
     if (!kernel_file_) {
         create_kernel_file();
@@ -240,7 +249,7 @@ int WatcherServer::Impl::register_kernel(const std::string& name) {
 }
 
 void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::string>& paths) {
-    const std::lock_guard<std::mutex> lock(watch_mutex_);
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex_);
     if (!kernel_elf_file_) {
         create_kernel_elf_file();
     }
@@ -260,6 +269,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex_);
     std::string line;
     while (std::getline(f, line)) {
         kernel_names_.push_back(line.substr(line.find(':') + 2));
@@ -613,7 +623,7 @@ void WatcherServer::Impl::poll_watcher_data() {
     } else {
         disabled_features = "None";
     }
-    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
+    log_debug(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
         // Need to hold the lock here as well to prevent kernel_names_ being modified from the main thread while being
@@ -661,7 +671,7 @@ void WatcherServer::Impl::poll_watcher_data() {
         }
     }
 
-    log_info(LogLLRuntime, "Watcher thread stopped watching...");
+    log_debug(LogLLRuntime, "Watcher thread stopped watching...");
     server_running_ = false;
     stop_server_ = false;
 }

@@ -23,7 +23,7 @@ ARG PYTHON_VERSION=''
 # Fallback UV_IMAGE for standalone `docker build` without Bake.
 # The single source of truth is docker-bake.hcl variable "UV_IMAGE".
 # When upgrading uv, update docker-bake.hcl first, then sync this default.
-ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 
 #############################################################
 # uv layer - copy from official distroless image

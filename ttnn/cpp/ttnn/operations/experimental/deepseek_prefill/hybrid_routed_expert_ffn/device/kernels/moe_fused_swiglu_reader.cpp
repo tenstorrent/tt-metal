@@ -42,7 +42,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the writer
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout

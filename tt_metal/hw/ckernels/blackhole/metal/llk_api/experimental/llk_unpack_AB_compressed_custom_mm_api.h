@@ -14,7 +14,7 @@
  * in0 tile shape: [{1, 2, 4, 8}, 32]
  * in1 tile shape: [32, 32]
  * rt_dim: 1
- * ct_dim: any integer from 1 to 16
+ * ct_dim: any integer from 1 to 64, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: even number from 2 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
@@ -52,7 +52,7 @@ inline void llk_unpack_AB_compressed_custom_mm_init(const std::uint32_t operand0
  * @param base_address_meta: Byte address of the per-tile format metadata; see
  *                           @ref _llk_unpack_AB_compressed_custom_mm_ for the layout.
  * @param kt_dim: Inner dimension in tiles, an even number from 2 to 256.
- * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param ct_dim: Output width in tiles, 1 to 64, as long as the output tiles fit in DEST.
  * @note Call @ref llk_unpack_AB_compressed_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_compressed_custom_mm.
  */

@@ -4,9 +4,12 @@
 #include "hybrid_half_merge.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <stdexcept>
 #include <variant>
+
+#include <fmt/format.h>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -24,10 +27,10 @@ using tt::tt_metal::SemaphoreDescriptor;
 
 // Both halves' semaphores live in ONE id space and the two passes reuse it.
 //
-// They can, because the passes are strictly ordered: pass A is finished everywhere before pass B
-// begins anywhere, so no id is ever live for both. The pass barrier is what makes that true, and
-// it also has to zero the shared ids -- pass A leaves them at arbitrary values and pass B's
-// waits assume they start at zero.
+// They can, because the passes are strictly ordered: the first is finished everywhere before the
+// second begins anywhere, so no id is ever live for both. The pass barrier is what makes that true,
+// and it also has to zero the shared ids -- the first pass leaves them at arbitrary values and the
+// second's waits assume they start at zero.
 //
 // The barrier's own semaphore is therefore the one id that must NOT be reused, so it sits above
 // both halves' blocks and is never reset.
@@ -87,7 +90,7 @@ uint32_t overlay_circular_buffers(
     ProgramDescriptor& out) {
     const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    // Pass A off: its buffers are never touched, so they are not placed and no arena is needed.
+    // Fused pass off: its buffers are never touched, so they are not placed and no arena is needed.
     // Every remaining CB is the unified half's and is allocated the ordinary way.
     if (!run_fused_pass) {
         for (auto& cb : unified.cbs) {
@@ -161,10 +164,9 @@ uint32_t overlay_circular_buffers(
 // choose, and a wrong choice here is wrong numbers with no error.
 //
 // bfp8_pack_precise is the one field they genuinely differ on: the fused half sets it, the unified
-// half leaves it clear. The merged program keeps it SET -- the more precise packing of the two --
-// which means the unified half's bf8 output in a merged program is not bit-for-bit what the
-// standalone unified op produces. That is a deliberate, accepted difference; grade that half on
-// PCC against the standalone op, not on equality.
+// half leaves it clear. The merged program keeps it SET for the fused half, and
+// mark_unified_pack_precision hands the unified half's circular buffers back their truncated
+// packing, so each half packs bit-for-bit as its standalone op does.
 //
 // Every other field must already agree. Taking a silent majority on math fidelity or the dst
 // accumulator would change one half's arithmetic without any signal.
@@ -303,6 +305,13 @@ KernelDescriptor merge_kernel(
         "a half grew common runtime args; the merge does not rebase them yet");
 
     reconcile_config(fused, unified, merged);
+    // Both halves of a dataflow kernel sit in one binary and the kernel config ring, not instruction
+    // count, is what this op runs out of. These two wait on the NoC rather than issue back to back, so
+    // trading speed for size costs them little. The compute halves keep their default O3: the fused
+    // matmul is the one place where a lower level has measured 1.8x slower.
+    if (!std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(merged.config)) {
+        merged.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+    }
     if (run_fused_pass) {
         merged.defines.emplace_back("HYB_RUN_FUSED_PASS", "1");
     }
@@ -320,7 +329,7 @@ KernelDescriptor merge_kernel(
             args.resize(barrier_base, 0);
             // Coordinator, not just master CORE: both data-movement kernels run this body, and a
             // second one entering the master block would re-zero the shared semaphores after
-            // pass B had already started on them.
+            // the second pass had already started on them.
             args.push_back(static_cast<uint32_t>(is_coordinator_kernel && core == barrier.master_logical));
             args.push_back(barrier.master_noc_x);
             args.push_back(barrier.master_noc_y);
@@ -335,6 +344,33 @@ KernelDescriptor merge_kernel(
         }
     }
     return merged;
+}
+
+size_t compute_role() { return KernelDescriptor::ConfigDescriptor(tt::tt_metal::ComputeConfigDescriptor{}).index(); }
+
+// The merged compute binary packs block-float the precise way whenever the fused half does (see
+// reconcile_config). Naming the unified half's CB indices lets the kernel give those back the
+// truncated packing the unified half is built with alone (hybrid_pack_precision.hpp), so each half
+// packs exactly as its standalone op does.
+void mark_unified_pack_precision(
+    const ProgramDescriptor& unified, const KernelDescriptor& unified_compute, ProgramDescriptor& merged) {
+    const auto& own = std::get<tt::tt_metal::ComputeConfigDescriptor>(unified_compute.config);
+    for (auto& kernel : merged.kernels) {
+        const auto* config = std::get_if<tt::tt_metal::ComputeConfigDescriptor>(&kernel.config);
+        if (config == nullptr || config->bfp8_pack_precise == own.bfp8_pack_precise) {
+            continue;
+        }
+        TT_FATAL(!own.bfp8_pack_precise, "the merged binary packs less precisely than the unified half asked for");
+        uint64_t mask = 0;
+        for (const auto& cb : unified.cbs) {
+            for (const auto& format : cb.format_descriptors) {
+                TT_FATAL(
+                    format.buffer_index < 64, "CB index {} does not fit the pack-precision mask", format.buffer_index);
+                mask |= uint64_t{1} << format.buffer_index;
+            }
+        }
+        kernel.defines.emplace_back("HYB_APPROX_PACK_CB_MASK", fmt::format("{:#x}ull", mask));
+    }
 }
 
 // The kernels a half emits, keyed by the processor class they run on.
@@ -359,7 +395,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     MergeReport& report) {
     TT_FATAL(
         !run_fused_pass || l1_arena != nullptr,
-        "pass A runs, so both halves' circular buffers need the shared L1 arena to be laid over");
+        "the fused pass runs, so both halves' circular buffers need the shared L1 arena to be laid over");
 
     ProgramDescriptor merged;
     report.barrier_semaphore_id = merge_semaphores(fused, unified, merged);
@@ -408,6 +444,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
             /*shared_semaphore_count=*/report.barrier_semaphore_id,
             *bases_it->second));
     }
+    mark_unified_pack_precision(unified, *unified_by_role.at(compute_role()), merged);
     return merged;
 }
 

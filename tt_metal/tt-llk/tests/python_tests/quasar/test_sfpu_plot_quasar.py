@@ -43,7 +43,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -51,8 +50,8 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     QuasarSfpuVariant,
+    max_dest_tiles,
     resolve_quasar_sfpu_variant,
 )
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
@@ -68,7 +67,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -150,8 +148,8 @@ QUASAR_APPROX_CAPABLE_OPS = (
 #   approx_mode             ApproximationMode.Yes on QUASAR_APPROX_CAPABLE_OPS only
 #   dest_acc                override the format-derived Dest width (fp32 Dest for
 #                           a 16-bit format, for example)
-#   dest_sync / implied_math_format  Quasar-only kernel knobs (default Half / Yes,
-#                           the perf-mode pins of the functional suite)
+#   dest_sync               Quasar-only kernel knob (default Half,
+#                           the perf-mode pin of the functional suite)
 #   extra_undefined_ranges  override the red "undefined domain" plot shading
 #   name                    custom test id — the plot filename and the -k selector
 #                           (defaults to "<Op>-<fmt>", or "<Op>-<fmt>-approx" when
@@ -178,7 +176,6 @@ class Case:
     # Advanced overrides — defaults are derived from `fmt`.
     dest_acc: Optional[DestAccumulation] = None
     dest_sync: DestSync = DestSync.Half
-    implied_math_format: ImpliedMathFormat = ImpliedMathFormat.Yes
     input_dimensions: Optional[List[int]] = None
     extra_undefined_ranges: Optional[List[Tuple[float, float]]] = None
     # ulp_sweep only: sweep a range too large for one run in batches of this
@@ -279,13 +276,6 @@ _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
 _MAX_SWEEP_BATCHES = 512
 
 
-def _dest_capacity_tiles(dest_sync: DestSync, dest_acc: DestAccumulation) -> int:
-    """Tiles one Quasar kernel run may hold in Dest (all tiles share one section)."""
-    return DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
-
-
 def _ulp_sweep_dims(
     stimuli_format: DataFormat,
     low: float,
@@ -342,7 +332,7 @@ def run_case(case: Case) -> bool:
         )
     variant = _resolve_variant(case, dest_acc)
     unpack_to_dest = variant.unpack_to_dest
-    capacity_tiles = _dest_capacity_tiles(case.dest_sync, dest_acc)
+    capacity_tiles = max_dest_tiles(dest_acc, case.dest_sync)
     logger.info(
         "[{}] route: unpack_to_dest={} unpack_dst={} sfpu={}/{} pack_src={} "
         "dest_acc={} (Dest capacity {} tiles)",
@@ -392,7 +382,6 @@ def run_case(case: Case) -> bool:
                 PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
                 MATH_OP(mathop=mathop),
                 APPROX_MODE(case.approx_mode),
-                IMPLIED_MATH_FORMAT(case.implied_math_format),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -549,7 +538,7 @@ def run_case(case: Case) -> bool:
         f"{variant.sfpu_dst.name} → pack {variant.pack_src.name} → out "
         f"{formats.output_format.name}\n"
         f"dest_acc={dest_acc.name}  |  approx={case.approx_mode.name}  |  "
-        f"{case.dest_sync.name}  |  implied_math_format={case.implied_math_format.name}"
+        f"{case.dest_sync.name}"
         f"  |  {spec.distribution.name.lower()}, {x.size} points"
     )
     plot_and_print(

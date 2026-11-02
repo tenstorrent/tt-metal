@@ -8,14 +8,13 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/edm_fabric_utils.hpp
     hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
     hw/inc/edm_fabric/edm_handshake.hpp
+    hw/inc/edm_fabric/edm_handshake_types.hpp
     hw/inc/edm_fabric/fabric_connection_manager.hpp
     hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
     hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
     hw/inc/edm_fabric/fabric_router_eth_handshake.hpp
     hw/inc/edm_fabric/fabric_txq_setup.h
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
-    hw/inc/fabric_direction_table_interface.h
-    fabric_edm_packet_header.hpp
 )
 
 set(FABRIC_SOURCES
@@ -55,6 +54,7 @@ set(FABRIC_SOURCES
     fabric_context.cpp
     fabric_builder_context.cpp
     fabric_mux_config.cpp
+    fabric_mux_program_local_l1.cpp
     fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp
@@ -66,8 +66,12 @@ set(FABRIC_SOURCES
     serialization/intermesh_connections_serialization.cpp
     serialization/port_descriptor_serialization.cpp
     ccl/ccl_common.cpp
+    link_health.cpp
+    fsd_host_filter.cpp
+    physical_node_id.cpp
     physical_system_discovery.cpp
     physical_system_descriptor.cpp
+    physical_system_descriptor_diff.cpp
     topology_mapper.cpp
     topology_mapper_utils.cpp
     topology_solver.cpp

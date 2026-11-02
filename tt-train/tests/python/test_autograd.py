@@ -28,6 +28,7 @@ def supported_autograd_types_except(*except_types):
             ttnn.DataType.INT8,
             ttnn.DataType.FP8_E4M3,  # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
         )
+        + ttnn.MX_DTYPES  # Quasar-only block formats, not supported by ttml autograd
         + tuple(except_type for except_type in except_types)
     )
 
@@ -673,3 +674,147 @@ def test_binary_operators_distinct_operands(numpy_type, binary_op, numpy_op, lhs
     result = getattr(autograd_lhs, binary_op)(autograd_rhs)
 
     assert_binary_result(result, numpy_op(lhs, rhs))
+
+
+_NATIVE = ttml.autograd.PreferredPrecision.NATIVE
+_OTHER_FLOAT_DTYPE = {
+    ttnn.DataType.BFLOAT16: ttnn.DataType.FLOAT32,
+    ttnn.DataType.FLOAT32: ttnn.DataType.BFLOAT16,
+}
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_assign_keeps_the_storage_dtype(dtype):
+    """Loading values into a tensor (checkpoints, safetensors) never changes its precision."""
+    shape = (1, 1, 32, 32)
+    target = ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=np.float32), new_type=dtype)
+    values = np.full(shape, 0.5, dtype=np.float32)
+    source = ttml.autograd.Tensor.from_numpy(values, new_type=_OTHER_FLOAT_DTYPE[dtype])
+
+    target.assign(source)
+
+    assert target.get_value(_NATIVE).dtype == dtype
+    np.testing.assert_array_equal(target.to_numpy(precision=_NATIVE).astype(np.float32), values)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_in_place_initializers_keep_the_storage_dtype(dtype):
+    """ttml.init's in-place initializers fill a parameter without changing its precision."""
+    parameter = ttml.autograd.Tensor.from_numpy(np.zeros((1, 1, 32, 32), dtype=np.float32), new_type=dtype)
+
+    ttml.init.normal_(parameter, 0.0, 1.0)
+
+    assert parameter.get_value(_NATIVE).dtype == dtype
+    assert np.any(parameter.to_numpy(precision=_NATIVE).astype(np.float32) != 0.0)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_assign_numpy_loads_in_the_storage_dtype(dtype):
+    """Loaders keep a parameter's dtype: an fp32 one gets the exact values, a bf16 one ml_dtypes' rounding. The
+    source here is a read-only, transposed view, which the loaders must read in its logical order."""
+    shape = (1, 1, 32, 32)
+    base = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    base.setflags(write=False)
+    values = base.transpose(0, 1, 3, 2)
+    parameter = ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=np.float32), new_type=dtype)
+
+    ttml.autograd.assign_numpy(parameter, values)
+
+    assert parameter.get_value(_NATIVE).dtype == dtype
+    expected = values if dtype == ttnn.DataType.FLOAT32 else values.astype(ml_dtypes.bfloat16)
+    np.testing.assert_array_equal(parameter.to_numpy(precision=_NATIVE), expected)
+
+
+@pytest.mark.parametrize("shape", [(32,), (32, 64), (1, 32, 64)])
+def test_assign_numpy_adds_leading_unit_dims(shape):
+    """A weight or bias with fewer than 4 dimensions, as safetensors stores them, loads with leading unit ones."""
+    shape_4d = (1,) * (4 - len(shape)) + shape
+    values = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    parameter = ttml.autograd.Tensor.from_numpy(np.zeros(shape_4d, dtype=np.float32), new_type=ttnn.DataType.FLOAT32)
+
+    ttml.autograd.assign_numpy(parameter, values)
+
+    np.testing.assert_array_equal(parameter.to_numpy(precision=_NATIVE), values.reshape(shape_4d))
+
+
+@pytest.mark.parametrize("shape", [(64,), (32, 64), (2, 32, 64)])
+def test_assign_numpy_keeps_a_lower_rank_tensors_shape(shape):
+    """A tensor below rank 4 keeps its shape: only an array with fewer dimensions than the tensor gets unit ones."""
+    values = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=np.float32), new_type=ttnn.DataType.FLOAT32)
+
+    ttml.autograd.assign_numpy(tensor, values)
+
+    assert tuple(tensor.shape()) == shape
+    np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
+
+
+def test_assign_numpy_refuses_an_array_of_another_shape(expect_error):
+    """Loading values never resizes a tensor: an array that would land at another shape is refused, the tensor kept."""
+    values = np.zeros((1, 1, 32, 32), dtype=np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(values, new_type=ttnn.DataType.FLOAT32)
+
+    with expect_error(ttml.autograd.ShapeMismatchError, r"lands at \(1, 1, 32, 64\) per device"):
+        ttml.autograd.assign_numpy(tensor, np.ones((32, 64), dtype=np.float32))
+
+    assert tuple(tensor.shape()) == (1, 1, 32, 32)
+    np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
+
+
+def test_linear_layer_setstate_keeps_the_layer_dtype():
+    """__setstate__ loads the weights in the dtype the layer stores them in: an fp32 layer gets the exact values."""
+    layer = ttml.modules.LinearLayer(32, 32)
+    for tensor in (layer.weight.tensor, layer.bias.tensor):
+        tensor.set_value(tensor.get_value(ttml.autograd.PreferredPrecision.FULL))
+    rng = np.random.default_rng(0)
+    state = {
+        "weight": rng.standard_normal((1, 1, 32, 32)).astype(np.float32),
+        "bias": rng.standard_normal((1, 1, 1, 32)).astype(np.float32),
+    }
+
+    layer.__setstate__(state)
+
+    for name, tensor in (("weight", layer.weight.tensor), ("bias", layer.bias.tensor)):
+        assert tensor.get_value(_NATIVE).dtype == ttnn.DataType.FLOAT32, name
+        np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), state[name], err_msg=name)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_dtype_is_the_storage_dtype(dtype):
+    tensor = ttml.autograd.Tensor.from_numpy(np.zeros((1, 1, 32, 32), dtype=np.float32), new_type=dtype)
+    assert tensor.dtype() == dtype
+
+
+def test_to_numpy_reads_a_bf16_tensor_without_a_device_copy():
+    """to_numpy() gives a float32 array for a bf16 tensor, converted on the host: no fp32 copy stays on the device."""
+    values = np.random.default_rng(0).standard_normal((1, 1, 64, 64)).astype(np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(values, new_type=ttnn.DataType.BFLOAT16)
+    tracker = ttml.core.utils.MemoryUsageTracker
+
+    guard = tracker.begin_capture()
+    array = tensor.to_numpy()
+    tracker.end_capture("TO_NUMPY")
+    usage = tracker.get_dram_usage("TO_NUMPY")
+    tracker.clear()
+    del guard
+
+    assert array.dtype == np.float32
+    np.testing.assert_array_equal(array, values.astype(ml_dtypes.bfloat16).astype(np.float32))
+    assert usage.total_allocations - usage.total_deallocations == 0
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_to_numpy_reads_a_host_tensor_whose_shape_is_not_tile_aligned(dtype):
+    """to_numpy() on the host copy of a tiled tensor whose shape does not fill its tiles returns the logical values: a
+    host tensor takes the same path as a device one (cpu() returns it as is, and the conversion to row major runs on
+    the host), so no device op is asked to read it."""
+    values = np.random.default_rng(1).standard_normal((1, 1, 37, 70)).astype(np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, dtype)
+    host = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).cpu()
+    assert host.storage_type() == ttnn.StorageType.HOST and host.get_layout() == ttnn.Layout.TILE
+
+    array = ttml.autograd.create_tensor(host, False).to_numpy()
+
+    expected = values.astype(ml_dtypes.bfloat16).astype(np.float32) if dtype == ttnn.DataType.BFLOAT16 else values
+    assert array.dtype == np.float32 and array.shape == values.shape
+    np.testing.assert_array_equal(array, expected)

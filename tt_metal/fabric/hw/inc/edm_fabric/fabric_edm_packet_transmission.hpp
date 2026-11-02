@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
@@ -124,7 +124,9 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 }
 
 // Shifts the chunk encoding in a scatter write packet to the next chunk
-FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
+FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) {
+    chunk_encodings >>= tt::tt_fabric::NOC_SCATTER_CHUNK_ENCODING_BITS;
+}
 
 // Core implementation of unicast-to-local-chip dispatch.
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
@@ -257,7 +259,8 @@ FORCE_INLINE
                 chunk_size,
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
@@ -270,7 +273,8 @@ FORCE_INLINE
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
@@ -283,15 +287,16 @@ FORCE_INLINE
                         chunk_size,
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
-                        tt::tt_fabric::edm_to_local_chip_noc);
+                        tt::tt_fabric::edm_to_local_chip_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
             }
 
             // Last chunk is either a unicast write or a semaphore increment
-            constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;  // Gets us the encoding of the least significant chunk
-            const ChunkEncoding chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
+            const ChunkEncoding chunk_encoding =
+                static_cast<ChunkEncoding>(packet_encoding & tt::tt_fabric::NOC_SCATTER_CHUNK_ENCODING_MASK);
             const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
             if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
                 const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
@@ -301,7 +306,8 @@ FORCE_INLINE
                     final_chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);

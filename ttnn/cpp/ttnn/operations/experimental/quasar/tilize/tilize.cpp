@@ -62,8 +62,29 @@ ttnn::Tensor tilize(
     uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
+
+    // Reserve the output buffer's per-core L1 up front: it is allocated after this check but
+    // before the DFBs are placed (interleaved L1 grows top-down, static DFBs bottom-up), so leaving
+    // it out overestimates the DFB budget and can pick a factory whose DFBs then clash with it.
+    // The staging terms stay 0 even though TilizeMultiCoreBlockProgramFactory allocates a staging DFB:
+    // select_program_factory never picks that factory on Gen2 (its cliff reader self-loops the staging
+    // DFB, which Gen2 rejects) and routes !enough_space_height to SingleCore instead. If the block
+    // factory is ever re-enabled, mirror data_movement/tilize and pass its staging footprint here.
+    const uint32_t pending_l1_output_bytes = ttnn::operations::data_movement::get_pending_l1_output_reservation(
+        input_tensor,
+        input_tensor.padded_shape(),
+        memory_config.value_or(input_tensor.memory_config()),
+        output_dtype.value_or(input_tensor.dtype()),
+        Layout::TILE);
+
     bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        /*staging_bytes_per_tile=*/0,
+        /*fixed_staging_bytes=*/0,
+        pending_l1_output_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Port of tt-metal 1e95aec97d5 (#45331): ttnn::prim::qsr::tilize routes wide width-sharded input

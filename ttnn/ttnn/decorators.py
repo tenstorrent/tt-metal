@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
+from ttnn.comparison import comp_pcc, comp_ulp
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
@@ -127,8 +128,6 @@ def compare_tensors_using_pcc(
 ):
     import numbers
     import torch
-
-    from models.common.utility_functions import comp_pcc, comp_ulp
 
     golden_outputs, outputs = _split_complex_outputs(golden_outputs, outputs)
     if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):

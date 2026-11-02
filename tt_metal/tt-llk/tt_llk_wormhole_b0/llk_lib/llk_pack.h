@@ -20,8 +20,7 @@ using namespace ckernel::packer;
 
 namespace llk_pack_internal
 {
-static std::uint32_t configured_num_tiles   = 1;
-static std::uint32_t configured_zero_output = 0;
+static std::uint32_t configured_num_tiles = 1;
 
 /**
  * @brief Emit the final close/reset PACR for a multi-tile pack run.
@@ -216,24 +215,20 @@ inline void _llk_pack_mop_config_(
         }
     }
 
-    const std::uint32_t PACKCNT               = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
-    constexpr std::uint32_t MEGAROW           = 1;
-    constexpr std::uint32_t ZERO_OUTPUT_FLAG  = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr std::uint32_t MOP_INNER_LOOP    = 1;
-    llk_pack_internal::configured_num_tiles   = num_tiles;
-    llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
+    const std::uint32_t PACKCNT                    = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
+    constexpr std::uint32_t MEGAROW                = 1;
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG       = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+    constexpr std::uint32_t MOP_INNER_LOOP         = 1;
+    llk_pack_internal::configured_num_tiles        = num_tiles;
+    llk_pack_internal::configured_zero_output      = ZERO_OUTPUT_FLAG;
+    llk_pack_internal::configured_partial_face_bfp = pack_mode != PackMode::Untilize && partial_face && IS_BFP_FORMAT(pack_dst_format);
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
         if (partial_face && IS_BFP_FORMAT(pack_dst_format))
         {
             LLK_ASSERT(num_tiles == 1, "multi-tile partial-face BFP pack is not supported");
-            constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
-            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
-            tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));                                     // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
-            tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
-            tmp.program();
+            llk_pack_internal::program_partial_face_bfp_mop();
         }
         else if (num_tiles == 1)
         {
@@ -316,7 +311,10 @@ inline void _llk_pack_reconfig_data_format_(
  * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
  *
  * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
- * before the init/execute sequence.
+ * before the init/execute sequence, or again when a later op needs a different packer configuration.
+ *
+ * @note Drains the packer and blocks this RISC until it is idle before any register is rewritten, so it
+ *       is safe to call while a pack from the previous op is still in flight.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
@@ -342,6 +340,7 @@ inline void _llk_pack_hw_configure_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 

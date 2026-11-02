@@ -1,0 +1,24 @@
+# Configuration only, not a test matrix. The generated entries in
+# models_sweep_tests.yaml remain subject to changed-test and time-budget checks.
+# The monthly audit covers only the four families used by the focused sweeps.
+# It reads commands, owners, tiers and SKUs from models_e2e_tests.yaml.
+families:
+  - Llama
+  - Qwen
+  - Gemma
+  - GPT-OSS
+
+# Qwen Image shares a family label with language models but is a diffusion model.
+exclude_models:
+  - qwenimage
+
+# Add one model/SKU selection here to create focused sweep jobs. The generator
+# inherits each source e2e entry's metadata and uses DIAGNOSTIC_TIMEOUT_MULTIPLIER
+# in model_trace_tests.py to reserve extra job time.
+# Then run: python .github/scripts/utils/model_trace_tests.py sync-sweeps
+# Review the generated diff and run verify_time_budget.py before committing.
+sweeps:
+  llama3.1-8b: [wh_n150, bh_p150, wh_llmbox_perf]
+  qwen3.6-27b: [bh_quietbox_2]
+  gemma-4-26b-a4b: [wh_llmbox_perf, bh_quietbox_2]
+  gpt-oss-120b: [wh_galaxy_perf, bh_quietbox_2, bh_galaxy]

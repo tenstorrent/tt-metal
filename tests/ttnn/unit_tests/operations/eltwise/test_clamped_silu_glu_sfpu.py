@@ -20,7 +20,7 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 LIMIT = 10.0  # DeepSeek-V4 swiglu_limit, baked as ClampedSiluGluConfigDsV4
 TILE_ELEMS = 32 * 32

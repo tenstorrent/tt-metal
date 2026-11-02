@@ -52,6 +52,10 @@ struct SoftmaxParams {
     const DeviceComputeKernelConfig compute_kernel_config;
     const bool is_scale_causal_mask_hw_dims_softmax;
     const bool numeric_stable;
+    // True when the caller passed compute_kernel_config. The attention-optimized factory keeps its
+    // bulk intermediate buffers in Float32 for an explicit fp32_dest_acc_en, as it did before the
+    // defaulted path started enabling fp32 accumulation with 16-bit bulk buffers.
+    const bool has_explicit_compute_kernel_config = false;
 };
 
 struct SoftmaxInputs {

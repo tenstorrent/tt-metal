@@ -11,8 +11,8 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 #include "impl/context/context_types.hpp"
 
@@ -52,6 +52,12 @@ struct JitDeviceConfig {
     uint8_t num_hw_cqs = 0;
 
     bool routing_fw_enabled = false;
+
+    // Quasar with an ATT map: whether the interleaved L1 banks form one ascending selector run, which the address
+    // generator's interleaved recipe assumes (quasar_att::worker_banks_form_selector_run). Where they do not, kernels
+    // get TT_TA_ADDRGEN_INTERLEAVED_L1_SW and those transfers use software addresses. (DRAM banks always do: checked
+    // per map at compile time.)
+    bool l1_banks_form_selector_run = true;
 
     // Pre-computed in the factory so that JitBuildEnv::init can consume it without
     // calling get_profiler_dram_bank_size_per_risc_bytes(), which has a side-effect
