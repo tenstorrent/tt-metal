@@ -447,7 +447,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()),
-    transfer_stats_(&MetalContext::instance(mesh_device->impl().get_context_id()).host_transfer_stats()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -509,7 +509,7 @@ H2DSocketImpl::H2DSocketImpl(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
-    transfer_stats_(&MetalContext::instance(mesh_device->impl().get_context_id()).host_transfer_stats()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {
@@ -574,7 +574,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
-    transfer_stats_(&MetalContext::instance(mesh_device.impl().get_context_id()).host_transfer_stats()),
+    transfer_stats_(&mesh_device.impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, recv_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw

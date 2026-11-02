@@ -56,7 +56,7 @@ MeshCommandQueueBase::MeshCommandQueueBase(
     MeshCommandQueue(mesh_device, id),
     dispatch_thread_pool_(std::move(dispatch_thread_pool)),
     lock_api_function_(std::move(lock_api_function)),
-    host_transfer_stats_(&MetalContext::instance(mesh_device->impl().get_context_id()).host_transfer_stats()) {}
+    host_transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()) {}
 
 MeshCommandQueueBase::ScopedTransferStats::ScopedTransferStats(
     MeshCommandQueueBase& cq,
