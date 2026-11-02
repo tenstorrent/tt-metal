@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <map>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,14 @@
 
 namespace tt::tt_metal::experimental {
 namespace {
+
+NodeRangeSet InferScratchpadPlacement(const ScratchpadSpec& scratchpad, const CollectedSpecData& collected) {
+    const auto& binders = collected.scratchpad_binders.at(scratchpad.unique_id);
+    return std::accumulate(
+        binders.begin(), binders.end(), NodeRangeSet{}, [&](const NodeRangeSet& nodes, const KernelSpec* kernel) {
+            return nodes.merge(collected.kernel_node_set.at(kernel->unique_id));
+        });
+}
 
 // Scratchpad placement census (multi-binding rule).
 //
@@ -85,6 +94,16 @@ void ValidateScratchpadBindersPerNode(
 
 void ValidateScratchpadPlacement(const ValidationContext& ctx, tt::ARCH arch) {
     for (const auto& scratchpad : ctx.spec.scratchpads) {
+        if (const auto& override_placement = scratchpad.advanced_options.override_placement) {
+            const auto derived_placement = InferScratchpadPlacement(scratchpad, ctx.collected);
+            TT_FATAL(
+                derived_placement.contains(*override_placement),
+                "ScratchpadSpec '{}' override_placement must be a subset of its derived placement. "
+                "Requested nodes: {}; derived nodes: {}.",
+                scratchpad.unique_id,
+                override_placement->str(),
+                derived_placement.str());
+        }
         ValidateScratchpadBindersPerNode(scratchpad, ctx.collected, arch);
     }
 }
