@@ -47,12 +47,20 @@ def test_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    didt_back_to_back,
 ):
     per_core_M = 4
     per_core_N = 72
 
     # Initialize input configurations
     compute_grid = get_mesh_grid_size(mesh_device)
+    if grid_size:
+        # --grid-size XxY: cores per row x cores per column, a sub-grid anchored at core (0, 0)
+        assert (
+            grid_size[0] <= compute_grid.x and grid_size[1] <= compute_grid.y
+        ), f"--grid-size {grid_size} exceeds the device grid {compute_grid}"
+        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
     logger.info(f"Running on {compute_grid} cores")
 
     start_core = ttnn.CoreCoord(0, 0)
@@ -114,6 +122,7 @@ def test_ff1_matmul(
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
+        sync_every_iteration=not didt_back_to_back,
     )
 
     # Run test
@@ -161,6 +170,8 @@ def test_specific_chip_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    didt_back_to_back,
 ):
     submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_ff1_matmul(
@@ -169,6 +180,8 @@ def test_specific_chip_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
+        grid_size,
+        didt_back_to_back,
     )
 
 
@@ -190,9 +203,17 @@ def test_specific_board_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    didt_back_to_back,
 ):
     test_ff1_matmul(
-        t3k_single_board_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
+        t3k_single_board_mesh_device,
+        gelu,
+        math_fidelity,
+        didt_workload_iterations,
+        determinism_check_interval,
+        grid_size,
+        didt_back_to_back,
     )
 
 
@@ -212,13 +233,17 @@ def test_specific_board_ff1_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_ff1_matmul(mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval):
+def test_grid_size_ff1_matmul(
+    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval, grid_size, didt_back_to_back
+):
     test_ff1_matmul(
         mesh_device,
         gelu,
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
+        grid_size,
+        didt_back_to_back,
     )
 
 
@@ -239,7 +264,7 @@ def test_grid_size_ff1_matmul(mesh_device, gelu, math_fidelity, didt_workload_it
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
+    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval, grid_size, didt_back_to_back
 ):
     test_ff1_matmul(
         mesh_device,
@@ -247,6 +272,8 @@ def test_blackhole_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
+        grid_size,
+        didt_back_to_back,
     )
 
 
@@ -295,6 +322,8 @@ def test_mesh_size_ff1_matmul(
     math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
+    didt_back_to_back,
 ):
     # check that sub-mesh with sub_mesh_shape and mesh_coordinate can fit within the parent mesh of MESH_X by MESH_Y
     if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
@@ -303,7 +332,15 @@ def test_mesh_size_ff1_matmul(
         )
     sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
     logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
-    test_ff1_matmul(sub_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval)
+    test_ff1_matmul(
+        sub_mesh_device,
+        gelu,
+        math_fidelity,
+        didt_workload_iterations,
+        determinism_check_interval,
+        grid_size,
+        didt_back_to_back,
+    )
 
 
 @pytest.mark.parametrize(
@@ -319,7 +356,7 @@ def test_mesh_size_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_random_mesh_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
+    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval, grid_size, didt_back_to_back
 ):
     # generate random sub-mesh shape and mesh coordinate
     valid_sub_mesh_shapes = [(x, y) for x in range(1, MESH_X + 1) for y in range(1, MESH_Y + 1)]
@@ -331,4 +368,12 @@ def test_random_mesh_size_ff1_matmul(
 
     sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
     logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
-    test_ff1_matmul(sub_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval)
+    test_ff1_matmul(
+        sub_mesh_device,
+        gelu,
+        math_fidelity,
+        didt_workload_iterations,
+        determinism_check_interval,
+        grid_size,
+        didt_back_to_back,
+    )

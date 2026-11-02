@@ -1027,6 +1027,12 @@ def pytest_addoption(parser):
         help="Check determinism every nth iteration",
     )
     parser.addoption(
+        "--didt-back-to-back",
+        action="store_true",
+        default=False,
+        help="Run didt workload iterations back-to-back, syncing devices only on determinism-check iterations",
+    )
+    parser.addoption(
         "--grid-size",
         action="store",
         default=None,
@@ -1059,6 +1065,12 @@ def determinism_check_interval(request):
         # this will throw an error if bad value is passed
         return int(iterations)
     return -1
+
+
+# Indicates whether didt workload iterations run back-to-back (no per-iteration device sync)
+@pytest.fixture
+def didt_back_to_back(request):
+    return request.config.getoption("--didt-back-to-back")
 
 
 # Indicated the number of workload iterations to run within didt tests

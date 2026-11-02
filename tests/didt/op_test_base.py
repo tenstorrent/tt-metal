@@ -32,6 +32,7 @@ class OpTestBase:
         loop_count=1000,
         determinism_check_enabled=False,
         determinism_check_interval=False,
+        sync_every_iteration=True,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -53,6 +54,7 @@ class OpTestBase:
         self.loop_count = loop_count
         self.determinism_check_enabled = determinism_check_enabled
         self.determinism_check_interval = determinism_check_interval
+        self.sync_every_iteration = sync_every_iteration
 
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
@@ -168,16 +170,20 @@ class OpTestBase:
             for i in range(self.loop_count):
                 out = self.run_device_operation()
 
-                # Synchronize devices in mesh in order (this ensures we sync with closer devices first -
-                # - eg. if the chip is remote, we first sync its local pair);
-                # The device ids don't necessarily start from 0, as it is possible to target a specific chip in the mesh
-                for device_idx in self.device_ids:
-                    logger.info(f"Start sync device id: {device_idx}")
-                    ttnn.device.synchronize_device(self.get_device(device_idx))
-                    logger.info(f"End sync device id: {device_idx}")
+                check_iteration = self.determinism_check_enabled and i % self.determinism_check_interval == 0
+                # Back-to-back mode (sync_every_iteration=False) only syncs on check iterations and the last one,
+                # so the cores stay loaded across iterations instead of idling while the host syncs every device.
+                if self.sync_every_iteration or check_iteration or i == self.loop_count - 1:
+                    # Synchronize devices in mesh in order (this ensures we sync with closer devices first -
+                    # - eg. if the chip is remote, we first sync its local pair);
+                    # The device ids don't necessarily start from 0, as it is possible to target a specific chip in the mesh
+                    for device_idx in self.device_ids:
+                        logger.info(f"Start sync device id: {device_idx}")
+                        ttnn.device.synchronize_device(self.get_device(device_idx))
+                        logger.info(f"End sync device id: {device_idx}")
 
                 # Check if the output matches the first run output
-                if self.determinism_check_enabled and i % self.determinism_check_interval == 0:
+                if check_iteration:
                     outputs = list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(out.cpu())))
                     matches = list(pool.map(torch.equal, reference_out[current_act_tensor], outputs))
 
