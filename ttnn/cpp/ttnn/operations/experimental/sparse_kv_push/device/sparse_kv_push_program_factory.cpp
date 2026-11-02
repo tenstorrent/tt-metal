@@ -71,14 +71,21 @@ CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links) {
     return layout;
 }
 
-tt::tt_fabric::FabricMuxConfig mux_config(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    return tt::tt_fabric::FabricMuxConfig(
+// The mux's L1 map lives in program-local L1 on the mux cores, allocated with the program, so it cannot overlap live L1
+// buffers there. Its addresses are offsets into the map until the writers read its base from the mux.
+tt::tt_fabric::FabricMuxConfig mux_config(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::ProgramDescriptor& desc,
+    const CoreLayout& layout) {
+    tt::tt_fabric::FabricMuxConfig mux(
         /*num_full_size_channels=*/kSendersPerChannel,
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/kMuxBuffersPerChannel,
         /*num_buffers_header_only_channel=*/0,
         /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
-        /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+        /*base_l1_address=*/0);
+    mux.place_in_program_local_l1(desc, layout.mux_range);
+    return mux;
 }
 
 // Both kernels look up every destination's first hop, indexed by row-major rank.
@@ -232,7 +239,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const uint32_t my_rank = ttnn::operations::ccl::common::get_linearized_index(coord, mesh_view);
     const auto neighbors = torus_neighbors(mesh_view, coord);
     const auto layout = core_layout(params.core_grid, params.num_links);
-    const auto mux = mux_config(mesh_device);
+    const auto mux = mux_config(mesh_device, desc, layout);
     const auto defines = kernel_defines(mesh_device);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
     const auto shape = packet_shape(mesh_device, page_bytes);

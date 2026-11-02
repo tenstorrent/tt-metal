@@ -345,6 +345,7 @@ class ttMLA:
         slot_num: int = 1,
         layer_num: int = 61,
         kv_only: bool = False,
+        next_kv_only: bool = False,
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
@@ -727,10 +728,16 @@ class ttMLA:
         # A layer whose successor reuses its top-k pushes the successor's prefix rows on a sub-device beside its own
         # sparse_sdpa, leaving the successor only its own chunk's rows. Prefetch when the next layer runs in this
         # pipeline stage (layer_num counts the stage's layers) and reuses this layer's top-k, so its rows are known now.
+        # A kv_only successor (next_kv_only) fills its cache and stops before attention, so it reads nothing.
         next_layer = layer_idx + 1
         next_in_stage = next_layer - self._first_layer_idx < self.layer_num
         self._push_prefetch_grids = None
-        if self._push is not None and next_in_stage and indexer_layer_is_reused(config, next_layer):
+        if (
+            self._push is not None
+            and next_in_stage
+            and not next_kv_only
+            and indexer_layer_is_reused(config, next_layer)
+        ):
             query_rows = self.indexer_indices_shape()[2]
             self._push_prefetch_grids = self._push.grids(query_rows)
             self._push_prefetch_manager = self._push.prefetch_manager(query_rows)
@@ -2185,7 +2192,11 @@ class ttMLA:
         self._push.prefetched[next_layer] = plan
         storage = kvpe_cache.storage
         output = self._sparse_push_buffer(next_layer)
-        # Cache slots are user-major, so the next layer's slot is this one + 1.
+        # Cache slots are user-major, one per layer of the stage, so the next layer's slot is this one + 1.
+        assert cache_batch_idx % self.layer_num == self.layer_idx - self._first_layer_idx, (
+            f"layer {self.layer_idx} uses cache slot {cache_batch_idx}, not its stage-local slot "
+            f"{self.layer_idx - self._first_layer_idx} (of {self.layer_num}); slot + 1 would push another layer's KV"
+        )
         slot = self._sparse_push_slot_kwargs(storage, cache_batch_idx + 1, metadata)
         return lambda: ttnn.experimental.sparse_kv_push(
             storage,

@@ -12,7 +12,6 @@ path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
 """
 
-
 import pytest
 import torch
 from loguru import logger
@@ -35,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
     run_cpu_reference_ragged,
 )
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
+from models.demos.deepseek_v3_d_p.tt.mla import mla as mla_module
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
@@ -1026,9 +1026,9 @@ def test_sparse_mla_indexer_reuse_chunked(
     """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
     weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit.
-    On an 8x4 TorusXY mesh run B receives its KV rows through the sparse KV push (sparse_kv_push.py) where run A
-    gathers the whole prefix, so this also checks the push against the gather. The CI leg runs fabric2d, where both
-    runs gather; the push is checked in CI by test_sparse_sdpa_kv_push.py."""
+    On the 8x4 TorusXY mesh run B receives its KV rows through the sparse KV push (sparse_kv_push.py) where run A
+    gathers the whole prefix, so this also checks the push against the gather, for one layer and one chunk.
+    test_sparse_mla_push_layers_chunked covers the push across layers and chunks."""
     config = config_only
     config.max_seq_len = seq_len
     weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
@@ -1076,6 +1076,135 @@ def test_sparse_mla_indexer_reuse_chunked(
     _, pcc_message = assert_with_pcc(_to_torch(out_a), _to_torch(out_b), 0.9999)
     logger.info(f"[{variant.name}] indexer-reuse compute-vs-inject PCC: {pcc_message}")
     ttnn.synchronize_device(mesh_device)
+
+
+# Two production-size chunks (5120) on the 8x4 TorusXY mesh, where the sparse KV push runs.
+SPARSE_PUSH_LAYERS_CASES = [
+    c for c in _sparse_cases([10240], anchor_only=True) if "glm_5_2" in c.id and "shape-8x4" in c.id
+]
+PUSH_LAYERS_INDEXER_TYPES = ["full", "shared", "shared"]
+PUSH_LAYERS_CHUNK = 5120
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    SPARSE_PUSH_LAYERS_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_push_layers_chunked(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, monkeypatch
+):
+    """The sparse KV push wired across layers and chunks, bit-for-bit against gathering the prefix.
+
+    A full -> shared -> shared stack over two chunks, as TtPrefillTransformer runs it: the full layer computes the
+    top-k and the shared layers reuse it, so the push plan is cached across layers and dropped by the full layer of
+    the next chunk; each layer pushes its successor's prefix beside its own attention (empty in chunk 0, the first
+    chunk's rows in chunk 1) and the successor pushes the rest into the same buffer; and the shared layers alternate
+    between the dense gather buffer and the push buffer. Every layer has its own weights and input, so its KV slot
+    differs from the others' and a push from the wrong slot or buffer changes the output. The reference runs the same
+    stack with the push off, gathering the whole prefix in every layer."""
+    config = config_only
+    config.max_seq_len = seq_len
+    monkeypatch.setattr(config, "indexer_types", PUSH_LAYERS_INDEXER_TYPES, raising=False)
+    num_layers, chunk = len(PUSH_LAYERS_INDEXER_TYPES), PUSH_LAYERS_CHUNK
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    topology = per_axis_topology(device_params["fabric_config"])
+    weights = [
+        build_weights(variant, config, seed=42 + i, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)[0]
+        for i in range(num_layers)
+    ]
+    hidden = [make_hidden(seq_len, config.hidden_size, seed=100 + i) for i in range(num_layers)]
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        seq_len, chunk
+    )
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+
+    def to_device(t):
+        return ttnn.from_torch(
+            t.unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+
+    def to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    def run(push):
+        with monkeypatch.context() as m:
+            if not push:
+                m.setattr(mla_module, "sparse_kv_push_supported", lambda _mesh_device: False)
+            layers = [
+                ttMLA(
+                    config,
+                    weights[i],
+                    mesh_device,
+                    layer_idx=i,
+                    seq_len=seq_len,
+                    sp_axis=sp_axis,
+                    tp_axis=tp_axis,
+                    topology=topology,
+                    is_chunked=True,
+                    active_seq_len=chunk,
+                    layer_num=num_layers,
+                    first_layer_idx=0,
+                    sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+                )
+                for i in range(num_layers)
+            ]
+        # The push is on for every layer and each layer prefetches its successor's prefix, or it is off everywhere.
+        assert all((layer._push is not None) == push for layer in layers)
+        assert [layer._push_prefetch_grids is not None for layer in layers] == [push, push, False]
+        kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_layers,
+            tp_axis=tp_axis,
+        )
+        index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, tp_axis=tp_axis)
+        outs = {}
+        for start in range(0, seq_len, chunk):
+            indices = None
+            for i, layer in enumerate(layers):
+                out = layer.forward(
+                    to_device(hidden[i][:, start : start + chunk]),
+                    rope_tensors,
+                    kvpe_cache,
+                    cache_layer_idx=i,
+                    actual_start=start,
+                    index_kv_cache=index_kv_cache,
+                    indexer_indices=indices,
+                    return_indexer_indices=indices is None,
+                )
+                if indices is None:
+                    out, indices = out
+                outs[(start, i)] = to_torch(out)
+            if push:
+                # Every prefix pushed beside an attention was read by the layer after it.
+                assert not layers[0].tt_ccl.sparse_kv_push_planner.prefetched
+        ttnn.synchronize_device(mesh_device)
+        return outs
+
+    pushed, gathered = run(push=True), run(push=False)
+    for key in gathered:
+        start, i = key
+        assert torch.equal(pushed[key], gathered[key]), (
+            f"layer {i} ({PUSH_LAYERS_INDEXER_TYPES[i]}), chunk at {start}: pushed output differs from gathered; "
+            f"{comp_pcc(gathered[key].float(), pushed[key].float())[1]}"
+        )
+    logger.info(f"[{variant.name}] push across {num_layers} layers x {seq_len // chunk} chunks: bit-exact vs gather")
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
