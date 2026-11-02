@@ -1426,9 +1426,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         GLOBAL_MESH_SHAPE,
         rank=rank,
         num_ranks=num_ranks,
-        # The model's layer index, as the caches were built: under PREFILL_PP_LAYER_OFFSET the layer split's
-        # first_layer_idx is the un-offset one.
-        first_layer_idx=runtime.config.first_layer_idx,
+        # The table's layer space, from 0. Under PREFILL_PP_LAYER_OFFSET no table is built (setup_kv_chunk_table).
+        first_layer_idx=first_layer_idx,
         num_my_layers=num_my_layers,
     )
 
