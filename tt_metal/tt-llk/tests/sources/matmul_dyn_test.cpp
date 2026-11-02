@@ -15,6 +15,10 @@
 #include "perf.h"
 #include "profiler.h"
 
+#ifndef MATMUL_FUNC_BLOCKS
+#define MATMUL_FUNC_BLOCKS 0
+#endif
+
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -181,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
                 {
-                    const bool perf_ring       = LOOP_FACTOR > 1;
+                    const bool perf_ring       = LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS;
                     const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
                     const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
                     _llk_unpack_AB_matmul_k_<MAX_TILES_DEST, stream_z>(
@@ -208,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // _llk_unpack_AB_matmul_ still MOP-strides the THCON base (A by
                     // kt per extra output row, B by 1 per extra output column). The
                     // sweep keeps that walk inside PERF_RING_TILES.
-                    const bool perf_ring       = LOOP_FACTOR > 1;
+                    const bool perf_ring       = LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS;
                     const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
                     const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
                     const std::uint32_t tile_a = perf_ring ? 0 : j;
@@ -581,7 +585,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
                 if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
                 {
-                    _llk_pack_block_closed_pre_(0, LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]));
+                    _llk_pack_block_closed_pre_(0, (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0]));
                 }
 #endif
                 _llk_packer_wait_for_math_done_();
@@ -611,7 +615,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
                     // Golden packs unique result tiles. Perf K=32 dest-fill Float32
                     // places buffer_Res past L1; use the PERF_ADDRESS ring like matmul_perf.
-                    const std::uint32_t addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, i) : L1_ADDRESS(buffer_Res[i]);
+                    const std::uint32_t addr = (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, i) : L1_ADDRESS(buffer_Res[(MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0) + i]);
                     if (LOOP_FACTOR == 1)
                     {
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");

@@ -15,6 +15,10 @@
 #include "perf.h"
 #include "profiler.h"
 
+#ifndef MATMUL_FUNC_BLOCKS
+#define MATMUL_FUNC_BLOCKS 0
+#endif
+
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -83,9 +87,6 @@ constexpr bool matmul_hoist_rows = matmul_force_form ? (MATMUL_FORCE_FORM_CHAR =
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
-#endif
-#ifndef MATMUL_FUNC_BLOCKS
-#define MATMUL_FUNC_BLOCKS 0
 #endif
 #line 38
 #include "llk_unpack_common.h"
