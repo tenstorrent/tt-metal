@@ -92,7 +92,8 @@ class Qwen36DecoderLayer:
                        "QWEN36_1C_ATTN_LEAN", "QWEN36_1C_ATTN_QGVIEW", "QWEN36_1C_ATTN_TAIL",  # B's attention flags: counted 22:04
                        "QWEN36_1C_GDN_GB", "QWEN36_1C_GDN_FCONV",  # B's fused gating + conv: counted 23:31, orch 00:33
                        "QWEN36_1C_GDN_L2",  # B's q/k l2norm in the recurrence: counted 01:44
-                       "BONSAI_SCALE16", "QWEN36_1C_GDN_VSPLIT"):  # C's fp16-scale prefill fix + B's V-split: counted 02:20
+                       "BONSAI_SCALE16", "QWEN36_1C_GDN_VSPLIT",  # C's fp16-scale prefill fix + B's V-split: counted 02:20
+                       "QWEN36_1C_ATTN_NR"):  # B's fused attention q/k norm + RoPE: counted 04:46
                 os.environ.setdefault(_f, "1")
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
