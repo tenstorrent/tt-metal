@@ -92,6 +92,7 @@ class FusedLoraLinearT(Function):
         h_reduce_axis,
         weight_cat_fwd=None,
         transposed_output=False,
+        lowrank_sink=None,
     ):
         cfg = _compute_config()
         x_val, a_val, b_val, w_val = x.get_value(), lora_A.get_value(), lora_B.get_value(), weight_cat.get_value()
@@ -106,12 +107,22 @@ class FusedLoraLinearT(Function):
         # Transposed-orientation forward (iteration 36): the module keeps ``W_cat^T`` ([out, in + tail], a plain
         # ttnn tensor, no gradient) whose tail columns get the same scaled B; ``y^T = W_cat^T @ x_cat^T`` runs the
         # weight as the row-multicast operand on the full grid, then one transpose. Only for shapes with a config.
-        rows = int(x_val.shape[-2])
+        # Transposed wide input (iteration 38): the SwiGLU wrote h^T into a [in + TAIL_ROWS, T] buffer (its tail rows
+        # zeroed); the LoRA h^T goes into its tail rows and the transposed-orientation matmul takes it as a plain
+        # [K, N] operand. The buffer's gradient comes back in the same layout (the SwiGLU backward folds the
+        # low-rank term in, see the backward).
+        wide_t = (
+            weight_cat_fwd is not None
+            and int(x_val.shape[-2]) == in_features + TAIL_ROWS
+            and int(x_val.shape[-1]) != in_features + TAIL_ROWS
+        )
+        rows = int(x_val.shape[-1]) if wide_t else int(x_val.shape[-2])
         transposed_kwargs = (
             forward_transposed_matmul_kwargs(in_features + TAIL_ROWS, out_features, rows)
             if weight_cat_fwd is not None
             else None
         )
+        assert not wide_t or transposed_kwargs is not None, "the transposed wide input needs the transposed config"
         if transposed_kwargs is not None:
             b_cols = ttnn.transpose(bt, -2, -1)  # [1, 1, out, 32]
             write_tail_columns(weight_cat_fwd, b_cols, in_features)
@@ -120,11 +131,20 @@ class FusedLoraLinearT(Function):
         # straight into its tail (zero-padded to TAIL_ROWS) and the K-concat and pad disappear. Otherwise the
         # concat path.
         wide = (
-            int(x_val.shape[-1]) == in_features + TAIL_ROWS
+            not wide_t
+            and int(x_val.shape[-1]) == in_features + TAIL_ROWS
             and h_reduce_axis is None
             and skinny_matmul_fits(in_features, rank, a_val)
         )
-        if wide:
+        if wide_t:
+            # h^T [32, T] = A_wide @ x_cat^T: A zero-padded to 32 rows and to the buffer's K (the tail rows are zero,
+            # so the extra columns contribute nothing), written into the tail rows of the buffer.
+            a_wide = ttnn.pad(a_val, padding=[(0, 0), (0, 0), (0, 32 - rank), (0, TAIL_ROWS)], value=0.0)
+            h = ttnn.matmul(a_wide, x_val, compute_kernel_config=cfg, core_grid=full_core_grid())  # [1, 1, 32, T]
+            ttnn.deallocate(a_wide)
+            ttml.ops.metal.write_tile_block(x_val, h, in_features // 32, 0)
+            x_cat = x_val
+        elif wide:
             h = skinny_matmul(
                 x_val, a_val, transpose_b=True, tail_out=x_val, tail_col=in_features // 32, tail_tiles=TAIL_ROWS // 32
             )
@@ -138,7 +158,9 @@ class FusedLoraLinearT(Function):
             ttnn.deallocate(h_pad)
         transposed_out = transposed_kwargs is not None and transposed_output
         if transposed_kwargs is not None:
-            y_t = ttnn.matmul(weight_cat_fwd, x_cat, transpose_b=True, compute_kernel_config=cfg, **transposed_kwargs)
+            y_t = ttnn.matmul(
+                weight_cat_fwd, x_cat, transpose_b=not wide_t, compute_kernel_config=cfg, **transposed_kwargs
+            )
             if transposed_out:
                 y = y_t  # iteration 37: the consumer (the fused residual norm) reads [out, T]; its gradient is [out, T]
             else:
@@ -152,14 +174,15 @@ class FusedLoraLinearT(Function):
                 **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2], k=x_cat.shape[-1]),
             )
         ctx.save_for_backward(x_val, a_val, h, w_val)
-        ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide, transposed_out)
+        ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide, transposed_out, wide_t)
+        ctx.lowrank_sink = lowrank_sink
         return y
 
     @staticmethod
     def backward(ctx, grad_output):
         x_val, a_val, h, w_val = ctx.saved_tensors
         ctx.save_for_backward()
-        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide, transposed_out = ctx.meta
+        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide, transposed_out, wide_t = ctx.meta
         cfg = _compute_config()
         # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
         # With the transposed output (iteration 37) the gradient arrives as [out, T]: the same product without the
@@ -174,6 +197,40 @@ class FusedLoraLinearT(Function):
                 compute_kernel_config=cfg,
                 **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
             )
+        if wide_t:
+            # Transposed wide input (iteration 38): the gradient of the [in + TAIL, T] buffer is the product itself
+            # plus the low-rank term dh^T += A^T s_dh^T, which the SwiGLU backward folds in while it transposes the
+            # tiles (it reads A and the scale from the wrapper); here only the adapter gradients. h is h^T [32, T].
+            assert ctx.lowrank_sink is not None, "the transposed wide input needs the wrapper as the low-rank sink"
+            T = int(dcat_t.shape[-1])
+            s_dh_t = ttnn.slice(dcat_t, [0, 0, in_features, 0], [1, 1, in_features + 32, T], [1, 1, 1, 1])
+            if dh_scale != 1.0:
+                s_dh_t = ttnn.multiply(s_dh_t, dh_scale)
+            if reduce_axis is not None:
+                s_dh_t = ttml.core.distributed.all_reduce(s_dh_t, reduce_axis)
+            # dA = (s dh)^T x -> [32, in + TAIL] (the padded rows / tail columns dropped) and dB^T = h^T g -> [32, out]
+            # through ttnn's free in1 transpose (the all-core op's transposed-big mode is no faster at these shapes,
+            # `O/iter38_contract_check.log`).
+            da_wide = ttnn.matmul(
+                s_dh_t, x_val, transpose_b=True, compute_kernel_config=cfg, core_grid=full_core_grid()
+            )
+            grad_a = ttnn.slice(da_wide, [0, 0, 0, 0], [1, 1, rank, in_features], [1, 1, 1, 1])
+            ttnn.deallocate(da_wide)
+            if transposed_out:
+                db_t = ttnn.matmul(
+                    h, grad_output, transpose_b=True, compute_kernel_config=cfg, core_grid=full_core_grid()
+                )
+            else:
+                db_t = ttnn.matmul(h, grad_output, compute_kernel_config=cfg, core_grid=full_core_grid())
+            if scaling != 1.0:
+                db_t = ttnn.multiply(db_t, scaling)
+            db_full = ttnn.transpose(db_t, -2, -1)  # [out, 32]
+            ttnn.deallocate(db_t)
+            grad_b = ttnn.slice(db_full, [0, 0, 0, 0], [1, 1, out_features, rank], [1, 1, 1, 1])
+            ttnn.deallocate(db_full)
+            ttnn.deallocate(s_dh_t)
+            ctx.lowrank_sink._lowrank_grad = (a_val, dh_scale)
+            return dcat_t, None, grad_a, grad_b
         # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
         # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
         # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
@@ -201,15 +258,24 @@ class SwigluPackedWide(Function):
     of a fused LoRA ``w2`` (iteration 24). The backward takes the wide gradient and reads its first ``I`` columns."""
 
     @staticmethod
-    def forward(ctx, packed, out_cols):
+    def forward(ctx, packed, out_cols, sink=None, transposed=False):
         p = packed.get_value()
         ctx.save_for_backward(p)
-        return ttml.ops.metal.swiglu_packed_fw(p, None, out_cols)
+        ctx.sink, ctx.transposed = sink, transposed
+        # Iteration 38: ``transposed`` writes h^T into a [out_cols, R] buffer (tail rows zeroed) for a
+        # transposed-orientation w2, whose backward leaves (A, scale) on ``sink`` for the low-rank term.
+        return ttml.ops.metal.swiglu_packed_fw(p, None, out_cols, transposed_output=transposed)
 
     @staticmethod
     def backward(ctx, grad_h):
         (p,) = ctx.saved_tensors
         ctx.save_for_backward()
+        if ctx.transposed:
+            a_val, scale = ctx.sink._lowrank_grad  # left by FusedLoraLinearT.backward (the same backward pass)
+            del ctx.sink._lowrank_grad
+            return ttml.ops.metal.swiglu_packed_bw(
+                p, grad_h, None, lora_a=a_val, transposed_grad=True, lowrank_scale=scale
+            )
         return ttml.ops.metal.swiglu_packed_bw(p, grad_h)  # one gradient: `out_cols` is not a tensor
 
 
@@ -224,8 +290,8 @@ def _install_wide_swiglu(model, w2_names: set[str]) -> list[str]:
             continue
         out_cols = int(w2.frozen_shape[0]) + TAIL_ROWS
 
-        def swiglu_op(gu, out_cols=out_cols):
-            return SwigluPackedWide.apply(gu, out_cols)
+        def swiglu_op(gu, out_cols=out_cols, w2=w2):
+            return SwigluPackedWide.apply(gu, out_cols, w2, getattr(w2, "transposed_input", False))
 
         module.swiglu_op = swiglu_op
         installed.append(w2_name)
@@ -245,6 +311,7 @@ def fused_lora_linear_t(
     h_reduce_axis=None,
     weight_cat_fwd=None,
     transposed_output=False,
+    lowrank_sink=None,
 ):
     in_features, out_features = shape
     return FusedLoraLinearT.apply(
@@ -261,6 +328,7 @@ def fused_lora_linear_t(
         h_reduce_axis,
         weight_cat_fwd,
         transposed_output,
+        lowrank_sink,
     )
 
 
@@ -308,6 +376,9 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True, transpos
         # shard); its tail columns are rewritten with the scaled B every forward.
         if forward_transposed_matmul_kwargs(rows + TAIL_ROWS, cols, transposed_rows_hint) is not None:
             module.weight_cat_fwd = ttnn.transpose(extended, -2, -1)
+            # Iteration 38: the wide producer (SwiGLU) hands the input over transposed ([in + tail, T]) so the
+            # transposed-orientation matmul takes it as a plain operand and the backward needs no transpose_split.
+            module.transposed_input = True
         # The wide input path (iteration 24) needs h unreduced on the rank: every wrapper but a row-parallel one
         # without the batched gradients (that one all-reduces h before the tail).
         if (

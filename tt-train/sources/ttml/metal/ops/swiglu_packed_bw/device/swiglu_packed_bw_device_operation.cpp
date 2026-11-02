@@ -26,8 +26,27 @@ void SwigluPackedBwDeviceOperation::validate_on_program_cache_miss(
     check_same_device(dL_dh, packed, kOp, "dL_dh", "packed");
     swiglu_packed::validate_packed(packed, kOp);
     // dL_dh may be wider than the half width (the wide LoRA input buffer's gradient): only its first I columns
-    // are read.
-    {
+    // are read. Transposed (iteration 38): [1, 1, >= I + 32, R], rows [I, I + 32) the scaled LoRA tail.
+    if (args.transposed_grad) {
+        const auto half = swiglu_packed::halve_last_dim(packed.logical_shape());
+        const auto& g = dL_dh.logical_shape();
+        TT_FATAL(
+            half[0] * half[1] == 1 && g.rank() == 4 && g[0] * g[1] == 1 && g[-1] == half[-2] &&
+                g[-2] >= half[-1] + tt::constants::TILE_HEIGHT && g[-2] % tt::constants::TILE_HEIGHT == 0,
+            "{}: transposed dL_dh {} must be [1, 1, >= I + 32, R] for packed {}",
+            kOp,
+            g,
+            packed.logical_shape());
+        TT_FATAL(tensor_args.lora_a.has_value(), "{}: the transposed gradient needs lora_a", kOp);
+        const auto& a = tensor_args.lora_a->logical_shape();
+        check_device_tensor(*tensor_args.lora_a, kOp, "lora_a");
+        TT_FATAL(
+            a.rank() == 4 && a[0] == 1 && a[1] == 1 && a[2] <= tt::constants::TILE_HEIGHT && a[3] == half[-1],
+            "{}: lora_a {} must be [1, 1, <= 32, I {}]",
+            kOp,
+            a,
+            half[-1]);
+    } else {
         const auto half = swiglu_packed::halve_last_dim(packed.logical_shape());
         const auto& g = dL_dh.logical_shape();
         TT_FATAL(
@@ -93,16 +112,23 @@ ttsl::hash::hash_t SwigluPackedBwDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttml::metal::ops::swiglu_packed_bw::device::SwigluPackedBwDeviceOperation::tensor_return_value_t ttml_swiglu_packed_bw(
-    const ttnn::Tensor& packed, const ttnn::Tensor& dL_dh, const std::optional<ttnn::Tensor>& preallocated_dL_dpacked) {
+    const ttnn::Tensor& packed,
+    const ttnn::Tensor& dL_dh,
+    const std::optional<ttnn::Tensor>& preallocated_dL_dpacked,
+    const std::optional<ttnn::Tensor>& lora_a,
+    bool transposed_grad,
+    float lowrank_scale) {
     using Op = ttml::metal::ops::swiglu_packed_bw::device::SwigluPackedBwDeviceOperation;
 
     const auto tensor_args = Op::tensor_args_t{
         .packed = packed,
         .dL_dh = dL_dh,
         .preallocated_dL_dpacked = preallocated_dL_dpacked,
+        .lora_a = lora_a,
     };
 
-    return ttnn::device_operation::launch<Op>(Op::operation_attributes_t{}, tensor_args);
+    return ttnn::device_operation::launch<Op>(
+        Op::operation_attributes_t{.transposed_grad = transposed_grad, .lowrank_scale = lowrank_scale}, tensor_args);
 }
 
 }  // namespace ttnn::prim

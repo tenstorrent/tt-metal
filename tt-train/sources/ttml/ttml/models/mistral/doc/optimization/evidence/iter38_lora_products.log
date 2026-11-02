@@ -1,0 +1,6 @@
+dA  (i)  s_dh^T @ (x^T)^T, transpose_b (first build)      :    111 us  max|diff| 4.005e-03
+dA  (ii) (x^T @ s_dh)^T: tall-skinny + transpose          :    160 us  max|diff| 4.013e-03
+dB  (i)  h^T @ (g^T)^T, transpose_b (first build)         :     68 us  max|diff| 4.200e-03
+dB  (ii) (g^T @ h)^T: tall-skinny + transpose             :    107 us  max|diff| 3.945e-03
+h^T (i)  A_wide @ x^T, ttnn's choice (first build)        :     90 us  max|diff| 1.692e-02
+h^T (ii) (x^T)^T @ A_wide^T = transpose_a / transpose_b   :    105 us  max|diff| 1.683e-02

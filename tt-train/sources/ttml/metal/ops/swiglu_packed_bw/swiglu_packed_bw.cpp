@@ -9,8 +9,14 @@
 namespace ttml::metal {
 
 ttnn::Tensor swiglu_packed_bw(
-    const ttnn::Tensor& packed, const ttnn::Tensor& dL_dh, const std::optional<ttnn::Tensor>& preallocated_dL_dpacked) {
-    return ttnn::prim::ttml_swiglu_packed_bw(packed, dL_dh, preallocated_dL_dpacked);
+    const ttnn::Tensor& packed,
+    const ttnn::Tensor& dL_dh,
+    const std::optional<ttnn::Tensor>& preallocated_dL_dpacked,
+    const std::optional<ttnn::Tensor>& lora_a,
+    bool transposed_grad,
+    float lowrank_scale) {
+    return ttnn::prim::ttml_swiglu_packed_bw(
+        packed, dL_dh, preallocated_dL_dpacked, lora_a, transposed_grad, lowrank_scale);
 }
 
 }  // namespace ttml::metal

@@ -700,6 +700,8 @@ def test_mlp_fused_lora_wide_w2():
     w2_fwd = getattr(mlp.w2, "weight_cat_fwd", None)
     assert w2_fwd is not None and tuple(w2_fwd.shape)[-2:] == (HIDDEN, inter + 64), "w2 forward copy missing"
     assert getattr(mlp.w_gate_up, "weight_cat_fwd", None) is None
+    # Iteration 38: that w2 takes its wide input transposed from the SwiGLU (h^T in a [in + 64, T] buffer).
+    assert getattr(mlp.w2, "transposed_input", False)
     x = to_device(x_np, requires_grad=True)
     out = lora(x)
     out_val = to_host(out)

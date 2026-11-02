@@ -45,8 +45,10 @@ SkinnyContractProgramFactory::cached_program_t SkinnyContractProgramFactory::cre
     auto* device = big.device();
     tt::tt_metal::Program program{};
 
-    const uint32_t Kt = big.padded_shape()[2] / tt::constants::TILE_HEIGHT;
-    const uint32_t Nt = big.padded_shape()[3] / tt::constants::TILE_WIDTH;
+    const uint32_t Kt =
+        (args.big_transposed ? big.padded_shape()[3] : big.padded_shape()[2]) / tt::constants::TILE_HEIGHT;
+    const uint32_t Nt =
+        (args.big_transposed ? big.padded_shape()[2] : big.padded_shape()[3]) / tt::constants::TILE_WIDTH;
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_total = grid.x * grid.y;
     const uint32_t cols = std::min(kMaxCols, std::max<uint32_t>(1U, (Nt + num_cores_total - 1U) / num_cores_total));
@@ -64,6 +66,9 @@ SkinnyContractProgramFactory::cached_program_t SkinnyContractProgramFactory::cre
     std::map<std::string, std::string> defines;
     if (args.transpose_out) {
         defines["TRANSPOSE_OUT"] = "1";
+    }
+    if (args.big_transposed) {
+        defines["BIG_TRANSPOSED"] = "1";  // big tile (t, n) at page n * Kt + t
     }
     const uint32_t scale_bits = std::bit_cast<uint32_t>(args.scale);
 

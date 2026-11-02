@@ -48,7 +48,11 @@ void kernel_main() {
             uint32_t l1 = get_write_ptr(cb_big);
             for (uint32_t t = t0; t < t0 + rows; ++t) {
                 for (uint32_t j = 0; j < ncols; ++j) {
+#ifdef BIG_TRANSPOSED
+                    noc_async_read_page((n0 + j) * Kt + t, big_acc, l1 + j * tile_bytes);
+#else
                     noc_async_read_page(t * Nt + n0 + j, big_acc, l1 + j * tile_bytes);
+#endif
                 }
                 l1 += cols * tile_bytes;
             }

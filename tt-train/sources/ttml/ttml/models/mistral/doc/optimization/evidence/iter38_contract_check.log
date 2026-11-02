@@ -1,0 +1,2 @@
+dA (N = in + tail): op token-major 73 us | op big_transposed 74 us (diff 0.0e+00) | + small_transposed 68 us (diff 0.0e+00) | ttnn transpose_b 70 us (diff 3.9e-03)
+dB (N = out): op token-major 57 us | op big_transposed 55 us (diff 0.0e+00) | + small_transposed 49 us (diff 0.0e+00) | ttnn transpose_b 43 us (diff 3.9e-03)

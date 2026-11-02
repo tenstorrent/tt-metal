@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr uint32_t num_blocks_per_core = get_compile_time_arg_val(0);
@@ -21,6 +22,7 @@ constexpr uint32_t cb_gate = tt::CBIndex::c_0;
 constexpr uint32_t cb_up = tt::CBIndex::c_1;
 constexpr uint32_t cb_out = tt::CBIndex::c_2;
 constexpr uint32_t cb_silu = tt::CBIndex::c_3;
+constexpr uint32_t cb_scratch = tt::CBIndex::c_4;  // TRANSPOSED_OUTPUT: the product before its transpose
 
 // h = silu(gate) * up for one block.
 inline void swiglu_block() {
@@ -44,7 +46,22 @@ inline void swiglu_block() {
     }
     tile_regs_commit();
     cb_pop_front(cb_silu, block_size);
+#ifdef TRANSPOSED_OUTPUT
+    // h^T (iteration 38): the product once more through DEST, transposed (exact), for the writer's column scatter
+    pack_and_push_block(cb_scratch, block_size);
+    cb_wait_front(cb_scratch, block_size);
+    tile_regs_acquire();
+    transpose_init(cb_scratch);
+    for (uint32_t i = 0; i < block_size; ++i) {
+        transpose_tile(cb_scratch, i, i);
+    }
+    tile_regs_commit();
+    cb_pop_front(cb_scratch, block_size);
     pack_and_push_block(cb_out, block_size);
+    copy_init(cb_gate);  // the next block starts with copy_tile from cb_gate
+#else
+    pack_and_push_block(cb_out, block_size);
+#endif
 }
 
 void kernel_main() {

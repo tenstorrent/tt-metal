@@ -1,0 +1,3 @@
+iteration 37 path: transpose_split 119 us + swiglu_packed_bw 253 us = 371 us
+iteration 38 path: swiglu_packed_bw(transposed_grad) 276 us
+max|diff| between the two dpacked: 6.104e-05 (mean 4.17e-11)

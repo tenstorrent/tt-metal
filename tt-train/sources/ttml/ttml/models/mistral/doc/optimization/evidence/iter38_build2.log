@@ -1,0 +1,30 @@
+[0/2] Re-checking globbed directories...
+[1/27] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/softmax_backward_op.cpp.o
+[3/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/tt_profiler.cpp.o
+[4/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/layernorm_op.cpp.o
+[5/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/mla_kv_assemble_op.cpp.o
+[6/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/rmsnorm_op.cpp.o
+[7/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_packed_op.cpp.o
+[8/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw.cpp.o
+[9/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw_full_precision.cpp.o
+[10/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/losses.cpp.o
+[11/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_op.cpp.o
+[12/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/moe_ffn_swiglu_op.cpp.o
+[13/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/scaled_dot_product_attention.cpp.o
+[14/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/sgd.cpp.o
+[15/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_device_operation.cpp.o
+[16/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/qkv_causal_conv1d_silu_op.cpp.o
+[17/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_fw/swiglu_packed_fw.cpp.o
+[18/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/unary_ops.cpp.o
+[19/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_bw/swiglu_packed_bw.cpp.o
+[20/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_program_factory.cpp.o
+[21/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_program_factory.cpp.o
+[22/27] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_device_operation.cpp.o
+[23/27] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[24/27] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_2_cxx.cxx.o
+[25/27] Linking CXX static library tt-train/sources/ttml/libttml.a
+[26/27] Linking CXX shared library ttnn/_ttnncpp.so
+[27/27] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so
+build rc=0

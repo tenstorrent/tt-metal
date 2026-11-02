@@ -31,6 +31,11 @@ constexpr auto kDUpCbIndex = tt::CBIndex::c_4;    // output: grad wrt up branch
 constexpr auto kSigmoidCbIndex = tt::CBIndex::c_5;
 constexpr auto kScratchCbIndex = tt::CBIndex::c_6;
 constexpr auto kSiluGradCbIndex = tt::CBIndex::c_7;
+constexpr auto kDhTCbIndex = tt::CBIndex::c_8;    // TRANSPOSED_GRAD: dh^T tiles as read
+constexpr auto kACbIndex = tt::CBIndex::c_9;      // TRANSPOSED_GRAD: lora_a tiles of the block's columns
+constexpr auto kTailCbIndex = tt::CBIndex::c_10;  // TRANSPOSED_GRAD: the row's s_dh^T tile
+constexpr auto kSdhCbIndex = tt::CBIndex::c_11;   // TRANSPOSED_GRAD: s_dh (transposed, scaled)
+constexpr uint32_t kReaderABufferIdx = 2U;        // reader runtime arg: lora_a address
 
 }  // namespace
 
@@ -72,6 +77,14 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
     create_circular_buffer(program, all_cores, kSigmoidCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block);
+    std::map<std::string, std::string> defines;
+    if (args.transposed_grad) {
+        defines["TRANSPOSED_GRAD"] = "1";
+        create_circular_buffer(program, all_cores, kDhTCbIndex, data_format, tile_size_bytes, twice_block);
+        create_circular_buffer(program, all_cores, kACbIndex, data_format, tile_size_bytes, twice_block);
+        create_circular_buffer(program, all_cores, kTailCbIndex, data_format, tile_size_bytes, 2U);
+        create_circular_buffer(program, all_cores, kSdhCbIndex, data_format, tile_size_bytes, 1U);
+    }
 
     auto* const packed_buf = packed.buffer();
     auto* const dh_buf = dh.buffer();
@@ -79,32 +92,47 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
 
     SwigluPackedBwKernels kernels;
 
-    const uint32_t Wt_dh = tensor_args.dL_dh.padded_shape()[-1] / tt::constants::TILE_WIDTH;  // dL_dh row stride
+    // dL_dh row stride in tiles; transposed, its tile (c, r) sits at page c * Ht + r (Ht = token tile rows).
+    const uint32_t Ht = geometry.total_rows;
+    const uint32_t Wt_dh = args.transposed_grad ? Ht : tensor_args.dL_dh.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     std::vector<uint32_t> reader_ct_args{block_size, Wt, geometry.blocks_per_row, Wt_dh};
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(dh_buf).append_to(reader_ct_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
+    if (args.transposed_grad) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.lora_a->buffer()).append_to(reader_ct_args);
+    }
+    kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
+    const uint32_t scale_bits = std::bit_cast<uint32_t>(args.lowrank_scale);
 
-    std::vector<uint32_t> writer_ct_args{block_size, Wt};
+    std::vector<uint32_t> writer_ct_args{block_size, Wt, Ht};
     tt::tt_metal::TensorAccessorArgs(dpacked_buf).append_to(writer_ct_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size};
+    std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size, scale_bits, Ht};
     kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_g1_args, {}, kComputeKernelPath, true);
+        create_compute_kernel(program, core_group_1, compute_g1_args, defines, kComputeKernelPath, true);
 
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size};
+        std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size, scale_bits, Ht};
         kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_g2_args, {}, kComputeKernelPath, true);
+            create_compute_kernel(program, core_group_2, compute_g2_args, defines, kComputeKernelPath, true);
     }
 
     for_each_core_with_work(
         num_cores, num_cores_y, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2, [&](const CoreWork& work) {
             const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
             SetRuntimeArgs(
-                program, kernels.reader, core, {packed_buf->address(), dh_buf->address(), num_blocks, start_block});
+                program,
+                kernels.reader,
+                core,
+                {packed_buf->address(),
+                 dh_buf->address(),
+                 args.transposed_grad ? tensor_args.lora_a->buffer()->address() : 0U,
+                 num_blocks,
+                 start_block});
             SetRuntimeArgs(program, kernels.writer, core, {dpacked_buf->address(), num_blocks, start_block});
+            SetRuntimeArgs(
+                program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_block});
         });
 
     return cached_program_t{
@@ -135,6 +163,9 @@ void SwigluPackedBwProgramFactory::override_runtime_arguments(
             auto& args = reader_rt[core.x][core.y];
             args[kPackedBufferIdx] = tensor_args.packed.buffer()->address();
             args[kDhBufferIdx] = tensor_args.dL_dh.buffer()->address();
+            if (tensor_args.lora_a.has_value()) {
+                args[kReaderABufferIdx] = tensor_args.lora_a->buffer()->address();
+            }
         }
         writer_rt[core.x][core.y][kDPackedBufferIdx] = output.buffer()->address();
     });

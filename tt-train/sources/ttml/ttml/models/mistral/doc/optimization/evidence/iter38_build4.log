@@ -1,0 +1,4 @@
+[0/2] Re-checking globbed directories...
+[1/4] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+build rc=0

@@ -1,0 +1,7 @@
+[0/2] Re-checking globbed directories...
+[1/6] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/4] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/skinny_contract/device/skinny_contract_device_operation.cpp.o
+[3/4] Linking CXX static library tt-train/sources/ttml/libttml.a
+[4/4] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so
+build rc=0

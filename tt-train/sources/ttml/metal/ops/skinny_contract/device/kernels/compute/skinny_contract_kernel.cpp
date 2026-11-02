@@ -34,13 +34,18 @@ void kernel_main() {
         const uint32_t n0 = (work_start + item) * cols;
         const uint32_t ncols = (n0 + cols <= Nt) ? cols : (Nt - n0);
         tile_regs_acquire();
-        matmul_init(cb_small, cb_big, 0);
+#ifdef BIG_TRANSPOSED
+        constexpr uint32_t big_tr = 1;  // the big tiles arrive as (n, t): the unpacker transposes in1 for free
+#else
+        constexpr uint32_t big_tr = 0;
+#endif
+        matmul_init(cb_small, cb_big, big_tr);
         for (uint32_t t0 = 0; t0 < Kt; t0 += prefetch) {
             const uint32_t rows = (t0 + prefetch <= Kt) ? prefetch : (Kt - t0);
             cb_wait_front(cb_big, prefetch * cols);
             for (uint32_t t = t0; t < t0 + rows; ++t) {
                 for (uint32_t j = 0; j < ncols; ++j) {
-                    matmul_tiles(cb_small, cb_big, t, (t - t0) * cols + j, j);
+                    matmul_tiles(cb_small, cb_big, t, (t - t0) * cols + j, j);  // in1 transpose set by the init
                 }
             }
             cb_pop_front(cb_big, prefetch * cols);

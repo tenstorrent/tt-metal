@@ -34,6 +34,9 @@ namespace ttnn::prim {
 ttml::metal::ops::swiglu_packed_bw::device::SwigluPackedBwDeviceOperation::tensor_return_value_t ttml_swiglu_packed_bw(
     const ttnn::Tensor& packed,
     const ttnn::Tensor& dL_dh,
-    const std::optional<ttnn::Tensor>& preallocated_dL_dpacked = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_dL_dpacked = std::nullopt,
+    const std::optional<ttnn::Tensor>& lora_a = std::nullopt,
+    bool transposed_grad = false,
+    float lowrank_scale = 1.0F);
 
 }  // namespace ttnn::prim

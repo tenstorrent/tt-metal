@@ -16,6 +16,11 @@ namespace ttml::metal {
 ttnn::Tensor swiglu_packed_bw(
     const ttnn::Tensor& packed,
     const ttnn::Tensor& dL_dh,
-    const std::optional<ttnn::Tensor>& preallocated_dL_dpacked = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_dL_dpacked = std::nullopt,
+    // iteration 38: dL_dh transposed ([.., >= I + 32, R], dh^T in rows [0, I), the scaled LoRA tail s_dh^T in
+    // rows [I, I + 32)); dh += lowrank_scale * s_dh @ lora_a is folded in while the tiles are transposed in DEST
+    const std::optional<ttnn::Tensor>& lora_a = std::nullopt,
+    bool transposed_grad = false,
+    float lowrank_scale = 1.0F);
 
 }  // namespace ttml::metal

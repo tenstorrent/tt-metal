@@ -10,7 +10,7 @@
 namespace ttml::metal::ops::skinny_contract::device {
 
 void SkinnyContractDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& st = tensor_args.small_t;
     const auto& big = tensor_args.big;
     const DeviceTensorRequirements dram_bf16{.buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -25,16 +25,18 @@ void SkinnyContractDeviceOperation::validate_on_program_cache_miss(
         ss,
         bs);
     TT_FATAL(ss[2] >= 1 && ss[2] <= tt::constants::TILE_HEIGHT, "SkinnyContract: r must be <= 32, got {}", ss[2]);
-    TT_FATAL(ss[3] == bs[2], "SkinnyContract: T of small_t ({}) and big ({}) differ", ss[3], bs[2]);
-    TT_FATAL(bs[2] % tt::constants::TILE_HEIGHT == 0, "SkinnyContract: T must be a multiple of 32, got {}", bs[2]);
-    TT_FATAL(bs[3] % tt::constants::TILE_WIDTH == 0, "SkinnyContract: N must be a multiple of 32, got {}", bs[3]);
-    TT_FATAL(bs[2] / tt::constants::TILE_HEIGHT <= 128, "SkinnyContract: T must be <= 4096 (small_t resident in L1)");
+    const uint32_t T = args.big_transposed ? bs[3] : bs[2];
+    const uint32_t N = args.big_transposed ? bs[2] : bs[3];
+    TT_FATAL(ss[3] == T, "SkinnyContract: T of small_t ({}) and big ({}) differ", ss[3], T);
+    TT_FATAL(T % tt::constants::TILE_HEIGHT == 0, "SkinnyContract: T must be a multiple of 32, got {}", T);
+    TT_FATAL(N % tt::constants::TILE_WIDTH == 0, "SkinnyContract: N must be a multiple of 32, got {}", N);
+    TT_FATAL(T / tt::constants::TILE_HEIGHT <= 128, "SkinnyContract: T must be <= 4096 (small_t resident in L1)");
 }
 
 spec_return_value_t SkinnyContractDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const uint32_t r = tensor_args.small_t.logical_shape()[2];
-    const uint32_t N = tensor_args.big.logical_shape()[3];
+    const uint32_t N = args.big_transposed ? tensor_args.big.logical_shape()[2] : tensor_args.big.logical_shape()[3];
     const auto shape = args.transpose_out ? ttnn::Shape{1, 1, N, r} : ttnn::Shape{1, 1, r, N};
     return tt::tt_metal::TensorSpec(
         shape,
@@ -60,9 +62,10 @@ ttsl::hash::hash_t SkinnyContractDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttnn::Tensor ttml_skinny_contract(
-    const ttnn::Tensor& small_t, const ttnn::Tensor& big, float scale, bool transpose_out) {
+    const ttnn::Tensor& small_t, const ttnn::Tensor& big, float scale, bool transpose_out, bool big_transposed) {
     using OperationType = ttml::metal::ops::skinny_contract::device::SkinnyContractDeviceOperation;
-    auto attributes = OperationType::operation_attributes_t{.scale = scale, .transpose_out = transpose_out};
+    auto attributes = OperationType::operation_attributes_t{
+        .scale = scale, .transpose_out = transpose_out, .big_transposed = big_transposed};
     auto tensor_args = OperationType::tensor_args_t{.small_t = small_t, .big = big};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }

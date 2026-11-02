@@ -754,8 +754,9 @@ void py_module(nb::module_& m) {
             nb::arg("packed"),
             nb::arg("preallocated_output") = nb::none(),
             nb::arg("out_cols") = 0,
+            nb::arg("transposed_output") = false,
             "Fused packed-SwiGLU forward: packed [.., R, 2*I] = [gate|up] -> h = silu(gate)*up "
-            "[.., R, I].");
+            "[.., R, I]; transposed_output: [.., out_cols, R] with h^T in the first I rows, the rest zeroed.");
         py_metal.def(
             "vp_ce_row_stats",
             &ttml::metal::vp_ce_row_stats,
@@ -771,8 +772,12 @@ void py_module(nb::module_& m) {
             nb::arg("packed"),
             nb::arg("dL_dh"),
             nb::arg("preallocated_dL_dpacked") = nb::none(),
+            nb::arg("lora_a") = nb::none(),
+            nb::arg("transposed_grad") = false,
+            nb::arg("lowrank_scale") = 1.0F,
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
-            "dL/dpacked [.., R, 2*I] = [dgate|dup].");
+            "dL/dpacked [.., R, 2*I] = [dgate|dup]. transposed_grad: dL_dh is [.., >= I + 32, R] (dh^T, then the "
+            "scaled LoRA tail s_dh^T) and dh += lowrank_scale * s_dh @ lora_a is folded in.");
         py_metal.def(
             "rmsnorm_bw_allcore",
             &ttml::metal::rmsnorm_bw_allcore,
@@ -851,8 +856,11 @@ void py_module(nb::module_& m) {
             nb::arg("big"),
             nb::arg("scale") = 1.0F,
             nb::arg("transpose_out") = false,
+            nb::arg("big_transposed") = false,
+            nb::arg("small_transposed") = false,
             "scale * small^T @ big over the token dimension (small [T, r <= 32], big [T, N]) -> [r, N], or [N, r] with "
-            "transpose_out: the LoRA gradient products dB = s g^T h and dA = dh^T x on all cores, HiFi4 / fp32 acc.");
+            "transpose_out: the LoRA gradient products dB = s g^T h and dA = dh^T x on all cores, HiFi4 / fp32 acc. "
+            "big_transposed: big is [N, T]; small_transposed: small is already [r, T].");
         py_metal.def(
             "skinny_matmul",
             &ttml::metal::skinny_matmul,

@@ -17,6 +17,8 @@ namespace ttml::metal {
 ttnn::Tensor swiglu_packed_fw(
     const ttnn::Tensor& packed,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    uint32_t out_cols = 0);
+    uint32_t out_cols = 0,
+    // iteration 38: the output transposed ([.., out_cols, R], h^T in its first I rows, the rows past I zeroed)
+    bool transposed_output = false);
 
 }  // namespace ttml::metal

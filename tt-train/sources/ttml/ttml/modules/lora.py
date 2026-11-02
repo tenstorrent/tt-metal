@@ -52,21 +52,26 @@ def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
     return ttnn.addalpha(acc, update, scale)
 
 
-def skinny_contract(small, big, scale=1.0, transpose_out=False, big_transposed=False):
-    """``scale * small^T @ big`` over the token dimension (``small`` ``[T, r <= 16]``; with ``big_transposed`` the
-    second operand is stored ``[N, T]`` and enters through ttnn's free in1 transpose, iteration 37).
+def skinny_contract(small, big, scale=1.0, transpose_out=False, big_transposed=False, small_transposed=False):
+    """``scale * small^T @ big`` over the token dimension (``small`` ``[T, r <= 16]``, or ``[r, T]`` with
+    ``small_transposed``; with ``big_transposed`` the second operand is stored ``[N, T]``: iteration 38 reads it
+    column-wise in the all-core op, which beat ttnn's transpose_b route at these shapes, `O/iter38_lora_products.log`).
 
     Routing by the iteration-18 standalone table (``O/iter18_orientation_check.log``, ``O/iter18_build_check.log``):
     ``dA = dh^T x`` (``[r, N]``) stays on ttnn's transposed-a matmul, its fast orientation (312 GB/s at N = 5120);
     wide ``dB = s g^T h`` (``[N, r]``, ``N >= 4096``: gate_up / out / w2) is that same product plus a transpose of
     the small ``[r, N]`` output (110 / 41 us vs 156 / 55 for ttnn's ``[N, r]`` orientation and 123 / 53 for the op
     at N = 16384 / 5120); the narrow dB (qkv, N = 1536) goes to the all-core op (25 vs 28 / 39 us)."""
-    r, T = small.shape[-1], small.shape[-2]
+    r, T = (small.shape[-2], small.shape[-1]) if small_transposed else (small.shape[-1], small.shape[-2])
     N = big.shape[-2] if big_transposed else big.shape[-1]
     cfg = lora_matmul_config()
+    if big_transposed:
+        return ttml.ops.metal.skinny_contract(
+            small, big, scale, transpose_out, big_transposed=True, small_transposed=small_transposed
+        )
+    assert not small_transposed, "a transposed small operand is only routed with a transposed big one"
     if (
-        not big_transposed
-        and transpose_out
+        transpose_out
         and N < SKINNY_CONTRACT_MAX_N
         and r <= 16
         and T % 32 == 0
@@ -277,6 +282,7 @@ class LoraLinear(AbstractModuleBase):
                 self.frozen_shape,
                 weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                 transposed_output=getattr(self, "transposed_output", False),
+                lowrank_sink=self,
             )
         base = _base_linear(self, x, bias)
         lora_input = x
@@ -336,6 +342,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
                 reduce_axis=None if getattr(self, "tp_partial_grads", None) else self.cluster_axis,
                 weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                 transposed_output=getattr(self, "transposed_output", False),
+                lowrank_sink=self,
             )
         base = _base_linear(self, x, bias_t)
         if self.gather_output:
@@ -419,6 +426,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
                     self.frozen_shape,
                     weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                     transposed_output=getattr(self, "transposed_output", False),
+                    lowrank_sink=self,
                 )
             else:
                 # A is row-sharded (h partial, all-reduced inside), B replicated: the tail carries s/tp * B^T so
@@ -436,6 +444,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
                     h_reduce_axis=self.cluster_axis,
                     weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                     transposed_output=getattr(self, "transposed_output", False),
+                    lowrank_sink=self,
                 )
             out = ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
             if self.bias is not None:

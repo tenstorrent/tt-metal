@@ -13,6 +13,8 @@ namespace ttml::metal::ops::skinny_contract::device {
 struct Params {
     float scale = 1.0F;
     bool transpose_out = false;
+    bool big_transposed =
+        false;  // iteration 38: big is stored [1, 1, N, T] (g^T, x^T), its tile (t, n) at page n * Kt + t
 };
 
 struct Inputs {

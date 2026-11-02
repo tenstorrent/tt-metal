@@ -1,0 +1,28 @@
+=== gate_up forward transposed [16384, 5184] x [1024, 5184]^T on 11x10 2026-11-02T12:06:46Z
+M=16384 K=5184 N=1024 transpose_b: ttnn's choice on 11x10: 1.681 ms 103.5 TFLOP/s
+  2D 11x10 pcM 52 pcN 3 depth  2 sub 1x3: 1.626 ms  107.0 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 52 pcN 3 depth  2 sub 4x1: 1.593 ms  109.2 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 52 pcN 3 depth  2 sub 2x1: 1.680 ms  103.6 TFLOP/s  max|diff| 0.00e+00
+  2D depth 3 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 3 sub 4x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 3 sub 2x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 6 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 6 sub 4x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 6 sub 2x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 9 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 9 sub 4x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 9 sub 2x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+=== reference: the committed 1D config (16x5, depth 9) and ttnn's choice
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 1.96 ms, 88.7 TFLOP/s wall
+      1.62 ms    107.5 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+      1.62 ms    107.5 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+=== done 2026-11-02T12:06:59Z
+=== gate_up transposed with out_block_h < per_core_M 2026-11-02T12:07:22Z
+M=16384 K=5184 N=1024 transpose_b: ttnn's choice on 11x10: 1.679 ms 103.6 TFLOP/s
+  2D 11x10 pcM 52 pcN 3 depth  3 sub 1x3 out_block_h 13: 1.595 ms  109.1 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 52 pcN 3 depth  3 sub 1x3 out_block_h 26: 1.585 ms  109.7 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 52 pcN 3 depth  6 sub 1x3 out_block_h 13: 1.533 ms  113.5 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 52 pcN 3 depth  6 sub 1x3 out_block_h 26: 1.532 ms  113.5 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 52 pcN 3 depth  9 sub 1x3 out_block_h 13: 1.497 ms  116.2 TFLOP/s  max|diff| 3.12e-02
+  2D depth 9 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+=== done 2026-11-02T12:07:49Z

@@ -10,6 +10,9 @@ namespace ttml::metal::ops::swiglu_packed_fw::device {
 
 struct SwigluPackedFwParams {
     uint32_t out_cols = 0;  // output width (>= I, multiple of 32; 0 = I): the wide LoRA input buffer (iteration 24)
+    // iteration 38: the output transposed, [.., out_cols, R] with h^T in rows [0, I) and the rows past I zeroed
+    // (the transposed wide LoRA input buffer of a transposed-orientation w2)
+    bool transposed_output = false;
 };
 
 // `packed` [.., R, 2*I] = [gate | up]; output h = silu(gate) * up, [.., R, I].

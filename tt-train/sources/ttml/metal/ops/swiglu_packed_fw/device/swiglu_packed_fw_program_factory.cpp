@@ -26,6 +26,8 @@ constexpr auto kGateCbIndex = tt::CBIndex::c_0;
 constexpr auto kUpCbIndex = tt::CBIndex::c_1;
 constexpr auto kOutCbIndex = tt::CBIndex::c_2;
 constexpr auto kSiluCbIndex = tt::CBIndex::c_3;
+constexpr auto kScratchCbIndex = tt::CBIndex::c_4;  // TRANSPOSED_OUTPUT: the product before its transpose
+constexpr auto kZeroCbIndex = tt::CBIndex::c_5;     // TRANSPOSED_OUTPUT: one zero tile for the tail rows
 
 }  // namespace
 
@@ -62,6 +64,12 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     create_circular_buffer(program, all_cores, kUpCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kOutCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kSiluCbIndex, data_format, tile_size_bytes, twice_block);
+    std::map<std::string, std::string> defines;
+    if (args.transposed_output) {
+        defines["TRANSPOSED_OUTPUT"] = "1";
+        create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
+        create_circular_buffer(program, all_cores, kZeroCbIndex, data_format, tile_size_bytes, 1U);
+    }
 
     auto* const packed_buf = packed.buffer();
     auto* const output_buf = output.buffer();
@@ -70,28 +78,39 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
 
     std::vector<uint32_t> reader_ct_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    const uint32_t Wt_out = output.padded_shape()[-1] / tt::constants::TILE_WIDTH;  // output row stride (>= Wt)
+    // Row stride of the output in tiles: the (possibly wider) row for the plain layout, the token count for the
+    // transposed one (its tile (c, r) sits at page c * Ht + r).
+    const uint32_t Ht = geometry.total_rows;
+    const uint32_t Wt_out = args.transposed_output ? Ht : output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     std::vector<uint32_t> writer_ct_args{block_size, geometry.blocks_per_row, Wt_out};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_ct_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
+    // TRANSPOSED_OUTPUT: the rows past I (the LoRA tail rows of the wide buffer) are zeroed by the first core.
+    const uint32_t out_tile_rows = args.transposed_output ? output.padded_shape()[-2] / tt::constants::TILE_HEIGHT : 0U;
+    const uint32_t zero_start = Wt * Ht;
+    const uint32_t zero_tiles = args.transposed_output && out_tile_rows > Wt ? (out_tile_rows - Wt) * Ht : 0U;
 
     std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size};
     kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_g1_args, {}, kComputeKernelPath, true);
+        create_compute_kernel(program, core_group_1, compute_g1_args, defines, kComputeKernelPath, true);
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size};
         kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_g2_args, {}, kComputeKernelPath, true);
+            create_compute_kernel(program, core_group_2, compute_g2_args, defines, kComputeKernelPath, true);
     }
 
     for_each_core_with_work(
         num_cores, num_cores_y, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2, [&](const CoreWork& work) {
             const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
             SetRuntimeArgs(program, kernels.reader, core, {packed_buf->address(), num_blocks, start_block});
-            SetRuntimeArgs(program, kernels.writer, core, {output_buf->address(), num_blocks, start_block});
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {output_buf->address(), num_blocks, start_block, zero_start, core_index == 0 ? zero_tiles : 0U});
         });
 
     return cached_program_t{

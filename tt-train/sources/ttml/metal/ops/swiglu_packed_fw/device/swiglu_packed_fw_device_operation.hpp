@@ -34,6 +34,7 @@ namespace ttnn::prim {
 ttml::metal::ops::swiglu_packed_fw::device::SwigluPackedFwDeviceOperation::tensor_return_value_t ttml_swiglu_packed_fw(
     const ttnn::Tensor& packed,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    uint32_t out_cols = 0);
+    uint32_t out_cols = 0,
+    bool transposed_output = false);
 
 }  // namespace ttnn::prim
