@@ -475,7 +475,8 @@ def gated_attention_forward_ttnn(
                 device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
             ),
         )
-        attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
+        if not (lean and _os.environ.get("QWEN36_1C_ATTN_TAIL") == "1"):
+            attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
         new_key = paged_kv_cache_key
         new_value = paged_kv_cache_value
         _paged_sdpa_done = True  # Skip the bottom SDPA section (attn_output already computed)
@@ -655,15 +656,33 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(query_states)
 
     # Convert from [B, H, T, D] back to [B, T, H*D]
-    if use_optimized_concat:
+    attn_tail = lean and _os.environ.get("QWEN36_1C_ATTN_TAIL") == "1"
+    if attn_tail:
+        # QWEN36_1C_ATTN_TAIL: SDPA's [1, 1, H, D] -> [H, 1, 1, D] (one head per tile-row) by one permute, whose
+        # tile sequence IS [1, 1, 1, H*D], so a view finishes the head concat (was transpose + concatenate_heads).
+        H, Dh = num_attention_heads, head_dim
+        attn_output = ttnn.permute(attn_output, (2, 0, 1, 3))
+        attn_output = ttnn.experimental.view(
+            attn_output, ttnn.Shape([1, 1, 1, H * Dh]), ttnn.Shape([1, 1, ttnn.TILE_SIZE, H * Dh])
+        )
+    elif use_optimized_concat:
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
     else:
         attn_output = ttnn.transpose(attn_output, 1, 2)
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
 
     # Apply sigmoid gate
-    gate = ttnn.sigmoid(gate)
-    attn_output = ttnn.multiply(attn_output, gate)
+    if attn_tail:
+        # sigmoid rides on the multiply, which writes L1 so the o_proj's to_memory_config below is a no-op.
+        attn_output = ttnn.multiply(
+            attn_output,
+            gate,
+            input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    else:
+        gate = ttnn.sigmoid(gate)
+        attn_output = ttnn.multiply(attn_output, gate)
     ttnn.deallocate(gate)
 
     # Output projection

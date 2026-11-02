@@ -73,3 +73,24 @@ def test_attn_qgview(mesh_device):
         exact = (a == b).float().mean().item()
         print(f"qgview {name}: shape {tuple(b.shape)} bit-exact {100 * exact:.2f}%  max|d| {(a - b).abs().max().item():.3e}")
         assert exact == 1.0
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_attn_tail(mesh_device):
+    """QWEN36_1C_ATTN_TAIL: SDPA out [1,1,H,D] -> permute + view + multiply(sigmoid fused, L1) against transpose +
+    concatenate_heads + sigmoid + multiply. Expect bit-exact."""
+    torch.manual_seed(2)
+    H = 24
+    o = ttnn.from_torch(torch.randn(1, 1, H, D).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device)
+    g = ttnn.from_torch((torch.randn(1, 1, H * D) * 3).to(torch.bfloat16), dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    a0 = ttnn.transformer.concatenate_heads(ttnn.transpose(o, 1, 2))
+    a0 = ttnn.to_torch(ttnn.multiply(a0, ttnn.sigmoid(g))).float()
+    a1 = ttnn.experimental.view(ttnn.permute(o, (2, 0, 1, 3)), ttnn.Shape([1, 1, 1, H * D]),
+                                ttnn.Shape([1, 1, ttnn.TILE_SIZE, H * D]))
+    a1 = ttnn.to_torch(ttnn.multiply(a1, g, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
+                                     memory_config=ttnn.L1_MEMORY_CONFIG)).float()
+    exact = (a0 == a1).float().mean().item()
+    print(f"tail: shape {tuple(a1.shape)} bit-exact {100 * exact:.2f}%  max|d| {(a0 - a1).abs().max().item():.3e}")
+    assert exact == 1.0
