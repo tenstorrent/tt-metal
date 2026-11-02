@@ -349,10 +349,10 @@ CBHandle Metal1ProgramBuilder::add_circular_buffer_(const std::shared_ptr<Circul
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
-        owner_.invalidate_circular_buffer_allocation();
+        owner_.cb_allocator().invalidate();
     } else {
         circular_buffer->assign_global_address();
-        // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
+        // cb_allocator().invalidate() would have done this; adding a buffer still means
         // the program has to be laid out again.
         owner_.compile_and_allocate_needed_ = true;
     }
@@ -361,7 +361,7 @@ CBHandle Metal1ProgramBuilder::add_circular_buffer_(const std::shared_ptr<Circul
 
     // A globally allocated CB does need l1 allocation
     if (!circular_buffer->globally_allocated()) {
-        register_ephemeral_allocation(owner_.cb_allocation_metadata_, circular_buffer->core_ranges());
+        owner_.cb_allocator().register_cores(circular_buffer->core_ranges());
     }
     return handle;
 }
@@ -610,7 +610,7 @@ KernelHandle Metal1ProgramBuilder::create_dram_kernel(
 void Metal1ProgramBuilder::update_circular_buffer_total_size(CBHandle cb_handle, uint32_t total_size) {
     std::shared_ptr<CircularBufferImpl> circular_buffer = get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
-        owner_.invalidate_circular_buffer_allocation();
+        owner_.cb_allocator().invalidate();
     }
     circular_buffer->set_total_size(total_size);
 }

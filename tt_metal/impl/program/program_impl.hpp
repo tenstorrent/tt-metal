@@ -20,6 +20,7 @@
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "program_builder.hpp"
+#include "program_cb_allocator.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
@@ -244,6 +245,9 @@ public:
     // Metal 1.0 construction of kernels, circular buffers and semaphores (see host_api.hpp CreateKernel etc.)
     Metal1ProgramBuilder& builder() { return builder_; }
     const Metal1ProgramBuilder& builder() const { return builder_; }
+    // Placement of the circular buffers of the program in L1.
+    Metal1CircularBufferAllocator& cb_allocator() { return cb_allocator_; }
+    const Metal1CircularBufferAllocator& cb_allocator() const { return cb_allocator_; }
 
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
@@ -284,13 +288,10 @@ public:
     /// TT_METAL_FORCE_JIT_COMPILE is set). A program is compiled once per build key; later calls return early.
     void compile(IDevice* device, bool force_slow_dispatch = false);
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
-    void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
-    // Call before allocate_circular_buffers, allocate_dataflow_buffers and allocate_scratchpads.
+    // Call before cb_allocator().allocate, allocate_dataflow_buffers and allocate_scratchpads.
     // Seals the program's cores in the device's persistent L1 and sets the base address of every registered region.
     void prepare_ephemeral_allocation(const IDevice* device);
-    // Always used in conjunction with validate_circular_buffer_region and compile
-    void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
@@ -562,21 +563,7 @@ public:
 
     void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
 
-    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
-    void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
-    // Ensures that circular buffer core ranges are within the device compute grid
-    void validate_circular_buffer_core_ranges(const IDevice* device);
-
-    // Deallocate circular buffers and unregister from devices
-    void deallocate_circular_buffers();
-
-    // CB tracking for SHM memory reporting
-    // Merge exact core-range unions before expanding to individual cores.
-    void merge_cb_l1_regions_by_core_range(
-        std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const;
-    static std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> expand_cb_l1_regions_per_core(
-        const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range);
 
     bool runs_on_noc_multicast_only_cores();
 
@@ -687,15 +674,13 @@ private:
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
     // Metal 1.0 construction state: kernels, circular buffers and semaphores
     Metal1ProgramBuilder builder_;
+    Metal1CircularBufferAllocator cb_allocator_;
     uint64_t id;        // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     std::vector<CoreCoord> grid_extent_;
 
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    EphemeralAllocationMetadata cb_allocation_metadata_;
-    // Tracks which devices this program has CBs allocated on (for CB memory reporting)
-    std::unordered_set<const IDevice*> cb_devices_;
 
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
@@ -751,7 +736,6 @@ private:
     bool created_from_spec_ = false;
 
     std::unordered_set<uint64_t> compiled_;
-    bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 
     // Guards compile_and_allocate, which runs on every enqueue of a program, not just the first.
@@ -821,6 +805,7 @@ private:
         bool use_prefetcher_cache);
 
     friend class Metal1ProgramBuilder;
+    friend class Metal1CircularBufferAllocator;
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;

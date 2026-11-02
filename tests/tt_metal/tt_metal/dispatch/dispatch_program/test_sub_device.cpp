@@ -47,7 +47,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
 
-// Access to internal API: ProgramImpl::validate_circular_buffer_region
+// Access to internal API: Metal1CircularBufferAllocator::validate_region
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -101,14 +101,14 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
     program.impl().prepare_ephemeral_allocation(mesh_device.get());
-    program.impl().allocate_circular_buffers(mesh_device.get());
-    program.impl().validate_circular_buffer_region(mesh_device.get());
+    program.impl().cb_allocator().allocate(mesh_device.get());
+    program.impl().cb_allocator().validate_region(mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 4);
     program.impl().prepare_ephemeral_allocation(mesh_device.get());
-    program.impl().allocate_circular_buffers(mesh_device.get());
-    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
+    program.impl().cb_allocator().allocate(mesh_device.get());
+    EXPECT_THROW(program.impl().cb_allocator().validate_region(mesh_device.get()), std::exception);
     global_buffer.reset();
-    program.impl().validate_circular_buffer_region(mesh_device.get());
+    program.impl().cb_allocator().validate_region(mesh_device.get());
     program.impl().compile_and_allocate(mesh_device.get(), false);
     program.impl().compile_and_allocate(mesh_device.get(), false);  // cached layout, still no L1 collision
     ShardSpecBuffer local_shard_spec_buffer =
@@ -121,12 +121,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     };
 
     auto local_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_2, mesh_device.get());
-    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
+    EXPECT_THROW(program.impl().cb_allocator().validate_region(mesh_device.get()), std::exception);
     EXPECT_THROW(program.impl().compile_and_allocate(mesh_device.get(), false), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
     program.impl().prepare_ephemeral_allocation(mesh_device.get());
-    program.impl().allocate_circular_buffers(mesh_device.get());
-    program.impl().validate_circular_buffer_region(mesh_device.get());
+    program.impl().cb_allocator().allocate(mesh_device.get());
+    program.impl().cb_allocator().validate_region(mesh_device.get());
     EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
     EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
     mesh_device->clear_loaded_sub_device_manager();
