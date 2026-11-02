@@ -3,7 +3,9 @@
 `BONSAI_NATIVE=pq2_0` runs every ternary projection of Ternary Bonsai 2 27B at decode straight from
 the PQ2_0 GGUF: 2-bit codes as `BFLOAT2_B` tiles plus the fp16 per-128-group scales (held as fp32),
 applied inside the matmul. Nothing is requantized. `BONSAI_NATIVE_SITES` picks sites (default: all
-of `mlp, gdn_in, gdn_out, attn_qkv, attn_o, lm_head`); decode only (M = 1).
+of `mlp, gdn_in, gdn_out, attn_qkv, attn_o, lm_head`); decode only (M = 1). Defaults: 256 B code
+tiles with a forced exponent (`BONSAI_A2B=0` for 320 B Bfp2_b) and the 32 A3 workers as two
+rectangles (`BONSAI_A3_RECT=0` for the scattered set).
 
 ## Data path per projection
 
@@ -31,7 +33,10 @@ once, never rewritten), `linear.TernaryLinear` (one projection), `mlp.TernaryMLP
 | + exact-ternary MLP | 59.01 | 95.31 / 100.00 |
 | + GDN in/out (vs MLP-only 58.24, same session) | 49.43 | 95.70 / 100.00 |
 | all sites (counted, vs control 79.09) | 44.25 | 95.51 / 100.00 |
-| + A2b 256 B code tiles + rectangular workers (dev) | 39.62 | 95.51 / 100.00 |
+| + A2b 256 B code tiles + rectangular workers (vs 44.25 same session) | 39.40 | 95.51 / 100.00 |
+
+Against the six-flag control: 2.01x (12.6 -> 25.4 tok/s). Q2_0 runs number for number as PQ2_0
+(bit-identical codes, deduplicated scales; the cost of finer groups was not measured).
 
 Op level (device us, real weights, PCC >= 0.99999 vs float64 cpu_ref): MLP 240 per layer (dense
 ~575), GDN [qkv|z] 79 (dense 259), ssm_out / attn_output 38 (91 / 102), attn qkv 71 (215),
