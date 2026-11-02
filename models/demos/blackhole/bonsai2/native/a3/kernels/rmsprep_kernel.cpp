@@ -291,7 +291,9 @@ void kernel_main() {
     for (uint32_t c = 0; c < 32; ++c) {
         rr[c] = rbits;
     }
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(3)) = rbits;  // rb shard: what MATH reads
+    volatile tt_l1_ptr uint32_t* rbw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(3));
+    rbw[0] = rbits;  // rb shard: what the MATH RISC reads (emit) ...
+    rbw[1] = 1;      // ... once this flag is up (MATH cleared it at its start, before our partial could exist)
     cb_push_back(cb_r, 1);  // the signal: TRISC unpack waits on it, MATH follows the unpacker
 
     // 4. scatter, as prep_hadamard_kernel.cpp
@@ -321,6 +323,9 @@ void kernel_main() {
         }
     }
 #elif defined(COMPILE_FOR_TRISC)
+    if constexpr (emit) {  // the rb flag: BRISC sets it after writing rstd, which needs our partial, so this is first
+        MATH((reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(0))[1] = 0));
+    }
     deepseek_compute_kernel_init();
     // 1. one acquire: x -> slot 0, g -> slot 1; slot 2 = x^2 column-reduced (the partial, -> cb_p),
     //    slot 0 = y' = x * g (-> cb_y32 as one bf16 tile; BRISC re-lays it for custom_mm). rstd is
@@ -401,7 +406,14 @@ void kernel_main() {
         reconfig_data_format_srca(cb_r, cb_y32);
         copy_init(cb_y32);
         copy_tile(cb_y32, 0, 5);
-        MATH((sfpu_section([r_addr] { scale_slot5(sfpi::vFloat(*reinterpret_cast<volatile float*>(r_addr))); })));
+        // The MATH RISC runs ahead of the Tensix queue (copy_tile waiting on cb_r doesn't stop it), so wait for
+        // BRISC's flag before reading rstd as a scalar.
+        MATH((sfpu_section([r_addr] {
+            volatile uint32_t* rb = reinterpret_cast<volatile uint32_t*>(r_addr);
+            while (rb[1] != 1) {
+            }
+            scale_slot5(sfpi::vFloat(*reinterpret_cast<volatile float*>(r_addr)));
+        })));
     }
     tile_regs_commit();
     tile_regs_wait();
