@@ -39,7 +39,7 @@ def test_sparse_split(mesh_device, pdt):
         if fp8
         else (torch.randn(1, 1, R, D, generator=g) * 0.5)
     )
-    q_t = torch.randn(1, H, S, D, generator=g).to(torch.bfloat16)
+    q_t = (torch.randn(1, H, S, D, generator=g) * float(os.environ.get("SS_QSCALE", "1"))).to(torch.bfloat16)
     nvs = [640, 640, 600, 513, 300, 129, 128, 1][:S] + [640] * max(0, S - 8)
     idx_t = torch.full((1, 1, S, TOPK), -1, dtype=torch.int32)
     for r in range(S):
@@ -81,7 +81,12 @@ def test_sparse_split(mesh_device, pdt):
     t_ref = (time.time() - t0) / reps * 1e6
     print(f"SS_REF pdt={pdt} S={S}: {t_ref:.1f} us/call (eager wall)")
     for G in splits:
-        f = lambda: SS.sparse_sdpa_split(q, kv, idx, D, scale, kchunk, G, ckc, sink)
+        qin = q
+        if os.environ.get("SS_QTILE") == "1":  # real layout: q as [1,S,32,512] TILE, pad rows 9.. = NaN
+            qp = q_t.permute(0, 2, 1, 3).clone()
+            qp[:, :, 9:, :] = float("nan")
+            qin = up(qp, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        f = lambda: SS.sparse_sdpa_split(qin, kv, idx, D, scale, kchunk, G, ckc, sink)
         o = ttnn.to_torch(ttnn.get_device_tensors(f())[0]).float()
         ttnn.synchronize_device(md)
         t0 = time.time()
