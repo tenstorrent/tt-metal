@@ -19,8 +19,6 @@ import re
 import subprocess
 import sys
 
-from precommit_common import safe_git_rev, safe_repo_path
-
 # Compile regex patterns once at module level for the methods we check
 _METHOD_NAMES = ["validate", "compute_output_specs", "create_program", "create_program_at"]
 _METHOD_PATTERNS = {name: re.compile(rf"\b{re.escape(name)}\s*[<(]") for name in _METHOD_NAMES}
@@ -31,11 +29,8 @@ def check_has_non_static_method(filepath, method_name):
     Check if a method exists and is non-static.
     Returns True if a non-static declaration is found.
     """
-    resolved = safe_repo_path(filepath)
-    if resolved is None:
-        return False
     try:
-        with open(resolved, "r") as f:
+        with open(filepath, "r") as f:
             content = f.read()
     except FileNotFoundError:
         return False
@@ -76,12 +71,9 @@ def check_file_for_legacy_class(filepath):
 
 def _file_exists_in_git(filepath, ref):
     """Check if a file exists in a git ref."""
-    safe_ref = safe_git_rev(ref)
-    if safe_ref is None:
-        return False
     try:
         subprocess.check_output(
-            ["git", "cat-file", "-e", f"{safe_ref}:{filepath}"],
+            ["git", "cat-file", "-e", f"{ref}:{filepath}"],
             stderr=subprocess.DEVNULL,
         )
         return True
@@ -91,23 +83,21 @@ def _file_exists_in_git(filepath, ref):
 
 def _auto_detect_from_ref(to_ref):
     """Auto-detect from_ref by finding merge base with common branches."""
-    safe_to = safe_git_rev(to_ref)
-    if safe_to is not None:
-        for base_branch in ["origin/main", "main", "origin/master", "master"]:
-            try:
-                subprocess.check_output(
-                    ["git", "rev-parse", "--verify", base_branch],
-                    stderr=subprocess.DEVNULL,
-                )
-                merge_base = subprocess.check_output(
-                    ["git", "merge-base", safe_to, base_branch],
-                    stderr=subprocess.DEVNULL,
-                    encoding="utf-8",
-                ).strip()
-                if merge_base:
-                    return merge_base
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                continue
+    for base_branch in ["origin/main", "main", "origin/master", "master"]:
+        try:
+            subprocess.check_output(
+                ["git", "rev-parse", "--verify", base_branch],
+                stderr=subprocess.DEVNULL,
+            )
+            merge_base = subprocess.check_output(
+                ["git", "merge-base", to_ref, base_branch],
+                stderr=subprocess.DEVNULL,
+                encoding="utf-8",
+            ).strip()
+            if merge_base:
+                return merge_base
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
 
     # Fallback: try HEAD^ for local pre-commit (before commit)
     try:

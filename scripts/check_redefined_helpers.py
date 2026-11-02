@@ -17,6 +17,7 @@ Run ``python3 scripts/check_redefined_helpers.py --list`` to print the catalog.
 """
 
 import argparse
+import bisect
 import os
 import re
 import subprocess
@@ -102,16 +103,19 @@ Device (RISC-V kernels, firmware, tt_metal/hw)
 """
 
 FUNC_NAME = re.compile(
-    r"\b(?P<name>(?:div_up|round_up|round_down|align_up|align_down|align|is_power_of_two|is_power_of_2)"
-    r"(?:_[A-Za-z0-9]+)*)\s*(?:<[^;>]{0,160}>)?\s*\("
+    r"\b(?P<name>div_up|round_up_to_mul16|round_up_to_mul32|round_up_to_tile|"
+    r"round_up|round_down|align_power_of_2|align_up|align_down|align|"
+    r"is_power_of_two|is_power_of_2)\s*(?:<[^;>]{0,160}>)?\s*\("
 )
 MACRO_NAME = re.compile(
-    r"^\s*#\s*define\s+(?P<name>(?:div_up|round_up|round_down|align_up|align_down|"
-    r"TILE_HEIGHT|TILE_WIDTH|TILE_HW|FACE_HEIGHT|FACE_WIDTH|FACE_HW|L1_ALIGNMENT))\b"
+    r"^\s*#\s*define\s+(?P<name>div_up|round_up_to_mul16|round_up_to_mul32|round_up_to_tile|"
+    r"round_up|round_down|align_power_of_2|align_up|align_down|"
+    r"TILE_HEIGHT|TILE_WIDTH|TILE_HW|FACE_HEIGHT|FACE_WIDTH|FACE_HW|L1_ALIGNMENT)\b(?P<rest>.*)",
+    re.S,
 )
 CONST_NAME = re.compile(
     r"\b(?P<name>TILE_HEIGHT|TILE_WIDTH|TILE_HW|FACE_HEIGHT|FACE_WIDTH|FACE_HW|L1_ALIGNMENT)\s*"
-    r"(?:=\s*(?P<eq>[^;]*)|\{\s*(?P<br>[^}]*)\})"
+    r"(?:=\s*(?P<eq>[^;{}]*)|\{\s*(?P<br>[^};]*)\})"
 )
 L1_FUNC = re.compile(
     r"\b(?P<name>get_max_l1_space|get_static_l1_space|available_program_l1_capacity|"
@@ -121,11 +125,25 @@ L1_VAR = re.compile(
     r"\b(?:max_l1(?:_[A-Za-z0-9]+)?|usable_l1(?:_[A-Za-z0-9]+)?|available_l1(?:_[A-Za-z0-9]+)?|"
     r"free_l1(?:_[A-Za-z0-9]+)?|static_l1(?:_[A-Za-z0-9]+)?|l1_budget|l1_space)\b"
 )
-L1_RAW = re.compile(r"\b(?:l1_size_per_core|lowest_occupied_compute_l1_address|get_base_allocator_addr)\s*\(")
+L1_RAW = re.compile(r"\b(l1_size_per_core|lowest_occupied_compute_l1_address|get_base_allocator_addr)\s*\(")
 L1_CANON_CALL = re.compile(
     r"\b(?:get_max_l1_space|get_static_l1_space|available_program_l1_capacity|usable_program_l1_capacity)\s*\("
 )
-INT_LITERAL = re.compile(r"^\(?\s*[+-]?(?:0[xX][0-9A-Fa-f]+|\d+)(?:[uUlL])*\s*\)?$")
+INT_LITERAL = re.compile(r"^\(?\s*[+-]?(?:0[xX][0-9A-Fa-f']+|[\d']+)(?:[uUlL])*\s*\)?$")
+CANONICAL_CONST_VALUES = {
+    "TILE_HEIGHT": 32,
+    "TILE_WIDTH": 32,
+    "TILE_HW": 1024,
+    "FACE_HEIGHT": 16,
+    "FACE_WIDTH": 16,
+    "FACE_HW": 256,
+}
+DEVICE_INCLUDE = re.compile(
+    r'^\s*#\s*include\s+"(?:api/(?:compute|dataflow|debug|tensor|alignment\.h|tile_constants\.h)|'
+    r"compute_kernel_api\.h|dataflow_api\.h)",
+    re.M,
+)
+HOST_INCLUDE = re.compile(r"^\s*#\s*include\s+<tt-metalium/", re.M)
 STATEMENT_KEYWORDS = {
     "return",
     "co_return",
@@ -190,13 +208,23 @@ def relpath(path):
     return path
 
 
-def side_of(path):
+def side_of(path, text=""):
     """Which compiler this file is built with: host, device, or both."""
-    if "hostdev" in path:
+    if "hostdev" in path or "/shared_with_host/" in path:
         return "both"
-    if path.startswith("tt_metal/hw/") or "/hw/inc/" in path or "/firmware/" in path:
+    has_dev_inc = bool(text and DEVICE_INCLUDE.search(text))
+    has_host_inc = bool(text and HOST_INCLUDE.search(text))
+    if has_dev_inc and has_host_inc:
+        return "both"
+    if has_dev_inc:
         return "device"
-    if re.search(r"(^|/)(test_)?kernels?(/|$)", path):
+    if has_host_inc:
+        return "host"
+    if path.startswith("tt_metal/hw/") or "/hw/inc/" in path or "/hw/firmware/" in path:
+        return "device"
+    if re.search(r"(^|/)(?:(?:test_)?kernels?|kernel_common|kernel_helper_functions)(/|$)", path):
+        return "device"
+    if re.search(r"(^|/)(?:[^/]*_)?(?:dataflow|compute)(?:_[^/]*)?\.(?:h|hpp|c|cc|cpp|inl)$", path):
         return "device"
     return "host"
 
@@ -232,26 +260,101 @@ def comment_opts_out(original, masked):
 
 
 def base_of(name):
-    for base in (
-        "is_power_of_two",
-        "is_power_of_2",
-        "div_up",
-        "round_up",
-        "round_down",
-        "align_up",
-        "align_down",
-        "align",
-    ):
-        if name == base or name.startswith(base + "_"):
-            return base
+    if name in {"round_up_to_mul16", "round_up_to_mul32", "round_up_to_tile"}:
+        return "round_up"
+    if name == "align_power_of_2":
+        return "align"
     return name
+
+
+def _eval_atom(token):
+    token = token.strip()
+    while token.startswith("(") and token.endswith(")"):
+        inner = token[1:-1].strip()
+        if "(" in inner or ")" in inner:
+            break
+        token = inner
+    if token.startswith("tt::constants::"):
+        token = token[len("tt::constants::") :]
+    if token in CANONICAL_CONST_VALUES:
+        return CANONICAL_CONST_VALUES[token]
+    if not INT_LITERAL.match(token):
+        return None
+    cleaned = re.sub(r"[uUlL'\s()]", "", token)
+    try:
+        return int(cleaned, 0)
+    except ValueError:
+        return None
+
+
+def _eval_const_rhs(rhs):
+    rhs = rhs.strip()
+    while rhs.startswith("(") and rhs.endswith(")"):
+        inner = rhs[1:-1].strip()
+        if "(" in inner or ")" in inner:
+            break
+        rhs = inner
+    if not rhs:
+        return None
+    if "<<" in rhs:
+        parts = rhs.split("<<")
+        if len(parts) != 2:
+            return None
+        left, right = _eval_atom(parts[0]), _eval_atom(parts[1])
+        if left is None or right is None or not (0 <= right <= 32):
+            return None
+        return left << right
+    product = 1
+    for part in rhs.split("*"):
+        val = _eval_atom(part)
+        if val is None:
+            return None
+        product *= val
+    return product
+
+
+def const_value_matches(name, rhs):
+    """True when ``rhs`` evaluates to the canonical value of ``name``."""
+    val = _eval_const_rhs(rhs)
+    if val is None:
+        return False
+    if name in CANONICAL_CONST_VALUES:
+        return val == CANONICAL_CONST_VALUES[name]
+    if name == "L1_ALIGNMENT":
+        return val > 0
+    return False
+
+
+def is_l1_budget_calc(rhs):
+    """True when ``rhs`` computes an L1 budget rather than reading a single raw property."""
+    if not L1_RAW.search(rhs) or L1_CANON_CALL.search(rhs):
+        return False
+    without_arrows = rhs.replace("->", ".")
+    if re.search(r"[\w)\]]\s*[-/*]", without_arrows):
+        return True
+    raw_calls = {match.group(1) for match in L1_RAW.finditer(rhs)}
+    return len(raw_calls) >= 2
+
+
+def _strip_templates(text):
+    """Remove balanced <...> blocks so template parameter defaults do not look like initializers."""
+    out = []
+    depth = 0
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">" and depth > 0:
+            depth -= 1
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
 
 
 def _type_token(prefix):
     """Return the type immediately before a declarator, if the prefix looks like one."""
     prefix = re.sub(r"(?:[\w]+::)+\s*$", "", prefix)
     match = re.search(
-        r"(?:^|[\s;{}])(?:[\w:]+)\s+(?:(?:const|volatile)\s+)*(?:[*&]\s*)*$",
+        r"(?:^|[\s;{}<>])(?:[\w:]+)\s+(?:(?:const|volatile)\s+)*(?:[*&]\s*)*$",
         prefix,
     )
     if not match:
@@ -272,14 +375,48 @@ def _type_is_declarator(prefix, type_token):
     return type_token.endswith("_t") or type_token.endswith("_type")
 
 
+def _func_declarator_span(cxx_code, match):
+    """Return (decl_start_offset, sig_end_offset) when ``match`` is a function declaration, else None."""
+    stmt_pos = (
+        max(
+            cxx_code.rfind(";", 0, match.start()),
+            cxx_code.rfind("{", 0, match.start()),
+            cxx_code.rfind("}", 0, match.start()),
+        )
+        + 1
+    )
+    raw_prefix = cxx_code[stmt_pos : match.start()]
+    access = re.match(r"^\s*(?:public|private|protected)\s*:\s*", raw_prefix)
+    if access:
+        stmt_pos += access.end()
+        raw_prefix = raw_prefix[access.end() :]
+    if re.search(r"(?:\.|->)\s*$", raw_prefix):
+        return None
+    stripped_prefix = _strip_templates(raw_prefix)
+    if "=" in stripped_prefix or "(" in stripped_prefix or ")" in stripped_prefix:
+        return None
+    type_token = _type_token(raw_prefix)
+    if type_token is None or not _type_is_declarator(raw_prefix, type_token):
+        return None
+    lead_ws = len(raw_prefix) - len(raw_prefix.lstrip())
+    decl_start = stmt_pos + lead_ws
+    depth = 1
+    idx = match.end()
+    while idx < len(cxx_code) and depth > 0:
+        ch = cxx_code[idx]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch in ";{}":
+            break
+        idx += 1
+    sig_end = max(match.start(), idx - 1)
+    return decl_start, sig_end
+
+
 def is_function_declarator(line, match):
-    prefix = line[: match.start()]
-    if re.search(r"(?:\.|->)\s*$", prefix):
-        return False
-    type_token = _type_token(prefix)
-    if type_token is None:
-        return False
-    return _type_is_declarator(prefix, type_token)
+    return _func_declarator_span(line, match) is not None
 
 
 def advice_for(kind, name, side):
@@ -334,7 +471,7 @@ def applies(kind, name, side, path):
             return True
         return side == "host" and (path.startswith("ttnn/") or path.startswith("tt-train/"))
     if kind == "l1":
-        return side != "device"
+        return side == "host" and (path.startswith("ttnn/") or path.startswith("tt-train/"))
     if kind == "const":
         return True
     if side == "device" and base in {"div_up", "round_down"}:
@@ -359,58 +496,134 @@ def find_violations(path, text, only_lines=None):
     path = relpath(path)
     if excluded(path):
         return []
-    side = side_of(path)
+    side = side_of(path, text)
     raw_lines = text.splitlines()
     # Keep #define visible. Comments, strings and character literals are blanked, newlines stay.
     masked_lines = blank_noncode(text, blank_directives=False).splitlines()
     if len(masked_lines) < len(raw_lines):
         masked_lines.extend([""] * (len(raw_lines) - len(masked_lines)))
-    code_lines = ["" if comment_opts_out(raw, masked) else masked for raw, masked in zip(raw_lines, masked_lines)]
+    opted_out = {
+        line_no
+        for line_no, (raw, masked) in enumerate(zip(raw_lines, masked_lines), 1)
+        if comment_opts_out(raw, masked)
+    }
     found = []
 
-    def selected(line_no):
-        return only_lines is None or line_no in only_lines
+    def span_active(start_line, end_line):
+        span = range(start_line, end_line + 1)
+        if any(ln in opted_out for ln in span):
+            return False
+        return only_lines is None or any(ln in only_lines for ln in span)
 
-    for line_no, code in enumerate(code_lines, 1):
-        if not code or not selected(line_no):
+    cxx_lines = list(masked_lines)
+    idx = 0
+    while idx < len(masked_lines):
+        if not masked_lines[idx].lstrip().startswith("#"):
+            idx += 1
             continue
-        macro = MACRO_NAME.match(code)
-        if macro:
-            name = macro.group("name")
-            kind = "const" if name.isupper() else "func"
-            _emit(found, path, line_no, kind, name, side)
+        start_idx = idx
+        while idx + 1 < len(raw_lines) and raw_lines[idx].rstrip().endswith("\\"):
+            idx += 1
+        end_idx = idx
+        idx += 1
+        for k in range(start_idx, end_idx + 1):
+            cxx_lines[k] = ""
+        start_line, end_line = start_idx + 1, end_idx + 1
+        if not span_active(start_line, end_line):
             continue
-        const = CONST_NAME.search(code)
-        if const and re.search(r"\b(?:constexpr|const)\b", code[: const.start()]):
-            rhs = (const.group("eq") if const.group("eq") is not None else const.group("br")).strip()
-            if INT_LITERAL.match(rhs):
-                _emit(found, path, line_no, "const", const.group("name"), side)
-        for match in FUNC_NAME.finditer(code):
-            if not is_function_declarator(code, match):
-                continue
-            name = match.group("name")
-            kind = "power" if base_of(name) in {"is_power_of_two", "is_power_of_2"} else "func"
-            _emit(found, path, line_no, kind, name, side)
-        for match in L1_FUNC.finditer(code):
-            if is_function_declarator(code, match):
-                _emit(found, path, line_no, "l1", match.group("name"), side)
+        directive = " ".join(masked_lines[k].rstrip().rstrip("\\") for k in range(start_idx, end_idx + 1))
+        macro = MACRO_NAME.match(directive)
+        if not macro:
+            continue
+        name = macro.group("name")
+        rest = macro.group("rest")
+        if name.isupper():
+            if not rest.startswith("(") and const_value_matches(name, rest.strip()):
+                _emit(found, path, start_line, "const", name, side)
+        else:
+            _emit(found, path, start_line, "func", name, side)
+
+    cxx_code = "\n".join(cxx_lines)
+    line_starts = [0]
+    for line in cxx_lines:
+        line_starts.append(line_starts[-1] + len(line) + 1)
+
+    def line_of(offset):
+        return bisect.bisect_right(line_starts, offset)
+
+    for const in CONST_NAME.finditer(cxx_code):
+        stmt_pos = (
+            max(
+                cxx_code.rfind(";", 0, const.start()),
+                cxx_code.rfind("{", 0, const.start()),
+                cxx_code.rfind("}", 0, const.start()),
+            )
+            + 1
+        )
+        prefix = cxx_code[stmt_pos : const.start()]
+        kw = re.search(r"\b(?:constexpr|const)\b", prefix)
+        if not kw:
+            continue
+        rhs = (const.group("eq") if const.group("eq") is not None else const.group("br")).strip()
+        if not const_value_matches(const.group("name"), rhs):
+            continue
+        start_line = line_of(stmt_pos + kw.start())
+        name_line = line_of(const.start("name"))
+        end_line = line_of(max(const.start(), const.end() - 1))
+        if span_active(start_line, end_line):
+            _emit(found, path, name_line, "const", const.group("name"), side)
+
+    for match in FUNC_NAME.finditer(cxx_code):
+        span = _func_declarator_span(cxx_code, match)
+        if span is None:
+            continue
+        start_line = line_of(span[0])
+        name_line = line_of(match.start("name"))
+        end_line = line_of(span[1])
+        if not span_active(start_line, end_line):
+            continue
+        name = match.group("name")
+        kind = "power" if base_of(name) in {"is_power_of_two", "is_power_of_2"} else "func"
+        _emit(found, path, name_line, kind, name, side)
+
+    for match in L1_FUNC.finditer(cxx_code):
+        span = _func_declarator_span(cxx_code, match)
+        if span is None:
+            continue
+        start_line = line_of(span[0])
+        name_line = line_of(match.start("name"))
+        end_line = line_of(span[1])
+        if span_active(start_line, end_line):
+            _emit(found, path, name_line, "l1", match.group("name"), side)
 
     # A reinvented L1 budget is often split over the initializer's next line.
-    statement = []
-    start = None
-    for line_no, code in enumerate(code_lines, 1):
-        if code.strip():
-            if start is None:
-                start = line_no
-            statement.append(code)
-        if start is not None and (";" in code or line_no == len(code_lines)):
-            joined = " ".join(statement)
-            if selected(start) and L1_VAR.search(joined) and L1_RAW.search(joined) and not L1_CANON_CALL.search(joined):
-                _emit(found, path, start, "l1", "max L1 budget", side)
-            statement = []
-            start = None
-        elif not code.strip() and not statement:
-            start = None
+    for var_match in L1_VAR.finditer(cxx_code):
+        tail = cxx_code[var_match.end() :].lstrip()
+        if not (tail.startswith("=") and not tail.startswith("==")) and not tail.startswith("{"):
+            continue
+        stmt_pos = (
+            max(
+                cxx_code.rfind(";", 0, var_match.start()),
+                cxx_code.rfind("{", 0, var_match.start()),
+                cxx_code.rfind("}", 0, var_match.start()),
+            )
+            + 1
+        )
+        prefix = cxx_code[stmt_pos : var_match.start()]
+        if "=" in prefix:
+            continue
+        lead_ws = len(prefix) - len(prefix.lstrip())
+        stmt_start = stmt_pos + lead_ws
+        semi = cxx_code.find(";", var_match.end())
+        stmt_end = len(cxx_code) - 1 if semi < 0 else semi
+        rhs = cxx_code[var_match.end() : stmt_end]
+        if not is_l1_budget_calc(rhs):
+            continue
+        start_line = line_of(stmt_start)
+        var_line = line_of(var_match.start())
+        end_line = line_of(stmt_end)
+        if span_active(start_line, end_line):
+            _emit(found, path, var_line, "l1", "max L1 budget", side)
 
     found.sort(key=lambda item: item[0])
     # One report per line: a signature can match the function rule and little else.

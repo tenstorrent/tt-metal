@@ -155,15 +155,133 @@ def test_canonical_headers_are_clean():
 
 
 def test_real_copies_match_the_catalog():
-    cases = {
-        "tt_metal/impl/buffers/tensor_prefetcher_manager.cpp": "align_up",
-        "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp": "round_up",
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_unpad_sharded_to_interleaved.cpp": "TILE_HEIGHT",
-    }
-    for rel, name in cases.items():
-        with open(os.path.join(REPO, rel), encoding="utf-8") as handle:
-            found = [item[2] for item in chk.find_violations(rel, handle.read())]
+    cases = [
+        (
+            "tt_metal/impl/buffers/tensor_prefetcher_manager.cpp",
+            "inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }\n",
+            "align_up",
+        ),
+        (
+            "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp",
+            "constexpr std::size_t round_up(std::size_t a, std::size_t multiple) { return ((a + multiple - 1) / multiple) * multiple; }\n",
+            "round_up",
+        ),
+        (
+            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_unpad_sharded_to_interleaved.cpp",
+            "void kernel_main() {\n    constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth\n}\n",
+            "TILE_HEIGHT",
+        ),
+    ]
+    for rel, snippet, name in cases:
+        found = [item[2] for item in chk.find_violations(rel, snippet)]
         assert name in found, rel
+
+
+def test_unrelated_suffixed_names_are_not_flagged():
+    found = names(
+        "tt_metal/hw/inc/api/compute/experimental/2_0/internal/llk_descriptor.h",
+        """
+        constexpr std::uint32_t round_up_l1_words(std::uint32_t bytes) { return (bytes + 15u) >> 4; }
+        uint32_t align_to_slice_and_sync(uint32_t block_idx, uint32_t sender_id) { return block_idx; }
+        """,
+    )
+    assert found == []
+
+
+def test_compilation_context_classification():
+    assert chk.side_of("tt_metal/impl/device/firmware/risc_firmware_initializer.cpp") == "host"
+    assert chk.side_of("tt_metal/hw/firmware/src/tt-1xx/brisck.cc") == "device"
+    assert chk.side_of("tt-train/sources/ttml/metal/common/dataflow_utils.hpp") == "device"
+    assert chk.side_of("tt-train/sources/ttml/metal/common/compute_utils.hpp") == "device"
+    assert chk.side_of("ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp") == "device"
+    assert chk.side_of("ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp") == "both"
+    assert names(
+        "tt_metal/impl/device/firmware/risc_firmware_initializer.cpp",
+        "uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }\n",
+    ) == ["div_up"]
+    dev_violations = chk.find_violations(
+        "tt-train/sources/ttml/metal/common/dataflow_utils.hpp",
+        "inline constexpr uint32_t round_up(uint32_t a, uint32_t b) { return a; }\n",
+    )
+    assert len(dev_violations) == 1
+    assert "api/alignment.h" in dev_violations[0][3]
+
+
+def test_multiline_declarations_are_detected():
+    body = textwrap.dedent(
+        """\
+        inline constexpr uint32_t
+        round_up(uint32_t a, uint32_t b) {
+            return a;
+        }
+        constexpr uint32_t TILE_HEIGHT =
+            32;
+        """
+    )
+    assert [item[2] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/host.cpp", body)] == [
+        "round_up",
+        "TILE_HEIGHT",
+    ]
+    assert [item[2] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/host.cpp", body, {1})] == [
+        "round_up"
+    ]
+    assert [item[2] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/host.cpp", body, {6})] == [
+        "TILE_HEIGHT"
+    ]
+
+
+def test_constant_values_are_verified():
+    found = names(
+        "ttnn/cpp/ttnn/operations/example/device/kernels/reader.cpp",
+        """
+        #define TILE_WIDTH get_compile_time_arg_val(3)
+        #define TILE_HEIGHT 32
+        constexpr uint32_t TILE_HW = 32;
+        constexpr uint32_t FACE_HEIGHT = 8;
+        constexpr uint32_t FACE_HW = 16 * 16;
+        """,
+    )
+    assert found == ["TILE_HEIGHT", "FACE_HW"]
+    assert (
+        names(
+            "ttnn/cpp/ttnn/operations/example/host.cpp",
+            """
+        constexpr uint32_t TILE_HW = 1024;
+        """,
+        )
+        == ["TILE_HW"]
+    )
+
+
+def test_l1_check_ignores_raw_limit_and_detects_first_statement_in_function():
+    assert (
+        names(
+            "tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp",
+            "void validate(const IDevice* device) { uint32_t max_l1_size = device->l1_size_per_core(); }\n",
+        )
+        == []
+    )
+    assert (
+        names(
+            "ttnn/cpp/ttnn/operations/example/device/factory.cpp",
+            "void validate(const IDevice* device) { uint32_t max_l1_size = device->l1_size_per_core(); }\n",
+        )
+        == []
+    )
+    body = textwrap.dedent(
+        """\
+        void build_program(IDevice* device) {
+            uint32_t max_l1_size =
+                (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        }
+        """
+    )
+    assert [
+        item[:3] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/device/factory.cpp", body, {2, 3})
+    ] == [(2, "l1", "max L1 budget")]
+    assert [
+        item[:3] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/device/factory.cpp", body, {3})
+    ] == [(2, "l1", "max L1 budget")]
 
 
 def test_git_rev_rejects_option_injection():
