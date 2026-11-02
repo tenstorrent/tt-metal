@@ -527,7 +527,6 @@ class TtCSA(TtV4AttentionBase):
         seq_len_actual: int | None = None,
         *,
         state: TtCSAState,
-        cache_user_id: int | None = None,
     ):
         """One chunk: [B, 1, S_pad/sp, hidden/tp] in and out; the caller keeps the first S_real rows.
 
@@ -537,10 +536,7 @@ class TtCSA(TtV4AttentionBase):
 
         The user slot in the index key cache and the indexer's overlap state is the state's own
         ``cache_user_id``: one layer serves many users, and a state paired with another slot's rows would
-        corrupt both. ``cache_user_id``, when given, must agree with it."""
-        assert (
-            cache_user_id is None or cache_user_id == state.cache_user_id
-        ), f"cache_user_id {cache_user_id} does not match the state's slot {state.cache_user_id}"
+        corrupt both, so the slot is never passed separately."""
         cache_user_id = state.cache_user_id
         batch = hidden_states.shape[0]
         seq_local = hidden_states.shape[2]

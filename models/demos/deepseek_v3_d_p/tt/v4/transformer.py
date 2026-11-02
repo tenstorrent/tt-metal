@@ -214,10 +214,9 @@ class TtV4Transformer(LightweightModule):
             layer.reset_state(slot)
         self.positions[slot] = 0
 
-    def _check_slot(self, slot: int) -> int:
+    def _check_slot(self, slot: int) -> None:
         if not 0 <= slot < self.slot_num:
             raise ValueError(f"user slot {slot} is outside the model's {self.slot_num} slots")
-        return slot
 
     def release_sub_device_managers(self):
         """Remove the MoE overlap sub-device managers before the mesh device closes. Idempotent."""
@@ -292,7 +291,8 @@ class TtV4Transformer(LightweightModule):
             raise NotImplementedError("DeepSeek-V4 has no traced path: the attention state advances on host counters")
         if d2h_service is not None or on_layer_hidden is not None or return_intermediates:
             raise NotImplementedError("DeepSeek-V4 supports host layer acks (on_layer_complete) only")
-        slot = self._check_slot(0 if cache_user_id is None else cache_user_id)
+        slot = 0 if cache_user_id is None else cache_user_id
+        self._check_slot(slot)
         position = self.positions[slot]
         if position is None:
             raise RuntimeError(
