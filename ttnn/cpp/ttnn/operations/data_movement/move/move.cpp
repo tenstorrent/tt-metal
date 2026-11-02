@@ -111,8 +111,12 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
 
     ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
         ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE;
-    if ((not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and
-        compute_with_storage_grid_size.y > 1) {
+    if (not non_overlap) {
+        // Backwards iteration within each core does not order reads and writes across cores.
+        // Overlap therefore requires staging the complete input before any output is written.
+        TT_FATAL(
+            fits_in_cb and compute_with_storage_grid_size.x > 1 and compute_with_storage_grid_size.y > 1,
+            "ttnn.move: overlapping buffers require enough L1 staging space and at least a 2x2 compute grid");
         move_op_parallelization_strategy = ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 
