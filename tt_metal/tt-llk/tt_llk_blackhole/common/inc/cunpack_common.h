@@ -223,8 +223,8 @@ inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpac
 // Canonical srcA channel-1 Y stride: face row step (one face row = FACE_R_DIM datums).
 //
 // This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
-// so it serves as the documented baseline that operations which mutate Y-stride
-// (e.g. tilizeA_B) must restore on uninit. It does not depend on the operand's face_r_dim;
+// and the one per-op inits and uninits that touch the Y stride (e.g. tilizeA_B) set and
+// re-assert. It does not depend on the operand's face_r_dim;
 // FACE_R_DIM is the constant face row count (matches set_packer_strides and unpack_untilize).
 inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format)
 {
@@ -811,8 +811,8 @@ inline void configure_unpack_AB(
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
         (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
 
-    // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits that
-    // mutate Y-stride (e.g. tilizeA_B) can deterministically restore this baseline on uninit
+    // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits and
+    // uninits that touch the Y stride (e.g. tilizeA_B) set and re-assert this baseline
     // rather than snapshotting the previous register value into a GPR.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpA_dst_format_masked));

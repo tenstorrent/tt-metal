@@ -20,6 +20,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -68,10 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            // ISSUE tt-llk #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will
-            // keep writing to dest_idx=0.
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, OUTPUT_NUM_TILES_IN_BLOCK /*num_tiles_per_unpack*/);
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
         }
         else
         {
@@ -107,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS); block++)
                 {
-                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * OUTPUT_NUM_TILES_IN_BLOCK, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_unary_operand_to_dest_block_(block * OUTPUT_NUM_TILES_IN_BLOCK /*l1_tile_idx*/, 0 /*dst_tile_idx*/, OUTPUT_NUM_TILES_IN_BLOCK);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();

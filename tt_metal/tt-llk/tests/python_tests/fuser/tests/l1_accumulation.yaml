@@ -2,19 +2,22 @@
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [128, 128]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [128, 128]
     format: "Float16_b"
   - name: "l1_acc_out"
+    tile_dims: all
     dims: [128, 128]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwadd"
@@ -22,6 +25,6 @@ operations:
         math_fidelity: "LoFi"
     pack:
       - output: "l1_acc_out"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         packer: "Packer"
         pack_l1_accumulation: 1

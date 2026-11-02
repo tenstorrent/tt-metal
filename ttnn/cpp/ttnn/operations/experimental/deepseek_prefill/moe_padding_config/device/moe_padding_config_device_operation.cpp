@@ -53,7 +53,7 @@ void validate_runtime_args(
     // Output: what the consumers (moe_grouped_topk / dispatch) require of padding_config, asserted
     // here so a malformed buffer fails with a clear message instead of a bad on-device read.
     TT_FATAL(config.storage_type() == StorageType::DEVICE, "config must be on device");
-    TT_FATAL(config.buffer() != nullptr, "config must be allocated");
+    TT_FATAL(config.is_allocated(), "config must be allocated");
     TT_FATAL(config.dtype() == DataType::UINT32, "config must be UINT32");
     TT_FATAL(config.layout() == Layout::ROW_MAJOR, "config must be ROW_MAJOR");
     TT_FATAL(
@@ -65,7 +65,7 @@ void validate_runtime_args(
     // Structural properties the kernel assumes of each metadata tensor.
     auto validate_meta = [&config](const Tensor& meta, const char* name) {
         TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
-        TT_FATAL(meta.buffer() != nullptr, "metadata tensor {} must be allocated", name);
+        TT_FATAL(meta.is_allocated(), "metadata tensor {} must be allocated", name);
         TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
         TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
         TT_FATAL(

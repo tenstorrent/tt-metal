@@ -127,8 +127,7 @@ constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
 // Packing of RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr (part of the
 // host<->device remote-CB config contract): L1 addresses fit in 24 bits (< 2 MB) and
 // num_receivers fits in 8 bits, so the two share a single 32-bit slot. The device pack/unpack
-// helpers live in circular_buffer_interface.h; host code packs the same field in
-// global_circular_buffer.cpp.
+// helpers live in circular_buffer_interface.h.
 constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
 constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
 
@@ -384,6 +383,25 @@ struct watcher_msg_t {
     struct debug_stack_usage_t stack_usage;
     struct debug_insert_delays_msg_t debug_insert_delays;
     struct debug_ring_buf_msg_t debug_ring_buf;
+};
+
+// Written by the Blackhole BRISC L1 ECC interrupt handler before it halts the core; reason values are in
+// hostdev/l1_ecc_halt_constants.h.
+struct l1_ecc_halt_msg_t {
+    volatile uint32_t reason;
+    volatile uint32_t ecc_ctrl;
+    volatile uint32_t l1_counts;                  // ECC_STATUS view 2
+    volatile uint32_t last_l1_error_banks_0_15;   // ECC_STATUS view 3
+    volatile uint32_t last_l1_error_banks_16_31;  // ECC_STATUS view 6
+    volatile uint32_t program_id;
+};
+
+// Blackhole Tensix only, at MEM_L1_ECC_HALT_BASE.
+struct l1_ecc_halt_slot_t {
+    struct l1_ecc_halt_msg_t record;
+    // Written by the host at init: code that returns from an interrupt handler without using the stack
+    // (brisc_int_release_code in hostdev/l1_ecc_halt_constants.h).
+    volatile uint32_t brisc_int_release[2];
 };
 
 // NOC alignment max from BH

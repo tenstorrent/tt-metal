@@ -15,7 +15,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/hal.hpp>
 
 namespace ttnn {
 
@@ -46,18 +45,7 @@ inline bool has_nontile_w(const ttnn::Tensor& input) {
     return s.rank() >= 1 && s[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-// TensorAccessor strides pages by the buffer's *aligned* page size, but `noc_async_*_sharded` reads
-// that same value back as the per-page *payload*. For a B/W-sharded RM buffer the page is the shard
-// row, so the two only agree when the row is already a multiple of the buffer's alignment.
-inline bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& mc, uint32_t element_size) {
-    if (!mc.shard_spec().has_value()) {
-        return false;
-    }
-    const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
-    return (mc.shard_spec()->shape[1] * element_size) % alignment != 0;
-}
+using ttnn::operations::data_movement::has_subaligned_shard_row;
 
 // Route RM sharded input through composite when native isn't safe: nontile-aligned B/W, B/W with a
 // sub-aligned shard row or non-zero width-begin, or nontile-aligned HEIGHT outside the sharded fast

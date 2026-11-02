@@ -95,7 +95,7 @@ class QwenImageTransformer(Module):
                 num_heads=num_attention_heads,
                 head_dim=attention_head_dim,
                 context_pre_only=False,
-                # ff_activation_fn="gelu-approximate",  # this is what the original model uses
+                ff_activation_fn="gelu_tanh",
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,

@@ -42,7 +42,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         act_tensor.device() == weight_tensor.device(),
         "all_gather_minimal_matmul_async inputs must reside on the same device");
     TT_FATAL(
-        act_tensor.buffer() != nullptr && weight_tensor.buffer() != nullptr,
+        act_tensor.is_allocated() && weight_tensor.is_allocated(),
         "all_gather_minimal_matmul_async inputs must be allocated in device buffers");
     if (has_bias) {
         const auto& bias_tensor = *bias_ptr;
@@ -53,8 +53,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             bias_tensor.device() == act_tensor.device(),
             "all_gather_minimal_matmul_async bias must be on the same device");
         TT_FATAL(
-            bias_tensor.buffer() != nullptr,
-            "all_gather_minimal_matmul_async bias must be allocated in a device buffer");
+            bias_tensor.is_allocated(), "all_gather_minimal_matmul_async bias must be allocated in a device buffer");
     }
 
     // Layout requirements: all inputs must be TILE layout
@@ -156,7 +155,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             "persistent_weight_buffer must be provided when fsdp_cluster_axis is set");
         const auto& pwb = tensor_args.persistent_weight_buffer.value();
         TT_FATAL(
-            pwb.storage_type() == StorageType::DEVICE && pwb.buffer() != nullptr,
+            pwb.storage_type() == StorageType::DEVICE && pwb.is_allocated(),
             "persistent_weight_buffer must be on device and allocated");
         TT_FATAL(pwb.layout() == Layout::TILE, "persistent_weight_buffer must be TILE layout");
         const auto& pwb_logical = pwb.logical_shape();
@@ -269,8 +268,8 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
         TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
         TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
-        TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
-        TT_FATAL(ternary_b.buffer() != nullptr, "fused_ternary_input_b must be allocated");
+        TT_FATAL(ternary_a.is_allocated(), "fused_ternary_input_a must be allocated");
+        TT_FATAL(ternary_b.is_allocated(), "fused_ternary_input_b must be allocated");
 
         TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
         TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
