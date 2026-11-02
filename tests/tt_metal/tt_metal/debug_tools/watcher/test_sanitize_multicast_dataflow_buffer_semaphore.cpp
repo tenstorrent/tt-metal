@@ -84,20 +84,32 @@ void LaunchAndCheck(distributed::MeshDevice& mesh_device, Program program, bool 
 }
 
 // The sender sets the semaphore over the rectangle from logical node (0,0) to (end_x,0).
-void RunSemaphoreMulticastTest(distributed::MeshDevice& mesh_device, uint32_t end_x, bool expect_error) {
+// The semaphore multicasts the writer kernel issues, by its `op` arg.
+enum class SemaphoreMulticast : uint32_t { SET = 0, INCREMENT = 1, RELAY = 2 };
+
+void RunSemaphoreMulticastTest(
+    distributed::MeshDevice& mesh_device, uint32_t end_x, bool expect_error, SemaphoreMulticast op) {
     if (ShouldSkip(mesh_device)) {
         GTEST_SKIP();
     }
+    // A relay writes `target`, so its source `flag` exists only on the sender: a relay checked against the source's
+    // nodes would then be reported even within `target`'s nodes.
+    const bool is_relay = op == SemaphoreMulticast::RELAY;
     const NodeCoord rect_start = mesh_device.worker_core_from_logical_core({0, 0});
     const NodeCoord rect_end = mesh_device.worker_core_from_logical_core({end_x, 0});
     const experimental::KernelSpecName kernel_name{"semaphore_multicast_writer"};
-    const experimental::SemaphoreSpecName semaphore_name{"flag"};
+    const experimental::SemaphoreSpecName flag_name{"flag"};
+    const experimental::SemaphoreSpecName target_name{"target"};
     const experimental::ProgramSpec spec{
         .name = "watcher_multicast_semaphore",
         .kernels = {experimental::KernelSpec{
             .unique_id = kernel_name,
             .source = kKernelDirectory + "semaphore_multicast_writer.cpp",
-            .semaphore_bindings = {{.semaphore_spec_name = semaphore_name, .accessor_name = "flag"}},
+            .semaphore_bindings =
+                {
+                    {.semaphore_spec_name = flag_name, .accessor_name = "flag"},
+                    {.semaphore_spec_name = target_name, .accessor_name = "target"},
+                },
             .compile_time_args =
                 {
                     {"noc_x_start", static_cast<uint32_t>(rect_start.x)},
@@ -106,10 +118,18 @@ void RunSemaphoreMulticastTest(distributed::MeshDevice& mesh_device, uint32_t en
                     {"noc_y_end", static_cast<uint32_t>(rect_end.y)},
                     // Every node of the rectangle, which excludes the sender.
                     {"num_targets", end_x + 1},
+                    {"op", static_cast<uint32_t>(op)},
                 },
             .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_0, NOC::NOC_0),
         }},
-        .semaphores = {experimental::SemaphoreSpec{.unique_id = semaphore_name, .target_nodes = kResourceNodes}},
+        .semaphores =
+            {
+                experimental::SemaphoreSpec{
+                    .unique_id = flag_name,
+                    .target_nodes = is_relay ? NodeRangeSet(kSender) : kResourceNodes,
+                },
+                experimental::SemaphoreSpec{.unique_id = target_name, .target_nodes = kResourceNodes},
+            },
         .work_units = {experimental::WorkUnitSpec{
             .name = "main",
             .kernels = {kernel_name},
@@ -280,11 +300,27 @@ void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
 }  // namespace
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinSemaphore) {
-    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/1, /*expect_error=*/false);
+    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/1, /*expect_error=*/false, SemaphoreMulticast::SET);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastPastSemaphore) {
-    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/2, /*expect_error=*/true);
+    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/2, /*expect_error=*/true, SemaphoreMulticast::SET);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinSemaphoreIncrement) {
+    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/1, /*expect_error=*/false, SemaphoreMulticast::INCREMENT);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastPastSemaphoreIncrement) {
+    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/2, /*expect_error=*/true, SemaphoreMulticast::INCREMENT);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinSemaphoreRelay) {
+    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/1, /*expect_error=*/false, SemaphoreMulticast::RELAY);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastPastSemaphoreRelay) {
+    RunSemaphoreMulticastTest(*this->devices_[0], /*end_x=*/2, /*expect_error=*/true, SemaphoreMulticast::RELAY);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinDataflowBuffer) {

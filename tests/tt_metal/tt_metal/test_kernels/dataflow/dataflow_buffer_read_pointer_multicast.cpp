@@ -53,6 +53,8 @@ void kernel_main() {
         noc.async_write_barrier();
     } else {
         ready.up(noc, sender_x, sender_y, 1);
+        // The increment is a NoC atomic; drain it so the kernel doesn't exit with it in flight.
+        noc.async_atomic_barrier();
         valid.wait(1);
         auto* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target.get_read_ptr());
         for (uint32_t i = 0; i < num_words; ++i) {
