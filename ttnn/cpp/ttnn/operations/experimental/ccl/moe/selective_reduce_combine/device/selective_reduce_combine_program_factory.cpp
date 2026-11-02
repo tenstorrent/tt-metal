@@ -385,6 +385,7 @@ CombineFabric plan_combine_fabric(
     // itself after its last client closes.
     const uint32_t link_sync_semaphore_id = add_semaphore_descriptor(desc, worker_set, 0);
     std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
+    client_semaphores.reserve(neighbors.size());
     for (std::size_t d = 0; d < neighbors.size(); ++d) {
         client_semaphores.push_back({
             .flow_control_sem_id = add_semaphore_descriptor(desc, worker_set, 0),
