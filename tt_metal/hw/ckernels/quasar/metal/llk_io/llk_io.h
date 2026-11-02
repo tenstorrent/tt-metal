@@ -31,8 +31,8 @@ inline bool dfb_op_is_whole_share(const LocalDFBInterface& intf, std::uint32_t n
     return intf.block_size <= 1 || num_tiles * intf.stride_size_tiles == static_cast<std::uint32_t>(intf.block_size);
 }
 
-// Move one counter's cursor (this role's) past an n-tile op: to the op's last entry, then `jump`
-// entries to this counter's next entry. Wraps to the ring base at the end.
+// Move one counter's cursor past an n-tile op: to the op's last entry, then `jump` entries to
+// this counter's next entry. Wraps to the ring base at the end.
 template <bool IsProducer>
 inline void dfb_step_slot(const LocalDFBInterface& intf, DFBTCSlot& slot, std::uint32_t n) {
     std::uint32_t entry_idx = IsProducer ? slot.wr_entry_idx : slot.rd_entry_idx;

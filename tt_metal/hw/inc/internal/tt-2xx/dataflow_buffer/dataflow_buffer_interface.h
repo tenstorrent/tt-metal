@@ -76,9 +76,6 @@ static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan size is incorrect");
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-// One shape for every compute TRISC image. wr_entry_ptr is the packer's in-order tile offset
-// (llk_pack); tensix_trisc_mask holds the DFB_TRISC_ROLE_* bits that say which TRISC produces and
-// which consumes this DFB, so each image skips the ops that are not its job.
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
@@ -86,7 +83,7 @@ struct LocalDFBInterface {
     uint16_t wr_entry_ptr;
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
-    uint8_t tc_idx;  // current slot in the TC round-robin; one index serves both roles
+    uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
     uint16_t split_tc;    // one op (a whole block) is split across all of this hart's TCs

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Metal 2.0 C3 compute kernel: unpack and pack keep their DFBs to the DM kernels while trisc3 owns two
-// intra-Neo DFBs between them.
+// Metal 2.0 C3 compute kernel: unpack and pack keep their DFBs to the DM kernels while trisc3 sits between
+// them as the consumer of one intra DFB and the producer of another.
 //
 // Four DFB pipeline:
 //   dfb::in    (DM -> unpack)
@@ -11,8 +11,8 @@
 //   dfb::back  (trisc3 -> unpack, intra)
 //   dfb::out   (pack -> DM)
 //
-// Per tile: in -> relu -> mid (unpack / math / pack), mid -> back (trisc3 copies the entry with RISC
-// loads and stores), back -> relu -> out (unpack / math / pack). Positive input comes out unchanged.
+// Per tile: stage A runs in -> relu -> mid and stage C runs back -> relu -> out on unpack, math and pack;
+// stage B has trisc3 copy the mid entry into back with RISC loads and stores. Positive input comes out unchanged.
 
 #include <cstdint>
 #include "api/compute/common.h"

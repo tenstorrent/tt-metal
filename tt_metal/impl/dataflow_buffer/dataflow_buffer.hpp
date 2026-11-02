@@ -56,10 +56,8 @@ struct DataflowBufferConfig {
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
-    // Quasar only. A compute consumer unpacks on trisc0 and a compute producer packs on trisc2 by
-    // default; these move that side of the DFB to trisc3 (the isolate-SFPU thread). Both may be set
-    // on one DFB (an intra-tensix self-loop). trisc3 has no LLK unpack/pack path yet: it moves
-    // credits, not data.
+    // Quasar only: run the compute consumer / producer side on trisc3 instead of trisc0 / trisc2.
+    // Both may be set on one DFB.
     bool unpack_on_trisc3 = false;
     bool pack_on_trisc3 = false;
     // When true, the DFB borrows L1 memory from an externally managed buffer
