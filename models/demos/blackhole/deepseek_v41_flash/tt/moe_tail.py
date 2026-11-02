@@ -74,19 +74,26 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80, fold=None):
     rt = ttnn.RuntimeArgs()
     for i, (cx, cy) in enumerate(cores):
         rt[cx][cy] = [i * tpc]
-    A, S, TMP, O = 0, 1, 2, 16
+    A, S, TMP, O, RM = 0, 1, 2, 16, 4
+    tilize = (
+        os.environ.get("DSV41_TAIL_TILIZE", "0") == "1"
+    )  # hardware tilize of row-major segments in the compute kernel (moe_tail2_*.cpp)
     bf = ttnn.bfloat16
     map_page = int(mapping.shape[-1]) * 2
     v2 = _v2()
     if v2:
         assert mesh_cols & (mesh_cols - 1) == 0
-    tmp_bytes = (K * T * tpc * 64) + 2 * T * 64 + 256 + map_page
-    cbs = [
-        _cb(core_set, A, K * tpc, 2048, bf),
-        _cb(core_set, S, K, 2048, bf),
-        _cb(core_set, TMP, 1, (tmp_bytes + 63) // 64 * 64, bf),
-        _cb(core_set, O, tpc, 2048, bf),
-    ] + ([_cb(core_set, 3, tpc, 2048, bf), _cb(core_set, 4, tpc, 2048, bf)] if fold_on else [])
+    tmp_bytes = (0 if tilize else K * T * tpc * 64) + 2 * T * 64 + 256 + map_page
+    cbs = (
+        [
+            _cb(core_set, A, K * tpc, 2048, bf),
+            _cb(core_set, S, K, 2048, bf),
+            _cb(core_set, TMP, 1, (tmp_bytes + 63) // 64 * 64, bf),
+            _cb(core_set, O, tpc, 2048, bf),
+        ]
+        + ([_cb(core_set, RM, 32 * K, tpc * 64, bf)] if tilize else [])
+        + ([_cb(core_set, 5, tpc, 2048, bf), _cb(core_set, 6, tpc, 2048, bf)] if fold_on else [])
+    )
     sc_page, idx_page, row_page = K * 2, K * 2, H * 2
 
     def kern(name, ct, cfg, common):
@@ -95,24 +102,20 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80, fold=None):
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set,
             compile_time_args=ct,
-            runtime_args=rt if name != "moe_tail_compute.cpp" else ttnn.RuntimeArgs(),
+            runtime_args=rt if "compute" not in name else ttnn.RuntimeArgs(),
             common_runtime_args=common,
             config=cfg,
             defines=(
                 ([("TAIL_DBG", "1")] if os.environ.get("DSV41_TAIL_DBG") and name == "moe_tail_reader.cpp" else [])
                 + ([("TAIL_V2", "1")] if v2 and name == "moe_tail_reader.cpp" else [])
-                + ([("TAIL_FOLD", "1"), ("CB_FOLD", "3")] if fold_on and name == "moe_tail_reader.cpp" else [])
-                + (
-                    [("TAIL_FOLD", "1"), ("CB_FOLD", "3"), ("CB_MID", "4")]
-                    if fold_on and name == "moe_tail_compute.cpp"
-                    else []
-                )
+                + ([("TAIL_FOLD", "1"), ("CB_FOLD", "5")] if fold_on and "reader" in name else [])
+                + ([("TAIL_FOLD", "1"), ("CB_FOLD", "5"), ("CB_MID", "6")] if fold_on and "compute" in name else [])
             ),
         )
 
     reader = kern(
-        "moe_tail_reader.cpp",
-        [A, S, TMP, T, K, tpc, mesh_cols, sc_page, idx_page, map_page, row_page]
+        "moe_tail2_reader.cpp" if tilize else "moe_tail_reader.cpp",
+        [RM if tilize else A, S, TMP, T, K, tpc, mesh_cols, sc_page, idx_page, map_page, row_page]
         + _acc(combine)
         + _acc(scores)
         + _acc(indices)
@@ -131,8 +134,8 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80, fold=None):
     )
     writer = kern("moe_tail_writer.cpp", [O, tpc] + _acc(out), ttnn.WriterConfigDescriptor(), [out.buffer_address()])
     compute = kern(
-        "moe_tail_compute.cpp",
-        [tpc, K, A, S, O],
+        "moe_tail2_compute.cpp" if tilize else "moe_tail_compute.cpp",
+        [tpc, K, A, S, O] + ([RM] if tilize else []),
         ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
         [],
     )
@@ -142,6 +145,8 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80, fold=None):
             (
                 bool(os.environ.get("DSV41_TAIL_DBG")),
                 v2,
+                tilize,
+                os.environ.get("DSV41_TAIL_STAGGER", "0"),
                 T,
                 K,
                 H,
