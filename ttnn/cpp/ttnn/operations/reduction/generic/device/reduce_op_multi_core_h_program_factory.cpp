@@ -166,6 +166,13 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
+    // A COL result is one row: pack it as a 1x32 tile and write only the two face rows that hold it (the rest of the
+    // output tile is padding).
+    const bool row_tile_output =
+        !rm_path && !use_width_sharding && !tile_h_split && !is_sfpu_reduce && !use_fpu_negate &&
+        operation_attributes.output_layout == Layout::TILE && !output.memory_config().is_sharded() &&
+        tile_height == 32u && tile_width == 32u && output.tensor_spec().tile().get_height() == 32u &&
+        (dst_cb_data_format == tt::DataFormat::Float16_b || dst_cb_data_format == tt::DataFormat::Float32);
 
     auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
@@ -319,9 +326,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         uint32_t num_output_tiles = use_fpu_negate ? chunk_size : 2;
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = OUT_DFB,
-            .entry_size = dst_single_tile_size,
+            .entry_size = row_tile_output ? dst_single_tile_size / 32u : dst_single_tile_size,
             .num_entries = num_output_tiles,
             .data_format_metadata = dst_cb_data_format,
+            .tile_format_metadata =
+                row_tile_output ? std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({1, 32})) : std::nullopt,
         });
     }
 
@@ -572,9 +581,10 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         writer_rta_names = {"num_units"};
         // No tensor binding: the output is written in place through the borrowed OUT_DFB.
     } else {
-        writer_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_metal2.cpp";
+        writer_source = row_tile_output ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                                          "writer_reduce_h_row_interleaved.cpp"
+                                        : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                          "writer_unary_interleaved_start_id_metal2.cpp";
         writer_rta_names = {"num_pages", "start_id"};
         writer_tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}};
     }
