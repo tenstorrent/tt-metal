@@ -943,9 +943,7 @@ void emit_formats_array(
     int array_size,
     const std::vector<DataFormat>& formats,
     tt::ARCH arch) {
-    auto as_int = [arch](DataFormat f) -> hw_format_t {
-        return arch == tt::ARCH::QUASAR ? host_data_format_to_hw(f) : static_cast<hw_format_t>(f);
-    };
+    auto as_int = [arch](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f, arch); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 

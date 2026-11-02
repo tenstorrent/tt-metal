@@ -19,8 +19,13 @@ constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on 
 constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
 constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
 constexpr hw_format_t kHwUInt8 = 17;       // host UInt8 is 30 (Wormhole/Blackhole encoding)
+constexpr hw_format_t kHwFp8P = 16;        // host Fp8_e4m3 is 26 (Quasar Int8_2x owns 26)
 
 }  // namespace
+
+hw_format_t host_data_format_to_hw(DataFormat f, tt::ARCH arch) {
+    return arch == tt::ARCH::QUASAR ? host_data_format_to_hw(f) : static_cast<hw_format_t>(f);
+}
 
 hw_format_t host_data_format_to_hw(DataFormat f) {
     switch (f) {
@@ -30,6 +35,7 @@ hw_format_t host_data_format_to_hw(DataFormat f) {
         case DataFormat::MxInt4: return kHwMxInt4;
         case DataFormat::MxInt2: return kHwMxInt2;
         case DataFormat::UInt8: return kHwUInt8;
+        case DataFormat::Fp8_e4m3: return kHwFp8P;
         default: return static_cast<hw_format_t>(f);
     }
 }

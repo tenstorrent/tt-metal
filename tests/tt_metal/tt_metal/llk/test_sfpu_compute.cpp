@@ -1741,8 +1741,8 @@ inline bool typecast_is_int(tt::DataFormat fmt) {
 
 inline bool typecast_is_unsigned(tt::DataFormat fmt) { return fmt == tt::DataFormat::UInt8; }
 
-// One-byte integer endpoints. Int8 and UInt8 share a datum width and a Dest slot, so they take the
-// same preserve-fp32 routing; only the L1 encoding (sign-magnitude vs raw unsigned) differs.
+// One-byte integer endpoints. Int8 and UInt8 share a datum width. The L1 encoding differs:
+// sign-magnitude for Int8, raw unsigned bytes for UInt8.
 inline bool typecast_is_8bit_int(tt::DataFormat fmt) {
     return fmt == tt::DataFormat::Int8 || fmt == tt::DataFormat::UInt8;
 }
@@ -1761,6 +1761,46 @@ inline std::string typecast_device_format_name(tt::DataFormat fmt) {
         case tt::DataFormat::MxFp8P: return "MxFp8P";
         default: TT_THROW("typecast test: unsupported format {}", static_cast<int>(fmt));
     }
+}
+
+// Sign-magnitude has no negative power of two. Int8 is [-127, 127].
+constexpr int32_t kInt8SmagMax = 127;
+
+// Sign-magnitude pack/decode for a Bits-wide lane (8 or 16). Sign in the top bit, magnitude
+// in the rest, lanes packed into a 32-bit word.
+template <unsigned Bits>
+uint32_t sign_mag_encode(int32_t s) {
+    constexpr uint32_t mag_mask = (1u << (Bits - 1)) - 1u;
+    constexpr uint32_t sign_bit = 1u << (Bits - 1);
+    constexpr int32_t mag_max = static_cast<int32_t>(mag_mask);
+    s = std::clamp(s, -mag_max, mag_max);
+    return (s < 0 ? sign_bit : 0u) | (static_cast<uint32_t>(std::abs(s)) & mag_mask);
+}
+
+template <unsigned Bits>
+std::vector<uint32_t> pack_sign_mag(const std::vector<float>& vals) {
+    constexpr unsigned lanes = 32 / Bits;
+    std::vector<uint32_t> out((vals.size() + lanes - 1) / lanes, 0);
+    for (size_t i = 0; i < vals.size(); ++i) {
+        const uint32_t enc = sign_mag_encode<Bits>(static_cast<int32_t>(std::lround(vals[i])));
+        out[i / lanes] |= enc << (Bits * (i % lanes));
+    }
+    return out;
+}
+
+template <unsigned Bits>
+std::vector<float> decode_sign_mag(const std::vector<uint32_t>& bytes) {
+    constexpr unsigned lanes = 32 / Bits;
+    constexpr uint32_t lane_mask = (1u << Bits) - 1u;
+    constexpr uint32_t mag_mask = (1u << (Bits - 1)) - 1u;
+    constexpr uint32_t sign_bit = 1u << (Bits - 1);
+    std::vector<float> out(bytes.size() * lanes);
+    for (size_t i = 0; i < out.size(); ++i) {
+        const uint32_t b = (bytes[i / lanes] >> (Bits * (i % lanes))) & lane_mask;
+        const int32_t mag = static_cast<int32_t>(b & mag_mask);
+        out[i] = static_cast<float>((b & sign_bit) ? -mag : mag);
+    }
+    return out;
 }
 
 // Pack tile-ordered whole-number floats into `fmt`'s on-device L1 tile encoding.
@@ -1787,32 +1827,13 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
             }
             return out;
         }
-        case tt::DataFormat::Int16: {
-            // Quasar Int16 in L1 is sign-magnitude 16-bit (SMAG16): sign in bit 15, 14-bit magnitude;
-            // two elements packed per 32-bit word (element 2i in the low half, 2i+1 in the high half).
-            std::vector<uint32_t> out((vals.size() + 1) / 2, 0);
-            for (size_t i = 0; i < vals.size(); ++i) {
-                const int32_t s = static_cast<int32_t>(std::lround(vals[i]));
-                const uint16_t enc =
-                    static_cast<uint16_t>((s < 0 ? 0x8000u : 0u) | (static_cast<uint32_t>(std::abs(s)) & 0x7fffu));
-                out[i / 2] |= static_cast<uint32_t>(enc) << (16 * (i % 2));
-            }
-            return out;
-        }
-        case tt::DataFormat::Int8: {
-            // Quasar Int8 in L1 is sign-magnitude 8-bit (SMAG8): sign in bit 7, 7-bit magnitude; four
-            // elements packed per 32-bit word. Sign-magnitude has no -128, so the range is [-127, 127].
-            // (Wormhole/Blackhole instead store two's complement and have callers declare the buffer
-            // UInt8; the Quasar kernel decodes the byte natively, so no reinterpretation is needed.)
-            std::vector<uint32_t> out((vals.size() + 3) / 4, 0);
-            for (size_t i = 0; i < vals.size(); ++i) {
-                const int32_t s = std::clamp<int32_t>(static_cast<int32_t>(std::lround(vals[i])), -127, 127);
-                const uint8_t enc =
-                    static_cast<uint8_t>((s < 0 ? 0x80u : 0u) | (static_cast<uint32_t>(std::abs(s)) & 0x7fu));
-                out[i / 4] |= static_cast<uint32_t>(enc) << (8 * (i % 4));
-            }
-            return out;
-        }
+        case tt::DataFormat::Int16:
+            // Quasar Int16 in L1 is sign-magnitude 16-bit (SMAG16).
+            return pack_sign_mag<16>(vals);
+        case tt::DataFormat::Int8:
+            // Quasar Int8 in L1 is sign-magnitude 8-bit (SMAG8), range [-kInt8SmagMax, kInt8SmagMax].
+            // Wormhole/Blackhole store two's complement and declare the buffer UInt8.
+            return pack_sign_mag<8>(vals);
         case tt::DataFormat::UInt8: {
             // UInt8 in L1 is raw unsigned bytes (four per 32-bit word).
             std::vector<uint32_t> out((vals.size() + 3) / 4, 0);
@@ -1855,24 +1876,8 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
             }
             return out;
         }
-        case tt::DataFormat::Int16: {
-            std::vector<float> out(bytes.size() * 2);
-            for (size_t i = 0; i < out.size(); ++i) {
-                const uint16_t h = static_cast<uint16_t>(bytes[i / 2] >> (16 * (i % 2)));
-                const int32_t mag = h & 0x7fff;
-                out[i] = static_cast<float>((h & 0x8000) ? -mag : mag);
-            }
-            return out;
-        }
-        case tt::DataFormat::Int8: {
-            std::vector<float> out(bytes.size() * 4);
-            for (size_t i = 0; i < out.size(); ++i) {
-                const uint8_t b = static_cast<uint8_t>(bytes[i / 4] >> (8 * (i % 4)));
-                const int32_t mag = b & 0x7f;
-                out[i] = static_cast<float>((b & 0x80) ? -mag : mag);
-            }
-            return out;
-        }
+        case tt::DataFormat::Int16: return decode_sign_mag<16>(bytes);
+        case tt::DataFormat::Int8: return decode_sign_mag<8>(bytes);
         case tt::DataFormat::UInt8: {
             std::vector<float> out(bytes.size() * 4);
             for (size_t i = 0; i < out.size(); ++i) {
@@ -1920,7 +1925,9 @@ inline std::vector<float> typecast_golden(
             if (typecast_is_unsigned(out_fmt)) {
                 v = std::clamp(v, 0.0f, 255.0f);
             } else if (out_fmt == tt::DataFormat::Int8) {
-                v = std::clamp(v, -127.0f, 127.0f);  // sign-magnitude saturates, and has no -128
+                // Sign-magnitude saturates at kInt8SmagMax and has no -128. This sweep stays inside
+                // that range; saturation and nearest-even ties are test_typecast_fp32_to_int8_edge_cases_quasar.
+                v = std::clamp(v, -static_cast<float>(kInt8SmagMax), static_cast<float>(kInt8SmagMax));
             }
         }
     }
@@ -3229,15 +3236,15 @@ bool run_sfpu_typecast(
     // See param_config.py:_resolve_quasar_typecast_variant.
     const bool narrow_int_source = sfpu_util::typecast_is_int(in_fmt) && !in_is_32bit;
 
-    // preserve_fp32_precision: a Float32 input, an 8-bit-output promotion from a bf16/MX source, or an
-    // 8-bit input. Int8 and UInt8 are routed identically here (see typecast_is_8bit_int).
+    // preserve_fp32_precision: a Float32 input, or an 8-bit output promoted from a bf16/MX source.
+    // An 8-bit input is a narrow_int_source, and that branch ignores preserve_fp32.
     const bool preserve_fp32 = in_fmt == tt::DataFormat::Float32 ||
                                (sfpu_util::typecast_is_8bit_int(out_fmt) &&
-                                (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt))) ||
-                               sfpu_util::typecast_is_8bit_int(in_fmt);
+                                (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt)));
 
-    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. Narrow integer pairs (e.g. Int16 ->
-    // Float16_b) stay in a 16-bit Dest, exactly as production runs them.
+    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. A narrow integer source uses a
+    // 32-bit Dest only when the output is 32-bit, and a 16-bit Dest otherwise. Production ttnn uses
+    // 32-bit Dest plus Unpack-to-Dest for an 8-bit input; this follows the LLK typecast resolver.
     const bool fp32_dest_acc = narrow_int_source ? out_is_32bit : (preserve_fp32 || in_is_32bit || out_is_32bit);
 
     // Unpack-to-Dest for genuine 32-bit inputs and for narrow integer sources (above). The older note
@@ -4429,8 +4436,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
     }
 }
 
-// Typecast test fixture: one (in_format -> out_format) pair per instance, covering the Quasar typecast matrix over all
-// data formats.
+// Typecast test fixture: one (in_format -> out_format) pair per instance. The matrix is Float16_b,
+// Float32, Int32, Int16, Int8, UInt8, and MxFp8P / MxFp8R. UInt16, UInt32, and MxFp4 are out of scope.
+// UInt8 -> Int32 and UInt8 -> Int16 are not part of the matrix.
 class SingleCoreSingleMeshDeviceSfpuTypecastFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<tt::DataFormat, tt::DataFormat>> {};

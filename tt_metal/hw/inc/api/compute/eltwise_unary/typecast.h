@@ -72,15 +72,19 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
+ * On Quasar, an Int8, Int16, or UInt8 source must be unpacked to Dest. The SM8 / SM16 / U8 load
+ * decodes the datum in place, and an FPU widen first makes that load read the wrong bits.
+ *
  * Int8 takes a different circular-buffer convention per architecture, because the two SFPU
  * implementations disagree on how an Int8 byte in L1 is encoded:
  *  - Wormhole/Blackhole: declare the circular buffers as UInt8 instead of Int8, so the raw 2's
  *    complement byte is zero-extended instead of being decoded as sign-magnitude, and put Dest in
  *    32 bit mode, which is enforced by a static_assert. The kernels below do the sign handling
  *    themselves on that raw byte.
- *  - Quasar: declare the circular buffers as Int8. Int8 is a native Dest format there and its datums
- *    are sign-magnitude, which is exactly what the shared kernel's SM8 load and store decode, so the
- *    byte needs no reinterpretation. Sign-magnitude has no -128, so the range is [-127, 127].
+ *  - Quasar: declare the circular buffers as Int8 and unpack the source to Dest. Int8 is a native
+ *    Dest format there and its datums are sign-magnitude, which is what the shared kernel's SM8
+ *    load and store decode, so the byte needs no reinterpretation on that path. Sign-magnitude
+ *    has no -128, so the range is [-127, 127].
  *
  * Return value: None
  *

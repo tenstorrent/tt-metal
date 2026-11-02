@@ -2087,6 +2087,143 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
     )
 
 
+# Float32 -> Int8. The randomised sweep stays inside [-127, 127] and is integer-only, so it never
+# sees saturation or a .5 tie. The kernel converts fp32 -> int32 nearest-even, then int32_to_int8
+# saturates. Sign-magnitude has no -128.
+_INT8_EDGE_NEGATIVE = (
+    (-0.5, 0),
+    (-1.5, -2),
+    (-200.0, -127),
+)
+_INT8_EDGE_TIES = (
+    (0.5, 0),
+    (1.5, 2),
+    (2.5, 2),
+    (126.5, 126),
+    (127.5, 127),  # nearest-even is 128, then saturation
+    (-126.5, -126),
+    (-127.5, -127),  # nearest-even is -128, then saturation
+)
+_INT8_EDGE_EXACT = (
+    (1.0, 1),
+    (-1.0, -1),
+    (127.0, 127),
+    (-127.0, -127),
+)
+_INT8_EDGE_SATURATION = (
+    (128.0, 127),
+    (200.0, 127),
+    (-128.0, -127),
+)
+_INT8_EDGE_GROUPS = (
+    ("negative and fractional", _INT8_EDGE_NEGATIVE),
+    ("round-nearest-even ties", _INT8_EDGE_TIES),
+    ("exact values", _INT8_EDGE_EXACT),
+    ("saturation", _INT8_EDGE_SATURATION),
+)
+_INT8_EDGE_CASES = tuple(case for _, group in _INT8_EDGE_GROUPS for case in group)
+
+
+def _int8_edge_case_tile() -> tuple:
+    element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    repeats = math.ceil(element_count / len(_INT8_EDGE_CASES))
+    inputs = [value for value, _ in _INT8_EDGE_CASES] * repeats
+    expected = [result for _, result in _INT8_EDGE_CASES] * repeats
+    return (
+        torch.tensor(inputs[:element_count], dtype=torch.float32),
+        torch.tensor(expected[:element_count], dtype=torch.int64),
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp32_to_int8_edge_cases_quasar(dest_sync):
+    """Float32 -> Int8 saturates to [-127, 127] and rounds nearest-even, including .5 ties."""
+    dest_sync = dest_sync[0]
+
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Int8)
+    variants = generate_quasar_sfpu_format_variants(MathOperation.Typecast, [formats])
+    assert len(variants) == 1, (
+        "expected exactly one Float32 -> Int8 Quasar variant, got "
+        f"{len(variants)}: {variants}"
+    )
+    variant = variants[0]
+
+    src_A, expected_flat = _int8_edge_case_tile()
+    src_B = torch.zeros_like(src_A)
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Typecast),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(dest_sync),
+                TYPECAST_FORMATS(
+                    input_format=variant.sfpu_src,
+                    output_format=variant.sfpu_dst,
+                ),
+            ],
+            "runtimes": [
+                TILE_COUNT(1),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+
+    variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+    result = torch.tensor(res_from_L1, dtype=torch.int64)
+    assert (
+        result.numel() == expected_flat.numel()
+    ), f"result has {result.numel()} elements, expected {expected_flat.numel()}"
+
+    period = len(_INT8_EDGE_CASES)
+    case_index = 0
+    for group_name, group in _INT8_EDGE_GROUPS:
+        for value, want in group:
+            got = result[case_index::period]
+            mismatched = (got != want).nonzero().flatten()
+            assert mismatched.numel() == 0, (
+                f"{group_name}: input {value} should convert to {want}, got "
+                f"{got[mismatched[:8]].tolist()} at {mismatched.numel()} of "
+                f"{got.numel()} tile positions"
+            )
+            case_index += 1
+
+    assert torch.equal(result, expected_flat), (
+        "Float32 -> Int8 mismatch:\n"
+        f"got      {result[:32].tolist()}\n"
+        f"expected {expected_flat[:32].tolist()}"
+    )
+
+
 def _uint16_to_fp32_tile() -> tuple:
     """Repeat the uint16 boundary seeds across one tile, with the fp32 oracle."""
     element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM

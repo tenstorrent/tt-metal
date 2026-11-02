@@ -64,13 +64,9 @@ ExpPrecision get_exp_precision(DataFormat data_format) {
 DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> data_format) {
     DataFormat last_valid_format = DataFormat::Invalid;
     for (const auto& format : data_format) {
-        // Special case where Float32 can pair with any exponent precision, skip checking.
-        // Integer formats carry no exponent at all, so they pair with either precision for the same
-        // reason, and every integer format is listed here.
-        if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
-            (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
-            (format == DataFormat::UInt8) || (format == DataFormat::Int32) || (format == DataFormat::Int8) ||
-            (format == DataFormat::Int16)) {
+        // Float32 and the integer formats carry no exponent constraint, so they pair with either
+        // precision
+        if (format == DataFormat::Float32 || tt::is_integer_format(format)) {
             continue;
         }
 
@@ -293,7 +289,10 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt8;
         } else if (data_format == DataFormat::Int8) {
             pack_src_format = DataFormat::Int8;
-        } else if (data_format == DataFormat::Int16) {
+        } else if (arch == tt::ARCH::QUASAR && data_format == DataFormat::Int16) {
+            // Quasar only. On Wormhole/Blackhole this still throws: Int16 is not a pack source there.
+            // This cannot tell an Int16 input from an Int16 output. A consumed Int16 DFB with
+            // 32-bit Dest must unpack to Dest; ValidateUnpackModes enforces that.
             pack_src_format = DataFormat::Int16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
