@@ -821,3 +821,33 @@
 #       tier: 2
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
+
+# ── GLM ─────────────────────────────────────────────────────────────────────────────
+- name: "GLM-5.3-Flash device (BH Galaxy)"
+  model: zai-org/GLM-5.3-Flash
+  server-timeout: 45
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-blackhole
+  # The served 1 M profile of tt-inference-server (32 resident users): the 2D-torus fabric, the 512 MiB trace
+  # region, device sampling, chunked prefill aligned to the 256-row grid, eight decode steps between a prompt's
+  # chunks. The mesh weight cache is $TT_CACHE_PATH/glm53_mesh (built on the first run, mlperf write access).
+  tt-config: '{"fabric_config": "FABRIC_2D_TORUS_XY", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 536870912, "l1_small_size": 32768, "sample_on_device_mode": "all", "prefill_chunk_alignment": 256, "decode_interleave_enabled": true, "decode_interleave_prefill_steps": 1, "decode_interleave_decode_steps": 8}'
+  # No JSON-valued arguments here: the workflow embeds the matrix in a single-quoted bash literal, so quotes break
+  # it. The image request runs on vLLM's defaults (one image per prompt; a window over the tower's 1024-patch cap
+  # is encoded as row bands by the model).
+  additional-server-args: "--max-model-len 1048576 --max-num-seqs 32 --block-size 32 --max-num-batched-tokens 524288 --long-prefill-token-threshold 16384 --enable-prefix-caching --async-scheduling --reasoning-parser glm45"
+  extra-env: "GLM53_MESH_SHAPE=8,4 GLM53_MODEL_TRACE_MB=512 GLM53_VLLM_IMAGES=1 GLM53_VLLM_VISION_RESIDENT=0 GLM53_VLLM_VISION_BATCH_PATCHES=1024 GLM53_VLLM_PREFIX_CACHING=1 GLM53_VLLM_APC_SNAPSHOTS=2 GLM53_VLLM_APC_WARMUP_ALLOWANCE_MIB=400 GLM53_VLLM_ROWS_INDEPENDENT=1 GLM53_RESIDENT_DECODE=1 GLM53_REGIONS_T=4096 GLM53_PAGED_SPARSE=1 GLM53_DECODE_SLOT_MASK=1 GLM53_DEVICE_SAMPLING=1 GLM53_VLLM_WARMUP_PREFILL=128,32768"
+  coherence-test: true
+  # the plugin's sampling suite over the device sampler (seeded draws, top-p / top-k, logprobs on host-sampled rows)
+  sampling-tests: true
+  sampling-test-timeout: 15
+  # the chat API's image request (the tower at the 1024-patch window, device-sampled with top_k 10)
+  multimodal: true
+  skus:
+    bh_galaxy:
+      timeout: 85
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm

@@ -370,7 +370,7 @@ models:
     wh_galaxy_perf: 215
     bh_p150: 27
     bh_quietbox_2: 434
-    bh_galaxy: 78
+    bh_galaxy: 90  # +12: GLM-5.3-Flash e2e 45 beside Qwen3-32B 15 + GPT-OSS 30 (PR #63440)
     bh_sc1: 180
     bh_sc1_high_power: 185
     bh_sc4: 75
@@ -428,6 +428,7 @@ models:
     wh_n150: 30
     wh_galaxy_perf: 70
     bh_p150: 20
+    bh_galaxy: 25  # GLM-5.3-Flash layer decode profiles on a (2,4) block (PR #63440)
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
@@ -458,7 +459,7 @@ models:
     bh_p150: 52
     bh_p150b_civ2: 45
     bh_quietbox_2: 609
-    bh_galaxy: 150
+    bh_galaxy: 180  # +30: GLM-5.3-Flash seqlen sweep (PR #63440)
   sweep_tier2:
     wh_n150: 30
     wh_llmbox_perf: 271
@@ -469,7 +470,7 @@ models:
     bh_quietbox_2: 310
     wh_llmbox: 370
     bh_loudbox: 320
-    bh_galaxy: 65
+    bh_galaxy: 150  # Qwen3-32B 65 + GLM-5.3-Flash 85 (PR #63440)
     wh_n150: 65
 umd:
   unit:

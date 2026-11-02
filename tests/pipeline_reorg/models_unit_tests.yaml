@@ -2393,3 +2393,39 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
+
+- name: GLM-5.3-Flash host suites
+  cmd: |
+    # CPU-only (no device, no weights): the serving adapter's placement / prefix cache / spec-decode contracts, the
+    # packed decode inputs, the KDA chronology, the dispatch budget and the allocation policy. One pytest session per
+    # file (--noconftest): every suite asserts that ttnn was never imported. The Galaxy device coverage (evals,
+    # benchmarks, API conformance) runs on the tt-shield release flow until the Models CI Galaxy runners carry the
+    # checkpoint.
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_alloc_policy_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_decode_packed_inputs_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_dispatch_pass_budget_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_dsa_decode_state_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_expert_e1_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_hybrid_glue_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_kda_chrono_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mesh_prefill_scope_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mhc_norm_select_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mhc_roofline_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_prefill_linear_rowblock_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_regions_decode_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_roofline_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_serving_image_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_serving_prefix_cache_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_serving_spec_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_spec_commit_fused_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_spec_commit_gated_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_spec_decode_host.py
+  model: glm53-flash
+  model_family: GLM
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: unit
