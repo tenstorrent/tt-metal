@@ -511,9 +511,9 @@ class SFPU_SOFTPLUS_PARAMS(TemplateParameter):
         if beta == 0.0:
             raise ValueError("softplus beta 0 is not a finite 1/beta")
         return (
-            f"#define SOFTPLUS_TEST_BETA {_fp32_bits(beta):#x}u\n"
-            f"#define SOFTPLUS_TEST_BETA_RECIP {_fp32_bits(1.0 / beta):#x}u\n"
-            f"#define SOFTPLUS_TEST_THRESHOLD {_fp32_bits(self.softplus_threshold):#x}u"
+            f"#define SOFTPLUS_TEST_BETA {fp32_bits(beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_BETA_RECIP {fp32_bits(1.0 / beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_THRESHOLD {fp32_bits(self.softplus_threshold):#x}u"
         )
 
 
