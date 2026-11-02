@@ -13,7 +13,6 @@ from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
     ATTENTION_GRIDS,
-    NOT_WRITTEN,
     REFERENCE_LAYERS,
     RING,
     reference_rope,
@@ -30,7 +29,6 @@ from models.experimental.kimi_k3_moonvit_v2.tt.vision_block import TT_Vision_Blo
 @RING
 @REFERENCE_LAYERS
 @ATTENTION_GRIDS
-@NOT_WRITTEN
 def test_vision_block(mesh_device, sp_axis, num_links, config, reference, grid, layer):
     parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
     tt = TT_Vision_Block(
