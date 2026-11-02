@@ -677,3 +677,16 @@ def test_gather_row_major_out_for_row_major_input(device):
     ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
     ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
     assert torch.equal(ttnn.to_torch(ttnn_output), torch.gather(input, -1, index))
+
+
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
+@pytest.mark.parametrize("out_dtype", [ttnn.float32, ttnn.uint16])
+def test_gather_rejects_out_with_different_dtype(layout, out_dtype, device, expect_error):
+    torch.manual_seed(0)
+    input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 32, 32), dtype=torch.int64)
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=layout, device=device)
+    ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), out_dtype, layout=layout, device=device)
+    with expect_error(RuntimeError, "Output tensor dtype must match the input tensor dtype"):
+        ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
