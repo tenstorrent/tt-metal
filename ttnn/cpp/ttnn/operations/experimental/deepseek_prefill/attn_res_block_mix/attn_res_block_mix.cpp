@@ -20,12 +20,12 @@ std::vector<ttnn::Tensor> attn_res_block_mix(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(!sealed.empty(), "AttnResBlockMix needs at least one sealed snapshot tensor");
-    // HiFi4 with fp32 dest accumulation: the scoring chain is rsqrt, a product, a max and
-    // exp, and the mixture MACs every candidate into one accumulator per site.
+    // Fidelity reaches only the mixture's bf16 MACs, the one FPU product: HiFi2 keeps a bf16
+    // weight's full mantissa. Scoring is SFPU in fp32, and dest accumulates in fp32.
     auto kernel_config_val = init_device_compute_kernel_config(
         stats.device()->arch(),
         compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
 

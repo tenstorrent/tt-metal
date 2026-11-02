@@ -212,13 +212,14 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     writer.config = WriterConfigDescriptor{};
     writer.emplace_common_runtime_args({partials.buffer(), closed.buffer(), shift.buffer(), mass.buffer()});
 
-    // The gathered statistics, the scores, the shift and the closed sites' mass, mask and
-    // factor are only ever copied into dest, never fed to the FPU, so they unpack straight to
-    // it rather than being cut to tf32 on the way through srcA.
+    // Scoring runs on the SFPU: every fp32 buffer it reads is only ever copied into dest, so
+    // they unpack straight to it rather than being cut to tf32 on the way through srcA.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dest_mode[CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[CBIndex::c_2] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[CBIndex::c_3] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[CBIndex::c_4] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;

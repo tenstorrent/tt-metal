@@ -142,8 +142,7 @@ void score_row() {
     reconfig_data_format(cb_stats, cb_summed);
     pack_reconfig_data_format(cb_summed);
 
-    // The statistics, summed across ranks in fp32 dest. They unpack straight to dest, so
-    // srcA goes back to the summed statistics' format after.
+    // The statistics, summed across ranks in fp32 dest.
     cb_stats_obj.wait_front(num_candidates * num_partials);
     cb_summed_obj.reserve_back(num_candidates);
     copy_init(cb_stats);
@@ -157,7 +156,6 @@ void score_row() {
     });
     cb_summed_obj.push_back(num_candidates);
     cb_stats_obj.pop_front(num_candidates * num_partials);
-    reconfig_data_format_srca(cb_stats, cb_summed);
 
     // Reciprocal RMS per candidate. Only column 0 means anything.
     cb_summed_obj.wait_front(num_candidates);
@@ -173,11 +171,19 @@ void score_row() {
     });
     cb_rr_obj.push_back(num_candidates);
 
-    // Scores: every column of a candidate's statistics scaled by its column 0.
+    // Scores: every column of a candidate's statistics scaled by its column 0. An SFPU
+    // product in fp32, so the mixture's math fidelity never reaches the scores.
     cb_rr_obj.wait_front(num_candidates);
     cb_scores_obj.reserve_back(num_candidates);
-    mul_bcast_cols_init(cb_summed, cb_rr);
-    per_candidate(cb_scores, [](uint32_t c) { mul_tiles_bcast_cols(cb_summed, cb_rr, c, c, dst_a); });
+    per_candidate(cb_scores, [](uint32_t c) {
+        copy_init(cb_summed);
+        copy_tile(cb_summed, c, dst_a);
+        unary_bcast_init<BroadcastType::COL>(cb_rr);
+        unary_bcast<BroadcastType::COL>(cb_rr, c, dst_b);
+        unary_bcast_uninit<BroadcastType::COL>(cb_rr);
+        mul_binary_tile_init();
+        mul_binary_tile(dst_a, dst_b, dst_a);
+    });
     cb_scores_obj.push_back(num_candidates);
     cb_rr_obj.pop_front(num_candidates);
     cb_summed_obj.pop_front(num_candidates);
@@ -187,8 +193,6 @@ void score_row() {
     cb_scores_obj.wait_front(num_candidates);
     cb_shift_obj.reserve_back(1);
     cb_shift_out_obj.reserve_back(1);
-    // The scores and shift unpack to dest in fp32, where the multiply left srcA on tf32.
-    reconfig_data_format_srca(cb_summed, cb_scores);
     copy_init(cb_scores);
     tile_regs_acquire();
     copy_tile(cb_scores, 0, dst_a);

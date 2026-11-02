@@ -73,13 +73,13 @@ def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
 def test_attn_res_block_mix(device, planes, num_sites, num_partials, num_tokens):
     (out, tt_shift, tt_mass), (partials, shift, mass) = run_mix(device, planes, num_sites, num_partials, num_tokens)
 
-    # Scores multiply through tf32 operands, and the weights reach the MAC as bf16.
-    torch.testing.assert_close(tt_shift, shift, rtol=3e-3, atol=3e-3)
-    torch.testing.assert_close(tt_mass, mass, rtol=3e-2, atol=3e-2)
+    # Scoring is fp32 throughout.
+    torch.testing.assert_close(tt_shift, shift, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(tt_mass, mass, rtol=1e-4, atol=1e-4)
     passed, pcc = comp_pcc(partials, out, 0.9999)
     assert passed, f"partials PCC {pcc}"
     # Elementwise, a partial sums up to C unit-scale values with weights that are bf16 at the
-    # MAC and carry the scores' tf32 error through exp: ~2^-8 of up to C * 4, so 0.1.
+    # MAC: ~2^-8 of up to C * 4, so 0.1.
     torch.testing.assert_close(out, partials, rtol=2e-2, atol=1e-1)
 
 
@@ -98,5 +98,5 @@ def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):
     # and a weight's rounding flips one bf16 step either way.
     torch.testing.assert_close(closed, reads, rtol=2e-2, atol=5e-2)
     torch.testing.assert_close(out, partials[num_closed:], rtol=2e-2, atol=1e-1)
-    torch.testing.assert_close(shift_out, shift[num_closed:], rtol=3e-3, atol=3e-3)
-    torch.testing.assert_close(mass_out, mass[num_closed:], rtol=3e-2, atol=3e-2)
+    torch.testing.assert_close(shift_out, shift[num_closed:], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(mass_out, mass[num_closed:], rtol=1e-4, atol=1e-4)
