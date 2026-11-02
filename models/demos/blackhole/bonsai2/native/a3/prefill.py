@@ -242,3 +242,34 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
         ttnn.deallocate(wd)
     ttnn.deallocate(hr)
     return ttnn.reshape(y, list(x.shape))
+
+
+# --- dense weights a ternary site replaced -------------------------------------------------------
+_freed = {"bytes": 0, "tensors": 0}
+
+
+def _dram_allocated(device) -> int:
+    mv = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
+    return mv.total_bytes_allocated_per_bank * mv.num_banks
+
+
+def drop_dense(device, *tensors):
+    """Free dense weights that a ternary site replaced (decode and prefill both run ternary then).
+    Bytes are measured from the DRAM allocator before and after; the total prints at exit."""
+    before = _dram_allocated(device)
+    for t in tensors:
+        if isinstance(t, ttnn.Tensor) and t.is_allocated():
+            ttnn.deallocate(t)
+            _freed["tensors"] += 1
+    _freed["bytes"] += before - _dram_allocated(device)
+
+
+def _report_freed():
+    if _freed["tensors"]:
+        print(f"BONSAI_NATIVE dense weights freed: {_freed['tensors']} tensors, {_freed['bytes'] / 2**30:.2f} GiB DRAM",
+              flush=True)
+
+
+import atexit  # noqa: E402
+
+atexit.register(_report_freed)

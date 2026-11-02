@@ -1152,7 +1152,7 @@ class TPGatedDeltaNet:
             return out
         from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
 
-        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw["out"])
+        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw.get("out"))  # None once a ternary out-proj replaced it
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
         if getattr(self.args, "num_devices", 1) == 1:
@@ -1793,7 +1793,7 @@ class TPGatedDeltaNet:
 
         from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
 
-        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw["out"])
+        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw.get("out"))  # None once a ternary out-proj replaced it
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         out = tt_all_reduce(
@@ -2195,7 +2195,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(z_all)
         from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
 
-        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw["out"])
+        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw.get("out"))  # None once a ternary out-proj replaced it
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
         o_red = tt_all_reduce(

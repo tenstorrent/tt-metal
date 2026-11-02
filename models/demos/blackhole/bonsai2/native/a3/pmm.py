@@ -23,6 +23,12 @@ KDIR = "models/demos/blackhole/bonsai2/native/a3/kernels/"
 MAX_ROWS = 128
 
 
+def _one(core, args):
+    ra = ttnn.RuntimeArgs()
+    ra[core.x][core.y] = args
+    return ra
+
+
 def pmm(x, w, s, k: int, n: int, gu: bool = False):
     """x: [1, 1, M, K] bf16 DRAM interleaved (rotated). w, s: a3.weights_for_device tensors.
     n: real output columns (gu: per half). Returns [1, 1, M, n] bf16 DRAM (gu: (gate, up))."""
@@ -40,21 +46,41 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
     outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, m, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
                                            ttnn.DRAM_MEMORY_CONFIG) for _ in range(2 if gu else 1)]
     g = device.compute_with_storage_grid_size()
-    cores = [ttnn.CoreCoord(cx, cy) for cy in range(g.y) for cx in range(g.x)]
-    # Every core streams all of x', so x traffic = cores x |x'| and binds at M=128 (down: 80 cores x 4.4 MB).
-    # ~160/MT cores balances it (sweep at S=128: down 4 cols/core 0.78 ms vs 2/core 1.43; gate|up 16/core 0.84 vs 10/core 1.25).
-    per = max(-(-ncols // len(cores)), -(-ncols // (160 // mt)), int(os.environ.get("BONSAI_PMM_PER", "0")))
-    cores = cores[: -(-ncols // per)]
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    mc = os.environ.get("BONSAI_PMM_MC", "0") == "1"  # WIP: the first multicast run hung chip 3 (18:37)
+    if mc:
+        # x' multicast: one sender at logical (g.x-1, 0) reads x' once and multicasts it to a worker rectangle
+        # of width g.x-1, so all workers share one x' stream instead of each reading it from DRAM.
+        wx = g.x - 1
+        per = -(-ncols // (wx * g.y))
+        used = -(-ncols // per)
+        h = -(-used // wx)
+        cores = [ttnn.CoreCoord(cx, cy) for cy in range(h) for cx in range(wx)]
+        sender = ttnn.CoreCoord(g.x - 1, 0)
+        wrect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(wx - 1, h - 1))])
+        allr = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(wx - 1, h - 1)),
+                                  ttnn.CoreRange(sender, sender)])
+        p0 = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
+        p1 = device.worker_core_from_logical_core(ttnn.CoreCoord(wx - 1, h - 1))
+        ps = device.worker_core_from_logical_core(sender)
+        crs = wrect
+    else:
+        cores = [ttnn.CoreCoord(cx, cy) for cy in range(g.y) for cx in range(g.x)]
+        # Every core streams all of x', so x traffic = cores x |x'| and binds at M=128 (down: 80 cores x 4.4 MB).
+        # ~160/MT cores balances it (sweep at S=128: down 4 cols/core 0.78 ms vs 2/core 1.43; gate|up 16/core 0.84 vs 10/core 1.25).
+        per = max(-(-ncols // len(cores)), -(-ncols // (160 // mt)), int(os.environ.get("BONSAI_PMM_PER", "0")))
+        cores = cores[: -(-ncols // per)]
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        allr = crs
     rd, cp, wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, c in enumerate(cores):
-        c0, nc = i * per, min(per, ncols - i * per)
-        rd[c.x][c.y] = [x.buffer_address(), w.buffer_address(), s.buffer_address(), c0, nc]
+        c0 = min(i * per, ncols)
+        nc = max(0, min(per, ncols - c0))
+        rd[c.x][c.y] = [x.buffer_address(), wt.buffer_address(), s.buffer_address(), c0, nc]
         cp[c.x][c.y] = [nc]
         wr[c.x][c.y] = [outs[0].buffer_address(), outs[-1].buffer_address(), c0, nc]
 
     def cb(idx, fmt, page, nt):
-        return ttnn.CBDescriptor(total_size=nt * page, core_ranges=crs, format_descriptors=[
+        return ttnn.CBDescriptor(total_size=nt * page, core_ranges=allr, format_descriptors=[
             ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page)])
 
     kd = lambda src, ct, rt, cfg: ttnn.KernelDescriptor(  # noqa: E731
@@ -65,13 +91,22 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("BONSAI_PMM_FID", "HiFi2")), fp32_dest_acc_en=True,
                                        math_approx_mode=False)
     cfg.unpack_to_dest_mode = modes
-    prog = ttnn.ProgramDescriptor(
-        kernels=[
-            kd("pmm_reader.cpp", [ng, mt, kt, cpb, wtb, s_tiles, xtb], rd, ttnn.ReaderConfigDescriptor()),
+    kernels = [
+            kd("pmm_reader.cpp", [ng, mt, kt, cpb, wtb, s_tiles, xtb, int(mc), ps.x if mc else 0, ps.y if mc else 0, 0, 1],
+               rd, ttnn.ReaderConfigDescriptor()),
             kd("pmm_writer.cpp", [mt, n // 32, int(gu), xtb], wr, ttnn.WriterConfigDescriptor()),
             kd("pmm_compute.cpp", [ng, mt, int(os.environ.get("BONSAI_PMM_DBG", "0")), sx], cp, cfg),
-        ],
-        semaphores=[],
+    ]
+    if mc:
+        kernels.append(ttnn.KernelDescriptor(
+            kernel_source=KDIR + "pmm_xsend.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(sender, sender)]),
+            compile_time_args=[ng, mt, kt, xtb, len(cores), p0.x, p0.y, p1.x, p1.y, 0, 1],
+            runtime_args=_one(sender, [x.buffer_address()]), config=ttnn.WriterConfigDescriptor()))
+    prog = ttnn.ProgramDescriptor(
+        kernels=kernels,
+        semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=allr, initial_value=0),
+                    ttnn.SemaphoreDescriptor(id=1, core_ranges=allr, initial_value=0)],
         cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(2, ttnn.float32, 4096, 2),
              cb(3, ttnn.bfloat16, xtb, 32), cb(4, ttnn.float32, 4096, per * mt), cb(16, ttnn.bfloat16, xtb, 2 * mt)])
     ttnn.generic_op([x, wt, s] + outs, prog)

@@ -24,15 +24,26 @@ void kernel_main() {
     constexpr uint32_t xtb = get_compile_time_arg_val(6);
     constexpr uint32_t cb_x = 0, cb_c = 1, cb_s = 2;
     const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = xtb};
+    constexpr uint32_t mc = get_compile_time_arg_val(7);  // 1: x' arrives by multicast from the sender core
+    constexpr uint32_t snd_x = get_compile_time_arg_val(8), snd_y = get_compile_time_arg_val(9);
+    constexpr uint32_t sem_ready_id = get_compile_time_arg_val(10), sem_valid_id = get_compile_time_arg_val(11);
+    volatile tt_l1_ptr uint32_t* valid = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_valid_id));
+    const uint64_t ready_noc = get_noc_addr(snd_x, snd_y, get_semaphore(sem_ready_id));
     for (uint32_t G = 0; G < ng; ++G) {
         cb_reserve_back(cb_x, MT * 32);
-        uint32_t l1 = get_write_ptr(cb_x);
-        for (uint32_t m = 0; m < MT; ++m) {
-            for (uint32_t t = 0; t < 32; ++t, l1 += xtb) {
-                noc_async_read(get_noc_addr(m * kt + G * 32 + t, xg), l1, xtb);
+        if constexpr (mc) {
+            noc_semaphore_set(valid, 0);
+            noc_semaphore_inc(ready_noc, 1);
+            noc_semaphore_wait(valid, 1);
+        } else {
+            uint32_t l1 = get_write_ptr(cb_x);
+            for (uint32_t m = 0; m < MT; ++m) {
+                for (uint32_t t = 0; t < 32; ++t, l1 += xtb) {
+                    noc_async_read(get_noc_addr(m * kt + G * 32 + t, xg), l1, xtb);
+                }
             }
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
         cb_push_back(cb_x, MT * 32);
         for (uint32_t c = c0; c < c0 + nc; ++c) {
             const uint32_t bank = c / cpb, j = c % cpb;

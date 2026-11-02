@@ -191,6 +191,7 @@ class Qwen36DecoderLayer:
                 sites,
             )
             from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
+            from models.demos.blackhole.bonsai2.native.a3.prefill import drop_dense
 
             _sh = shared_for(mesh_device)
             _cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_linear")
@@ -199,8 +200,11 @@ class Qwen36DecoderLayer:
                 if "attn_qkv" in sites() and self.attention.weights.fused_qkv is not None:
                     import dataclasses
 
+                    _w = self.attention.weights
+                    # C: decode and prefill both take the ternary fused qkv, so the dense q/k/v and fused qkv go.
+                    drop_dense(mesh_device, _w.q_proj, _w.k_proj, _w.v_proj, _w.fused_qkv)
                     self.attention.weights = dataclasses.replace(
-                        self.attention.weights,
+                        _w, q_proj=None, k_proj=None, v_proj=None,
                         fused_qkv=TernaryLinear(
                             _sh,
                             f"blk.{layer_num}.attn_qkv_fused",
@@ -212,15 +216,20 @@ class Qwen36DecoderLayer:
                 if "attn_o" in sites():
                     import dataclasses
 
+                    _old_o = self.attention.weights.o_proj
                     self.attention.weights = dataclasses.replace(
                         self.attention.weights,
                         o_proj=TernaryLinear(_sh, f"blk.{layer_num}.attn_output.weight", _cache),
                     )
+                    drop_dense(mesh_device, _old_o)  # C: the dense o_proj is unused once the site is ternary
             elif self._tp1_gdn:
                 if "gdn_out" in sites():
                     self.attention._native_out = TernaryLinear(
                         _sh, f"blk.{layer_num}.ssm_out.weight", _cache, out_mem=ttnn.DRAM_MEMORY_CONFIG
                     )
+                    _tw = self.attention.tw  # C: dense out-projection copies are unused once the site is ternary
+                    drop_dense(mesh_device, _tw.pop("out", None), _tw.pop("out_colpar", None))
+                    self.attention._out_colpar_prefill = False  # prefill then takes _row_proj -> the ternary site
                 if "gdn_in" in sites():
                     import torch
 
@@ -231,6 +240,8 @@ class Qwen36DecoderLayer:
                         rows=lambda: gdn_in_rows(_sh, layer_num),
                         shape=gdn_in_shape(_sh, layer_num),
                     )
+                    _tw = self.attention.tw  # C: the dense qkvz(ab) and ab are unused once the site is ternary
+                    drop_dense(mesh_device, _tw.pop("qkvz", None), _tw.pop("ab", None))
                     _g = substate(state_dict, f"layers.{layer_num}.linear_attn")
                     _ab = torch.cat([_g["in_proj_a.weight"], _g["in_proj_b.weight"]], 0)  # [2*Nv, dim], bf16 in the GGUF
                     self.attention._native_ab = ttnn.as_tensor(
