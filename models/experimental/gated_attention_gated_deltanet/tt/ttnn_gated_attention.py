@@ -586,7 +586,9 @@ def gated_attention_forward_ttnn(
 
     # Apply sigmoid gate
     gate = ttnn.sigmoid(gate)
-    attn_output = ttnn.multiply(attn_output, gate)
+    # bonsai2 BONSAI_NATIVE: the exact-ternary o_proj reads L1, so the gate writes there (no copy op)
+    _l1 = not isinstance(o_proj_weight, ttnn.Tensor) and _os.environ.get("BONSAI_ATTN_GATE_L1", "1") == "1"
+    attn_output = ttnn.multiply(attn_output, gate, **({"memory_config": ttnn.L1_MEMORY_CONFIG} if _l1 else {}))
     ttnn.deallocate(gate)
 
     # Output projection
