@@ -226,7 +226,7 @@ Receiver::~Receiver() {
         tt::LogMetal,
         "[streaming profiler] DevicePublish descriptor ids: {} of {} assigned to the images this process loaded",
         llrt::device_publish_descriptor_ids_assigned(),
-        TT_ZONE_STALL_ID);
+        TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID);
 }
 
 bool Receiver::poll(Stream& s) {

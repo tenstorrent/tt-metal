@@ -20,12 +20,12 @@ OUTPUT_ARCH(riscv)
    pointers they hold by subtracting the section's own sh_addr (llrt/observability_event_meta.cpp). The string and
    record sections only need a defined base so that the link-time pointers from .tt_observability_event_meta into
    .tt_observability_event_str are well-formed. The id section's base must keep its upper 20 bits nonzero (see its
-   comment); 0x6800000 is also hostdev/observability_event_descriptor.h's TT_OBSERVABILITY_EVENT_IDS_LINK_VMA. Kept 1 MB apart and
-   clear of the device memory map, continuing the ladder the .device_print_strings sections started
-   at 0x6400000. */
+   comment); 0x6800000 is also hostdev/observability_event_descriptor.h's TT_DEVICE_PUBLISH_DESCRIPTOR_IDS_LINK_VMA.
+   Kept 1 MB apart and clear of the device memory map, continuing the ladder the .device_print_strings sections
+   started at 0x6400000. */
 #define TT_OBSERVABILITY_EVENT_STR_VMA 0x6600000
 #define TT_OBSERVABILITY_EVENT_META_VMA 0x6700000
-#define TT_OBSERVABILITY_EVENT_IDS_VMA 0x6800000
+#define DEVICE_PUBLISH_DESCRIPTOR_IDS_VMA 0x6800000
 
 /* Fake VMAs for the streaming profiler's call-site sections below (internal/debug/device_publish_impl.h). All three are
    (INFO), so they are non-ALLOC, never appear in a PT_LOAD and are never placed on the device; the host resolves the
@@ -196,20 +196,20 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Descriptor ids: one byte per event, so an event's descriptor id is its address and one image's ids are dense
-     from TT_OBSERVABILITY_EVENT_IDS_VMA in link order. The host moves the section to the image's block of the
-     16-bit id space when it loads the image, re-resolving every relocation against it (which is
-     why the link keeps its relocations, -Wl,--emit-relocs); an event materializes its id as lui/addi
-     of the handle, and this VMA's nonzero upper bits keep relaxation from folding that into a single
-     addi the host could not rebase. (INFO) for the same reason as above. */
-  .tt_observability_event_ids TT_OBSERVABILITY_EVENT_IDS_VMA (INFO) :
+  /* DevicePublish descriptor ids: one byte per call site, so a call site's id is its address and one image's ids are
+     dense from DEVICE_PUBLISH_DESCRIPTOR_IDS_VMA in link order. The host moves the section to the image's block of the
+     16-bit id space when it loads the image, re-resolving every relocation against it (which is why the link keeps its
+     relocations, -Wl,--emit-relocs); a call site materializes its id as lui/addi of the handle, and this VMA's nonzero
+     upper bits keep relaxation from folding that into a single addi the host could not rebase. (INFO) for the same
+     reason as above. */
+  .device_publish_descriptor_ids DEVICE_PUBLISH_DESCRIPTOR_IDS_VMA (INFO) :
   {
-    __tt_observability_event_ids_start = .;
-    KEEP(*(.tt_observability_event_ids))
-    __tt_observability_event_ids_end = .;
+    __device_publish_descriptor_ids_start = .;
+    KEEP(*(.device_publish_descriptor_ids))
+    __device_publish_descriptor_ids_end = .;
   }
-  ASSERT(__tt_observability_event_ids_end - __tt_observability_event_ids_start < 0xFFFF,
-         "more KERNEL_PROFILER events in one image than the 16-bit descriptor id space holds")
+  ASSERT(__device_publish_descriptor_ids_end - __device_publish_descriptor_ids_start < 0xFFFF,
+         "more call sites in one image than the 16-bit DevicePublish descriptor id space holds")
 
   /* What DevicePublish's call-site descriptors point at: texts, field codes, argument and packet layout tables,
      metadata values and samples. */

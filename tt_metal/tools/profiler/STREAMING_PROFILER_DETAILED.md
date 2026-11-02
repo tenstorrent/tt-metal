@@ -373,7 +373,7 @@ bank and pumps them to the host FIFO over a D2H socket.
   ceiling (5 µs) stays below a lane's fill time at high rates. The CV pass's tails are authoritative: a frame
   claims exactly `[mirror, tail-at-the-CV-read)`, which is safe at any gather lag because a producer only
   appends *past* a published tail (§N+71).
-- **Frames.** Prefix + heads/tails/`SPSC_CORE_XY` control words synthesized from the mirror and the CV
+- **Frames.** Prefix + heads/tails control words synthesized from the mirror and the CV
   read (the only control words the decoder reads) + each RISC's live window packed flat with 0–3 pad
   words per run bringing the wire offset to its ring phase. A full span of five full rings and their pads
   always fits a slot, so the lane walk has no room gate. Frames are page-rounded (64 B pages); pad and

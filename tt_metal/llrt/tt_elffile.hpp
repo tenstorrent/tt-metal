@@ -88,12 +88,12 @@ public:
     // XIPify
     void MakeExecuteInPlace();
 
-    // Streaming-profiler descriptor ids (hostdev/observability_event_descriptor.h): move the non-ALLOC
-    // .tt_observability_event_ids section to BASE, re-resolving every relocation against it -- the lui/addi pair each
-    // event materializes its id with, and the id word of each .tt_observability_event_meta record -- so the image emits
+    // DevicePublish descriptor ids (hostdev/observability_event_descriptor.h): move the non-ALLOC
+    // .device_publish_descriptor_ids section to BASE, re-resolving every relocation against it -- the lui/addi pair
+    // each call site materializes its id with, and the id of each call-site descriptor -- so the image emits
     // ids [BASE, BASE + size). Needs the link's relocations (-Wl,--emit-relocs). Returns the
-    // section's size, 0 when the image has no events.
-    uint32_t RebaseDescriptorIds(address_t base);
+    // section's size, 0 when the image has no call sites.
+    uint32_t RebaseDevicePublishDescriptorIds(address_t base);
 
 private:
     class Impl;

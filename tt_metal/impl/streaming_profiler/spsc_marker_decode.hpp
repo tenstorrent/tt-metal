@@ -27,7 +27,6 @@ using kernel_profiler::ppfmt;
 inline constexpr uint32_t kSpscRingCap = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
 inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
-inline constexpr uint32_t kSpscStallZoneId = TT_ZONE_STALL_ID;
 
 // Worst case: five full rings behind maximal pads. Bounds the bounce buffer and frame validation, not any
 // device layout.

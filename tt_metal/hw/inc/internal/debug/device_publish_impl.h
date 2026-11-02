@@ -8,8 +8,8 @@
 //
 // The metadata never reaches the device. The device compiler copies it, the source location and the type names into
 // sections the device never loads, next to one descriptor per call site (.device_publish_descriptors). The descriptor
-// id is the address of a one-byte handle in .tt_observability_event_ids, which the host rebases into the process's id
-// space when it loads the ELF (llrt/call_sites.cpp).
+// id is the address of a one-byte handle in .device_publish_descriptor_ids, which the host rebases into the process's
+// id space when it loads the ELF (llrt/call_sites.cpp).
 #pragma once
 
 #include <type_traits>
@@ -22,7 +22,7 @@
 #define DEVICE_PUBLISH_DESCRIPTOR_CONTENTS_SECTION_NAME ".device_publish_descriptor_contents"
 #define DEVICE_PUBLISH_DESCRIPTORS_SECTION_NAME ".device_publish_descriptors"
 #define DEVICE_PUBLISH_STRINGS_SECTION_NAME ".device_publish_strings"
-#define DEVICE_PUBLISH_DESCRIPTOR_IDS_SECTION_NAME ".tt_observability_event_ids"
+#define DEVICE_PUBLISH_DESCRIPTOR_IDS_SECTION_NAME ".device_publish_descriptor_ids"
 
 namespace tt::tt_metal::experimental::streaming_profiler {
 /** @brief The DevicePublish option that lets a record wait for its RISC's next batch of records, or the launch's end,

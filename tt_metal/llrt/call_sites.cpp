@@ -366,7 +366,7 @@ std::vector<std::pair<uint32_t, CallSite>> read_call_sites(const std::string& el
 
 void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     uint64_t ids_vma = 0;
-    const size_t count = elf.GetSectionContents(".tt_observability_event_ids", ids_vma).size();
+    const size_t count = elf.GetSectionContents(".device_publish_descriptor_ids", ids_vma).size();
     if (count == 0) {
         return;
     }
@@ -376,16 +376,16 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     {
         const std::lock_guard lock(images.mutex);
         TT_FATAL(
-            uint64_t{images.next_id} + count <= TT_ZONE_STALL_ID,
+            uint64_t{images.next_id} + count <= TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID,
             "streaming profiler: '{}' has {} call sites, and only {} of the process's {} DevicePublish "
             "descriptor ids remain",
             elf_path,
             count,
-            TT_ZONE_STALL_ID - images.next_id,
-            TT_ZONE_STALL_ID);
+            TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID - images.next_id,
+            TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID);
         base = std::exchange(images.next_id, images.next_id + static_cast<uint32_t>(count));
     }
-    elf.RebaseDescriptorIds(base);
+    elf.RebaseDevicePublishDescriptorIds(base);
 
     // The sites' strings point into the image, which add() stores before the image goes.
     std::vector<std::pair<uint32_t, CallSite>> sites = read_call_sites(elf_path, elf);
@@ -450,9 +450,10 @@ struct CallSites::State {
 
 CallSites::CallSites() :
     state_(std::make_unique<State>()),
-    by_id_(std::make_unique<std::atomic<const llrt::CallSite*>[]>(TT_EVENT_DESCRIPTOR_ID_COUNT)),
-    metadata_(std::make_unique<std::atomic<const CallSiteMetadataBase*>[]>(TT_EVENT_DESCRIPTOR_ID_COUNT)) {
-    by_id_[TT_ZONE_STALL_ID].store(&state_->sites.emplace_back(llrt::make_stall_site()), std::memory_order_release);
+    by_id_(std::make_unique<std::atomic<const llrt::CallSite*>[]>(TT_DEVICE_PUBLISH_DESCRIPTOR_ID_COUNT)),
+    metadata_(std::make_unique<std::atomic<const CallSiteMetadataBase*>[]>(TT_DEVICE_PUBLISH_DESCRIPTOR_ID_COUNT)) {
+    by_id_[TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID].store(
+        &state_->sites.emplace_back(llrt::make_stall_site()), std::memory_order_release);
 }
 
 CallSites::~CallSites() = default;

@@ -21,7 +21,7 @@ flowchart TB
 
   subgraph B[" 1 · JIT build — once per kernel, cached "]
     S["event in kernel source<br/>DeviceZoneScopedN('X')"]:::build
-    L["link: .tt_observability_event_ids placed at 0x6800000<br/>event k gets id 0x6800000 + k"]:::build
+    L["link: .device_publish_descriptor_ids placed at 0x6800000<br/>event k gets id 0x6800000 + k"]:::build
     S --> L
   end
   E[("kernel.elf in the JIT cache<br/>ids baked into lui / addi")]:::file
@@ -48,7 +48,7 @@ byte of L1:
 
 | section | placed at (link) | flags | contents | who reads it |
 |---|---|---|---|---|
-| `.tt_observability_event_ids` | `0x6800000` | none | one zero byte per event; **the byte's address is the id** | the loader (size = number of events) |
+| `.device_publish_descriptor_ids` | `0x6800000` | none | one zero byte per event; **the byte's address is the id** | the loader (size = number of events) |
 | `.tt_observability_event_meta` | `0x6700000` | `M`, entsize 16 | one 16-byte record per event: `{id, name_ptr, file_ptr, line}` | the loader, to name ids |
 | `.tt_observability_event_str` | `0x6600000` | `MS` | the zone names and `__FILE__` strings, deduplicated by the linker | the loader, via the record pointers |
 
@@ -63,7 +63,7 @@ flowchart LR
   classDef sec  fill:#FEF3C7,stroke:#B45309,stroke-width:2px,color:#0F172A
 
   Z["DeviceZoneScopedN('X')"]:::code
-  I["<b>.tt_observability_event_ids</b> — never loaded<br/>one zero byte; its address is the id"]:::sec
+  I["<b>.device_publish_descriptor_ids</b> — never loaded<br/>one zero byte; its address is the id"]:::sec
   M["<b>.tt_observability_event_meta</b> — never loaded<br/>{ id, name_ptr, file_ptr, line }"]:::sec
   T["<b>.tt_observability_event_str</b> — never loaded<br/>'X', 'kernel.cpp'"]:::sec
   C["<b>.text</b> — the device<br/>lui / addi of the id, then the marker"]:::code
@@ -85,7 +85,7 @@ struct hash {                                   // one type per event
     static inline __attribute__((always_inline)) uint32_t descriptor_id() {
         uint32_t v;
         asm(".ifndef __tt_observability_event_0_7\n"           // first appearance in this assembly only:
-            " .pushsection .tt_observability_event_ids\n"
+            " .pushsection .device_publish_descriptor_ids\n"
             " __tt_observability_event_0_7: .byte 0\n"          //   the handle -- its address is the id
             " .popsection\n"
             " .pushsection .tt_observability_event_str,\"MS\"\n"
@@ -141,8 +141,8 @@ zero.
 `hw/toolchain/main.ld` places the section:
 
 ```
-.tt_observability_event_ids 0x6800000 (INFO) : { KEEP(*(.tt_observability_event_ids)) }
-ASSERT(__tt_observability_event_ids_end - __tt_observability_event_ids_start < 0xFFFF, "more KERNEL_PROFILER events in one image than the 16-bit descriptor id space holds")
+.device_publish_descriptor_ids 0x6800000 (INFO) : { KEEP(*(.device_publish_descriptor_ids)) }
+ASSERT(__device_publish_descriptor_ids_end - __device_publish_descriptor_ids_start < 0xFFFF, "more call sites in one image than the 16-bit DevicePublish descriptor id space holds")
 ```
 
 `(INFO)` strips `SHF_ALLOC`; the linker lays the handles out back to back, so an image with 15 events
@@ -161,12 +161,12 @@ reached through `llrt::get_risc_binary`; see *Parallel links and parallel loads*
 It opens the ELF once and calls `ObservabilityEventMetaRegistry::ingest_elf(path, elf)` (`llrt/observability_event_meta.cpp`) before
 `ll_api::memory::from_elf` packs the image's segments for the device:
 
-1. `n = size of .tt_observability_event_ids` -- the number of events. No section, nothing to do (dispatch kernels, the
+1. `n = size of .device_publish_descriptor_ids` -- the number of events. No section, nothing to do (dispatch kernels, the
    relay, anything built without the producer).
 2. **Reserve** `[base, base + n)` from a process-wide counter that starts at 0. Reservation is per path, so
    a second load of the same ELF gets the same block.
-3. **Rebase**: `ElfFile::RebaseDescriptorIds(base)` (`llrt/tt_elffile.cpp`) walks every relocation whose symbol
-   lives in `.tt_observability_event_ids` and rewrites the bytes it points at, in the in-memory copy:
+3. **Rebase**: `ElfFile::RebaseDevicePublishDescriptorIds(base)` (`llrt/tt_elffile.cpp`) walks every relocation whose symbol
+   lives in `.device_publish_descriptor_ids` and rewrites the bytes it points at, in the in-memory copy:
 
    ```
    on disk (as linked)                     in memory after load, base = 15, k = 2
@@ -197,12 +197,12 @@ process id space (16 bits)
 └──────────┴──────────────┴──────────────┴───────────┴ ─ ─ ─ ─ ─ ┴────────┘
 ```
 
-`0xFFFF` is `TT_ZONE_STALL_ID`: the producer's own back-pressure zone, recognized by value, never handed
+`0xFFFF` is `TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID`: the producer's own back-pressure zone, recognized by value, never handed
 out, and the only id without a record.
 
 ### Parallel links and parallel loads
 
-**Linking needs no coordination.** A link never chooses an id. Every image's `.tt_observability_event_ids` is placed at the
+**Linking needs no coordination.** A link never chooses an id. Every image's `.device_publish_descriptor_ids` is placed at the
 same address, `0x6800000`, and numbered 0 … n−1 inside that image only. The JIT build links ~30 kernels at a
 time on its thread pool, and several processes can share one cache root; none of those links read or write any
 shared counter, file or lock for descriptor ids. The ELF a link produces is the same whatever else is linking.
@@ -224,7 +224,7 @@ under that concurrency because only one short step touches shared state:
 
 1. **Reserve** -- under the registry's mutex: look the path up, and if it is new record `base = next_id` and
    advance `next_id += n`. Two concurrent loads therefore always get disjoint blocks.
-2. **Rebase** -- no lock: `RebaseDescriptorIds(base)` patches this caller's own in-memory copy of the ELF, which no
+2. **Rebase** -- no lock: `RebaseDevicePublishDescriptorIds(base)` patches this caller's own in-memory copy of the ELF, which no
    other thread can see.
 3. **Publish** -- under the mutex again: parse the records and fill `events[]`.
 
@@ -249,7 +249,7 @@ affects whether they are unique.
 - **The DRAM profiler is untouched.** It keeps its 16-bit `Hash16_CT` ids and `kernel_profiler.hpp`; only the
   streaming producer (`kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`) uses this scheme.
 - **Linker scripts must place the section.** Only `main.ld` does today. A script without the placement
-  leaves `.tt_observability_event_ids` an orphan at address 0, where relaxation drops the `lui`; the loader detects this and
+  leaves `.device_publish_descriptor_ids` an orphan at address 0, where relaxation drops the `lui`; the loader detects this and
   throws rather than mis-naming. The Wormhole erisc scripts are in that state; the streaming profiler's relay
   is Blackhole-only, so it does not arise yet.
 
@@ -260,8 +260,8 @@ affects whether they are unique.
 - A kernel as linked, and as loaded (`R` = `runtime/sfpi/compiler/bin/riscv-tt-elf-readelf`):
 
   ```sh
-  $R -S -W brisc.elf          | grep tt_zone        # .tt_observability_event_ids at 06800000, size = events
-  $R -S -W brisc.elf.xip.elf  | grep tt_zone_ids    # the same section at its block base
+  $R -S -W brisc.elf          | grep tt_zone        # .device_publish_descriptor_ids at 06800000, size = events
+  $R -S -W brisc.elf.xip.elf  | grep device_publish_descriptor_ids    # the same section at its block base
   $R -x .tt_observability_event_meta brisc.elf.xip.elf             # word0 of each record = the final id
   $R -p .tt_observability_event_str brisc.elf.xip.elf              # the names
   riscv-tt-elf-objdump -d brisc.elf.xip.elf | grep -B1 __tt_observability_event_   # lui aN,0x0 / addi aN,aN,<id>
@@ -271,7 +271,7 @@ affects whether they are unique.
 
   | message | cause |
   |---|---|
-  | `.tt_observability_event_ids sits at 0x…; the linker script must place it above 4 KiB` | the image was linked with a script that lacks the `.tt_observability_event_ids` placement |
+  | `.device_publish_descriptor_ids sits at 0x…; the linker script must place it above 4 KiB` | the image was linked with a script that lacks the `.device_publish_descriptor_ids` placement |
   | `has events but no relocations; link it with -Wl,--emit-relocs` | a firmware/kernel link without `--emit-relocs` (the JIT adds it; an out-of-tree link may not) |
   | `loading '…' (n events) would exceed the 65535-id zone space` | more distinct events loaded in one process than the id has room for |
   | `… zone record(s) whose id is outside its own block … or unnamed` | a stale `.tt_observability_event_meta` layout in the JIT cache; those zones render as `Zone_<id>` |
@@ -303,7 +303,7 @@ affects whether they are unique.
 | `tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp` | `profileScope<Event>` and the `DeviceZone*`/`DeviceRecordEvent`/`DeviceTimestampedData` macros |
 | `tt_metal/hw/toolchain/main.ld` | places the three sections, asserts the per-image budget |
 | `tt_metal/jit_build/build.cpp` | `-DTT_PROFILER_TU_ID=<index>` per TU; `--emit-relocs` for firmware under the streaming profiler |
-| `tt_metal/llrt/tt_elffile.{hpp,cpp}` | `ElfFile::RebaseDescriptorIds` |
+| `tt_metal/llrt/tt_elffile.{hpp,cpp}` | `ElfFile::RebaseDevicePublishDescriptorIds` |
 | `tt_metal/llrt/observability_event_meta.{hpp,cpp}` | `ObservabilityEventMetaRegistry`: block allocation, rebase, name harvesting, listener |
 | `tt_metal/llrt/llrt.cpp` | calls `ingest_elf` as each image loads, before `ll_api::memory::from_elf` |
 | `tt_metal/api/tt-metalium/experimental/streaming_profiler.hpp`, `impl/streaming_profiler/api.cpp` | `DescriptorRegistry::descriptors[65536]`, `descriptor_of`, the listener that fills it |

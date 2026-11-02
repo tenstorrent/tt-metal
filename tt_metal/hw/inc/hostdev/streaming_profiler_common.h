@@ -74,11 +74,9 @@ enum SpscControlBuffer {
     // serve. A core nobody drains, such as a dispatch core, then overwrites its ring instead of waiting on it, which
     // would hang wait_until_cores_done() at device close.
     PROFILER_ARMED = 2 * PROFILER_SPSC_MAX_RISC,
-    // Reserved; the core's NoC coordinate reaches the wire from the host's core list via the relay (SPSC_PREFIX_XY).
-    SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
-    // Per-RISC count of full-ring blocks, written in the stall path and read by the host from L1 at teardown;
-    // counting decoded stall markers would undercount, since a marker can be dropped between the relay frame and
-    // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
+    // Per-RISC count of full-ring blocks, written in the stall path and read by the host from L1 at teardown, which
+    // warns about any. Stall records can't give that total: a callback that falls behind skips frames before decoding
+    // them, and with no callback none are decoded. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
     // An active eth core that runs a link sync port writes the port's stamp records to a ring in L1, separate from the

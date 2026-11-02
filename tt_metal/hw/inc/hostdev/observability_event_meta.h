@@ -26,7 +26,7 @@
 // fields of the same struct (Metadata::as<T>()).
 //
 // Record in .tt_observability_event_meta (little-endian; one per event; records are 4-byte aligned and contiguous):
-//   [0]  u32 id          the handle's VMA in .tt_observability_event_ids (rebased by the host at load)
+//   [0]  u32 id          the handle's VMA in .device_publish_descriptor_ids (rebased by the host at load)
 //   [4]  u32 signature   VMA in .tt_observability_event_str of "<type name>:<field codes>", e.g.
 //   "tt::observability_event::ZoneColorMeta:sw" [8]  u32 file        VMA in .tt_observability_event_str [12] u32 line
 //   [16] the leaf fields in declaration order, nested structs flattened in place, each aligned to min(its size,
@@ -587,7 +587,7 @@ constexpr AsmText emit_event(const T& meta, const char* event_label, const char*
     };
     a.put(".ifndef ");
     label();
-    a.put("\n.pushsection .tt_observability_event_ids,\"\",@progbits\n");
+    a.put("\n.pushsection .device_publish_descriptor_ids,\"\",@progbits\n");
     label();
     a.put(":\t.byte 0\n.popsection\n");
 

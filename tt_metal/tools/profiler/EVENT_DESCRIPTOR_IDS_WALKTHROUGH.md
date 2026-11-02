@@ -56,9 +56,9 @@ the kernel.
 |---|---|---|---|
 | `0x06600000` | `TT_OBSERVABILITY_EVENT_STR_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_str` (the strings) |
 | `0x06700000` | `TT_OBSERVABILITY_EVENT_META_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_meta` (the records) |
-| `0x06800000` | `TT_OBSERVABILITY_EVENT_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_ids` (the handles) |
+| `0x06800000` | `DEVICE_PUBLISH_DESCRIPTOR_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.device_publish_descriptor_ids` (the handles) |
 | `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/observability_event_meta.h` | bytes of a record's fixed header; the event's metadata fields follow it |
-| `0xFFFF` | `TT_ZONE_STALL_ID` | `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | reserved id; the space handed out is `0 … 0xFFFE` |
+| `0xFFFF` | `TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID` | `tt_metal/hw/inc/hostdev/observability_event_descriptor.h` | reserved id; the space handed out is `0 … 0xFFFE` |
 
 The three addresses are **made up**. None of these sections is ever loaded onto the device, so their addresses
 do not refer to real memory; they only have to exist so the linker can compute pointers between the sections.
@@ -196,7 +196,7 @@ device. The text it returns for this event:
 
 ```asm
 .ifndef __tt_observability_event_0_6_a2c1de433b077f49
-.pushsection .tt_observability_event_ids,"",@progbits
+.pushsection .device_publish_descriptor_ids,"",@progbits
 __tt_observability_event_0_6_a2c1de433b077f49:	.byte 0                        # the handle: exactly one byte
 .popsection
 .pushsection .tt_observability_event_meta,"",@progbits
@@ -228,7 +228,7 @@ __tt_observability_event_0_6_a2c1de433b077f49:	.byte 0                        # 
 
 The compiler replaces `%0` with a register (`a0` in this kernel).
 
-- `.byte 0` puts one byte in `.tt_observability_event_ids`. Its value is irrelevant; its **address** will be the id.
+- `.byte 0` puts one byte in `.device_publish_descriptor_ids`. Its value is irrelevant; its **address** will be the id.
 - **The record** is a 16-byte header (id slot, signature, file, line) followed by the struct's fields in declaration
   order: a string becomes a 4-byte pointer, an integer or enum is stored at its own size, and each field is aligned to its
   size (at most 4). The record is then padded to a multiple of 4. `ZoneUnitMeta` gives
@@ -269,7 +269,7 @@ Nothing is a number yet: the id is "wherever `__tt_observability_event_0_6_a2c1d
 
 ## 4. Link: the handle is placed
 
-The linker gathers every `.tt_observability_event_ids` byte of this image into one section and puts it at `TT_OBSERVABILITY_EVENT_IDS_VMA`,
+The linker gathers every `.device_publish_descriptor_ids` byte of this image into one section and puts it at `DEVICE_PUBLISH_DESCRIPTOR_IDS_VMA`,
 **`0x06800000`**. The bytes are laid end to end, one per event, in link order (each label also ends in its value's
 hash, shortened to `_…` here):
 
@@ -393,7 +393,7 @@ modified again; every process rebases its own in-memory copy.
 When the program is launched, the host reads each kernel ELF (`llrt::get_risc_binary`) and gives it the next free block of
 the process's id space, starting from 0.
 
-**How many ids an image needs.** Every event emitted exactly one byte into `.tt_observability_event_ids` (step 3), so the
+**How many ids an image needs.** Every event emitted exactly one byte into `.device_publish_descriptor_ids` (step 3), so the
 section's size in bytes is the number of events. The loader reads that size from the section header. This image's
 section is 12 bytes, so it needs 12 ids.
 
@@ -402,7 +402,7 @@ The images this run loaded, in load order. The streaming profiler's own kernels 
 15 events each because `--markers 1` compiles three point markers into them (`_Event`, `_Data`, `_Iter`). The compute
 kernels have 12:
 
-| load order | image | `.tt_observability_event_ids` size = events | block |
+| load order | image | `.device_publish_descriptor_ids` size = events | block |
 |---|---|---|---|
 | 1st–2nd | the profiler's kernels: `tile_sync` on BRISC and on a DRAM core | 2, 2 | `[0, 4)` |
 | 3rd | `zones_dm/…/ncrisc.elf` | 15 | `[4, 19)` |
@@ -457,7 +457,7 @@ the whole 32-bit word (`R_RISCV_32`, stored as the bytes `33 00 00 00`). The res
 
 ```
 id slot at 0x06700078 holds        0x06800005      (step 6)
-minus where .tt_observability_event_ids was linked − 0x06800000   = 5, the event's offset
+minus where .device_publish_descriptor_ids was linked − 0x06800000   = 5, the event's offset
 plus this image's block start      + 46            (step 9)
                                    = 51
 ```
@@ -466,7 +466,7 @@ plus this image's block start      + 46            (step 9)
 
 | section | what holds 51 | who uses it |
 |---|---|---|
-| `.tt_observability_event_ids` | the handle's address: the section now starts at 46, and this is byte 5 | the loader (it is where the 51 came from) |
+| `.device_publish_descriptor_ids` | the handle's address: the section now starts at 46, and this is byte 5 | the loader (it is where the 51 came from) |
 | `.text` | the `lui`/`addi` pair, which together produce 51 | the device, which puts it in the marker (step 13) |
 | `.tt_observability_event_meta` | the record's id slot | the host, which maps 51 to the event (step 12) |
 
@@ -581,7 +581,7 @@ $R -x .tt_observability_event_meta $E                                     # step
 $R -p .tt_observability_event_str $E                                      # step 6: strings and their offsets
 $R -r -W $E | grep __tt_observability_event_0_6_                          # step 7
 $R -l -W $E | grep -A3 "Segment Sections"                  # step 8
-$R -S -W $X | grep tt_observability_event_ids              # step 9: section address = base, size = events
+$R -S -W $X | grep device_publish_descriptor_ids            # step 9: section address = base, size = events
 $O -d --start-address=0x7cc4 --stop-address=0x7ccc $X      # step 10
 $R -x .tt_observability_event_meta $X                                     # step 11
 ```

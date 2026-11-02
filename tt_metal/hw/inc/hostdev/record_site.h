@@ -116,7 +116,7 @@ struct PacketLayout {
 // first, so every 4-byte field after it packs without padding.
 struct CallSiteDescriptor {
     uint64_t file;            // the String of the call site's file name
-    SectionAddress<char> id;  // its handle in .tt_observability_event_ids; the loader rebases it into its id
+    SectionAddress<char> id;  // its handle in .device_publish_descriptor_ids; the loader rebases it into its id
     uint32_t line;
     SectionAddress<char> function;
 

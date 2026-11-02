@@ -38,9 +38,9 @@ SECTIONS
   {
     KEEP(*(.device_publish_strings))
   }
-  .tt_observability_event_ids 0x6800000 (INFO) :
+  .device_publish_descriptor_ids 0x6800000 (INFO) :
   {
-    KEEP(*(.tt_observability_event_ids))
+    KEEP(*(.device_publish_descriptor_ids))
   }
 
   .text :

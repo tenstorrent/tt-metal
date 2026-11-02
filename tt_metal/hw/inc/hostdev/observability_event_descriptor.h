@@ -2,21 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Descriptor ids and the ELF records that name them, for the streaming device profiler. An id travels in low27 of a
-// streaming marker's word0; the DRAM backend keeps its own 16-bit timer_id.
+// DevicePublish descriptor ids and the ELF records that name them. An id travels in low27 of a streaming marker's
+// word0; the DRAM backend keeps its own 16-bit timer_id.
 //
-// An id is the ADDRESS of a one-byte handle the event emits into the non-ALLOC section .tt_observability_event_ids.
-// The linker lays the handles out back to back from TT_OBSERVABILITY_EVENT_IDS_LINK_VMA (hw/toolchain/main.ld), so one
-// image's ids are dense in link order. When the host loads the image (llrt/observability_event_meta.cpp, from
-// ll_api::memory) it gives the image the next free block of the process-wide 16-bit id space and rebases the section
-// there by re-resolving the relocations against it: the lui/addi pair each event materializes its id with, and the id
-// word of each .tt_observability_event_meta record. Ids are thus unique across every image a process loads, with no
-// per-TU partition, no registry file, and nothing computed on the device: an id costs the two instructions any 32-bit
-// constant does. Nothing on the host may discriminate on an id's value: it depends on load order. The one exception is
-// TT_ZONE_STALL_ID, the top of the space, which the allocator never hands out.
+// An id is the ADDRESS of a one-byte handle the call site emits into the non-ALLOC section
+// .device_publish_descriptor_ids. The linker lays the handles out back to back from
+// TT_DEVICE_PUBLISH_DESCRIPTOR_IDS_LINK_VMA (hw/toolchain/main.ld), so one image's ids are dense in link order. When
+// the host loads the image (llrt/call_sites.cpp, from ll_api::memory) it gives the image the next free block of the
+// process-wide 16-bit id space and rebases the section there by re-resolving the relocations against it: the lui/addi
+// pair each call site materializes its id with, and the id of each call-site descriptor. Ids are thus unique across
+// every image a process loads, with no per-TU partition, no registry file, and nothing computed on the device: an id
+// costs the two instructions any 32-bit constant does. Nothing on the host may discriminate on an id's value: it
+// depends on load order. The one exception is TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID, the top of the space, which the
+// allocator never hands out.
 //
-// Emission is assembler directives inside the one asm statement of the event's descriptor_id(), after libmeta: zero
-// .text beyond the two instructions and zero device memory, since none of .tt_observability_event_ids,
+// Emission is assembler directives inside the one asm statement of the event's id(), after libmeta: zero
+// .text beyond the two instructions and zero device memory, since none of .device_publish_descriptor_ids,
 // .tt_observability_event_str, .tt_observability_event_meta is SHF_ALLOC. Directives rather than C++ objects with
 // section attributes because an event inside a vague-linkage function (inline, template, class-template member)
 // makes such objects COMDAT, which GCC will not put in a named section (without LTO a "section type conflict", with LTO
@@ -32,17 +33,18 @@
 
 #include "hostdev/observability_event_meta.h"
 
-// The id space: a process assigns [0, TT_ZONE_STALL_ID) to images in load order.
-#define TT_EVENT_DESCRIPTOR_ID_BITS 16
-#define TT_EVENT_DESCRIPTOR_ID_COUNT (1u << TT_EVENT_DESCRIPTOR_ID_BITS)
-#define TT_EVENT_DESCRIPTOR_ID_MASK (TT_EVENT_DESCRIPTOR_ID_COUNT - 1u)
-// The profiler's own stall zone: recognized by value, so it has no ELF record and no source location.
-#define TT_ZONE_STALL_ID (TT_EVENT_DESCRIPTOR_ID_COUNT - 1u)
+// The id space: a process assigns [0, TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID) to images in load order.
+#define TT_DEVICE_PUBLISH_DESCRIPTOR_ID_BITS 16
+#define TT_DEVICE_PUBLISH_DESCRIPTOR_ID_COUNT (1u << TT_DEVICE_PUBLISH_DESCRIPTOR_ID_BITS)
+#define TT_DEVICE_PUBLISH_DESCRIPTOR_ID_MASK (TT_DEVICE_PUBLISH_DESCRIPTOR_ID_COUNT - 1u)
+// The stall call site, the producer's own, which every image shares: recognized by value, so it has no ELF record and
+// no source location (llrt/call_sites.cpp describes it).
+#define TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID (TT_DEVICE_PUBLISH_DESCRIPTOR_ID_COUNT - 1u)
 
-// Where the linker script places .tt_observability_event_ids before the host rebases it (hw/toolchain/main.ld carries
-// the same value). Any address with nonzero upper 20 bits serves: it keeps linker relaxation from folding an event's
-// lui/addi into one instruction, which the host could not rebase.
-#define TT_OBSERVABILITY_EVENT_IDS_LINK_VMA 0x6800000
+// Where the linker script places .device_publish_descriptor_ids before the host rebases it (hw/toolchain/main.ld
+// carries the same value). Any address with nonzero upper 20 bits serves: it keeps linker relaxation from folding a
+// call site's lui/addi into one instruction, which the host could not rebase.
+#define TT_DEVICE_PUBLISH_DESCRIPTOR_IDS_LINK_VMA 0x6800000
 
 #define TT_OBSERVABILITY_EVENT_STR_(x) #x
 #define TT_OBSERVABILITY_EVENT_STR(x) TT_OBSERVABILITY_EVENT_STR_(x)

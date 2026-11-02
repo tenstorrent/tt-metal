@@ -5,11 +5,11 @@
 // Host-side descriptor id -> source location table for the streaming profiler, built as each ELF loads
 // (llrt::get_cached_binary, llrt/llrt.cpp). An image links its descriptor ids densely from one fixed VMA
 // (hostdev/observability_event_descriptor.h); here it is given the next block of the process-wide 16-bit id space, its
-// ids are rebased there inside the loaded image (ElfFile::RebaseDescriptorIds), and its .tt_observability_event_meta /
-// .tt_observability_event_str records are harvested with the rebased ids. An id is therefore unique across every image
-// of this process by construction, and named strictly before the kernel that emits it can run. Handed to its listener
-// as it grows, since kernels stream zones while later ones are still compiling. Never persisted: ids are assigned in
-// load order.
+// ids are rebased there inside the loaded image (ElfFile::RebaseDevicePublishDescriptorIds), and its
+// .tt_observability_event_meta / .tt_observability_event_str records are harvested with the rebased ids. An id is
+// therefore unique across every image of this process by construction, and named strictly before the kernel that emits
+// it can run. Handed to its listener as it grows, since kernels stream zones while later ones are still compiling.
+// Never persisted: ids are assigned in load order.
 #pragma once
 
 #include <cstddef>
@@ -60,7 +60,8 @@ public:
     using Listener = std::function<void(std::span<const ObservabilityEventMetaEntry* const>)>;
     void set_listener(Listener listener);
 
-    // Ids handed out so far; the next image's block starts here and the space ends at TT_ZONE_STALL_ID.
+    // Ids handed out so far; the next image's block starts here and the space ends at
+    // TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID.
     uint32_t ids_assigned() const;
     // Records whose id fell outside their image's block or repeated one; their zones render as Zone_<id>.
     uint64_t malformed_records() const;

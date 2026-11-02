@@ -26,8 +26,8 @@ namespace {
 // The fixed part of a .tt_observability_event_meta record; the event's metadata fields follow
 // (hostdev/observability_event_meta.h).
 struct RecordHeader {
-    uint32_t descriptor_id;  // the handle's VMA in .tt_observability_event_ids, which RebaseDescriptorIds has
-                             // already moved
+    uint32_t descriptor_id;  // the handle's VMA in .device_publish_descriptor_ids, which
+                             // RebaseDevicePublishDescriptorIds has already moved
     uint32_t signature_ptr;  // VMA into .tt_observability_event_str: "<type name>:<field codes>"
     uint32_t file_ptr;       // VMA into .tt_observability_event_str
     uint32_t line;
@@ -41,7 +41,7 @@ struct State {
     std::unordered_map<std::string, uint32_t> base_by_path;  // every image seen, and where its ids start
     uint32_t next_id = 0;
     std::deque<ObservabilityEventMetaEntry> log;  // append-only; the listener keeps pointers into it
-    std::vector<int32_t> log_idx_by_id = std::vector<int32_t>(TT_EVENT_DESCRIPTOR_ID_COUNT, -1);
+    std::vector<int32_t> log_idx_by_id = std::vector<int32_t>(TT_DEVICE_PUBLISH_DESCRIPTOR_ID_COUNT, -1);
     ObservabilityEventMetaRegistry::Listener listener;
     std::unordered_set<std::string> strings;  // interned metadata strings; node-based, so pointers stay valid
     uint64_t malformed_records = 0;
@@ -150,7 +150,7 @@ ObservabilityEventMetaRegistry& ObservabilityEventMetaRegistry::instance() {
 
 void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_api::ElfFile& elf) {
     uint64_t ids_vma = 0;
-    const size_t count = elf.GetSectionContents(".tt_observability_event_ids", ids_vma).size();
+    const size_t count = elf.GetSectionContents(".device_publish_descriptor_ids", ids_vma).size();
     if (count == 0) {
         return;  // no events: dispatch kernels, the relay, anything built without the producer
     }
@@ -164,12 +164,12 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
         if (inserted) {
             // The block must stay below the stall id, the one value the device emits without a record.
             TT_FATAL(
-                static_cast<uint64_t>(s.next_id) + count <= TT_ZONE_STALL_ID,
+                static_cast<uint64_t>(s.next_id) + count <= TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID,
                 "streaming profiler: loading '{}' ({} events) would exceed the {}-id zone space ({} assigned); "
                 "this process has loaded more distinct device events than the 16-bit id supports",
                 elf_path,
                 count,
-                TT_ZONE_STALL_ID,
+                TT_DEVICE_PUBLISH_STALL_DESCRIPTOR_ID,
                 s.next_id);
             s.next_id += static_cast<uint32_t>(count);
             first = true;
@@ -178,7 +178,7 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
     }
     // The image is this caller's; its text is packed for the device after we return, so the rebase must
     // land here whether or not this path's names were already registered.
-    elf.RebaseDescriptorIds(base);
+    elf.RebaseDevicePublishDescriptorIds(base);
     if (!first) {
         return;
     }
