@@ -109,10 +109,16 @@ def reference_prefill(ref_layer, layer_idx, x):
     with torch.no_grad():
         y = ref_layer(x, torch.arange(x.shape[0]), hist)
     if path:
+        # Python's open() makes a read-only cache (CI mounts /mnt/MLPerf read-only; it is still read above) raise
+        # OSError; torch.save given a path raises RuntimeError. The write goes to .partial and is renamed into place,
+        # so a killed run leaves no truncated entry for the next run to load.
+        partial = path + ".partial"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos, checkpoint=checkpoint), path)
-        except OSError as e:  # a read-only cache (CI mounts /mnt/MLPerf read-only) is still read above
+            with open(partial, "wb") as f:
+                torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos, checkpoint=checkpoint), f)
+            os.replace(partial, path)
+        except (OSError, RuntimeError) as e:
             logger.warning(f"could not save the reference to {path}: {e}")
     return y, hist
 
