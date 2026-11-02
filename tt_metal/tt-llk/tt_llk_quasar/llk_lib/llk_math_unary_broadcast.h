@@ -276,6 +276,16 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
 }
 
 /**
+ * @brief Init unary-broadcast math without accumulation; src_format is only needed to validate acc_to_dest.
+ */
+template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest, bool acc_to_dest = false>
+inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape)
+{
+    static_assert(!acc_to_dest, "acc_to_dest requires the src_format overload of _llk_math_eltwise_unary_broadcast_init_");
+    _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest, acc_to_dest>(tensor_shape, DataFormat::Invalid);
+}
+
+/**
  * @brief Run one tile of unary broadcast math: set dest write addr
  *
  * @tparam unpack_to_dest: When true, UNP_A unpacks to the Dest register
