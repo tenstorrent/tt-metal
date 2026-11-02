@@ -103,22 +103,20 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     it through the cache with no L2 invalidates. Every region below starts on a 64B line.
 
     [dfb_config_base]:
-      dfb_global_header_t (120B): one 8B dfb_hart_desc_t per hart, the region offsets, DM1's slot
-      word (dm1_slots), DM0's prologue word (dm0_packed) and the has_dm0_isr / dm0_isr_ready flags.
+      dfb_global_header_t (120B): one 8B dfb_hart_desc_t per hart, the signal-region offset, DM1's
+      slot word (dm1_slots), DM0's prologue word (dm0_packed) and the has_dm0_isr / dm0_isr_ready flags.
 
-    [dfb_config_base + dm1_remapper_blob_offset]:
+    [dfb_config_base + DFB_DM1_REMAPPER_BLOB_OFFSET], only when DM1 has remapper slots:
       DM1 remapper blob — core-wide, read by DM1:
-        [dfb_dm1_remapper_core_header_t (4B)][pad to 64B]
         [ready flags: one byte per remapper pair (64B), host-zeroed; DM1 sets flags[pair] uncached once
          it has programmed that pair, and producers (DM and TRISC) poll their pair's byte uncached]
-        [dfb_dm1_remapper_slot_t x num_slots]
+        [dfb_dm1_remapper_slot_t x num_slots]  (offset and count in dm1_slots)
 
-    [dfb_config_base + dm0_isr_blob_offset]:
+    [dfb_config_base + dfb_dm0_packed_blob_offset(dm0_packed)], only when has_dm0_isr:
       DM0 ISR blob — core-wide, read by DM0:
-        [dfb_dm0_isr_blob_core_header_t (8B)][pad to 64B]
         [txn_desc_pool: one descriptor per used txn id, ascending id order, each slot 8, 16 or 32B
                         (the smallest that fits every descriptor on the core), threshold in its
-                        last byte]
+                        last byte]  (txn-id masks and stride in dm0_packed)
 
     [dfb_config_base + hart_desc[h].blob_start]:
       Per-hart sequential init blob, hart_desc[h].num_entries entries, one per DFB the hart
@@ -127,12 +125,17 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
       TC tail.
 
     [dfb_config_base + dfb_signal_region_off]:
-      uint8_t  dfb_signal[NUM_DFBS * MAX_PRODUCERS_PER_DFB] — 192B; producer hart h writes byte 1
-                                                              to dfb_signal[h] once, after its init.
-      uint32_t dfb_expected_signal[NUM_DFBS]                — 128B; mask of the harts that produce
-                                                              DFB d.
+      uint8_t  dfb_signal[DFB_SIGNAL_SLOT_BYTES]  — one byte per hart; producer hart h writes byte 1
+                                                    to dfb_signal[h] once, after its init.
+      uint32_t dfb_expected_signal[NUM_DFBS]      — 128B; mask of the harts that produce DFB d.
       Consumers poll dfb_signal[h] for every h set in dfb_expected_signal[d].
 */
+
+// Producer-ready byte slots at the start of the signal region: one per hart, indexed by hart id.
+// A multiple of 4, so dfb_expected_signal[] that follows stays uint32_t-aligned.
+constexpr uint32_t DFB_SIGNAL_SLOT_BYTES = (static_cast<uint32_t>(dfb::NUM_PARTICIPATING_HARTIDS) + 3u) & ~3u;
+constexpr uint32_t DFB_SIGNAL_REGION_BYTES =
+    DFB_SIGNAL_SLOT_BYTES + static_cast<uint32_t>(dfb::NUM_DFBS) * static_cast<uint32_t>(sizeof(uint32_t));
 
 // Everything setup_local_dfb_interfaces() needs from the global header before it can start
 // walking, in ONE naturally-aligned 8B record per hart, so the prologue makes one uncached load.
@@ -162,14 +165,13 @@ constexpr uint8_t DFB_HART_DESC_FLAG_PRODUCER = 0x01u;
 struct dfb_global_header_t {
     dfb_hart_desc_t hart_desc[dfb::NUM_PARTICIPATING_HARTIDS];  // 96B at offset 0
 
-    uint16_t dm1_remapper_blob_offset;  // -> DM1 remapper blob
-    uint16_t dm0_isr_blob_offset;       // -> DM0 ISR blob (core header + descriptor pool)
-    uint16_t dfb_signal_region_off;     // -> signal region: per-hart byte slots then dfb_expected_signal[NUM_DFBS]
+    uint16_t dfb_signal_region_off;  // -> signal region: per-hart byte slots then dfb_expected_signal[NUM_DFBS]
     uint8_t num_dfbs;
     uint8_t dm0_isr_ready;  // cleared by host; set by DM0 when ISR is armed
     uint8_t has_dm0_isr;    // 1 if any DFB uses implicit sync
-    uint8_t _rsvd[3];       // pad 105 -> 108
+    uint8_t _rsvd[3];       // pad 101 -> 104
     uint32_t dm1_slots;     // [15:0] DM1 slot array offset from region base, [31:16] num_slots
+    uint32_t _rsvd2;        // pad 108 -> 112 for dm0_packed
     uint64_t dm0_packed;    // DM0 prologue word (dfb_dm0_packed_*); 0 = no DM0 ISR
 };
 
@@ -246,7 +248,7 @@ struct dfb_hart_init_entry_t {
     uint8_t threshold;                      // byte 14
     uint8_t num_entries_per_txn_id;         // byte 15
     uint8_t num_entries_per_txn_id_per_tc;  // byte 16
-    uint8_t producer_signal_bit;            // byte 17
+    uint8_t _rsvd17;                        // byte 17; unused (producers signal by hart id)
     uint8_t txn_ids[dfb::NUM_TXN_IDS];      // bytes 18-21
     uint8_t remapper_pair_index;            // byte 22
     uint8_t intra_shadow_tc_id;             // byte 23: intra-tensix ClientR shadow TC id, 0xFF if unused.
@@ -416,21 +418,6 @@ struct dfb_initializer_t {
 };
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size changed — check field alignment");
 
-// Core-wide header for the DM1 remapper blob.
-// Followed by the ready-flag line (DFB_DM1_READY_FLAGS_OFFSET), then dfb_dm1_remapper_slot_t[num_slots]
-// aggregated in ascending DFB id order.
-struct dfb_dm1_remapper_core_header_t {  // 4 bytes
-    uint16_t num_slots;
-    uint8_t _pad[2];
-} __attribute__((packed));
-
-// Core-wide header at dm0_isr_blob_offset (before the descriptor pool).
-// Host ORs txn ids across all DFBs on this core; DM0 loads once for CMDBUF IE programming.
-struct dfb_dm0_isr_blob_core_header_t {
-    uint32_t producer_txn_id_mask;
-    uint32_t consumer_txn_id_mask;
-};
-
 // Txn descriptor layout, shared by DM0's init copy and the ISR. Hot fields first: num_counters and
 // tiles_to_post_or_ack in bytes 0-1, then the 3-byte kernel-exit finish record every implicit-sync side
 // needs, then counters from byte 5, so the first 8B carry everything for <= 3 counters.
@@ -498,31 +485,23 @@ struct dfb_dm1_remapper_slot_t {
 } __attribute__((packed, aligned(4)));
 static_assert(sizeof(dfb_dm1_remapper_slot_t) == 12, "dfb_dm1_remapper_slot_t must be 12 bytes");
 
-static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_core_header_t must be 8 bytes");
-
-// Where a blob's CACHED payload starts, relative to the blob base. The DM1 slot array and the DM0
-// descriptor pool are walked through the cached view, but each sits behind a small core header.
-// Starting the payload right after the header would start the cached walk 4 or 8 bytes into a line
-// (a 192B slot array would then occupy 4 lines instead of 3), so the payload starts on the next
-// line. The host emitter and both device readers must use these, not sizeof(the core header).
+// Where a blob's CACHED payload starts, relative to the blob base. The host emitter and both device
+// readers must use these.
 //
-// The DM1 blob has one more line between the header and the slot array: the ready flags, one byte per
-// remapper pair. DM1 sets flags[pair] after programming that pair, and a producer (DM or TRISC packer)
-// polls its own pair's byte instead of the pair's ClientL register. Both sides use the uncached alias,
-// which is the fastest of the variants measured for DM producers (issue #55788). The host serializes the line as zeros
-// with every config write, so each launch starts with every flag clear.
-constexpr uint32_t DFB_DM1_READY_FLAGS_OFFSET = 64u;
+// The DM1 blob opens with the ready flags, one byte per remapper pair, on their own line ahead of the
+// cached slot array. DM1 sets flags[pair] after programming that pair, and a producer (DM or TRISC
+// packer) polls its own pair's byte instead of the pair's ClientL register. Both sides use the
+// uncached alias, which is the fastest of the variants measured for DM producers (issue #55788). The
+// host serializes the line as zeros with every config write, so each launch starts with every flag
+// clear. The slot count and offset live in dfb_global_header_t::dm1_slots, so the blob has no header.
+//
+// The DM0 blob is just the descriptor pool: its masks and stride live in dm0_packed.
+constexpr uint32_t DFB_DM1_READY_FLAGS_OFFSET = 0u;
 constexpr uint32_t DFB_DM1_READY_FLAGS_BYTES = 64u;
 constexpr uint32_t DFB_DM1_CACHED_PAYLOAD_OFFSET = DFB_DM1_READY_FLAGS_OFFSET + DFB_DM1_READY_FLAGS_BYTES;
-constexpr uint32_t DFB_DM0_CACHED_PAYLOAD_OFFSET = 64u;
-static_assert(
-    sizeof(dfb_dm1_remapper_core_header_t) <= DFB_DM1_READY_FLAGS_OFFSET,
-    "DM1 remapper core header no longer fits before the ready flags");
+constexpr uint32_t DFB_DM0_CACHED_PAYLOAD_OFFSET = 0u;
 static_assert(
     DFB_DM1_READY_FLAGS_BYTES >= dfb::NUM_REMAPPER_PAIRINGS, "DM1 ready flags need one byte per remapper pair");
-static_assert(
-    sizeof(dfb_dm0_isr_blob_core_header_t) <= DFB_DM0_CACHED_PAYLOAD_OFFSET,
-    "DM0 ISR core header no longer fits before the cached payload");
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
 // DM0 takes the threshold out of the source slot's byte 23 at the full 32B stride.
 static_assert(offsetof(dfb_dm0_txn_descriptor_image_t, threshold) == 23, "threshold must be byte 23 of the image");
@@ -558,13 +537,12 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 
 static_assert(sizeof(dfb_global_header_t) == 120, "dfb_global_header_t size changed — check field alignment");
 static_assert(offsetof(dfb_global_header_t, hart_desc) == 0, "hart_desc[] must be at offset 0");
-static_assert(offsetof(dfb_global_header_t, dm1_slots) == 108, "dm1_slots must be 4B aligned at 108");
+static_assert(offsetof(dfb_global_header_t, dm1_slots) == 104, "dm1_slots must be 4B aligned at 104");
 static_assert(offsetof(dfb_global_header_t, dm0_packed) == 112, "dm0_packed must be 8B aligned at 112");
-// The DM1 remapper blob always starts on the first cache line after the header, so a producer finds
-// DM1's ready flags from this constant instead of an uncached load of dm1_remapper_blob_offset.
+// The DM1 remapper blob, when present, always starts on the first cache line after the header, so DM1
+// and the producers find the ready flags from this constant with no header load.
 constexpr uint32_t DFB_DM1_REMAPPER_BLOB_OFFSET = (static_cast<uint32_t>(sizeof(dfb_global_header_t)) + 63u) & ~63u;
 static_assert(DFB_DM1_REMAPPER_BLOB_OFFSET % 64u == 0u, "DM1 remapper blob must start on a cache line");
-static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 

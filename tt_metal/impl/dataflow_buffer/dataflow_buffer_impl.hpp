@@ -173,10 +173,12 @@ void verify_dfb_hart_blobs(
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
-// DM0 ISR blob region: core header + txn_id-indexed hw pool + txn desc pool.
+// DM0 ISR blob region: the txn desc pool only (masks live in the global header's dm0_packed); 0 if no
+// DFB on the core uses implicit sync.
 uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
-// DM1 remapper blob: core header + contiguous remapper slots across all DFBs on core.
+// DM1 remapper blob: ready-flag line + contiguous remapper slots across all DFBs on core; 0 if the
+// core has no remapper slots.
 uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
 std::vector<uint8_t> serialize_dm1_remapper_core_blob(

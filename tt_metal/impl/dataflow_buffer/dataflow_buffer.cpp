@@ -290,11 +290,8 @@ std::vector<uint8_t> serialize_dm1_remapper_core_blob(
     std::vector<uint8_t> data;
     data.reserve(dm1_remapper_blob_core_size(dfbs_on_core));
 
-    dfb_dm1_remapper_core_header_t hdr = {};
-    hdr.num_slots = num_slots;
-    const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
-    data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
-    // Pad to the cached payload offset so the slot array the device walks starts on a line.
+    // The ready-flag line, written as zeros so every launch starts with every flag clear; the slot
+    // array the device walks starts on the next line.
     data.resize(DFB_DM1_CACHED_PAYLOAD_OFFSET, 0u);
 
     for (const auto& dfb : dfbs_on_core) {
@@ -349,9 +346,8 @@ uint32_t compute_dfb_config_serialized_size(const std::vector<std::shared_ptr<Da
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         payload += hart_blob_byte_size(h, dfbs_on_core);
     }
-    // Signal region: per-producer byte slots (NUM_DFBS * MAX_PRODUCERS_PER_DFB) + uint32_t expected per DFB.
-    payload += static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) +
-               static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(sizeof(uint32_t));
+    // Signal region: per-hart byte slots, then one uint32_t expected mask per DFB.
+    payload += DFB_SIGNAL_REGION_BYTES;
     return align_dfb_config_transfer_size(hal, payload);
 }
 
@@ -697,8 +693,8 @@ size_t serialize_dfb_config_for_core(
     }
 
     // ---------------------------------------------------------------------------
-    // 1. Collect per-core risc configs for every DFB (base/limit resolved per core).
-    //    Assign producer_signal_bit: per-producer bit position in dfb_signal[logical_dfb_id].
+    // 1. Collect per-core risc configs for every DFB (base/limit resolved per core), and the
+    //    harts that produce each DFB.
     // ---------------------------------------------------------------------------
     // per_core_configs[dfb_idx] = per-risc configs with base_addr/limit resolved.
     std::vector<std::vector<DFBRiscConfig>> per_core_configs;
@@ -707,41 +703,22 @@ size_t serialize_dfb_config_for_core(
         per_core_configs.push_back(dfb->compute_per_core_risc_configs(core));
     }
 
-    // producer_signal_bit[dfb_idx][hart] = bit position (0-based) in dfb_signal[logical_dfb_id]; 0xFF if consumer.
-    // dfb_expected_signal_vals[logical_dfb_id] = OR of all producer bits for that DFB.
-    // Every producer gets a unique bit; consumers wait for the full bitmask.
-    std::vector<std::array<uint8_t, ::dfb::NUM_PARTICIPATING_HARTIDS>> producer_signal_bit(dfbs_on_core.size());
-    for (auto& arr : producer_signal_bit) {
-        arr.fill(0xFFu);
-    }
+    // dfb_expected_signal_vals[logical_dfb_id] = mask of the harts producing that DFB. Each producer
+    // hart publishes its own dfb_signal[h] byte once; consumers wait for every hart in the mask.
+    // hart_is_producer[h] = hart h produces at least one DFB on this core.
     std::array<uint32_t, ::dfb::NUM_DFBS> dfb_expected_signal_vals{};
     dfb_expected_signal_vals.fill(0u);
-    std::array<uint8_t, ::dfb::NUM_DFBS> next_producer_bit{};
-    next_producer_bit.fill(0u);
+    std::array<bool, ::dfb::NUM_PARTICIPATING_HARTIDS> hart_is_producer{};
     for (size_t di = 0; di < dfbs_on_core.size(); di++) {
         const auto& dfb = dfbs_on_core[di];
         const uint8_t logical_dfb_id = static_cast<uint8_t>(dfb->device_slot);
-        for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
-            if (!(dfb->risc_mask & (1u << h))) {
+        for (const auto& rc : per_core_configs[di]) {
+            if (!rc.is_producer || rc.risc_id >= ::dfb::NUM_PARTICIPATING_HARTIDS ||
+                !(dfb->risc_mask & (1u << rc.risc_id))) {
                 continue;
             }
-            const auto& rcs = per_core_configs[di];
-            for (const auto& rc : rcs) {
-                if (rc.risc_id == h && rc.is_producer) {
-                    const uint8_t bit = next_producer_bit[logical_dfb_id]++;
-                    TT_FATAL(
-                        bit < ::dfb::MAX_PRODUCERS_PER_DFB,
-                        "DFB {}: producer signal bit {} exceeds MAX_PRODUCERS_PER_DFB {} "
-                        "(signal region stride; DM0/DM1 reserved)",
-                        dfb->id,
-                        bit,
-                        ::dfb::MAX_PRODUCERS_PER_DFB);
-                    producer_signal_bit[di][h] = bit;
-                    // Consumers wait on the producing HARTS: one dfb_signal[h] slot per hart.
-                    dfb_expected_signal_vals[logical_dfb_id] |= (1u << h);
-                    break;
-                }
-            }
+            dfb_expected_signal_vals[logical_dfb_id] |= (1u << rc.risc_id);
+            hart_is_producer[rc.risc_id] = true;
         }
     }
 
@@ -769,14 +746,12 @@ size_t serialize_dfb_config_for_core(
             : std::vector<uint8_t>{};
 
     // The region offsets are uint16_t: TT_FATAL rather than let a static_cast truncate silently.
-    // The device locates the DM1 blob (ready flags) by the constant, not by this header field.
+    // The device locates the DM1 blob (ready flags) by the constant; DM0 finds its blob in dm0_packed.
     const uint32_t dm1_off = DFB_DM1_REMAPPER_BLOB_OFFSET;
     const uint32_t dm0_off = dfb_align_cl(dm1_off + total_dm1_blob_size);
-    TT_FATAL(dm0_off <= 0xFFFFu, "DFB config: dm0_isr_blob_offset {} does not fit uint16", dm0_off);
-    ghdr.dm1_remapper_blob_offset = static_cast<uint16_t>(dm1_off);
-    ghdr.dm0_isr_blob_offset = static_cast<uint16_t>(dm0_off);
+    TT_FATAL(dm0_off <= 0xFFFFu, "DFB config: DM0 ISR blob offset {} does not fit uint16", dm0_off);
     {
-        // DM1 reads this one word instead of dm1_remapper_blob_offset and then the blob's num_slots.
+        // DM1's one header word: its slot-array offset and slot count.
         const uint32_t dm1_num_slots = (total_dm1_blob_size > DFB_DM1_CACHED_PAYLOAD_OFFSET)
                                            ? (total_dm1_blob_size - DFB_DM1_CACHED_PAYLOAD_OFFSET) /
                                                  static_cast<uint32_t>(sizeof(dfb_dm1_remapper_slot_t))
@@ -838,12 +813,7 @@ size_t serialize_dfb_config_for_core(
     // The packed per-hart view of everything the device prologue reads, for its single load.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         // num_entries already set in populate_dfb_global_header_participation.
-        ghdr.hart_desc[h].flags = 0;
-        for (size_t di = 0; di < dfbs_on_core.size(); di++) {
-            if (producer_signal_bit[di][h] != 0xFFu) {
-                ghdr.hart_desc[h].flags |= DFB_HART_DESC_FLAG_PRODUCER;
-            }
-        }
+        ghdr.hart_desc[h].flags = hart_is_producer[h] ? DFB_HART_DESC_FLAG_PRODUCER : 0u;
         ghdr.hart_desc[h].blob_start = static_cast<uint16_t>(hart_blob_starts[h]);
         ghdr.hart_desc[h].blob_len = static_cast<uint16_t>(hart_blob_sizes[h]);
         ghdr.hart_desc[h].signal_region_off = ghdr.dfb_signal_region_off;
@@ -882,14 +852,7 @@ size_t serialize_dfb_config_for_core(
     // 5. Emit DM0 ISR blob.
     // ---------------------------------------------------------------------------
     if (total_dm0_isr_blob_size > 0) {
-        dfb_dm0_isr_blob_core_header_t core_hdr = {
-            .producer_txn_id_mask = dm0_producer_mask,
-            .consumer_txn_id_mask = dm0_consumer_mask,
-        };
-        TT_FATAL(offset + sizeof(core_hdr) <= out.size(), "DFB config overflow (DM0 ISR core hdr)");
-        std::memcpy(out.data() + offset, &core_hdr, sizeof(core_hdr));
-        // Advance past the header before padding: pad_to() zero-fills from the cursor.
-        offset += sizeof(core_hdr);
+        // No header: the txn-id masks and the descriptor stride travel in dm0_packed.
         pad_to(dm0_off + DFB_DM0_CACHED_PAYLOAD_OFFSET, "DM0 descriptor pool");
 
         const std::vector<uint8_t>& desc_pool = dm0_desc_pool;
@@ -1087,7 +1050,6 @@ size_t serialize_dfb_config_for_core(
                     entry.txn_ids[t] = txn.txn_ids[t];
                 }
             }
-            entry.producer_signal_bit = producer_signal_bit[di][h];
             entry.remapper_pair_index = (dfb->use_remapper && rc.is_producer) ? rc.config.remapper_pair_index : 0xFFu;
             // Only meaningful for self-programming (intra-tensix) producers; DM harts reclaim this byte.
             entry.intra_shadow_tc_id = (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER && rc.is_producer)
@@ -1170,7 +1132,7 @@ size_t serialize_dfb_config_for_core(
 
     // ---------------------------------------------------------------------------
     // 7. Emit signal region:
-    //    [dfb_signal[NUM_DFBS * MAX_PRODUCERS_PER_DFB]] (byte slots, zeroed)
+    //    [dfb_signal[DFB_SIGNAL_SLOT_BYTES]] (one byte slot per hart, zeroed)
     //    [dfb_expected_signal[NUM_DFBS]] (uint32_t bitmasks, host-computed)
     //
     //    A producer hart h writes byte 1 to dfb_signal[h] at runtime, once, after its init.
@@ -1182,13 +1144,10 @@ size_t serialize_dfb_config_for_core(
         offset,
         ghdr.dfb_signal_region_off);
     {
-        constexpr uint32_t kMaxProd = static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB);
-        constexpr uint32_t kSlotBytes = static_cast<uint32_t>(::dfb::NUM_DFBS) * kMaxProd;
-        constexpr uint32_t kExpectedBytes = static_cast<uint32_t>(::dfb::NUM_DFBS) * sizeof(uint32_t);
-        TT_FATAL(offset + kSlotBytes + kExpectedBytes <= out.size(), "DFB config overflow (signal region)");
-        // Per-producer byte slots — zeroed; each producer writes 1 via uncached alias at runtime.
-        std::memset(out.data() + offset, 0, kSlotBytes);
-        offset += kSlotBytes;
+        TT_FATAL(offset + DFB_SIGNAL_REGION_BYTES <= out.size(), "DFB config overflow (signal region)");
+        // Per-hart byte slots — zeroed; each producer hart writes 1 via uncached alias at runtime.
+        std::memset(out.data() + offset, 0, DFB_SIGNAL_SLOT_BYTES);
+        offset += DFB_SIGNAL_SLOT_BYTES;
         // dfb_expected_signal[NUM_DFBS] — host-computed mask of the producer harts per DFB.
         for (uint32_t i = 0; i < static_cast<uint32_t>(::dfb::NUM_DFBS); i++) {
             std::memcpy(out.data() + offset, &dfb_expected_signal_vals[i], sizeof(uint32_t));
@@ -2333,8 +2292,7 @@ uint32_t finalize_dfbs(
     // out on 64B lines relative to the region base, so the base's own phase carries through to all
     // of them; program config sections are only aligned to hal.get_alignment(HalMemType::L1) (16 on
     // Quasar). Costs at most 48 bytes of padding.
-    constexpr uint32_t kDfbCacheLineBytes = 64;
-    dfb_offset = slot_addressed ? base_offset : static_cast<uint32_t>(tt::align(base_offset, kDfbCacheLineBytes));
+    dfb_offset = slot_addressed ? base_offset : dfb_align_cl(base_offset);
     dfb_size = 0;
 
     for (auto& kg : kernel_groups) {

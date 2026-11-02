@@ -43,7 +43,9 @@ FORCE_INLINE uint64_t dfb_read_hart_desc(uintptr_t config_cached, uint8_t hart_u
         static_cast<uintptr_t>(hart_u8) * sizeof(dfb_hart_desc_t)));
 }
 
-// Device-side shadow of dfb_hart_init_entry_t (TRISC only), populated by dfb_read_init_entry_header.
+// Decoded copy of the TRISC dfb_hart_init_entry_t, filled by dfb_read_init_entry_header. It is a
+// by-value local that the compiler keeps in registers, so its field order and size do not affect
+// the L1 layout or the init cost. The packed L1 layout is documented above dfb_unpack_entry_header.
 struct dfb_init_entry_hdr_t {
     uint32_t entry_size;
     uint32_t stride_size_precomp;  // host pre-computed, tile units
@@ -57,16 +59,15 @@ struct dfb_init_entry_hdr_t {
     uint8_t threshold;
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t broadcast_tc;         // unused on TRISC; kept so the shadow stays 36B
-    uint8_t remapper_pair_index;  // byte 22
-    uint8_t intra_shadow_tc_id;   // byte 23: intra-tensix ClientR shadow TC; 0xFF if unused
-    uint16_t block_size;          // bytes 28-29: how many tiles exist in one block
-    uint8_t split_tc;             // byte 3: tiles are split across all tile counters (1) or not (0)
-    uint16_t entries_to_jump;     // bytes 30-31: tiles to jump on each rotation of tile counters
+    uint8_t remapper_pair_index;
+    uint8_t intra_shadow_tc_id;  // intra-tensix ClientR shadow TC; 0xFF if unused
+    uint16_t block_size;         // how many tiles exist in one block
+    uint8_t split_tc;            // tiles are split across all tile counters (1) or not (0)
+    uint16_t entries_to_jump;    // tiles to jump on each rotation of tile counters
 };
-static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t must pack to 36B with no padding");
+static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t should stay 36B");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
 
 // Read the entire 32B dfb_hart_init_entry_t (__attribute__((packed))) as 8 u32s, through the
@@ -77,7 +78,7 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //   w1 = entry_size (u32)
 //   w2 = stride_size_precomp (u32): host pre-computed, tile units
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
-//   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
+//   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=reserved  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
 //      [31:24]=intra_shadow_tc_id
 //   w6 [15:0]=num_entries  [31:16]=capacity
@@ -98,7 +99,6 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.threshold = static_cast<uint8_t>(w3 >> 16);
     h.num_entries_per_txn_id = static_cast<uint8_t>(w3 >> 24);
     h.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(w4);
-    h.producer_signal_bit = static_cast<uint8_t>(w4 >> 8);
     h.txn_ids[0] = static_cast<uint8_t>(w4 >> 16);
     h.txn_ids[1] = static_cast<uint8_t>(w4 >> 24);
     h.txn_ids[2] = static_cast<uint8_t>(w5);
@@ -228,8 +228,8 @@ inline uint32_t rdcycle() {
 // (for DMs with implicit sync) DM0 has armed the ISR.
 //
 // Signal region layout at dfb_signal_region_off:
-//   uint8_t  dfb_signal[NUM_DFBS * MAX_PRODUCERS_PER_DFB]  — per-hart byte slots (192B)
-//   uint32_t dfb_expected_signal[NUM_DFBS]                 — host-computed hart mask (128B)
+//   uint8_t  dfb_signal[DFB_SIGNAL_SLOT_BYTES]  — one byte slot per hart
+//   uint32_t dfb_expected_signal[NUM_DFBS]      — host-computed hart mask (128B)
 //
 // A producer hart h writes byte 1 to dfb_signal[h] once, after its whole init loop (plain
 // volatile, no AMO). Consumer reads dfb_expected_signal[d] (mask of the harts producing d), then
@@ -245,11 +245,9 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
     const uint32_t sig_off =
         *dfb_l1_uncached_u16_ptr(config_cached + offsetof(dfb_global_header_t, dfb_signal_region_off));
 
-    // dfb_expected_signal[dfb_id] sits after all producer byte slots.
-    constexpr uint32_t kSlotStride = static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB);
-    constexpr uint32_t kExpectedBase = static_cast<uint32_t>(::dfb::NUM_DFBS) * kSlotStride;
+    // dfb_expected_signal[dfb_id] sits after the per-hart producer byte slots.
     const volatile uint32_t* exp_ptr = reinterpret_cast<const volatile uint32_t*>(dfb_l1_uncached_byte_ptr(
-        config_cached + sig_off + kExpectedBase + static_cast<uint32_t>(dfb_id) * sizeof(uint32_t)));
+        config_cached + sig_off + DFB_SIGNAL_SLOT_BYTES + static_cast<uint32_t>(dfb_id) * sizeof(uint32_t)));
 
     const uint32_t expected = *exp_ptr;
     if (expected == 0) {
