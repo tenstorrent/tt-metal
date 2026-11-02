@@ -156,7 +156,7 @@ def test_bfp2_full():
     assert torch.equal(ttnn.to_torch(tt_tensor), torch.full((64, 64), 0.5))
 
 
-@pytest.mark.parametrize("other", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat4_b])
+@pytest.mark.parametrize("other", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_bfp2_device_typecast_float(device, other):
     # Float targets are converted by the unpacker and packer, so these casts are exact for ternary data.
     x = _ternary((64, 64))
@@ -167,7 +167,7 @@ def test_bfp2_device_typecast_float(device, other):
     assert torch.equal(ttnn.to_torch(ttnn.typecast(other_tensor, ttnn.bfloat2_b)), x)
 
 
-@pytest.mark.parametrize("integer", [ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("integer", [ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8, ttnn.int8])
 def test_bfp2_device_typecast_integer(device, integer):
     # BFLOAT2_B takes the BFLOAT4_B arms of the typecast kernel, so {0, 1} converts exactly in both directions.
     x = _ternary((64, 64)).abs()
