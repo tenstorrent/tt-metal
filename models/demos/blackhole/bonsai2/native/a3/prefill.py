@@ -170,19 +170,34 @@ def _pf_dtype():
     return ttnn.bfloat4_b if os.environ.get("BONSAI_PF_W") == "bfp4" else ttnn.bfloat8_b
 
 
+def pick_pc(s: int, k: int, n: int, device):
+    """Matmul config for a prefill site. bench_out.py, chip 3, bfp8 scratch, ms:
+    the dense gdn_out config (create_prefill_mlp_matmul_program_config, 11 columns) wins wherever it fits:
+    6144->5120 1.05 vs wide 1.50 (S=2048), 0.33 vs 0.45 (640); 17408->5120 2.84 vs 4.05 / 0.84 vs 1.15;
+    For wide N it overflows L1 at S=2048 and clashes with resident L1 buffers at 640, so wide_pc there."""
+    if s <= 32:
+        return None
+    if n <= 5120:  # wide N at S=640 fits alone but clashes with resident L1 buffers (check_prefill, gate/up)
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        return tpc.create_prefill_mlp_matmul_program_config(
+            s, k, n, max_cols=device.compute_with_storage_grid_size().x, tuning=tpc.prefill_tuning(1))
+    return wide_pc(s, k, n)
+
+
 def prefill_linear(tl, x, mem=ttnn.DRAM_MEMORY_CONFIG, program_config=None):
     """Prefill for any a3.linear.TernaryLinear site: x [.., S, K] -> [1, 1, S, N] bf16."""
     xr = rotator(tl.sh)(x)
     if _use_pmm(xr):
         y = pmm(xr, tl.w, tl.s, tl.k, tl.n)
         ttnn.deallocate(xr)
-        if mem != ttnn.DRAM_MEMORY_CONFIG:
+        if mem is not None and mem != ttnn.DRAM_MEMORY_CONFIG:  # attention o_proj passes None
             y2 = ttnn.to_memory_config(y, mem)
             ttnn.deallocate(y)
             y = y2
         return ttnn.reshape(y, list(x.shape)[:-1] + [tl.n])
     wd = dequant(tl.w, tl.s, tl.k, tl.n, dtype=_pf_dtype())
-    pc = program_config or wide_pc(xr.shape[-2], tl.k, tl.n)
+    pc = program_config or pick_pc(xr.shape[-2], tl.k, tl.n, xr.device())
     y = ttnn.linear(xr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
     ttnn.deallocate(wd)
     ttnn.deallocate(xr)
@@ -202,7 +217,7 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
     else:
         gu_dt = ttnn.bfloat4_b if os.environ.get("BONSAI_PF_GU") == "bfp4" else ttnn.bfloat8_b
         wg, wu = dequant(mlp.w_gu, mlp.s_gu, k, h, gu=True, dtype=gu_dt)
-        pc = wide_pc(xr.shape[-2], k, h)
+        pc = pick_pc(xr.shape[-2], k, h, xr.device())
         g = ttnn.linear(xr, wg, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
         u = ttnn.linear(xr, wu, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
         for t in (wg, wu, xr):
@@ -216,7 +231,8 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
         y = pmm(hr, mlp.w_d, mlp.s_d, h, k)
     else:
         wd = dequant(mlp.w_d, mlp.s_d, h, k, dtype=_pf_dtype())
-        y = ttnn.linear(hr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=down_pc)
+        y = ttnn.linear(hr, wd, compute_kernel_config=_LOFI, memory_config=mem,
+                        program_config=pick_pc(hr.shape[-2], h, k, hr.device()) or down_pc)
         ttnn.deallocate(wd)
     ttnn.deallocate(hr)
     return ttnn.reshape(y, list(x.shape))

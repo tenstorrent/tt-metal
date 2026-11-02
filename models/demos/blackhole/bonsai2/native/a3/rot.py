@@ -83,7 +83,7 @@ class KRotator:
         ttnn.generic_op([x4, pn, y], prog)
         if x4 is not x and x4.buffer_address() != x.buffer_address():
             ttnn.deallocate(x4)
-        if mem != ttnn.DRAM_MEMORY_CONFIG:
+        if mem is not None and mem != ttnn.DRAM_MEMORY_CONFIG:
             y2 = ttnn.to_memory_config(y, mem)
             ttnn.deallocate(y)
             y = y2
