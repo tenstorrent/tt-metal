@@ -32,8 +32,7 @@ inline Tensor typecast_impl(
     DataType input_dtype = input_tensor.dtype();
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or
-        (is_8_bit_int(output_dtype) and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
-                                         input_dtype == DataType::BFLOAT4_B)) or
+        (is_8_bit_int(output_dtype) and (input_dtype == DataType::BFLOAT16 or is_block_float(input_dtype))) or
         (input_dtype == DataType::UINT16 and is_8_bit_int(output_dtype)) or is_8_bit_int(input_dtype);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
