@@ -67,6 +67,31 @@ REPORT="pytest-report-blackhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
 COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
+export RUNS_SEQ=2
+export RUN_REV=1
+export RUNS_X=2
+# Experiment: problem 1 check of the stack (1/5 to 3/5). One card runs this group single-worker in collection order
+# RUNS_SEQ times, then reversed when RUN_REV=1, then CI style (15 workers) RUNS_X times; each run keeps its own perf_data.
+export PERF_KEEP_RUNS=100
+pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=600 \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" --junitxml="$COMPILE_XML" .
+pytest -q --collect-only --compile-consumer "${SPEED_OF_LIGHT_ARGS[@]}" -p no:cacheprovider -m "perf and not accuracy" \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" . 2> /dev/null | grep '::' > grp_ids.txt || true
+tac grp_ids.txt > grp_ids_rev.txt
+wc -l grp_ids.txt
+run() {
+  local tag=$1
+  shift
+  env PERF_RUN_TAG="$tag" pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --timeout=600 \
+    -p no:cacheprovider "$@" || echo "run $tag rc=$?"
+  echo "done $tag"
+}
+for i in $(seq 1 "${RUNS_SEQ:-2}"); do run "seq$i" -n 1 @grp_ids.txt; done
+[[ "${RUN_REV:-0}" == 1 ]] && run rev -n 1 @grp_ids_rev.txt
+for i in $(seq 1 "${RUNS_X:-0}"); do run "x$i" --dist loadgroup -n 15 -m "perf and not accuracy" --perf-splits "$N_GROUPS" --perf-group "$GROUP" .; done
+cp "$COMPILE_XML" "${REPORT}.xml"
+exit 0
+
 if [[ "$PHASE" != run ]]; then
   pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=60 \
     --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
