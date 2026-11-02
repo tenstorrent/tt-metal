@@ -8,15 +8,19 @@
 #include <utility>
 
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 #include "impl/metal2_host_api/program_spec/construction/kernel_lowering.hpp"
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
 

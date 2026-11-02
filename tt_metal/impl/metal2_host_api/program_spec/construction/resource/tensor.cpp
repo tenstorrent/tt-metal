@@ -14,6 +14,9 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
