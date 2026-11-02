@@ -49,17 +49,18 @@ class TernaryLinear:
         cache = os.path.join(cache_dir, name) if cache_dir else None
         self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache, kn=(k, n_pad))
 
-    def norm(self, h, gamma, eps, emit=False):
+    def norm(self, h, gamma, eps, emit=False, add=None, h_out=None):
         """Decode RMSNorm fused into the prep (a3.rmsprep); the next forward on h (or the returned rows,
         or any view of either) skips its prep. emit: also return the normalized rows, for consumers
-        besides this projection (the GDN a|b matmul)."""
+        besides this projection (the GDN a|b matmul). add: the residual add fused in front (h + add is
+        normed and written to h_out, which a later forward(h_out) then matches)."""
         sh = self.sh
         assert not h.is_sharded(), "rmsprep reads an interleaved residual"
         y = (ttnn.allocate_tensor_on_device(h.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, sh.device, ttnn.L1_MEMORY_CONFIG)
              if emit else None)
         x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
-        a3.rmsprep(h, gamma, sh.m[self.k], x8, sh.workers, eps, y_out=y)
-        self._pending = ((y if emit else h).buffer_address(), x8)
+        a3.rmsprep(h, gamma, sh.m[self.k], x8, sh.workers, eps, y_out=y, add=add, h_out=h_out)
+        self._pending = ((y if emit else h_out if add is not None else h).buffer_address(), x8)
         return y
 
     def forward(self, x, out_mem=None, split=0):
