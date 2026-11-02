@@ -1,0 +1,8 @@
+# Install on top of the current TT-Metal source-build environment.
+# Bounds include current CI pins; do not upgrade the repository torch/TTNN.
+transformers>=5.3,<6
+diffusers>=0.38,<0.41
+accelerate>=1.7,<2
+huggingface-hub>=1.0,<2
+safetensors>=0.6,<1
+Pillow>=13.0.0,<14

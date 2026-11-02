@@ -275,23 +275,6 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
-// read and write stream scratch register store values as uint32_t
-enum class CoordinatedEriscContextSwitchState : uint32_t {
-    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
-    // state at the end of the handshake
-    NORMAL_EXECUTION = 0,
-    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
-    RETRAIN_INTENT = 1,
-    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
-    // erisc1's cooperation
-    INTENT_ACK = 2,
-    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
-    RETRAIN_COMPLETE = 3,
-    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
-    // NORMAL_EXECUTION
-    COMPLETE_ACK = 4,
-};
-
 // In case underlying type for the enum class is changed later
 using CoordinatedEriscCtxType = std::underlying_type_t<CoordinatedEriscContextSwitchState> ;
 
@@ -782,7 +765,9 @@ FORCE_INLINE void forward_to_local_destination(
 
 // Packed-slot bitset of eth outputs this ELF actually has. Bit i is fwd_dirs<MY_DIR>()[i].
 // Intramesh E/W also drop N/S (packed bits 1 and 2): Y-before-X forbids those turns, and
-// decode_action for E/W never reads the Y byte. INTERMESH E/W landings keep them.
+// decode_action for E/W never reads the Y byte. On an X-express mesh an intramesh Z router is an X
+// resource for the same reasons: it decodes the X byte only, which never carries N/S, so it drops
+// N/S (packed bits 2 and 3) as dead arms. INTERMESH landings keep them.
 template <size_t DOWNSTREAM_EDM_SIZE>
 constexpr uint8_t live_eth_mask_2d() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
@@ -804,6 +789,11 @@ constexpr uint8_t live_eth_mask_2d() {
         (my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST) && !is_intermesh_router;
     if constexpr (trim_ns_for_intramesh_ew) {
         live = static_cast<uint8_t>(live & ~0b0110);
+    }
+    constexpr bool trim_ns_for_intramesh_z_on_x_express =
+        my_dir == eth_chan_directions::Z && Fabric2DRoutingConfig::express_on(Fabric2DAxis::X) && !is_intermesh_router;
+    if constexpr (trim_ns_for_intramesh_z_on_x_express) {
+        live = static_cast<uint8_t>(live & ~0b1100);
     }
     return live;
 }
@@ -889,6 +879,15 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) uint8_t forward_2d_disp
     constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     constexpr bool stateful_api = use_2d_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    // The arms below skip a direction this router was built without, so a packet asking for one is
+    // dropped and its receiver hangs. Routes never ask for one (for example E/W after a
+    // VC0 landing with the intermesh VC disabled); with the watcher on, a wrong route stops here instead.
+    constexpr uint8_t DEAD_ARMS = static_cast<uint8_t>(
+        (((LIVE >> 0) & 1) ? 0 : Routing2DCodec::action_bit(dirs[0])) |
+        (((LIVE >> 1) & 1) ? 0 : Routing2DCodec::action_bit(dirs[1])) |
+        (((LIVE >> 2) & 1) ? 0 : Routing2DCodec::action_bit(dirs[2])) |
+        (((LIVE >> 3) & 1) ? 0 : Routing2DCodec::action_bit(dirs[3])));
+    ASSERT((action & DEAD_ARMS) == 0);
     uint8_t forwarded_slot_mask = 0;
     if constexpr ((LIVE >> 0) & 1) {
         if (action & Routing2DCodec::action_bit(dirs[0])) {
@@ -1462,7 +1461,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     action = Routing2DCodec::decode_action_y_first(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 } else {
-                    action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                    // A Z-facing router decodes the axis its chord runs along; see Fabric2DRoutingConfig.
+                    action = Fabric2DRoutingConfig::decode_action<static_cast<eth_chan_directions>(my_direction)>(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 }
                 // This chip is the exit when the maps say deliver here but the final mesh is
@@ -1899,11 +1899,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     uint16_t fabric_heartbeat_counter = 0;
 #if defined(ARCH_BLACKHOLE)
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE;
 #else
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
 #endif
-    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(fabric_kernel_heartbeat_addr);
 
     auto execute_main_loop = [&]() __attribute__((always_inline)) {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
@@ -2252,8 +2252,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     fabric_telemetry);
             }
 
-            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
-                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            if ((++fabric_heartbeat_counter & (FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS - 1)) == 0) {
+                *fabric_heartbeat_ptr = FABRIC_KERNEL_HEARTBEAT_MAGIC | fabric_heartbeat_counter;
             }
 
             if constexpr (enable_context_switch) {

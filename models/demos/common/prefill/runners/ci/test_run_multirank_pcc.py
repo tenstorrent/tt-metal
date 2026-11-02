@@ -8,14 +8,19 @@ models/demos/common/prefill/runners/ci -p test_run_multirank_pcc.py``.
 The actual shell harness runs with stub launchers; its inline verdict gate remains real.
 """
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
 STUB = r"""
@@ -45,6 +50,10 @@ if name == "sleep":
     time.sleep(0.02)
 elif name.startswith("mpirun"):
     record("mpi")
+    if "--output-filename" in args:
+        log = Path(args[args.index("--output-filename") + 1]) / "1" / "rank.0" / "stdout"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("stub rank log\n")
     os.environ["TEST_MPI_HOST"] = args[args.index("--host") + 1] if "--host" in args else ""
     os.environ["OMPI_COMM_WORLD_RANK"] = "0"
     if "bash" in args:
@@ -145,7 +154,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
             ("glm52", 1049600, 28),
-            ("mistral4", 56320, 1),
+            ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
@@ -216,7 +225,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "PREFILL_SP": "8",
             "PREFILL_TP": "1",
             "PREFILL_PCC_GOLDEN_LEN": "56320",
-            "PREFILL_MAX_SEQ_LEN": "56320",
+            "PREFILL_MAX_SEQ_LEN": "61440",
             "PREFILL_PRODUCER_CHUNKS": "11",
             "PREFILL_PRODUCER_CHECK_PCC": "1",
         }.items():
@@ -252,7 +261,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 56320), ("kimi27", 256000), ("glm52", 256000)):
+        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model, config="sc1")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -289,9 +298,17 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_perf_gate_fails_outside_margin(self):
-        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"})
+        result, _ = self.run_harness(
+            "mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000", "GITHUB_ACTIONS": "true"}
+        )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        self.assertIn("::error title=Prefill perf gate::TPS GATE FAIL", result.stdout)
+        # Log summaries read the tail: the failed gate must come after the rank-log dump.
+        tail = result.stdout.rsplit("==================== gate verdicts ====================", 1)
+        self.assertEqual(len(tail), 2, result.stdout)
+        self.assertIn("ranklog tails", tail[0])
+        self.assertIn("TPS GATE FAIL", tail[1])
+        self.assertNotIn("ranklog tails", tail[1])
 
     def test_perf_gate_reports_when_no_baseline_is_set(self):
         # The state the CI leg ships in: measure and print, do not compare.
@@ -350,6 +367,120 @@ class MultirankPccHarnessTests(unittest.TestCase):
         result, records = self.run_harness("mistral4", runner_rc=17)
         self.one_record(records, "producer")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+def _load_perf_gate():
+    spec = importlib.util.spec_from_file_location("perf_gate", HARNESS.with_name("perf_gate.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class PerfGateTableTests(unittest.TestCase):
+    """perf_gate.py against a baseline table, in-process, without the shell harness."""
+
+    perf_gate = _load_perf_gate()
+
+    TABLE = {
+        "margin": {"throughput_tok_s": 0.015, "ttft_s": 0.015, "chunk_time_ms": 0.1},
+        "baselines": {
+            "legacy": {"sc1": {"probe": "@55k", "14kw": {"throughput_tok_s": 10000}}},
+            "multi": {
+                "sc1": {
+                    "margin": {"@5k": {"throughput_tok_s": 0.07}},
+                    "14kw": {"@5k": {"throughput_tok_s": 20000}, "@55k": {"throughput_tok_s": 10000}},
+                }
+            },
+        },
+    }
+
+    def gate(self, model, throughput, power="14kw", extra_args=(), env=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / "table.json").write_text(json.dumps(self.TABLE))
+        perf_json = root / "run_sc1.json"
+        index = {"@5k": 0, "@55k": 10, "@1M": 200}
+        perf_json.write_text(json.dumps({"chunk_index": index, "throughput_tok_s": throughput}))
+        argv = ["perf_gate.py", str(perf_json), "--table", str(root / "table.json"), "--model", model]
+        argv += ["--config", "sc1"] + (["--power", power] if power else []) + list(extra_args)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(
+            os.environ, {"PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})}
+        ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            returncode = self.perf_gate.main()
+        result = types.SimpleNamespace(returncode=returncode, stdout=out.getvalue(), stderr=err.getvalue())
+        verdicts = root / "summaries" / "perf" / "run_sc1_gate.md"
+        return result, verdicts.read_text() if verdicts.exists() else ""
+
+    def test_legacy_entry_gates_only_its_probe(self):
+        result, verdicts = self.gate("legacy", {"@5k": 1.0, "@55k": 10000})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE @55k", result.stdout)
+        self.assertNotIn("TPS GATE @5k", result.stdout)
+        self.assertIn("| @55k | TPS (tok/s) | 10,000 |", verdicts)
+
+    def test_every_probe_is_gated(self):
+        # Within the deepest band but 25% slow at @5k: a deepest-only gate would pass this.
+        result, verdicts = self.gate("multi", {"@5k": 15000, "@55k": 10000})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE @5k", result.stdout)
+        self.assertIn("TPS GATE @55k", result.stdout)
+        self.assertIn("| @5k | TPS (tok/s) | 15,000 |", verdicts)
+        self.assertIn("| FAIL |", verdicts)
+
+    def test_per_probe_margin_overrides_table_margin(self):
+        # 5% slow at @5k: inside its 7% override, outside the table's 1.5%; @55k keeps the table's.
+        result, _ = self.gate("multi", {"@5k": 19000, "@55k": 10000})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE @5k: 19,000 tok/s vs 20,000 +/- 7%", result.stdout)
+        self.assertIn("TPS GATE @55k: 10,000 tok/s vs 10,000 +/- 1.5%", result.stdout)
+
+    def test_missing_gated_probe_fails(self):
+        result, _ = self.gate("multi", {"@55k": 10000})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no finite throughput_tok_s at @5k", result.stderr)
+
+    def test_deeper_context_than_baseline_fails(self):
+        result, _ = self.gate("multi", {"@5k": 20000, "@55k": 10000, "@1M": 5000})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("the context length changed", result.stderr)
+
+    def test_baselined_leg_on_unbaselined_power_class_fails(self):
+        # An sc1 perf leg baselined on 14kw only must not pass ungated on an 8kw host.
+        result, verdicts = self.gate("multi", {"@5k": 20000, "@55k": 10000}, power="8kw")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("baselined on 14kw only but this host is 8kw", result.stderr)
+        self.assertIn("FAIL: multi sc1 is baselined on 14kw only", verdicts)
+
+    def test_unreadable_power_class_fails_without_blaming_the_runner(self):
+        # The harness falls back to probing locally when the remote probe fails; with no tt-smi the TDP is
+        # unreadable, which says nothing about the host's power class.
+        with mock.patch.object(sys, "path", [str(HARNESS.parents[6]), *sys.path]):
+            result, verdicts = self.gate("multi", {"@5k": 20000, "@55k": 10000}, power="", env={"PATH": ""})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("power class could not be determined", result.stderr)
+        self.assertNotIn("misrouted", result.stderr)
+        self.assertIn("could not be determined", verdicts)
+
+    def test_expected_tps_gates_the_deepest_probe(self):
+        result, verdicts = self.gate("unknown", {"@5k": 1.0, "@55k": 10000}, extra_args=["--expected-tps", "10000"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE @55k", result.stdout)
+        self.assertNotIn("TPS GATE @5k", result.stdout)
+        self.assertIn("| @55k | TPS (tok/s) | 10,000 |", verdicts)
+
+    def test_require_without_baseline_reports(self):
+        result, verdicts = self.gate("unknown", {"@5k": 1.0, "@55k": 10000}, extra_args=["--require", "1"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS: 10,000 tok/s @55k", result.stdout)
+        self.assertIn("reporting, not gating", result.stdout)
+        self.assertEqual(verdicts, "")
+
+    def test_unbaselined_leg_is_not_gated(self):
+        result, _ = self.gate("unknown", {"@5k": 1.0, "@55k": 1.0}, power="8kw")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("GATE", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
