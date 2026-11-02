@@ -7,6 +7,7 @@
 #include "llk_bfd_alloc.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_broadcast_operands.h"
+#include "llk_unpack_unary_broadcast_operands_to_dest.h"
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "tensor_shape.h"
@@ -47,18 +48,18 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  * Overload matching Blackhole/Wormhole API signature `(transpose_of_faces, within_face_16x16_transpose, operand)`.
  *
  * When `binary_reuse_dest != NONE`, uses the eltwise-binary dest-reuse init path (UNP_A, default tile/face counts).
- * Otherwise uses the unary / unary-broadcast path. For the non-broadcast path the UNP_DEST routing
- * decision is made solely from the `unpack_to_dest` template parameter (no format inspection); when true,
- * all operands (including 16-bit) are routed to DEST through `_llk_unpack_unary_operand_to_dest_init_`, the
- * unpack-to-dest primitive (its section handshake runs once per tile_regs_acquire / tile_regs_commit in
- * llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done, not per tile); otherwise
- * `_llk_unpack_unary_operand_init_` targets UNP_A.
+ * Otherwise uses the unary / unary-broadcast path. On both, the UNP_DEST routing decision is made solely
+ * from the `unpack_to_dest` template parameter (no format inspection); when true, all operands (including 16-bit)
+ * are routed to DEST through the sync-free to-dest primitives (`_llk_unpack_unary_operand_to_dest_init_`,
+ * `_llk_unpack_unary_broadcast_operands_to_dest_init_`; their section handshake runs once per tile_regs_acquire /
+ * tile_regs_commit in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done, not per tile); otherwise
+ * `_llk_unpack_unary_operand_init_` targets UNP_A and the broadcast init targets UNP_B.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar in dest-reuse path; kept for API parity
  * @tparam binary_reuse_dest: Dest reuse mode; when not NONE, selects the dest-reuse sub-path
- * @tparam unpack_to_dest: When true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
- * format
+ * @tparam unpack_to_dest: When true, the unary / unary-broadcast primitive routes the operand through UNP_DEST
+ * regardless of format
  * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary/broadcast NONE path only)
  * @param within_face_16x16_transpose: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @param operand: The input operand logical dataflow buffer / CB id
@@ -120,14 +121,18 @@ inline void llk_unpack_A_init(
                 }
             }
         } else {
-            static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
-            // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
-            // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
+            // Unlike the unary path above, the broadcast LLKs take no TensorShape, so they do not scale
+            // their L1 tile index by the face count. Full-tile only until converted (tt-metal #47597).
             LLK_ASSERT(
                 tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
-            _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BType, DST_ACCUM_MODE>(bfd_id, 1);
+            if constexpr (unpack_to_dest) {
+                // Sync-free placer on UNP_DEST (transpose forced off inside); math broadcasts the rows in place.
+                _llk_unpack_unary_broadcast_operands_to_dest_init_<BType>(bfd_id);
+            } else {
+                _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BType, DST_ACCUM_MODE>(bfd_id, 1);
+            }
         }
     }
 }
@@ -136,23 +141,27 @@ inline void llk_unpack_A_init(
  *
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
- * For the non-broadcast path the UNP_DEST routing decision is made solely from the `unpack_to_dest` template
- * parameter (no format inspection): when true this calls `_llk_unpack_unary_operand_to_dest_tile_`, a sync-free
- * placer; the UNPACK_MATH / MATH_PACK section handshake and the SyncHalf bank flip live in
- * `llk_unpack_wait_for_dest_available` / `llk_unpack_dest_section_done` (tile_regs_acquire / tile_regs_commit), so
- * every call between the two lands in the same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A.
+ * On the unary and unary-broadcast paths the UNP_DEST routing decision is made solely from the `unpack_to_dest`
+ * template parameter (no format inspection): when true this calls the sync-free placer
+ * (`_llk_unpack_unary_operand_to_dest_tile_` / `_llk_unpack_unary_broadcast_operands_to_dest_tile_`); the
+ * UNPACK_MATH / MATH_PACK section handshake and the SyncHalf bank flip live in `llk_unpack_wait_for_dest_available` /
+ * `llk_unpack_dest_section_done` (tile_regs_acquire / tile_regs_commit), so every call between the two lands in the
+ * same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A or the broadcast MOP on UNP_B.
+ *
+ * A broadcast placed in DEST is read back by math through SrcB, so each such tile also publishes one dummy SrcB
+ * dvalid here and holds a SrcB bank until math consumes it after tile_regs_commit: one broadcast per section is
+ * the verified shape, more than two per section is unverified (SrcB has two banks).
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
- * format
+ * @tparam unpack_to_dest: when true, the unary / unary-broadcast primitive routes the operand through UNP_DEST
+ * regardless of format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
  * @param dst_tile_index: DEST tile index the tile lands at, relative to the current section base; must be below the
- * section capacity for the sync mode and DEST width (get_dest_max_tiles, asserted). Used on the non-broadcast
- * unpack-to-dest path only: there the unpacker writes DEST directly, so math cannot place the tile. Ignored otherwise,
- * including the broadcast paths, which unpack tile by tile.
+ * section capacity for the sync mode and DEST width (get_dest_max_tiles, asserted). Used on the unpack-to-dest paths
+ * only: there the unpacker writes DEST directly, so math cannot place the tile. Ignored on the SrcA / SrcB paths.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -190,8 +199,17 @@ inline void llk_unpack_A(
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
         }
+    } else if constexpr (unpack_to_dest) {
+        constexpr std::uint32_t dest_section_tiles = ckernel::trisc::
+            get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>();
+        LLK_ASSERT(
+            dst_tile_index < dest_section_tiles,
+            "unpack-to-dest broadcast: dst_tile_index exceeds the DEST section capacity for this sync mode and DEST "
+            "width");
+        // Math reads the rows back with MOVD2B, which stalls on SrcB validity: one dummy SrcB dvalid per tile.
+        _llk_unpack_set_srcB_dummy_valid_();
+        _llk_unpack_unary_broadcast_operands_to_dest_tile_(l1_tile_idx, dst_tile_index);
     } else {
-        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile_idx);
     }
     WAYPOINT("UPAD");
@@ -200,23 +218,22 @@ inline void llk_unpack_A(
 /**
  * @brief Unpacks a block of tiles for unary and unary-broadcast paths.
  *
- * On the non-broadcast unpack-to-dest path the tiles land at DEST tiles [start_dst_tile_index, start_dst_tile_index +
- * ntiles) of the current section with no handshake of their own, see llk_unpack_A. The other paths, broadcast included,
- * unpack tile by tile.
+ * On the unpack-to-dest paths the tiles land at DEST tiles [start_dst_tile_index, start_dst_tile_index + ntiles) of
+ * the current section with no handshake of their own, see llk_unpack_A. The SrcA / SrcB paths and the broadcast
+ * paths unpack tile by tile.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand
- * through UNP_DEST regardless of format
+ * @tparam unpack_to_dest: when true, the unary / unary-broadcast primitive routes the operand through UNP_DEST
+ * regardless of format
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
- * @param ntiles: The number of consecutive tiles to unpack. On the non-broadcast unpack-to-dest path the block stays
- * inside the current DEST section, so start_dst_tile_index + ntiles must not exceed the section capacity for the sync
- * mode and DEST width (get_dest_max_tiles, asserted).
+ * @param ntiles: The number of consecutive tiles to unpack. On the unpack-to-dest paths the block stays inside the
+ * current DEST section, so start_dst_tile_index + ntiles must not exceed the section capacity for the sync mode and
+ * DEST width (get_dest_max_tiles, asserted).
  * @param start_dst_tile_index: DEST tile index of the first tile, relative to the current section base; consecutive
- * tiles land at consecutive indices. Non-broadcast unpack-to-dest path only, ignored otherwise (the broadcast paths
- * unpack tile by tile).
+ * tiles land at consecutive indices. Unpack-to-dest paths only, ignored on the SrcA / SrcB paths.
  */
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
@@ -262,6 +279,17 @@ inline void llk_unpack_A_block(
             const std::uint32_t l1_tile_idx = rd_entry_idx + tile_index * stride_size_tiles;
             if constexpr (BType == BroadcastType::NONE) {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
+            } else if constexpr (unpack_to_dest) {
+                // Per tile as in llk_unpack_A: capacity check and one dummy SrcB dvalid for the math read-back.
+                constexpr std::uint32_t dest_section_tiles = ckernel::trisc::
+                    get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>();
+                const std::uint32_t dst_tile_index = start_dst_tile_index + (tile_index - start_tile_index);
+                LLK_ASSERT(
+                    dst_tile_index < dest_section_tiles,
+                    "unpack-to-dest broadcast: start_dst_tile_index + ntiles exceeds the DEST section capacity for "
+                    "this sync mode and DEST width");
+                _llk_unpack_set_srcB_dummy_valid_();
+                _llk_unpack_unary_broadcast_operands_to_dest_tile_(l1_tile_idx, dst_tile_index);
             } else {
                 _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile_idx);
             }
