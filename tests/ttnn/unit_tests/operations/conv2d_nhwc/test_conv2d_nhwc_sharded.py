@@ -135,6 +135,7 @@ def run_sharded(
     p = pcc(got, ref)
     rel_rms = ((got - ref).pow(2).mean().sqrt() / ref.std()).item()
     min_pcc, max_rms = _TOL[dtype]
+    print(f"PRECISION pcc={p:.6f} rel_rms={rel_rms:.5f}")
     assert p >= min_pcc and rel_rms <= max_rms, f"pcc={p} rel_rms={rel_rms}"
 
 

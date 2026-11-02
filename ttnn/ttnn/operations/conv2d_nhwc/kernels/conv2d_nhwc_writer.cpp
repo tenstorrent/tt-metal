@@ -24,6 +24,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
 constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t cb_bias_tiles = get_compile_time_arg_val(1);
@@ -55,7 +56,11 @@ constexpr uint32_t weight_k_rows = get_compile_time_arg_val(21);
 // the kernel's life — read (and multicast) once, before the first m-block, as ONE transfer instead
 // of a serial read -> multicast round per K-block per m-block. Compute reads it in place.
 constexpr bool weights_resident = get_compile_time_arg_val(22) != 0;
-constexpr auto weight_args = TensorAccessorArgs<23>();
+// Resident weights: K-rows (bn tiles each) per read/multicast chunk.
+constexpr uint32_t weight_chunk_rows = get_compile_time_arg_val(23);
+constexpr uint32_t WEIGHT_CHUNK_LEAD = 2;  // chunks whose reads are in flight ahead of the multicast
+constexpr uint32_t MAX_WEIGHT_TRIDS = 15;  // read transaction ids 1..15
+constexpr auto weight_args = TensorAccessorArgs<24>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
@@ -128,25 +133,31 @@ void kernel_main() {
         }
     }
 
-    // ---- load_bias_slice ----
-    if constexpr (has_bias) {
+    // ---- load_bias_slice ---- (after the resident weights: the bias is first needed at the end
+    // of the first m-block, the weights at its first matmul)
+    auto load_bias = [&]() {
+        if constexpr (has_bias) {
 #ifdef ABL_WZONE
-        DeviceZoneScopedN("BIAS");
+            DeviceZoneScopedN("BIAS");
 #endif
-        const auto bias = TensorAccessor(bias_args, bias_addr);
-        const uint32_t bias_tile_bytes = get_tile_size(cb_bias_tiles);
-        cb_reserve_back(cb_bias_tiles, core_n_tiles);
-        uint32_t dst = get_write_ptr(cb_bias_tiles);
-        for (uint32_t j = 0; j < core_n_tiles; ++j) {
-            if (n_tile_start + j < N_t) {
-                noc_async_read(bias.get_noc_addr(n_tile_start + j), dst, bias_tile_bytes);
-            } else {
-                zero_fill(zeros_noc, dst, bias_tile_bytes);
+            const auto bias = TensorAccessor(bias_args, bias_addr);
+            const uint32_t bias_tile_bytes = get_tile_size(cb_bias_tiles);
+            cb_reserve_back(cb_bias_tiles, core_n_tiles);
+            uint32_t dst = get_write_ptr(cb_bias_tiles);
+            for (uint32_t j = 0; j < core_n_tiles; ++j) {
+                if (n_tile_start + j < N_t) {
+                    noc_async_read(bias.get_noc_addr(n_tile_start + j), dst, bias_tile_bytes);
+                } else {
+                    zero_fill(zeros_noc, dst, bias_tile_bytes);
+                }
+                dst += bias_tile_bytes;
             }
-            dst += bias_tile_bytes;
+            noc_async_read_barrier();
+            cb_push_back(cb_bias_tiles, core_n_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_bias_tiles, core_n_tiles);
+    };
+    if constexpr (!weights_resident) {
+        load_bias();
     }
 
     constexpr uint32_t weight_block_tiles = weight_k_rows * block_n_tiles;
@@ -167,34 +178,86 @@ void kernel_main() {
         }
     };
 
-    // ---- load_resident_weights (R3): every K-block once, one multicast, before any m-block ----
+    // ---- load_resident_weights (R3): every K-block once, before any m-block ----
+    // The sender reads the slice in chunks of weight_chunk_rows K-rows, each tagged with its own read
+    // transaction id, and multicasts chunk c as soon as its reads land while chunks c+1.. are still
+    // in flight (the read issue is RISC-bound: it overlaps the multicast). Receivers push per chunk.
     if constexpr (weights_resident) {
 #ifdef ABL_WZONE
         DeviceZoneScopedN("WRES");
 #endif
-        constexpr uint32_t total_tiles = num_k_blocks * weight_block_tiles;
-        cb_reserve_back(cb_weight_tiles, total_tiles);
+        constexpr uint32_t total_rows = num_k_blocks * weight_k_rows;
+        constexpr uint32_t num_chunks = (total_rows + weight_chunk_rows - 1) / weight_chunk_rows;
+        static_assert(!weights_resident || num_chunks <= MAX_WEIGHT_TRIDS, "one read transaction id per chunk");
+        const uint32_t row_bytes = block_n_tiles * weight_tile_bytes;
+        cb_reserve_back(cb_weight_tiles, total_rows * block_n_tiles);
         const uint32_t slot = get_write_ptr(cb_weight_tiles);  // lockstep across the group
+        auto chunk_rows = [&](uint32_t c) {
+            const uint32_t r0 = c * weight_chunk_rows;
+            return total_rows - r0 < weight_chunk_rows ? total_rows - r0 : weight_chunk_rows;
+        };
+        // One HEIGHT core owns every output channel and its K order is the prepared one, so chunk c
+        // is the contiguous page range [r0 * N_t, (r0 + rows) * N_t) of the DRAM-interleaved weight:
+        // page p lives in bank p % NUM_DRAM_BANKS at a per-bank stride of one aligned page. Issue
+        // bank by bank with stateful reads: one address computation per bank, not per tile.
+        static_assert(!weights_resident || (block_n_tiles == N_t && !act_mcast), "resident = whole rows, one slice");
+        auto issue_chunk = [&](uint32_t c) {
+            dataflow_kernel_lib::set_read_trid(noc, c + 1);
+            const uint32_t p0 = c * weight_chunk_rows * N_t;
+            const uint32_t np = chunk_rows(c) * N_t;
+            const uint32_t bank_stride = weights.get_aligned_page_size();
+            const uint32_t dst0 = slot + p0 * weight_tile_bytes;
+            for (uint32_t b = 0; b < NUM_DRAM_BANKS && b < np; ++b) {
+                const uint64_t a = weights.get_noc_addr(p0 + b);
+                noc_async_read_set_state(a);
+                uint32_t src = static_cast<uint32_t>(a);
+                uint32_t dst = dst0 + b * weight_tile_bytes;
+                for (uint32_t q = b; q < np; q += NUM_DRAM_BANKS) {
+                    noc_async_read_with_state(src, dst, weight_tile_bytes);
+                    src += bank_stride;
+                    dst += NUM_DRAM_BANKS * weight_tile_bytes;
+                }
+            }
+        };
         if (reads_weights) {
             {
 #ifdef ABL_WZONE
-                DeviceZoneScopedN("WREAD");
+                DeviceZoneScopedN("WISSUE");
 #endif
-                for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
-                    read_weight_block(k_block, n_tile_start, slot + k_block * weight_block_bytes);
+                for (uint32_t c = 0; c < num_chunks && c < WEIGHT_CHUNK_LEAD; ++c) {
+                    issue_chunk(c);
                 }
-                noc_async_read_barrier();
             }
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                {
 #ifdef ABL_WZONE
-            DeviceZoneScopedN("WSEND");
+                    DeviceZoneScopedN("WBAR");
 #endif
-            if constexpr (weight_mcast) {
-                weight_sender->send(slot, slot, num_k_blocks * weight_block_bytes);  // self-excluded
+                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
+                }
+#ifdef ABL_WZONE
+                DeviceZoneScopedN("WSEND");
+#endif
+                if constexpr (weight_mcast) {
+                    // The resident region is never rewritten: no source guard needed (the kernel-end
+                    // write barrier drains the multicast).
+                    const uint32_t a = slot + c * weight_chunk_rows * row_bytes;
+                    weight_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                        a, a, chunk_rows(c) * row_bytes);  // self-excluded
+                }
+                cb_push_back(cb_weight_tiles, chunk_rows(c) * block_n_tiles);
+                if (c + WEIGHT_CHUNK_LEAD < num_chunks) {
+                    issue_chunk(c + WEIGHT_CHUNK_LEAD);
+                }
             }
+            dataflow_kernel_lib::set_read_trid(noc, 0);
         } else {
-            weight_receiver->receive();
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                weight_receiver->receive();
+                cb_push_back(cb_weight_tiles, chunk_rows(c) * block_n_tiles);
+            }
         }
-        cb_push_back(cb_weight_tiles, total_tiles);
+        load_bias();
     }
 
     const uint32_t m_tile_end = m_tile_start + m_tiles_this_core;

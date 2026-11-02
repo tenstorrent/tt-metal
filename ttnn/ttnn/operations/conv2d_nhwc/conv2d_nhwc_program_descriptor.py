@@ -30,6 +30,8 @@ import ttnn
 # slicing), never a generic error: the harness reads them as deliberate refusals.
 from ttnn.operations._op_contract import UnsupportedAxisValue
 
+import os as _os  # ABLATION-TEMP
+
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
@@ -91,6 +93,9 @@ WEIGHTS_RESIDENT = True
 # that fits SHARDED_CB_BUDGET_BYTES (gather of m-block i+1 overlaps compute of i). False / no fit:
 # the K-blocked whole-shard walk below.
 HEIGHT_SINGLE_K_PIPELINE = True
+# Resident weights are read + multicast in this many chunks (K-row ranges): chunk c is multicast
+# while the reads of chunks c+1.. are in flight. 1 = one read barrier, then one multicast.
+WEIGHT_MCAST_CHUNKS = 1
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
 # descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
 # accumulator (partials) page format. The public signature takes no compute_kernel_config,
@@ -100,17 +105,19 @@ COMPUTE_POLICY = {
     ttnn.float32: (ttnn.MathFidelity.HiFi4, True),
     ttnn.bfloat16: (ttnn.MathFidelity.HiFi2, True),
 }
+# (activation dtype, weight dtype) overrides of COMPUTE_POLICY. bf16 x bf8b runs at LoFi: the bf8b
+# weight mantissa (7 bits) is what LoFi's single fidelity phase consumes, it is the fidelity the
+# ResNet50 reference runs at, and fp32 DEST still accumulates K exactly (Refinement 6 changelog).
+COMPUTE_POLICY_BY_WEIGHT = {
+    (ttnn.bfloat16, ttnn.bfloat8_b): (ttnn.MathFidelity.LoFi, True),
+}
 
 
 def compute_policy(dtype, weight_dtype):
     """(math_fidelity, fp32_dest_acc_en, dst_tiles, acc_dtype) for a dtype pair."""
-    fidelity, fp32_acc = COMPUTE_POLICY[dtype]
-    import os as _os  # ABLATION-TEMP
-
-    if _os.environ.get("CONV2D_NHWC_LOFI") and dtype == ttnn.bfloat16:  # ABLATION-TEMP
-        fidelity = ttnn.MathFidelity.LoFi  # ABLATION-TEMP
-    if _os.environ.get("CONV2D_NHWC_BF16ACC") and dtype == ttnn.bfloat16:  # ABLATION-TEMP
-        fp32_acc = False  # ABLATION-TEMP
+    fidelity, fp32_acc = COMPUTE_POLICY_BY_WEIGHT.get((dtype, weight_dtype), COMPUTE_POLICY[dtype])
+    if _os.environ.get("CONV2D_NHWC_HIFI2") and dtype == ttnn.bfloat16:  # ABLATION-TEMP
+        fidelity = ttnn.MathFidelity.HiFi2  # ABLATION-TEMP
     dst_tiles = 4 if fp32_acc else 8  # half-sync DEST capacity in tiles
     acc_dtype = ttnn.float32 if fp32_acc else ttnn.bfloat16  # partials page follows DEST width
     return fidelity, fp32_acc, dst_tiles, acc_dtype
@@ -478,9 +485,6 @@ def _halo_sticks(lo, hi, own_lo, own_hi):
     return before + after
 
 
-import os as _os  # ABLATION-TEMP
-
-
 def select_blocking_sharded(
     *,
     N,
@@ -654,6 +658,9 @@ def select_blocking_sharded(
         # Resident: the CB holds every K-block (depth = the K-block count).
         "weight_depth": DW_WEIGHT_DEPTH if dw else (slice_k_tiles // bk if weights_resident else SHARDED_WEIGHT_DEPTH),
         "weights_resident": weights_resident,
+        "weight_chunk_rows": _div_up(
+            slice_k_tiles, int(_os.environ.get("CONV2D_NHWC_WCH", WEIGHT_MCAST_CHUNKS))
+        ),  # ABLATION-TEMP env
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
         # Depthwise weights are a few tap tiles per slice: each core reads its own.
         # HEIGHT (R1): every core needs the same weights (dense and depthwise): one group.
@@ -945,6 +952,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p["weight_depth"],
         p["weight_k_rows"],
         1 if p.get("weights_resident", False) else 0,
+        p.get("weight_chunk_rows", 1),
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
