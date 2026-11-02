@@ -45,18 +45,17 @@ W_PREFETCH_ROUNDS = 1
 # only pays where x's reads are slow: DRAM x 8x512 143.4 -> 141.0 us at 1; L1 x flat at 8x512, +0.6 us at 2x512.
 W_CHUNKS_BEFORE_X = {ttnn.BufferType.L1: 0, ttnn.BufferType.DRAM: 1}
 ACT_DEPTH = 2
-# Upper bound on block_h (x row-block rows). Row-block 0 is the fill transfer in front of all compute, and the packer
-# GELU binds the steady state, so a shorter block wins until per-call overhead shows: 8x512 4 -> 137.2, 3 -> 135.7,
-# 2 -> 140.6 us. The L1 solve may still pick fewer.
-BLOCK_H_MAX = 3
+# Upper bound on block_h (x row-block rows); the L1 solve may still pick fewer. With the load-macro GELU the matmul
+# co-binds, and a taller block hides more of the W-paced row-block 0 behind compute: 3 -> 4 is 8x512 98.5 -> 95.1,
+# 8x384 79.9 -> 76.1 us (medians of 3).
+BLOCK_H_MAX = 4
+# Carve-out: DRAM output is writer-bound and block_h 4 measured 143.8 -> 153.7 us there (8x512, medians of 3).
+BLOCK_H_MAX_DRAM_OUT = 3
 # Minimum cb_output_tiles ring in pages; the depth in (block_h x block_w) n-blocks derives from it, so the ring stays a
 # whole number of blocks. The writer needs about 24 pages to ride out DRAM write latency: 8 measured 143..146 us at
 # 8x512 DRAM out vs 138.7, and block_h 3 at 18 pages 138.6 vs 137.5 at 24.
 OUT_RING_PAGES = 24
 CB_BUDGET_BYTES = 900 * 1024
-# Same tanh GELU either way: 0 = 0.5x(1 + tanh(u)) with the FP32 accurate tanh, 1 = x / (1 + exp(-2u)) (exact
-# identity, ~22 vs ~38 SFPU ops). 1 measured PCC / rel RMS identical to 0 on golden inputs; the SFPU GELU binds the op.
-GELU_FAST = 1
 
 CB_ACTIVATION_BLOCK = 0
 CB_WEIGHT_RESIDENT = 1
@@ -97,7 +96,7 @@ def _footprint_bytes(block_h, core_n_tiles_max, block_w, tile_bytes):
     return fixed + act + out
 
 
-def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
+def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes, block_h_max):
     """Split m over m_slots grid lines and N_TILES / block_w n-blocks over n_slots; None if the W slice won't fit."""
     n_blocks = N_TILES // block_w
     core_n_blocks = _div_up(n_blocks, n_slots)
@@ -105,7 +104,7 @@ def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
     core_m_tiles = _div_up(tensor_m_tiles, m_slots)
     fits = [
         h
-        for h in range(1, min(core_m_tiles, BLOCK_H_MAX) + 1)
+        for h in range(1, min(core_m_tiles, block_h_max) + 1)
         if _footprint_bytes(h, core_n_tiles_max, block_w, tile_bytes) <= CB_BUDGET_BYTES
     ]
     if not fits:
@@ -121,18 +120,19 @@ def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
     )
 
 
-def select_blocking(input_tensor, compute_kernel_config):
+def select_blocking(input_tensor, compute_kernel_config, out_buffer_type):
     grid = input_tensor.device().compute_with_storage_grid_size()
     batch, _, seq, _ = list(input_tensor.shape)
     tensor_m_tiles = batch * _div_up(seq, TILE)
     tile_bytes = ttnn.tile_size(ttnn.bfloat16)
 
     assert N_TILES % BLOCK_W == 0
+    block_h_max = BLOCK_H_MAX_DRAM_OUT if out_buffer_type == ttnn.BufferType.DRAM else BLOCK_H_MAX
     # Orientation by output tiles per core (the per-tile GELU binds); ties keep m on grid rows.
     best = None
     for transposed in (False, True):
         m_slots, n_slots = (grid.x, grid.y) if transposed else (grid.y, grid.x)
-        cand = _candidate(tensor_m_tiles, BLOCK_W, m_slots, n_slots, tile_bytes)
+        cand = _candidate(tensor_m_tiles, BLOCK_W, m_slots, n_slots, tile_bytes, block_h_max)
         if cand is None:
             continue
         tiles = cand["core_m_tiles"] * cand["core_n_tiles_max"]
@@ -173,7 +173,7 @@ def _cb(index, num_pages, tile_bytes, cores):
 
 def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel_config):
     device = input_tensor.device()
-    blocking = select_blocking(input_tensor, compute_kernel_config)
+    blocking = select_blocking(input_tensor, compute_kernel_config, output.memory_config().buffer_type)
     tile_bytes = ttnn.tile_size(ttnn.bfloat16)
     block_h = blocking.block_h
     block_w = blocking.block_w
@@ -206,7 +206,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     seq = list(input_tensor.shape)[-2]
     writer_ct = [CB_OUTPUT_TILES, block_h, block_w, N_TILES, tile_bytes, _div_up(seq, TILE), seq % TILE]
     writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
-    compute_ct = [CB_ACTIVATION_BLOCK, CB_WEIGHT_RESIDENT, CB_OUTPUT_TILES, block_h, block_w, K_EXT_TILES, GELU_FAST]
+    compute_ct = [CB_ACTIVATION_BLOCK, CB_WEIGHT_RESIDENT, CB_OUTPUT_TILES, block_h, block_w, K_EXT_TILES]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()

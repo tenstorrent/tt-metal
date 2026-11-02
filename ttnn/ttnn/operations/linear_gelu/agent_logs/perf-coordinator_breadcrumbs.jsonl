@@ -1,0 +1,10 @@
+{"event":"breakdown","round":1,"shape":"8x512 L1/L1","full_ns":136824,"nogelu_ns":92342,"gelu_only_ns":127567,"nocompute_ns":47233,"nocompute_now_nox_ns":37796,"syncfloor_ns":23660,"nowrite_ns":136572,"ranked":["pack_thread_sfpu_gelu ~1.02us/tile","matmul ~84us","fill ~7us"],"zones":"compute_fill 7.0us, TRISC2 135.6us, reader span 94.2us","ts":"2026-11-02T22:53:20+00:00"}
+{"event":"verdict","idea":"gelu_loadmacro","verdict":"WIN","base_ns":136300,"cand_ns":98100,"option":"V6 (V5 96.0us, fp32 1-ULP low bias x>4)","precision":"bf16 identical class, PCC 0.99997","ts":"2026-11-02T23:25:27+00:00"}
+{"event":"verdict","idea":"gelu_sfpu_schedule","verdict":"WIN","base_ns":136300,"cand_ns":104800,"option":"magic4x2w","note":"same stage as gelu_loadmacro, slower","ts":"2026-11-02T23:25:27+00:00"}
+{"event":"verdict","idea":"gelu_alt_approx","verdict":"WIN","base_ns":136200,"cand_ns":115200,"option":"t21s","note":"same stage, slower","ts":"2026-11-02T23:25:27+00:00"}
+{"event":"verdict","idea":"gelu_call_overhead","verdict":"WIN-small","base_ns":136182,"cand_ns":132429,"option":"noreconfig+hoist1; overhead only 21 cyc/tile","ts":"2026-11-02T23:25:27+00:00"}
+{"event":"verdict","idea":"matmul_throughput","verdict":"conditional","nogelu_base_ns":92100,"nogelu_bh4_ns":88700,"full":"flat","note":"matmul at 93% HiFi2 peak in steady state; bh4 regresses nogelu DRAM out +7.9us","ts":"2026-11-02T23:25:27+00:00"}
+{"event":"verdict","idea":"fill_first_block","verdict":"NULL","base_ns":136300,"best_ns":136771,"note":"serial x0 read+mcast then W0 mcast; needs mcast helper ready-without-wait","ts":"2026-11-02T23:25:27+00:00"}
+{"event":"graduation","idea":"gelu_loadmacro V6","domain":"all supported cells","replaced":"GELU_FAST / GeluTanhActivation<1> deleted","8x512_ns":[136719,98270],"ts":"2026-11-02T23:33:46+00:00"}
+{"event":"graduation","idea":"BLOCK_H_MAX 4","carve_out":"DRAM out stays 3 (143.8->153.7us measured)","8x512_ns":[98500,94660],"ts":"2026-11-02T23:33:46+00:00"}
+{"event":"round_done","round":1,"graduated":2,"null":1,"superseded":3,"golden":"102/102","8x512_ns":[136719,94660],"dram_out":"+2.0% in noise","ts":"2026-11-02T23:33:46+00:00"}

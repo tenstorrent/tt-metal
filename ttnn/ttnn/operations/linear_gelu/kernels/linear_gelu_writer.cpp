@@ -13,6 +13,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
@@ -68,6 +69,8 @@ void kernel_main() {
         const uint32_t cur_sb_w = tail ? tail_sb_w : sb_w;
         const uint32_t sb_tiles = cur_sb_h * cur_sb_w;
         const uint32_t m_base = row_start + first_row;
+        // Occupancy: waits on the packer plus the write issue for one row-block.
+        MaybeDeviceZoneScope("writer_drain");
 
         for (uint32_t n_block_idx = 0; n_block_idx < num_n_blocks; ++n_block_idx) {
             const uint32_t n_base = n_tile_start + n_block_idx * block_w;
@@ -94,5 +97,8 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
+    {
+        MaybeDeviceZoneScope("writer_barrier");
+        noc_async_write_barrier();
+    }
 }

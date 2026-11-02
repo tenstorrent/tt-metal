@@ -50,3 +50,113 @@
 - Golden test progress: slices 55/55 (every DRAM-x cell, 8x512, 1x32, regression) and 54/54 (all placements of 8x512, 16x256, 32x128, 8x384, 128x32, 64x64, 8x500, 7x511, 13x300, 1x32, 16x8, plus regression); unit dir 50 passed.
 - Issues encountered: the profiler CSV lands in the sibling checkout's `generated/` (PYTHONPATH resolves `tracy` there).
 - Tests added: perf probes `probes/test_r4_ablate.py` (8x512 stage ablation / zones / fidelity), `probes/test_r4_block_h.py` (block_h cap x output ring), `probes/test_r4_fill_order.py` (W_CHUNKS_BEFORE_X x placement); `gelu_only` variant added to `test_r3_ablate.py`; `test_r3_blocking.py` moved to `OUT_RING_PAGES`.
+
+## Perf 1
+- Date: 2026-11-02. Device: Blackhole p100a, 110 cores, AICLK 1350 MHz. Focus: LOOSE_CASES 8x512 (x / out L1, W / bias DRAM, bf16, default config: HiFi2, fp32_dest_acc_en=True, math_approx_mode=False). Every number is DEVICE KERNEL DURATION. Precision knobs were never changed.
+- Instrumentation (permanent `MaybeDeviceZoneScope`): `compute_fill`, `compute_matmul_gelu` (per row-block), `reader_x_issue` / `reader_x_mcast` (per row-block), `reader_w_prefetch`, `reader_w_first`, `reader_w_deliver`, `writer_drain` (per row-block), `writer_barrier`. At most 30 markers per RISC at 8x512, so well inside the budget.
+
+### Measured breakdown (8x512, before)
+- Zones, per-core totals, max / p50 over 110 cores (balanced): TRISC2 (pack) span 135.6 us. compute_fill 7.0 us on TRISC0. NCRISC span 94.2 us, so the reader is not critical. writer_drain 135.6 us is occupancy waiting on the packer.
+- Cumulative ablation (us):
+
+| variant | us |
+|---|---|
+| full | 136.8 |
+| no GELU | 92.3 |
+| GELU only (SKIP_COMPUTE matmul) | 127.6 |
+| no compute | 47.2 |
+| + no W reads | 37.8 |
+| + no x reads | 37.8 |
+| sync floor (+ no writes) | 23.7 |
+| no writes only | 136.6 |
+
+- Ranked bottleneck:
+  1. Pack-thread SFPU GELU: about 1.02 us/tile x 117 tiles, binds.
+  2. Matmul: about 84 us, the overlap partner on the math thread.
+  3. Fill: 7 us.
+  Data movement alone is 47 us, so the DM ceiling is not the gate.
+
+### Portfolio and verdicts (one perf-part-optimizer each; artifacts in `perf_experiments/<slug>/`)
+
+**`gelu_loadmacro`: WIN, graduated.**
+- Raw-LLK tanh GELU: two DEST rows in lockstep (covers the SFPMAD latency), constants kept in LRegs, log2 split on SFPSTOCHRND, and the per-row reload / multiply / store tail issued as SFPLOADMACRO. The reciprocal is refined by `r(1 + e + e^2 + e^3)`.
+- Bench: 1031 -> 602 ns/tile. Whole op: 8x512 136.3 -> 98.1 us.
+- Precision: bf16 output within 1 ULP of the old body, no bias. PCC 0.99997 and rel RMS 1.1748e-2, identical to before.
+- Options not taken:
+  - V5 (series cut at e^2): 96.0 us, but its fp32 result is about 1 fp32 ULP low (one-sided) for x > 4. It is invisible after bf16 rounding but breaks the unbiased contract.
+  - V2 to V4: 709 / 638 / 590 ns/tile.
+
+**`gelu_sfpu_schedule`: WIN, superseded (same stage).**
+- `magic4x2w` (magic-number exp2, minimax degree-4, cubic reciprocal, two rows per pass): 674 ns/tile; whole op 136.3 -> 104.8 us; 1 ULP.
+- `magic3x2w`: 101.7 us, but 1.25% of values off by 1 ULP.
+- `nr1` variants: one-sided bias, not graduatable.
+- Hardware approx exp: wrong results.
+
+**`gelu_alt_approx`: WIN, superseded (same stage).**
+- `t21s` (degree-3 2^f, one bias-corrected Newton step, SFPSTOCHRND split): 850 ns/tile; whole op 136.2 -> 115.2 us; 1 ULP.
+- Hardware `approx_exp`: inexpressible (valid only for |x| < 1.4).
+
+**`gelu_call_overhead`: small WIN, not graduated.**
+- Per-tile SFPU call scaffolding is 21 cycles/tile (1.3%). Exposed pack time is about 26 cycles/tile.
+- Removing the per-subblock `pack_reconfig_data_format` saves 1.2 us, which is in the noise band and would need a change to the shared `matmul_block` helper.
+- Hoisting one constant: superseded by the load-macro body.
+- Unroll 4 / 2 / 1 is slower: the body is already replayed, so I-cache is not a factor.
+
+**`matmul_throughput`: conditional WIN, graduated as `BLOCK_H_MAX = 4` with a DRAM-out carve-out.**
+- In steady state the matmul runs at 93% of HiFi2 peak. Row-block 0 is paced by W delivery (about 2.7 us per chunk).
+- No-GELU path: 92.1 -> 88.7 us with block_h 4.
+- Other options: subblock / block_w 2 / 3 / 4 flat or slower; raw loop without per-call overhead flat (92.2); bias seeded into DEST 125.2 (regression: about 1000 cycles per subblock of copy / matmul re-init); x row-block 1 reads during W delivery flat; deeper W prefetch slower.
+
+**`fill_first_block`: NULL.**
+- The fill is a serial chain: x0 reads 2.4 us, x0 multicast 2.2 us, W0 multicast 1.15 us.
+- Results (us): ragged first block 151.3; every core reads x0 itself 188.0; every core reads W0 itself 154.0; split x0 senders 137.0 to 138.7; W first 136.8; W channel without handshake 139.3; NoC1 x reads hang (dedicated-NoC mode).
+- What would help is a `ttnn.Mcast` receiver that signals ready without waiting for data, so the two first multicasts can overlap (about 1.15 us at best).
+
+**Reuse broadcast (standing idea):** already in place. x is multicast along rows and W along columns, so it was not floated.
+
+### What graduated
+1. **Load-macro GELU** (`kernels/linear_gelu_gelu_sfpu.h`, V6).
+   - It is the op's only GELU path. `GELU_FAST` and the compute CT arg are deleted.
+   - It plugs into `matmul_block`'s pack-thread Activation slot through explicit specializations of `ActivationInit/ApplyHelper<GELU_TANH, kGeluLoadMacro>`.
+   - Domain: every supported cell, no carve-out. The only constraint is fp32 DEST (static_assert), which is the only supported config.
+2. **`BLOCK_H_MAX` 3 -> 4.**
+   - Medians of 3: 8x512 98.5 -> 95.1, 8x384 79.9 -> 76.1, 8x500 98.6 -> 94.5, 8x512 DRAM x 105.0 -> 101.9 us.
+   - Flat at 2x512, 4x256 and 1x32, where block_h does not change.
+   - Carve-out `BLOCK_H_MAX_DRAM_OUT = 3`, earned by a measured regression: 8x512 with DRAM output 143.8 -> 153.7 us (medians of 3; the writer binds there).
+
+### Whole op, before (R4 kernels) -> after (us, one run each unless noted)
+
+| case | before | after |
+|---|---|---|
+| 8x512 (focus) | 136.7 | 94.7 (1.44x) |
+| 16x256 | 136.7 | 95.3 |
+| 32x128 | 136.8 | 94.8 |
+| 8x384 | 107.6 | 76.5 |
+| 4x512 | 75.5 | 59.6 |
+| 8x256 | 75.4 | 60.5 |
+| 2x512 | 43.3 | 36.2 |
+| 4x256 | 43.3 | 37.3 |
+| 8x512 DRAM x | 140.3 | 104.3 |
+| 8x500 | 137.0 | 94.7 |
+| 1x32 | 22.2 | 21.6 (medians of 3, flat) |
+| 8x512 DRAM out | 138.6 | 141.4 (medians of 3) |
+
+- Every flagged row now beats stock by 1.2x to 2.6x.
+- 8x512 is still 4% above the 90.8 us target.
+- DRAM out is +2.0%. That is inside the noise band, but all 3 pairs moved the same way, so it is recorded here. No carve-out: it is not a material regression.
+
+### Guard set and correctness
+- Golden `eval/golden_tests/linear_gelu/`: 102 / 102 passed (after each graduation).
+- Unit, precision and perf tests: 50 / 50.
+- Precision baseline unchanged: 8x512 PCC 0.999970, rel RMS 1.1748e-2; 1x32 1.1839e-2.
+- Guard sweep: `perf_experiments/breakdown/guard.sh` (probe `tests/ttnn/unit_tests/operations/linear_gelu/probes/test_p1_guard.py`) covers every loose shape, DRAM x, DRAM out, non-aligned and 1x32.
+
+### Bottleneck now (8x512)
+- Ablation (us): full 94.9, no GELU 89.1, GELU only 80.4, DM only 45.9.
+- The matmul path binds, with the W-paced row-block 0 and the fill exposed. GELU is mostly hidden.
+- DRAM output is writer-bound at about 141 us and is the next target there.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `GeluTanhActivation` / `ActivationInitHelper` + `ActivationApplyHelper` (`sfpu_activation_helpers.hpp`) -> `calculate_gelu_tanh_fast` | capability | The pack-thread activation slot of `matmul_block` takes a closed `KernelActivation` enum: there is no way to supply a custom SFPU body / init, so the op had to explicitly specialize the library templates on an unused param value (`kGeluLoadMacro = 2`). The library's sfpi GELU compiles to one serial chain per row (34 instr + ~10 MAD stall cycles, 1031 ns/tile); there is no 2-row-interleaved or SFPLOADMACRO variant, and the load-macro state (LReg11-14, macro templates / sequences, ADDR_MOD_6) has no ownership contract in the helper. | 136719 | 94660 (98270 with block_h 3) | `kernels/linear_gelu_gelu_sfpu.h:150-165`, used at `kernels/linear_gelu_compute.cpp:47` |

@@ -18,7 +18,7 @@ SRC = Path(pd.__file__).parent / "kernels"
 SCRATCH = Path(__file__).parent / "ablate_kernels"
 
 EDITS = {
-    "nogelu": [("compute", "using Gelu = GeluTanhActivation<gelu_fast>;", "using Gelu = NoneActivation;")],
+    "nogelu": [("compute", "using Gelu = GeluTanhActivation<kGeluLoadMacro>;", "using Gelu = NoneActivation;")],
     "skipmm": [("compute", "#include <cstdint>", "#define SKIP_COMPUTE\n#include <cstdint>")],
     "now": [
         ("reader", "noc_async_read_page(k * n_tiles", "if (false) noc_async_read_page(k * n_tiles"),
@@ -93,6 +93,8 @@ def _make(variant):
                     assert old in text, (variant, old)
                     text = text.replace(old, new)
         (d / f"linear_gelu_{kind}.cpp").write_text(text)
+    for header in SRC.glob("*.h"):
+        (d / header.name).write_text(header.read_text())
     return d
 
 

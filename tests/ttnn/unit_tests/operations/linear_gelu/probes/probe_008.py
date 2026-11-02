@@ -23,6 +23,7 @@ for batch, seq in [(8, 512), (1, 416), (1, 96), (1, 128)]:
         pd.select_blocking(
             ttnn.from_torch(x, memory_config=ttnn.L1_MEMORY_CONFIG, **tile),
             pd.ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
+            ttnn.BufferType.L1,
         )
     )
     ref = torch.nn.functional.gelu(x.double().reshape(-1, 768) @ w.double() + b.double(), approximate="tanh")

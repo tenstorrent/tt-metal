@@ -1,0 +1,16 @@
+t21s 8x512 pcc=nan rel_rms=nan mean_err=+0.000e+00
+t21s 8x384 pcc=nan rel_rms=nan mean_err=+0.000e+00
+t21s 4x512 pcc=nan rel_rms=nan mean_err=+0.000e+00
+t21s 2x512 pcc=nan rel_rms=nan mean_err=+0.000e+00
+prod 8x512 pcc=nan rel_rms=nan mean_err=+0.000e+00
+prod 8x384 pcc=nan rel_rms=nan mean_err=+0.000e+00
+prod 4x512 pcc=nan rel_rms=nan mean_err=+0.000e+00
+prod 2x512 pcc=nan rel_rms=nan mean_err=+0.000e+00
+t21s 8x512 pcc=0.999994 rel_rms=3.4024e-03 mean_err=-8.424e-04
+t21s 8x384 pcc=0.999994 rel_rms=3.4332e-03 mean_err=-8.438e-04
+t21s 4x512 pcc=0.999994 rel_rms=3.3939e-03 mean_err=-8.473e-04
+t21s 2x512 pcc=0.999994 rel_rms=3.4386e-03 mean_err=-8.594e-04
+prod 8x512 pcc=0.999994 rel_rms=3.4058e-03 mean_err=-8.464e-04
+prod 8x384 pcc=0.999994 rel_rms=3.4370e-03 mean_err=-8.477e-04
+prod 4x512 pcc=0.999994 rel_rms=3.3975e-03 mean_err=-8.514e-04
+prod 2x512 pcc=0.999994 rel_rms=3.4424e-03 mean_err=-8.635e-04

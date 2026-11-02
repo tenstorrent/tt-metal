@@ -1,0 +1,7 @@
+none reps=40 tiles=24
+base reps=40 tiles=24
+t21 reps=40 tiles=24
+t21s reps=40 tiles=24
+magb reps=40 tiles=24
+t21n2 reps=40 tiles=24
+mag reps=40 tiles=24

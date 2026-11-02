@@ -20,6 +20,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
@@ -93,6 +94,7 @@ void kernel_main() {
     // issue_activation_reads reserves row-block i's slot and, on the round's sender, issues its reads (no barrier);
     // finish_activation_block completes the round. Split so row-block 0's reads overlap W chunk 0's delivery.
     auto issue_activation_reads = [&](uint32_t row_block_idx) {
+        MaybeDeviceZoneScope("reader_x_issue");
         const uint32_t first_row = row_block_idx * block_h;
         const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
         cb_reserve_back(cb_activation_block, act_block_tiles);
@@ -113,6 +115,7 @@ void kernel_main() {
         }
     };
     auto finish_activation_block = [&](uint32_t row_block_idx) {
+        MaybeDeviceZoneScope("reader_x_mcast");
         const uint32_t first_row = row_block_idx * block_h;
         const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
         const uint32_t slot_addr = get_write_ptr(cb_activation_block);
@@ -174,8 +177,11 @@ void kernel_main() {
         weight_cb.push_back(w_chunk_tiles);
     };
 
-    for (uint32_t n_block_idx = 0; n_block_idx < w_prefetch_rounds; ++n_block_idx) {
-        issue_owned_chunk_read(n_block_idx);
+    {
+        MaybeDeviceZoneScope("reader_w_prefetch");
+        for (uint32_t n_block_idx = 0; n_block_idx < w_prefetch_rounds; ++n_block_idx) {
+            issue_owned_chunk_read(n_block_idx);
+        }
     }
     // Fill: the first w_chunks_before_x W chunks are delivered while the x round-0 sender's reads are in flight.
     // Row-block 0 computes each W chunk as it lands; row-block 1 is not needed until all are consumed.
@@ -183,12 +189,14 @@ void kernel_main() {
     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
         issue_activation_reads(row_block_idx);
         if (row_block_idx == 0) {
+            MaybeDeviceZoneScope("reader_w_first");
             for (uint32_t n_block_idx = 0; n_block_idx < num_w_first; ++n_block_idx) {
                 deliver_weight_block(n_block_idx);
             }
         }
         finish_activation_block(row_block_idx);
         if (row_block_idx == 0) {
+            MaybeDeviceZoneScope("reader_w_deliver");
             for (uint32_t n_block_idx = num_w_first; n_block_idx < num_n_blocks; ++n_block_idx) {
                 deliver_weight_block(n_block_idx);
             }
