@@ -14,9 +14,9 @@ def timed(f, n=5):
     return float(np.median(ts))
 try:
     sh = Shared(dev); cache = os.path.join(os.environ["TT_CACHE_PATH"], "a3_linear"); rot = pf.rotator(sh)
-    sites = [("gdn_in", al.TernaryLinear(sh, "blk.0.gdn_in", cache, rows=al.gdn_in_rows(sh, 0))),
+    sites = [("gdn_in", al.TernaryLinear(sh, "blk.0.gdn_in", cache, rows=lambda: al.gdn_in_rows(sh, 0), shape=al.gdn_in_shape(sh, 0))),
              ("gdn_out", al.TernaryLinear(sh, "blk.0.ssm_out.weight", cache)),
-             ("attn_qkv", al.TernaryLinear(sh, "blk.3.attn_qkv_fused", cache, rows=al.attn_qkv_rows(sh, 3))),
+             ("attn_qkv", al.TernaryLinear(sh, "blk.3.attn_qkv_fused", cache, rows=lambda: al.attn_qkv_rows(sh, 3), shape=al.attn_qkv_shape(sh, 3))),
              ("attn_o", al.TernaryLinear(sh, "blk.3.attn_output.weight", cache))]
     for s in [int(v) for v in sys.argv[1].split(",")]:
         for name, tl in sites:

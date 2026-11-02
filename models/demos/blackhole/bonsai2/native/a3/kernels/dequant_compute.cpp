@@ -11,17 +11,29 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
+#include "api/compute/compute_kernel_api.h"
+
+// A2b (PackedW): code tiles are 256 B with no exponent section; unpacker 0 (SrcA) forces exponent 127.
+template <bool on>
+inline void force_shared_exp() {
+    UNPACK((cfg_reg_rmw_tensix<UNP0_FORCED_SHARED_EXP_shared_exp_RMW>(127)));
+    UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Force_shared_exp_RMW>(on ? 1 : 0)));
+}
 
 void kernel_main() {
     const uint32_t u0 = get_arg_val<uint32_t>(0);
     const uint32_t nu = get_arg_val<uint32_t>(1);
     constexpr uint32_t ng = get_compile_time_arg_val(0);
     constexpr uint32_t ncols = get_compile_time_arg_val(2);
+    constexpr bool sx = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t dt = get_compile_time_arg_val(1);  // tiles per DST half: 8 (bf16 DST) or 4 (fp32)
     constexpr uint32_t cb_w = 0, cb_s = 1, cb_out = 16;
 
     compute_kernel_hw_startup(cb_w, cb_s, cb_out);
     mul_bcast_rows_init(cb_w, cb_s);
+    if constexpr (sx) {
+        force_shared_exp<true>();
+    }
     for (uint32_t u = u0; u < u0 + nu; ++u) {
         const uint32_t G = u / ncols;
         cb_wait_front(cb_s, 1);

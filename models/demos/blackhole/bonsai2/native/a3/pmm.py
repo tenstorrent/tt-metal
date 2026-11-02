@@ -26,14 +26,15 @@ MAX_ROWS = 128
 def pmm(x, w, s, k: int, n: int, gu: bool = False):
     """x: [1, 1, M, K] bf16 DRAM interleaved (rotated). w, s: a3.weights_for_device tensors.
     n: real output columns (gu: per half). Returns [1, 1, M, n] bf16 DRAM (gu: (gate, up))."""
+    from .prefill import codes_view
+
+    wt, wtb, cpb, sx = codes_view(w)
     device = x.device()
     m = x.shape[-2]
     assert m % 32 == 0 and m <= MAX_ROWS and k % 1024 == 0
     mt, kt = m // 32, k // 32
     ng = kt // 32
     s_tiles = (ng + 3) // 4
-    cpb = w.memory_config().shard_spec.shape[1] // 32
-    wtb = w.get_tile().get_tile_size(w.dtype)
     xtb = ttnn.Tile([32, 32]).get_tile_size(ttnn.bfloat16)
     ncols = (2 if gu else 1) * n // 32
     outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, m, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
@@ -68,12 +69,12 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
         kernels=[
             kd("pmm_reader.cpp", [ng, mt, kt, cpb, wtb, s_tiles, xtb], rd, ttnn.ReaderConfigDescriptor()),
             kd("pmm_writer.cpp", [mt, n // 32, int(gu), xtb], wr, ttnn.WriterConfigDescriptor()),
-            kd("pmm_compute.cpp", [ng, mt, int(os.environ.get("BONSAI_PMM_DBG", "0"))], cp, cfg),
+            kd("pmm_compute.cpp", [ng, mt, int(os.environ.get("BONSAI_PMM_DBG", "0")), sx], cp, cfg),
         ],
         semaphores=[],
-        cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, w.dtype, wtb, 64), cb(2, ttnn.float32, 4096, 2),
+        cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(2, ttnn.float32, 4096, 2),
              cb(3, ttnn.bfloat16, xtb, 32), cb(4, ttnn.float32, 4096, per * mt), cb(16, ttnn.bfloat16, xtb, 2 * mt)])
-    ttnn.generic_op([x, w, s] + outs, prog)
+    ttnn.generic_op([x, wt, s] + outs, prog)
     return tuple(outs) if gu else outs[0]
 
 
@@ -110,7 +111,7 @@ def _selfcheck():
         sh = Shared(dev)
         mlp = TernaryMLP(sh, 0, os.path.join(os.environ["TT_CACHE_PATH"], "a3_mlp"))
         cache = os.path.join(os.environ["TT_CACHE_PATH"], "a3_linear")
-        gi = al.TernaryLinear(sh, "blk.0.gdn_in", cache, rows=al.gdn_in_rows(sh, 0))
+        gi = al.TernaryLinear(sh, "blk.0.gdn_in", cache, rows=lambda: al.gdn_in_rows(sh, 0), shape=al.gdn_in_shape(sh, 0))
         go = al.TernaryLinear(sh, "blk.0.ssm_out.weight", cache)
         t = {nm: read_ternary(sh.gguf, f"blk.0.ffn_{nm}.weight") for nm in ("gate", "up", "down")}
         dense = lambda tt: tt.codes.astype(np.float64) * np.repeat(tt.scales.astype(np.float64), 128, axis=1)  # noqa: E731

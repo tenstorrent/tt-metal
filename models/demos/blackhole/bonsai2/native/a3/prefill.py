@@ -35,17 +35,23 @@ _LOFI = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi, f
                                          packer_l1_acc=False)
 
 
+def codes_view(w):
+    """(ttnn tensor, bytes per code tile, columns per bank, shared_exp) for A3 code weights: the 320 B Bfp2_b
+    tensor, or A2b's PackedW (256 B tiles, no exponent section; the unpacker forces exponent 127)."""
+    if isinstance(w, a3.PackedW):
+        return w.t, a3.PackedW.TILE_BYTES, w.cols_per_bank, 1
+    return w, w.get_tile().get_tile_size(w.dtype), w.memory_config().shard_spec.shape[1] // 32, 0
+
+
 def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fidelity=None):
     """w, s: a3.weights_for_device output for codes [K, N_pad] (gu: (gate, up) column pairs).
     n: real output columns (gu: per half). Returns [1, 1, K, n] DRAM tensor(s) (gu: (gate, up))."""
-    device = w.device()
-    banks = device.dram_grid_size().x
+    wt, wtb, cpb, sx = codes_view(w)
+    device = wt.device()
     kt = k // 32
     assert kt % 32 == 0 and n % 32 == 0
     ng = kt // 32
     s_tiles = (ng + 3) // 4
-    cpb = w.memory_config().shard_spec.shape[1] // 32  # weight columns per bank
-    wtb = w.get_tile().get_tile_size(w.dtype)
     ncols = (2 if gu else 1) * n // 32  # real weight columns (padding columns sit past these)
     outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, k, n]), dtype, ttnn.TILE_LAYOUT, device,
                                            ttnn.DRAM_MEMORY_CONFIG) for _ in range(2 if gu else 1)]
@@ -76,12 +82,12 @@ def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fideli
         kernels=[
             kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb, ncols], rd, ttnn.ReaderConfigDescriptor()),
             kd("dequant_writer.cpp", [ng, n // 32, int(gu), otb, int(os.environ.get("BONSAI_DQ_SKIPW", "0")), ncols], wr, ttnn.WriterConfigDescriptor()),
-            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols], cp, ttnn.ComputeConfigDescriptor(
+            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols, sx], cp, ttnn.ComputeConfigDescriptor(
                 math_fidelity=fidelity or _DQ_FID, fp32_dest_acc_en=_FP32_DEST, math_approx_mode=False)),
         ],
         semaphores=[],
-        cbs=[cb(0, w.dtype, wtb, 64), cb(1, ttnn.float32, 4096, 2), cb(16, dtype, otb, 64)])
-    ttnn.generic_op([w, s] + outs, prog)
+        cbs=[cb(0, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(1, ttnn.float32, 4096, 2), cb(16, dtype, otb, 64)])
+    ttnn.generic_op([wt, s] + outs, prog)
     return tuple(outs) if gu else outs[0]
 
 

@@ -47,7 +47,8 @@ def main() -> int:
         rng = np.random.default_rng(0)
         for label, name, rows in sites:
             codes, scales = rows if rows is not None else gg(name)
-            tl = al.TernaryLinear(sh, name, cache, rows=rows)
+            shape = None if rows is None else (codes.shape[0], codes.shape[1])
+            tl = al.TernaryLinear(sh, name, cache, rows=None if rows is None else (lambda r=rows: r), shape=shape)
             w = codes.astype(np.float64) * np.repeat(scales.astype(np.float64), 128, axis=1)  # [N, K]
             for s in [int(v) for v in args.seqs.split(",")]:
                 x = torch.from_numpy(rng.standard_normal((s, tl.k)).astype(np.float32)).bfloat16()

@@ -15,12 +15,21 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+
+// A2b (PackedW): code tiles are 256 B with no exponent section; unpacker 0 (SrcA) forces exponent 127.
+template <bool on>
+inline void force_shared_exp() {
+    UNPACK((cfg_reg_rmw_tensix<UNP0_FORCED_SHARED_EXP_shared_exp_RMW>(127)));
+    UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Force_shared_exp_RMW>(on ? 1 : 0)));
+}
 
 void kernel_main() {
     const uint32_t nc = get_arg_val<uint32_t>(0);
     constexpr uint32_t ng = get_compile_time_arg_val(0);
     constexpr uint32_t MT = get_compile_time_arg_val(1);
     constexpr uint32_t dbg = get_compile_time_arg_val(2);  // 1: drop the partial reload (debug)
+    constexpr bool sx = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t cb_x = 0, cb_c = 1, cb_s = 2, cb_w = 3, cb_p = 4, cb_out = 16;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     for (uint32_t G = 0; G < ng; ++G) {
@@ -31,6 +40,9 @@ void kernel_main() {
             cb_wait_front(cb_c, 32);
             reconfig_data_format(cb_c, cb_s);  // srcA codes, srcB scales
             mul_bcast_rows_init(cb_c, cb_s);
+            if constexpr (sx) {
+                force_shared_exp<true>();
+            }
             pack_reconfig_data_format(cb_w);
             cb_reserve_back(cb_w, 32);
             for (uint32_t q = 0; q < 8; ++q) {
@@ -49,6 +61,9 @@ void kernel_main() {
             cb_push_back(cb_w, 32);
             cb_pop_front(cb_c, 32);
             cb_pop_front(cb_s, 1);
+            if constexpr (sx) {
+                force_shared_exp<false>();  // the partial reload and the bf16 W go through SrcA too
+            }
             // matmul on top of the reloaded partials
             cb_wait_front(cb_w, 32);
             tile_regs_acquire();
