@@ -369,7 +369,7 @@ ALWI void reduce_accumulate_via_add(
             uint32_t consumed = 0;
             if (full_cnt & 1u) {
                 input_dfb.wait_front(1);
-                copy_tile_init(input_dfb_id);
+                copy_init(input_dfb_id);
                 copy_tile(input_dfb_id, 0, 0);
                 input_dfb.pop_front(1);
                 consumed = 1;
@@ -404,7 +404,7 @@ ALWI void reduce_accumulate_via_add(
                     // first write, so the first add is the plain sum. Odd count: seed DST with a unary copy.
                     uint32_t k = 0;
                     if (full_cnt & 1u) {
-                        copy_tile_init(input_dfb_id);
+                        copy_init(input_dfb_id);
                         copy_tile(input_dfb_id, start, 0);
                         k = 1;
                     }
@@ -448,7 +448,7 @@ ALWI void reduce_accumulate_via_add(
                             }
                         } else {
                             reconfig_data_format_srca(input_dfb_id, acc_cb);
-                            copy_tile_init(acc_cb);
+                            copy_init(acc_cb);
                             copy_tile(acc_cb, 0, 0);  // DST = accumulator (even count reloads as the seed)
                             reconfig_data_format_srca(acc_cb, input_dfb_id);
                             add_init(input_dfb_id, input_dfb_id, true);
@@ -465,7 +465,7 @@ ALWI void reduce_accumulate_via_add(
                         {
                             uint32_t k = 0;
                             if (full_cnt & 1u) {
-                                copy_tile_init(input_dfb_id);
+                                copy_init(input_dfb_id);
                                 copy_tile(input_dfb_id, start, 0);  // DST[0] = new[0] (odd seed, fresh)
                                 k = 1;
                             }
@@ -475,7 +475,7 @@ ALWI void reduce_accumulate_via_add(
                             }
                         }
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
-                        copy_tile_init(acc_cb);
+                        copy_init(acc_cb);
                         copy_tile(acc_cb, 0, 1);  // DST[1] = accumulator (adjacent slot)
                         reconfig_data_format_srca(acc_cb, input_dfb_id);
 #ifndef ARCH_QUASAR
@@ -493,7 +493,7 @@ ALWI void reduce_accumulate_via_add(
                         // uses SrcA (or unpack-direct-to-dest when tagged), so reconfig SRCA around it; SrcB is
                         // left untouched (== input from the per-call reconfig), which the partial fold needs.
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
-                        copy_tile_init(acc_cb);
+                        copy_init(acc_cb);
                         copy_tile(acc_cb, 0, 0);  // DST = accumulator
                         reconfig_data_format_srca(acc_cb, input_dfb_id);
                         if (accumulate.reload == AccumulateReloadMode::CopySeedUniform) {
@@ -544,7 +544,7 @@ ALWI void reduce_accumulate_via_add(
                 // add is the plain sum — no separate overwrite-seed init. Odd count: seed DST with a unary copy.
                 uint32_t k = 0;
                 if (full_cnt & 1u) {
-                    copy_tile_init(input_dfb_id);
+                    copy_init(input_dfb_id);
                     copy_tile(input_dfb_id, start, 0);
                     k = 1;
                 }

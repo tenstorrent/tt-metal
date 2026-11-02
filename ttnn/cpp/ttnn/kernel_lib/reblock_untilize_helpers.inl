@@ -51,7 +51,7 @@ inline void reblock_and_untilize(
         init_uninit_mode == reblock_untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == reblock_untilize_config::InitUninitMode::InitOnly) {
         pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-        copy_tile_to_dst_init_short(interm_cb_id);
+        copy_init(interm_cb_id);
     }
 
     const uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_subblocks_w);

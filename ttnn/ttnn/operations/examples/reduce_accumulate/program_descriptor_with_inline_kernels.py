@@ -109,7 +109,7 @@ void kernel_main() {
         // ---- Stage 1: cross-tile accumulate into DEST[0]. Parity at the seed (no phantom zero). ----
         uint32_t k;
         if constexpr (num_tiles & 1u) {
-            copy_tile_init(cb_in);
+            copy_init(cb_in);
             copy_tile(cb_in, 0, 0);                 // odd: DEST = cb_in[0]
             k = 1;
         } else {
