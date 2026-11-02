@@ -101,6 +101,9 @@ inline __attribute__((always_inline, flatten)) void record(BeginRecording &&begi
  * @param args: Arguments forwarded to callable.
  * @note Ensure callable produces exactly Range.count instructions after MOP expansion. Recording has no
  *       explicit terminator; a mismatch records instructions before or after the intended sequence.
+ * @note Ensure the recorded body never contains a REPLAY; a REPLAY cannot be one of the
+ *       instructions it loads. In RecordOnly also ensure it contains no MOP or MOP_CFG;
+ *       a load-only REPLAY may record only individual single-store pushes.
  */
 template <BufferRange Range, RecordBehavior Behavior = RecordBehavior::RecordOnly, typename Callable, typename... Args>
 inline __attribute__((always_inline, flatten)) void record(Callable &&callable, Args &&...args)
@@ -122,6 +125,9 @@ inline __attribute__((always_inline, flatten)) void record(Callable &&callable, 
  * @param args: Arguments forwarded to callable.
  * @note Ensure callable produces exactly range.count instructions after MOP expansion. Recording has no
  *       explicit terminator; a mismatch records instructions before or after the intended sequence.
+ * @note Ensure the recorded body never contains a REPLAY; a REPLAY cannot be one of the
+ *       instructions it loads. In RecordOnly also ensure it contains no MOP or MOP_CFG;
+ *       a load-only REPLAY may record only individual single-store pushes.
  * @note Ensure range.start folds to a compile-time constant; the SFPI REPLAY builtin rejects a
  *       runtime start index. Only range.count may be dynamic.
  */
