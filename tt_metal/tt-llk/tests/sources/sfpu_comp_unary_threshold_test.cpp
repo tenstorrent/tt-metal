@@ -66,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     // The compares need only the generic SFPU init (config reg, ADDR_MOD_7, dest RWC reset).
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();

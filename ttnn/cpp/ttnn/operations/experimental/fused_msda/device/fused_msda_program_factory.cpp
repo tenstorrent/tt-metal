@@ -189,6 +189,8 @@ constexpr uint8_t geom_operand_cb = tt::CBIndex::c_10;
 constexpr uint8_t ref_tile_cb = tt::CBIndex::c_14;
 constexpr uint8_t const_cb = tt::CBIndex::c_15;
 constexpr uint8_t weight_cb = tt::CBIndex::c_19;
+// float32 reference points only: the reference tile split into bf16 parts.
+constexpr uint8_t ref_parts_cb = tt::CBIndex::c_13;
 
 // Row-major staging: when D is a whole number of tile widths, the reader
 // lands the four corners of a point side by side as a row-major block and
@@ -223,12 +225,13 @@ LevelConstants level_constants(const FusedMSDAOperation::operation_attributes_t&
 
 // Tiled geometry (kernels/msda_tiled_geometry.hpp): compute solves a whole
 // block from tiles, so the reader hands the operands over once per block. The
-// layout puts point j in tile column j, which fixes L * P at 16, and the FPU
+// layout puts point J in lane J % 16 of group J / 16, and a block's attention
+// weights in one tile row, which bounds L * P at 32; the compute kernel solves
+// the next block during a block, which bounds it below at MIN_POINTS. The FPU
 // applies the per-level constants as bf16 matrix entries, so each must be exact
-// in bf16. Every staged offsets column must be one the layout names, so the
-// offsets stick must be unpadded. bf16 reference points only: the reference
-// tile is bf16. Blackhole only: like the split gather, it has been validated
-// and measured nowhere else.
+// in bf16. Blackhole only: like the split gather, it has been validated and
+// measured nowhere else, and offset columns no point uses rely on Blackhole's
+// FPU multiplying inf and NaN by zero to zero.
 bool uses_tiled_geometry(
     const FusedMSDAOperation::operation_attributes_t& attrs,
     const FusedMSDAOperation::tensor_args_t& args,
@@ -236,8 +239,7 @@ bool uses_tiled_geometry(
     uint32_t loc_stick_aligned,
     uint32_t attn_stick_aligned) {
     namespace tg = fused_msda_tiled_geometry;
-    if (!attrs.from_offsets || args.reference_points->dtype() != DataType::BFLOAT16 ||
-        args.value.device()->arch() != tt::ARCH::BLACKHOLE) {
+    if (!attrs.from_offsets || args.value.device()->arch() != tt::ARCH::BLACKHOLE) {
         return false;
     }
     const auto c = level_constants(attrs, s);
@@ -248,9 +250,10 @@ bool uses_tiled_geometry(
                               bf16_exact(k.bias) && bf16_exact(k.extent);
         }
     }
-    return s.locations_packed && s.weights_packed && s.num_levels * s.num_points == tg::POINTS &&
-           s.num_refs <= tg::MAX_REFS && loc_stick_aligned == tg::RM_ATTN_OFFSET &&
-           attn_stick_aligned <= tg::RM_ROW_NBYTES - tg::RM_ATTN_OFFSET && constants_exact;
+    const uint32_t points = s.num_levels * s.num_points;
+    return s.locations_packed && s.weights_packed && points >= tg::MIN_POINTS && points <= tg::MAX_POINTS &&
+           s.num_refs <= tg::MAX_REFS && loc_stick_aligned <= tg::rm_attn_offset(points) &&
+           attn_stick_aligned <= tg::TILE_ROW_NBYTES && constants_exact;
 }
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
@@ -499,8 +502,8 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     // The geometry pipeline. On V2 the sampling offset rides in column 16 of
     // the geom tiles.
     //
-    // float32 reference points use float32 geom_x/geom_y tiles. Packing them
-    // to bf16 first would round the point before the SFPU multiply.
+    // float32 reference points use float32 geom_x/geom_y tiles, or a float32
+    // reference tile. Packing them to bf16 first would round the point.
     const bool ref_fp32 = attrs.from_offsets && args.reference_points->dtype() == DataType::FLOAT32;
     const auto primary_format = ref_fp32 ? datatype_to_dataformat_converter(DataType::FLOAT32) : data_format;
     const uint32_t primary_tile_nbytes = tt::tile_size(primary_format);
@@ -509,12 +512,16 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     const uint32_t corner_tile_nbytes = tt::tile_size(corner_format);
     if (tiled_geometry) {
         namespace tg = fused_msda_tiled_geometry;
-        push(geom_rm_cb, tg::RM_CB_PAGES, tile_nbytes, data_format);
-        push(geom_operand_cb, tg::RM_TILES, tile_nbytes, data_format);
-        push(ref_tile_cb, tg::REF_TILE_CB_PAGES, tile_nbytes, data_format);
-        push(const_cb, tg::CONST_TILES, tile_nbytes, data_format);
-        push(weight_cb, tg::WEIGHT_CB_PAGES, tile_nbytes, data_format);
-        push(corner_cb, tg::CORNER_CB_PAGES, corner_tile_nbytes, corner_format);
+        const uint32_t points = s.num_levels * s.num_points;
+        push(geom_rm_cb, tg::rm_cb_pages(points), tile_nbytes, data_format);
+        push(geom_operand_cb, tg::rm_tiles(points), tile_nbytes, data_format);
+        push(ref_tile_cb, tg::REF_TILE_CB_PAGES, primary_tile_nbytes, primary_format);
+        if (ref_fp32) {
+            push(ref_parts_cb, tg::FP32_REF_PARTS, tile_nbytes, data_format);
+        }
+        push(const_cb, tg::const_tiles(points), tile_nbytes, data_format);
+        push(weight_cb, tg::weight_cb_pages(points), tile_nbytes, data_format);
+        push(corner_cb, tg::corner_cb_pages(points), corner_tile_nbytes, corner_format);
     } else {
         push(geom_x_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
         push(geom_y_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
@@ -628,6 +635,8 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // The tiled geometry's CBs, decided by the plan like the split gather.
     const bool tiled_geometry =
         std::any_of(cb_plan.begin(), cb_plan.end(), [](const auto& spec) { return spec.index == geom_rm_cb; });
+    const bool tiled_ref_fp32 =
+        std::any_of(cb_plan.begin(), cb_plan.end(), [](const auto& spec) { return spec.index == ref_parts_cb; });
     if (split_gather) {
         descriptor.semaphores.push_back(SemaphoreDescriptor{
             .id = gather_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
@@ -722,6 +731,8 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         ref_tile_cb,
         const_cb,
         weight_cb,
+        static_cast<uint32_t>(tiled_ref_fp32),
+        ref_parts_cb,
     };
     // fp32 destination: the geometry builds px, which reaches the feature map's
     // extent. In a 16-bit destination the ulp at 200 is 1.0, so floor(px) and
@@ -739,8 +750,12 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // bits; unpacking straight into the 32-bit destination keeps all of them.
     if (ref_fp32) {
         compute_cfg.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        compute_cfg.unpack_to_dest_mode[geom_x_cb] = UnpackToDestMode::UnpackToDestFp32;
-        compute_cfg.unpack_to_dest_mode[geom_y_cb] = UnpackToDestMode::UnpackToDestFp32;
+        if (tiled_geometry) {
+            compute_cfg.unpack_to_dest_mode[ref_tile_cb] = UnpackToDestMode::UnpackToDestFp32;
+        } else {
+            compute_cfg.unpack_to_dest_mode[geom_x_cb] = UnpackToDestMode::UnpackToDestFp32;
+            compute_cfg.unpack_to_dest_mode[geom_y_cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
     }
     // HiFi4 (the default) is required by the tiled geometry: its matmuls must
     // reproduce bf16 data exactly, and only HiFi4 multiplies every mantissa bit

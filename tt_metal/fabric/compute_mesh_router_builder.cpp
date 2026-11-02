@@ -23,7 +23,7 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -519,10 +519,6 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         *local_vc0_fast_path_info = resolution.info;
 
         const bool speedy = resolution.speedy;
-        const bool changed_by_peer =
-            local_vc0_fast_path_info->terminal_or_source_only != row_only_info.terminal_or_source_only ||
-            local_vc0_fast_path_info->worker_only_nonforwarding != row_only_info.worker_only_nonforwarding;
-        // Info only where the peer changed the row's own answer; the full per-router table is debug.
         const std::string decision = fmt::format(
             "Channel trimming fast path: chip {} eth {} {} peer {}: sender_mask {:#x} rx0 {} -> "
             "terminal_or_source_only {} (row alone {}), worker_only_nonforwarding {} (row alone {}), "
@@ -539,11 +535,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             row_only_info.worker_only_nonforwarding,
             local_vc0_fast_path_info->enable_terminal_speedy_rx,
             speedy);
-        if (changed_by_peer) {
-            log_debug(tt::LogFabric, "{}", decision);
-        } else {
-            log_debug(tt::LogFabric, "{}", decision);
-        }
+        log_debug(tt::LogFabric, "{}", decision);
     }
 
     // The stream-register assignment is fabric-scoped (shared per mesh) and lives in

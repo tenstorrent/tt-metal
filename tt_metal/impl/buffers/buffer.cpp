@@ -33,7 +33,6 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
 
 #include "impl/emulation/emule_live_ranges.hpp"
