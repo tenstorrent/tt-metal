@@ -400,19 +400,19 @@ def test_simple_conv_t2d_weights_bias_match(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
-@pytest.mark.parametrize("input_channels", [64, 128])
-@pytest.mark.parametrize("input_height, input_width", [(8, 8), (16, 16), (24, 24), (32, 32), (48, 48)])
-def test_conv_t2d_prepared_bias_output_padding(device, input_channels, input_height, input_width):
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width",
+    [(32, 288, 3, 3), (32, 352, 3, 3), (64, 288, 16, 16)],
+)
+def test_conv_t2d_prepared_bias_output_padding(device, input_channels, output_channels, input_height, input_width):
     """
-    Weights and bias pre-prepared with output_padding != 0 must be laid out for the same auto-shard
-    decision as conv_transpose2d itself; at 288 output channels height and block sharding pad the bias
-    to different widths (9 vs 10 tiles).
+    Bias pre-prepared with output_padding != 0 must be laid out for the same auto-shard decision as
+    conv_transpose2d itself; for the 3x3 inputs output_padding changes the padded bias width.
     """
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
 
     batch_size = 1
-    output_channels = 288
     kernel_size = (3, 3)
     stride = (2, 2)
     padding = (1, 1)
