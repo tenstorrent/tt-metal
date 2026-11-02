@@ -2393,3 +2393,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
+
+# Small program-cache correctness guard; no model checkpoints are needed.
+- name: TT-DiT AGMM program-cache identity
+  cmd: |
+    pytest --timeout 300 models/tt_dit/tests/models/wan2_2/test_all_gather_minimal_matmul_async.py -k "test_linear_cache_identity or test_fused_activation_helper"
+  model: tt-dit-agmm-cache-identity
+  model_family: TT-DiT
+  skus:
+    bh_galaxy:
+      timeout: 10
+      tier: 2
+    bh_loudbox:
+      timeout: 10
+      tier: 2
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
