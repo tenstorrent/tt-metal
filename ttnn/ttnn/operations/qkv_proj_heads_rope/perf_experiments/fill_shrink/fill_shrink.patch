@@ -1,0 +1,263 @@
+--- kernels/qkv_proj_heads_rope_reader.cpp	2026-11-02 15:57:53.197719067 +0000
++++ perf_experiments/fill_shrink/kernels/qkv_proj_heads_rope_reader.cpp	2026-11-02 16:14:28.684574516 +0000
+@@ -20,6 +20,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "qkv_proj_heads_rope_store.hpp"
++#include "k_schedule.hpp"
+ 
+ namespace {
+ 
+@@ -94,8 +95,13 @@
+     constexpr auto x_mcast = dataflow_kernel_lib::
+         McastArgs<get_named_compile_time_arg_val("xmc_ct_offset"), get_named_compile_time_arg_val("xmc_rt_offset")>();
+ 
+-    // K' = hidden tiles + the bias K tile.
+-    static_assert(num_k_blocks * k_block == hidden_tiles + 1);
++    // K' = hidden tiles + the bias K tile, walked by a ragged schedule (k_schedule.hpp).
++    using Sched = k_schedule::Schedule<
++        k_block,
++        hidden_tiles + 1,
++        get_named_compile_time_arg_val("k_ramp0"),
++        get_named_compile_time_arg_val("k_ramp1")>;
++    static_assert(Sched::num_blocks == num_k_blocks);
+     constexpr uint32_t act_block_tiles = block_m * k_block;
+     // Table row = [cos_lo, -sin_lo, sin_hi, cos_hi]: the rotate_half tile swap needs D/2 == one tile.
+     static_assert(tiles_per_head == 2);
+@@ -114,10 +120,10 @@
+     auto x_receiver = x_mcast.receiver(noc);
+ 
+     // Sender side of one round: fill this core's slot (x tiles + ones column), then multicast it.
+-    auto read_x_block = [&](uint32_t k_first, uint32_t rows, uint32_t first_row) {
+-        const bool has_ones = k_first + k_block > hidden_tiles;
++    auto read_x_block = [&](uint32_t k_first, uint32_t k_size, uint32_t rows, uint32_t first_row, bool send) {
++        const bool has_ones = k_first + k_size > hidden_tiles;
+         const uint32_t ones_col = hidden_tiles - k_first;
+-        const uint32_t x_cols = has_ones ? ones_col : k_block;
++        const uint32_t x_cols = has_ones ? ones_col : k_size;
+         const uint32_t block_addr = get_write_ptr(cb_activation_block);
+         if (has_ones) {
+             for (uint32_t row = 0; row < rows; ++row) {
+@@ -146,9 +152,12 @@
+                 write_ones_column(block_addr + (row * k_block + ones_col) * tile_bytes);
+             }
+         }
+-        // Valid rows are the leading `rows * k_block` tiles of the slot.
++        if (!send) {
++            return;
++        }
++        // Valid tiles end at the last row's k_size-th column (rows keep the k_block stride).
+         MaybeDeviceZoneScope("reader_x_mcast_send");
+-        x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
++        x_sender.send(block_addr, block_addr, ((rows - 1) * k_block + k_size) * tile_bytes);
+     };
+ 
+     // Table slots [first, last) of the block starting at tile-row first_row; slot j holds sequence
+@@ -196,15 +205,24 @@
+                 MaybeDeviceZoneScope("reader_x_reserve");
+                 cb_reserve_back(cb_activation_block, act_block_tiles);
+             }
+-            if (x_mcast.should_send(round)) {
+-                read_x_block(k_blk * k_block, rows, first_row);
++            // x_local0: round 0 (the fill) is read by every core itself instead of multicast; its valid tiles
++            // are strided by k_block in the slot, so the multicast would carry mostly dead tiles.
++            constexpr bool x_local0 = get_named_compile_time_arg_val("x_local0");
++            if (x_local0 && round == 0) {
++                read_x_block(Sched::first(k_blk), Sched::size(k_blk), rows, first_row, false);
++            } else if (x_mcast.should_send(round)) {
++                read_x_block(Sched::first(k_blk), Sched::size(k_blk), rows, first_row, true);
+             } else {
+                 MaybeDeviceZoneScope("reader_x_receive");
+                 x_receiver.receive(round);
+             }
+             cb_push_back(cb_activation_block, act_block_tiles);
+             if (is_rotary) {
+-                const uint32_t table_rows_next = (k_blk + 1) * table_rows / num_k_blocks;
++                // table_lag: no table chunk after round 0, so the sender reads and multicasts round 1 (the
++                // fill's second step) right away; the rows spread over the remaining rounds.
++                constexpr bool table_lag = get_named_compile_time_arg_val("table_lag") && num_k_blocks > 1;
++                const uint32_t table_rows_next = table_lag ? k_blk * table_rows / (num_k_blocks - 1)
++                                                           : (k_blk + 1) * table_rows / num_k_blocks;
+                 read_table_rows(first_row, table_rows_done, table_rows_next);
+                 table_rows_done = table_rows_next;
+             }
+--- kernels/qkv_proj_heads_rope_writer.cpp	2026-11-02 15:57:53.197719067 +0000
++++ perf_experiments/fill_shrink/kernels/qkv_proj_heads_rope_writer.cpp	2026-11-02 16:02:02.584451155 +0000
+@@ -19,6 +19,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "qkv_proj_heads_rope_store.hpp"
++#include "k_schedule.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weight_block = get_compile_time_arg_val(0);
+@@ -63,7 +64,12 @@
+         McastArgs<get_named_compile_time_arg_val("wmc1_ct_offset"), get_named_compile_time_arg_val("wmc1_rt_offset")>();
+     constexpr bool alternate = std::decay_t<decltype(w_mcast_alt)>::active;
+ 
+-    static_assert(num_k_blocks * k_block == hidden_tiles + 1);
++    using Sched = k_schedule::Schedule<
++        k_block,
++        hidden_tiles + 1,
++        get_named_compile_time_arg_val("k_ramp0"),
++        get_named_compile_time_arg_val("k_ramp1")>;
++    static_assert(Sched::num_blocks == num_k_blocks);
+     constexpr uint32_t weight_block_tiles = k_block * n_tiles;
+     // Bias tile rows 1..31 (padding, possibly non-finite) are zeroed so 0 * pad cannot poison the fold:
+     // face 0/1 rows 1..15 and faces 2/3 entirely.
+@@ -81,11 +87,13 @@
+ 
+     // Issue the reads of W K-block k_blk into a slot (bias tile row as K tile hidden_tiles); no barrier.
+     auto issue_weight_reads = [&](uint32_t k_blk, uint32_t block_addr) {
+-        const uint32_t start = stagger_idx * weight_block_tiles / stagger_count;
++        const uint32_t k_size = Sched::size(k_blk);
++        const uint32_t valid_tiles = k_size * n_tiles;
++        const uint32_t start = stagger_idx * valid_tiles / stagger_count;
+         uint32_t k = start / n_tiles;
+         uint32_t n = start % n_tiles;
+-        for (uint32_t tile = 0; tile < weight_block_tiles; ++tile) {
+-            const uint32_t kt = k_blk * k_block + k;
++        for (uint32_t tile = 0; tile < valid_tiles; ++tile) {
++            const uint32_t kt = Sched::first(k_blk) + k;
+             const uint32_t l1_addr = block_addr + (k * n_tiles + n) * tile_bytes;
+             if (kt < hidden_tiles) {
+                 noc_async_read_page(kt * weight_width_tiles + first_col_tile + n, weight_accessor, l1_addr);
+@@ -94,7 +102,7 @@
+             }
+             if (++n == n_tiles) {
+                 n = 0;
+-                if (++k == k_block) {
++                if (++k == k_size) {
+                     k = 0;
+                 }
+             }
+@@ -103,9 +111,10 @@
+ 
+     // Wait for the slot's reads, then zero the bias tile padding (the reads must have landed first).
+     auto finish_weight_block = [&](uint32_t k_blk) {
+-        const uint32_t bias_k = hidden_tiles >= k_blk * k_block ? hidden_tiles - k_blk * k_block : k_block;
++        const uint32_t k_first = Sched::first(k_blk);
++        const uint32_t bias_k = hidden_tiles >= k_first ? hidden_tiles - k_first : k_block;
+         noc_async_read_barrier();
+-        if (bias_k < k_block) {
++        if (bias_k < Sched::size(k_blk)) {
+             for (uint32_t n = 0; n < n_tiles; ++n) {
+                 const uint32_t tile_off = (bias_k * n_tiles + n) * tile_bytes;
+                 noc.async_write_zeros(
+@@ -171,7 +180,8 @@
+             }
+             if (sending) {
+                 MaybeDeviceZoneScope("writer_w_mcast_send");
+-                channel.sender(noc).send(block_addr, block_addr, weight_block_tiles * tile_bytes);
++                // Only the block's valid K rows ([k][n] layout: the leading k_size * n_tiles tiles).
++                channel.sender(noc).send(block_addr, block_addr, Sched::size(k_blk) * n_tiles * tile_bytes);
+             } else {
+                 MaybeDeviceZoneScope("writer_w_receive");
+                 channel.receiver(noc).receive(round);
+--- kernels/qkv_proj_heads_rope_compute.cpp	2026-11-02 15:57:41.613778274 +0000
++++ perf_experiments/fill_shrink/kernels/qkv_proj_heads_rope_compute.cpp	2026-11-02 16:09:48.882047289 +0000
+@@ -23,6 +23,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "k_schedule.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
+@@ -45,6 +46,26 @@
+     const bool is_rotary = get_arg_val<uint32_t>(1) != 0;
+ 
+     using namespace compute_kernel_lib;
++    using Sched = k_schedule::Schedule<
++        k_block,
++        get_named_compile_time_arg_val("k_total"),
++        get_named_compile_time_arg_val("k_ramp0"),
++        get_named_compile_time_arg_val("k_ramp1")>;
++    static_assert(Sched::num_blocks == num_k_blocks);
++    // Ragged blocks: the FMA loop covers only the block's valid K tiles (slot stride stays k_block).
++    struct KInner {
++        ALWI uint32_t operator()(uint32_t block, uint32_t) const { return Sched::size(block); }
++    };
++    // Instrumentation (kwait_zone = 1): time each K-block's input wait (the helper's own wait is then a no-op).
++    struct KWait {
++        ALWI void operator()(uint32_t, uint32_t, bool) const {
++            if constexpr (get_named_compile_time_arg_val("kwait_zone")) {
++                MaybeDeviceZoneScope("compute_kwait");
++                cb_wait_front(cb_activation_block, block_m * k_block);
++                cb_wait_front(cb_weight_block, heads_per_core * tiles_per_head * k_block);
++            }
++        }
++    };
+ 
+     constexpr uint32_t n_tiles = heads_per_core * tiles_per_head;
+     constexpr uint32_t partials_tiles = block_m * n_tiles;
+@@ -148,10 +169,10 @@
+                 InputPolicy::WaitAndPopPerKBlock,
+                 InputPolicy::WaitAndPopPerKBlock,
+                 NoPostCompute,
+-                NoPreKBlock,
++                KWait,
+                 NoPostKBlock,
+                 0,
+-                NoKBlockInnerDimFn,
++                KInner,
+                 NoIn0Source,
+                 NoIn1BaseOffset,
+                 true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
+--- qkv_proj_heads_rope_program_descriptor.py	2026-11-02 15:57:53.197719067 +0000
++++ perf_experiments/fill_shrink/pd_fork.py	2026-11-02 16:14:28.684574516 +0000
+@@ -10,9 +10,11 @@
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
++import os
++
+ import ttnn
+ 
+-KERNEL_DIR = Path(__file__).parent / "kernels"
++KERNEL_DIR = Path(__file__).parent / "kernels"  # fill_shrink fork
+ 
+ TILE = 32
+ HIDDEN = 768
+@@ -79,7 +81,16 @@
+ }
+ W_TILES = K_TILES * TILES_PER_HEAD * TOTAL_HEADS
+ 
+-assert K_TILES % K_BLOCK == 0, "k_block must divide K' (ragged last K-block not built)"
++# fill_shrink: leading ramp K-blocks (QKV_FILL_RAMP="r0[,r1]", empty = the op's uniform schedule).
++def fill_ramp():
++    vals = [int(v) for v in os.environ.get("QKV_FILL_RAMP", "").split(",") if v.strip()]
++    vals += [0] * (2 - len(vals))
++    return vals[0], vals[1]
++
++
++def num_k_blocks_for(ramp):
++    ramp_len = sum(1 for r in ramp if r)
++    return ramp_len + _div_up(K_TILES - sum(ramp), K_BLOCK)
+ assert OUT_WRITE_NOCS in (1, 2)
+ assert 1 <= W_SENDERS <= len(W_CHANNEL_PREFIXES)
+ 
+@@ -404,7 +415,8 @@
+     n_tiles = blocking.n_tiles
+     block_m = blocking.block_m
+     k_block = blocking.k_block
+-    num_k_blocks = K_TILES // k_block
++    ramp = fill_ramp()
++    num_k_blocks = num_k_blocks_for(ramp)
+     weight_width_tiles = weight.padded_shape[-1] // TILE
+     groups_per_third = NUM_HEADS // blocking.heads_per_core
+ 
+@@ -571,4 +583,13 @@
+         config=compute_kernel_config,
+     )
+     descriptor.kernels = [*readers, *writers, compute]
++    for kernel in descriptor.kernels:
++        kernel.named_compile_time_args = list(kernel.named_compile_time_args) + [
++            ("k_ramp0", ramp[0]),
++            ("k_ramp1", ramp[1]),
++            ("k_total", K_TILES),
++            ("table_lag", int(os.environ.get("QKV_FS_TABLE_LAG", "0"))),
++            ("x_local0", int(os.environ.get("QKV_FS_XLOCAL0", "0"))),
++            ("kwait_zone", int(os.environ.get("QKV_FS_KWAIT", "0"))),
++        ]
+     return descriptor

@@ -1,0 +1,224 @@
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
+index 0c97d741f44..13f4074b579 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
+@@ -1,8 +1,8 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// qkv_proj_heads_rope reader (NCRISC): tile row 0 of the core's bias tiles into cb_bias once, x K-blocks
+-// into cb_activation_block, then per valid row the rotary table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
++// qkv_proj_heads_rope reader (NCRISC): x K-blocks into cb_activation_block, then per valid row the rotary
++// table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
+ // R3: one core of the M-group reads each x K-block and multicasts it into the same cb_activation_block
+ // slot on the rest of the group (sender choice is host-side; should_send() covers fixed and rotating).
+ // Table rows are read in chunks between x rounds (cb_rotary_table holds one row per distinct sequence
+@@ -61,14 +61,12 @@ void kernel_main() {
+     constexpr uint32_t n_tiles = get_compile_time_arg_val(11);
+     constexpr uint32_t num_heads = get_compile_time_arg_val(12);
+     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(13);
+-    constexpr uint32_t cb_bias = get_compile_time_arg_val(14);
+-    constexpr auto x_args = TensorAccessorArgs<15>();
++    constexpr auto x_args = TensorAccessorArgs<14>();
+     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+     constexpr auto q_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+-    constexpr auto bias_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+ 
+     const uint32_t x_addr = get_arg_val<uint32_t>(0);
+     const uint32_t cos_addr = get_arg_val<uint32_t>(1);
+@@ -81,8 +79,6 @@ void kernel_main() {
+     const uint32_t v_addr = get_arg_val<uint32_t>(8);
+     const uint32_t third = get_arg_val<uint32_t>(9);
+     const uint32_t first_head = get_arg_val<uint32_t>(10);
+-    const uint32_t bias_addr = get_arg_val<uint32_t>(11);
+-    const uint32_t first_col_tile = get_arg_val<uint32_t>(12);
+     constexpr auto x_mcast = dataflow_kernel_lib::
+         McastArgs<get_named_compile_time_arg_val("xmc_ct_offset"), get_named_compile_time_arg_val("xmc_rt_offset")>();
+ 
+@@ -100,28 +96,6 @@ void kernel_main() {
+     const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
+     const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
+ 
+-    {
+-        // Once per core; compute keeps the tiles fronted for every block. The seed is a ROW broadcast, so
+-        // only tile row 0 is consumed: one 64 B DRAM-aligned span from face 0 and one from face 1 per tile
+-        // (rows 2..15 of the faces stay stale and are never read). Full tiles from all 108 cores at t = 0
+-        // burst DRAM ahead of W round 0 (measured: W round 0's multicast moved 4.0 -> 11.6 us). On NoC0,
+-        // so the writer's W reads never wait on it.
+-        MaybeDeviceZoneScope("reader_bias");
+-        const auto bias_accessor = TensorAccessor(bias_args, bias_addr, tile_bytes);
+-        constexpr uint32_t face_bytes = 16 * 16 * 2;
+-        constexpr uint32_t span_bytes = 64;
+-        cb_reserve_back(cb_bias, n_tiles);
+-        const uint32_t bias_l1 = get_write_ptr(cb_bias);
+-        for (uint32_t n = 0; n < n_tiles; ++n) {
+-            const uint64_t src = bias_accessor.get_noc_addr(first_col_tile + n);
+-            const uint32_t dst = bias_l1 + n * tile_bytes;
+-            noc_async_read(src, dst, span_bytes);
+-            noc_async_read(src + face_bytes, dst + face_bytes, span_bytes);
+-        }
+-        noc_async_read_barrier();
+-        cb_push_back(cb_bias, n_tiles);
+-    }
+-
+     Noc noc;
+     auto x_sender = x_mcast.sender(noc);
+     auto x_receiver = x_mcast.receiver(noc);
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
+index 0285c377651..deb15e0f657 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
+@@ -1,8 +1,8 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// qkv_proj_heads_rope writer (BRISC): streams this core's W column slice into cb_weight_block, then
+-// scatters each valid output row into q|k|v head layout.
++// qkv_proj_heads_rope writer (BRISC): tile row 0 of the core's bias tiles into cb_bias once, streams this
++// core's W column slice into cb_weight_block, then scatters each valid output row into q|k|v head layout.
+ // R2: when the "wmc" channel is present, one core of the N-group reads each W K-block and multicasts it
+ // into the same cb_weight_block slot on the rest of the group; otherwise every core reads its own (R1).
+ // weight_depth > 2 (R2 only): the sender of round k+1 issues its reads into the next slot before round k's
+@@ -37,23 +37,26 @@ void kernel_main() {
+     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(12);
+     constexpr uint32_t out_write_nocs = get_compile_time_arg_val(13);
+     constexpr uint32_t weight_depth = get_compile_time_arg_val(14);
+-    constexpr auto weight_args = TensorAccessorArgs<15>();
+-    constexpr auto q_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
++    constexpr uint32_t cb_bias = get_compile_time_arg_val(15);
++    constexpr auto weight_args = TensorAccessorArgs<16>();
++    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
++    constexpr auto q_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+ 
+     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+-    const uint32_t q_addr = get_arg_val<uint32_t>(1);
+-    const uint32_t k_addr = get_arg_val<uint32_t>(2);
+-    const uint32_t v_addr = get_arg_val<uint32_t>(3);
+-    const uint32_t third = get_arg_val<uint32_t>(4);
+-    const uint32_t first_col_tile = get_arg_val<uint32_t>(5);
+-    const uint32_t first_head = get_arg_val<uint32_t>(6);
+-    const uint32_t row_start = get_arg_val<uint32_t>(7);
+-    const uint32_t core_rows = get_arg_val<uint32_t>(8);
++    const uint32_t bias_addr = get_arg_val<uint32_t>(1);
++    const uint32_t q_addr = get_arg_val<uint32_t>(2);
++    const uint32_t k_addr = get_arg_val<uint32_t>(3);
++    const uint32_t v_addr = get_arg_val<uint32_t>(4);
++    const uint32_t third = get_arg_val<uint32_t>(5);
++    const uint32_t first_col_tile = get_arg_val<uint32_t>(6);
++    const uint32_t first_head = get_arg_val<uint32_t>(7);
++    const uint32_t row_start = get_arg_val<uint32_t>(8);
++    const uint32_t core_rows = get_arg_val<uint32_t>(9);
+     // Cores sharing a W slice (one N-group) start each K-block at different tiles so they don't read in lockstep.
+-    const uint32_t stagger_idx = get_arg_val<uint32_t>(9);
+-    const uint32_t stagger_count = get_arg_val<uint32_t>(10);
++    const uint32_t stagger_idx = get_arg_val<uint32_t>(10);
++    const uint32_t stagger_count = get_arg_val<uint32_t>(11);
+     constexpr auto w_mcast = dataflow_kernel_lib::
+         McastArgs<get_named_compile_time_arg_val("wmc_ct_offset"), get_named_compile_time_arg_val("wmc_rt_offset")>();
+     // Second R2 channel (own fixed sender): when present, even rounds go on w_mcast and odd rounds on it.
+@@ -61,7 +64,7 @@ void kernel_main() {
+         McastArgs<get_named_compile_time_arg_val("wmc1_ct_offset"), get_named_compile_time_arg_val("wmc1_rt_offset")>();
+     constexpr bool alternate = std::decay_t<decltype(w_mcast_alt)>::active;
+ 
+-    // K' = hidden tiles: the bias is seeded into the partials by compute (the reader reads it).
++    // K' = hidden tiles: the bias is seeded into the partials by compute.
+     static_assert(num_k_blocks * k_block == hidden_tiles);
+     constexpr uint32_t weight_block_tiles = k_block * n_tiles;
+ 
+@@ -155,6 +158,37 @@ void kernel_main() {
+         }
+     };
+ 
++    // Bias tile row 0 for compute's partials seed, once per core. The seed is a ROW broadcast, so each tile
++    // needs one 64 B DRAM-aligned span from face 0 and one from face 1 (the rest stays stale, never read):
++    // full tiles from all cores at t = 0 burst DRAM ahead of W round 0 (measured: its multicast moved 4.0 ->
++    // 11.6 us). Issued before W round 0; a core that reads W in round 0 (R2 sender, every core under R1)
++    // pushes it after that round's read barrier, the others right away. On the reader instead, the bias
++    // latency (3 us at t = 0) delayed x round 0 to 7.0 us at 8x512.
++    bool round0_reads_w = true;
++    with_channel(0, [&](const auto& channel) {
++        if constexpr (std::decay_t<decltype(channel)>::active) {
++            round0_reads_w = channel.should_send(0);
++        }
++    });
++    {
++        MaybeDeviceZoneScope("writer_bias_issue");
++        const auto bias_accessor = TensorAccessor(bias_args, bias_addr, tile_bytes);
++        constexpr uint32_t face_bytes = 16 * 16 * 2;
++        constexpr uint32_t span_bytes = 64;
++        cb_reserve_back(cb_bias, n_tiles);
++        const uint32_t bias_l1 = get_write_ptr(cb_bias);
++        for (uint32_t n = 0; n < n_tiles; ++n) {
++            const uint64_t src = bias_accessor.get_noc_addr(first_col_tile + n);
++            noc_async_read(src, bias_l1 + n * tile_bytes, span_bytes);
++            noc_async_read(src + face_bytes, bias_l1 + n * tile_bytes + face_bytes, span_bytes);
++        }
++    }
++    if (!round0_reads_w) {
++        MaybeDeviceZoneScope("writer_bias_barrier");
++        noc_async_read_barrier();
++        cb_push_back(cb_bias, n_tiles);
++    }
++
+     // Every core of an N-group walks the same number of blocks (host gate), so the rounds and the
+     // cb_weight_block slot sequence line up across the group.
+     uint32_t round = 0;
+@@ -170,6 +204,10 @@ void kernel_main() {
+             const uint32_t block_addr = get_write_ptr(cb_weight_block);
+             with_channel(round, [&](const auto& channel) { fill_weight_slot(channel, k_blk, round, block_addr); });
+             cb_push_back(cb_weight_block, weight_block_tiles);
++            if (round == 0 && round0_reads_w) {
++                // Round 0's read barrier covered the bias reads.
++                cb_push_back(cb_bias, n_tiles);
++            }
+         }
+ 
+         {
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py b/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
+index c15b78282ea..23df3d8065f 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
+@@ -436,14 +436,12 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
+         n_tiles,
+         NUM_HEADS,
+         last_valid_rows,
+-        CB_BIAS,
+     ]
+     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+     reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
+     reader_ct_args.extend(ttnn.TensorAccessorArgs(sin).get_compile_time_args())
+     for output in outputs:
+         reader_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+-    reader_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
+ 
+     writer_ct_args = [
+         CB_WEIGHT_BLOCK,
+@@ -461,8 +459,10 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
+         last_valid_rows,
+         OUT_WRITE_NOCS,
+         blocking.weight_depth,
++        CB_BIAS,
+     ]
+     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
++    writer_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
+     for output in outputs:
+         writer_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+ 
+@@ -508,11 +508,10 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
+             *out_addrs,
+             third,
+             first_head,
+-            b_addr,
+-            first_col_tile,
+         ]
+         writer_rt[(core.x, core.y)] = [
+             w_addr,
++            b_addr,
+             *out_addrs,
+             third,
+             first_col_tile,

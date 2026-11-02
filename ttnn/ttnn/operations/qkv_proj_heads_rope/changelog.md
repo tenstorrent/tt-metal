@@ -70,3 +70,69 @@
 - Issues encountered: ablated kernels that fail the correctness check leak L1 outputs and break later tests' CB allocation, so ablations ran through the sweep test with QKV_SWEEP_NOCHECK=1. One profiling run came back ~1.7x slow on every shape (outlier, not reproduced).
 - Bottleneck now: 4x512 is matmul-bound at HiFi3 (stubbing the matmul gives 42.2 us). 2x512 is bound by the single W sender per N-group (W path 30.8 us, stubbing W gives 30.0). Next: spread W reads across the N-group, or an R2 layout for 6x18.
 - Tests added: `test_qkv_proj_heads_rope_perf_sweep.py` (opt-in, skipped by default).
+
+## Perf 1
+- Date: 2026-11-02. Device: Blackhole p100a (108 of 110 cores used at the focus shape), AICLK 1350 MHz. Metric: DEVICE KERNEL DURATION [ns], one fresh-cache run per point.
+- Focus: flagged LOOSE_CASE 8x512, exact config (x / cos / sin / q / k / v in L1, W / bias in DRAM, bf16 TILE interleaved, default compute config HiFi3 + fp32_dest_acc_en + approx off). All flagged rows share that config and are in SUPPORTED.
+- Instrumentation (permanent `MaybeDeviceZoneScope`): reader `reader_x_reserve / _read_issue / _read_barrier / _mcast_send / _receive`, `reader_table`, `reader_bias`, `reader_store_wait_first`, `reader_store`, `reader_write_barrier`; writer `writer_w_reserve / _read / _mcast_send / _receive`, `writer_store_wait_first`, `writer_store`, `writer_write_barrier`; compute `compute_bias_wait`, `compute_partials_reserve`, `compute_bias_seed`, `compute_matmul`, `compute_last_k_wait`, `compute_last_k_epilogue`. Tools: `perf_experiments/_breakdown/` (zone summarizer, ablation runner, ablation-hook patch).
+
+### Measured breakdown (8x512, before)
+| point | us |
+|---|---|
+| full | 106.4 |
+| input DM stubbed (x / W / table reads + both multicasts) | 100.7 |
+| + output stores stubbed | 92.5 |
+| + epilogue math stubbed | 88.3 |
+| + matmul stubbed (unpack / pack / sync floor) | 24.5 |
+| compute + stores stubbed (input DM alone) | 69.2 |
+| stores stubbed alone | 99.1 |
+
+Zones (median core): matmul 0.3-88.2 us, FPU-bound (~54 cycles per tile-product at HiFi3, 2200 products per core); W rounds done 63 us; epilogue 88.9-99.2 (max 105.4); stores end 100.0 (max 106.0). Ranked: (1) serial post-K-loop tail, ~8 us epilogue + ~7 us store burst (bisection-bound, 19 MB from 108 cores at once); (2) pipeline fill ~6.5 us (W round-0 DRAM read ~4 us + multicast); (3) bias K tile = 1/25 of the FPU-bound matmul (~3.5 us). The matmul payload itself is at the HiFi3 FPU roofline and was not targeted; the precision contract was not touched.
+
+### Portfolio and verdicts
+| idea | verdict | 8x512 before -> after (isolated vs the then-current op) | domain |
+|---|---|---|---|
+| epilogue_overlap: last K-block per row, epilogue + store follow each row (lead 0 / 1 / 2: 102.1 / 100.5 / 100.3 us) | WIN | 106,263 -> 100,530 | everywhere; 4x512 -3.1%, 7x511 -5.0%, 256x16 (2 blocks) -4.0%, 2x512 flat |
+| epilogue_fast: rotary as whole-tile phase-major ELWMUL (menu: per-row DEST windows 7787, face-major whole tile 7936, phase-major 4319 vs 8422 ns per 11x8 block, isolated) | WIN, bit-identical | 106,553 -> 104,641 (store-bound then; full ~3.7 us shows with stores stubbed: 99.0 -> 95.3) | everywhere; HiFi3 / HiFi4 / LoFi, 1-6 heads, multi-block; 4x256 h3 and multi-block flat |
+| fill_shrink: ragged first K-blocks [2, 4] + table chunks off round 0 | WIN (isolated), not graduated | 106,600 -> 103,900 | everywhere (x_local0 variant: measured regression, 107-118 us, rejected) |
+| bias_seed: K' = 24, bias row-broadcast seeded into the fp32 partials (menu: DEST seed 106.7-112.0, late full-tile bias read 112.2, seed + 64 B bias spans at k_block 3 / 4 / 5 / 6: 103.5 / 103.4 / 104.6 / 105.0) | WIN | 105,822 -> 103,388 (k_block 4) | everywhere; R1 6x18 grids -6 to -8%, 4096x1 -1.5% |
+| (coordinator) bias read on the writer / NoC1 instead of the reader | REGRESSION | 95.0 -> 96.8 (all rows +1-3 us: bias barrier 3.1 us on NoC1, W round-0 multicast 3.4 -> 5.2 us) | not graduated; patch in `perf_experiments/_breakdown/` |
+
+fill_shrink was not graduated: after bias_seed the fill is bound by the bias DRAM read (~3.2 us at t = 0) plus the seed's 88 fp32 packs (~3.2 us), which must land before K-block 0 packs, so the fill floor is ~6.4 us against 7.0 us measured; a smaller round 0 can recover at most ~0.6 us, and porting the ragged schedule needs a ragged per-row last K-block. Round 2 target.
+
+### Graduated (each the one unqualified path, code it replaced deleted, no carve-outs)
+| step | perf rows 8x512 / 16x256 / 32x128 / 8x384 / 4x512 / 8x256 / 2x512 / 4x256 (ns) | golden |
+|---|---|---|
+| before | 106,373 / 106,501 / 106,002 / 78,665 / 59,424 / 59,108 / 39,489 / 38,635 | 210/210 |
+| + epilogue_overlap | 100,440 / 100,440 / 100,403 / 75,320 / 57,971 / 58,194 / 38,939 / 38,870 | 210/210 |
+| + epilogue_fast (rotary eltwise_chain deleted) | 96,730 / 96,514 / 96,828 / 73,060 / 55,816 / 56,062 / 39,097 / 38,725 | 210/210 |
+| + bias_seed (ones column, bias K row, bias pad zeroing deleted) | 95,023 / 95,097 / 94,967 / 72,029 / 55,128 / 54,973 / 37,003 / 36,644 | 210/210 |
+
+Whole op, focus 8x512: 106.4 -> 95.0 us (-10.7%; stock 226.3, target 90). Every flagged row faster; still above target_ns on every row.
+Helper change: `matmul_block` gains `seeded_pack_target` (template bool after `caller_owns_pack_target`, default false = unchanged behavior; no existing caller passes that many template args): K-block 0 packs with L1 accumulation on, onto a caller-written target.
+
+### Guard set (`test_qkv_proj_heads_rope_perf_guard.py`, before -> after ns, all correct)
+| row | before | after |
+|---|---|---|
+| 8x512 all L1 (R2 + R3) | 106,404 | 94,981 |
+| 2x512 (W-multicast bound, depth 3) | 39,452 | 36,859 |
+| 7x511 h_non_aligned | 96,280 | 87,510 |
+| 13x300 h_non_aligned | 106,619 | 95,445 |
+| 8x512 x in DRAM | 108,234 | 98,312 |
+| 8x512 tables + outputs in DRAM | 147,141 | 137,280 |
+| 1x32 (R1 W unicast) | 23,451 | 22,143 |
+| 1x128 | 30,239 | 28,056 |
+| 2x37 | 30,869 | 28,407 |
+| 16x8 | 37,981 | 34,705 |
+| 4096x1 multi-block, all DRAM | 4,506,236 | 4,319,166 |
+No regression on any cell. SUPPORTED unchanged.
+
+### Bottleneck now (8x512, 95.0 us)
+Bias read + seed ~6.4-7 us before K-block 0, matmul K-blocks 0..4 ~70 us, last K-block + epilogue ~19 us (stores hidden). Next: shrink the bias/seed fill (bias via the W multicast, or seed after K-block 0), then the ragged first K-block.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| matmul_block | capability | No per-row (per M-subblock-row) hook after a row's last-K pack, so an epilogue cannot follow each row; a separate per-row call for only the last K-block was also impossible because K-block 0's L1 accumulation was hard-coded off (now `seeded_pack_target`; the per-row hook is still missing). | 106,263 (whole K-loop in helper, serial epilogue) | 100,530 | qkv_proj_heads_rope_compute.cpp:177 (`last_k_row`) |
+| eltwise_chain BinaryFpu (mul_tiles) | capability | Only the face-major ELWMUL sequence: each ELWMUL accumulates into DEST rows written two instructions earlier and the fp32 DEST read-modify-write stalls (~2.5 cycles per ELWMUL); no whole-tile src unpack with fidelity-phase-outermost MOP. Also `DestAccumulation::PerRow` gives one output tile per DEST window, so a chain cannot batch the 4 products of a head into one window. | 8,422 per 11x8 block (isolated); 100,440 e2e | 4,319; 96,730 e2e | tile_src_mul.hpp:84, qkv_proj_heads_rope_compute.cpp:134 |
+| eltwise_chain CopyTile / no helper for a broadcast seed | capability | No element packs one DEST tile to several CB tiles (one-to-many pack), so a row-broadcast seed of a block_m x N_c region through a chain costs block_m unpacks per bias tile instead of one; seed written with the compute API (`unary_bcast<ROW>` + `pack_tile<true>`). Chain variant not built, so no helper-side number. | not measured | seed 0.4 us unpack / 3.1 us math / 6.0 us pack zone at 8x512, inside the fill | qkv_proj_heads_rope_compute.cpp:154 (`seed_partials`) |

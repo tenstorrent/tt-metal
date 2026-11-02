@@ -16,7 +16,7 @@ Key structural facts the design rests on:
 |------|-------------|
 | D/2 = 32 = one tile width | `rotate_half` is a **tile swap plus a sign** on the two d-tiles of a head: no intra-tile permutation, no transformation-matrix matmul. Rotary = 2 elementwise products per output tile. |
 | A head (64 cols) = 2 tiles; 12 heads per third; 36 head-pairs total | Head = atomic unit of the N axis (rotary couples its two tiles). Heads per core divides 12 so every core writes exactly one of q/k/v. |
-| Bias is a row broadcast over all tokens | Folded into the matmul as a 25th K tile: in0 gets a constant "ones-column" tile, in1 gets the bias tile row. No separate bias pass. |
+| Bias is a row broadcast over all tokens | Perf 1: seeded into the Float32 partials (row broadcast, once per block) and K-block 0 L1-accumulates onto it, so K' = 24. (Phase 0 - Refinement 5: a 25th K tile, ones column x bias row.) No separate bias pass. |
 | B*S <= 4096, tile-aligned S >= 32 | Phase 0 (tile_aligned) has `Mt = B*S/32 <= 128` tile-rows: every core's assignment is one block. |
 
 ## Parameters
@@ -73,7 +73,7 @@ Registry axes (names from `feature_spec.py` TARGET): `dtype`, `layout`, `alignme
 | `head_cols` (head-pairs, 36 = 3 thirds x 12 heads) | independent across heads; x and cos/sin are reuse-shared across it | `heads_per_core` (h_c); `N_c = 2*h_c` tiles | selection function (4 at Mt=128) = whole per-core N slice | host constant -> CT arg `heads_per_core` | split over `grid_n = 36/h_c` N-groups; h_c divides 12 | knob-turn |
 | `head_dim_tile` (dt in {0,1}) | dependent within a head (rotate_half couples d and d+32 -> both d-tiles in one block) | fixed 2 | 2 (whole) | constant `TILES_PER_HEAD = 2` (= D/32) | not split (atomic) | none (structural) |
 | `qkv_third` (t in {q,k,v}) | independent; selects the epilogue (rotary for q,k; convert for v) | folded into `head_cols` (h_c divides 12 keeps one t per core) | 1 per core | derived from N-group index | N-groups `[0, 12/h_c)` q, next k, next v | knob-turn |
-| `hidden_k` (K' = 24 x-tiles + 1 bias tile = 25) | dependent (reduction; results span it) | `k_block` (in0_block_k) | 5 (`num_k_blocks = 25/5 = 5`) | host constant -> CT arg `k_block` | not split across cores (every core runs the full K'); Phase 0 whole axis per core | scheme-change (cross-core K split + combine: rejected, see Regimes) |
+| `hidden_k` (K' = 24 x-tiles since Perf 1; 25 with the bias K tile before) | dependent (reduction; results span it) | `k_block` (in0_block_k) | 4 since Perf 1 (`num_k_blocks = 6`; was 5 of 25) | host constant -> CT arg `k_block` | not split across cores (every core runs the full K'); Phase 0 whole axis per core | scheme-change (cross-core K split + combine: rejected, see Regimes) |
 
 Re-run on intermediate data (`P` = matmul partials, axes `token_rows x head_cols`): the epilogue (rotary / convert) is independent per (row, head) and runs **on the core that computed the block** - no designated core, no single-core stage, no cross-core hand-off. The table rows (cos/sin) share `token_rows`; they are fetched per valid row by the same core.
 
@@ -361,3 +361,13 @@ Helpers considered and rejected:
 | Writer pad zeroing (TARGET) | x padding can hold inf; q/k/v pad rows must be exactly 0 and finite | writer overwrites rows `[S%32, 32)` of the last tile-row per image in L1 before the NoC write (CB consumer owns the page) |
 | L1 footprint with production L1 tensors | 8x512 keeps x + q/k/v (~230 KiB/core) in L1 beside 780 KiB of CBs | `cb_budget_bytes = 900 KiB` caps `block_m`; lamp to re-measure if the model's resident set grows |
 | Three outputs through `generic_op` | the descriptor writes q, k, v; `generic_op` returns one tensor | allocate q, k, v before dispatch, pass all eight tensors in the io list, return the three allocated tensors |
+
+## Perf 1 changes (supersede the per-stage details above where they conflict)
+
+| Stage | Now |
+|-------|-----|
+| Bias | Reader reads tile row 0 of the core's `N_c` bias tiles (two 64 B spans per tile, NoC0) into `cb_bias` (CB 6, `N_c` bf16 pages) at kernel start. Compute seeds every tile of the reserved partials block with `unary_bcast<ROW>` + `pack_tile` (one unpack per bias tile, `block_m` packs), then `matmul_block<..., seeded_pack_target = true>` keeps L1 accumulation on for K-block 0. No ones tile, no bias K row, no bias padding zeroing. |
+| K-blocking | K' = 24, `k_block = 4`, `num_k_blocks = 6`. |
+| Last K-block | K-blocks 0..n-2 run in `matmul_block`; the last K-block runs one row at a time (raw `ckernel::matmul_block`, L1-acc on), with row r + 1's matmul issued before row r's epilogue, so each row's epilogue and store overlap the rest of the K-loop. |
+| Rotary | `tile_src_mul.hpp`: whole-tile src unpack + one phase-major ELWMUL MOP per tile product, `dest_tiles / 2` heads per DEST window, one reserve / push per row. Bit-identical to `mul_tiles`. v cores keep the copy chain. |
+| Epilogue setup | Once per row (the last-K matmul init between rows reprograms unpack and math). |
