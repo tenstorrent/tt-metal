@@ -154,6 +154,11 @@ a reduce. It gives every expert every token, so it materialises
 rather than sequence length alone. `test_dense_forward_matches_the_ragged_loop` asserts the two
 formulations agree.
 
+The port does not run the dense form: it runs the ragged loop itself on the device, each token
+through its two experts only, about a quarter of the rows. The gather and scatter indices are
+computed on the device from the top-2 selection, so nothing is read back to the host
+(`tt/experts.py`). The dense form stays the module tests' oracle.
+
 ## 5. Embedding pipeline
 
 From the checkpoint's `modules.json`, `1_Pooling/config.json` and

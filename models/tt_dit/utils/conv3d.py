@@ -710,6 +710,12 @@ def conv3d_blocking_hash(module: Module) -> str:
     return "cin" + hashlib.sha256("_".join(parts).encode()).hexdigest()[:8]
 
 
+def conv3d_configs(module: Module) -> tuple[str, ...]:
+    """The conv3d blockings of all conv3d layers. Two modules with equal blockings run any input
+    the same way and share cached weights."""
+    return tuple(repr(m.conv_config) for m in _walk_conv3d_modules(module))
+
+
 def count_convs(module: Module) -> int:
     """Count the total number of conv3d modules in a module tree."""
     return sum(1 for _ in _walk_conv3d_modules(module))

@@ -16,7 +16,7 @@ from pathlib import Path
 import torch
 
 HERE = Path(__file__).resolve().parent
-TALE = HERE.parents[2] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
+TALE = HERE.parents[2] / "ttt_compat" / "tests" / "tale-of-two-cities.txt.bz2"
 
 
 def prose_ids(tokenizer, length):

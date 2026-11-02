@@ -6,6 +6,7 @@ than one chunk is traced only when every chunk replays, vLLM's prefill_forward r
 eager chunks all eager and after the lane's replays, and the traces are refused on a build whose chunked MLA prefill
 takes no runtime start."""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ import torch
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm as gv
 from models.experimental.mimo_v2_6_flash.tt import model as model_lib
 from models.experimental.mimo_v2_6_flash.tt.model import TtMiMoModel
+from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
 
 CHUNK = 4096
 ALIGN = 128  # the pair split's global block
@@ -127,3 +129,138 @@ def test_chunk_traces_need_a_runtime_start(monkeypatch, expect_error, pair_split
     with expect_error(RuntimeError, "chunk_start_idx_tensor"):
         model.setup_prefill_chunk_traces([CHUNK])
     assert model.chunk_logits is None and model.chunk_traces == {}
+
+
+def test_chunk_traces_are_on_by_default():
+    if "MIMO_PREFILL_CHUNK_TRACE" in os.environ:
+        pytest.skip("MIMO_PREFILL_CHUNK_TRACE is set")
+    assert model_lib.PREFILL_CHUNK_TRACE and gv.PREFILL_CHUNK_TRACE
+
+
+class FakeTraces:
+    """The ttnn trace calls capture_prefill_chunk_traces makes, on a trace region of ``total`` bytes where each capture
+    takes ``size`` bytes; capture number ``fail_at`` (from 1) raises as the region-size check does. A capture that
+    raises takes nothing from the region (tt-metal's MeshTrace::populate_mesh_buffer counts a trace only once it fits).
+    """
+
+    BufferType = SimpleNamespace(TRACE="trace")
+
+    def __init__(self, total, size, used=0, fail_at=None):
+        self.total, self.size, self.used, self.fail_at = total, size, used, fail_at
+        self.captures, self.live, self.released = 0, set(), []
+
+    def synchronize_device(self, device):
+        pass
+
+    def begin_trace_capture(self, device, cq_id):
+        self.captures += 1
+        return self.captures
+
+    def end_trace_capture(self, device, trace_id, cq_id):
+        self.live.add(trace_id)
+        if trace_id == self.fail_at:
+            raise RuntimeError(
+                "Creating trace buffers of size 2B on MeshDevice 1, but only 1B is allocated for trace region."
+            )
+        self.used += self.size
+
+    def release_trace(self, device, trace_id):
+        self.live.discard(trace_id)
+        self.released.append(trace_id)
+
+    def get_memory_view(self, device, buffer_type):
+        assert buffer_type == "trace"
+        return SimpleNamespace(num_banks=1, total_bytes_per_bank=self.total, total_bytes_allocated_per_bank=self.used)
+
+
+def traced_model(monkeypatch, fake, count=3, first_estimate=100):
+    monkeypatch.setattr(model_lib, "ttnn", fake)
+    monkeypatch.setattr(model_lib, "CHUNK_TRACE_FIRST_ESTIMATE", first_estimate)
+    model = TtMiMoModel.__new__(TtMiMoModel)
+    model.mesh_device = object()
+    model.chunk_traces = {k: {"id": None, "key": k} for k in range(count)}
+    model.chunk_inputs, model.chunk_logits = {0: {}}, [object()]
+    model._chunk_trace_body = lambda trace: None
+    return model
+
+
+def test_chunk_traces_that_fit_are_captured(monkeypatch):
+    fake = FakeTraces(total=1000, size=100, used=500)
+    model = traced_model(monkeypatch, fake)
+    assert model.capture_prefill_chunk_traces()
+    assert [t["id"] for t in model.chunk_traces.values()] == [1, 2, 3] and fake.used == 800
+
+
+@pytest.mark.parametrize("fail_at", [1, 2], ids=["first", "second"])
+def test_a_failed_chunk_capture_falls_back_to_eager(monkeypatch, fail_at):
+    """A capture that throws (the region-size check, say) releases every later-chunk trace, frees their buffers and
+    leaves later chunks eager; startup goes on."""
+    fake = FakeTraces(total=1000, size=100, fail_at=fail_at)
+    model = traced_model(monkeypatch, fake)
+    assert not model.capture_prefill_chunk_traces()
+    assert model.chunk_traces == {} and model.chunk_inputs == {} and model.chunk_logits is None
+    assert fake.live == set(), "a captured or failed trace is still live"
+    assert model._chunk_trace(0, 8192, torch.empty(CHUNK)) is None
+
+
+def test_chunk_traces_stop_before_the_region_is_full(monkeypatch):
+    """Two captures of 400 bytes fit in 1000 with 100 used; the third would not (100 left): every later-chunk trace is
+    dropped before that capture is tried."""
+    fake = FakeTraces(total=1000, size=400, used=100)
+    model = traced_model(monkeypatch, fake)
+    assert not model.capture_prefill_chunk_traces()
+    assert fake.captures == 2 and fake.released == [1, 2] and fake.live == set()
+    assert model.chunk_traces == {}
+
+
+def test_the_first_chunk_capture_is_checked_too(monkeypatch):
+    """Before the first capture of a replica there is no captured size to go by: it is checked against
+    CHUNK_TRACE_FIRST_ESTIMATE, so a region without room for one chunk trace drops them without trying a capture."""
+    fake = FakeTraces(total=1000, size=100, used=900)
+    model = traced_model(monkeypatch, fake, first_estimate=200)
+    assert not model.capture_prefill_chunk_traces()
+    assert fake.captures == 0 and model.chunk_traces == {}
+
+
+def rope_setup():
+    setup = MiMoRotarySetup.__new__(MiMoRotarySetup)
+    setup.prefill_cache, setup.prefill_pinned = None, set()
+    return setup
+
+
+class Failing:
+    """A ttnn whose embedding (the first op of a traced chunk) raises."""
+
+    TILE_LAYOUT, bfloat16 = "tile", "bf16"
+
+    def embedding(self, *args, **kwargs):
+        raise RuntimeError("out of memory")
+
+
+@pytest.mark.parametrize("pinned", [False, True], ids=["eager", "pinned"])
+def test_a_prefill_that_raises_leaves_no_rope_chunk_open(expect_error, pinned):
+    """_prefill_rope ends every RoPE setup's chunk however the pass exits, so the next prefill can begin its own (an
+    open chunk fails the next one: "prefill chunks do not nest")."""
+    model = TtMiMoModel.__new__(TtMiMoModel)
+    model.rope_setups = {"global": rope_setup(), "swa": rope_setup()}
+    rope = {name: {(4096, CHUNK): ["cos", "sin"]} for name in model.rope_setups} if pinned else None
+    with expect_error(RuntimeError, "boom"):
+        with model._prefill_rope(rope):
+            assert all(s.prefill_cache is not None for s in model.rope_setups.values())
+            raise RuntimeError("boom")
+    assert all(s.prefill_cache is None for s in model.rope_setups.values())
+    with model._prefill_rope():  # a later prefill begins its chunk
+        pass
+
+
+def test_a_failed_chunk_trace_body_leaves_no_rope_chunk_open(monkeypatch, expect_error):
+    """A traced chunk's body that raises (its warm pass, or inside a capture) leaves the RoPE setups closed."""
+    monkeypatch.setattr(model_lib, "ttnn", Failing())
+    model = TtMiMoModel.__new__(TtMiMoModel)
+    model.rope_setups = {"global": rope_setup(), "swa": rope_setup()}
+    model.chunk_inputs = {CHUNK: {"rope": {name: ["cos", "sin"] for name in model.rope_setups}, "tokens": None}}
+    model.embedding = None
+    trace = {"key": (CHUNK, 256, True, ALIGN, 0), "start": 2 * CHUNK}
+    with expect_error(RuntimeError, "out of memory"):
+        model._chunk_trace_body(trace)
+    assert all(s.prefill_cache is None for s in model.rope_setups.values())

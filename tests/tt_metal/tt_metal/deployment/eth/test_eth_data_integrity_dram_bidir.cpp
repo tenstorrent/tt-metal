@@ -125,8 +125,8 @@ static bool run_test_integrity_dram_bidir(
     uint32_t recvbuf1 = l1_alloc(&alloc, transfer_size);
 
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
-        {send_mesh_device, make_shared<Program>()},
-        {recv_mesh_device, make_shared<Program>()},
+        {send_mesh_device, make_shared<Program>(CreateProgram(*send_mesh_device))},
+        {recv_mesh_device, make_shared<Program>(CreateProgram(*recv_mesh_device))},
     };
 
     prepare_bidir_integrity(

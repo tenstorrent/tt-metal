@@ -58,8 +58,11 @@ void MeshTrace::populate_mesh_buffer(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
     size_t padded_size = round_up(unpadded_size, page_size);
 
+    // The trace budget counter is bumped only once the region check has passed, and is rolled back if the buffer
+    // cannot be created: ~MeshTraceBuffer subtracts only for an allocated buffer, so a bump left behind by a failed
+    // capture would never be undone, and every later capture would be checked against the inflated counter.
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
-    mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
+    const auto new_trace_buffers_size = current_trace_buffers_size + padded_size;
     auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
 
     // When trace_region_size is 0, use dynamic allocation mode (allocate in DRAM, top-down)
@@ -75,9 +78,9 @@ void MeshTrace::populate_mesh_buffer(
         // DRAM banks (see AllocatorImpl::init_one_bank_per_channel), matching get_trace_buffers_size(), which
         // tracks the total interleaved size across all banks.
         TT_FATAL(
-            mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
+            new_trace_buffers_size <= trace_region_size,
             "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
-            mesh_cq.device()->get_trace_buffers_size(),
+            new_trace_buffers_size,
             mesh_cq.device()->id(),
             trace_region_size);
     }
@@ -96,10 +99,14 @@ void MeshTrace::populate_mesh_buffer(
     // and dynamic top-down BufferType::DRAM storage is checked against every live trace's high-water mark below. The
     // "trace_storage" allocation context is explicitly recognized by the trace allocation tracker, which uses it to
     // exclude both forms from unsafe-allocation accounting (and from the tracking-disabled warning).
-    {
+    mesh_cq.device()->set_trace_buffers_size(new_trace_buffers_size);
+    try {
         auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
         trace_buffer->mesh_buffer =
             MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    } catch (...) {
+        mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size);
+        throw;
     }
 
     // In dynamic allocation mode, validate that the new trace buffer is outside the replay footprint of every live

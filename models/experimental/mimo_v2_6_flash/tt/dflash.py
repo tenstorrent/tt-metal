@@ -38,7 +38,6 @@ row (the scatter P [32, RING] is rows of an identity table; a skipped row reads 
 drafts into the pass's result page.
 """
 
-import os
 import time
 
 import torch
@@ -48,7 +47,7 @@ import ttnn
 from ..reference.dflash import DFlashConfig, load_dflash_weights
 from ..reference.spec_chain import DFlashLayout, dflash_inputs
 from ..reference.spec_decode import DRAFT_GROUPS, MAX_DRAFTS
-from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
+from .common import TILE, DramShardedMatmul, as_weight, cache_fill, cache_name, compute_config
 from .decoder import TtRMSNorm
 from .greedy_head import GreedyHead
 from .rope import MiMoRotarySetup, meta_rope_permutation, partial_rope_cos_sin
@@ -134,52 +133,51 @@ class TtDFlash:
         cfg = self.cfg = DFlashConfig.from_model_path(model_path)
         plan, tp = self.plan, self.plan.tp
         tag = f"dflash_tp{tp}"
-        done = cache_name(cache_dir, tag, "complete")
-        warm = done is not None and os.path.exists(done)
-        assert load or warm, "cold cache needs the checkpoint"
-        weights = None if warm else load_dflash_weights(cfg)
-        assert cfg.hidden_size == model.cfg.hidden_size and cfg.block <= TILE and MAX_DRAFTS < cfg.block
-        self.ring = cfg.window
-        self.tap_layers = list(cfg.target_layer_ids)
-        self.layers = [TtDFlashLayer(plan, cfg, weights, i, cache_dir, weight_dtype) for i in range(cfg.num_layers)]
-        h = cfg.hidden_size
-        fc = full = None
-        if weights is not None:
-            # fc [hidden, taps * hidden] -> per tap layer its [hidden, hidden] block, column-parallel.
-            full = weights["fc.weight"].T.contiguous()
-            fc = [full[k * h : (k + 1) * h] for k in range(len(self.tap_layers))]
-        self.fc = [
-            as_weight(fc and fc[k], plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, tag, f"fc{k}"))
-            for k in range(len(self.tap_layers))
-        ]
-        # The draft's 32 tap rows go through all of fc in one DRAM-sharded matmul.
-        taps_width = len(self.tap_layers) * h
-        self.fc_mm = DramShardedMatmul(
-            plan, taps_width, h // tp, compute_kernel_config=compute_config(ttnn.MathFidelity.HiFi2)
-        )
-        self.fc_all = as_weight(
-            full if weights is not None else None,
-            plan,
-            plan.shard(-1),
-            weight_dtype,
-            cache_name(cache_dir, tag, "fc_ds"),
-            memory_config=self.fc_mm.weight_memory_config,
-        )
-        self.hidden_norm = TtRMSNorm(
-            plan, weights and weights["hidden_norm.weight"], cfg.eps, cache_name(cache_dir, tag, "hidden_norm")
-        )
-        self.final_norm = TtRMSNorm(
-            plan, weights and weights["norm.weight"], cfg.eps, cache_name(cache_dir, tag, "norm")
-        )
-        mask = None
-        if weights is not None:
-            mask = weights["mask_embedding"].bfloat16().float().reshape(1, 1, 1, h).expand(1, 1, TILE, h).clone()
-            mask[:, :, 0] = 0  # row 0 is the anchor's embedding
-        self.mask_rows = as_weight(mask, plan, plan.replicate(), ttnn.bfloat16, cache_name(cache_dir, tag, "mask_rows"))
-        del weights, fc
-        full = None
-        if done is not None and not warm:
-            open(done, "w").close()
+        with cache_fill(cache_dir, tag) as need:
+            assert load or not need, "cold cache needs the checkpoint"
+            weights = load_dflash_weights(cfg) if need else None
+            assert cfg.hidden_size == model.cfg.hidden_size and cfg.block <= TILE and MAX_DRAFTS < cfg.block
+            self.ring = cfg.window
+            self.tap_layers = list(cfg.target_layer_ids)
+            self.layers = [TtDFlashLayer(plan, cfg, weights, i, cache_dir, weight_dtype) for i in range(cfg.num_layers)]
+            h = cfg.hidden_size
+            fc = full = None
+            if weights is not None:
+                # fc [hidden, taps * hidden] -> per tap layer its [hidden, hidden] block, column-parallel.
+                full = weights["fc.weight"].T.contiguous()
+                fc = [full[k * h : (k + 1) * h] for k in range(len(self.tap_layers))]
+            self.fc = [
+                as_weight(fc and fc[k], plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, tag, f"fc{k}"))
+                for k in range(len(self.tap_layers))
+            ]
+            # The draft's 32 tap rows go through all of fc in one DRAM-sharded matmul.
+            taps_width = len(self.tap_layers) * h
+            self.fc_mm = DramShardedMatmul(
+                plan, taps_width, h // tp, compute_kernel_config=compute_config(ttnn.MathFidelity.HiFi2)
+            )
+            self.fc_all = as_weight(
+                full if weights is not None else None,
+                plan,
+                plan.shard(-1),
+                weight_dtype,
+                cache_name(cache_dir, tag, "fc_ds"),
+                memory_config=self.fc_mm.weight_memory_config,
+            )
+            self.hidden_norm = TtRMSNorm(
+                plan, weights and weights["hidden_norm.weight"], cfg.eps, cache_name(cache_dir, tag, "hidden_norm")
+            )
+            self.final_norm = TtRMSNorm(
+                plan, weights and weights["norm.weight"], cfg.eps, cache_name(cache_dir, tag, "norm")
+            )
+            mask = None
+            if weights is not None:
+                mask = weights["mask_embedding"].bfloat16().float().reshape(1, 1, 1, h).expand(1, 1, TILE, h).clone()
+                mask[:, :, 0] = 0  # row 0 is the anchor's embedding
+            self.mask_rows = as_weight(
+                mask, plan, plan.replicate(), ttnn.bfloat16, cache_name(cache_dir, tag, "mask_rows")
+            )
+            del weights, fc
+            full = None
         self.rope = MiMoRotarySetup(plan.mesh_device, TILE, cfg.head_dim, cfg.rope_dim, cfg.rope_theta)
         self.scale = cfg.head_dim**-0.5
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
