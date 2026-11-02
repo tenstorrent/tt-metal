@@ -52,7 +52,7 @@ measure() {
   fi
   LLK_PERF_NODE_LIST="$OUT/nodes.$4" RUNNER_TEMP="$OUT/tmp-$1-$4" timeout -k 20 "$(( left - 20 ))" "$2/tests/run_llk_perf_placement.sh" \
     || echo "::warning::Stage 2 part $4 on the $1 side did not finish; what it missed is reported as not re-measured."
-  for d in "$2"/perf_data/runs/p{0,4,20,36,52}; do
+  for d in "$2"/perf_data/runs/p{0,4,24,44,60}; do
     [[ -d $d ]] && mv "$d" "$d-$4"
   done
   # Both sides run the PR's node ids; a test the base does not have (renamed, new) is skipped there.

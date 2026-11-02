@@ -44,7 +44,7 @@ from regression_compare import (  # noqa: E402
     _run_type_of,
 )
 
-POSITIONS = ("p0", "p4", "p20", "p36", "p52")
+POSITIONS = ("p0", "p4", "p24", "p44", "p60")
 DEFAULT_CAP = 1000
 _STATS = ("current", "baseline", "delta_pct", "delta_cycles", "marker", "run_type")
 
@@ -332,13 +332,14 @@ def render(results, arch, limit_note=""):
         verdict = "ℹ️ no confirmed regression, code-placement effects only"
     else:
         verdict = "✅ no confirmed regression"
-    head = "| test | configuration | run type | change at positions +0 / +4 / +20 / +36 / +52 B | loop code changed in |"
+    head = "| test | configuration | run type | change at positions +0 / +4 / +24 / +44 / +60 B | loop code changed in |"
     rule = "|---|---|---|---|---|"
     lines = [
         f"## {name}: {verdict}",
         "",
         "Stage 2 measured every stage-1 regression again with the TRISC code at 5 positions, on the base "
-        "and on the head.",
+        "and on the head. All of the code moves together, so the positions of functions relative to each other "
+        "do not change.",
         "",
         f"- {len(results)} stage-1 regression(s)",
     ]
