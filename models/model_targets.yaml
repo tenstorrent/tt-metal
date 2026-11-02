@@ -561,8 +561,11 @@ targets:
             perf:
               decode_t/s/u: 16.6298
               decode_t/s: 16.6298
-              prefill_t/s: 430.5
-              prefill_time_to_token: 0.2021
+              # Scheduled runs 10-20..11-02 on f10cs06 / f10cs08 / f10cs09: prefill_t/s 434.8-559.7 (median 487),
+              # prefill_time_to_token 0.1554-0.2001 s (median 0.1785). The old 430.5 / 0.2021 matched the slowest
+              # host (f10cs09) only, so f10cs08 failed as "much better than expected" (10-27, 11-02).
+              prefill_t/s: 490.0
+              prefill_time_to_token: 0.18
               compile_decode: 33.7187
               # Cold JIT compile on the WH perf runners swings between runs: 39.15 s (earlier), 32.89 s
               # (run 40213776008), 38.57 s (run 40227270371); centred between the last two and widened to
@@ -938,7 +941,10 @@ targets:
               # Greedy decode uses the on-device argmax fast-path and two DRAM readers per bank
               # for the decode projections. Measured 42.08-42.09 t/s/u locally and in CI.
               decode_t/s/u: 42.0
-              prefill_time_to_first_token: 53
+              # Step change between d7cec1a7 (10-30, 50.56 ms on vm-304) and 2905a9a9 (10-31): scheduled runs
+              # 10-31..11-02 measured 44.43 / 44.41 (vm-308) and 44.37 ms (vm-304), below the old 45.05 floor.
+              # 10-18..10-30 measured 49.6-51.0 ms, which still pass at the default +/-15%.
+              prefill_time_to_first_token: 47
             accuracy: {}
       bh_p300:
         entries:
@@ -2612,7 +2618,9 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0932
+              # Scheduled runs 10-20..11-02 on 8 QB2 runners: 0.0989-0.1078 fps (median 0.1052); the 0.0932
+              # target put the 0.1072 ceiling inside that spread (11-02: 0.1078 on qb2-120-p06t02).
+              fps: 0.1050
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
