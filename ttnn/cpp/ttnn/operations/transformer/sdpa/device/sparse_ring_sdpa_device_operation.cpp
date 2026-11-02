@@ -259,14 +259,14 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n,
         N_global);
 
-    const bool tensor_mha = (NQH == NKH) && (NKH == NVH);
-    const bool tensor_separate_v_shared_k = (NKH == 1) && (NVH == NQH);
-    const bool tensor_gqa_grouped_kv =
-        ring_joint::is_gqa_grouped_kv_head_mode(/*v_shares_k_buffer=*/false, NQH, NKH, NVH);
+    // MHA only. A K/V chain or group must stream one piece schedule on every member: the head chains and head groups
+    // do (every member streams each piece of the shard that holds a live block, whatever its own mask), but the GQA
+    // chains and the shared-K chain span query heads whose masks differ and have no such schedule, so their members'
+    // transfers would not pair up.
     TT_FATAL(
-        tensor_mha || tensor_separate_v_shared_k || tensor_gqa_grouped_kv,
-        "Unsupported K/V head relationship. Expected MHA (NQH == NKH == NVH), separate-V shared-K "
-        "(NKH == 1 && NVH == NQH), or GQA (NKH == NVH < NQH && NQH % NKH == 0). Got NQH: {}, NKH: {}, NVH: {}",
+        NQH == NKH && NKH == NVH,
+        "SparseRingSDPA supports MHA only (NQH == NKH == NVH); GQA and shared-K heads are not supported. Got NQH: {}, "
+        "NKH: {}, NVH: {}",
         NQH,
         NKH,
         NVH);
@@ -285,10 +285,14 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.pooled_route()) {
         const auto& pk = *tensor_args.pooled_k;
         const auto& pv = *tensor_args.pooled_v;
+        // The reader reads pooled tiles into the K / V CBs, whose pages have K's tile size and format.
         for (const auto* t : {&pk, &pv}) {
             TT_FATAL(
-                t->layout() == Layout::TILE && t->dtype() == DataType::BFLOAT16,
-                "pooled_k / pooled_v must be bf16 tile");
+                t->layout() == Layout::TILE && t->dtype() == dtype,
+                "pooled_k / pooled_v must be tile in the dtype of q / k / v ({}), got {} {}",
+                dtype,
+                t->layout(),
+                t->dtype());
             TT_FATAL(
                 t->buffer() != nullptr && t->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "pooled_k / pooled_v must be in DRAM");

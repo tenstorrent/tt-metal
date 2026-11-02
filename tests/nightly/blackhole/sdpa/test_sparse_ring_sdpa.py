@@ -20,10 +20,9 @@ dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases co
 partial last blocks, a logical_n tail and a shard with less than one block of live tokens, mask structures (random,
 band, clustered, uneven rows), minimal masks, masks without block 0, Q blocks that keep nothing (zero output
 kept-only), kept partial blocks, padding inside the sequence (the block_counts input: ragged and empty blocks at
-random and VSA's ragged 4x4x4 layout), per-head masks, determinism, new inputs on a cached program, several Q passes,
-pair steps (r1024k256: three blocks of one head per core) and the kept-only mode. Runs on a single ring (1xN) or the
-4x8 Galaxy (TP=4 heads x SP=8 ring);
-production lengths are skipped on CI.
+random and VSA's ragged 4x4x4 layout), block-float inputs, per-head masks, determinism, new inputs on a cached
+program, several Q passes, pair steps (r1024k256: three blocks of one head per core) and the kept-only mode. Runs on a
+single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production lengths are skipped on CI.
 """
 
 import math
@@ -265,10 +264,11 @@ def runtime():
 
 
 class Case:
-    """Inputs, device buffers and both ops for one geometry on the module's mesh."""
+    """Inputs, device buffers and both ops for one geometry on the module's mesh. dtype: of Q, K, V and the pooled
+    K / V (bf16, or block float)."""
 
-    def __init__(self, rt, geo):
-        self.rt, self.geo = rt, geo
+    def __init__(self, rt, geo, dtype=ttnn.bfloat16):
+        self.rt, self.geo, self.dtype = rt, geo, dtype
         self.S, self.TP = MESH_CONFIG.sp_size, MESH_CONFIG.tp_size
         self.H = HEADS_PER_DEVICE * self.TP  # heads in total; HEADS_PER_DEVICE per device
         self.scale = 1.0 / math.sqrt(D)
@@ -289,7 +289,7 @@ class Case:
         self.buf_k, self.buf_v = (
             ttnn.from_torch(
                 torch.zeros(1, self.H, n, D),
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=dev,
                 mesh_mapper=self.mapper(dims(None, 1)),
@@ -311,11 +311,16 @@ class Case:
     def _upload(self, x, d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(x, dtype=dtype, layout=layout, device=self.rt.mesh_device, mesh_mapper=self.mapper(d))
 
+    def quantize(self, x):
+        """x rounded to the case's dtype on the host, so the reference sees exactly what the device reads."""
+        if self.dtype == ttnn.bfloat16:
+            return x.bfloat16().float()
+        return ttnn.to_torch(ttnn.from_torch(x, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)).float()
+
     def inputs(self, seed):
         g = torch.Generator().manual_seed(seed)
         shape = (1, self.H, self.S * self.geo.rows, D)
-        # bf16-rounded on host so the reference sees exactly what the device reads
-        return tuple(torch.randn(shape, generator=g).bfloat16().float() for _ in range(3))
+        return tuple(self.quantize(torch.randn(shape, generator=g)) for _ in range(3))
 
     def blocks_per_core(self):
         """(most, fewest) Q blocks a working core holds: the op splits the flat (head, Q block) units evenly."""
@@ -342,10 +347,14 @@ class Case:
         want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"]). counts: the
         block_counts input ([S * nb_pad] real tokens per global block), also used by the pooling and the reference."""
         rt, geo = self.rt, self.geo
-        tq, tk, tv = (self._upload(x, self.seq_dims) for x in (q, k, v))
-        pooled_k, pooled_v = (pool(x, geo, self.S, counts).bfloat16().float() for x in (k, v))
+        tq, tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (q, k, v))
+        pooled_k, pooled_v = (self.quantize(pool(x, geo, self.S, counts)) for x in (k, v))
         t_mask = self._upload(mask, self.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        t_pk, t_pv = (self._upload(x, self.dims(None, 1)) for x in (pooled_k, pooled_v)) if pooled else (None, None)
+        t_pk, t_pv = (
+            (self._upload(x, self.dims(None, 1), dtype=self.dtype) for x in (pooled_k, pooled_v))
+            if pooled
+            else (None, None)
+        )
         t_counts = (
             None
             if counts is None
@@ -672,6 +681,19 @@ def test_empty_q_blocks(runtime, pooled, passes):
         empty = _empty_rows(mask, geo, case.S)[:, : geo.logical_n]
         out = r["sparse"][0]
         assert (out[empty] == 0).all(), f"empty Q blocks: max |out| {out[empty].abs().max().item():.3e}"
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf8", "bf4"])
+def test_block_float_inputs(runtime, dtype, pooled):
+    """Block-float Q, K, V and pooled K / V: the K / V CBs take the inputs' tile format and size, and the pooled
+    entries are read into them in the same format. The reference sees the same rounded values."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo, dtype=dtype)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=25)
+    r = case.run(*case.inputs(25), mask, want_dense=False, pooled=pooled)
+    mode = "pooled" if pooled else "kept-only"
+    _check(f"{dtype} {mode}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
 
 
 def test_determinism(runtime):

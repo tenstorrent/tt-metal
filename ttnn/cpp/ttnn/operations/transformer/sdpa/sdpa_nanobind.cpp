@@ -875,14 +875,15 @@ void bind_sdpa(nb::module_& mod) {
           kept blocks.
 
         Args:
-            input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, sequence-sharded on cluster_axis.
-            input_tensor_k (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, all-gather input.
-            input_tensor_v (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, all-gather input.
+            input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] TILE, sequence-sharded on cluster_axis; bf16,
+                bfloat8_b or bfloat4_b, the same for q, k, v and the pooled tensors.
+            input_tensor_k (ttnn.Tensor): [1, H, N/ring_size, D] TILE, all-gather input.
+            input_tensor_v (ttnn.Tensor): [1, H, N/ring_size, D] TILE, all-gather input.
             block_mask (ttnn.Tensor): [1, H, nqb_pad, ring_size * nb_pad] uint32 ROW_MAJOR. Entry
                 [0, h, qb, s * nb_pad + b] != 0 computes block b of shard s exactly for local Q block qb.
-            pooled_k (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] bf16 TILE, mean K per block (zero
-                padding). Omit together with pooled_v for kept-blocks-only attention.
-            pooled_v (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] bf16 TILE, mean V per block.
+            pooled_k (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] TILE in q's dtype, mean K per block
+                (zero padding). Omit together with pooled_v for kept-blocks-only attention.
+            pooled_v (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] TILE in q's dtype, mean V per block.
 
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): gathered K buffer.

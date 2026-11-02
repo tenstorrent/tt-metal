@@ -29,10 +29,10 @@ namespace ttnn::transformer {
 // Every core keeps its Q blocks and their softmax state in L1. When they do not all fit, each core's blocks are split
 // into passes (the same pass count on every core); each pass replays the ring over the K/V the all-gather delivered
 // once, during the first pass. q_blocks_per_pass caps the blocks per core per pass (nullopt: the most that fit L1).
-//   q, k, v    [1, H, N/ring_size, D]  bf16 TILE (sequence-sharded along the ring axis)
+//   q, k, v    [1, H, N/ring_size, D]  TILE, bf16 / bf8 / bf4, one dtype (sequence-sharded along the ring axis)
 //   block_mask [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR; != 0 keeps global block s * nb_pad + b
-//   pooled_k   optional [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
-//   pooled_v   optional [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean V
+//   pooled_k   optional [1, H, ring_size * nb_pad, D]  TILE, q / k / v dtype; per-block mean K over the valid tokens
+//   pooled_v   optional [1, H, ring_size * nb_pad, D]  TILE, q / k / v dtype; per-block mean V (zero for padding)
 //   block_counts optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, replicated; real tokens of global block
 //              s * nb_pad + b (0..B, real tokens first in the block), for padding inside the sequence (e.g. VSA's
 //              ragged 4x4x4 tiles). Tokens past a block's count are never attended, and a block of count 0 never

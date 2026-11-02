@@ -98,7 +98,8 @@ struct SparseRingSDPAParams {
 // mask and pooled K / V come from the routing pre-pass (see ttnn::transformer::sparse_ring_sdpa):
 //   block_mask  uint32 row-major [1, NH, nb_pad, n_blocks_pad]: != 0 computes (local block_size-row Q block, global
 //               block_size-token K block) exactly; global block s * nb_pad + b is block b of shard s.
-//   pooled_k/v  OPTIONAL bf16 tile [1, NH, n_blocks_pad, DH]: per-block mean K / mean V over the valid tokens, whole
+//   pooled_k/v  OPTIONAL tile, q / k / v dtype, [1, NH, n_blocks_pad, DH]: per-block mean K / mean V over the valid
+//   tokens, whole
 //               sequence. Present (Sol-Attn): every block the mask drops enters the softmax as one pooled entry
 //               weighted by its token count, through the column bias the reader generates (pooled_bias_gen.hpp).
 //               Absent (kept blocks only, e.g. the VSA fine branch): the softmax normalizes over the kept blocks.
