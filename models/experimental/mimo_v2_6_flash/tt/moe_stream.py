@@ -1193,7 +1193,11 @@ class FabricRowGather:
         tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
         # One packet per (core, chip) when the fabric's packets hold a core's tiles (fabric_config's router_config,
         # generator_vllm), the gather buffer then chip-major; else a packet per two tiles, tile-major.
-        self.whole = ttnn.get_tt_fabric_max_payload_size_bytes() >= self.tiles_per_core * tile_bytes
+        max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+        assert (
+            max_payload >= 2 * tile_bytes
+        ), f"fabric packets of {max_payload} B: the row gather sends two tiles at least"
+        self.whole = max_payload >= self.tiles_per_core * tile_bytes
         self.chip_packets = 1 if self.whole else self.tiles_per_core // 2
         self.phase_tiles = self.tiles_per_core * self.chips
         self.phase_bytes = self.phase_tiles * tile_bytes

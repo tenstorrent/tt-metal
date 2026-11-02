@@ -53,6 +53,7 @@ from transformers import AutoTokenizer
 
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    DRAFT_GROUPS,
     MAX_DRAFTS,
     SPEC_SLOTS,
     accept_greedy,
@@ -172,6 +173,10 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
         pytest.skip("the planned MTP program plans its passes on device: it needs the decode RoPE tables")
     if not backfill and (mtp_layers == 1 or device_rope != "whole"):
         pytest.skip("without the backfill: once (3 MTP layers, whole RoPE tables)")
+    if DRAFT_GROUPS > 1 and not planned_drafts(mtp_layers):
+        pytest.skip(f"draft groups draft through the planned program: {mtp_layers} MTP layers do not run it")
+    if DRAFT_GROUPS > 1 and not backfill:
+        pytest.skip("draft groups need the MTP history (the backfill)")
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")
@@ -385,6 +390,8 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
 def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
     if mtp_layers not in (1, MAX_DRAFTS):
         pytest.skip(f"{mtp_layers} MTP layers draft {mtp_layers} tokens; the groups hold {MAX_DRAFTS}")
+    if DRAFT_GROUPS > 1 and not planned_drafts(mtp_layers):
+        pytest.skip(f"draft groups draft through the planned program: {mtp_layers} MTP layers do not run it")
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")

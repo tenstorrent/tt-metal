@@ -343,6 +343,7 @@ class TtMiMoMoE:
             fused_router = self.router_scores is not None and self.router_scores.accepts(h, self.w_router)
             if route and ROUTER_IN_REDUCE and fused_router:
                 # The router of the decode that reads norm_out (forward_decode right after this) runs in this launch.
+                assert consumer is None, "the reduce launch holds one consumer: the router or the next layer's qkv"
                 waits = len(self.reduce_expand.cores)
                 section = self.router_scores.section(h, self.w_router, wait=waits)
                 rs = self.router_scores

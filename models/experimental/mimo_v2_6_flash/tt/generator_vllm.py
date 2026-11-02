@@ -1240,6 +1240,11 @@ class MiMoV2ForCausalLM:
             # The pass's group width (adaptive draft groups: from its request count); a row whose drafts came from a
             # wider step verifies the first width - 1 of them (the rest count as rejected).
             width = self._set_width(lane, len(live), hold=any(first <= r < last for r in relayed))
+            if not fused and any(n > width - 1 for *_, n in active):
+                # The plugin walks every draft it sent through the argmax ids / logits: a cell the verify does not
+                # answer would commit garbage. Only the device's accept walk (fused_sample) counts them as rejected.
+                over = {r: n for r, *_, n in active if n > width - 1}
+                raise RuntimeError(f"lane {lane}: drafts {over} past a width-{width} verify ({spec_mode})")
             active = [(r, tok, pos, min(n, width - 1)) for r, tok, pos, n in active]
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
