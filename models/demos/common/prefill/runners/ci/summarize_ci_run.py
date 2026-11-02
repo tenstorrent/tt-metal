@@ -10,6 +10,7 @@ _GQA = re.compile(r"layer\s+(\d+):\s+K=([-\d.]+)\s+V=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
 _CHUNK_RETIRE = re.compile(
     r"\[producer\] CHUNK_RETIRE slot=(\d+) start=(\d+) end=(\d+) first=([\d.]+) retire=([\d.]+) warmup=([01])"
+    r"(?: acks=(\d+))?"
 )
 
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
@@ -121,7 +122,7 @@ def _spans_from_logs(root, real_chunks):
     for line in _iter_lines(root):
         m = _CHUNK_RETIRE.search(line)
         if m and m.group(6) == "0":
-            spans.append((float(m.group(4)), float(m.group(5))))
+            spans.append((float(m.group(4)), float(m.group(5)), int(m.group(7) or 0)))
     spans.sort()
     return spans[-real_chunks:] if real_chunks > 0 else spans
 
@@ -132,7 +133,8 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
         return [], {}
     max_seq = n * chunk_size
     t0 = spans[0][0]
-    end = [retire for _first, retire in spans]
+    end = [span[1] for span in spans]
+    whole_chunk_acks = all(span[2] == 1 for span in spans)
     rec = {
         "chunk_size": chunk_size,
         "num_chunks": n,
@@ -162,16 +164,19 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
     out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size})")
     out.append("labels are tokens prefilled through that chunk, in units of 1024 (M past 1Mi); probes snap to chunks")
     out.append("all times are the producer's clock: first layer ack -> last layer ack of a chunk")
-    out.append("chunk_time = the chunk's first layer ack -> its last layer ack")
-    for lbl, d in probes((0, 50000, max_seq // 2, max_seq - chunk_size)):
-        rec["chunk_index"][lbl] = d
-        rec["chunk_time_ms"][lbl] = (spans[d][1] - spans[d][0]) * 1000.0
-        out.append(f"  chunk_time {lbl:>14} (chunk {d:>3}): {rec['chunk_time_ms'][lbl]:>12.3f} ms")
-    out.append("ttft = the request's first layer ack -> the chunk's last layer ack")
-    for lbl, d in probes((50000, max_seq // 2, max_seq), skip_first_chunk=True):
-        rec["chunk_index"][lbl] = d
-        rec["ttft_s"][lbl] = end[d] - t0
-        out.append(f"  ttft       {lbl:>14} (chunk {d:>3}): {rec['ttft_s'][lbl]:>12.3f} s")
+    if whole_chunk_acks:
+        out.append("chunk_time, ttft: n/a (the runner acks each chunk in one message)")
+    else:
+        out.append("chunk_time = the chunk's first layer ack -> its last layer ack")
+        for lbl, d in probes((0, 50000, max_seq // 2, max_seq - chunk_size)):
+            rec["chunk_index"][lbl] = d
+            rec["chunk_time_ms"][lbl] = (spans[d][1] - spans[d][0]) * 1000.0
+            out.append(f"  chunk_time {lbl:>14} (chunk {d:>3}): {rec['chunk_time_ms'][lbl]:>12.3f} ms")
+        out.append("ttft = the request's first layer ack -> the chunk's last layer ack")
+        for lbl, d in probes((50000, max_seq // 2, max_seq), skip_first_chunk=True):
+            rec["chunk_index"][lbl] = d
+            rec["ttft_s"][lbl] = end[d] - t0
+            out.append(f"  ttft       {lbl:>14} (chunk {d:>3}): {rec['ttft_s'][lbl]:>12.3f} s")
 
     out.append(f"throughput = tokens / wall time across up to {_TPUT_WINDOW} chunk retires centred on the probe")
     for lbl, d in probes((0, 50000, max_seq // 2, max_seq)):

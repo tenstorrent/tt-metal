@@ -12,6 +12,7 @@ import struct
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -584,27 +585,34 @@ class _ChunkRetireClock:
         self._lock = threading.Lock()
         self._pushed = {}
         self._first_ack = {}
+        self._acks = {}
         self.warmup = False
 
     def on_push(self, key: tuple) -> None:
         with self._lock:
-            self._pushed[key] = self.warmup
+            self._pushed.setdefault(key, deque()).append(self.warmup)
 
     def on_ack(self, c) -> None:
+        key = chunk_key(c)
         with self._lock:
-            self._first_ack.setdefault(chunk_key(c), time.perf_counter())
+            self._first_ack.setdefault(key, time.perf_counter())
+            self._acks[key] = self._acks.get(key, 0) + 1
 
     def on_retire(self, key: tuple, retire_ts: float) -> None:
         with self._lock:
-            warmup = self._pushed.pop(key, None)
+            queued = self._pushed.get(key)
+            warmup = queued.popleft() if queued else None
+            if queued is not None and not queued:
+                del self._pushed[key]
             first_ts = self._first_ack.pop(key, None)
+            acks = self._acks.pop(key, 0)
         if warmup is None or first_ts is None:
             logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
             return
         slot_id, pos_start, pos_end = key
         logger.info(
             f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
-            f"retire={retire_ts:.6f} warmup={int(warmup)}"
+            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks}"
         )
 
 
