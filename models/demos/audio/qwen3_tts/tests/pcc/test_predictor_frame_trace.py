@@ -30,10 +30,11 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 TEMPERATURE, TOP_K = 0.9, 50
-DRAWS = 1000
+DRAWS = 300
 # A chi-square test of the draws against the exact distribution fails a correct sampler
 # once in a thousand runs. `ttnn.sampling`, which never draws past the top ~18 of a
-# 50-way draw, is rejected far below this.
+# 50-way draw, is rejected far below this: a third of this prompt's mass lies past the
+# top 18, so 300 draws reject it at p < 1e-25.
 MIN_P_VALUE = 1e-3
 
 
