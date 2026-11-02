@@ -1,0 +1,9 @@
+# Separate CUDA reference environment; not installed into the TT CI runtime.
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.17.0
+diffusers==0.40.0
+accelerate>=1.10,<2
+huggingface-hub>=1.23,<2
+safetensors>=0.6,<1
+Pillow>=13.0.0,<14

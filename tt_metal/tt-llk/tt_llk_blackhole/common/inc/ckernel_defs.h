@@ -382,6 +382,19 @@ enum class BinaryOp : std::uint8_t
     // macro-expanded wherever both are visible.
     MASK_POSINF   = 51,
     ISCLOSE_EQNAN = 52,
+    // The remaining quantization.h entry points: uint8 / int8 output (quant_init / requant_init
+    // OUTPUT_FORMAT) and int8 input (requant_init / dequant_init INT8_INPUT). QUANT / REQUANT /
+    // DEQUANT above are the default instantiations (OUTPUT_FORMAT = Int32, INT8_INPUT = false).
+    QUANT_UINT8               = 53,
+    QUANT_INT8                = 54,
+    REQUANT_UINT8             = 55,
+    REQUANT_INT8              = 56,
+    REQUANT_INT8_IN           = 57,
+    REQUANT_INT8_IN_UINT8_OUT = 58,
+    REQUANT_INT8_IN_INT8_OUT  = 59,
+    DEQUANT_INT8              = 60,
+    // _float_to_int32_positive_ on raw fp32 words (in0 -> out), the conversion inside the pow kernels.
+    FLOAT_TO_INT32_POSITIVE = 61,
 };
 
 enum class PackMode : std::uint8_t

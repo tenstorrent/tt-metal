@@ -4,6 +4,9 @@
 
 #include "dispatch_fabric2d_device_operation.hpp"
 
+#include <algorithm>
+#include <vector>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -23,7 +26,7 @@ constexpr uint32_t MAX_EXPERTS_PER_TOK = 16;
 // chip's copy of a buffer starts at the same address, which interleaved DRAM allocation on a uniform mesh
 // gives.
 void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
-    TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
+    TT_FATAL(t.is_allocated(), "dispatch_fabric2d: {} has no device buffer", name);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
             t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -59,6 +62,67 @@ uint32_t axis_extent(const DispatchFabric2dParams& args) {
     return static_cast<uint32_t>(args.device->shape()[args.axis]);
 }
 
+// The caller's forwarding and staging buffers. Each must be its own allocation: on a cache hit the framework finds a
+// cached program's buffers again by matching them among the tensor args, so a buffer passed twice, or one that is
+// also an input, leaves it unable to tell them apart.
+void validate_dram_scratch(const DispatchFabric2dParams& args, const DispatchFabric2dInputs& t) {
+    std::vector<const tt::tt_metal::Buffer*> seen = {
+        t.input_tensor.buffer(),
+        t.indices_tensor.buffer(),
+        t.expert_offsets_tensor.buffer(),
+        t.expert_dispatch_table_tensor.buffer(),
+        t.expert_token_counts.buffer(),
+        t.expert_region_offsets.buffer()};
+    if (t.padding_config.has_value()) {
+        seen.push_back(t.padding_config->buffer());
+    }
+    const uint32_t token_bytes =
+        token_page_bytes(args.device, static_cast<uint32_t>(t.input_tensor.logical_shape()[-1]));
+    const auto check = [&](const std::optional<ttnn::Tensor>& provided,
+                           const tt::tt_metal::TensorSpec& spec,
+                           const char* name,
+                           bool used) {
+        if (!provided.has_value()) {
+            return;
+        }
+        validate_dram_interleaved(*provided, name);
+        // The kernels use its address on this mesh, so a buffer of the same size on another mesh would pass the
+        // checks below and be written as if it were here.
+        TT_FATAL(provided->device() == args.device, "dispatch_fabric2d: {} is on another mesh device", name);
+        const tt::tt_metal::Buffer* buffer = provided->buffer();
+        TT_FATAL(
+            std::find(seen.begin(), seen.end(), buffer) == seen.end(),
+            "dispatch_fabric2d: {} shares its buffer with another argument; pass a separate allocation",
+            name);
+        seen.push_back(buffer);
+        if (!used) {
+            return;
+        }
+        const uint32_t page_bytes = static_cast<uint32_t>(spec.compute_page_size_bytes());
+        TT_FATAL(
+            buffer->aligned_page_size() == page_bytes,
+            "dispatch_fabric2d: {} pages at {} B but the op addresses it in {} B pages; allocate it with "
+            "dispatch_fabric2d_buffers for this emb_dim",
+            name,
+            buffer->aligned_page_size(),
+            page_bytes);
+        // Only the first pages are used, so one buffer sized for the largest call serves every smaller one.
+        const uint32_t num_pages = static_cast<uint32_t>(spec.logical_shape()[0]);
+        TT_FATAL(
+            buffer->num_pages() >= num_pages,
+            "dispatch_fabric2d: {} has {} pages but this call needs {}",
+            name,
+            buffer->num_pages(),
+            num_pages);
+    };
+    check(t.forwarding_buffer, forwarding_buffer_spec(args, token_bytes), "forwarding_buffer", true);
+    check(
+        t.staging_buffer,
+        staging_buffer_spec(args, token_bytes),
+        "staging_buffer",
+        t.input_tensor.layout() == tt::tt_metal::Layout::TILE);
+}
+
 }  // namespace
 
 void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
@@ -81,6 +145,12 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",
         args.num_links);
     TT_FATAL(args.seq_len_per_chip > 0, "dispatch_fabric2d: seq_len_per_chip must be positive");
+    TT_FATAL(
+        args.fwd_vc_pages >= dspf2d::MIN_VC_PAGES,
+        "dispatch_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
+        "channel and has to stay >= 1, and a channel shallower than a read batch spends all its time announcing",
+        dspf2d::MIN_VC_PAGES,
+        args.fwd_vc_pages);
     TT_FATAL(
         args.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
             args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -212,6 +282,8 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_experts_per_tok {} is above {}, the largest top-k this op is validated at",
         args.num_experts_per_tok,
         MAX_EXPERTS_PER_TOK);
+
+    validate_dram_scratch(args, tensor_args);
 }
 
 void DispatchFabric2dDeviceOperation::validate_on_program_cache_hit(
@@ -278,9 +350,12 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    const std::optional<ttnn::Tensor>& forwarding_buffer,
+    const std::optional<ttnn::Tensor>& staging_buffer) {
     using namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d;
     using OperationType = DispatchFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -294,6 +369,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fwd_vc_pages = fwd_vc_pages,
             .has_padding_config = padding_config.has_value(),
             .topology = topology,
             .output_mem_config = memory_config,
@@ -305,7 +381,9 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
             .expert_token_counts = expert_token_counts,
             .expert_region_offsets = expert_region_offsets,
-            .padding_config = padding_config});
+            .padding_config = padding_config,
+            .forwarding_buffer = forwarding_buffer,
+            .staging_buffer = staging_buffer});
 }
 
 }  // namespace ttnn::prim

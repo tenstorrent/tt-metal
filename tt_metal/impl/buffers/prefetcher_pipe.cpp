@@ -17,7 +17,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -33,7 +33,6 @@
 #include <vector>
 
 #include "hostdev/remote_dfb_config_layout.h"
-#include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -688,10 +687,6 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
         .applied_entry_size = initial_entry_size_};
     const uint32_t sender_page_addr = static_cast<uint32_t>(drisc_config_page_->addr());
     const uint32_t receiver_sent_base = space_->config_address() + layout.sent_offset;
-    TT_FATAL(
-        (receiver_sent_base & ~dev_msgs::REMOTE_CB_PACKED_ADDR_MASK) == 0,
-        "Receiver counter base 0x{:x} does not fit the packed remote-pointer field",
-        receiver_sent_base);
 
     const distributed::MeshDevice* mesh_device = space_->get_device();
     config_pages_.clear();

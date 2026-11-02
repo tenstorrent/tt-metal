@@ -24,7 +24,7 @@ void validate_runtime_args(const operation_attributes_t& /*attrs*/, const tensor
     const auto& input = tensor_args.input_tensor;
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_route_prep input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "topk_route_prep input must have an allocated buffer");
+    TT_FATAL(input.is_allocated(), "topk_route_prep input must have an allocated buffer");
     TT_FATAL(input.logical_shape().rank() >= 2, "topk_route_prep input must have rank >= 2");
 }
 

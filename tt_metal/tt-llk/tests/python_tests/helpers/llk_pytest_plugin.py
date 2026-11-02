@@ -251,7 +251,8 @@ def pytest_addoption(parser):
         "--ulp-emit",
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep writes what it "
-        "measured into helpers/sfpu_accuracy_budget.yaml at the end of the session. "
+        "measured into this architecture's helpers/sfpu_accuracy_budget_*.yaml at the "
+        "end of the session. "
         "Writes the table; use it deliberately.",
     )
     parser.addoption(

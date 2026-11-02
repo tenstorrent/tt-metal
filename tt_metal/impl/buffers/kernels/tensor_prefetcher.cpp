@@ -4,43 +4,36 @@
 //
 // Queueable DRISC prefetcher kernel — successor to tensor_prefetcher.cpp.
 // Sits in a request loop on a per-(device, sender-core) H2D socket; each request
-// payload names its delivery target by the DRISC L1 address of this sender's state
-// for it — a DramSenderStateBlock for a GlobalCircularBuffer, a sender config page
-// for a PrefetcherPipe, selected by the header's transport — and carries the
-// per-tensor geometry. The kernel builds a RemoteSenderCBInterface from that state,
-// runs the chunk-loop logic, and acks the socket page. A GCB's mutable fifo_wr_ptr
-// is written back so the next request to it resumes at the right ring offset; a
-// pipe's is written back into its config page, where each receiver keeps its own copy.
+// payload names the PrefetcherPipe it delivers into by the DRISC L1 address of this
+// sender's config page for that pipe, and carries the per-tensor geometry. For each
+// tensor the kernel loads the pipe's credit counters and write cursor from that page,
+// runs the chunk loop, and writes the cursor back into the page, where each receiver
+// keeps its own copy, so the next request (or the next program) resumes where this
+// one stopped.
 //
 // Request page wire format (one socket page): a TensorPrefetcherRequestHeader
 // (one-byte command id + per-command union). The STOP command (all-zero page) exits
-// the request loop; WAIT_CQ blocks on a per-CQ signal slot; PREFETCH is followed by a
-// forward-growing table of per-tensor TensorPrefetcherEntry (address + layout index)
-// and a backward-growing (from the end of the payload) deduplicated table of
-// TensorPrefetcherTensorLayout. The kernel walks the entries in order, resolving each
-// entry's geometry from the referenced layout. See
+// the request loop; WAIT_CQ blocks on a per-CQ signal slot; DRAIN waits out the acks of
+// the pipes it lists; PREFETCH is followed by a forward-growing table of per-tensor
+// TensorPrefetcherEntry (address + layout offset) and a backward-growing (from the end of
+// the payload) deduplicated table of TensorPrefetcherTensorLayout. The kernel walks the
+// entries in order, resolving each entry's geometry from the referenced layout. See
 // tt_metal/impl/buffers/tensor_prefetcher_request.hpp.
 //
-// Per-GCB sender state block layout: see
-// tt_metal/impl/buffers/dram_sender_state_block.hpp. PrefetcherPipe sender config
-// page layout: see tt_metal/hw/inc/hostdev/remote_dfb_config_layout.h.
+// PrefetcherPipe sender config page layout: see
+// tt_metal/hw/inc/hostdev/remote_dfb_config_layout.h.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/remote_circular_buffer.h"
 #include "api/socket_api.h"
 #include "experimental/gddr_dma.h"
 #include "experimental/gddr_mc.h"
 #include "hostdev/remote_dfb_config_layout.h"
-#include "internal/dram_sender_credit_counters.h"
 #include "api/dataflow/prefetcher_pipe.h"
 #include "internal/prefetcher_pipe_dram_sender.h"
-#include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
-using tt::tt_metal::DramSenderStateBlock;
-using tt::tt_metal::kDrainTargetPipeBit;
 using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
 using tt::tt_metal::TensorPrefetcherEntry;
@@ -69,10 +62,19 @@ using tt::tt_metal::TensorPrefetcherTensorLayout;
 #define PROF_DUMP(tag, val) ((void)0)
 #endif
 
-// DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
-CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
-
 namespace {
+
+// The pipe a request delivers into, as the loops below drive it: its config page, loaded per tensor,
+// plus the write cursor and the end of the whole-block region for that tensor's block size. Every
+// receiver of a pipe is credited the same bytes each round, so one cursor stands for all of them.
+struct PipeSender {
+    experimental::PipeSenderCtx ctx;
+    // Ring base plus the bytes that hold whole blocks: no block starts at or past it, and the
+    // trailing gap after it is credited by whichever block reaches it.
+    uint32_t fifo_limit;
+    // Receiver-L1 address the next block lands at.
+    uint32_t fifo_wr_ptr;
+};
 
 template <bool single_row, bool single_page>
 FORCE_INLINE void prefetcher_write_chunk(
@@ -131,168 +133,78 @@ FORCE_INLINE void prefetcher_write_chunk(
     }
 }
 
-// `local_pages_stride` and `remote_pages_stride` are the byte steps from one receiver's credit
-// counter to the next, in this sender's own L1 and on the receivers' side respectively. A
-// DRAM-sender GlobalCircularBuffer interleaves its local pages_sent/pages_acked at uint32 stride
-// (REMOTE_CB_LOCAL_PAGES_STRIDE) and addresses 2 * L1_ALIGNMENT-strided pairs on the receivers; a
-// DRAM-sender PrefetcherPipe keeps sent and acked in separate blocks, so a receiver's step is one
-// L1_ALIGNMENT at both ends. The credit unit is the same either way
-// (REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == L1_ALIGNMENT), so the two transports differ only in
-// these values. They are arguments rather than template parameters so the sender loop is emitted
-// once -- DRISC text is the tight resource -- and carries no per-iteration transport branch.
+// Credit one round of `bytes_per_recv` bytes to every receiver and advance the write cursor past it.
+// A round that reaches the usable limit also credits the trailing gap and wraps the cursor to the
+// ring base. Credits count L1_ALIGNMENT-byte units, one SENT slot per receiver at both ends.
 template <bool skip_ptr_update>
-FORCE_INLINE void prefetcher_finalize_block(
-    RemoteSenderCBInterface& iface,
-    uint32_t page_bytes_per_recv,
-    uint32_t num_receivers,
-    uint8_t noc,
-    uint32_t local_pages_stride,
-    uint32_t remote_pages_stride) {
-    uint32_t len_bytes = page_bytes_per_recv;
-    uint32_t next_wr_ptr = iface.fifo_wr_ptr + page_bytes_per_recv;
-    if (next_wr_ptr >= iface.fifo_limit_page_aligned) {
-        const uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[3];
-        len_bytes += iface.fifo_start_addr + fifo_size - iface.fifo_limit_page_aligned;
-        next_wr_ptr = iface.fifo_start_addr + (next_wr_ptr - iface.fifo_limit_page_aligned);
+FORCE_INLINE void prefetcher_finalize_block(PipeSender& snd, uint32_t bytes_per_recv, uint8_t noc) {
+    const experimental::PipeSenderCtx& ctx = snd.ctx;
+    uint32_t len_bytes = bytes_per_recv;
+    uint32_t next_wr_ptr = snd.fifo_wr_ptr + bytes_per_recv;
+    if (next_wr_ptr >= snd.fifo_limit) {
+        len_bytes += ctx.fifo_start_addr + ctx.ring_bytes - snd.fifo_limit;
+        next_wr_ptr = ctx.fifo_start_addr + (next_wr_ptr - snd.fifo_limit);
     }
-    const uint32_t fifo_pages_sent = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+    const uint32_t credit_units = len_bytes / L1_ALIGNMENT;
 
-    volatile tt_l1_ptr uint32_t* local_pages_sent =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
-    uint32_t remote_sent_base = remote_cb_remote_pages_sent_ptr(iface.num_receivers_and_remote_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* recv_xy_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr);
-    for (uint32_t i = 0; i < num_receivers; ++i) {
+    volatile tt_l1_ptr uint32_t* local_sent = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.local_sent_base);
+    uint32_t remote_sent = ctx.remote_sent_base;
+    volatile tt_l1_ptr uint32_t* recv_xy_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.receiver_noc_xy_ptr);
+    for (uint32_t i = 0; i < ctx.num_receivers; ++i) {
         const uint32_t remote_noc_xy =
             uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, recv_xy_ptr[0]), DYNAMIC_NOC_Y(noc, recv_xy_ptr[1])));
-        *local_pages_sent += fifo_pages_sent;
-        const uint64_t remote_sent_addr = get_noc_addr_helper(remote_noc_xy, remote_sent_base);
-        noc_semaphore_inc<skip_ptr_update>(remote_sent_addr, fifo_pages_sent, noc);
-        local_pages_sent += local_pages_stride / sizeof(uint32_t);
-        remote_sent_base += remote_pages_stride;
+        *local_sent += credit_units;
+        noc_semaphore_inc<skip_ptr_update>(get_noc_addr_helper(remote_noc_xy, remote_sent), credit_units, noc);
+        local_sent += L1_ALIGNMENT / sizeof(uint32_t);
+        remote_sent += L1_ALIGNMENT;
         recv_xy_ptr += 2;
     }
-    iface.fifo_wr_ptr = next_wr_ptr;
+    snd.fifo_wr_ptr = next_wr_ptr;
 }
 
-// Non-blocking variant of remote_cb_reserve_back's polling loop: the min free aligned-page count
-// across receivers, used by the recv-contig batched main loop to size the next round. The ring
-// capacity is the only thing this adds to the shared scan, and it lives in the config page.
-// REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE is L1_ALIGNMENT, so an aligned page is a credit unit.
-FORCE_INLINE uint32_t poll_min_free_aligned_pages(
-    const RemoteSenderCBInterface& iface,
-    uint32_t num_receivers,
-    uint32_t local_acked_base,
-    uint32_t local_pages_stride) {
-    const uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[3];
-    return experimental::dram_sender_min_free_units(
-        iface.aligned_pages_sent_ptr,
-        local_acked_base,
-        local_pages_stride,
-        num_receivers,
-        fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE);
-}
-
-// Fill a RemoteSenderCBInterface from an already-loaded PrefetcherPipe sender context, so the
-// receiver-contiguous loop can drive either transport through one interface. The two config layouts
-// share their first four words (is_sender, num_receivers, fifo_start, fifo_size), which is what lets
-// the loop keep reading fifo_size from config_ptr[3].
-//
-// The write cursor comes from the pipe's own config page, where every receiver has a durable copy
-// beside its credit counters. Receiver-contiguous delivery finalizes a round by crediting every
-// receiver the same B blocks, so all receivers share one cursor and receiver 0's is representative.
-// That holds under the streaming rotation too -- it varies which DRAM block feeds a receiver, not
-// how much each one is credited.
-FORCE_INLINE void load_pipe_sender_state(const experimental::PipeSenderCtx& ctx, RemoteSenderCBInterface& iface) {
-    iface.config_ptr = ctx.config_ptr;
-    iface.fifo_start_addr = ctx.fifo_start_addr;
-    iface.fifo_page_size = ctx.entry_bytes;
-    iface.receiver_noc_xy_ptr = ctx.receiver_noc_xy_ptr;
-    iface.aligned_pages_sent_ptr = ctx.local_sent_base;
-    iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(ctx.num_receivers, ctx.remote_sent_base);
+// Load the pipe whose sender config page is at `config_page_addr`. The write cursor comes from that
+// page, where every receiver has a durable copy beside its credit counters; delivery credits them
+// all alike, so receiver 0's is representative. That holds under the streaming rotation too -- it
+// varies which DRAM block feeds a receiver, not how much each one is credited.
+FORCE_INLINE PipeSender load_pipe_sender(uint32_t config_page_addr) {
+    PipeSender snd;
+    experimental::pipe_load_sender_ctx(snd.ctx, config_page_addr);
     // pipe_usable_bytes owns the trailing-gap rule; do not re-derive it here.
-    iface.fifo_limit_page_aligned = ctx.fifo_start_addr + experimental::pipe_usable_bytes(ctx);
-    iface.fifo_wr_ptr = ctx.fifo_start_addr + experimental::pipe_sender_wr_offset(ctx, 0);
+    snd.fifo_limit = snd.ctx.fifo_start_addr + experimental::pipe_usable_bytes(snd.ctx);
+    snd.fifo_wr_ptr = snd.ctx.fifo_start_addr + experimental::pipe_sender_wr_offset(snd.ctx, 0);
+    return snd;
 }
 
 // Put a tensor's finishing write cursor back into every receiver's slot in the pipe's config page,
-// which is where the next tensor's snap and the next program's load read it. The round loop advances
-// only the working copy in `iface` -- the cursor is per receiver, but recv-contig credits them
-// alike -- so this is the pipe's counterpart to store_sender_state.
-FORCE_INLINE void store_pipe_sender_state(const RemoteSenderCBInterface& iface, uint32_t num_receivers) {
-    experimental::pipe_store_wr_offset(
-        iface.aligned_pages_sent_ptr, num_receivers, iface.fifo_wr_ptr - iface.fifo_start_addr);
-}
-
-// Loads the per-GCB sender state block's RemoteSenderCBInterface-compatible region
-// from L1 into the static cb_interface[] slot for this request.
-FORCE_INLINE void load_sender_state(volatile tt_l1_ptr DramSenderStateBlock* sb, RemoteSenderCBInterface& iface) {
-    iface.config_ptr = sb->config_ptr;
-    iface.fifo_start_addr = sb->fifo_start_addr;
-    iface.fifo_wr_ptr = sb->fifo_wr_ptr;
-    iface.receiver_noc_xy_ptr = sb->receiver_noc_xy_ptr;
-    iface.aligned_pages_sent_ptr = sb->aligned_pages_sent_ptr;
-    iface.num_receivers_and_remote_pages_sent_ptr = sb->num_receivers_and_remote_pages_sent_ptr;
-    // fifo_limit_page_aligned / fifo_page_size are intentionally not loaded: they're
-    // recomputed per-tensor by resize_remote_sender_cb_interface before any use.
-}
-
-// Writes back only the field that needs to persist across requests targeting this
-// GCB. Per-tensor fields (fifo_limit / fifo_page_size) are overwritten by
-// resize_remote_sender_cb_interface on every new request, so we don't round-trip them.
-FORCE_INLINE void store_sender_state(
-    volatile tt_l1_ptr DramSenderStateBlock* sb, const RemoteSenderCBInterface& iface) {
-    sb->fifo_wr_ptr = iface.fifo_wr_ptr;
-}
-
-// Spin until every receiver of one target has acked everything this sender published to it.
-// `target_word` is how a DRAIN request names the target: its state address, with kDrainTargetPipeBit
-// set for a PrefetcherPipe. Both transports keep their counters in the state they name, so this reads
-// them straight from there rather than from an interface a later request may have overwritten.
-FORCE_INLINE void drain_target(uint32_t target_word) {
-    const uint32_t state_addr = target_word & ~kDrainTargetPipeBit;
-    if (target_word & kDrainTargetPipeBit) {
-        experimental::PipeSenderCtx ctx;
-        experimental::pipe_load_sender_ctx(ctx, state_addr);
-        experimental::dram_sender_barrier(ctx.local_sent_base, ctx.local_acked_base, L1_ALIGNMENT, ctx.num_receivers);
-    } else {
-        volatile tt_l1_ptr DramSenderStateBlock* sb =
-            reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(state_addr);
-        experimental::dram_sender_barrier(
-            sb->aligned_pages_sent_ptr,
-            sb->aligned_pages_sent_ptr + experimental::REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET,
-            experimental::REMOTE_CB_LOCAL_PAGES_STRIDE,
-            sb->num_receivers);
-    }
+// which is where the next tensor's snap and the next program's load read it.
+FORCE_INLINE void store_pipe_sender(const PipeSender& snd) {
+    experimental::pipe_store_wr_offset(snd.ctx, snd.fifo_wr_ptr - snd.ctx.fifo_start_addr);
 }
 
 }  // namespace
 
 void kernel_main() {
     // ---- Compile-time args ----
-    // num_receivers used to live here, but it's now per-GCB: each request's state
-    // block carries its own num_receivers (DramSenderStateBlock::num_receivers).
-    // Different GCBs queued against the same prefetcher can have different receiver
-    // counts.
+    // The receiver count is not among them: each request's pipe carries its own in its config
+    // page, so one prefetcher can serve pipes with different receiver counts.
     constexpr uint32_t stage_ring_base = get_compile_time_arg_val(0);
     constexpr uint32_t stage_ring_size = get_compile_time_arg_val(1);
-    constexpr uint32_t remote_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t socket_page_size = get_compile_time_arg_val(2);
     // Base of this core's per-CQ signal slots (kNumCqSignalSlots uint32 counters).
     // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
     // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
     // Slots are `cq_signal_slot_stride` bytes apart, not packed: each is the target of
     // its own dispatcher write, which only lands on an L1-aligned address.
-    constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
-    constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
-    constexpr bool controls_ordinary_mpfe = get_compile_time_arg_val(6) != 0;
-    constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(7);
-    constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
-    constexpr bool dynamic_mpfe_weighting = get_compile_time_arg_val(9) != 0;
-    constexpr bool mpfe_enabled = get_compile_time_arg_val(10) != 0;
+    constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(3);
+    constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(4);
+    constexpr bool controls_ordinary_mpfe = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(6);
+    constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(7);
+    constexpr bool dynamic_mpfe_weighting = get_compile_time_arg_val(8) != 0;
+    constexpr bool mpfe_enabled = get_compile_time_arg_val(9) != 0;
     // kTensorPrefetcherSelectorScratchBytes of DRISC L1, DRAM-aligned, that a selector page is read
     // into before the groups it selects are streamed (see tensor_prefetcher_request.hpp).
-    constexpr uint32_t selector_scratch_l1_addr = get_compile_time_arg_val(11);
+    constexpr uint32_t selector_scratch_l1_addr = get_compile_time_arg_val(10);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -327,8 +239,6 @@ void kernel_main() {
         }
     }
 
-    RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
-
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
     // can be enqueued until StartTensorPrefetcher returns to the single-threaded
@@ -356,12 +266,15 @@ void kernel_main() {
         }
         if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_DRAIN) {
             // Receivers ack into counters in this DRISC's L1, which the next program is free to
-            // reuse once the kernel exits, so wait for the acks of every listed target.
-            volatile tt_l1_ptr uint32_t* target_words =
+            // reuse once the kernel exits, so wait for the acks of every listed pipe. Each is named
+            // by its sender config page, which holds both its credit blocks.
+            volatile tt_l1_ptr uint32_t* config_pages =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.read_ptr + sizeof(TensorPrefetcherRequestHeader));
             const uint32_t num_drain_targets = req->drain.num_targets;
             for (uint32_t t = 0; t < num_drain_targets; ++t) {
-                drain_target(target_words[t]);
+                experimental::PipeSenderCtx ctx;
+                experimental::pipe_load_sender_ctx(ctx, config_pages[t]);
+                experimental::pipe_sender_barrier(ctx);
             }
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
@@ -385,12 +298,8 @@ void kernel_main() {
         }
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
-        // Per-sender state for this request's target: a DramSenderStateBlock for a
-        // GlobalCircularBuffer, this pipe's own sender config page for a PrefetcherPipe. Which one
-        // it is follows the transport below.
-        const uint32_t target_state_addr = req->prefetch.target_state_addr;
-        volatile tt_l1_ptr DramSenderStateBlock* state =
-            reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(target_state_addr);
+        // This sender's config page for the pipe the request delivers into.
+        const uint32_t config_page_addr = req->prefetch.target_config_page_addr;
 
         PROF_DECL_ACC(prof_rounds);
         PROF_DECL_ACC(prof_chunks);
@@ -403,26 +312,6 @@ void kernel_main() {
         PROF_DECL_ACC(prof_defer_flush);
         PROF_DECL_ACC(prof_finalize);
 
-        // Which kind of target the state address above points at.
-        const bool is_pipe = req->prefetch.transport == tt::tt_metal::TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
-        // All the credit loops need from the transport; hoisted here so they stay branch-free (see
-        // prefetcher_finalize_block).
-        const uint32_t local_pages_stride = is_pipe ? L1_ALIGNMENT : experimental::REMOTE_CB_LOCAL_PAGES_STRIDE;
-        const uint32_t remote_pages_stride = is_pipe ? L1_ALIGNMENT : 2 * L1_ALIGNMENT;
-
-        if (!is_pipe) {
-            load_sender_state(state, iface);
-        }
-        // Where this sender reads its receivers' acks: a pipe keeps them in a second block of its
-        // config page, a GlobalCircularBuffer interleaves them with pages_sent.
-        const uint32_t local_acked_base =
-            is_pipe ? experimental::pipe_local_acked_base(target_state_addr)
-                    : iface.aligned_pages_sent_ptr + experimental::REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET;
-        // num_receivers lives inside the target's per-sender state. Reading it per request lets a
-        // single prefetcher serve targets with different receiver counts.
-        const uint32_t num_receivers =
-            is_pipe ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target_state_addr)[REMOTE_DFB_CFG_NUM_RECEIVERS]
-                    : state->num_receivers;
         // Entries follow the header (grow forward); the deduplicated layout slots grow backward
         // from the end of the payload, and each entry names its own slot by byte offset from the
         // page start -- so how the host packed the slots stays host business. See
@@ -490,46 +379,36 @@ void kernel_main() {
                 }
                 const uint32_t tensor_base = entries[e].bank_local_base + group * t_group_stride;
 
-                if (is_pipe) {
-                    // Apply this tensor's block size to the pipe before rebuilding the interface. When it
-                    // differs from the size the pipe last applied, the PrefetcherPipe constructor snaps
-                    // every receiver's stored write cursor onto the new entry grid and publishes the
-                    // skipped bytes as pad credits. The consumer's PrefetcherPipe constructor runs the
-                    // matching snap when its Attach entry size differs from the one last applied and
-                    // blocks on exactly these credits, so a tensor whose per-receiver block size differs
-                    // from the previous one still starts every entry on an entry boundary. A tensor with
-                    // the size already applied changes nothing.
-                    {
-                        experimental::PrefetcherPipe pipe(
-                            experimental::DramSenderConfigPage{target_state_addr}, t_page_bytes_per_recv);
-                    }
-                    // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
-                    // cursors come out of that page, which is what makes them resume correctly across
-                    // requests and across programs, and the snap above left this tensor's entry size
-                    // there too.
-                    experimental::PipeSenderCtx pipe_ctx;
-                    experimental::pipe_load_sender_ctx(pipe_ctx, target_state_addr);
-                    load_pipe_sender_state(pipe_ctx, iface);
-                } else {
-                    // Set the sender fifo page size to one full per-receiver page. When resize skips
-                    // padding to reach the next aligned page (e.g. a larger page after a smaller one in
-                    // a mixed-page-size stream), credit that skip to the receiver over NoC so sender and
-                    // receiver pointers stay in lockstep; otherwise the next receiver is short of
-                    // credits.
-                    experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/true>(
-                        remote_cb_id, t_page_bytes_per_recv, noc_index);
+                // Apply this tensor's block size to the pipe before loading it. When it differs from the
+                // size the pipe last applied, the PrefetcherPipe constructor snaps every receiver's stored
+                // write cursor onto the new entry grid and publishes the skipped bytes as pad credits. The
+                // consumer's PrefetcherPipe constructor runs the matching snap when its Attach entry size
+                // differs from the one last applied and blocks on exactly these credits, so a tensor whose
+                // per-receiver block size differs from the previous one still starts every entry on an
+                // entry boundary. A tensor with the size already applied changes nothing.
+                {
+                    experimental::PrefetcherPipe pipe(
+                        experimental::DramSenderConfigPage{config_page_addr}, t_page_bytes_per_recv);
                 }
+                // Load the pipe from its config page each tensor. The write cursors come out of that page,
+                // which is what makes them resume correctly across requests and across programs, and the
+                // snap above left this tensor's entry size there too.
+                PipeSender snd = load_pipe_sender(config_page_addr);
 
                 // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
                 // `(a + b) - slot`.
                 constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
+
+                // Converts the credit units of free space the poll reports into whole blocks of
+                // t_page_bytes_per_recv, the unit both loops push in.
+                const uint32_t credit_units_per_block = t_page_bytes_per_recv / L1_ALIGNMENT;
 
                 // Branch on layout. The branch is per-tensor (100% predictable across the
                 // inner chunk loop), so adding the second branch costs nothing in the
                 // hot path.
                 if (t_layout_mode == 0) {
                     // ---- K-row-major main loop ----
-                    const uint32_t t_recv_per_chunk = num_receivers / t_M;
+                    const uint32_t t_recv_per_chunk = snd.ctx.num_receivers / t_M;
                     const uint32_t t_sub_band_per_block = t_num_sub * t_M;
                     const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
@@ -552,8 +431,12 @@ void kernel_main() {
 
                     for (uint32_t c = 0; c < total_chunks; ++c) {
                         if (sb == 0 && ch == 0) {
-                            experimental::remote_cb_reserve_back(remote_cb_id, 1);
-                            fifo_snapshot = iface.fifo_wr_ptr;
+                            // Wait for room for this whole block at every receiver. A block that reaches
+                            // the usable limit also credits the trailing gap, but that needs no extra
+                            // room: the gap never holds data, so it is free whenever the block is.
+                            while (experimental::pipe_sender_min_free_units(snd.ctx) < credit_units_per_block) {
+                            }
+                            fifo_snapshot = snd.fifo_wr_ptr;
                             cum_offset_in_page = 0;
                         }
 
@@ -583,7 +466,7 @@ void kernel_main() {
                         const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
                         experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
                         volatile tt_l1_ptr uint32_t* chunk_recv_xy =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(snd.ctx.receiver_noc_xy_ptr) +
                             ch * t_recv_per_chunk * 2;
                         // Per-tensor-stable predicate; branches are 100% predictable across the
                         // chunk loop. Compiler folds the fast-path bodies via `if constexpr` in
@@ -640,13 +523,7 @@ void kernel_main() {
 
                         if (sb + 1 == t_num_sub && ch + 1 == t_M) {
                             noc_async_posted_writes_flushed();
-                            prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                                iface,
-                                t_page_bytes_per_recv,
-                                num_receivers,
-                                noc_index,
-                                local_pages_stride,
-                                remote_pages_stride);
+                            prefetcher_finalize_block</*skip_ptr_update=*/true>(snd, t_page_bytes_per_recv, noc_index);
                         } else {
                             // The ping-pong DMA can reuse this stage slot two chunks later.
                             // Make sure all posted writes sourced from it have departed first.
@@ -677,9 +554,9 @@ void kernel_main() {
                     // into mostly free overlapped work.
                     //
                     // After all num_receivers visits, finalize bumps pages_sent + remote
-                    // semaphore by B for every receiver and advances iface.fifo_wr_ptr by
+                    // semaphore by B for every receiver and advances snd.fifo_wr_ptr by
                     // B * t_page_bytes_per_recv. The pages_to_wrap clamp prevents B from
-                    // crossing fifo_limit_page_aligned mid-round.
+                    // crossing snd.fifo_limit mid-round.
                     constexpr uint32_t kStageSlotBytes = stage_third;
                     // Per-stage-slot capacity expressed in whole sub-bands; t_chunk_bytes
                     // (= sub_chunk_bytes) is the natural alignment for both DMA and NoC
@@ -687,11 +564,6 @@ void kernel_main() {
                     // packet counts come out exact (no truncation loss).
                     const uint32_t subs_per_stage_slot = kStageSlotBytes / t_chunk_bytes;
                     const uint32_t max_chunk_bytes = subs_per_stage_slot * t_chunk_bytes;
-
-                    // fifo_pages_per_block converts aligned-page free space into
-                    // "blocks of t_page_bytes_per_recv" — the batch unit B uses.
-                    const uint32_t fifo_pages_per_block =
-                        t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
                     constexpr uint32_t slot_addrs[3] = {stage_slot_0, stage_slot_1, stage_slot_2};
 
@@ -705,14 +577,13 @@ void kernel_main() {
                         PROF_DECL_TS(t_poll_end);
                         PROF_TICK(t_poll_start);
                         do {
-                            const uint32_t min_free_aligned =
-                                poll_min_free_aligned_pages(iface, num_receivers, local_acked_base, local_pages_stride);
-                            min_free_blocks = min_free_aligned / fifo_pages_per_block;
+                            min_free_blocks =
+                                experimental::pipe_sender_min_free_units(snd.ctx) / credit_units_per_block;
                         } while (min_free_blocks == 0);
                         PROF_TICK(t_poll_end);
                         PROF_ACC(prof_poll, t_poll_end, t_poll_start);
 
-                        const uint32_t bytes_to_wrap = iface.fifo_limit_page_aligned - iface.fifo_wr_ptr;
+                        const uint32_t bytes_to_wrap = snd.fifo_limit - snd.fifo_wr_ptr;
                         const uint32_t pages_to_wrap = bytes_to_wrap / t_page_bytes_per_recv;
                         const uint32_t remaining = t_block_count - pages_sent_global;
 
@@ -727,7 +598,7 @@ void kernel_main() {
                             B = pages_to_wrap;
                         }
 
-                        const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
+                        const uint32_t fifo_snapshot = snd.fifo_wr_ptr;
                         const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
 
                         // blk (first source block) and wrap_boff (byte offset within the visit where
@@ -754,7 +625,7 @@ void kernel_main() {
                         // and ragged-tail/head modes have been removed.)
                         const uint32_t uniform_chunks_per_visit =
                             (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
-                        const uint32_t total_chunks_round = num_receivers * uniform_chunks_per_visit;
+                        const uint32_t total_chunks_round = snd.ctx.num_receivers * uniform_chunks_per_visit;
 
                         // ---- Depth-2 software pipeline over 3 stage slots ----
                         // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
@@ -824,7 +695,7 @@ void kernel_main() {
                             if (gen_boff >= bytes_per_recv) {
                                 gen_r += 1;
                                 gen_boff = 0;
-                                if (gen_r < num_receivers) {
+                                if (gen_r < snd.ctx.num_receivers) {
                                     recv_wrap(gen_r, gen_blk, gen_wrap_boff);
                                 }
                             }
@@ -879,7 +750,7 @@ void kernel_main() {
                             if (r != cur_r) {
                                 cur_r = r;
                                 volatile tt_l1_ptr uint32_t* xy_ptr =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(snd.ctx.receiver_noc_xy_ptr) + r * 2;
                                 remote_noc_xy = uint32_t(NOC_XY_ENCODING(
                                     DYNAMIC_NOC_X(noc_index, xy_ptr[0]), DYNAMIC_NOC_Y(noc_index, xy_ptr[1])));
                                 const uint64_t set_state_dest = get_noc_addr_helper(remote_noc_xy, fifo_snapshot);
@@ -933,23 +804,15 @@ void kernel_main() {
                         PROF_DECL_TS(t_fn0);
                         PROF_DECL_TS(t_fn1);
                         PROF_TICK(t_fn0);
-                        prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                            iface,
-                            B * t_page_bytes_per_recv,
-                            num_receivers,
-                            noc_index,
-                            local_pages_stride,
-                            remote_pages_stride);
+                        prefetcher_finalize_block</*skip_ptr_update=*/true>(snd, B * t_page_bytes_per_recv, noc_index);
                         PROF_TICK(t_fn1);
                         PROF_ACC(prof_finalize, t_fn1, t_fn0);
                         pages_sent_global += B;
                     }
                 }
-                if (is_pipe) {
-                    // Per tensor rather than per request: the next entry in this same request snaps
-                    // its cursors onto its own entry grid, and that snap reads them from the page.
-                    store_pipe_sender_state(iface, num_receivers);
-                }
+                // Per tensor rather than per request: the next entry in this same request snaps its
+                // cursors onto its own entry grid, and that snap reads them from the page.
+                store_pipe_sender(snd);
             }  // group
         }
 
@@ -969,13 +832,6 @@ void kernel_main() {
         PROF_DUMP(0xAAu, prof_defer_flush);
         PROF_DUMP(0xB0u, stage_ring_size);
         PROF_DUMP(0xB1u, stage_third);
-
-        // Persist mutable state (fifo_wr_ptr) so the next request to this GCB resumes at the right
-        // ring offset. A PrefetcherPipe writes its cursor back per tensor instead, into the config
-        // page every one of its receivers holds a copy in.
-        if (!is_pipe) {
-            store_sender_state(state, iface);
-        }
 
         if constexpr (mpfe_enabled && dynamic_mpfe_weighting) {
             gddr_mc_write_mpfe_weight(own_mpfe_port, ordinary_mpfe_weight);
