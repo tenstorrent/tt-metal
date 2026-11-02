@@ -102,16 +102,16 @@ protected:
             "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
         mesh_graph_ = std::make_unique<MeshGraph>(tt::tt_metal::ClusterType::T3K, mesh_graph_desc_path.string());
 
-        LocalMeshBinding local_mesh_binding;
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        const MeshId bound_mesh_id = MeshId{0};
+        const MeshHostRankId bound_host_rank = MeshHostRankId{0};
 
         mapper_ = std::make_unique<TopologyMapper>(
             tt::tt_metal::MetalContext::instance().get_cluster(),
             tt::tt_metal::MetalContext::instance().global_distributed_context(),
             *mesh_graph_,
             *expected_,
-            local_mesh_binding);
+            bound_mesh_id,
+            bound_host_rank);
     }
 
     void TearDown() override {

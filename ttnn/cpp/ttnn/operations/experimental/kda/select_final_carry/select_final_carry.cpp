@@ -22,7 +22,7 @@ ttnn::Tensor select_final_carry(
     std::optional<uint32_t> num_links) {
     // Validation runs on cache misses only; the device must be known before then to pick the links.
     TT_FATAL(
-        prefix_final.storage_type() == StorageType::DEVICE && prefix_final.buffer() != nullptr,
+        prefix_final.storage_type() == StorageType::DEVICE && prefix_final.is_allocated(),
         "select_final_carry: prefix_final must be an allocated device tensor");
     auto* mesh = prefix_final.device();
     TT_FATAL(
@@ -30,8 +30,8 @@ ttnn::Tensor select_final_carry(
         "select_final_carry: sequence_parallel_axis {} is out of range for a {}-D mesh",
         sequence_parallel_axis,
         mesh->shape().dims());
-    const auto topology = ::ttnn::ccl::convert_2d_to_1d_topology(
-        ::ttnn::ccl::get_usable_topology(prefix_final, tt::tt_fabric::get_fabric_topology(), sequence_parallel_axis));
+    const auto topology = ::ttnn::ccl::convert_2d_to_1d_topology(::ttnn::ccl::get_usable_topology(
+        prefix_final, tt::tt_fabric::get_fabric_topology(*mesh), sequence_parallel_axis));
     const auto available_links =
         static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh, sequence_parallel_axis));
     TT_FATAL(

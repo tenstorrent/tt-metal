@@ -49,8 +49,8 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
@@ -125,10 +125,10 @@ create_mesh_workloads(
     bool use_sub_devices) {
     log_info(tt::LogTest, "created program");
     std::vector<tt_metal::Program> programs;
-    programs.push_back(tt_metal::Program());
+    programs.push_back(tt_metal::CreateProgram(*device));
 
     if (use_sub_devices) {
-        programs.push_back(tt_metal::Program());
+        programs.push_back(tt_metal::CreateProgram(*device));
     }
     auto& sender_program = programs[0];
     auto& receiver_program = use_sub_devices ? programs[1] : programs[0];

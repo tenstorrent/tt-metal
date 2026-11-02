@@ -13,25 +13,33 @@ views and temporal modeling.
 
 import ttnn
 import torch
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, NamedTuple
 
-from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
-from .tt_common import layer_norm
+from .tt_spatial_cross_attention import SCARebatchPlanner, SCAVisibility, TTSpatialCrossAttention
+from .tt_common import layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
-from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
+from .tt_point_sampling_3d_2d import camera_rows, image_size, point_sampling_3d_to_2d_ttnn, world_points_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 from loguru import logger
 
 # Enable/disable logging output
 ENABLE_LOGGING = False
+
+
+class CameraProjection(NamedTuple):
+    """One frame's reference grid projected to the cameras, with the visibility the spatial
+    cross-attention plan is built from.
+
+    Attributes:
+        reference_points_cam: Bfloat16 ``[num_cams, B, num_queries, D, 2]``.
+        bev_mask: Bfloat16 ``[num_cams, B, num_queries, D]``.
+        visibility: The encoder planner's :meth:`SCARebatchPlanner.visibility` of ``bev_mask``.
+    """
+
+    reference_points_cam: ttnn.Tensor
+    bev_mask: ttnn.Tensor
+    visibility: SCAVisibility
 
 
 class TTBEVFormerLayer:
@@ -142,76 +150,72 @@ class TTBEVFormerLayer:
             value: Batch-first multi-camera features [B, num_cams, H*W, embed_dims], shared by
                 every layer.
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
-            shift: Camera shift information for temporal alignment
+            prev_bev: The previous BEV, rotated to this frame, stacked per sample with the encoder's
+                input queries, [B*2, num_queries, embed_dims], as upstream's encoder builds it; None
+                on the first frame.
+            shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
+                with ``prev_bev``.
             reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
             rebatch_plan: Shared SCA rebatch plan for this frame
-            bev_reference_points: 2D BEV reference points on device [B, num_queries, 1, 2].
+            bev_reference_points: 2D BEV reference points on device, float32 ROW_MAJOR
+                [B, num_queries, 1, 2].
                 The encoder owns the grid and widens its leading dimension to the
                 runtime batch before the layer loop.
 
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
         """
-        if use_signpost:
-            signpost(header="TTNN BEVFormerLayer Forward Start")
+        signpost(header="TTNN BEVFormerLayer Forward Start")
 
-        if use_signpost:
-            signpost(header="BEVLayer TSA Start")
+        signpost(header="BEVLayer TSA Start")
         # Combine current BEV with history for temporal modeling
         temp_query = self.temporal_self_attention(
             query=bev_query,
             value=prev_bev,  # Use previous BEV as value for temporal context
             query_pos=bev_pos,
             reference_points=bev_reference_points,
+            shift=shift,
             **kwargs,
         )
 
-        if use_signpost:
-            signpost(header="BEVLayer TSA Complete")
+        signpost(header="BEVLayer TSA End")
 
         # Layer normalization (norm1)
         temp_query = layer_norm(temp_query, self.params.norm1)
         bev_query = temp_query
 
-        if use_signpost:
-            signpost(header="BEVLayer SCA Start")
+        signpost(header="BEVLayer SCA Start")
 
         # Spatial Cross-Attention
         spatial_query = self.spatial_cross_attention(
             query=bev_query,
             value=value,
             residual=bev_query,
-            query_pos=bev_pos,
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
             rebatch_plan=rebatch_plan,
             **kwargs,
         )
 
-        if use_signpost:
-            signpost(header="BEVLayer SCA Complete")
+        signpost(header="BEVLayer SCA End")
 
         # Layer normalization (norm2)
         spatial_query = layer_norm(spatial_query, self.params.norm2)
         bev_query = spatial_query
 
-        if use_signpost:
-            signpost(header="BEVLayer FFN Start")
+        signpost(header="BEVLayer FFN Start")
 
         # Feed-Forward Network
         ffn_output = self._forward_ffn(bev_query)
 
-        if use_signpost:
-            signpost(header="BEVLayer FFN Complete")
+        signpost(header="BEVLayer FFN End")
 
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
         bev_query = layer_norm(ffn_output_with_residual, self.params.norm3)
 
-        if use_signpost:
-            signpost(header="TTNN BEVFormerLayer Forward End")
+        signpost(header="TTNN BEVFormerLayer Forward End")
 
         return bev_query
 
@@ -373,12 +377,18 @@ class TTBEVFormerEncoder:
             batch_size=1,
             dtype=torch.float32,
         )
+        # float32: in bfloat16 a 100-cell grid's centres round by up to 0.4 cells. ROW_MAJOR, where
+        # the trailing (1, 2) is not padded to a tile.
         self._bev_reference_points = ttnn.from_torch(
             self._reference_points_3d[:, :, 0, :2].unsqueeze(2),
             device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        # The grid in world coordinates, which every frame projects to the cameras.
+        self.world_points = world_points_ttnn(self._reference_points_3d, pc_range, device)
+        # One per encoder, as its capacity is the camera rig's high-water mark.
+        self.rebatch_planner = SCARebatchPlanner(device)
 
         # Build transformer layers
         self.layers = []
@@ -405,6 +415,46 @@ class TTBEVFormerEncoder:
             )
             self.layers.append(layer)
 
+    def project_cameras(self, img_metas, projection=None) -> CameraProjection:
+        """Project the reference grid to the frame's cameras and queue their visible counts' readback.
+
+        Nothing here waits for the device. Called ahead of the backbone, the counts are back long
+        before the encoder needs them to size its rebatch plan.
+
+        Args:
+            img_metas: Camera metadata with each sample's ``lidar2img`` and the images' size.
+            projection: The cameras' projection rows (``tt_point_sampling_3d_2d.camera_rows``) on
+                device, float32 TILE; None builds them from ``img_metas`` and uploads them.
+        """
+        if projection is None:
+            projection = ttnn.from_torch(
+                self.projection_rows(img_metas), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
+        reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
+            reference_points=None,
+            pc_range=self.pc_range,
+            lidar2img=None,
+            device=self.device,
+            # The grid broadcasts over the batch.
+            world_points=self.world_points,
+            projection=projection,
+            # Projected in float32; bfloat16 is the only dtype the rebatch plan's gather takes.
+            output_dtype=ttnn.bfloat16,
+        )
+        return CameraProjection(reference_points_cam, bev_mask, self.rebatch_planner.visibility(bev_mask))
+
+    def projection_rows(self, img_metas) -> torch.Tensor:
+        """Host projection rows (``tt_point_sampling_3d_2d.camera_rows``) of the frame's cameras over
+        this encoder's reference grid."""
+        grid = self.world_points
+        return camera_rows(self._host_lidar2img(img_metas), image_size(img_metas), grid.num_queries, grid.num_points)
+
+    @staticmethod
+    def _host_lidar2img(img_metas):
+        """Each sample's ``lidar2img``, the transform from lidar to image pixels, as torch
+        [B, num_cams, 4, 4] float32."""
+        return torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
+
     def forward(
         self,
         bev_query,
@@ -414,6 +464,7 @@ class TTBEVFormerEncoder:
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
+        cameras: Optional[CameraProjection] = None,
         **kwargs,
     ):
         """
@@ -421,19 +472,23 @@ class TTBEVFormerEncoder:
 
         Args:
             bev_query: Initial BEV query features [B, num_queries, embed_dims]
-            key: Multi-camera features [num_cams, H*W, B, embed_dims]
+            key: Batch-first multi-camera features [B, num_cams, H*W, embed_dims], as the spatial
+                cross-attention reads them
             value: Same as key (optional); falls back to ``key`` when omitted
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
-            shift: Camera shift for temporal alignment
-            img_metas: Camera metadata for point sampling
+            prev_bev: The previous BEV, rotated to this frame, stacked per sample with the encoder's
+                input queries, [B*2, num_queries, embed_dims], as upstream's encoder builds it; None
+                on the first frame.
+            shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
+                with ``prev_bev``.
+            img_metas: Camera metadata, projected here with :meth:`project_cameras`; not with ``cameras``.
+            cameras: The frame's :meth:`project_cameras`, made ahead of the forward.
 
         Returns:
             Final BEV features [B, num_queries, embed_dims]
             If return_intermediate=True, returns list of intermediate features.
         """
-        if use_signpost:
-            signpost(header="TTNN BEVFormerEncoder Forward Start")
+        signpost(header="TTNN BEVFormerEncoder Forward Start")
 
         output = bev_query
         intermediate = []
@@ -444,10 +499,7 @@ class TTBEVFormerEncoder:
             num_queries == self.bev_h * self.bev_w
         ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
 
-        # Batch is a pure broadcast of the stored grid. Widen the host tensor as a
-        # stride-0 view -- from_torch copies it during upload either way -- and widen the
-        # device tensor on device, freeing the copy once the layers are done with it.
-        reference_points_3d = self._reference_points_3d if bs == 1 else self._reference_points_3d.expand(bs, -1, -1, -1)
+        # Batch is a pure broadcast of the stored grid, widened on device and freed once used.
         bev_reference_points = (
             self._bev_reference_points
             if bs == 1
@@ -458,72 +510,28 @@ class TTBEVFormerEncoder:
         camera_features = value if value is not None else key
         if camera_features is not None:
             expected_L = shapes.prod(dim=1).sum().item()
-            L = camera_features.shape[1]
+            L = camera_features.shape[2]
             assert expected_L == L, (
                 f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != camera spatial dimension ({L}). "
                 f"spatial_shapes: {shapes.tolist()}, camera features shape: {camera_features.shape}"
             )
 
-        if use_signpost:
-            signpost(header="BEVEncoder Reference Points Generation Start")
+        signpost(header="BEVEncoder Reference Points Start")
 
-        # Project the cached 3D reference points to camera coordinates.
-        # These reference points define where each BEV query will sample features from camera views
-        reference_points_cam = None
-        bev_mask = None
-
+        assert cameras is None or img_metas is None, "pass img_metas or cameras, not both"
         if img_metas is not None:
-            # Extract camera transformation matrices from metadata
-            # These matrices transform 3D world coordinates to 2D camera pixel coordinates
-            if "lidar2img" in img_metas[0]:
-                # Extract precomputed transformation matrices from dataset metadata
-                # lidar2img transforms points from lidar/world coordinates to camera image pixels
-                lidar2img_list = []
-                for meta in img_metas:
-                    if isinstance(meta["lidar2img"], torch.Tensor):
-                        lidar2img_list.append(meta["lidar2img"])
-                    else:
-                        # Convert numpy arrays or lists to tensors
-                        lidar2img_list.append(torch.tensor(meta["lidar2img"], dtype=torch.float32))
+            cameras = self.project_cameras(img_metas)
+        reference_points_cam, bev_mask, rebatch_plan = None, None, None
+        if cameras is not None:
+            reference_points_cam, bev_mask, visibility = cameras
+            # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
+            rebatch_plan = self.rebatch_planner(reference_points_cam, visibility)
 
-                lidar2img = torch.stack(lidar2img_list)
-                # Shape: [batch, num_cams, 4, 4] - homogeneous transformation matrices
-                lidar2img = lidar2img.cpu()
-            else:
-                # Fallback: construct transformation from separate intrinsic and extrinsic matrices
-                # Intrinsic: camera parameters (focal length, principal point)
-                # Extrinsic: camera pose in world coordinates (rotation + translation)
-                camera_intrinsics = torch.tensor(img_metas[0]["camera_intrinsics"], dtype=torch.float32)
-                camera_extrinsics = torch.tensor(img_metas[0]["camera_extrinsics"], dtype=torch.float32)
-                # Combined transformation: world -> camera -> image
-                lidar2img = camera_intrinsics @ camera_extrinsics  # [num_cams, 4, 4]
-            # Project 3D reference points to 2D camera coordinates
-            # This determines where each BEV query will sample from in each camera view
-            # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
-            #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
-            reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
-                reference_points=reference_points_3d,
-                pc_range=self.pc_range,
-                lidar2img=lidar2img,
-                img_metas=img_metas,
-                device=self.device,
-            )
-
-        # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
-        rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
-
-        if use_signpost:
-            signpost(header="BEVEncoder Reference Points Complete")
-
-        # Every layer reads the same camera features, so SCA takes them batch-first and this
-        # runs once per forward, not once per layer.
-        if camera_features is not None:
-            camera_features = ttnn.permute(camera_features, (2, 0, 1, 3))
+        signpost(header="BEVEncoder Reference Points End")
 
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
-            if use_signpost:
-                signpost(header=f"BEVEncoder Layer {lid} Start")
+            signpost(header=f"BEVEncoder Layer {lid} Start")
 
             output = layer(
                 bev_query=output,
@@ -537,8 +545,7 @@ class TTBEVFormerEncoder:
                 bev_reference_points=bev_reference_points,
                 **kwargs,
             )
-            if use_signpost:
-                signpost(header=f"BEVEncoder Layer {lid} Complete")
+            signpost(header=f"BEVEncoder Layer {lid} End")
 
             if self.return_intermediate:
                 intermediate.append(output)
@@ -546,11 +553,7 @@ class TTBEVFormerEncoder:
         if bev_reference_points is not self._bev_reference_points:
             ttnn.deallocate(bev_reference_points)
 
-        if camera_features is not None:
-            ttnn.deallocate(camera_features)
-
-        if use_signpost:
-            signpost(header="TTNN BEVFormerEncoder Forward End")
+        signpost(header="TTNN BEVFormerEncoder Forward End")
 
         if self.return_intermediate:
             return intermediate

@@ -18,9 +18,9 @@ void MoeHashGateDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(scores.storage_type() == ttnn::StorageType::DEVICE, "Scores tensor must be on device");
     TT_FATAL(input_ids.storage_type() == ttnn::StorageType::DEVICE, "input_ids tensor must be on device");
     TT_FATAL(tid2eid.storage_type() == ttnn::StorageType::DEVICE, "tid2eid tensor must be on device");
-    TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
-    TT_FATAL(input_ids.buffer() != nullptr, "input_ids tensor must be allocated");
-    TT_FATAL(tid2eid.buffer() != nullptr, "tid2eid tensor must be allocated");
+    TT_FATAL(scores.is_allocated(), "Scores tensor must be allocated");
+    TT_FATAL(input_ids.is_allocated(), "input_ids tensor must be allocated");
+    TT_FATAL(tid2eid.is_allocated(), "tid2eid tensor must be allocated");
 
     TT_FATAL(scores.dtype() == tt::tt_metal::DataType::FLOAT32, "Scores tensor must be FLOAT32");
     TT_FATAL(scores.layout() == tt::tt_metal::Layout::TILE, "Scores tensor must be TILE layout");
@@ -33,7 +33,7 @@ void MoeHashGateDeviceOperation::validate_on_program_cache_miss(
     if (padding_config.has_value()) {
         TT_FATAL(
             padding_config->storage_type() == ttnn::StorageType::DEVICE, "Padding config tensor must be on device");
-        TT_FATAL(padding_config->buffer() != nullptr, "Padding config tensor must be allocated");
+        TT_FATAL(padding_config->is_allocated(), "Padding config tensor must be allocated");
         TT_FATAL(padding_config->dtype() == tt::tt_metal::DataType::UINT32, "Padding config tensor must be UINT32");
         TT_FATAL(
             padding_config->layout() == tt::tt_metal::Layout::ROW_MAJOR,

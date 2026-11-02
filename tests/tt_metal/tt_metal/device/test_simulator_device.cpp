@@ -32,8 +32,8 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/io_window/io_window.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

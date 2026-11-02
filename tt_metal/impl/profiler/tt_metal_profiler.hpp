@@ -27,6 +27,10 @@ void ClearProfilerControlBuffer(IDevice* device);
 // context.
 void ProfilerSync(MetalContext& ctx, ProfilerSyncState state);
 
+// Initialize the profiler of the given device, which belongs to the given context. The public InitDeviceProfiler(device)
+// overload looks the context up from the device.
+void InitDeviceProfiler(MetalContext& ctx, IDevice* device);
+
 // Set the output directory of the device profilers of the devices in the given mesh device.
 void SetDeviceProfilerDir(distributed::MeshDevice& mesh_device, const std::string& output_dir = "");
 

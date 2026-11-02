@@ -349,7 +349,7 @@ class MiniMaxH3AudioGeGluMlp(Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         normed = self.norm(x)
         # nn.GELU(approximate="tanh")
-        gated = ttnn.gelu(self.w0(normed), fast_and_approximate_mode=True)
+        gated = ttnn.gelu(self.w0(normed), variant=ttnn.GeluVariant.Tanh)
         return self.w2(ttnn.mul(gated, self.w1(normed)))
 
 
