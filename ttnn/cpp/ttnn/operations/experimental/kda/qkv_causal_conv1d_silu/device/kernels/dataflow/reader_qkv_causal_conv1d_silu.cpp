@@ -87,23 +87,10 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 {.offset_bytes = offset_of(rows) + row * block_row_bytes});
         }
     };
-    // The same, from a convolution tail stored per 64-channel segment (`history`, or the bare predecessor carry):
-    // page `c / segment_channels`, row `r` at byte `r * segment_row_bytes`. One read per (row, touched segment).
+    // The same, from a convolution tail (`history`, or the bare predecessor carry).
     const auto read_tail = [&](const auto& source, uint32_t ct_start) {
-        const uint32_t ct_end = ct_start + block_ct;
         for (uint32_t row = 0; row < history_rows; ++row) {
-            for (uint32_t ct = ct_start; ct < ct_end;) {
-                const uint32_t first = ct % tiles_per_segment;
-                const uint32_t remaining = ct_end - ct;
-                const uint32_t count = tiles_per_segment - first < remaining ? tiles_per_segment - first : remaining;
-                noc.async_read(
-                    source,
-                    scratch,
-                    count * tile_row_bytes,
-                    {.page_id = ct / tiles_per_segment, .offset_bytes = row * segment_row_bytes + first * tile_row_bytes},
-                    {.offset_bytes = offset_of(rows) + row * block_row_bytes + (ct - ct_start) * tile_row_bytes});
-                ct += count;
-            }
+            read_tail_row(noc, source, scratch, row, ct_start, block_ct, offset_of(rows) + row * block_row_bytes);
         }
     };
 
