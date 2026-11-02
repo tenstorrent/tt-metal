@@ -41,7 +41,8 @@
 //
 // Usage: sdpa_fw_benchmark [scenario-name-substring] [shape=B,Hq,Hkv,S,D[,causal|none|arbitrary[,gate]] ...]
 //        [q_chunk_size,k_chunk_size,heads_per_item[,max_pieces[,num_cores]] ...] [pairs] [default_pairs]
-//        pairs = main's chunking placed as main did (heavy/light pairs); default_pairs = the default chunking so placed.
+//        pairs = main's chunking placed as main did (heavy/light pairs); default_pairs = the default chunking
+//        so placed.
 // Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
 
 #include <fmt/format.h>
