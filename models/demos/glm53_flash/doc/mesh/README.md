@@ -2366,3 +2366,13 @@ scope "local" for `ttKDA(sequence_parallel_size=1)` on a multi-row mesh); `test_
 the sequence-parallel carries against HF after a row-local run (the output-only comparison had hidden it). Rule: a
 persistent semaphore needs a consumer in every program variant that bumps it, or each variant gets its own set.
 Validation queued: the 8x4 unit file on the stock runtime, the c1 1 M needle on both runtimes, the 8 x 20 K wave smoke.
+
+### 2026-11-02 09:50: the folder-only branch validated served (override runtime and stock runtime)
+
+With the exchange-per-mode fix: `test_mesh_local_kda` 4/4 on the 8x4 stock runtime (row-local vs HF 0.9999 per row,
+chained chunks 0.9998, idle rows bit-identical, the sequence-parallel carries after a row-local run recurrent 0.99989 /
+conv 0.99999, the ragged plans); the served c1 1 M needle FOUND on the fixed tree in 385.1 s (7 tokens, the passing
+chunk tokens); the 8 x 20 K two-round wave smoke on the STOCK runtime (the row-local path served through
+`TtKDA.local_bounds`): round 1 8/8 needles at TTFT 59.1 s each (one wave of 8; 69 s before the pick-combine
+kernel), round 2 8/8 prefix-cache hits at 11.9-36.8 s, texts identical across rounds 8/8. Release #9 (tt-shield run
+41423561217) runs on the image of this head. The stock-runtime c1 1 M needle is the last proof row (queued).
