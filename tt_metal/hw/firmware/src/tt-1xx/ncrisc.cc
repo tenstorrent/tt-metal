@@ -88,6 +88,7 @@ inline __attribute__((always_inline)) void wait_for_brisc_notification() {
         asm volatile("nop; nop; nop; nop; nop");
 #endif
         invalidate_l1_cache();
+        __builtin_riscv_pause();  // waiting; see trisc.cc
     }
 }
 
