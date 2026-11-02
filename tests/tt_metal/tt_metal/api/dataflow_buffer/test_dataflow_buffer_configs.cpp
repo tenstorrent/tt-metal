@@ -334,39 +334,41 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(sizeof(dfb_global_header_t), 120u);
     EXPECT_EQ(dfb_config_header_size(), 120u);
 
-    // Header is at offset 0; the DM1 blob starts on the next cache line, its slot array two lines later
-    // (after the header line and DM1's ready-flag line, which the host writes as zeros).
+    // Header is at offset 0 and the DM1 blob would start on the next cache line. A STRIDED DM-to-DM
+    // DFB uses no remapper, so DM1 has no slots and its blob (header + ready-flag line) is omitted:
+    // the next region starts where the DM1 blob would have.
     EXPECT_EQ(ghdr->dm1_remapper_blob_offset, DFB_DM1_REMAPPER_BLOB_OFFSET);
     EXPECT_EQ(DFB_DM1_REMAPPER_BLOB_OFFSET, 128u);
-    EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, 256u);
-    {
-        // The ready flags must be written as zeros, not left as whatever the buffer held.
-        std::vector<uint8_t> dirty(buf.size(), 0xA5u);
-        ASSERT_EQ(experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, dirty), nbytes);
-        for (uint32_t i = 0; i < DFB_DM1_READY_FLAGS_BYTES; i++) {
-            EXPECT_EQ(dirty[ghdr->dm1_remapper_blob_offset + DFB_DM1_READY_FLAGS_OFFSET + i], 0u) << "ready flag " << i;
-        }
-    }
-    EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
+    EXPECT_EQ(ghdr->dm1_slots >> 16, 0u);
+    EXPECT_EQ(experimental::dfb::detail::dm1_remapper_blob_core_size(dfbs), 0u);
+    EXPECT_EQ(ghdr->dm0_isr_blob_offset, DFB_DM1_REMAPPER_BLOB_OFFSET);
     // No implicit sync → no DM0 ISR blob, and dm0_packed is 0.
     EXPECT_EQ(experimental::dfb::detail::dm0_isr_blob_region_size(dfbs), 0u);
     EXPECT_EQ(ghdr->has_dm0_isr, 0u);
     EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
     EXPECT_EQ(ghdr->dm0_packed, 0u);
 
-    // Every hart, participating or not, gets a blob of whole cache lines; only harts 0 (producer) and
-    // 4 (consumer) have an entry, and only the producer publishes a signal.
+    // Only harts 0 (producer) and 4 (consumer) have an entry, and only the producer publishes a
+    // signal. They get blobs of whole cache lines; every other hart gets an empty blob.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
         SCOPED_TRACE("hart " + std::to_string(h));
         const dfb_hart_desc_t& desc = ghdr->hart_desc[h];
-        EXPECT_EQ(desc.num_entries, (h == 0 || h == 4) ? 1u : 0u);
+        const bool participates = (h == 0 || h == 4);
+        EXPECT_EQ(desc.num_entries, participates ? 1u : 0u);
         EXPECT_EQ(desc.flags, h == 0 ? DFB_HART_DESC_FLAG_PRODUCER : 0u);
         EXPECT_GT(desc.blob_start, 0u);
         EXPECT_EQ(desc.blob_start % 64u, 0u);
-        EXPECT_GT(desc.blob_len, 0u);
+        if (participates) {
+            EXPECT_GT(desc.blob_len, 0u);
+        } else {
+            EXPECT_EQ(desc.blob_len, 0u);
+        }
         EXPECT_EQ(desc.blob_len % 64u, 0u);
         EXPECT_EQ(desc.signal_region_off, ghdr->dfb_signal_region_off);
     }
+    // Two one-line blobs, back to back, then the signal region.
+    EXPECT_EQ(ghdr->hart_desc[4].blob_start, ghdr->hart_desc[0].blob_start + ghdr->hart_desc[0].blob_len);
+    EXPECT_EQ(ghdr->dfb_signal_region_off, ghdr->hart_desc[4].blob_start + ghdr->hart_desc[4].blob_len);
 
     // Signal region: per-hart byte slots (zeroed) then dfb_expected_signal[NUM_DFBS].
     EXPECT_GT(ghdr->dfb_signal_region_off, 0u);
@@ -2553,11 +2555,17 @@ static uint32_t expect_dm_cached_lines_disjoint(const std::vector<uint8_t>& buf,
     const uint32_t signal_bytes = static_cast<uint32_t>(::dfb::NUM_DFBS) *
                                   (static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) + sizeof(uint32_t));
     // DM1's ready flags are written and polled through the uncached alias, so no DM may read their line cached.
+    // They exist only when DM1 has slots: otherwise the DM1 blob is omitted, nothing touches that address,
+    // and the line belongs to whichever region follows.
+    const bool has_ready_flags = (ghdr->dm1_slots >> 16) > 0;
     const std::pair<uint32_t, uint32_t> uncached[] = {
         {0u, static_cast<uint32_t>(sizeof(dfb_global_header_t))},
-        {DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET, DFB_DM1_READY_FLAGS_BYTES},
+        {DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET, has_ready_flags ? DFB_DM1_READY_FLAGS_BYTES : 0u},
         {ghdr->dfb_signal_region_off, signal_bytes}};
     for (const auto& [off, len] : uncached) {
+        if (len == 0) {
+            continue;
+        }
         for (uint32_t l = off / kLineBytes; l <= (off + len - 1) / kLineBytes; ++l) {
             if (const auto it = owner.find(l); it != owner.end()) {
                 ADD_FAILURE() << "line " << l << " holds uncached bytes [" << off << ", +" << len
@@ -2642,6 +2650,28 @@ TEST_F(UnitMeshFixture, DfbConfigDmCachedLinesDisjoint) {
         EXPECT_EQ((ghdr->dm1_slots >> 16) > 0, topology.expect_dm1_slots);
         EXPECT_EQ(ghdr->has_dm0_isr != 0, topology.expect_dm0_isr);
         EXPECT_GE(expect_dm_cached_lines_disjoint(buf, nbytes), topology.min_dms);
+        EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
+
+        // The DM1 blob exists exactly when DM1 has slots; without it the DM0 region takes its place.
+        if (topology.expect_dm1_slots) {
+            EXPECT_GE(ghdr->dm0_isr_blob_offset, DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_CACHED_PAYLOAD_OFFSET);
+            // Producers poll the ready flags, so they must be written as zeros, not left as whatever
+            // the buffer held.
+            std::vector<uint8_t> dirty(buf.size(), 0xA5u);
+            ASSERT_EQ(experimental::dfb::detail::serialize_dfb_config_for_core(core, dfbs, dirty), nbytes);
+            for (uint32_t i = 0; i < DFB_DM1_READY_FLAGS_BYTES; i++) {
+                EXPECT_EQ(dirty[DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET + i], 0u)
+                    << "ready flag " << i;
+            }
+        } else {
+            EXPECT_EQ(ghdr->dm0_isr_blob_offset, DFB_DM1_REMAPPER_BLOB_OFFSET);
+        }
+
+        // A hart with no entries gets no blob bytes.
+        for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+            SCOPED_TRACE("hart " + std::to_string(h));
+            EXPECT_EQ(ghdr->hart_desc[h].num_entries == 0, ghdr->hart_desc[h].blob_len == 0);
+        }
     }
 }
 

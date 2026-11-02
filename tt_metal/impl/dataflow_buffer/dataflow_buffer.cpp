@@ -261,6 +261,9 @@ uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowB
     for (const auto& dfb : dfbs_on_core) {
         num_slots += dfb->dm1_remapper_slot_count();
     }
+    if (num_slots == 0) {
+        return 0;
+    }
     return DFB_DM1_CACHED_PAYLOAD_OFFSET + num_slots * static_cast<uint32_t>(sizeof(dfb_dm1_remapper_slot_t));
 }
 
@@ -280,6 +283,9 @@ std::vector<uint8_t> serialize_dm1_remapper_core_blob(
             num_slots + slot_count <= UINT16_MAX, "DM1 remapper slot count overflow on core ({},{})", core.x, core.y);
         num_slots = static_cast<uint16_t>(num_slots + slot_count);
     }
+    if (num_slots == 0) {
+        return {};
+    }
 
     std::vector<uint8_t> data;
     data.reserve(dm1_remapper_blob_core_size(dfbs_on_core));
@@ -298,7 +304,8 @@ std::vector<uint8_t> serialize_dm1_remapper_core_blob(
 }
 
 // Returns the serialized byte size of one hart's init blob (init entries only, no wait entries),
-// rounded to a whole number of cache lines so no two harts' blobs share a line.
+// rounded to a whole number of cache lines so no two harts' blobs share a line. A hart with no
+// entries gets 0 bytes.
 static uint32_t hart_blob_byte_size(
     uint8_t hartid, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
     uint32_t sz = 0u;
@@ -319,7 +326,7 @@ static uint32_t hart_blob_byte_size(
         sz += dfb_hart_init_entry_byte_size_for(num_tcs, hartid < ::dfb::TENSIX_RISC_OFFSET);
     }
     if (n == 0) {
-        sz = 4u;  // minimal blob for non-participating hart
+        return 0u;
     }
     return dfb_align_cl(sz);
 }
@@ -441,7 +448,11 @@ void verify_dfb_hart_blobs(
             config_bytes.size());
 
         if (num_entries == 0) {
-            TT_FATAL(blob_off + 4u <= config_bytes.size(), "hart {} minimal blob overflows config", hartid);
+            TT_FATAL(
+                ghdr->hart_desc[hartid].blob_len == 0u,
+                "hart {} has no entries but a {}B blob",
+                hartid,
+                ghdr->hart_desc[hartid].blob_len);
             continue;
         }
 
@@ -944,10 +955,8 @@ size_t serialize_dfb_config_for_core(
         }
 
         if (num_entries == 0) {
-            // Minimal blob: the same whole line the sizer reserved for it.
-            TT_FATAL(offset + hart_blob_sizes[h] <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
-            std::memset(out.data() + offset, 0, hart_blob_sizes[h]);
-            offset += hart_blob_sizes[h];
+            // No blob: the sizer reserved nothing, and the device never reads past num_entries.
+            TT_FATAL(hart_blob_sizes[h] == 0u, "hart {} has no entries but {}B reserved", h, hart_blob_sizes[h]);
             continue;
         }
 
