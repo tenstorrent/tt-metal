@@ -46,6 +46,23 @@ pre-agent-steps:
             > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err
         DIFF_EXIT=$?
         set -e
+        if [ $DIFF_EXIT -ne 0 ] && grep -qE 'HTTP 406|exceeded the maximum number of files' /tmp/gh-aw/agent/pr-diff.err; then
+          # GitHub refuses `gh pr diff` for PRs touching more than 300 files.
+          # Rebuild an equivalent diff from the paginated REST files endpoint
+          # (same exclusions as above) instead of failing the whole check.
+          echo "::warning::gh pr diff refused: PR exceeds GitHub's 300-file diff limit. Falling back to the paginated pulls/files API; per-file patches may be omitted for very large files."
+          set +e
+          gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            --jq '.[] | select(.filename | test("(^|/)[^/]*\\.lock\\.yml$|(^|/)(generated|dist|build)/") | not) | "diff --git a/\(.previous_filename // .filename) b/\(.filename)\n--- a/\(.previous_filename // .filename)\n+++ b/\(.filename)\n\(.patch // "(patch omitted by GitHub API: binary or too large)")"' \
+            > /tmp/gh-aw/agent/pr-diff.full 2>>/tmp/gh-aw/agent/pr-diff.err
+          DIFF_EXIT=$?
+          set -e
+          if [ $DIFF_EXIT -ne 0 ]; then
+            echo "::warning::Fallback diff fetch also failed (exit $DIFF_EXIT); continuing without a diff: $(cat /tmp/gh-aw/agent/pr-diff.err)"
+            echo "# PR diff unavailable: PR exceeds GitHub's 300-file diff limit and the fallback fetch failed. Review from pr-meta.json only and say so in the review." > /tmp/gh-aw/agent/pr-diff.full
+            DIFF_EXIT=0
+          fi
+        fi
         if [ $DIFF_EXIT -ne 0 ]; then
           echo "::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)" >&2
           exit 1
