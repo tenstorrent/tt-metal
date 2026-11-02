@@ -242,10 +242,6 @@ def filter_params_with_constraints(all_params):
             ):
                 continue
 
-        # SCALAR broadcast + acc_to_dest (already excluded above, but explicit)
-        if broadcast_type == BroadcastType.Scalar and acc_to_dest:
-            continue
-
         # Broadcast incompatible with DEST_TO_SRCB/SRCA
         if not broadcast_none:
             if reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB:
