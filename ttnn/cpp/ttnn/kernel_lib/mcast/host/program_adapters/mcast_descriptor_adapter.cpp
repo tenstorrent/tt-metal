@@ -72,7 +72,6 @@ void McastImpl::attach(
         TT_FATAL(!collision, "Multicast semaphore ID collides with an existing resource");
         semaphores.push_back({.id = ids[role], .core_ranges = participating_, .initial_value = 0});
     }
-    const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
     std::set<const KernelDescriptor*> selected;
     std::vector<KernelDescriptor> kernels;
     kernels.reserve(targets.size());
@@ -106,13 +105,7 @@ void McastImpl::attach(
                 "Multicast attachment encountered an invalid buffer binding");
         }
         for (const auto& core : corerange_to_cores(kernel.core_ranges)) {
-            if (const auto* group = group_for_core_(core)) {
-                const bool sender =
-                    std::find(group->senders_.begin(), group->senders_.end(), core) != group->senders_.end();
-                TT_FATAL(
-                    !(sender || chain) || noc == cfg_.noc,
-                    "Multicast sender/forwarder NoC differs from the configured multicast NoC");
-            }
+            check_kernel_noc_(core, noc);
             auto entry = std::find_if(
                 kernel.runtime_args.begin(),
                 kernel.runtime_args.end(),

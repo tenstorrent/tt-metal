@@ -542,7 +542,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     mm_kernel_in1_sender_writer_defines["SPARSITY"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    // Quasar has one NoC, and the in0 multicast must be configured on NOC_0 there.
+    tt_metal::NOC in0_noc = device->arch() == tt::ARCH::QUASAR
+                                ? tt_metal::NOC::NOC_0
+                                : tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     ////////////////////////////////////////////////////////////////////////////

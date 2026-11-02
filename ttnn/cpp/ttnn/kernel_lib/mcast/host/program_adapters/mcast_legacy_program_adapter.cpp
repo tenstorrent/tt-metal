@@ -110,18 +110,6 @@ void McastImpl::attach(
     runtime_args = std::move(staged_args);
 }
 
-void McastImpl::check_kernel_noc_(const CoreCoord& core, NOC noc) const {
-    const auto* group = group_for_core_(core);
-    if (group == nullptr) {
-        return;
-    }
-    const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
-    const bool sender = std::find(group->senders_.begin(), group->senders_.end(), core) != group->senders_.end();
-    TT_FATAL(
-        !(sender || chain) || noc == cfg_.noc,
-        "Multicast sender/forwarder NoC differs from the configured multicast NoC");
-}
-
 void attach_absent_mcast(DataMovementConfig& config, std::string_view prefix) {
     auto staged = config;
     insert_offsets(staged, prefix, 0);

@@ -529,6 +529,21 @@ const McastImpl::Group* McastImpl::group_for_core_(const CoreCoord& core) const 
     }
     return nullptr;
 }
+void McastImpl::check_kernel_noc_(const CoreCoord& core, tt::tt_metal::NOC noc) const {
+    // Quasar has one NoC, so a kernel's Gen1 NoC selection does not apply there.
+    if (prepared_arch_ == tt::ARCH::QUASAR) {
+        return;
+    }
+    const auto* group = group_for_core_(core);
+    if (group == nullptr) {
+        return;
+    }
+    const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
+    const bool sender = std::find(group->senders_.begin(), group->senders_.end(), core) != group->senders_.end();
+    TT_FATAL(
+        !(sender || chain) || noc == cfg_.noc,
+        "Multicast sender/forwarder NoC differs from the configured multicast NoC");
+}
 wire::ArgumentMetadata McastImpl::argument_metadata_(const CoreRangeSet* placement) const {
     require_arguments_prepared_();
     // Empty descriptor placements still compile their source, including direct

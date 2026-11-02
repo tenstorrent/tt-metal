@@ -205,11 +205,11 @@ void McastImpl::attach(
     for (const auto& args : staged_args.kernel_run_args) {
         TT_FATAL(runtime_kernels.insert(args.kernel).second, "Duplicate multicast kernel run-argument entry");
     }
-    const bool chain = wire::transfer_mode(layout_.flags) == dataflow_kernel_lib::TransferMode::ChainUnicast;
     const auto grid = prepared_device_grid_;
     for (const auto index : indices) {
         auto& kernel = staged.kernels[index];
         const auto nodes = placement(staged, kernel.unique_id);
+        const auto noc = spec_noc(kernel);
         const auto metadata = argument_metadata_(&nodes);
         const uint32_t words = wire::RuntimeLayout(metadata).words;
         const auto base = uniform_varargs(kernel, nodes);
@@ -229,13 +229,7 @@ void McastImpl::attach(
         }
         for (const auto& node : tt::tt_metal::corerange_to_cores(nodes)) {
             TT_FATAL(node.x < grid.x && node.y < grid.y, "Multicast kernel is placed outside the worker grid");
-            if (const auto* group = group_for_core_(node)) {
-                const bool sender =
-                    std::find(group->senders_.begin(), group->senders_.end(), node) != group->senders_.end();
-                TT_FATAL(
-                    !(sender || chain) || spec_noc(kernel) == cfg_.noc,
-                    "Multicast sender/forwarder NoC differs from the configured multicast NoC");
-            }
+            check_kernel_noc_(node, noc);
             auto entry = values.find(node);
             TT_FATAL(entry != values.end() || base == 0, "Missing caller runtime prefix for multicast attachment");
             auto& args_for_node = values[node];
