@@ -104,8 +104,17 @@ class M3VLVisionModel(LightweightModule):
         )
 
     # ------------------------------------------------------------------
-    def _push_pixel_values(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
-        """Push flattened pixel_values (L, 1176) to device as bf16 (1, 1, L, 1176), whatever the weights' dtype."""
+    def push_pixel_values(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Check one image's input and push its pixel values to device as forward_device takes them.
+
+        Takes one image, pixel_values (L, 1176) and image_grid_thw (1, 3) as the image processor gives them, and raises
+        ValueError (check_image_input) for anything else before any device work. On the device, rows past the grid's
+        patches would get zero q and k from the RoPE op (rotary_embedding_llama) without an error, one NaN or Inf
+        value would reach every patch through attention, and the patches of several images would attend to each other,
+        as in Hugging Face 5.12.1; vLLM and SGLang keep attention inside each image. Returns the pixel values on device
+        as bf16 (1, 1, L, 1176), whatever the weights' dtype.
+        """
+        check_image_input(pixel_values, image_grid_thw, self.config.patch_dim)
         return to_device(pixel_values.reshape(1, 1, *pixel_values.shape), self.device)
 
     def _stage_rope(self, image_grid_thw: torch.Tensor):
@@ -123,7 +132,7 @@ class M3VLVisionModel(LightweightModule):
         """The cos and sin tables of the grid, staged with its first image and kept for the next images of that grid.
 
         Holds the tables of the ROPE_CACHE_GRIDS grids used last and frees the two tables of the grid it drops. Only
-        forward_tower uses them, to copy them to L1 for the blocks, so no caller holds a table that this frees.
+        _tower_device uses them, to copy them to L1 for the blocks, so no caller holds a table that this frees.
         """
         key = tuple(image_grid_thw[0].tolist())
         if key in self._rope_cache:
@@ -147,16 +156,11 @@ class M3VLVisionModel(LightweightModule):
 
     # ------------------------------------------------------------------
     def forward_tower(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run patch_embed -> pre_layrnorm -> the blocks. Returns (1, 1, L, 1280).
+        """Run patch_embed -> pre_layrnorm -> the blocks on one image (push_pixel_values). Returns (1, 1, L, 1280)."""
+        return self._tower_device(self.push_pixel_values(pixel_values, image_grid_thw), image_grid_thw)
 
-        Takes one image, pixel_values (L, 1176) and image_grid_thw (1, 3) as the image processor gives them, and raises
-        ValueError (check_image_input) for anything else before any device work. On the device, rows past the grid's
-        patches would get zero q and k from the RoPE op (rotary_embedding_llama) without an error, one NaN or Inf
-        value would reach every patch through attention, and the patches of several images would attend to each other,
-        as in Hugging Face 5.12.1; vLLM and SGLang keep attention inside each image.
-        """
-        check_image_input(pixel_values, image_grid_thw, self.config.patch_dim)
-        x_tt = self._push_pixel_values(pixel_values)
+    def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """forward_tower's device ops, on the pixel values that push_pixel_values gave, which stay allocated."""
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
@@ -166,12 +170,18 @@ class M3VLVisionModel(LightweightModule):
         ttnn.deallocate(sin_tt)
         return x_tt
 
-    def forward(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Full forward of one image (see forward_tower). With projector: (1, 1, L//4, 6144); else the tower out
-        (1, 1, L, 1280)."""
-        x_tt = self.forward_tower(pixel_values, image_grid_thw)
+    def forward_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Every device op of forward, on the pixel values that push_pixel_values gave for image_grid_thw. They stay
+        allocated, so one upload serves several calls. It does not check that they belong to image_grid_thw: pixel
+        values pushed for another grid can give wrong tokens without an error. With projector: (1, 1, L//4, 6144); else
+        the tower out (1, 1, L, 1280)."""
+        x_tt = self._tower_device(x_tt, image_grid_thw)
         if self.projector is None:
             return x_tt
         out_tt = self.projector(x_tt)
         ttnn.deallocate(x_tt)
         return out_tt
+
+    def forward(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
+        """Full forward of one image: push_pixel_values, then forward_device."""
+        return self.forward_device(self.push_pixel_values(pixel_values, image_grid_thw), image_grid_thw)

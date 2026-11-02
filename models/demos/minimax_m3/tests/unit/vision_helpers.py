@@ -3,7 +3,7 @@
 
 """Shared parts of the vision encoder unit tests (test_vision_*_vs_ref.py): the image grids, the host to
 device copies and the comparison with the reference. The reference model and its activations are fixtures in
-conftest.py."""
+conftest.py. tests/perf/test_vision_encoder_timing.py also uses VISION_GRIDS and to_host."""
 
 from __future__ import annotations
 
