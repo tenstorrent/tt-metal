@@ -22,7 +22,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole, is_wormhole_b0
 
 pytestmark = pytest.mark.use_module_device
 
