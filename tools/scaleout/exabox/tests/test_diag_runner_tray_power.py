@@ -19,17 +19,21 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
+import diag_runner  # noqa: E402
 from diag_runner import (  # noqa: E402
     FAIL,
     PASS,
     SKIP,
     TRAY_POWER_ALLOWED,
     TRAY_POWER_BUS,
+    TRAY_POWER_CALL_S,
+    TRAY_POWER_PHASE_S,
     WARN,
     Phase,
     TrayPowerReader,
@@ -86,10 +90,19 @@ class FakeBmc:
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
 
-def run_phase(bmc, tier="pre_reboot", dry_run=False) -> Phase:
+def run_phase(bmc, tier="pre_reboot", dry_run=False, clock=None) -> Phase:
     phase = Phase(name="tray_power", gates=False)
-    run_tray_power(tier, phase, dry_run, runner=bmc)
+    kw = {"clock": clock} if clock else {}
+    run_tray_power(tier, phase, dry_run, runner=bmc, **kw)
     return phase
+
+
+class FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
 
 
 def by_tray(phase: Phase) -> dict[int, object]:
@@ -244,6 +257,78 @@ class TestTrayPowerPhase(unittest.TestCase):
         bmc = FakeBmc()
         self.assertEqual([c.status for c in run_phase(bmc, dry_run=True).checks], [SKIP])
         self.assertEqual(bmc.calls, [])
+
+    def test_timeouts_everywhere_stop_at_once_as_one_skip(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            raise subprocess.TimeoutExpired(argv, TRAY_POWER_CALL_S)
+
+        phase = run_phase(runner)
+        self.assertLessEqual(len(calls), 12)
+        self.assertEqual([(c.name, c.status) for c in phase.checks], [("tray_12v_feed", SKIP)])
+        self.assertIn("no reply", phase.checks[0].details)
+
+    def test_deadline_mid_run_leaves_the_rest_not_read(self):
+        clock = FakeClock()
+        clean = FakeBmc()
+
+        def runner(argv):
+            cp = clean(argv)
+            if len(clean.calls) == 32:  # trays 1 and 2 read in full
+                clock.t = TRAY_POWER_PHASE_S
+            return cp
+
+        checks = by_tray(run_phase(runner, clock=clock))
+        self.assertEqual(len(clean.calls), 32)
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS, PASS, WARN, WARN])
+        for t in (3, 4):
+            self.assertIn("not read: HSC 0x40, HSC 0x42, CPLD (phase time limit", checks[t].details)
+
+    def test_bmc_hanging_mid_run_is_bounded_by_the_phase_limit(self):
+        clock = FakeClock()
+        clean = FakeBmc()
+
+        def runner(argv):
+            if txn_of(argv)[0] == TRAY_POWER_BUS[1]:
+                clock.t += 1
+                return clean(argv)
+            clock.t += TRAY_POWER_CALL_S
+            raise subprocess.TimeoutExpired(argv, TRAY_POWER_CALL_S)
+
+        checks = by_tray(run_phase(runner, clock=clock))
+        self.assertLessEqual(clock.t, TRAY_POWER_PHASE_S + TRAY_POWER_CALL_S)
+        self.assertEqual(checks[1].status, PASS)
+        for t in (2, 3, 4):
+            self.assertEqual(checks[t].status, WARN)
+            self.assertIn("not read: HSC 0x40, HSC 0x42, CPLD", checks[t].details)
+
+    def test_call_timeout_never_outlasts_the_phase(self):
+        clock = FakeClock()
+        reader = TrayPowerReader(clock=clock)
+        seen = {}
+
+        def fake_run(argv, **kw):
+            seen.update(kw)
+            return subprocess.CompletedProcess(argv, 0, stdout=" 00 00\n", stderr="")
+
+        clock.t = TRAY_POWER_PHASE_S - 4
+        with mock.patch.object(diag_runner, "run", fake_run):
+            reader.txn(TRAY_POWER_BUS[1], 0x40, 2, 0x79)
+        self.assertEqual(seen["timeout"], 4)
+
+    def test_powered_off_tray_is_a_warn_without_the_bus_bar_hint(self):
+        bmc = FakeBmc(
+            hsc={(2, a): {"word": 0x0840, "input": 0x00, "iout": 0x00} for a in (0x40, 0x42)},
+            cpld={2: {"reg1e": "00", "dbg5f": "70", "dbg58": "78"}},
+        )
+        checks = by_tray(run_phase(bmc))
+        self.assertEqual(checks[2].status, WARN)
+        self.assertIn("powered off", checks[2].details)
+        self.assertNotIn("bus bar", checks[2].details)
+        self.assertIs(checks[2].data["cpld"]["power_enable"], False)
+        self.assertEqual(checks[1].status, PASS)
 
     def test_gate_refuses_writes_before_ipmitool(self):
         bmc = FakeBmc()

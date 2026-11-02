@@ -2653,6 +2653,10 @@ CPLD_HEALTHY, CPLD_BUSBAR = ("ff", "7c"), ("00", "78")
 CPLD_FEED_FAULTS = frozenset({"TRAY_12V_LOST", "BUSBAR_SIG", "HOTSWAP_OC"})
 TRAY_POWER_HINT = "bus bar / tray 12 V feed"
 TRAY_POWER_CALL_S = 15
+# Whole-phase bound: an unresponsive BMC must not eat the run's own timeout.
+TRAY_POWER_PHASE_S = 120
+# Timeouts before any read succeeded that mean no route: stop there.
+TRAY_POWER_NO_ROUTE_TIMEOUTS = 2
 TRAY_POWER_MAX_READS = 4
 
 
@@ -2725,26 +2729,47 @@ def _parse_raw_bytes(out: str, nbytes: int) -> list[int] | None:
 class TrayPowerReader:
     """In-band reads of the tray HSCs and CPLDs, gated by TRAY_POWER_ALLOWED.
 
-    `runner(argv) -> CompletedProcess` is injectable so the tests can see every
-    transaction without ipmitool.
+    `runner(argv) -> CompletedProcess` and `clock` are injectable so the tests
+    can see every transaction without ipmitool. Once `budget_s` is spent, or
+    the first reads only time out (no route), no more transactions are sent:
+    `stopped` says why and every later read returns None.
     """
 
-    def __init__(self, runner=None):
+    def __init__(self, runner=None, clock=time.monotonic, budget_s=TRAY_POWER_PHASE_S):
         base = ["ipmitool"]
         if os.geteuid() != 0:
             base = ["sudo", "-n"] + base
         self.base = base
-        self.runner = runner or (lambda argv: run(argv, capture_output=True, text=True, timeout=TRAY_POWER_CALL_S))
+        self.clock = clock
+        self.budget_s = budget_s
+        self.deadline = clock() + budget_s
+        self.runner = runner or self._run
         self.reads_ok = 0
+        self.timeouts = 0
         self.errors: list[str] = []
+        self.stopped = ""
+
+    def _run(self, argv: list[str]) -> subprocess.CompletedProcess:
+        left = self.deadline - self.clock()
+        return run(argv, capture_output=True, text=True, timeout=max(1.0, min(TRAY_POWER_CALL_S, left)))
 
     def txn(self, bus: int, addr: int, nbytes: int, *payload: int) -> list[int] | None:
         if bus not in TRAY_POWER_BUS.values() or (addr, nbytes, tuple(payload)) not in TRAY_POWER_ALLOWED:
             raise ValueError(f"tray power: refusing bus 0x{bus:02x} addr 0x{addr:02x} {nbytes} {payload}")
         argv = self.base + ["raw", "0x06", "0x52", f"0x{bus:02x}", f"0x{addr:02x}", f"0x{nbytes:02x}"]
         argv += [f"0x{b:02x}" for b in payload]
+        if not self.stopped and self.clock() >= self.deadline:
+            self.stopped = f"phase time limit of {self.budget_s:g} s spent"
+        if self.stopped:
+            return None
         try:
             cp = self.runner(argv)
+        except subprocess.TimeoutExpired as e:
+            self.timeouts += 1
+            self.errors.append(f"ipmitool: no reply in {e.timeout:g} s")
+            if self.reads_ok == 0 and self.timeouts >= TRAY_POWER_NO_ROUTE_TIMEOUTS:
+                self.stopped = "no route: ipmitool timed out"
+            return None
         except (OSError, subprocess.SubprocessError) as e:
             self.errors.append(repr(e))
             return None
@@ -2800,8 +2825,13 @@ class TrayPowerReader:
         }
 
 
-def tray_power_check(tray: int, hscs: dict, cpld: dict) -> Check:
-    """One tray's Check from its HSC reads ({addr: hsc()}) and CPLD read (cpld())."""
+def tray_power_check(tray: int, hscs: dict, cpld: dict, why: str = "") -> Check:
+    """One tray's Check from its HSC reads ({addr: hsc()}) and CPLD read (cpld()).
+
+    `why` says why reads were cut short (the phase's time limit), for the
+    'not read' text. A tray whose CPLD power enable reads low was powered off on
+    purpose: its OFF latch is no 12 V feed fault, so it is a WARN with no hint.
+    """
     where = f"tray {tray} ({tray_bdf_range(tray)})"
     findings, unread, data = [], [], {"tray": tray, "bdf_range": tray_bdf_range(tray), "hsc": {}, "cpld": dict(cpld)}
     for addr, st in sorted(hscs.items()):
@@ -2823,34 +2853,48 @@ def tray_power_check(tray: int, hscs: dict, cpld: dict) -> Check:
         findings.append(f"CPLD: {state}: {text} (reg 0x1E={cpld['reg1e']} dbg 0x5F={cpld['dbg5f']})")
     elif state == "UNREAD":
         unread.append("CPLD")
+    dbg58 = cpld.get("dbg58")
+    powered_off = dbg58 is not None and not int(dbg58, 16) & 0x80
+    data["cpld"]["power_enable"] = None if dbg58 is None else not powered_off
 
     name = f"tray{tray}_12v_feed"
+    not_read = f"not read: {', '.join(unread)}" + (f" ({why})" if why else "")
+    if powered_off:
+        lines = [f"{where}: tray powered off (CPLD power enable low, dbg 0x58={dbg58}): latches not judged"]
+        lines += findings + ([not_read] if unread else [])
+        return Check(name=name, status=WARN, details="\n".join(lines), data=data, ip="board")
     if findings:
         lines = [f"{where}: check {TRAY_POWER_HINT}"] + findings
         if unread:
-            lines.append(f"not read: {', '.join(unread)}")
+            lines.append(not_read)
         return Check(name=name, status=FAIL, details="\n".join(lines), data=data, ip="board")
     if unread:
-        return Check(name=name, status=WARN, details=f"{where}: not read: {', '.join(unread)}", data=data, ip="board")
+        return Check(name=name, status=WARN, details=f"{where}: {not_read}", data=data, ip="board")
     if state == "OTHER":
         return Check(name=name, status=WARN, details=f"{where}: CPLD {text}", data=data, ip="board")
     extra = f"; CPLD {text}" if state != "HEALTHY" else ""
     return Check(name=name, status=PASS, details=f"{where}: no 12 V latch set{extra}", data=data, ip="board")
 
 
-def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None) -> None:
-    """Read and judge every tray's 12 V feed latches into `phase`."""
+def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=time.monotonic) -> None:
+    """Read and judge every tray's 12 V feed latches into `phase`.
+
+    Bounded by TRAY_POWER_PHASE_S: trays left when it is spent are WARN 'not
+    read'. No successful read on the first tray means no route: one SKIP.
+    """
     if not TIER_TRAY_POWER.get(tier, False):
         phase.add(Check(name="tray_12v_feed", status=SKIP, details=f"not run at tier {tier}", ip="board"))
         return
     if dry_run:
         phase.add(Check(name="tray_12v_feed", status=SKIP, details="(dry) ipmitool raw 0x06 0x52 reads", ip="board"))
         return
-    reader = TrayPowerReader(runner)
+    reader = TrayPowerReader(runner, clock)
     checks = []
     for tray, bus in sorted(TRAY_POWER_BUS.items()):
         hscs = {addr: reader.hsc(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
-        checks.append(tray_power_check(tray, hscs, reader.cpld(bus)))
+        checks.append(tray_power_check(tray, hscs, reader.cpld(bus), why=reader.stopped))
+        if reader.reads_ok == 0:
+            break
     if reader.reads_ok == 0:
         # No route at all (no ipmitool, no sudo, no BMC): one SKIP, not four WARNs.
         first = reader.errors[0] if reader.errors else "no reply"
