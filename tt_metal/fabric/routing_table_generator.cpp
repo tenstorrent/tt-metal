@@ -117,18 +117,24 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                                                          std::uint32_t src_chip_id,
                                                          std::uint32_t dst_chip_id,
                                                          RoutingDirection a,
-                                                         RoutingDirection b) -> RoutingDirection {
+                                                         RoutingDirection b,
+                                                         bool prefer_b_on_tie) -> RoutingDirection {
         // Loop through intra_mesh_connectivity starting with a or b direction and return direction that matches
-        // dst_chip_id_first In case of tie, this function is returning a
+        // dst_chip_id first. On a tie, returns b if prefer_b_on_tie, else a
         std::uint32_t curr_a = src_chip_id, curr_b = src_chip_id;
         bool a_valid = true, b_valid = true;
         while (a_valid or b_valid) {
-            if (intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
-                intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a) {
+            const bool a_reaches_dst = intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
+                                       intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a;
+            const bool b_reaches_dst = intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
+                                       intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b;
+            if (a_reaches_dst and b_reaches_dst) {
+                return prefer_b_on_tie ? b : a;
+            }
+            if (a_reaches_dst) {
                 return a;
             }
-            if (intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
-                intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b) {
+            if (b_reaches_dst) {
                 return b;
             }
             a_valid = false;
@@ -157,6 +163,11 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             mesh_id_val);
         return RoutingDirection::NONE;  // This line should never be reached
     };
+    // Split ring ties by the source's position along the axis (even -> N/E, odd -> S/W) to balance both directions.
+    // Must depend only on that position: the 2D action vectors are built from one row/column per axis.
+    const auto prefer_negative_direction_on_tie = [](std::uint32_t position_on_axis) {
+        return position_on_axis % 2 == 1;
+    };
     const auto& mesh_graph = topology_mapper_.get_mesh_graph();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -178,7 +189,12 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                         return intra_mesh_connectivity[mesh_id_val][src_chip_id].at(next_chip).port_direction;
                     }
                     return get_shorter_direction_on_row_or_col(
-                        mesh_id_val, src_chip_id, target_chip_id, forward, reverse);
+                        mesh_id_val,
+                        src_chip_id,
+                        target_chip_id,
+                        forward,
+                        reverse,
+                        prefer_negative_direction_on_tie(src_mesh_coord[axis]));
                 };
                 // Preserve dimension order: dim 0 (N/S) completes before dim 1 (E/W).
                 if (src_mesh_coord[0] != dst_mesh_coord[0]) {
