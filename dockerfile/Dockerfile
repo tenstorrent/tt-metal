@@ -190,12 +190,15 @@ RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
+# clang-tidy-23 comes from the llvm-23 apt repo added (and pinned below the v17/v20
+# default priority) in install_dependencies.sh.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-20-dev \
     libclang-rt-20-dev \
     clang-tidy-20 \
+    clang-tidy-23 \
     clang-20 \
     llvm-20 \
     curl \
@@ -354,8 +357,6 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
 # switching to libgl1
-# socat is for the exabox-tools image (dockerfile/exabox_tools/Dockerfile), which
-# derives from this stage and cannot run apt itself.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
@@ -367,7 +368,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     libgl1 \
     ipmitool \
-    socat \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Configure SSH for MPI multihost jobs readiness

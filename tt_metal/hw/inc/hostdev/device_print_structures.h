@@ -66,7 +66,8 @@ namespace device_print_dispatch {
 struct NocLocationInputInfo {
     uint16_t x : 6;
     uint16_t y : 6;
-    uint64_t rw_ptr_addr : 52;
+    uint64_t rw_ptr_addr : 51;
+    uint64_t use_dram_alignment : 1;  // Set for DRISC L1, which the NOC reaches through the DRAM tile
     uint16_t buf_offset;
     uint16_t buf_size;
 } __attribute__((packed, aligned(4)));
@@ -77,7 +78,7 @@ static_assert(sizeof(NocLocationInputInfo) % 4 == 0, "NocLocationInputInfo must 
 struct DramStreamMessageHeader {
     uint16_t x : 6;
     uint16_t y : 6;
-    uint16_t align : 6;
+    uint16_t align : 6;  // Payload offset from the header in 4-byte words; offsets are always word multiples
     uint16_t buffer_wrapped : 1;
     uint16_t length : 13;
 } __attribute__((packed, aligned(4)));

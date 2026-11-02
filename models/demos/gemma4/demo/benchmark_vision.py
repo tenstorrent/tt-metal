@@ -19,7 +19,7 @@ Usage:
 
     # Override image / prompt / iteration count / vision dtype:
     HF_MODEL=google/gemma-4-31B-it \\
-        GEMMA4_VISION_IMAGE=models/tt_transformers/demo/sample_prompts/llama_models/dog.jpg \\
+        GEMMA4_VISION_IMAGE=models/ttt_compat/demo/sample_prompts/llama_models/dog.jpg \\
         GEMMA4_VISION_PROMPT="Describe this image." \\
         GEMMA4_VISION_BENCH_ITERS=20 \\
         GEMMA4_VISION_DTYPE=bfloat8_b \\

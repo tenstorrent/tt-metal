@@ -2,11 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import ttnn
 import pytest
 
-from models.experimental.bevformer.tt.tt_spatial_cross_attention import TTSpatialCrossAttention
+from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
+    SCARebatchPlanner,
+    TTSpatialCrossAttention,
+    _rebatch_len,
+)
 from models.experimental.bevformer.reference.spatial_cross_attention import SpatialCrossAttention
 
 
@@ -274,3 +280,176 @@ def test_spatial_cross_attention_forward(
 
     if ENABLE_LOGGING:
         logger.info("✅ All SCA tolerance checks passed successfully!")
+
+
+# The rebatch plan on its own: its routing must be exact, which a global PCC would dilute.
+
+NUM_DEPTH_LEVELS = 4
+
+
+def random_mask(num_cams, bs, num_queries, visible, generator, later_samples_extra=0):
+    """``[num_cams, bs, num_queries, D]`` with ``visible[i]`` queries of camera ``i`` seen at one or
+    more depth levels in the first sample, ``later_samples_extra`` more in the others."""
+    mask = torch.zeros(num_cams, bs, num_queries, NUM_DEPTH_LEVELS, dtype=torch.bool)
+    for i in range(num_cams):
+        for j in range(bs):
+            n = max(0, visible[i] + (later_samples_extra if j else 0))
+            queries = torch.randperm(num_queries, generator=generator)[:n]
+            levels = torch.randint(0, NUM_DEPTH_LEVELS, (queries.numel(),), generator=generator)
+            mask[i, j, queries, levels] = True
+            # A second level on some queries: the plan counts a query once however many levels hit.
+            mask[i, j, queries[::3], (levels[::3] + 1) % NUM_DEPTH_LEVELS] = True
+    return mask
+
+
+def host_plan(mask, rebatch_len):
+    """The plan's indices built on the host with ``nonzero``: every sample gathers the queries the
+    first sample's cameras see, a query's slots fill in camera order."""
+    num_cams, bs, num_queries, _ = mask.shape
+    seen_by = mask.any(-1)
+    visible = seen_by[:, :1].expand_as(seen_by)
+    compact = torch.full((bs, num_cams, rebatch_len), num_queries - 1, dtype=torch.int64)
+    max_cameras = int(visible.sum(0).max())
+    inverse = torch.full((max_cameras, bs, num_queries), -1, dtype=torch.int64)
+    next_slot = torch.zeros(bs, num_queries, dtype=torch.int64)
+    for j in range(bs):
+        for i in range(num_cams):
+            ids = torch.nonzero(visible[i, j]).squeeze(-1)
+            compact[j, i, : ids.numel()] = ids
+            inverse[next_slot[j, ids], j, ids] = (j * num_cams + i) * rebatch_len + torch.arange(ids.numel())
+            next_slot[j, ids] += 1
+    return dict(
+        compact=compact,
+        inverse=inverse,
+        max_cameras=max_cameras,
+        num_valid=visible.sum(-1).t().flatten(),
+        count=seen_by.sum(0).clamp(min=1),
+    )
+
+
+def upload_frame(mask, device, generator):
+    num_cams, bs, num_queries, _ = mask.shape
+    points = torch.rand(num_cams, bs, num_queries, NUM_DEPTH_LEVELS, 2, generator=generator)
+    return (
+        points,
+        ttnn.from_torch(points, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.from_torch(mask.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+    )
+
+
+def check_plan(plan, mask, points):
+    """Assert ``plan`` routes every row as the host build at the plan's own ``rebatch_len``; padded
+    rows may hold anything a mask selects away."""
+    num_cams, bs, num_queries, _ = mask.shape
+    rebatch_len = plan.rebatch_len
+    expected = host_plan(mask, rebatch_len)
+    assert int(expected["num_valid"].max()) < rebatch_len, "the plan holds fewer rows than a camera sees"
+    assert plan.num_valid_queries == tuple(expected["num_valid"].tolist())
+
+    row_mask = ttnn.to_torch(plan.row_mask).flatten().view(bs * num_cams, rebatch_len)
+    expected_rows = torch.arange(rebatch_len) < expected["num_valid"].view(-1, 1)
+    assert torch.equal(row_mask.bool(), expected_rows)
+
+    # Padded rows gather some query of their own sample; which one is not part of the plan.
+    query_index = ttnn.to_torch(plan.query_index).flatten().to(torch.int64).view(bs * num_cams, rebatch_len)
+    offsets = (torch.arange(bs) * num_queries).view(bs, 1, 1)
+    want = (expected["compact"] + offsets).view(bs * num_cams, rebatch_len)
+    assert torch.equal(query_index[expected_rows], want[expected_rows])
+    sample_start = offsets.expand(bs, num_cams, rebatch_len).reshape(bs * num_cams, rebatch_len)
+    padded_ids = (query_index - sample_start)[~expected_rows]
+    assert torch.all((padded_ids >= 0) & (padded_ids < num_queries))
+
+    assert torch.equal(ttnn.to_torch(plan.count).flatten().to(torch.int64), expected["count"].flatten())
+
+    # Filled slots point at exactly the host's row; unfilled ones, including slots past this frame's
+    # most cameras per query, at a padded row.
+    assert len(plan.inverse_index) >= expected["max_cameras"]
+    padded = ~row_mask.flatten().bool()
+    for slot, index in enumerate(plan.inverse_index):
+        rows = ttnn.to_torch(index).flatten().to(torch.int64).view(bs, num_queries)
+        want = expected["inverse"][slot] if slot < expected["max_cameras"] else torch.full_like(rows, -1)
+        filled = want >= 0
+        assert torch.equal(rows[filled], want[filled]), f"slot {slot} routes a contribution to the wrong row"
+        assert torch.all(padded[rows[~filled]]), f"slot {slot} reads a computed row for an unfilled slot"
+
+    # The gathered reference points are the compacted queries' own, clamped as upstream.
+    gathered = ttnn.to_torch(plan.reference_points_batched).float()
+    host_points = points.clamp(-10.0, 10.0).to(torch.bfloat16).float().permute(1, 0, 2, 3, 4)
+    for j in range(bs):
+        for i in range(num_cams):
+            n = int(expected["num_valid"][j * num_cams + i])
+            assert torch.equal(gathered[j * num_cams + i, :n], host_points[j, i, expected["compact"][j, i, :n]])
+    return expected
+
+
+@pytest.mark.parametrize(
+    "num_cams, bs, num_queries, visible, later_samples_extra",
+    [
+        (6, 1, 2500, (473, 400, 380, 300, 440, 470), 0),
+        (6, 2, 900, (200, 0, 150, 120, 180, 199), 0),  # a blind camera
+        (6, 2, 900, (200, 100, 150, 120, 180, 199), 60),  # the second sample sees more than the first
+        (6, 2, 900, (200, 100, 150, 120, 180, 199), -60),  # and fewer
+        (6, 1, 40000, (9885, 9500, 9400, 9000, 9700, 9800), 0),  # base grid
+        (2, 1, 64, (31, 32), 0),  # camera counts one below and at the tile edge
+    ],
+)
+def test_rebatch_plan_matches_host(device, num_cams, bs, num_queries, visible, later_samples_extra):
+    generator = torch.Generator().manual_seed(0)
+    mask = random_mask(num_cams, bs, num_queries, visible, generator, later_samples_extra)
+    points, tt_points, tt_mask = upload_frame(mask, device, generator)
+
+    planner = SCARebatchPlanner(device, headroom=1.0)
+    plan = planner(tt_points, planner.visibility(tt_mask))
+    # Sized by the first sample's cameras, whatever the others see.
+    assert planner.capacity == max(visible), "device and host max_len differ"
+    assert plan.rebatch_len == _rebatch_len(max(visible))
+    check_plan(plan, mask, points)
+
+
+def test_rebatch_plan_empty_frame(device):
+    generator = torch.Generator().manual_seed(0)
+    mask = torch.zeros(6, 1, 900, NUM_DEPTH_LEVELS, dtype=torch.bool)
+    _, tt_points, tt_mask = upload_frame(mask, device, generator)
+    planner = SCARebatchPlanner(device)
+    plan = planner(tt_points, planner.visibility(tt_mask))
+    assert plan.is_empty and plan.rebatch_len == 0
+    assert planner.capacity == 0
+
+
+@pytest.mark.parametrize("bs", [1, 2])
+def test_rebatch_plan_over_a_sequence(device, bs):
+    """One planner over a frame sequence: capacity and slots grow only when a frame outgrows them and
+    never shrink, frames within them keep the plan's shapes, and every frame's plan matches the host
+    build at that capacity, however far below it the frame is."""
+    generator = torch.Generator().manual_seed(0)
+    num_cams, num_queries = 6, 2500
+    planner = SCARebatchPlanner(device, headroom=1.01)
+    # Per-frame visible queries of the busiest camera; 0 is a frame no camera sees anything in.
+    sequence = [600, 603, 597, 606, 607, 650, 0, 640, 655, 300, 657]
+    capacity, num_slots, reallocations, previous_len = 0, 0, 0, None
+    for frame, busiest in enumerate(sequence):
+        visible = tuple(max(0, busiest - drop) if busiest else 0 for drop in (0, 50, 100, 20, 80, 10))
+        mask = random_mask(num_cams, bs, num_queries, visible, generator)
+        points, tt_points, tt_mask = upload_frame(mask, device, generator)
+        plan = planner(tt_points, planner.visibility(tt_mask))
+
+        if busiest == 0:
+            assert plan.is_empty, f"frame {frame}"
+            assert (planner.capacity, planner.num_slots) == (capacity, num_slots), f"frame {frame}"
+            continue
+        expected = check_plan(plan, mask, points)
+        grew = busiest > capacity or expected["max_cameras"] > num_slots
+        reallocations += grew and capacity > 0
+        if busiest > capacity:
+            capacity = math.ceil(busiest * 1.01)
+        num_slots = max(num_slots, expected["max_cameras"])
+        assert (planner.capacity, planner.num_slots) == (capacity, num_slots), f"frame {frame}"
+        assert planner.reallocations == reallocations, f"frame {frame}"
+        assert len(plan.inverse_index) == num_slots, f"frame {frame}"
+        if not grew:
+            assert plan.rebatch_len == previous_len, f"frame {frame} changed shape within capacity"
+        previous_len = plan.rebatch_len
+
+    # 607 outgrows ceil(600 * 1.01) = 606, and 650 outgrows ceil(607 * 1.01) = 614.
+    assert capacity == math.ceil(650 * 1.01)
+    assert reallocations >= 2
