@@ -306,10 +306,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     def prefill_chunk(self, *args, **kwargs):
         """Reset the KDA carries at the start of a request, then defer to the shared runtime.
 
-        `actual_start == 0` is the head of a request, and it is the only safe moment to zero: the
-        reset allocates a transient zero carry and uploads the slot scalar, both of which a capture
-        rejects, and it must not land inside a captured region anyway, which would re-zero on every
-        replay and destroy the carry the trace exists to advance.
+        `actual_start == 0` is the head of a request and the only point at which a slot's carry may be
+        zeroed: `KdaStates.zero_slot` must run outside any capture, which would re-zero on every replay
+        and destroy the carry the trace exists to advance.
         """
         # Bound from the real signature rather than by counting positions: `actual_start` is the
         # fourth positional parameter, and reading the third instead would take `slot_id` — which is

@@ -560,7 +560,8 @@ class KdaStates:
         """Zero every layer's state at a host ``slot``, ending whatever stream was in flight there.
 
         A carry summarizes the whole prefix behind it, so a new request must not continue from the
-        previous one's. Outside any capture: a trace replays every chunk and would re-zero each time.
+        previous one's. Outside any capture: a trace replays every chunk and would re-zero each time,
+        and a capture rejects the host write of the slot index.
         """
         self._check_slot(slot)
         device = self.recurrent.device()
