@@ -156,11 +156,11 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     core_n_tiles = blocking.core_n_tiles_max
+    sb_h, sb_w = _subblock(block_h, blocking.dest_tiles)
     for row in range(blocking.active_rows):
         row_start = row * blocking.core_m_tiles
         rows = min(blocking.core_m_tiles, blocking.tensor_m_tiles - row_start)
         last_block_h = rows - (_div_up(rows, block_h) - 1) * block_h
-        sb_h, sb_w = _subblock(block_h, blocking.dest_tiles)
         tail_sb_h, tail_sb_w = _subblock(last_block_h, blocking.dest_tiles)
         for col in range(blocking.active_cols):
             n_tile_start = col * core_n_tiles

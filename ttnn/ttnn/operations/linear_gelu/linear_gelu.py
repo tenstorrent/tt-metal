@@ -81,6 +81,12 @@ def _check_structure(input_tensor, weight, bias):
         raise ValueError("linear_gelu: all tensors must be on the same device")
 
 
+def _resolve(input_tensor, compute_kernel_config, memory_config):
+    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    out_memory = memory_config if memory_config is not None else input_tensor.memory_config()
+    return cfg, out_memory
+
+
 # ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
@@ -103,9 +109,10 @@ def validate(input_tensor, weight, bias, *, compute_kernel_config=None, memory_c
         ):
             raise UnsupportedAxisValue(f"linear_gelu: {name} must be bfloat16 TILE interleaved")
 
-    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    cfg, out_memory = _resolve(input_tensor, compute_kernel_config, memory_config)
+    if out_memory.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise UnsupportedAxisValue("linear_gelu: output memory_layout must be INTERLEAVED")
     input_memory = input_tensor.memory_config()
-    out_memory = memory_config if memory_config is not None else input_memory
     axes = {
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
@@ -126,9 +133,6 @@ def validate(input_tensor, weight, bias, *, compute_kernel_config=None, memory_c
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"linear_gelu: unsupported combination (refinement candidate): {exc}")
 
-    if out_memory.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise UnsupportedAxisValue("linear_gelu: output memory_layout must be INTERLEAVED")
-
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -145,8 +149,7 @@ def linear_gelu(
 ) -> ttnn.Tensor:
     validate(input_tensor, weight, bias, compute_kernel_config=compute_kernel_config, memory_config=memory_config)
 
-    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
-    out_memory = memory_config if memory_config is not None else input_tensor.memory_config()
+    cfg, out_memory = _resolve(input_tensor, compute_kernel_config, memory_config)
     batch, _, seq, _ = list(input_tensor.shape)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([batch, 1, seq, FFN]),
