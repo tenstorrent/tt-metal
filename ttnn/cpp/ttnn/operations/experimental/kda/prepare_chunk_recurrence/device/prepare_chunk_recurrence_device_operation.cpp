@@ -52,6 +52,11 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_same_device(in.q, in.beta, operation_name, "beta");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    const MathFidelity math_fidelity = attrs.compute_kernel_config.math_fidelity;
+    TT_FATAL(
+        math_fidelity == MathFidelity::HiFi3 || math_fidelity == MathFidelity::HiFi4,
+        "prepare_chunk_recurrence: math_fidelity below HiFi3 is unsupported because the mask products keep the FP32 "
+        "data in SrcB, whose multiplier input is 10 bits only at HiFi3/4");
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();
