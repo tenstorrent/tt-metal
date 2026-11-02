@@ -66,7 +66,7 @@ Build with `./build_metal.sh --build-programming-examples`, then start the exter
 and run the Metal process in another, from the tt-metal root, here for 5 s at 10 samples per second:
 
 ```
-TT_METAL_STREAMING_PROFILER=1 ./build/programming_examples/metal_example_telemetry_metal_process 5 10
+TT_METAL_DEVICE_OBSERVABILITY=1 ./build/programming_examples/metal_example_telemetry_metal_process 5 10
 ```
 
 The external process prints one line per sample, starting with the time of day (UTC) the core published it:
