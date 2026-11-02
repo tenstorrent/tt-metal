@@ -224,6 +224,13 @@ def test_bfp2_add_integer_to_bfp2(device):
     assert torch.equal(ttnn.to_torch(result), 2 * x.float())
 
 
+def test_bfp2_binary_inputs_rejected(device, expect_error):
+    # Binary ops can write BFLOAT2_B results but don't read BFLOAT2_B inputs yet.
+    a = ttnn.from_torch(_ternary((32, 32)), dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Input tensor A dtype DataType::BFLOAT2_B is not supported"):
+        ttnn.add(a, a)
+
+
 def test_bfp2_device_round_trip(device):
     x = _ternary((64, 128))
 
