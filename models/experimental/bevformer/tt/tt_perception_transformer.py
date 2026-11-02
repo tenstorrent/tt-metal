@@ -4,11 +4,13 @@
 """TTNN port of the BEV half of BEVFormer's ``PerceptionTransformer``
 (``reference/perception_transformer.py``): FPN levels and BEV queries in, the frame's BEV out.
 
-What changes from frame to frame and comes from the host, the CAN bus, the ego shift and the
-previous BEV's rotation, is prepared by :meth:`TTPerceptionTransformer.prepare_frame` into a
-:class:`PerceptionFrame` whose device buffers are allocated once and refilled in place. The
-encoder projects the cameras from the frame's ``img_metas`` in its forward and reads its
-visibility mask on the host there, so the transformer runs live, not under a trace.
+What changes from frame to frame and comes from the host, the cameras' projections, the CAN
+bus, the ego shift and the previous BEV's rotation, is prepared by
+:meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
+buffers are allocated once and refilled in place. It also projects the cameras and queues the
+readback of their visible counts, which size the spatial cross-attention's plan: ahead of the
+backbone, they are back before the encoder needs them. The plan's sizes still follow what the
+cameras see, so the transformer runs live, not under a trace.
 
 The previous BEV's rotation is nearest-neighbour, so it moves whole cells: the host rotates an
 image of cell indices with the reference's own ``rotate``, and the device gathers the previous
@@ -17,6 +19,7 @@ outside the grid are zeroed by a mask.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 import ttnn
@@ -25,7 +28,7 @@ from torchvision.transforms.functional import rotate
 from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
 from models.experimental.bevformer.tt.model_preprocessing import bev_grid_length, ego_shift
 from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
-from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
+from models.experimental.bevformer.tt.tt_encoder import CameraProjection, TTBEVFormerEncoder
 
 
 @dataclass
@@ -34,20 +37,26 @@ class PerceptionFrame:
     address.
 
     Attributes:
-        img_metas: The frame's per-sample metas, which the encoder projects the cameras from.
+        img_metas: The frame's per-sample metas, one per sample of the batch.
+        projection: ``(bs, num_cams, 9, width)`` float32, the cameras' projections as rows that
+            weigh the encoder's reference grid (``tt_point_sampling_3d_2d.camera_rows``).
         can_bus: ``(bs, 1, CAN_BUS_DIMS)`` bfloat16, the relative CAN bus.
         shift: ``(bs, 1, 1, 2)`` float32 ROW_MAJOR, the ego translation in BEV-grid fractions.
         rotation_index: ``(1, 1, 1, bs * num_query)`` uint32 ROW_MAJOR, the stacked previous-BEV row each
             cell takes.
         rotation_mask: ``(bs, num_query, 1)`` bfloat16, zero where the cell rotated in from
             outside the grid.
+        cameras: The encoder's grid projected through ``projection`` and the cameras' visibility. Not
+            a buffer: each preparation replaces it with the new frame's tensors.
     """
 
     img_metas: list
+    projection: ttnn.Tensor
     can_bus: ttnn.Tensor
     shift: ttnn.Tensor
     rotation_index: ttnn.Tensor
     rotation_mask: ttnn.Tensor
+    cameras: Optional[CameraProjection] = None
 
 
 def rotation_gather(img_metas, bev_h, bev_w, rotate_center):
@@ -92,7 +101,10 @@ class TTPerceptionTransformer:
         grid_length = bev_grid_length(self.encoder.pc_range, self.bev_h, self.bev_w)
         shift = ego_shift(img_metas, self.bev_h, self.bev_w, grid_length).view(len(img_metas), 1, 1, 2)
         rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
+        projection = self.encoder.projection_rows(img_metas)
         return dict(
+            # float32: in bfloat16 the projection moves the points by several pixels on average.
+            projection=(projection, ttnn.float32, ttnn.TILE_LAYOUT),
             can_bus=(can_bus, ttnn.bfloat16, ttnn.TILE_LAYOUT),
             shift=(shift, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
             rotation_index=(rotation_index, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
@@ -105,20 +117,22 @@ class TTPerceptionTransformer:
         refilled in place for a frame of the same batch size."""
         host = self._host_frame(img_metas)
         if frame is None:
-            return PerceptionFrame(
+            frame = PerceptionFrame(
                 img_metas=img_metas,
                 **{
                     name: ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=self.device)
                     for name, (tensor, dtype, layout) in host.items()
                 },
             )
-        frame.img_metas = img_metas
-        for name, (tensor, dtype, layout) in host.items():
-            buffer = getattr(frame, name)
-            assert tuple(buffer.shape) == tuple(
-                tensor.shape
-            ), f"{name}: the frame holds {tuple(buffer.shape)}, not {tuple(tensor.shape)}; prepare a new frame"
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(tensor, dtype=dtype, layout=layout), buffer)
+        else:
+            frame.img_metas = img_metas
+            for name, (tensor, dtype, layout) in host.items():
+                buffer = getattr(frame, name)
+                assert tuple(buffer.shape) == tuple(
+                    tensor.shape
+                ), f"{name}: the frame holds {tuple(buffer.shape)}, not {tuple(tensor.shape)}; prepare a new frame"
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(tensor, dtype=dtype, layout=layout), buffer)
+        frame.cameras = self.encoder.project_cameras(img_metas, frame.projection)
         return frame
 
     def camera_features(self, mlvl_feats, bs):
@@ -157,10 +171,10 @@ class TTPerceptionTransformer:
         can_bus = ttnn.linear(can_bus, mlp.linear2.weight, bias=mlp.linear2.bias, activation="relu")
         can_bus = layer_norm(can_bus, mlp.norm)
         bev_queries = ttnn.add(bev_queries, can_bus)
-        # The encoder takes the cameras' features as (num_cams, num_keys, bs, C).
+        # The encoder takes the cameras' features batch-first, (bs, num_cams, num_keys, C), as its
+        # spatial cross-attention reads them; splitting the leading dim of a TILE tensor is a view.
         value = self.camera_features(mlvl_feats, bs)
-        num_keys = value.shape[1]
-        value = ttnn.permute(ttnn.reshape(value, (bs, self.num_cams, num_keys, self.embed_dims)), (1, 2, 0, 3))
+        value = ttnn.reshape(value, (bs, self.num_cams, value.shape[1], self.embed_dims))
         shift = None
         if prev_bev is not None:
             # As upstream's encoder: the rotated previous BEV paired with the encoder's input
@@ -170,7 +184,13 @@ class TTPerceptionTransformer:
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, -1, self.embed_dims))
             shift = frame.shift
         bev_embed = self.encoder(
-            bev_queries, value=value, bev_pos=bev_pos, prev_bev=prev_bev, shift=shift, img_metas=frame.img_metas
+            bev_queries,
+            value=value,
+            bev_pos=bev_pos,
+            prev_bev=prev_bev,
+            shift=shift,
+            cameras=frame.cameras,
         )
+        ttnn.deallocate(value)
         signpost(header="TTNN PerceptionTransformer Forward End")
         return bev_embed
