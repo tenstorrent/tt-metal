@@ -466,8 +466,8 @@ class TtKimiK3Transformer(LightweightModule):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
         if chunks is not None:
-            if d2h_service is not None or metadata is not None or metadata_msg is not None or layer_tap is not None:
-                raise ValueError("a Kimi-K3 packed forward is eager and host-acked (no d2h_service, metadata or taps)")
+            if d2h_service is not None or metadata is not None or metadata_msg is not None:
+                raise ValueError("a Kimi-K3 packed forward is eager and host-acked (no d2h_service or metadata)")
             return self.forward_packed(
                 token_ids,
                 kvpe_cache,
@@ -476,6 +476,7 @@ class TtKimiK3Transformer(LightweightModule):
                 on_layer_complete=on_layer_complete,
                 on_layer_hidden=on_layer_hidden,
                 rope_tensors=rope_tensors,
+                layer_tap=layer_tap,
             )
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
@@ -570,6 +571,7 @@ class TtKimiK3Transformer(LightweightModule):
         metadata: Optional[list] = None,
         padding_config=None,
         rope_tensors=None,
+        layer_tap: Optional[Callable] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them, any users at any depth): every
         layer runs its attention once per non-empty chunk against that chunk's slot and offset (MLA: its KV slab;
@@ -579,6 +581,8 @@ class TtKimiK3Transformer(LightweightModule):
         Single-rank only: a pipeline handoff would carry several chunks' rows, which nothing downstream expects.
 
         on_layer_complete: ``(global layer index, chunk)`` once per non-empty chunk per layer.
+        layer_tap: ``(local_idx, hidden)`` after each layer with the live residual over every chunk's rows, as in
+            forward().
         metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
             chunk position replaces ``chunks`` (then None), and the persistent MoE padding config replaces the
             host row counts. Every position runs (an empty one points at a scratch slot); no acks.
@@ -657,6 +661,8 @@ class TtKimiK3Transformer(LightweightModule):
                     packed_padding_config=padding_config,
                     attn_input_tap=attn_input_tap,
                 )
+                if layer_tap is not None and not layer.kv_only:
+                    layer_tap(local_idx, residual.current())
         finally:
             for scalar in owned:
                 ttnn.deallocate(scalar)
