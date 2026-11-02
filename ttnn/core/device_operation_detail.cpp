@@ -329,7 +329,7 @@ namespace {
 
 // The device buffer `tensor` lives in, or nullptr for a host or deallocated tensor.
 const void* device_buffer(const ttnn::Tensor& tensor) {
-    if (tensor.storage_type() != tt::tt_metal::StorageType::DEVICE || !tensor.is_allocated()) {
+    if (tensor.storage_type() != ttnn::StorageType::DEVICE || !tensor.is_allocated()) {
         return nullptr;
     }
     return &tensor.mesh_buffer();
