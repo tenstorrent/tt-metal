@@ -176,7 +176,7 @@ def flat_layout(layout=None, **kw):
     """A FlatLayoutOptions from a dict of fields / an existing FlatLayoutOptions / None, plus field overrides."""
     opts = _moe_block().FlatLayoutOptions
     if isinstance(layout, opts):
-        layout = {f: getattr(layout, f) for f in ("x_helpers", "pin_ratio", "rows_hint", "x_ready")}
+        layout = {f: getattr(layout, f) for f in ("x_helpers", "pin_ratio", "rows_hint", "x_ready", "drisc_tiles")}
     return opts(**{**(layout or {}), **kw})
 
 
@@ -240,7 +240,7 @@ class FlatRoutedExpert:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0) if n_dev > 1 else None,
         )
         self.done = mb.create_flat_routed_expert_done_words(mesh_device, self.plan, done_buffer_type)
-        self.drisc = mb.FlatDriscSenders.get(mesh_device, self.plan.drisc_n)
+        self.drisc = mb.FlatDriscSenders.get(mesh_device, self.plan.drisc_n, self.plan.drisc_tiles)
 
     def __call__(
         self,

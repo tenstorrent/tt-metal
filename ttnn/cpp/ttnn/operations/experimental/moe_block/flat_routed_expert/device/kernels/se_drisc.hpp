@@ -44,10 +44,13 @@ constexpr uint32_t SD_RXY = 11;      // R receiver xy (x << 16 | y)
 constexpr uint32_t SD_MPFE =
     SD_RXY + SE_DRISC_MAX_R;  // GDDR MPFE weights (job 0): 0 untouched, else bit 31 + the
                               // DRISC port's (bits 0-2), the NOC0 / NOC1 endpoints' (4-6 / 8-10)
-// 1: both of the bank's DRISC tiles send this call: at most 2 DMA reads in flight each (two tiles with deep DMA queues
-// next to the bank's NoC DRAM reads wedged the NoC: pure mode on K2.7, 3 of 3 runs; a 2-read cap or one tile: clean)
-constexpr uint32_t SD_PAIRED = SD_MPFE + 1;
-constexpr uint32_t SD_XON = SD_MPFE + 2;    // (0: reserved)
+// the job's DMA reads in flight at most (0: up to its L1 slots). 2 when both of the bank's DRISC tiles send (two tiles
+// with deep DMA queues next to the bank's NoC DRAM reads wedged the NoC: pure mode on K2.7, 3 of 3 runs; a 2-read cap
+// or one tile: clean). One tile serving both of its bank's slots (two jobs, streams 0 and 1) with 4 or more 9 KB reads
+// in flight a job sent wrong weights (GLM-Flash, 2026-11-02: y differs; 3: bit-exact): keep 2, no faster at 1-3 there
+constexpr uint32_t SD_DMA_CAP = SD_MPFE + 1;
+// blocks per unit (one DMA, one transaction id, one flush check; 0: the sender's choice, se_drisc_gu.cpp)
+constexpr uint32_t SD_UB = SD_MPFE + 2;
 constexpr uint32_t SD_LOADS = SD_MPFE + 3;  // N_LOAD x (expert | region << 8)
 constexpr uint32_t SD_MAX_LOADS = 128;
 static_assert((SD_LOADS + SD_MAX_LOADS) * 4 <= 640 && se_drisc_desc(2) <= SE_DRISC_SLOTS);

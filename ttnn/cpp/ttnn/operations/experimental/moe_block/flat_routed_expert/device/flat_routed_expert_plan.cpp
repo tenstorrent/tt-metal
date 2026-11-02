@@ -303,7 +303,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     p.mt = std::min(mt_cap, std::max(1u, p.m / 32));
     // DRISC only: every gate/up weight slot from the DRAM cores (pure, tiles in switch mode); no Tensix weight readers
     // (FlatDriscTopology::of fails on a device without programmable DRAM cores)
-    const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device);
+    const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, lo.drisc_tiles);
+    p.drisc_tiles = lo.drisc_tiles;
     // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
     // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
     // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)
@@ -498,9 +499,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     const uint32_t out_tiles = p.mt * pcd;
 
     // gate/up cores per weight slot: each slot's cores by the hops from the DRAM tile that actually sends it (switch
-    // mode: a bank's second slot from its NOC1-endpoint tile, on NOC0), all pairs (slot, core) taken
-    // nearest first rather than round-robin nearest (which left the last slots 15-21 hops). Galaxy loads GLM-5.3 /
-    // GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 / 1216 / 808 us.
+    // mode: a bank's second slot from its NOC1-endpoint tile, on NOC0; one-tile choices: both from the bank's tile),
+    // all pairs (slot, core) taken nearest first rather than round-robin nearest (which left the last slots 15-21
+    // hops). Galaxy loads GLM-5.3 / GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 / 1216 / 808 us.
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
     std::vector<bool> placed(gu_all.size(), false);
     {

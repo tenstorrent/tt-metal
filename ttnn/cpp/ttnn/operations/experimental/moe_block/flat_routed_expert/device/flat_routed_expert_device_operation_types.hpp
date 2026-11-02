@@ -18,10 +18,26 @@ namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 // relays zero: a caller's persistent relay words need only X_READY_OFF + 4 bytes a relay.
 constexpr uint32_t X_READY_OFF = 496;
 
+// Which of a bank's two Metal DRISC tiles send its gate/up weight slots (slot r in bank r % banks; two slots a bank
+// at 16 slots). The NOC1-endpoint tile's NOC1 NIU forwards the bank's NOC1 DRAM accesses (NOC2AXI), so a kernel there
+// sends on NOC0 only; the free tile (no endpoint) may send on either NoC.
+enum class FlatDriscTiles : uint32_t {
+    // both tiles every call: slot r < banks from the free tile (NOC1, DMA stream 0), slot r >= banks from the NOC1
+    // endpoint (NOC0, DMA stream 1)
+    both = 0,
+    // the free tile sends both of its bank's slots (job 0 on NOC1 / stream 0, job 1 on NOC0 / stream 1); the NOC1
+    // endpoint tile is left idle
+    free_only = 1,
+    // the NOC1-endpoint tile sends both of its bank's slots, both on NOC0 (job 0 on stream 1, job 1 on stream 0); the
+    // free tile is left to another resident kernel (e.g. a KV manager's data movers)
+    noc1_endpoint_only = 2,
+};
+const char* to_string(FlatDriscTiles tiles);
+
 // The layout / program choices a caller makes for the flat routed expert: part of the plan cache key and of every
 // program hash. -1: unset (the plan's own choice). The plan itself is fixed: DRISC-only gate/up weight readers (every
 // slot from the DRAM cores, tiles in switch mode), even gate/up and down splits, x read once by the helper relays and
-// fed along unicast snakes.
+// fed along unicast snakes. The DRISC tiles a bank uses are a choice (drisc_tiles).
 struct FlatLayoutOptions {
     int32_t x_helpers = -1;  // x helper relays per rectangle: 1 (-1: 1); the x path needs exactly one
     uint32_t pin_ratio = 8;  // pin only an expert this many times the next one's rows (0: always pin)
@@ -34,6 +50,9 @@ struct FlatLayoutOptions {
     // x-ready word (the relay words at X_READY_OFF) reaches this count before its first x read, then re-arms it by
     // subtraction; the caller's dispatch ports count in there once their rows have landed. -1: x is in place at launch
     int32_t x_ready = -1;
+    // which DRISC tiles of each bank send the gate/up weights (FlatDriscTiles): both, or one tile serving both of its
+    // bank's slots
+    FlatDriscTiles drisc_tiles = FlatDriscTiles::both;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

@@ -65,6 +65,7 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | `x_helpers` | -1 (1) | x helper relays per rectangle; only 1 |
 | `x_ready` | -1 | > 0: the relays wait for the dispatch ports' count in their x-ready word (dispatch in the same program) |
 | `pin_ratio` | 8 | pin an expert only at this many times the next one's rows |
+| `drisc_tiles` | `both` | DRISC tiles a bank sends its gate/up slots from: `both` (free + NOC1 endpoint, every call), `free_only`, `noc1_endpoint_only` (one tile serves both of the bank's slots; the latter leaves the free tiles to another resident kernel) |
 
 ## Tests
 

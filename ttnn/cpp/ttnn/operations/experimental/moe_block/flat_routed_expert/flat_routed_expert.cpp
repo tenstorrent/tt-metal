@@ -140,10 +140,12 @@ ttnn::Tensor flat_routed_expert(
     cfg.math_fidelity = math_fidelity;
     const auto plan = flat_routed_expert_plan(*device, cfg);
     TT_FATAL(
-        drisc_senders.n_slots() == plan->drisc_n,
-        "flat_routed_expert: DRISC senders of {} slots, the plan has {}",
+        drisc_senders.n_slots() == plan->drisc_n && drisc_senders.tiles() == plan->drisc_tiles,
+        "flat_routed_expert: DRISC senders of {} slots ({}), the plan has {} ({})",
         drisc_senders.n_slots(),
-        plan->drisc_n);
+        to_string(drisc_senders.tiles()),
+        plan->drisc_n,
+        to_string(plan->drisc_tiles));
     // (output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
     const ttnn::Tensor output =
         output_tensor
@@ -195,10 +197,15 @@ FlatRoutedExpertResources ensure_flat_routed_expert_resources(
         "flat_routed_expert: {} gate/up cores' freed words overrun the x-ready word at {}",
         r.plan->gu.size(),
         X_READY_OFF);
-    if (!resources.has("flat_routed_expert/drisc")) {
-        resources.attach("flat_routed_expert/drisc", FlatDriscSenders::get(mesh_device, r.plan->drisc_n));
+    // (one attachment per tile choice: a request for another choice relaunches the mesh's senders,
+    // FlatDriscSenders::get)
+    const std::string drisc_name = r.plan->drisc_tiles == FlatDriscTiles::both
+                                       ? std::string("flat_routed_expert/drisc")
+                                       : std::string("flat_routed_expert/drisc/") + to_string(r.plan->drisc_tiles);
+    r.drisc_senders = FlatDriscSenders::get(mesh_device, r.plan->drisc_n, r.plan->drisc_tiles);
+    if (!resources.has(drisc_name)) {
+        resources.attach(drisc_name, r.drisc_senders);
     }
-    r.drisc_senders = FlatDriscSenders::get(mesh_device, r.plan->drisc_n);
     return r;
 }
 

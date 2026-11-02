@@ -8,16 +8,15 @@
 //
 // Per call each slot k posts a job (se_drisc_go.cpp): its chunks are its loads' (expert e: chunks e * PER_E .., each
 // RG blocks of BLK bytes, from this bank's region). Unit u = (chunk c, block b) is read from GDDR by DMA (job k on
-// stream k, which completes in order) into one of the job's NS L1 slots, then written to the G receivers that share
-// block b (receiver j gets block j / G) at landing slot (region of c's load) * PER_E + c % PER_E, once each of them
-// has granted chunk c, on the job's NoC with transaction id TRID0 + u % NS; when the id has no outstanding writes the
-// receivers' data semaphores are bumped (in order: each receiver pushes its landing slots by count) and the slot
+// its own stream, which completes in order) into one of the job's NS L1 slots, then written to the G receivers that
+// share block b (receiver j gets block j / G) at landing slot (region of c's load) * PER_E + c % PER_E, once each of
+// them has granted chunk c, on the job's NoC with transaction id TRID0 + u % NS; when the id has no outstanding writes
+// the receivers' data semaphores are bumped (in order: each receiver pushes its landing slots by count) and the slot
 // refills. A receiver counts its grants in a semaphore of its own (zero at each launch); the sender reads the counters
 // when it runs out of grants. The jobs advance round-robin.
 //
-// RT: 0 working base (se_drisc.hpp layout), 1 working region bytes, 2 NJ, 3.. NJ x the job's NoC, then the MPFE ports
-// of
-//     this tile and of the bank's NOC0 / NOC1 endpoints
+// RT: 0 working base (se_drisc.hpp layout), 1 working region bytes, 2 NJ, 3.. NJ x the job's NoC, NJ x the job's DMA
+//     stream (distinct), then the MPFE ports of this tile and of the bank's NOC0 / NOC1 endpoints
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/gddr_dma.h"
@@ -91,7 +90,7 @@ inline void fast_inc_nopoll(uint8_t noc, uint32_t coord) {
 struct Job {
     uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub, dmax;
     uint32_t rd, wr, fl;  // units DMA'd, written, flushed (acked)
-    uint8_t noc;
+    uint8_t noc, stream;
     uint8_t loads[SD_MAX_LOADS], regions[SD_MAX_LOADS];
     uint32_t cr[SE_DRISC_MAX_R];
     uint64_t rx[SE_DRISC_MAX_R], rdata[SE_DRISC_MAX_R], rgrant[SE_DRISC_MAX_R];
@@ -117,10 +116,10 @@ void kernel_main() {
     }
     *word(SE_DRISC_READY) = SE_DRISC_READY_MAGIC;
     // GDDR MPFE weights (the job descriptor's word, per call): this tile's port, the bank's NOC0 / NOC1 endpoints'
-    // ports (RT 3 + NJ ..); the weights as found are restored when the call asks for none and on exit (they persist
+    // ports (RT 3 + 2 NJ ..); the weights as found are restored when the call asks for none and on exit (they persist
     // until a reset)
     const uint32_t mp_port[3] = {
-        get_arg_val<uint32_t>(3 + nj), get_arg_val<uint32_t>(4 + nj), get_arg_val<uint32_t>(5 + nj)};
+        get_arg_val<uint32_t>(3 + 2 * nj), get_arg_val<uint32_t>(4 + 2 * nj), get_arg_val<uint32_t>(5 + 2 * nj)};
     uint32_t mp_orig[3], mp_applied = 0;
     for (uint32_t q = 0; q < 3; ++q) {
         mp_orig[q] = gddr_mc_read_mpfe_weight(mp_port[q]);
@@ -184,13 +183,14 @@ void kernel_main() {
             J.land = d[SD_LAND];
             const uint32_t dsem = d[SD_DATA_SEM], n_load = d[SD_N_LOAD], gsem = d[SD_GRANTS];
             J.dsem = dsem;
-            J.dmax = d[SD_PAIRED] ? 2 : 255;  // (se_drisc.hpp SD_PAIRED)
+            J.dmax = d[SD_DMA_CAP] ? d[SD_DMA_CAP] : 255;  // (se_drisc.hpp SD_DMA_CAP)
             for (uint32_t l = 0; l < n_load; ++l) {
                 const uint32_t v = d[SD_LOADS + l];
                 J.loads[l] = v & 0xFF;
                 J.regions[l] = (v >> 8) & 0xFF;
             }
             J.noc = get_arg_val<uint32_t>(3 + k);
+            J.stream = get_arg_val<uint32_t>(3 + nj + k);
             for (uint32_t j = 0; j < J.R; ++j) {
                 const uint32_t xy = d[SD_RXY + j];
                 J.rx[j] = get_noc_addr(xy >> 16, xy & 0xFFFF, 0, J.noc);
@@ -203,8 +203,18 @@ void kernel_main() {
             // a unit is UB consecutive blocks of one chunk (one DMA, one transaction id, one flush check). One job
             // per tile: single blocks (the deepest pipeline: GLM-Flash M 64 33.9 vs 35.2 us / expert with pairs); two
             // jobs per tile (half the L1 each): pairs (the per-block loop, ~800 cycles, caps a tile at ~15 GB/s: all
-            // 16 slots on one tile per bank M 64 57.8 -> 41.2 us).
-            J.ub = n_real > 1 && J.rg % 2 == 0 ? 2 : 1;
+            // 16 slots on one tile per bank M 64 57.8 -> 41.2 us) while they leave two units in flight a job, else
+            // single blocks (K3's 13.5 KB blocks: one pair a job in half the L1; Galaxy load, one tile a bank
+            // 1720 -> 1600 us; GLM-Flash's 9 KB blocks keep pairs: singles 413 -> 545 us). SD_UB: a caller's choice
+            // (one whose unit does not fit the job's L1 falls back to single blocks)
+            {
+                const uint32_t ub = d[SD_UB];
+                if (ub) {
+                    J.ub = J.rg % ub == 0 && room >= ub * J.blk ? ub : 1;
+                } else {
+                    J.ub = n_real > 1 && J.rg % 2 == 0 && room >= 4 * J.blk ? 2 : 1;
+                }
+            }
             J.ns = room / (J.ub * J.blk);
             constexpr uint32_t ns_max = 7;  // (transaction ids 1-7 / 8-14 per job)
             J.ns = J.ns > ns_max ? ns_max : J.ns;
@@ -235,10 +245,7 @@ void kernel_main() {
         while (left && !stop) {
             for (uint32_t k = 0; k < nj; ++k) {
                 Job& J = jobs[k];
-#ifndef SE_DRISC_STREAM0
-#define SE_DRISC_STREAM0 0
-#endif
-                const uint8_t stream = (SE_DRISC_STREAM0 + k) & 1, noc = J.noc;
+                const uint8_t stream = J.stream, noc = J.noc;
                 // DMA ahead into free slots (unit rd: chunk rd / RG of load (rd / RG) / PER_E, block rd % RG)
                 {
                     const uint32_t freed = J.fl;

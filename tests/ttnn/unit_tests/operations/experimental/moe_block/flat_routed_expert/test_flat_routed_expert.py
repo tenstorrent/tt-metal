@@ -3,7 +3,8 @@
 """ttnn.experimental.moe_block.flat_routed_expert on one Blackhole chip (programmable DRAM cores, a 10-row grid):
 
 * test_flat_routed_expert_pcc: GLM-5.3-Flash at the Galaxy per-chip load against a torch reference of the
-  bfp4-quantized weights, two calls (the second with a moved arena: the cache hit must patch every address).
+  bfp4-quantized weights, two calls (the second with a moved arena: the cache hit must patch every address), with
+  both DRISC tiles of a bank sending and with one (FlatLayoutOptions.drisc_tiles).
 * test_flat_routed_expert_bit_exact: bit-exact against the Python reference's saved outputs
   (dump_ref_flat_routed_expert.py); runs only with MOE_BLOCK_REFS set.
 * test_flat_routed_expert_host_time: host time per untraced call on program-cache hits (the reference's, when a
@@ -61,7 +62,7 @@ def _rm(t, dt, device):
     )
 
 
-def _op(device, model, chunk, weights):
+def _op(device, model, chunk, weights, drisc_tiles="both"):
     md, pc = cases.MODELS[model], cases.per_chip(model, "8x4", chunk)
     E = pc["epc"]
     gids = [(md["E"] // E) * e + 1 for e in range(E)]
@@ -75,18 +76,22 @@ def _op(device, model, chunk, weights):
         n_global=md["E"],
         act=md["act"],
         pin=1,
-        layout=dict(rows_hint=round(pc["M"])),
+        layout=dict(
+            rows_hint=round(pc["M"]),
+            drisc_tiles=getattr(ttnn._ttnn.operations.experimental.moe_block.FlatDriscTiles, drisc_tiles),
+        ),
     )
 
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_flat_routed_expert_pcc(device):
+@pytest.mark.parametrize("drisc_tiles", ["both", "free_only", "noc1_endpoint_only"])
+def test_flat_routed_expert_pcc(device, drisc_tiles):
     _skip_unless_supported(device)
     model, chunk = "glm53_flash", 5120
     md, E = cases.MODELS[model], cases.per_chip(model, "8x4", chunk)["epc"]
     wsets = cases.weight_sets(md["H"], md["I"])
-    op = _op(device, model, chunk, [[wsets[e % cases.N_W] for e in range(E)]])
+    op = _op(device, model, chunk, [[wsets[e % cases.N_W] for e in range(E)]], drisc_tiles)
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa: E731
     wq = [tuple(q(w) for w in ws) for ws in wsets]
     pinned = []

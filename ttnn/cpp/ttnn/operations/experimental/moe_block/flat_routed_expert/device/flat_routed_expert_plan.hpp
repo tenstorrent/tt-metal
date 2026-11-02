@@ -65,8 +65,14 @@ struct FlatRoutedExpertPlan {
     uint32_t static_l1_bytes = 0;
     // the one Tensix core that posts every slot's DRISC job (the other reader cells are free: the down cores take them)
     Core launcher{0, 0};
-    // weight slots served by the DRAM cores (one per reader cell, two DRISC tiles per bank in switch mode)
+    // weight slots served by the DRAM cores (one per reader cell; two DRISC tiles per bank in switch mode, or one per
+    // bank serving both of its slots: drisc_tiles)
     uint32_t drisc_n = 0;
+    FlatDriscTiles drisc_tiles = FlatDriscTiles::both;
+    // DMA reads in flight per DRISC job (se_drisc.hpp SD_DMA_CAP; 0: up to its L1 slots)
+    uint32_t drisc_dma_cap = 2;
+    // blocks per DRISC unit (se_drisc.hpp SD_UB; 0: the sender's choice)
+    uint32_t drisc_ub = 0;
     // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
     uint32_t ti_off = 0;
     // down

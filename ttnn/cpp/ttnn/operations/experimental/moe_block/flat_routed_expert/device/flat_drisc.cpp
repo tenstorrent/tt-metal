@@ -8,8 +8,9 @@
 #include <chrono>
 #include <map>
 #include <mutex>
-#include <set>
 #include <string>
+
+#include <fmt/format.h>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -62,11 +63,12 @@ CoreCoord flat_worker_noc0(tt::tt_metal::distributed::MeshDevice& mesh_device, c
     return mx::GetWorkerNoc0Core(mesh_device, flat_reference_coord(mesh_device), logical);
 }
 
-FlatDriscTopology FlatDriscTopology::of(tt::tt_metal::distributed::MeshDevice& mesh_device) {
+FlatDriscTopology FlatDriscTopology::of(tt::tt_metal::distributed::MeshDevice& mesh_device, FlatDriscTiles tiles) {
     TT_FATAL(
         mx::AreDramCoreKernelsSupported(mesh_device),
         "flat_routed_expert: DRISC gate/up weight senders only, and this device has no programmable DRAM cores");
     FlatDriscTopology t;
+    t.tiles = tiles;
     t.coord = flat_reference_coord(mesh_device);
     t.banks = mesh_device.dram_grid_size().x;
     const auto region = mx::GetDramCoreKernelL1Region(mesh_device);
@@ -93,17 +95,35 @@ uint32_t FlatDriscTopology::free_tile(uint32_t bank) const {
     TT_THROW("flat DRISC: bank {} has no DRAM tile outside its endpoints", bank);
 }
 
-CoreCoord FlatDriscTopology::logical(uint32_t r) const { return CoreCoord(r % banks, free_tile(r % banks)); }
+uint32_t FlatDriscTopology::home_tile(uint32_t bank) const {
+    return tiles == FlatDriscTiles::noc1_endpoint_only ? noc1_tile(bank) : free_tile(bank);
+}
+
+CoreCoord FlatDriscTopology::logical(uint32_t r) const { return CoreCoord(r % banks, home_tile(r % banks)); }
+
+uint32_t FlatDriscTopology::noc(uint32_t r) const {
+    if (tiles == FlatDriscTiles::noc1_endpoint_only) {
+        return 0;  // (its NOC1 NIU is the bank's NOC1 endpoint: NOC2AXI)
+    }
+    return job(r, banks) == 0 ? 1 : 0;
+}
+
+// the free tile: job k on stream k. The NOC1-endpoint tile: its first job on stream 1 (as the alternate's one job in
+// switch mode), its second on stream 0
+uint32_t FlatDriscTopology::stream(uint32_t k) const {
+    return tiles == FlatDriscTiles::noc1_endpoint_only ? (1 + k) & 1 : k & 1;
+}
 
 // switch mode: a bank's second slot is sent by its other Metal tile (the bank's NOC1 endpoint, on NOC0, DMA stream 1)
 // on every call, the free tile's second job skipped (both tiles on every call: one tile per bank for the whole call
 // starved its small experts - K3 2 x 4 overlap, Zipf spread / packed fused 3369 / 6148 -> 2589 / 5906 us)
+// (one-tile choices: none, the home tile sends both of the bank's slots)
 std::pair<CoreCoord, uint32_t> FlatDriscTopology::alt(uint32_t r) const {
-    if (r < banks) {
+    if (r < banks || tiles != FlatDriscTiles::both) {
         return {CoreCoord(0, 0), ~0u};
     }
-    const uint32_t b = r % banks, f = free_tile(b);
-    return {CoreCoord(b, f == 1 ? 2 : 1), 0};
+    const uint32_t b = r % banks;
+    return {CoreCoord(b, noc1_tile(b)), 0};
 }
 
 std::pair<CoreCoord, uint32_t> FlatDriscTopology::sender(uint32_t r) const {
@@ -111,7 +131,7 @@ std::pair<CoreCoord, uint32_t> FlatDriscTopology::sender(uint32_t r) const {
     if (j != ~0u) {
         return {info(a).noc0_core, 0u};
     }
-    return {info(logical(r)).noc0_core, noc(r, banks)};
+    return {info(logical(r)).noc0_core, noc(r)};
 }
 
 uint32_t FlatDriscTopology::virtual_xy(const CoreCoord& logical) const {
@@ -120,7 +140,7 @@ uint32_t FlatDriscTopology::virtual_xy(const CoreCoord& logical) const {
 }
 
 std::shared_ptr<FlatDriscSenders> FlatDriscSenders::get(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots) {
+    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles) {
     std::lock_guard<std::mutex> lock(registry_mutex);
     if (auto it = registry.find(&mesh_device); it != registry.end()) {
         if (auto live = it->second.lock(); live && live->running()) {
@@ -129,48 +149,60 @@ std::shared_ptr<FlatDriscSenders> FlatDriscSenders::get(
                 "flat DRISC senders: running for {} slots, {} requested",
                 live->n_slots(),
                 n_slots);
-            return live;
+            if (live->tiles() == tiles) {
+                return live;
+            }
+            // another tile choice: the running set owns the DRAM cores (and runs other kernels' tiles), so it stops
+            // (its holders' flat calls then fail the running check) and the requested set launches
+            log_info(
+                tt::LogOp,
+                "flat DRISC senders: stopping the {} set for a {} one",
+                to_string(live->tiles()),
+                to_string(tiles));
+            live->stop();
         }
     }
-    std::shared_ptr<FlatDriscSenders> senders(new FlatDriscSenders(mesh_device, n_slots));
+    std::shared_ptr<FlatDriscSenders> senders(new FlatDriscSenders(mesh_device, n_slots, tiles));
     registry[&mesh_device] = senders;
     return senders;
 }
 
-bool FlatDriscSenders::running_on(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots) {
+bool FlatDriscSenders::running_on(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles) {
     std::lock_guard<std::mutex> lock(registry_mutex);
     auto it = registry.find(&mesh_device);
     if (it == registry.end()) {
         return false;
     }
     auto live = it->second.lock();
-    return live && live->running() && live->n_slots() == n_slots;
+    return live && live->running() && live->n_slots() == n_slots && live->tiles() == tiles;
 }
 
-FlatDriscSenders::FlatDriscSenders(tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots) :
-    mesh_device_(&mesh_device), n_slots_(n_slots), topo_(FlatDriscTopology::of(mesh_device)) {
+FlatDriscSenders::FlatDriscSenders(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles) :
+    mesh_device_(&mesh_device), n_slots_(n_slots), tiles_(tiles), topo_(FlatDriscTopology::of(mesh_device, tiles)) {
     const uint32_t banks = topo_.banks;
     TT_FATAL(n_slots <= 2 * banks, "flat DRISC: {} reader slots > 2 DRISCs x {} banks", n_slots, banks);
-    // per tile: its slots' NoCs by job index
-    std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> tile_nocs;
+    // per tile: its jobs' (NoC, DMA stream) by job index
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<std::pair<uint32_t, uint32_t>>> tile_jobs;
     for (uint32_t r = 0; r < n_slots; ++r) {
         const CoreCoord c = topo_.logical(r);
-        auto& v = tile_nocs[{c.x, c.y}];
+        auto& v = tile_jobs[{c.x, c.y}];
         const uint32_t k = FlatDriscTopology::job(r, banks);
         if (v.size() <= k) {
-            v.resize(k + 1, 0);
+            v.resize(k + 1, {0, 0});
         }
-        v[k] = FlatDriscTopology::noc(r, banks);
+        v[k] = {topo_.noc(r), topo_.stream(k)};
     }
-    std::set<std::pair<uint32_t, uint32_t>> alt_tiles;  // (switch mode: one job on NOC0, DMA stream 1)
+    // (switch mode: the alternate tiles' one job on NOC0, DMA stream 1 - a bank's two tiles both on stream 0, each
+    // with ~7 reads in flight, next to heavy NOC1 DRAM reads through the bank's NOC1 endpoint wedged those NoC reads)
     for (uint32_t r = 0; r < n_slots; ++r) {
         const auto [ac, aj] = topo_.alt(r);
         if (aj != ~0u) {
-            tile_nocs[{ac.x, ac.y}] = {0};
-            alt_tiles.insert({ac.x, ac.y});
+            tile_jobs[{ac.x, ac.y}] = {{0, 1}};
         }
     }
-    for (const auto& [xy, nocs] : tile_nocs) {
+    for (const auto& [xy, jobs] : tile_jobs) {
         cores_.emplace_back(xy.first, xy.second);
     }
     // the kernels' stop / ready words zero before they start (each sender zeroes its other words itself)
@@ -180,24 +212,34 @@ FlatDriscSenders::FlatDriscSenders(tt::tt_metal::distributed::MeshDevice& mesh_d
         mx::WriteDramCoreL1(mesh_device, c, topo_.base + READY, zero);
     }
     const uint32_t base = topo_.base, size = topo_.size;
+    std::string tiles_log;
+    for (const auto& c : cores_) {
+        const auto& jobs = tile_jobs.at({c.x, c.y});
+        tiles_log += fmt::format(" {}:", c.str());
+        for (const auto& [noc, stream] : jobs) {
+            tiles_log += fmt::format(" noc{}/s{}", noc, stream);
+        }
+    }
+    log_debug(tt::LogOp, "flat DRISC senders ({}, {} slots):{}", to_string(tiles), n_slots, tiles_log);
     kernels_ = mx::LaunchDramCoreKernels(
         mesh_device,
         [&](const tt::tt_metal::distributed::MeshCoordinate& coord) {
             std::vector<mx::DramCoreKernelConfig> out;
             for (const auto& c : cores_) {
-                const auto& nocs = tile_nocs.at({c.x, c.y});
+                const auto& jobs = tile_jobs.at({c.x, c.y});
                 const auto bank_cores = mx::GetDramCores(mesh_device, coord, c.x);
                 mx::DramCoreKernelConfig k{
                     .kernel_file = SENDER_KERNEL,
                     .core = c,
-                    .noc = nocs[0] ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
-                // the alternate tiles DMA on stream 1: a bank's two tiles both on stream 0, each with ~7 reads in
-                // flight, next to heavy NOC1 DRAM reads through the bank's NOC1 endpoint wedged those NoC reads
-                if (alt_tiles.contains({c.x, c.y})) {
-                    k.defines["SE_DRISC_STREAM0"] = "1";
+                    .noc = jobs[0].first ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
+                // (se_drisc_gu.cpp RT) a tile's jobs never share a stream; nor do a bank's two tiles in switch mode
+                k.runtime_args = {base, size, static_cast<uint32_t>(jobs.size())};
+                for (const auto& j : jobs) {
+                    k.runtime_args.push_back(j.first);
                 }
-                k.runtime_args = {base, size, static_cast<uint32_t>(nocs.size())};
-                k.runtime_args.insert(k.runtime_args.end(), nocs.begin(), nocs.end());
+                for (const auto& j : jobs) {
+                    k.runtime_args.push_back(j.second);
+                }
                 // MPFE ports: this tile's, the bank's NOC0 / NOC1 endpoints'
                 k.runtime_args.push_back(bank_cores.at(c.y).mpfe_port);
                 k.runtime_args.push_back(bank_cores.at(0).mpfe_port);

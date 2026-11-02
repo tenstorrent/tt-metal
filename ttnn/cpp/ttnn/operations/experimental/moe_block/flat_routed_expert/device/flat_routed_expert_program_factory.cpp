@@ -314,16 +314,17 @@ FlatProgramHandles add_flat_routed_expert_program(
     };
     // the DRAM cores' persistent senders read and forward the gate/up weights (flat_drisc.hpp); the launcher only posts
     // each call's jobs (se_drisc_go.cpp)
-    const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device);
+    const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, p.drisc_tiles);
     const uint32_t drisc_base = drisc.base;
     auto drisc_xy = [&](uint32_t r) { return drisc.virtual_xy(drisc.logical(r)); };
     {
         TT_FATAL(p.r_ <= 8, "flat DRISC: <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
         TT_FATAL(
-            FlatDriscSenders::running_on(mesh_device, p.drisc_n),
-            "flat_routed_expert: the DRISC senders of {} slots are not running on this mesh device "
+            FlatDriscSenders::running_on(mesh_device, p.drisc_n, p.drisc_tiles),
+            "flat_routed_expert: the DRISC senders of {} slots ({}) are not running on this mesh device "
             "(FlatDriscSenders::get)",
-            p.drisc_n);
+            p.drisc_n,
+            to_string(p.drisc_tiles));
         // the job posting args (se_drisc_post.hpp); the GDDR arbitration weights (SD_MPFE) untouched
         Args post;
         post.lit(drisc_base)
@@ -332,7 +333,7 @@ FlatProgramHandles add_flat_routed_expert_program(
             .lit(p.drisc_n)
             .lit(p.r_)
             .lit(0)
-            .lits({0, p.slot * w_tile, 0, G, p.nk_gu, GRANT, DATA});
+            .lits({p.drisc_dma_cap, p.slot * w_tile, p.drisc_ub, G, p.nk_gu, GRANT, DATA});
         // per slot (se_drisc_post.hpp): its DRISC / alternate, region, and its chunk / blocks / receivers
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             const auto [ac, aj] = drisc.alt(r);

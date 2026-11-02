@@ -6,11 +6,12 @@
 // schedule: one job descriptor per slot written into its DRISC's L1, then the DRISC's job counter bumped.
 //
 // Runtime args from A0: 0 DRISC working base, 1 gate/up weights address, 2 landing (arena), 3 NS slots, 4 R (the
-// receivers' stride: the most of any slot), 5 MPFE word (SD_MPFE), 6 (unused), 7 BLK_BYTES, 8 (unused), 9 G, 10 PER_E,
-// 11 GRANT_SEM id, 12 DATA_SEM id, then per slot (SE_DRISC_SLOT_ARGS): DRISC xy, job index on it, region offset in its
-// bank, alternate DRISC xy (0: none), its job index, its CHUNK_BYTES, RG and receivers (uneven splits: they differ
-// per slot); then the slots' receiver xy, R words each. A slot with an alternate (switch mode) is served by it on every
-// call; its first DRISC's job gets a skip (its skip counter bumped, no descriptor).
+// receivers' stride: the most of any slot), 5 MPFE word (SD_MPFE), 6 DMA reads in flight a job (SD_DMA_CAP), 7
+// BLK_BYTES, 8 blocks a unit (SD_UB), 9 G, 10 PER_E, 11 GRANT_SEM id, 12 DATA_SEM id, then per slot
+// (SE_DRISC_SLOT_ARGS): DRISC xy, job index on it, region offset in its bank, alternate DRISC xy (0: none), its job
+// index, its CHUNK_BYTES, RG and receivers (uneven splits: they differ per slot); then the slots' receiver xy, R words
+// each. A slot with an alternate (switch mode) is served by it on every call; its first DRISC's job gets a skip (its
+// skip counter bumped, no descriptor).
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -64,8 +65,8 @@ inline void se_drisc_post(const SeDyn& dyn, uint32_t a0, uint32_t scratch, uint3
         d[SD_N_LOAD] = n_load;
         d[SD_GRANTS] = get_semaphore(arg(11));
         d[SD_MPFE] = arg(5);
-        d[SD_XON] = 0;
-        d[SD_PAIRED] = 1;  // (switch mode: the alternate tiles send next to the free ones, every call)
+        d[SD_UB] = arg(8);
+        d[SD_DMA_CAP] = arg(6);
         for (uint32_t l = 0; l < n_load; ++l) {
             d[SD_LOADS + l] = dyn.load_eid[l] | (uint32_t(dyn.region[l]) << 8);
         }

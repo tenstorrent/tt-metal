@@ -19,6 +19,8 @@
 #include <tt-metalium/experimental/dram_core_kernels.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#include "flat_routed_expert_device_operation_types.hpp"
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 }
@@ -27,25 +29,35 @@ namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
 // The DRAM cores as the flat expert uses them, read once per mesh device (its first local chip, as the plan).
 // Weight slot r lives in bank r % banks. Each bank has a "free" tile (no view's endpoint: both NIUs in stream mode)
-// and, in switch mode, a bank's second slot (r >= banks) is sent by the bank's other Metal tile (its NOC1 endpoint,
-// on NOC0) while the free tile's job 1 is skipped.
+// and a NOC1-endpoint tile (its NOC1 NIU is NOC2AXI: it sends on NOC0 only). FlatDriscTiles::both (switch mode): a
+// bank's second slot (r >= banks) is sent by the NOC1-endpoint tile, on NOC0, while the free tile's job 1 is skipped.
+// One-tile choices: the bank's one tile (its home tile) takes both of the bank's slots as jobs 0 and 1.
 struct FlatDriscTopology {
+    FlatDriscTiles tiles = FlatDriscTiles::both;
     uint32_t banks = 0;
     uint32_t base = 0;  // the senders' working region in DRAM-core L1 (se_drisc.hpp offsets are from here)
     uint32_t size = 0;
     tt::tt_metal::distributed::MeshCoordinate coord{0, 0};                     // the chip the topology was read from
     std::vector<std::vector<tt::tt_metal::experimental::DramCoreInfo>> cores;  // per bank
 
-    static FlatDriscTopology of(tt::tt_metal::distributed::MeshDevice& mesh_device);
+    static FlatDriscTopology of(
+        tt::tt_metal::distributed::MeshDevice& mesh_device, FlatDriscTiles tiles = FlatDriscTiles::both);
 
     // the bank's free tile index
     uint32_t free_tile(uint32_t bank) const;
-    // reader slot r's DRISC (logical): the free tile of bank r % banks
+    // the bank's NOC1-endpoint tile index (the other Metal tile)
+    uint32_t noc1_tile(uint32_t bank) const { return free_tile(bank) == 1 ? 2 : 1; }
+    // the tile that gets the bank's job descriptors: the NOC1-endpoint tile for noc1_endpoint_only, else the free tile
+    uint32_t home_tile(uint32_t bank) const;
+    // reader slot r's DRISC (logical): the home tile of bank r % banks
     tt::tt_metal::CoreCoord logical(uint32_t r) const;
     // the job index of slot r on its DRISC
     static uint32_t job(uint32_t r, uint32_t banks) { return r / banks; }
-    // the NoC the free tile writes slot r on: job 0 on NOC1, job 1 on NOC0
-    static uint32_t noc(uint32_t r, uint32_t banks) { return r / banks == 0 ? 1 : 0; }
+    // the NoC the home tile writes slot r on: the free tile job 0 on NOC1, job 1 on NOC0; the NOC1-endpoint tile NOC0
+    uint32_t noc(uint32_t r) const;
+    // the DMA stream the home tile's job k reads on (each job its own: a stream completes in order); the alternate
+    // tile's one job: stream 1. Two tiles of a bank never share a stream (se_drisc_gu.cpp)
+    uint32_t stream(uint32_t k) const;
     // switch mode: slot r's alternate {logical tile, job}; job ~0u: none
     std::pair<tt::tt_metal::CoreCoord, uint32_t> alt(uint32_t r) const;
     // slot r's sending tile (NOC0 grid coordinates) and NoC
@@ -60,11 +72,19 @@ struct FlatDriscTopology {
 class FlatDriscSenders {
 public:
     // The mesh device's senders: launched on first use, shared while anyone holds them (one set a mesh: they own the
-    // DRAM cores). A second request must ask for the same slot count.
-    static std::shared_ptr<FlatDriscSenders> get(tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots);
+    // DRAM cores). A second request must ask for the same slot count; one for another tile choice stops the running
+    // set (its holders' flat calls then fail its running check) and launches its own.
+    static std::shared_ptr<FlatDriscSenders> get(
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint32_t n_slots,
+        FlatDriscTiles tiles = FlatDriscTiles::both);
 
-    // Whether the mesh device's senders of `n_slots` slots are running (a flat program needs them).
-    static bool running_on(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots);
+    // Whether the mesh device's senders of `n_slots` slots and this tile choice are running (a flat program needs
+    // them).
+    static bool running_on(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint32_t n_slots,
+        FlatDriscTiles tiles = FlatDriscTiles::both);
 
     ~FlatDriscSenders();
     FlatDriscSenders(const FlatDriscSenders&) = delete;
@@ -75,13 +95,15 @@ public:
     void stop();
     bool running() const;
     uint32_t n_slots() const { return n_slots_; }
+    FlatDriscTiles tiles() const { return tiles_; }
     const tt::tt_metal::distributed::MeshDevice* mesh_device() const { return mesh_device_; }
 
 private:
-    FlatDriscSenders(tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots);
+    FlatDriscSenders(tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles);
 
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     uint32_t n_slots_;
+    FlatDriscTiles tiles_;
     FlatDriscTopology topo_;
     std::vector<tt::tt_metal::CoreCoord> cores_;  // logical DRAM tiles that run a sender
     std::unique_ptr<tt::tt_metal::experimental::DramCoreKernels> kernels_;
