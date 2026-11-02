@@ -525,6 +525,11 @@ void kernel_main() {
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
     noc.async_write_barrier();
+    // DSV41 hang fix (PF_MOE_PAD + fused attention): this kernel issues NoC-1 traffic (noc_up reads, write / semaphore
+    // multicasts) that the NoC-0 barrier above does not drain; a late NoC-1 response landing after the next kernel on
+    // this core (combine reader, NCRISC, NoC 1) has snapshotted the counters leaves its write barrier waiting forever.
+    noc_up.async_atomic_barrier();
+    noc_up.async_write_barrier();
     // UP_SPLIT issues only per-K-block-barriered NoC-1 `up` reads (no NoC-1
     // worker multicast and no NoC-1 atomics), so no extra NoC-1 drain is needed
     // here — which is exactly why it is safe beside the fabric CCL ops.

@@ -1121,5 +1121,7 @@ void kernel_main() {
     // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
     // is a posted atomic; without an explicit barrier it can still be in
     // flight at kernel exit, leading to timing-dependent corruption.
+    // (DSV41 hang fix) also drain this RISC's outstanding non-posted (multicast) writes before exit.
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }
