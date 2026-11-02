@@ -505,7 +505,7 @@ bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
     const uint32_t n_cores = grid_x * grid_y;
-    TT_FATAL(NV <= grid_x, "chunk_gdn_fused: nv={} exceeds the grid width {}", NV, grid_x);
+    TT_FATAL(NV >= 1 && NV <= grid_x, "chunk_gdn_fused: nv={} must be in [1, grid width {}]", NV, grid_x);
     const uint32_t HPR = grid_x / NV;  // heads per receiver row (placement 0)
     const uint32_t R = BH * NV;        // receiver cores
     // Placement 2: NP is the pool size, NPH of it per head are home producers, the rest extras.
