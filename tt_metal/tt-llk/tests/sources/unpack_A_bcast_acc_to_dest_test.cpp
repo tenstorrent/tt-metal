@@ -79,14 +79,16 @@ inline void broadcast_block(const RuntimeParams& params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, params.TEST_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::B2D, is_fp32_dest_acc_en, bcast_type, false /*is_int_fpu_en*/, PackMode::Default, acc_to_dest>(
-        params.num_faces, formats.math);
+        tensor_shape, formats.math);
     for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
     {
         LLK_ASSERT(
             (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::B2D, dest_sync, is_fp32_dest_acc_en, bcast_type, false /*unpack_to_dest*/, acc_to_dest>(
-            tile, formats.math, formats.math, params.num_faces);
+            tile, formats.math, formats.math, tensor_shape);
     }
 }
 

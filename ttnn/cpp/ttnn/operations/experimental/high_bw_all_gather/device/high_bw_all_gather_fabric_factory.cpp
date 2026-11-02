@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -442,7 +443,7 @@ GatherPlan build_gather_plan(
     const uint32_t num_local_copy_cores = input_interleaved ? L : 2 * L;
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
-        auto* device = mesh_device->get_device(chip);
+        auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
         auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
         fabric_link_workers.assign(plan.num_rings * 2 * L, {});
         std::set<std::pair<size_t, size_t>> taken;
@@ -937,7 +938,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     tt::tt_metal::CoreCoord started_signal_target{0, 0}, downstream_worker{0, 0};
                     tt::tt_fabric::FabricNodeId downstream_node = mesh_device->get_fabric_node_id(chip);
                     if (downstream) {
-                        auto* downstream_device = mesh_device->get_device(*downstream);
+                        auto* downstream_device = tt::tt_metal::internal::get_device(*mesh_device, *downstream);
                         const auto& downstream_workers = plan.fabric_link_workers[plan.linear_chip_index(*downstream)];
                         started_signal_target = downstream_device->worker_core_from_logical_core(
                             downstream_workers[fabric_link_worker_index(ring, 1 - direction, link, L)].core);
@@ -976,7 +977,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the latter
         // signals every fabric link worker of this chip per block.
         const uint32_t rank = plan.rank_of_chip[chip_index];
-        auto* device = mesh_device->get_device(chip);
+        auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
         std::vector<uint32_t> local_copy_writer_args{
             0, num_local_copy_cores, rank, static_cast<uint32_t>(fabric_link_workers.size())};
         for (const auto& fabric_link_worker : fabric_link_workers) {

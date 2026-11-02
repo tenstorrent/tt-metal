@@ -45,7 +45,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import get_tile_params
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 supported_formats = [
     DataFormat.Int32,
@@ -98,7 +98,9 @@ def get_valid_perf_tile_dimensions_bcast(formats):
 
 
 def _is_wh_row_dest_acc(dest_acc, broadcast_type):
-    """WH plain (MOVB2D) row broadcast with dest accumulation is a known issue (TODO: pgardner)."""
+    """WH plain (MOVB2D) row broadcast with dest accumulation is a known issue:
+    https://github.com/tenstorrent/tt-llk/issues/1680
+    """
     return (
         get_chip_architecture() == ChipArchitecture.WORMHOLE
         and broadcast_type == BroadcastType.Row
@@ -281,11 +283,7 @@ def _run_unpack_bcast_test(
     res_from_L1 = configuration.run().result
 
     # --- Assertions ------------------------------------------------------
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Pretty red/green diff output via passed_test (tolerance-based)
     tile_shape = construct_tile_shape(tile_dimensions)
