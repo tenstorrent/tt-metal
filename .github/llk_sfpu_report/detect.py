@@ -80,7 +80,7 @@ def compiled_variants(side, family):
     return out
 
 
-def compile_all(side, arch, family, log, jobs=8, only_ops=()):
+def compile_all(side, arch, family, log, jobs=8, only_ops=(), extra_pytest_args=()):
     """Compile (never run) every variant of the family's perf module, math only.
 
     Returns pytest's exit code: 0 when everything built, 1 when some variant did not,
@@ -98,6 +98,7 @@ def compile_all(side, arch, family, log, jobs=8, only_ops=()):
             "perf",
             "--speed-of-light",
             *op_args,
+            *extra_pytest_args,
             MODULES[family],
         ],
         env={"LLK_PERF_RUN_TYPES": "MATH_ISOLATE"},

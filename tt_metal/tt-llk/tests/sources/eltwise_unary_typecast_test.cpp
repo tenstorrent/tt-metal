@@ -88,9 +88,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Avoid software unpack-to-math synchronization in math-isolate.
-            // The unavoidable hardware valid handshake sets SrcA always and
-            // SrcB only when fp32 destination accumulation requires it.
+            // Math-isolate assumes unpack-to-Dest data is ready and issues no handshake.
+            // Otherwise set unavoidable valid bits for SrcA and, with fp32 Dest, SrcB.
             if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en /*set_b*/>(num_faces * TILE_CNT * LOOP_FACTOR /*iterations*/);
@@ -138,9 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        // A2D preserves the raw datum bits for the SFPU typecast below, so
-        // integer-FPU mode stays disabled. Destination accumulation follows
-        // production through is_fp32_dest_acc_en.
+        // A2D preserves raw bits for the SFPU typecast, so integer-FPU mode stays disabled.
         _llk_math_eltwise_unary_datacopy_init_wrapper_<data_copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false /*is_int_fpu_en*/, PackMode::Default>(
             ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -167,12 +164,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (unpack_to_dest)
                     {
+                        // Unpack-to-Dest datacopy only acknowledges Dest; it copies no data.
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             tile % MAX_TILES_DEST, formats.math, formats.math);
                     }
                     else
                     {
-                        _perf_math_loop_clear_valid<true /*set_a*/, true /*set_b*/>(num_faces /*iterations*/);
+                        // Release the SrcA/SrcB valid bits consumed by unpack.
+                        _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(num_faces /*iterations*/);
                     }
                 }
             }
@@ -188,12 +187,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         if constexpr (unpack_to_dest)
                         {
+                            // Unpack-to-Dest datacopy only acknowledges Dest; it copies no data.
                             _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 block_tile, formats.math, formats.math);
                         }
                         else
                         {
-                            _perf_math_loop_clear_valid<true /*set_a*/, true /*set_b*/>(num_faces /*iterations*/);
+                            // Release the SrcA/SrcB valid bits consumed by unpack.
+                            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(num_faces /*iterations*/);
                         }
                     }
                 }

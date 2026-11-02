@@ -40,6 +40,7 @@ from helpers.stimuli_generator import (
     calculate_tile_and_face_counts,
     generate_stimuli,
 )
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     FAST_MODE,
@@ -586,7 +587,8 @@ def _build_typecast_config(
     run_types: list[PerfRunType] | None = None,
     loop_factor: int = 1,
     iterations: int = 8,
-):
+) -> TestConfig:
+    """Build the shared config; run_types applies only when is_perf is true."""
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
 
