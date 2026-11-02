@@ -82,6 +82,7 @@ struct Harness {
     std::vector<api::detail::RecordLane> lanes = std::vector<api::detail::RecordLane>(profiler::kSpscNRiscDecode);
     streaming_profiler::RecordTypes types;
     streaming_profiler::RecordRoutes routes;
+    streaming_profiler::ClockMap clocks{1, {}};  // no sync yet: a restarted lane widens around its own high word
     streaming_profiler::StreamDecoder dec;
     uint32_t head = 0;
 
@@ -90,7 +91,7 @@ struct Harness {
 
     explicit Harness(
         std::vector<api::detail::RecordTypeDescriptor> record_types = {kRawRecordType}, Lane lane = Lane::Seeded) :
-        types(std::move(record_types)), routes(types, call_sites), dec(dev, lanes, routes) {
+        types(std::move(record_types)), routes(types, call_sites), dec(dev, lanes, routes, clocks, 0) {
         routes.set_route(kEventId, {.types = 1});
         if (lane == Lane::Seeded) {
             feed({word(PacketType::TimerHigh, 0)});
@@ -105,7 +106,8 @@ struct Harness {
         frame[kernel_profiler::SPSC_PREFIX_XY] = kTileXy;
         frame[kernel_profiler::SPSC_PREFIX_HEAD_0] = head;
         control[kernel_profiler::SPSC_WIRE_TAIL_0] = head + words.size();
-        control[kernel_profiler::SPSC_WIRE_TIMER_0] = slot_timer;
+        reinterpret_cast<uint16_t*>(control + kernel_profiler::SPSC_WIRE_TIMER_0)[0] =
+            static_cast<uint16_t>(slot_timer);
         control[kernel_profiler::spsc_wire_prog_word(0)] = slot_prog;
         uint32_t offset = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS;
         offset += kernel_profiler::spsc_span_pack_pad(head, offset);

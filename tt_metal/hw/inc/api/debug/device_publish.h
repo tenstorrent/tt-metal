@@ -12,6 +12,7 @@
 //
 // Options:
 //   kPublishBatched         Defers the record until the RISC's next batch or the end of the launch, saving a fence.
+//   kSendToExternalProcess  Also sends the record to the external process.
 //   kNoInline               Prevents inlining the publish at this call site, saving code size.
 //
 // A host callback registered for Record<Payload, Metadata> receives the records of calls whose metadata type is

@@ -340,11 +340,12 @@
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
 #define MEM_DRISC_FIRMWARE_BASE MEM_DRISC_L1_INLINE_END
 // DRAM-core kernel text loads into this window after the firmware (see the kernel config note
-// below), so the window must hold the watcher build of the DRISC firmware (~13.2 KB) plus the
-// largest DRAM-core kernel text, the Tensor prefetcher under TT_METAL_WATCHER=1 (11920 B). 25 KB
-// leaves that kernel a 12064 B budget, ~150 B spare. Every KB added here comes out of the DRISC
-// kernel working region (the prefetcher's stage ring).
-#define MEM_DRISC_FIRMWARE_SIZE (25 * 1024)
+// below), so the window must hold the DRISC firmware plus the largest DRAM-core kernel. That is the
+// streaming profiler's DRISC relay, whose 12944 B of text and initialized data fit after the 13360 B
+// firmware with 320 B spare. The Tensor prefetcher under TT_METAL_WATCHER=1 (11920 B, after the
+// ~13.2 KB watcher build of the firmware) has about 1.1 KB spare. Every KB added here comes out of
+// the DRISC kernel working region (the prefetcher's stage ring).
+#define MEM_DRISC_FIRMWARE_SIZE (26 * 1024)
 #define MEM_DRISC_MAP_END (MEM_DRISC_FIRMWARE_BASE + MEM_DRISC_FIRMWARE_SIZE)
 #define MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_DRISC_MAP_END
 // L1 staging area for the firmware's initialized local .data image, copied into the
