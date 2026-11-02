@@ -376,6 +376,28 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     assert device.cache_entries_counter.total == 1
 
 
+def test_reshape_on_device_tile_same_padded_shape_different_alignment(device):
+    """Two tiled inputs that share a padded shape but differ in logical shape and Alignment must not share a cached
+    program. Metal 2.0 compares every tensor's layout exactly on a cache hit, so the key must cover it (#59915)."""
+    torch.manual_seed(0)
+    # Padded to [1, 1, 64, 64] by the default 32x32 tile alignment.
+    tt_default = ttnn.from_torch(
+        torch.rand((1, 1, 48, 40), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    # Padded to the same [1, 1, 64, 64] explicitly, which gives it a different Alignment.
+    tt_explicit = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch.rand((1, 1, 30, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        [1, 1, 64, 64],
+        0.0,
+    )
+    assert list(tt_default.padded_shape) == list(tt_explicit.padded_shape) == [1, 1, 64, 64]
+
+    with device.cache_entries_counter.measure():
+        ttnn.reshape_on_device(tt_default, 1, 1, 15, 128)
+        ttnn.reshape_on_device(tt_explicit, 1, 1, 15, 128)
+    assert device.cache_entries_counter.total == 2
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_reshape(h, w):

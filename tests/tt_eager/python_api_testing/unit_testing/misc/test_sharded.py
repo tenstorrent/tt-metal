@@ -474,6 +474,53 @@ def test_interleaved_to_sharded_partial_program_cache_reuse(device, H, num_cores
         assert passing, f"slice {slice_index} returned wrong data on cache hit (stale starting_idx_h): {output}"
 
 
+# interleaved_to_sharded_partial keys the input's whole TensorSpec: two tiled inputs with the same padded shape but a
+# different logical shape and Alignment must build two programs. Metal 2.0 compares every tensor's layout exactly on
+# a cache hit, so a key that let them share one would throw once the op is ported (#59915).
+def test_interleaved_to_sharded_partial_same_padded_shape_different_alignment(device, function_level_defaults):
+    grid_size = (8, 8)
+    num_slices = 2
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    torch.manual_seed(0)
+    # Padded to [1, 1, 64, 64] by the default 32x32 tile alignment.
+    tt_default = ttnn.from_torch(
+        torch.randn([1, 1, 64, 64]).bfloat16(),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
+    # Padded to the same [1, 1, 64, 64] explicitly, which gives it a different Alignment.
+    tt_explicit = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(
+            torch.randn([1, 1, 30, 64]).bfloat16(),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        ),
+        [1, 1, 64, 64],
+        0.0,
+        memory_config=interleaved_mem_config,
+    )
+    assert list(tt_default.padded_shape) == list(tt_explicit.padded_shape) == [1, 1, 64, 64]
+
+    entries_before = device.num_program_cache_entries()
+    for tt_input in (tt_default, tt_explicit):
+        ttnn.interleaved_to_sharded_partial(
+            tt_input,
+            grid_size,
+            [32, 64],
+            num_slices,
+            0,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    assert device.num_program_cache_entries() - entries_before == 2
+
+
 @pytest.mark.parametrize("H, W, num_cores, num_slices", [[32 * 32, 16 * 32, 64, 2], [2816, 16 * 32, 64, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",
