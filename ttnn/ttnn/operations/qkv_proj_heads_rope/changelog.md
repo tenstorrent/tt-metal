@@ -136,3 +136,69 @@ Bias read + seed ~6.4-7 us before K-block 0, matmul K-blocks 0..4 ~70 us, last K
 | matmul_block | capability | No per-row (per M-subblock-row) hook after a row's last-K pack, so an epilogue cannot follow each row; a separate per-row call for only the last K-block was also impossible because K-block 0's L1 accumulation was hard-coded off (now `seeded_pack_target`; the per-row hook is still missing). | 106,263 (whole K-loop in helper, serial epilogue) | 100,530 | qkv_proj_heads_rope_compute.cpp:177 (`last_k_row`) |
 | eltwise_chain BinaryFpu (mul_tiles) | capability | Only the face-major ELWMUL sequence: each ELWMUL accumulates into DEST rows written two instructions earlier and the fp32 DEST read-modify-write stalls (~2.5 cycles per ELWMUL); no whole-tile src unpack with fidelity-phase-outermost MOP. Also `DestAccumulation::PerRow` gives one output tile per DEST window, so a chain cannot batch the 4 products of a head into one window. | 8,422 per 11x8 block (isolated); 100,440 e2e | 4,319; 96,730 e2e | tile_src_mul.hpp:84, qkv_proj_heads_rope_compute.cpp:134 |
 | eltwise_chain CopyTile / no helper for a broadcast seed | capability | No element packs one DEST tile to several CB tiles (one-to-many pack), so a row-broadcast seed of a block_m x N_c region through a chain costs block_m unpacks per bias tile instead of one; seed written with the compute API (`unary_bcast<ROW>` + `pack_tile<true>`). Chain variant not built, so no helper-side number. | not measured | seed 0.4 us unpack / 3.1 us math / 6.0 us pack zone at 8x512, inside the fill | qkv_proj_heads_rope_compute.cpp:154 (`seed_partials`) |
+
+## Perf 2
+- Date: 2026-11-02. Device: Blackhole p100a (108 of 110 cores at the focus shape), AICLK 1350 MHz. Metric: DEVICE KERNEL DURATION [ns], one fresh-cache run per point.
+- Focus: flagged LOOSE_CASE 8x512, exact config (x / cos / sin / q / k / v in L1, W / bias in DRAM, bf16 TILE interleaved, default compute config HiFi3 + fp32_dest_acc_en + half-sync DEST + approx off). In SUPPORTED. Precision knobs untouched.
+- Instrumentation: Perf 1 zones reused; new `reader_bias_barrier`. Ablation hooks for this round: `perf_experiments/_breakdown/ablation_hooks_perf2.patch` (`ABL_NO_{STORE,XREAD,WREAD,TABLE,MCAST,BIAS,EPI,MATMUL}`); flagged / guard row runner `perf_experiments/_breakdown/perfrows.sh`.
+
+### Measured breakdown (8x512, before)
+| point (cumulative peel) | ns |
+|---|---|
+| full | 95,024 |
+| stores stubbed | 93,602 |
+| + input DM stubbed (x / W / table / bias reads, both multicasts) | 88,186 |
+| + epilogue math stubbed | 86,302 |
+| + matmul math stubbed (seed / pack / sync floor) | 10,162 |
+| compute stubbed (matmul + epilogue), DM alone | 74,153 |
+| input DM stubbed alone | 91,127 |
+
+Compute alone is 88.2 us; DM alone 74.2 us, so DM does not bind. With no DM the K-loop ran ~52.4 cycles per tile product against 48 at HiFi3 (16 per fidelity phase): ~4.4 cycles per product of fixed issue overhead, ~8 us. Ranked: (1) matmul issue overhead ~8 us; (2) DM fill + store tail ~6.8 us (x round 0 waited behind the 3 us bias barrier, bias + seed pack before K-block 0); (3) epilogue math 1.9 us exposed; (4) M imbalance (11 vs 10.67 rows per core, ~2.3 us; structural, not floated). The matmul payload at 48 cycles per product is the HiFi3 roofline and was not targeted.
+
+### Portfolio and verdicts (8x512 e2e ns in each subagent's op fork, baseline ~94.9k)
+| idea | verdict | before -> after | domain |
+|---|---|---|---|
+| matmul_kloop: one math MOP per `matmul_block` call (lean: CLR_AB on the call's last MVMUL, DEST offset written only on change). Menu: raw K-loop with stock LLK 95,271 (flat); fused + end op 93,793; fused, no end op 92,560; lean 92,045; kb6 97,060 and lean+kb6 93,769 (bigger fill and last K-block outweigh 52.4 -> 52.0 cycles); kb8 inexpressible at 8x512 (CB region collides with L1-resident x) | WIN, bit-identical | 94,919 -> 92,045 | everywhere: 4x512 -2.8%, 7x511 -3.3%, 32x128 -3.2%, 4096x1 -2.0%, HiFi4 / HiFi2 / LoFi / full sync bit-identical; 2x512, 4x256 h3 (2x2 subblock) and 1x32 flat |
+| fill_v2: shorten the fill before K-block 0. Menu: XFIRST (x round 0 issued behind the bias spans, one barrier) 93,866; BMC+WSHIFT (bias read by 9 W senders, multicast as a leading W round, W sender moved off the x sender) 93,531; BMC+BWRITER+KS (ragged [2,4,4,4,5,5], k_block 5 slots) 92,996; RAMP [2,2] 95,855; BTRID, BCOMPACT, BPOLL flat | WIN (XFIRST graduated) | 94,853 -> 93,866 | XFIRST everywhere (2x512 and 4096x1 flat). BMC+WSHIFT: 2x512 +1.7% over 3 runs. BMC+BWRITER+KS: 2x512 +12.6% (measured regression) |
+| tail_v2: (a) fuse last K-block + epilogue in DEST; (b) cheaper epilogue / schedule. Menu: preuse (rotary unpacks each fp32 partial once for 2 products) 94,109; vblk (v convert one DEST window per dest_tiles) 94,470; preuse+vblk 93,547-93,684; halfsplit 93,758 (flat); row groups 2 / 4 / 10 95,650 / 99,157 / 101,565; LAST_K_LEAD 2 95,690 | WIN (preuse+vblk), bit-identical. Fusion (a): NULL, not built; removing the whole rotary epilogue saves only 1.1 us, and fusion would remove just the partial unpacks out of that | 94,987 -> 93,590 | everywhere: 4x512 / 2x512 / 7x511 -1.3%; 4096x1 and 1x32 flat; HiFi4 / LoFi / full sync / 3 heads per core bit-identical |
+
+BMC+WSHIFT was not graduated: over XFIRST it saves 0.3-0.5 us at 8x512, inside the run-to-run band, and it costs 0.6 us on flagged 2x512. To get that, it needs a host-side W-sender move plus an extra multicast round.
+
+### Graduated (each the one unqualified path, code it replaced deleted, no carve-outs)
+| step | 8x512 / 16x256 / 32x128 / 8x384 / 4x512 / 8x256 / 2x512 / 4x256 (ns) | golden |
+|---|---|---|
+| before (Perf 1 kernels, same session) | 94,929 / 95,119 / 94,613 / 71,973 / 55,133 / 54,953 / 37,032 / 36,654 | 210/210 |
+| + fused-MOP matmul (helper K-loop replaced by raw `block_k_loop`, `last_k_row` fused) | 91,825 / 92,125 / 91,719 / 69,776 / 53,401 / 53,090 / 37,217 / 36,467 | 210/210 |
+| + rotary srcA reuse + v convert DEST windows (4-call `tile_src_mul` deleted) | 90,713 / 90,966 / 90,503 / 68,961 / 52,761 / 52,372 / 36,664 / 36,262 | 210/210 |
+| + x round 0 behind the bias spans | 89,963 / 89,609 / 89,574 / 67,659 / 52,267 / 51,707 / 36,707 / 36,119 | 210/210 |
+
+Whole op, focus 8x512: 94.9 -> 90.0 us (-5.2%; target 90.0). 16x256 and 32x128 under their 90 us target; 8x384 (68 us target) at 67.7; 4x512 / 8x256 (46) and 2x512 / 4x256 (28) still above. Unit suite 25/25. x in DRAM after: 8x512 94,276, 4x512 53,668, 2x512 37,063.
+
+### Guard set (`test_qkv_proj_heads_rope_perf_guard.py`, same session, before -> after ns, all correct)
+| row | before | after |
+|---|---|---|
+| 8x512 all L1 | 94,812 | 89,522 |
+| 2x512 | 36,971 | 36,648 |
+| 7x511 h_non_aligned | 87,379 | 82,238 |
+| 13x300 h_non_aligned | 95,550 | 90,912 |
+| 8x512 x in DRAM | 97,867 | 94,075 |
+| 8x512 tables + outputs in DRAM | 137,725 | 132,853 |
+| 1x32 (R1) | 22,339 | 22,581 |
+| 1x128 | 28,064 | 27,907 |
+| 2x37 | 28,139 | 28,358 |
+| 16x8 | 34,576 | 34,519 |
+| 4096x1 multi-block, all DRAM | 4,323,452 | 4,244,288 |
+1x32 (+1.1%) and 2x37 (+0.8%) are inside the ~2% noise band that the subagents measured on those shapes (1x32 moved +1.9% / -1.8% depending on run order). No material regression. SUPPORTED unchanged.
+
+### Bottleneck now (8x512, 90.1 us, zones)
+- The K-loop is at ~49.6 cycles per product (math zone 4.0 -> 68.9 us), close to the 48-cycle roofline.
+- The fill is bias barrier (3.0 us at 108 readers) + seed (math until 4.0, pack about 3 us after the bias).
+- Last K-block + epilogue 17.8 us.
+- Stores end 88-90 us.
+- Next candidates: a seed that does not occupy the pack thread before K-block 0 (with bias multicast); the M-row imbalance (11 vs 10.67 rows per core); upstreaming the fused matmul MOP into LLK so `matmul_block` can be used again.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| matmul_block (via ckernel::matmul_block / llk_math_matmul) | capability | The math half issues a DEST target offset write plus one MOP run per tile product (~4.4 cycles per product regardless of fidelity). No helper or API mode runs a call's ct_dim x rt_dim products as one MOP with the DEST stride in an address mod. A raw K-loop with the stock LLK is flat vs the helper (95,271 vs 94,919), so the helper itself costs nothing. The fix belongs in the LLK matmul MOP, and the helper would inherit it. | 94,919 | 92,045 | kernels/mm_fused_mop.hpp:99, qkv_proj_heads_rope_compute.cpp (`block_k_loop`, `last_k_row`) |
+| eltwise_chain BinaryFpu / mul_tiles (extends the Perf 1 `tile_src_mul` bypass) | capability | Every product unpacks both operands, so there is no way to keep srcA resident across two products with different srcB. The rotary epilogue is unpack-bound (one fidelity phase measured the same), so each fp32 partial tile was unpacked twice. | 94,880 (Perf 1 raw tile_src_mul; mul_tiles not re-measured) | 94,109 | kernels/tile_src_mul.hpp (`tile_src_mul_pair`), qkv_proj_heads_rope_compute.cpp (`epilogue_row`) |

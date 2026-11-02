@@ -1,0 +1,167 @@
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp
+index a80c1a3f008..80f61a468f1 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp
+@@ -128,6 +128,7 @@ void kernel_main() {
+             for (uint32_t head0 = 0; head0 < heads_per_core; head0 += window_heads) {
+                 const uint32_t heads = heads_per_core - head0 < window_heads ? heads_per_core - head0 : window_heads;
+                 tile_regs_acquire();
++#ifndef ABL_NO_EPI  // ABLATION-TMP
+                 for (uint32_t head = 0; head < heads; ++head) {
+                     const uint32_t p0 = row_base + (head0 + head) * tiles_per_head;
+                     const uint32_t dst = head * tiles_per_head;
+@@ -136,6 +137,7 @@ void kernel_main() {
+                     tile_src::tile_src_mul(cb_matmul_partials, cb_rotary_table, p0, table_base + 2, dst + 1);
+                     tile_src::tile_src_mul(cb_matmul_partials, cb_rotary_table, p0 + 1, table_base + 3, dst + 1);
+                 }
++#endif
+                 tile_regs_commit();
+                 tile_regs_wait();
+                 for (uint32_t tile = 0; tile < heads * tiles_per_head; ++tile) {
+@@ -145,6 +147,9 @@ void kernel_main() {
+             }
+             cb_push_back(cb_out, n_tiles);
+         } else {
++#ifdef ABL_NO_EPI  // ABLATION-TMP
++            cb_reserve_back(cb_out, n_tiles); cb_push_back(cb_out, n_tiles); return;
++#endif
+             eltwise_chain<InitReconfigOwner::Caller>(
+                 IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
+         }
+@@ -181,7 +186,11 @@ void kernel_main() {
+         pack_reconfig_l1_acc(1);
+         for (uint32_t col = 0; col < n_tiles; col += row_sb_w) {
+             tile_regs_acquire();
++#ifndef ABL_NO_MATMUL  // ABLATION-TMP
+             for (uint32_t inner = 0; inner < k_block; ++inner) {
++#else
++            for (uint32_t inner = 0; inner < 0; ++inner) {
++#endif
+                 ckernel::matmul_block(
+                     cb_activation_block,
+                     cb_weight_block,
+@@ -249,6 +258,10 @@ void kernel_main() {
+         {
+             // Occupancy: matmul_block waits per K-block on x / W inside the helper.
+             MaybeDeviceZoneScope("compute_matmul");
++#ifdef ABL_NO_MATMUL  // ABLATION-TMP
++            for (uint32_t kb = 0; kb + 1 < num_k_blocks; ++kb) { activation.wait_front(act_block_tiles); weight.wait_front(weight_block_tiles); activation.pop_front(act_block_tiles); weight.pop_front(weight_block_tiles); }
++            if constexpr (false)
++#endif
+             matmul_block<
+                 false,
+                 true,
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
+index 0c97d741f44..89d9ebdfaa3 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
+@@ -115,8 +115,10 @@ void kernel_main() {
+         for (uint32_t n = 0; n < n_tiles; ++n) {
+             const uint64_t src = bias_accessor.get_noc_addr(first_col_tile + n);
+             const uint32_t dst = bias_l1 + n * tile_bytes;
++#ifndef ABL_NO_BIAS  // ABLATION-TMP
+             noc_async_read(src, dst, span_bytes);
+             noc_async_read(src + face_bytes, dst + face_bytes, span_bytes);
++#endif
+         }
+         noc_async_read_barrier();
+         cb_push_back(cb_bias, n_tiles);
+@@ -133,6 +135,9 @@ void kernel_main() {
+             MaybeDeviceZoneScope("reader_x_read_issue");
+             for (uint32_t row = 0; row < rows; ++row) {
+                 for (uint32_t col = 0; col < k_block; ++col) {
++#ifdef ABL_NO_XREAD  // ABLATION-TMP
++                    continue;
++#endif
+                     noc_async_read_page(
+                         (first_row + row) * hidden_tiles + k_first + col,
+                         x_accessor,
+@@ -146,7 +151,9 @@ void kernel_main() {
+         }
+         // Valid rows are the leading `rows * k_block` tiles of the slot.
+         MaybeDeviceZoneScope("reader_x_mcast_send");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+         x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
++#endif
+     };
+ 
+     // Table slots [first, last) of the block starting at tile-row first_row; slot j holds sequence
+@@ -159,6 +166,10 @@ void kernel_main() {
+         const uint32_t num_tiles = (last - first) * table_tiles_per_row;
+         cb_reserve_back(cb_rotary_table, num_tiles);
+         uint32_t table_addr = get_write_ptr(cb_rotary_table);
++#ifdef ABL_NO_TABLE  // ABLATION-TMP
++        cb_push_back(cb_rotary_table, num_tiles);
++        return;
++#endif
+         for (uint32_t row = first; row < last; ++row) {
+             const uint32_t lo_page = ((first_row + row) % seq_tiles) * tiles_per_head;
+             noc_async_read_page(lo_page, cos_accessor, table_addr);
+@@ -198,7 +209,9 @@ void kernel_main() {
+                 read_x_block(k_blk * k_block, rows, first_row);
+             } else {
+                 MaybeDeviceZoneScope("reader_x_receive");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+                 x_receiver.receive(round);
++#endif
+             }
+             cb_push_back(cb_activation_block, act_block_tiles);
+             if (is_rotary) {
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp
+index cb471a91fcd..42f8da8fe83 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp
+@@ -66,6 +66,9 @@ FORCE_INLINE void store_row(
+     for (uint32_t n = 0; n < n_tiles; ++n) {
+         const uint32_t head = first_head + n / tiles_per_head;
+         const uint32_t page = ((batch * num_heads + head) * seq_tiles + st) * tiles_per_head + n % tiles_per_head;
++#ifdef ABL_NO_STORE  // ABLATION-TMP
++        continue;
++#endif
+         if (third == 0) {
+             noc_async_write_page(page, q_accessor, l1_addr);
+         } else if (third == 1) {
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
+index 0285c377651..2ec1ba2c617 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
+@@ -80,7 +80,9 @@ void kernel_main() {
+         for (uint32_t tile = 0; tile < weight_block_tiles; ++tile) {
+             const uint32_t kt = k_blk * k_block + k;
+             const uint32_t l1_addr = block_addr + (k * n_tiles + n) * tile_bytes;
++#ifndef ABL_NO_WREAD  // ABLATION-TMP
+             noc_async_read_page(kt * weight_width_tiles + first_col_tile + n, weight_accessor, l1_addr);
++#endif
+             if (++n == n_tiles) {
+                 n = 0;
+                 if (++k == k_block) {
+@@ -141,10 +143,14 @@ void kernel_main() {
+             }
+             if (sending) {
+                 MaybeDeviceZoneScope("writer_w_mcast_send");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+                 channel.sender(noc).send(block_addr, block_addr, weight_block_tiles * tile_bytes);
++#endif
+             } else {
+                 MaybeDeviceZoneScope("writer_w_receive");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+                 channel.receiver(noc).receive(round);
++#endif
+             }
+             if (read_ahead && round == 0) {
+                 issue_weight_reads(next % num_k_blocks, slot_addr(next));
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py b/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
+index c15b78282ea..666c7af0350 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
+@@ -580,4 +580,10 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
+         config=compute_kernel_config,
+     )
+     descriptor.kernels = [*readers, *writers, compute]
++    import os  # ABLATION-TMP
++    if os.environ.get("QKV_ABLATE"):  # ABLATION-TMP
++        kernels = list(descriptor.kernels)  # ABLATION-TMP
++        for kernel in kernels:  # ABLATION-TMP
++            kernel.defines = list(kernel.defines) + [(d, "1") for d in os.environ["QKV_ABLATE"].split(",")]  # ABLATION-TMP
++        descriptor.kernels = kernels  # ABLATION-TMP
+     return descriptor
