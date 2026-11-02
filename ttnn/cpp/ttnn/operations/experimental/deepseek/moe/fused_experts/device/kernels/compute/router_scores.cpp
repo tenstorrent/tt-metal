@@ -24,6 +24,7 @@
 //
 // Compile-time args:
 //   0: cb_rin   1: k_tiles   2: cb_rw   3: cb_rbias   4: bias_tiles   5: cb_rout   6: col_stride
+//   7: piece_tiles (the K tiles per weight piece the reader pushes; k_tiles for an L1 gate)
 //
 // Runtime args:
 //   0: first_tile (this core's first tile column)   1: n_tiles
@@ -42,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t bias_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t cb_rout_id = get_compile_time_arg_val(5);
     constexpr uint32_t col_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t piece_tiles = get_compile_time_arg_val(7);
 
     const uint32_t first_tile = get_arg_val<uint32_t>(0);
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);
@@ -75,11 +77,20 @@ void kernel_main() {
 
     custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_rin_id, cb_rw_id, cb_rout_id, 1);
     in_cb.wait_front(k_tiles);
-    w_cb.wait_front(n_tiles * k_tiles);
     {
         DeviceZoneScopedN("FE_R_MM");
+        // A DRAM gate arrives piece by piece (an L1 one all at once); only a column's last piece finalizes.
+        constexpr uint32_t pieces_per_col = k_tiles / piece_tiles;
         for (uint32_t n = 0; n < n_tiles; ++n) {
-            custom_mm_block<true, false>(cb_rin_id, cb_rw_id, 0, n * k_tiles, n, k_tiles, 1);
+            for (uint32_t p = 0; p < pieces_per_col; ++p) {
+                const uint32_t k0 = p * piece_tiles;
+                w_cb.wait_front(n * k_tiles + k0 + piece_tiles);
+                if (p + 1u == pieces_per_col) {
+                    custom_mm_block<true>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+                } else {
+                    custom_mm_block<false>(cb_rin_id, cb_rw_id, k0, n * k_tiles + k0, n, piece_tiles, 1);
+                }
+            }
         }
     }
     custom_mm_block_uninit<dense_packing>();

@@ -133,9 +133,9 @@ namespace ttnn::experimental::deepseek::moe {
 //   shared_swiglu_limit: clamp limit for the shared expert's SwiGLU; defaults to swiglu_limit,
 //                     and +inf leaves it unclamped.
 //   router_weight / router_bias: the learned router, run inside the op (see ROUTING INPUT). The
-//                     weight is [H, E] TILE, resident in L1, ND-sharded [H, 32] (one 32-expert
-//                     tile column per shard) ROW_MAJOR ROUND_ROBIN_1D over exactly the router
-//                     cores; the bias the [1, 1, 1, E] bfloat16 ROW_MAJOR row, DRAM
+//                     weight is [H, E] TILE, ND-sharded [H, 32] (one 32-expert tile column per
+//                     shard): in L1 ROW_MAJOR ROUND_ROBIN_1D over exactly the router cores, or in
+//                     DRAM, which the router cores stream; the bias the [1, 1, 1, E] bfloat16 ROW_MAJOR row, DRAM
 //                     interleaved. The input must be the one-row L1 replica, covering the router
 //                     cores as well as the expert grid.
 //

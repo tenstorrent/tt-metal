@@ -267,8 +267,9 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(gate.storage_type() == StorageType::DEVICE, "fused_experts: router_weight must be on device");
         TT_FATAL(gate.layout() == tt::tt_metal::Layout::TILE, "fused_experts: router_weight must be TILE layout");
         TT_FATAL(
-            gate.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
-            "fused_experts: router_weight must be resident in L1 (ND-sharded over the router cores)");
+            gate.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 ||
+                gate.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "fused_experts: router_weight must be ND-sharded in L1 (over the router cores) or DRAM");
         TT_FATAL(
             static_cast<uint32_t>(gate.logical_shape()[-2]) == hidden_dim &&
                 static_cast<uint32_t>(gate.logical_shape()[-1]) == num_weights_arg,
