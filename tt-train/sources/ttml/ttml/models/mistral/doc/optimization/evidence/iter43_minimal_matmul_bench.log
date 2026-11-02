@@ -1,0 +1,21 @@
+=== minimal_matmul vs the committed matmul routes, one chip, alternating rounds 2026-11-02T17:21:44Z
+gate_up fwd^T [16384, 5184] x [5184, 1024]: committed route 1493 us (first look)
+  minimal_matmul M4 K9 N4 sub 4x1 grid 11x10: 2028 us vs committed 1699 (+19.4 %)  max|diff| 3.12e-02
+  minimal_matmul M8 K9 N2 sub 4x1 grid 11x10: 2117 us vs committed 1723 (+22.8 %)  max|diff| 3.12e-02
+  minimal_matmul M4 K6 N4 sub 4x1 grid 11x10: 2032 us vs committed 1697 (+19.8 %)  max|diff| 3.12e-02
+  minimal_matmul M2 K9 N4 sub 2x2 grid 11x10: 2261 us vs committed 1703 (+32.8 %)  max|diff| 3.12e-02
+gate_up dX^T [5184, 16384] x [16384, 1024]: committed route 1493 us (first look)
+  minimal_matmul M4 K8 N4 sub 4x1 grid 11x10: 2070 us vs committed 1718 (+20.5 %)  max|diff| 6.25e-02
+  minimal_matmul M8 K8 N2 sub 4x1 grid 11x10: 2226 us vs committed 1869 (+19.1 %)  max|diff| 6.25e-02
+  minimal_matmul M4 K16 N4 sub 4x1 grid 11x10: 2064 us vs committed 1873 (+10.2 %)  max|diff| 6.25e-02
+  minimal_matmul M2 K8 N4 sub 2x2 grid 11x10: 2474 us vs committed 1864 (+32.7 %)  max|diff| 6.25e-02
+w2 fwd^T [5120, 8256] x [8256, 1024]: committed route 731 us (first look)
+  minimal_matmul M4 K6 N4 sub 4x1 grid 11x10: 960 us vs committed 785 (+22.3 %)  max|diff| 3.12e-02
+  minimal_matmul M8 K6 N2 sub 4x1 grid 11x10: 1024 us vs committed 828 (+23.8 %)  max|diff| 3.12e-02
+  minimal_matmul M4 K3 N4 sub 4x1 grid 11x10: 963 us vs committed 832 (+15.8 %)  max|diff| 3.12e-02
+  minimal_matmul M2 K6 N4 sub 2x2 grid 11x10: 1179 us vs committed 830 (+42.1 %)  max|diff| 3.12e-02
+w2 dX^T [8256, 5120] x [5120, 1024]: committed route 768 us (first look)
+  minimal_matmul M4 K8 N4 sub 4x1 grid 11x10: 949 us vs committed 825 (+15.0 %)  max|diff| 3.12e-02
+  minimal_matmul M8 K8 N2 sub 4x1 grid 11x10: 960 us vs committed 852 (+12.6 %)  max|diff| 3.12e-02
+  minimal_matmul M4 K4 N4 sub 4x1 grid 11x10: 951 us vs committed 859 (+10.7 %)  max|diff| 3.12e-02
+=== done 2026-11-02T17:21:59Z

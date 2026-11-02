@@ -1,0 +1,29 @@
+=== fused CCL + minimal matmul scoping on the 1x4 mesh 2026-11-02T17:18:38Z
+2026-11-02 17:18:46.263 | critical |          Always | TT_FATAL: subblock_h * subblock_w must be <= max_dest_volume (assert.hpp:104)
+2026-11-02 17:18:46.829 | critical |          Always | TT_FATAL: MinimalMatmulStridedReduceScatterAsync requires dim=3 for the ReduceScatter operation. (assert.hpp:104)
+2026-11-02 17:18:46.830 | critical |          Always | TT_FATAL: MinimalMatmulStridedReduceScatterAsync requires dim=3 for the ReduceScatter operation. (assert.hpp:104)
+2026-11-02 17:18:46.903 | critical |          Always | TT_FATAL: MinimalMatmulStridedReduceScatterAsync requires dim=3 for the ReduceScatter operation. (assert.hpp:104)
+2026-11-02 17:18:46.905 | critical |          Always | TT_FATAL: MinimalMatmulStridedReduceScatterAsync requires dim=3 for the ReduceScatter operation. (assert.hpp:104)
+(a) w2 fwd [1024, 8256] x [8256, 5120]: ttnn mcast matmul (its choice) 1062 us
+  minimal_matmul M4 K6 N5 sub 4x1 grid 11x8: 917 us  max|diff| 3.12e-02
+  minimal_matmul M4 K3 N5 sub 4x1 grid 11x8: 934 us  max|diff| 3.12e-02
+  minimal_matmul M2 K6 N5 sub 2x1 grid 11x10: 1032 us  max|diff| 3.12e-02
+(a) out fwd [1024, 1024] x [1024, 5120]: ttnn mcast matmul (its choice) 152 us
+  minimal_matmul M4 K4 N5 sub 4x1 grid 11x8: 126 us  max|diff| 7.81e-03
+  minimal_matmul M2 K8 N5 sub 2x1 grid 11x10: 133 us  max|diff| 7.81e-03
+(a) gate_up fwd [1024, 5184] x [5184, 16384]: ttnn mcast matmul (its choice) 1975 us
+  minimal_matmul M4 K9 N5 sub 4x1 grid 11x8: 1948 us  max|diff| 3.12e-02
+  minimal_matmul M2 K9 N8 sub 2x4 grid 11x10: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h *
+(b) w2 fwd: matmul then reduce_scatter (dim 2) 1183 us per call
+  fused minimal_matmul + strided RS (matmul grid 11x8): FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_r
+  fused minimal_matmul + strided RS (matmul grid 11x6): FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_r
+(b) out fwd: matmul then reduce_scatter (dim 2) 272 us per call
+  fused minimal_matmul + strided RS (matmul grid 11x8): FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_r
+  fused minimal_matmul + strided RS (matmul grid 11x6): FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_r
+(c) qkv fwd: all_gather (dim 2) then matmul 319 us per call
+  fused strided AG + minimal_matmul (matmul grid 11x8): FAILED
+  fused strided AG + minimal_matmul (matmul grid 11x6): FAILED
+(c) gate_up fwd: all_gather (dim 2) then matmul 2171 us per call
+  fused strided AG + minimal_matmul (matmul grid 11x8): FAILED
+  fused strided AG + minimal_matmul (matmul grid 11x6): FAILED
+=== done 2026-11-02T17:18:50Z

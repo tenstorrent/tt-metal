@@ -1,0 +1,14 @@
+=== mcast-matmul-based fused collectives on the 1x4 mesh 2026-11-02T17:29:29Z
+(a) matmul + reduce-scatter over the tokens (dim 3)
+  w2^T fwd [5120, 8256] x [8256, 1024]: committed matmul 746 us; matmul + reduce_scatter 984 us
+  fused (matmul 11x8, RS on rows 8..): 1059 us (the matmul alone on that grid 910); max|diff| vs separate 0.00e+00
+  fused (matmul 11x9, RS on rows 9..): 1099 us (the matmul alone on that grid 862); max|diff| vs separate 0.00e+00
+  gate_up dX^T [5184, 16384] x [16384, 1024]: committed matmul 1615 us; matmul + reduce_scatter 1696 us
+  fused (matmul 11x8, RS on rows 8..): 2088 us (the matmul alone on that grid 1921); max|diff| vs separate 0.00e+00
+  fused (matmul 11x9, RS on rows 9..): 1936 us (the matmul alone on that grid 1643); max|diff| vs separate 0.00e+00
+(b) all-gather over the tokens (dim 3 of x^T) + matmul with transpose_a
+  qkv fwd x [1024, 5120] @ W [5120, 1536]: all_gather + transpose + matmul (ttnn's choice) 383 us
+  fused AG + matmul(transpose_a) on 11x8: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.cpp:1716: a_shape_padded[-1] == b_shape_padded[-2]
+  gate_up fwd x_cat [1024, 5184] @ W [5184, 16384]: all_gather + transpose + matmul (ttnn's choice) 2029 us
+  fused AG + matmul(transpose_a) on 11x8: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.cpp:1716: a_shape_padded[-1] == b_shape_padded[-2]
+=== done 2026-11-02T17:29:43Z
