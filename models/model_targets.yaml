@@ -1861,8 +1861,10 @@ targets:
             seq_len: 686
             status: active
             perf:
-              decode_t/s/u: 19.5
-              decode_t_s_u_tolerance: 0.10
+              # The T3K perf runners f10cs08 and f10cs09 measure 19.3-22.1 on the same code.
+              # f10cs06 measures about 14 and is meant to fail.
+              decode_t/s/u: 20.7
+              decode_t_s_u_tolerance: 0.15
               prefill_time_to_first_token: 141
               prefill_time_to_first_token_tolerance: 0.15
             accuracy: {}
