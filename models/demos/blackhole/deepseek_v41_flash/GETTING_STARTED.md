@@ -1,14 +1,14 @@
-# DeepSeek-V4.1-Flash on Blackhole Galaxy: getting started (rc4c)
+# DeepSeek-V4.1-Flash on Blackhole Galaxy: getting started (B=8)
 
 OpenAI-compatible vLLM server on one Blackhole Galaxy (32 chips, 4x8 mesh). Release notes: `RELEASE_NOTES.md`.
 
 ## Docker image
 
-Local build (nothing is pushed yet; the registry name below is a placeholder until the image is published):
+Target registry name (**not pushed yet**) and the local image it was tagged from:
 
 ```
-dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901
-ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:<tag>      # placeholder
+ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb
+dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901      # same image (id 27afaf993dab), local name
 ```
 
 - 21.7 GB on disk. No weights or caches inside.
@@ -20,9 +20,8 @@ ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:<tag>    
 | | Users | Context | Select |
 |---|---|---|---|
 | **B=8** (default entry) | 8 | 1,048,576 | `--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy` (no `--impl`) |
-| **B=16** | 16 | 262,144 | add `--impl deepseek-v41-flash` |
 
-Both: speculative decoding, image input (up to 250 images per prompt), tool calling / reasoning parser / non-thinking default (`tokenizer-mode deepseek_v41`), structured outputs, prefix caching on a 512-token grid (device block-paged at B=8), paged prefill. The catalog also has vision entries (`deepseek-v41-flash-vlm-b8-1m`, `deepseek-v41-flash-vlm`) that differ only in the model type used by the evaluation workflows. B=4 entries exist in the catalog but were not validated for rc4c. All settings of an entry are in the catalog (`workflows/model_specs/dev/llm.yaml` and `vlm.yaml` of tt-inference-server `2406dcb15`); read them with:
+B=8: speculative decoding, image input (up to 250 images per prompt), tool calling / reasoning parser / non-thinking default (`tokenizer-mode deepseek_v41`), structured outputs, prefix caching on a 512-token grid (device block-paged at B=8), paged prefill. The catalog also has vision entries (`deepseek-v41-flash-vlm-b8-1m`) that differ only in the model type used by the evaluation workflows. B=4 entries exist in the catalog but were not validated for rc4c. All settings of an entry are in the catalog (`workflows/model_specs/dev/llm.yaml` and `vlm.yaml` of tt-inference-server `2406dcb15`); read them with:
 
 ```bash
 docker run --rm --entrypoint cat dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901 /home/container_app_user/model_specs/model_spec.json > model_spec.json
@@ -38,7 +37,7 @@ The weight cache is keyed by directory only, so each checkpoint needs its own em
 export CKPT=/path/to/deepseek-v41-flash-1017   # checkpoint, read-only
 export CACHE=/path/to/dsv41_cache_1017         # weights/ unified/ kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes
-export IMAGE=dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901   # or the registry name once published
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb   # once pushed; before that the local name dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT        # a token may be needed
@@ -49,7 +48,7 @@ mkdir -p $R/refs $R/snapshots/local && echo -n local > $R/refs/main
 cp $CKPT/config.json $CKPT/tokenizer.json $CKPT/tokenizer_config.json $R/snapshots/local/
 ```
 
-Start the server. B=8 (default entry):
+Start the server (B=8, the default entry):
 
 ```bash
 docker run -d --rm --name dsv41 \
@@ -71,7 +70,7 @@ docker run -d --rm --name dsv41 \
   --model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy --no-auth
 ```
 
-B=16: the same command with `--impl deepseek-v41-flash` added after `--no-auth`. This is the command the rc4c validation used (`dsv4-logs/rc4c_val/hold_acc.sh`: no runtime spec, no tree or plugin mounts, no environment overrides); the B=16 runs added `--impl deepseek-v41-flash` (`seq34.sh`).
+This is the command the validation used (`dsv4-logs/rc4c_val/hold_acc.sh`: no runtime spec, no tree or plugin mounts, no environment overrides). B=16 is not part of this release.
 
 Note: `docker -e DSV41_...` does not override the settings baked into the catalog entry; to change a setting, mount a modified `model_spec.json` over `/home/container_app_user/model_specs/model_spec.json`.
 
@@ -105,6 +104,5 @@ From `docker run` to `/health` 200, with the weight and kernel caches populated 
 | Configuration | Time |
 |---|---|
 | B=8 (1,048,576 tokens) | 1,274-1,635 s (21-27 min) |
-| B=16 (262,144 tokens) | 803-934 s (13-16 min) |
 
 The first start with empty caches takes much longer (not measured for rc4c); it writes the weight cache and the kernel cache.
