@@ -569,7 +569,11 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 tt::CoreType::WORKER,
                 mux_l1_small_floor_address);
 
-            // V2 places one logical channel per worker
+            const bool mux_connection_valid =
+                (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+
+            // V2 places one logical channel per worker. Its map goes in program-local L1 (a circular buffer on the
+            // mux core), so it stays clear of persistent L1 there.
             std::optional<tt::tt_fabric::FabricMuxV2Config> mux_v2_config;
             if (use_mux_v2) {
                 mux_v2_config.emplace(
@@ -577,12 +581,11 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     static_cast<uint8_t>(num_full_size_channels),
                     static_cast<uint8_t>(num_buffers_full_size_channels),
                     buffer_size_bytes_full_size_channel,
-                    mux_base_l1_address,
-                    mux_l1_small_floor_address);
+                    /*base_l1_address=*/0);
+                if (mux_connection_valid) {
+                    mux_v2_config->place_in_program_local_l1(program, CoreRangeSet(CoreRange(mux_logical_core)));
+                }
             }
-
-            const bool mux_connection_valid =
-                (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
             if (mux_connection_valid) {
                 const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                 const auto dst_node_id =
@@ -770,7 +773,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     }
                 }
                 if (use_mux_v2) {
-                    // Layout: [mux_connection_valid][11 client-connection args]
+                    // Layout: [mux_connection_valid][12 client-connection args]
                     writer_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid ? 1 : 0));
                     const uint32_t flow_control_sem_id = CreateSemaphore(program, {core}, 0);
                     const uint32_t teardown_sem_id = CreateSemaphore(program, {core}, 0);

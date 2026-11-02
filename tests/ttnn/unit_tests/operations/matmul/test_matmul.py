@@ -18,7 +18,6 @@ from tt_py_test_utils_common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
-
 # for setting up multi-device stress tests
 NUM_DEVICES_ENV_KEY = "USE_NUM_DEVICES"
 NUM_DEVICES = ttnn.distributed.get_num_pcie_devices() if os.environ.get(NUM_DEVICES_ENV_KEY, None) is not None else 1
@@ -5345,6 +5344,71 @@ def test_matmul_1d_mcast_sharded_output_anchors_at_subdevice_start(device, mcast
         device.reset_sub_device_stall_group()
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(mgr)
+
+
+@pytest.mark.parametrize("zero_field", ["per_core_M", "per_core_N"])
+@pytest.mark.parametrize("config_type", ["mcast_2d", "mcast_1d"])
+def test_matmul_sharded_output_rejects_zero_per_core_dims(device, expect_error, zero_field, config_type):
+    # A sharded output's spec divides M and N by per_core_M / per_core_N, and launch() computes
+    # output specs before validate_on_program_cache_miss.
+    a = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    per_core = dict(per_core_M=1, per_core_N=1)
+    per_core[zero_field] = 0
+    if config_type == "mcast_2d":
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=None,
+            **per_core,
+        )
+        layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(2, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+            **per_core,
+        )
+        layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    out_mem_config = ttnn.MemoryConfig(memory_layout=layout, buffer_type=ttnn.BufferType.L1)
+    with expect_error(RuntimeError, f"{zero_field} is 0, which is not valid"):
+        ttnn.matmul(a, b, program_config=program_config, memory_config=out_mem_config)
+
+
+@pytest.mark.parametrize("core_grid", [(0, 1), (1, 0)])
+def test_matmul_rejects_zero_core_grid(device, expect_error, core_grid):
+    # The auto-generated configs split the work by core_grid.x * core_grid.y.
+    a = ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "core_grid must be non-zero"):
+        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(x=core_grid[0], y=core_grid[1]))
+
+
+@pytest.mark.parametrize("grid", [(0, 1), (1, 0)])
+def test_attn_matmul_rejects_zero_grid(device, expect_error, grid):
+    # The factory splits q_heads over compute_with_storage_grid_size.x * .y cores.
+    a = ttnn.from_torch(torch.randn(1, 32, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 1, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "compute_with_storage_grid_size must be non-zero"):
+        ttnn.experimental.attn_matmul(a, b, compute_with_storage_grid_size=ttnn.CoreCoord(*grid))
+
+
+def test_group_attn_matmul_rejects_zero_kv_heads(device, expect_error):
+    # Validate takes q_heads % kv_heads.
+    a = ttnn.from_torch(torch.randn(1, 32, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 0, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Number of q_heads must be divisible by kv_heads"):
+        ttnn.experimental.group_attn_matmul(
+            a, b, compute_with_storage_grid_size=device.compute_with_storage_grid_size()
+        )
 
 
 def _bias_logical_h_program_config(config_kind, m, n, k):
