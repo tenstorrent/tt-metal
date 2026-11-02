@@ -1,0 +1,13 @@
+base written
+=== base
+      1.70 ms    102.2 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.69 ms    103.0 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5 l1_acc=1
+      1.65 ms    105.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x5 l1_acc=1
+      1.65 ms    105.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x5 l1_acc=1
+nomath written
+=== nomath
+      1.09 ms    159.7 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      0.75 ms    232.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5 l1_acc=1
+      1.08 ms    160.3 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x5 l1_acc=1
+      0.75 ms    232.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5 l1_acc=1
+kernel restored clean

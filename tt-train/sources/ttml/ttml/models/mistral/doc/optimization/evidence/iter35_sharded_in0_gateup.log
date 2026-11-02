@@ -1,0 +1,83 @@
+2026-11-02 09:37:54.771 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-02 09:37:54.810 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 09:37:54.810 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 09:37:54.810 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 09:37:54.810 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 09:37:54.821 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 09:37:54.821 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 09:37:54.900 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 09:37:54.900 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 09:37:54.900 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 09:37:54.900 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 09:37:54.902 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 09:37:55.017 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-11-02 09:37:55.017 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 09:37:55.051 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-02 09:37:55.051 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-02 09:37:55.051 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 09:37:55.092 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-11-02 09:37:57.589 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 14 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 393216 and static dataflow buffer region ends at 1377664 (assert.hpp:104)
+M=1024 K=5184 N=16384: interleaved in0, w=2 16x5: 1.686 ms 103.2 TFLOP/s
+  interleaved in0, w=9 16x5: 1.605 ms 108.4 TFLOP/s
+  interleaved in0, w=6 16x5: 1.685 ms 103.2 TFLOP/s
+  interleaved in0, w=3 16x5: 1.807 ms 96.3 TFLOP/s
+shards=18 (shard [1024, 288], 576 KB per core): interleaved->sharded 17334 us
+  sharded in0 s=18, w=9 16x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:37:57.904 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2459008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  sharded in0 s=18, w=9 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: tt::excepti
+2026-11-02 09:37:58.223 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 18 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 393216 and static dataflow buffer region ends at 861568 (assert.hpp:104)
+  sharded in0 s=18, w=3 16x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:37:58.534 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 20 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 393216 and static dataflow buffer region ends at 1549696 (assert.hpp:104)
+  sharded in0 s=18, w=3 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:37:58.854 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 22 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 393216 and static dataflow buffer region ends at 689536 (assert.hpp:104)
+  sharded in0 s=18, w=1 16x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:37:59.169 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 24 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 393216 and static dataflow buffer region ends at 1246592 (assert.hpp:104)
+  sharded in0 s=18, w=1 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:37:59.680 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 28 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 786432 and static dataflow buffer region ends at 1119616 (assert.hpp:104)
+shards=27 (shard [1024, 192], 384 KB per core): interleaved->sharded 39 us
+  sharded in0 s=27, w=6 16x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:37:59.995 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2004352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  sharded in0 s=27, w=6 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: tt::excepti
+2026-11-02 09:38:00.233 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 32 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 786432 and static dataflow buffer region ends at 861568 (assert.hpp:104)
+  sharded in0 s=27, w=3 16x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:38:00.470 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 34 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 786432 and static dataflow buffer region ends at 1549696 (assert.hpp:104)
+  sharded in0 s=27, w=3 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+  sharded in0 s=27, w=2 16x5: 1.680 ms 103.5 TFLOP/s  max|diff| 0.00e+00
+2026-11-02 09:38:01.173 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 38 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 786432 and static dataflow buffer region ends at 1398144 (assert.hpp:104)
+  sharded in0 s=27, w=2 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+  sharded in0 s=27, w=1 16x5: 1.778 ms 97.8 TFLOP/s  max|diff| 3.12e-02
+2026-11-02 09:38:01.722 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 42 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 786432 and static dataflow buffer region ends at 1246592 (assert.hpp:104)
+  sharded in0 s=27, w=1 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:38:01.903 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: shard_shape[1] (96) / in0_tile width (32) must be divisible by in0_block_w (9) (assert.hpp:104)
+shards=54 (shard [1024, 96], 192 KB per core): interleaved->sharded 40 us
+  sharded in0 s=54, w=9 16x5: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:
+2026-11-02 09:38:01.905 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: shard_shape[1] (96) / in0_tile width (32) must be divisible by in0_block_w (9) (assert.hpp:104)
+  sharded in0 s=54, w=9 32x5: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:
+2026-11-02 09:38:01.906 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: shard_shape[1] (96) / in0_tile width (32) must be divisible by in0_block_w (6) (assert.hpp:104)
+  sharded in0 s=54, w=6 16x5: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:
+2026-11-02 09:38:01.907 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: shard_shape[1] (96) / in0_tile width (32) must be divisible by in0_block_w (6) (assert.hpp:104)
+  sharded in0 s=54, w=6 32x5: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:
+  sharded in0 s=54, w=3 16x5: 1.668 ms 104.3 TFLOP/s  max|diff| 3.12e-02
+2026-11-02 09:38:02.421 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 48 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1179648 and static dataflow buffer region ends at 1549696 (assert.hpp:104)
+  sharded in0 s=54, w=3 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+  sharded in0 s=54, w=1 16x5: 1.800 ms 96.7 TFLOP/s  max|diff| 3.12e-02
+2026-11-02 09:38:02.963 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 52 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1179648 and static dataflow buffer region ends at 1246592 (assert.hpp:104)
+  sharded in0 s=54, w=1 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+2026-11-02 09:38:03.140 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: shard_shape[1] (64) / in0_tile width (32) must be divisible by in0_block_w (6) (assert.hpp:104)
+shards=81 (shard [1024, 64], 128 KB per core): interleaved->sharded 41 us
+  sharded in0 s=81, w=6 16x5: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:
+2026-11-02 09:38:03.141 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCast1DProgramConfig: shard_shape[1] (64) / in0_tile width (32) must be divisible by in0_block_w (6) (assert.hpp:104)
+  sharded in0 s=81, w=6 32x5: FAILED TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:
+  sharded in0 s=81, w=2 16x5: 1.692 ms 102.8 TFLOP/s  max|diff| 0.00e+00
+2026-11-02 09:38:03.656 | critical |          Always | TT_THROW: Statically allocated dataflow buffers in program 58 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1310720 and static dataflow buffer region ends at 1398144 (assert.hpp:104)
+  sharded in0 s=81, w=2 32x5: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3072: tt::excepti
+  sharded in0 s=81, w=1 16x5: 1.795 ms 96.9 TFLOP/s  max|diff| 3.12e-02
+  sharded in0 s=81, w=1 32x5: 1.782 ms 97.6 TFLOP/s  max|diff| 3.12e-02
+2026-11-02 09:38:04.496 | info     |    BuildKernels | JIT cache stats: 36/105 hits (34.3%) [36 cached, 77 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 09:38:04.496 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 09:38:04.509 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 09:38:04.509 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 09:38:04.817 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 09:38:04.817 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 09:38:04.817 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

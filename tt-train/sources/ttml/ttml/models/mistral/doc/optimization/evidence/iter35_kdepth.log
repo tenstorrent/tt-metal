@@ -1,0 +1,21 @@
+=== gateup_fwd 2026-11-02T09:21:06Z
+rc=0
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 1.93 ms, 90.3 TFLOP/s wall
+10 configs tried, 10 ran, 0 failed
+      1.59 ms    109.1 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+      1.62 ms    107.7 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=16x5 l1_acc=1
+      1.65 ms    105.6 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=16x5 l1_acc=1
+      1.66 ms    104.8 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.68 ms    103.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5 l1_acc=1
+      2.28 ms     76.3 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=8x5 l1_acc=1
+      2.37 ms     73.4 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=8x5 l1_acc=1
+      2.44 ms     71.4 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=8x5 l1_acc=1
+=== gateup_fwd_noacc 2026-11-02T09:21:12Z
+rc=0
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 3.62 ms, 48.0 TFLOP/s wall
+4 configs tried, 4 ran, 0 failed
+      1.86 ms     93.7 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=0
+      2.01 ms     86.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=16x5 l1_acc=0
+      3.07 ms     56.7 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=0
+      3.08 ms     56.5 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=32x5 l1_acc=0
+=== done 2026-11-02T09:21:17Z

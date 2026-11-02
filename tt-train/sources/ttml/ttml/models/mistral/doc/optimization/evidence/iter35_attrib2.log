@@ -1,0 +1,26 @@
+base written
+=== base 2026-11-02T09:34:05Z
+M=5184 K=16384 N=1024 transpose_b: ttnn's choice on 11x10: 1.527 ms, 113.9 TFLOP/s wall
+M=8256 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.769 ms, 112.6 TFLOP/s wall
+M=1024 K=5184 N=1792: ttnn's choice on 11x10: 0.247 ms, 77.0 TFLOP/s wall
+M=1024 K=1344 N=5120: ttnn's choice on 11x10: 0.202 ms, 69.7 TFLOP/s wall
+nomath written
+=== nomath 2026-11-02T09:34:20Z
+M=5184 K=16384 N=1024 transpose_b: ttnn's choice on 11x10: 1.029 ms, 169.1 TFLOP/s wall
+M=8256 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.588 ms, 147.2 TFLOP/s wall
+M=1024 K=5184 N=1792: ttnn's choice on 11x10: 0.124 ms, 153.3 TFLOP/s wall
+M=1024 K=1344 N=5120: ttnn's choice on 11x10: 0.114 ms, 123.7 TFLOP/s wall
+nopack written
+=== nopack 2026-11-02T09:34:36Z
+M=5184 K=16384 N=1024 transpose_b: ttnn's choice on 11x10: 1.511 ms, 115.1 TFLOP/s wall
+M=8256 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.758 ms, 114.2 TFLOP/s wall
+M=1024 K=5184 N=1792: ttnn's choice on 11x10: 0.244 ms, 78.0 TFLOP/s wall
+M=1024 K=1344 N=5120: ttnn's choice on 11x10: 0.201 ms, 70.1 TFLOP/s wall
+nomath_nopack written
+=== nomath_nopack 2026-11-02T09:34:52Z
+M=5184 K=16384 N=1024 transpose_b: ttnn's choice on 11x10: 1.024 ms, 169.8 TFLOP/s wall
+M=8256 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.592 ms, 146.3 TFLOP/s wall
+M=1024 K=5184 N=1792: ttnn's choice on 11x10: 0.123 ms, 154.7 TFLOP/s wall
+M=1024 K=1344 N=5120: ttnn's choice on 11x10: 0.109 ms, 129.3 TFLOP/s wall
+kernel restored: clean
+=== done 2026-11-02T09:35:08Z

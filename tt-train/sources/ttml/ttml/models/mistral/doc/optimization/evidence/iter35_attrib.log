@@ -1,0 +1,27 @@
+base written
+=== base 2026-11-02T09:33:29Z
+rc=0
+      1.70 ms    102.2 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.61 ms    108.0 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+nomath written
+=== nomath 2026-11-02T09:33:36Z
+rc=0
+      1.09 ms    159.6 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.09 ms    159.1 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+nopack written
+=== nopack 2026-11-02T09:33:43Z
+rc=0
+      1.65 ms    105.4 TFLOP/s  max|diff| 6.64e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.60 ms    108.6 TFLOP/s  max|diff| 4.19e+00  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+nomath_nopack written
+=== nomath_nopack 2026-11-02T09:33:50Z
+rc=0
+      1.08 ms    160.7 TFLOP/s  max|diff| 6.64e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.09 ms    160.1 TFLOP/s  max|diff| 4.19e+00  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+base written
+=== base 2026-11-02T09:33:58Z
+rc=0
+      1.69 ms    103.1 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=5 in0_block_w=2 sub=4x1 out_block=16x5 l1_acc=1
+      1.62 ms    107.6 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=9 sub=4x1 out_block=16x5 l1_acc=1
+kernel restored: clean
+=== done 2026-11-02T09:34:05Z

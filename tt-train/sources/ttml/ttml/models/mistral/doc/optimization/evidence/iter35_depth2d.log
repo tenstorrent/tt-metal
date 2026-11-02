@@ -1,0 +1,33 @@
+=== gateup_dx 2026-11-02T10:23:54Z
+M=5184 K=16384 N=1024 transpose_b: ttnn's choice on 11x10: 1.528 ms 113.8 TFLOP/s
+  2D 11x10 pcM 17 pcN 3 depth  4 sub 1x3: 1.600 ms  108.7 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 17 pcN 3 depth  4 sub 1x1: 1.645 ms  105.8 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 17 pcN 3 depth  8 sub 1x3: 1.513 ms  115.0 TFLOP/s  max|diff| 6.25e-02
+  2D 11x10 pcM 17 pcN 3 depth  8 sub 1x1: 1.574 ms  110.5 TFLOP/s  max|diff| 6.25e-02
+  2D depth 16 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 16 sub 1x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+=== w2_dx 2026-11-02T10:24:00Z
+M=8256 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.755 ms 114.6 TFLOP/s
+  2D 11x10 pcM 26 pcN 3 depth  4 sub 1x3: 0.769 ms  112.5 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 26 pcN 3 depth  4 sub 2x1: 0.784 ms  110.4 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 26 pcN 3 depth  5 sub 1x3: 0.760 ms  113.9 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 26 pcN 3 depth  5 sub 2x1: 0.780 ms  110.9 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 26 pcN 3 depth  8 sub 1x3: 0.746 ms  116.1 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 26 pcN 3 depth  8 sub 2x1: 0.759 ms  114.1 TFLOP/s  max|diff| 3.12e-02
+  2D depth 10 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 10 sub 2x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 16 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 16 sub 2x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 20 sub 1x3: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 20 sub 2x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+=== w2_fwd_8256 2026-11-02T10:24:07Z
+M=1024 K=8256 N=5120: ttnn's choice on 11x8: 0.998 ms 86.8 TFLOP/s
+  2D 11x8 pcM 4 pcN 15 depth  3 sub 4x1: 0.909 ms   95.3 TFLOP/s  max|diff| 0.00e+00
+  2D 11x8 pcM 4 pcN 15 depth  6 sub 4x1: 0.883 ms   98.1 TFLOP/s  max|diff| 3.12e-02
+=== w2_fwd_8320 2026-11-02T10:24:11Z
+M=1024 K=8320 N=5120: ttnn's choice on 11x8: 0.966 ms 90.3 TFLOP/s
+  2D 11x8 pcM 4 pcN 15 depth 10 sub 4x1: 0.881 ms   99.0 TFLOP/s  max|diff| 6.25e-02
+  2D 11x8 pcM 4 pcN 15 depth 13 sub 4x1: 0.866 ms  100.7 TFLOP/s  max|diff| 6.25e-02
+  2D depth 20 sub 4x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  2D depth 26 sub 4x1: FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+=== done 2026-11-02T10:24:16Z

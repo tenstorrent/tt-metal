@@ -111,6 +111,14 @@ FORWARD_PROGRAM_CONFIG: dict[tuple[int, int], dict] = {
     (5120, 65536): dict(
         grid=(10, 10), in0_block_w=2, out_subblock_h=4, out_subblock_w=1, out_block_h=16, out_block_w=7, per_core_N=21
     ),
+    # gate_up forward at the TP=4 shard width [1024, 5184] x [5184, 16384] (iteration 35, ``iter35_matmul_sweep1d.py``):
+    # nine K tiles per block instead of ttnn's two (36 matmuls per DEST acquire, the per-block partial round trip
+    # amortised 4.5x) at the same 16x5 output block; 1.60 vs 1.68 ms standalone, outputs within one bf16 ulp of
+    # ttnn's choice (the K blocking changes the fp32 accumulation order). ``in0_block_w`` must divide K in tiles
+    # (162 = 2 x 3^4 with the LoRA tail; ``forward_matmul_kwargs`` falls back when it does not).
+    (5120, 16384): dict(
+        grid=(11, 10), in0_block_w=9, out_subblock_h=4, out_subblock_w=1, out_block_h=16, out_block_w=5, per_core_N=5
+    ),
 }
 
 
@@ -164,10 +172,12 @@ def forward_matmul_kwargs(in_features: int, out_features: int, rows: int, k: int
         return kwargs_2d
     spec = FORWARD_PROGRAM_CONFIG.get((in_features, out_features))
     grid = ttml.autograd.AutoContext.get_instance().get_device().compute_with_storage_grid_size()
+    k_tiles = (k if k is not None else in_features) // 32
     if (
         spec is None
         or rows % 32 != 0
         or (rows // 32) % spec["out_block_h"] != 0
+        or k_tiles % spec["in0_block_w"] != 0
         or spec["grid"][0] > grid.x
         or spec["grid"][1] > grid.y
     ):

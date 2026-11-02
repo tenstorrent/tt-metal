@@ -1,0 +1,19 @@
+M=5184 K=16384 N=1024 transpose_b: ttnn's choice on 11x10: 1.500 ms, 116.0 TFLOP/s wall
+M=8256 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.779 ms, 111.1 TFLOP/s wall
+M=1024 K=8256 N=5120: ttnn's choice on 11x10: 0.999 ms, 86.6 TFLOP/s wall
+M=1024 K=5184 N=1792: ttnn's choice on 11x10: 0.262 ms, 72.7 TFLOP/s wall
+M=1024 K=1344 N=5120: ttnn's choice on 11x10: 0.208 ms, 67.9 TFLOP/s wall
+              tracy_mm: kernel   1538.7 us | BRISC   1538.7 NCRISC   1326.8 TRISC1   1370.7 | exposed after compute  168.0 us
+    tracy_mm_gateup_dx: kernel   1412.3 us | BRISC   1412.3 NCRISC   1375.9 TRISC1   1392.0 | exposed after compute   20.3 us
+        tracy_mm_w2_dx: kernel    702.4 us | BRISC    702.3 NCRISC    641.7 TRISC1    666.2 | exposed after compute   36.1 us
+       tracy_mm_w2_fwd: kernel    923.8 us | BRISC    923.8 NCRISC    873.0 TRISC1    899.2 | exposed after compute   24.6 us
+      tracy_mm_qkv_fwd: kernel    225.8 us | BRISC    225.8 NCRISC    206.8 TRISC1    214.9 | exposed after compute   10.9 us
+      tracy_mm_out_fwd: kernel    180.1 us | BRISC    180.1 NCRISC    131.1 TRISC1    157.2 | exposed after compute   22.9 us
+  tracy_mm_gateup_fwd2: kernel   1542.4 us | BRISC   1542.4 NCRISC   1333.7 TRISC1   1377.9 | exposed after compute  164.5 us
+       tracy_mm_w2_dx2: kernel    699.7 us | BRISC    699.7 NCRISC    642.1 TRISC1    666.6 | exposed after compute   33.1 us
+     tracy_mm_out_fwd2: kernel    179.3 us | BRISC    179.3 NCRISC    131.3 TRISC1    157.2 | exposed after compute   22.1 us
+run 0: kernel   1799.5 us | BRISC   1799.5 NCRISC   1698.7 TRISC1   1727.2 | exposed   72.2 us
+run 1: kernel   1536.6 us | BRISC   1536.6 NCRISC   1437.0 TRISC1   1459.5 | exposed   77.1 us
+run 2: kernel   1532.9 us | BRISC   1532.9 NCRISC   1326.5 TRISC1   1370.6 | exposed  162.3 us
+run 3: kernel   1456.5 us | BRISC   1456.5 NCRISC   1355.3 TRISC1   1427.8 | exposed   28.7 us
+24 matmul rows

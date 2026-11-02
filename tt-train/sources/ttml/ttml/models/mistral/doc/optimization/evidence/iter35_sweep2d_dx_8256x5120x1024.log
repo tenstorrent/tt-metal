@@ -1,0 +1,66 @@
+2026-11-02 09:52:09.736 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-02 09:52:10.269 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 09:52:10.269 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 09:52:10.269 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 09:52:10.269 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 09:52:10.279 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 09:52:10.280 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 09:52:10.360 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 09:52:10.360 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 09:52:10.360 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 09:52:10.360 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 09:52:10.362 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 09:52:10.448 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-11-02 09:52:10.517 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 09:52:10.551 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-02 09:52:10.551 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-02 09:52:10.551 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 09:52:10.591 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+[8256,5120]x[5120,1024] (transpose_b) default: 965 us (90 TFLOP/s)
+  grid 10x10 pcM 26 pcN 4 in0_block_w  1 sub 2x2: 1088 us (80 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 26 pcN 4 in0_block_w  2 sub 2x2: 1005 us (86 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  4 sub 2x2: 981 us (88 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  5 sub 2x2: 959 us (90 TFLOP/s) max|diff| 1
+2026-11-02 09:52:11.957 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x10 pcM 26 pcN 4 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 8x10 pcM 26 pcN 4 in0_block_w  1 sub 2x2: 1059 us (82 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 26 pcN 4 in0_block_w  2 sub 2x2: 1010 us (86 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  4 sub 2x2: 985 us (88 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  5 sub 2x2: 965 us (90 TFLOP/s) max|diff| 1
+2026-11-02 09:52:12.095 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 8x10 pcM 26 pcN 4 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 4x10 pcM 26 pcN 8 in0_block_w  1 sub 2x2: 1975 us (44 TFLOP/s) max|diff| 0
+2026-11-02 09:52:12.150 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 1668480 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  2 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.155 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 1947008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  4 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.163 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 2086272 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  5 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.167 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 2839936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  1 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.172 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3011968 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  2 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.177 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3356032 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  4 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.181 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3528064 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  5 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.186 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 5461376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  1 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.190 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 5698944 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  2 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-11-02 09:52:12.194 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 6174080 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  4 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+[8256,5120]x[5120,1024] default 965 us; best 5 (us, gx, gy, pcM, pcN, in0_block_w, sub_h, sub_w, max|diff|):
+    (959.4425093382597, 10, 10, 26, 4, 5, 2, 2, 1.0)
+    (964.8269042372704, 8, 10, 26, 4, 5, 2, 2, 1.0)
+    (980.8032773435116, 10, 10, 26, 4, 4, 2, 2, 1.0)
+    (985.0475005805492, 8, 10, 26, 4, 4, 2, 2, 1.0)
+    (1004.9506090581417, 10, 10, 26, 4, 2, 2, 2, 1.0)
+2026-11-02 09:52:12.415 | info     |    BuildKernels | JIT cache stats: 143/143 hits (100.0%) [143 cached, 49 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 09:52:12.415 | info     |    BuildKernels | JIT telemetry: 30 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 09:52:12.428 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 09:52:12.428 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 09:52:12.718 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 09:52:12.718 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 09:52:12.718 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

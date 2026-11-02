@@ -1,0 +1,34 @@
+2026-11-02 09:40:25.095 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-02 09:40:25.134 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 09:40:25.134 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 09:40:25.134 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 09:40:25.134 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 09:40:25.145 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 09:40:25.145 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 09:40:25.224 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 09:40:25.224 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 09:40:25.224 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 09:40:25.224 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 09:40:25.226 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 09:40:25.264 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-11-02 09:40:25.335 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-11-02 09:40:25.335 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 09:40:25.370 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-02 09:40:25.370 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-02 09:40:25.370 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 09:40:25.410 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+M=1024 K=5184 N=16384: ttnn's own choice on the 11x8 grid 1.94 ms, 89.5 TFLOP/s wall
+      1.67 ms    104.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=32x5 l1_acc=1
+2026-11-02 09:40:27.886 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2004352 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+--- sorted ---
+2 configs tried, 1 ran, 1 failed
+      1.67 ms    104.2 TFLOP/s  max|diff| 3.12e-02  grid 11x10 per_core_N=5 in0_block_w=3 sub=4x1 out_block=32x5 l1_acc=1
+   grid 11x10 per_core_N=5 in0_block_w=6 sub=4x1 out_block=32x5 l1_acc=1 FAILED TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buff
+2026-11-02 09:40:28.102 | info     |    BuildKernels | JIT cache stats: 19/30 hits (63.3%) [19 cached, 4 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 09:40:28.103 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 09:40:28.116 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 09:40:28.116 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 09:40:28.435 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 09:40:28.435 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 09:40:28.435 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
