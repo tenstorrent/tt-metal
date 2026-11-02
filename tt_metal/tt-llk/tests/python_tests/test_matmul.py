@@ -35,6 +35,7 @@ from helpers.test_variant_parameters import (
     MATMUL_PACK_BLOCK,
     MATMUL_ROW_MOP,
     MATMUL_DYN_SWITCH,
+    MATMUL_FUNC_BLOCKS,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
     MATMUL_ROW_END_FOLD,
@@ -113,6 +114,7 @@ def test_matmul(
     unpack_ttsync_excl=False,
     source="sources/matmul_test.cpp",
     dyn_switch=None,
+    blocks=1,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -182,6 +184,7 @@ def test_matmul(
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
             *([MATMUL_DYN_SWITCH()] if dyn_switch else []),
+            *([MATMUL_FUNC_BLOCKS()] if blocks > 1 else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
             *([] if unpack_ttsync else MATMUL_UNPACK_TTSYNC.for_block(formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim, dest_sync)),
@@ -218,7 +221,7 @@ def test_matmul(
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-            LOOP_FACTOR(1),
+            LOOP_FACTOR(blocks),
             UNPACK_TRANS_FACES(Transpose.Yes if transpose else Transpose.No),
         ],
         variant_stimuli=StimuliConfig(
@@ -229,13 +232,16 @@ def test_matmul(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
+            tile_count_res=matmul_dims.output_tile_cnt * blocks,
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
     )
 
     res_from_L1 = configuration.run().result
+
+    if blocks > 1:
+        golden_tensor = torch.cat([golden_tensor] * blocks)
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -522,3 +528,19 @@ def test_matmul_dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn
         source="sources/matmul_dyn_switch_test.cpp",
         dyn_switch=dyn_switch,
     )
+
+
+# Three output blocks of the same matmul on the real buffers, each packed to the next result tiles, on every config whose pack form is a block form: the
+# second and the third block take the W base programming and the W advance of llk_pack_block (matmul_pack_production.h), which one pass never reaches.
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_matmul_blocks(math_fidelity, format_dest_acc_and_dims, dest_sync):
+    formats, dest_acc, dims = format_dest_acc_and_dims
+    md = generate_tile_dims((dims[0], dims[1]))
+    if matmul_pack_form(formats, dest_sync, math_fidelity, md.rt_dim, md.ct_dim, md.kt_dim) == 0:
+        pytest.skip("per-tile pack")
+    test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=dest_sync, blocks=3)

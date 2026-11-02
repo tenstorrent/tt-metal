@@ -137,6 +137,14 @@ class MATMUL_REUSE_DIR(TemplateParameter):
 
 
 @dataclass
+class MATMUL_FUNC_BLOCKS(TemplateParameter):
+    """Blackhole matmul functional run of several output blocks (LOOP_FACTOR of them) on the real buffers, each block packed to the next result tiles."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_FUNC_BLOCKS 1"
+
+
+@dataclass
 class MATMUL_DYN_SWITCH(TemplateParameter):
     """Blackhole matmul: a dynamic throttle change re-inits through the dyn_switch path of _llk_math_matmul_init_."""
 
