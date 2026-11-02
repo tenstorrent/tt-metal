@@ -1,18 +1,27 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// conv2d_nhwc writer (BRISC, NoC1) — regime R0.
+// conv2d_nhwc writer (BRISC) — regimes R0 and R4/R5.
 //
 // Block operations owned here:
 //   load_bias_slice      : core_n_tiles bias tiles, once per core (compute keeps them fronted).
 //   weight K-block fill  : per (m-block, n-block), num_k_blocks K-blocks of bk x bn weight tiles
-//                          (row-major [k][n] in cb_weight_tiles), double-buffered.
-//   untilize_store_block : per tile-row, 32 RM rows of bn*32 output channels written to DRAM
+//                          (row-major [k][n] in cb_weight_tiles), double-buffered. Column tiles
+//                          >= N_t (the R4/R5 slice padding, technique 5) are zero-filled.
+//   act_exchange (R4/R5) : per K-block j, the owner of slice j / kblocks_per_slice multicasts its
+//                          tilized cb_act_send block into cb_act_tiles of every core in its group
+//                          (grid row / all WIDTH cores, itself included); the others receive it.
+//                          One rotating-sender multicast + handshake per K-block (McastArgs).
+//   untilize_store_block : R0: per tile-row, 32 RM rows of bn*32 output channels written to DRAM
 //                          at byte offset n_start*32*elem_bytes of each pixel's output stick;
 //                          rows >= M or past the core's m range are dropped.
+//                          R4/R5: compute untilizes into the output shard in place; only a WIDTH
+//                          shard's partial last tile-row is copied here (its valid rows).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t cb_bias_tiles = get_compile_time_arg_val(1);
@@ -27,12 +36,31 @@ constexpr uint32_t core_n_tiles = get_compile_time_arg_val(9);
 constexpr uint32_t has_bias = get_compile_time_arg_val(10);
 constexpr uint32_t M = get_compile_time_arg_val(11);
 constexpr uint32_t elem_bytes = get_compile_time_arg_val(12);
-constexpr auto weight_args = TensorAccessorArgs<13>();
+constexpr bool k_exchange = get_compile_time_arg_val(13) != 0;
+constexpr uint32_t cb_act_send = get_compile_time_arg_val(14);
+constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(15);
+constexpr uint32_t kblocks_per_slice = get_compile_time_arg_val(16);
+constexpr bool has_out_tail = get_compile_time_arg_val(17) != 0;  // WIDTH shard, M % 32 != 0
+constexpr bool act_mcast = get_compile_time_arg_val(18) != 0;     // > 1 channel slice
+constexpr auto weight_args = TensorAccessorArgs<19>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("act_mcast_ct_offset"),
+    get_named_compile_time_arg_val("act_mcast_rt_offset")>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t out_row_bytes = block_n_tiles * TILE_DIM * elem_bytes;
+constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
+
+FORCE_INLINE void zero_fill(uint64_t zeros_noc, uint32_t dst, uint32_t bytes) {
+    while (bytes > 0) {
+        const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
+        noc_async_read(zeros_noc, dst, chunk);
+        dst += chunk;
+        bytes -= chunk;
+    }
+}
 
 void kernel_main() {
     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
@@ -42,10 +70,33 @@ void kernel_main() {
     const uint32_t m_tiles_this_core = get_arg_val<uint32_t>(4);
     const uint32_t num_m_blocks = get_arg_val<uint32_t>(5);
     const uint32_t n_tile_start = get_arg_val<uint32_t>(6);
+    const uint32_t my_slice = get_arg_val<uint32_t>(7);  // R4/R5: this core's channel slice
+    const bool is_sink = get_arg_val<uint32_t>(8) != 0;  // receive-only rectangle filler (WIDTH)
 
     const auto weights = TensorAccessor(weight_args, weight_addr);
     const auto output = TensorAccessor(output_args, output_addr);
     const uint32_t weight_tile_bytes = get_tile_size(cb_weight_tiles);
+    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+    Noc noc;
+    auto act_sender = act_channel.optional_sender(noc);
+    auto act_receiver = act_channel.optional_receiver(noc);
+    [[maybe_unused]] const uint32_t act_block_bytes = act_block_tiles * get_tile_size(cb_act_tiles);
+
+    // ---- sink: keep the group's landing-slot cadence and acks, nothing else ----
+    if constexpr (act_mcast) {
+        if (is_sink) {
+            for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
+                for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
+                    cb_reserve_back(cb_act_tiles, act_block_tiles);
+                    act_receiver->receive(k_block / kblocks_per_slice);
+                    cb_push_back(cb_act_tiles, act_block_tiles);
+                    cb_wait_front(cb_act_tiles, act_block_tiles);
+                    cb_pop_front(cb_act_tiles, act_block_tiles);
+                }
+            }
+            return;
+        }
+    }
 
     // ---- load_bias_slice ----
     if constexpr (has_bias) {
@@ -54,7 +105,11 @@ void kernel_main() {
         cb_reserve_back(cb_bias_tiles, core_n_tiles);
         uint32_t dst = get_write_ptr(cb_bias_tiles);
         for (uint32_t j = 0; j < core_n_tiles; ++j) {
-            noc_async_read(bias.get_noc_addr(n_tile_start + j), dst, bias_tile_bytes);
+            if (n_tile_start + j < N_t) {
+                noc_async_read(bias.get_noc_addr(n_tile_start + j), dst, bias_tile_bytes);
+            } else {
+                zero_fill(zeros_noc, dst, bias_tile_bytes);
+            }
             dst += bias_tile_bytes;
         }
         noc_async_read_barrier();
@@ -75,13 +130,46 @@ void kernel_main() {
                 uint32_t row_page = k_block * block_k_tiles * N_t + n0;
                 for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
                     for (uint32_t j = 0; j < block_n_tiles; ++j) {
-                        noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);
+                        if (n0 + j < N_t) {
+                            noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);
+                        } else {
+                            zero_fill(zeros_noc, dst, weight_tile_bytes);
+                        }
                         dst += weight_tile_bytes;
                     }
                     row_page += N_t;
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_weight_tiles, block_k_tiles * block_n_tiles);
+
+                // ---- act_exchange: K-block k_block's in0, from its slice owner ----
+                if constexpr (act_mcast) {
+                    const uint32_t owner = k_block / kblocks_per_slice;
+                    cb_reserve_back(cb_act_tiles, act_block_tiles);
+                    const uint32_t landing = get_write_ptr(cb_act_tiles);  // identical on every group core
+                    if (owner == my_slice) {
+                        cb_wait_front(cb_act_send, act_block_tiles);
+                        act_sender->send(get_read_ptr(cb_act_send), landing, act_block_bytes);
+                        cb_pop_front(cb_act_send, act_block_tiles);
+                    } else {
+                        act_receiver->receive(owner);  // round = owner -> sender phase
+                    }
+                    cb_push_back(cb_act_tiles, act_block_tiles);
+                }
+            }
+
+            if constexpr (k_exchange) {
+                // Output is untilized into the shard in place; copy only a staged partial tail.
+                if (has_out_tail && m_block + 1 == num_m_blocks) {
+                    cb_wait_front(cb_out_rm, block_n_tiles);
+                    const uint32_t last_tile = m_tile_end - 1;
+                    const uint32_t valid_rows = M - last_tile * TILE_DIM;
+                    const uint32_t dst = output_addr + (last_tile - m_tile_start) * TILE_DIM * out_row_bytes;
+                    noc_async_write(get_read_ptr(cb_out_rm), get_noc_addr(dst), valid_rows * out_row_bytes);
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_out_rm, block_n_tiles);
+                }
+                continue;
             }
 
             // ---- untilize_store_block: drain bm tile-rows ----

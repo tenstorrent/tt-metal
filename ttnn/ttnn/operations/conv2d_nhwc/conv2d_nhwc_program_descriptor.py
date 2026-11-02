@@ -1,7 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""conv2d_nhwc — blocking selection + ProgramDescriptor (regime R0).
+"""conv2d_nhwc — blocking selection + ProgramDescriptor.
+
+Regimes built:
+  R0     — DRAM interleaved: 2-D (m x n) split, DRAM window, per-core weight reads.
+  R4/R5  — BLOCK / WIDTH sharded: the shard pins m (grid row) and the input-channel
+           slice (grid column / WIDTH core). Each core gathers + tilizes the im2col of
+           its own channel slice from its resident shard (+ halo over the NoC from the
+           same-column shards) and multicasts it along its row (rotating sender); every
+           core accumulates all S slices against its own output-column slice. Output is
+           a shard-backed CB on the sharded output tensor (zero-copy).
 
 Every knob (core split, bm / bk / bn, buffer depths) is defined once here and
 every CB size, loop trip count and kernel arg derives from it.
@@ -31,6 +40,8 @@ def l1_cap_bytes():
 ACT_RM_DEPTH = 2  # cb_act_rm depth, in (1 tile-row x bk) quanta
 WEIGHT_DEPTH = 2  # cb_weight_tiles depth, in (bk x bn) K-blocks
 OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
+ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast)
+ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (double-buffered multicast)
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # Compute config: one source for the descriptor, the DEST capacity used by the
 # subblock rule and the accumulator page format.
@@ -47,7 +58,13 @@ CB_BIAS_TILES = 3
 CB_ACT_TILES = 4
 CB_PARTIALS = 5
 CB_BIASED = 6
-CB_OUT_RM = 7
+CB_OUT_RM = 7  # R0: untilized tile-rows for the DRAM writer; R4/R5: the ragged-tail staging tile-row
+CB_IN_SHARD = 8  # R4/R5: zero-copy view of the resident input shard
+CB_OUT_SHARD = 9  # R4/R5: zero-copy view of the output shard (untilize target)
+CB_ACT_SEND = 10  # R4/R5: own-slice tilized K-blocks awaiting the row multicast
+
+_ML = ttnn.TensorMemoryLayout
+K_EXCHANGE_LAYOUTS = (_ML.BLOCK_SHARDED, _ML.WIDTH_SHARDED)
 
 
 def _div_up(a, b):
@@ -63,13 +80,44 @@ def _divisors(n):
     return [d for d in range(1, n + 1) if n % d == 0]
 
 
-def conv_geometry(*, C_in, kH, kW, groups, elem_bytes):
-    """Prepared-K geometry shared by prepare_conv2d_weights and the kernels."""
+def channel_slices(memory_config):
+    """(S, slice_width) of a WIDTH/BLOCK-sharded input's channel split, else None.
+
+    The single source prepare_conv2d_weights, validate() and the program agree on:
+    S = shard columns (BLOCK, ROW_MAJOR orientation: grid x) or shard cores (WIDTH),
+    slice_width = shard width in channels."""
+    if memory_config.memory_layout not in K_EXCHANGE_LAYOUTS:
+        return None
+    spec = memory_config.shard_spec
+    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise NotImplementedError("conv2d_nhwc: only ROW_MAJOR shard orientation is built")
+    if memory_config.memory_layout == _ML.BLOCK_SHARDED:
+        bb = spec.grid.bounding_box()
+        S = bb.end.x - bb.start.x + 1
+    else:
+        S = spec.grid.num_cores()
+    return S, int(spec.shape[1])
+
+
+def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None):
+    """Prepared-K geometry shared by prepare_conv2d_weights and the kernels.
+
+    Interleaved: K order [kh][kw x tap_width], each kh band padded to band_tiles tiles.
+    Channel-sliced (BLOCK/WIDTH, technique 6): K order [slice][kh][kw x slice_width],
+    each (slice, kh) band padded to band_tiles tiles; tap_width = the shard's stick width."""
     granule = L1_NOC_ALIGN // elem_bytes
-    C_in_g = C_in // groups
-    tap_width = _div_up(C_in_g, granule) * granule
+    if slices is None:
+        C_in_g = C_in // groups
+        tap_width = _div_up(C_in_g, granule) * granule
+        S = 1
+    else:
+        S, tap_width = slices
+        if tap_width % granule != 0:
+            raise NotImplementedError(f"conv2d_nhwc: shard width {tap_width} is not L1-granule aligned")
+        if _div_up(C_in, tap_width) != S:
+            raise ValueError(f"conv2d_nhwc: {S} channel shards of width {tap_width} do not tile C_in={C_in}")
     band_tiles = _div_up(kW * tap_width, TILE)
-    return {"tap_width": tap_width, "band_tiles": band_tiles, "K_t": kH * band_tiles}
+    return {"tap_width": tap_width, "band_tiles": band_tiles, "K_t": S * kH * band_tiles, "S": S}
 
 
 def _window_bounds(pix0, pix1, *, H, W, H_out, W_out, kH, kW, padding, stride, dilation):
@@ -240,6 +288,201 @@ def select_blocking(
     }
 
 
+def _window_stick_range(pix0, pix1, **kw):
+    """Flattened input-stick range [lo, hi] covering an m-block's window (superset of the
+    2-D clip). Mirrors the reader's sharded window."""
+    row_lo, row_hi, col_lo, last_hi, _, _, _ = _window_bounds(pix0, pix1, **kw)
+    return row_lo * kw["W"] + col_lo, row_hi * kw["W"] + last_hi
+
+
+def _halo_sticks(lo, hi, own_lo, own_hi):
+    """Window sticks [lo, hi] not in the resident shard [own_lo, own_hi): before + after runs."""
+    before = max(0, min(own_lo, hi + 1) - lo)
+    after = max(0, hi + 1 - max(own_hi, lo))
+    return before + after
+
+
+def select_blocking_sharded(
+    *,
+    N,
+    H,
+    W,
+    C_in,
+    C_out,
+    kH,
+    kW,
+    padding,
+    stride,
+    dilation,
+    groups,
+    elem_bytes,
+    weight_tile_bytes,
+    has_bias,
+    memory_layout,
+    slices,
+    shard_h,
+    rows_in,
+    l1_cap_bytes,
+):
+    """Regimes R4 (BLOCK) / R5 (WIDTH): the shard pins the core split.
+
+    m: output tile-rows over the R_in grid rows (`core_m_tiles` each, whole-shard block by
+    default, clamped by L1 to a divisor). n: output-channel tiles over the S slices,
+    `ceil(N_t/S)` each (trailing tiles zero, technique 5); bn = the whole slice (the output
+    shard row). k: own-slice K-blocks of bk tiles (a divisor of the slice's kH*band_tiles);
+    the largest that fits — every K-block is one multicast handshake (technique 8)."""
+    S, cw = slices
+    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes, slices=slices)
+    tap_width, band_tiles, K_t = geo["tap_width"], geo["band_tiles"], geo["K_t"]
+    slice_k_tiles = kH * band_tiles
+    H_out = (H + 2 * padding - dilation * (kH - 1) - 1) // stride + 1
+    W_out = (W + 2 * padding - dilation * (kW - 1) - 1) // stride + 1
+    M = N * H_out * W_out
+    M_t = _div_up(M, TILE)
+    N_t = _div_up(C_out, TILE)
+    NHW = N * H * W
+    nt_s = _div_up(N_t, S)
+    if memory_layout == _ML.WIDTH_SHARDED:
+        core_m_tiles, g_m = M_t, 1
+    else:
+        core_m_tiles = _div_up(M_t, rows_in)
+        g_m = _div_up(M_t, core_m_tiles)
+    # WIDTH output shards are exactly M rows tall: a partial last tile-row is staged and
+    # copied (writer) instead of untilized in place. BLOCK shards are allocated whole.
+    out_tail = memory_layout == _ML.WIDTH_SHARDED and M % TILE != 0
+
+    T = TILE * TILE * elem_bytes
+    T_w = weight_tile_bytes
+    T_acc = tile_bytes(ACC_DTYPE)
+    win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, kW=kW, padding=padding, stride=stride, dilation=dilation)
+
+    def halo_max(bm):
+        best = 0
+        for r in range(g_m):
+            own_lo, own_hi = (
+                (0, NHW) if memory_layout == _ML.WIDTH_SHARDED else (r * shard_h, min(NHW, (r + 1) * shard_h))
+            )
+            m_start = r * core_m_tiles
+            m_tiles = min(core_m_tiles, M_t - m_start)
+            for b in range(_div_up(m_tiles, bm)):
+                t0 = m_start + b * bm
+                t1 = min(t0 + bm, m_start + m_tiles)
+                lo, hi = _window_stick_range(t0 * TILE, min(t1 * TILE, M) - 1, **win_kw)
+                best = max(best, _halo_sticks(lo, hi, own_lo, own_hi))
+        return best
+
+    # S == 1: the core owns all of K — no exchange; compute tilizes straight into in0 (as R0).
+    act_mcast = S > 1
+
+    def footprint(bm, bk, halo):
+        return (
+            max(halo, 1) * tap_width * elem_bytes
+            + ACT_RM_DEPTH * bk * T
+            + (ACT_SEND_DEPTH * bm * bk * T if act_mcast else 0)
+            + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
+            + WEIGHT_DEPTH * bk * nt_s * T_w
+            + bm * nt_s * T_acc
+            + (nt_s * T_w if has_bias else 0)
+            + (nt_s * T if out_tail else 0)
+        )
+
+    k_divs_desc = sorted(_divisors(slice_k_tiles), reverse=True)
+
+    def walk(budget):
+        for bm in sorted(_divisors(core_m_tiles), reverse=True):
+            halo = halo_max(bm)
+            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget), None)
+            if bk is not None:
+                return bm, bk, halo
+        return None
+
+    choice = walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
+    if choice is None:
+        raise NotImplementedError("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
+    bm, bk, halo = choice
+    bn = nt_s
+    sb_w = max(d for d in _divisors(bn) if d <= DST_TILES)
+    sb_h = max(d for d in _divisors(bm) if d * sb_w <= DST_TILES)
+    kbps = slice_k_tiles // bk
+    return {
+        **geo,
+        "k_exchange": True,
+        "act_mcast": act_mcast,
+        "memory_layout": memory_layout,
+        "slice_width": cw,
+        "shard_h": shard_h,
+        "rows_in": rows_in,
+        "H_out": H_out,
+        "W_out": W_out,
+        "M": M,
+        "M_t": M_t,
+        "N_t": N_t,
+        "N": N,
+        "H": H,
+        "W": W,
+        "C_in": C_in,
+        "C_out": C_out,
+        "kH": kH,
+        "kW": kW,
+        "padding": padding,
+        "stride": stride,
+        "dilation": dilation,
+        "elem_bytes": elem_bytes,
+        "has_bias": has_bias,
+        "core_m_tiles": core_m_tiles,
+        "g_m": g_m,
+        "core_n_tiles": nt_s,
+        "g_n": S,
+        "block_m_tiles": bm,
+        "block_k_tiles": bk,
+        "block_n_tiles": bn,
+        "kblocks_per_slice": kbps,
+        "num_k_blocks": S * kbps,
+        "num_n_blocks": 1,
+        "window_sticks_max": max(halo, 1),
+        "out_tail": out_tail,
+        "out_subblock_h": sb_h,
+        "out_subblock_w": sb_w,
+        "T": T,
+        "T_w": T_w,
+        "T_acc": T_acc,
+        "footprint": footprint(bm, bk, halo),
+    }
+
+
+def output_memory_config(plan, input_memory_config):
+    """Sharded output placement (R4/R5): same TensorMemoryLayout as the input, one
+    ceil(N_t/S)-tile-wide column slice per input-channel slice (the shards together may be
+    wider than C_out, technique 5). BLOCK: core_m_tiles*32 rows per grid row; WIDTH: all M rows."""
+    p = plan
+    spec = input_memory_config.shard_spec
+    width = p["core_n_tiles"] * TILE
+    if p["memory_layout"] == _ML.BLOCK_SHARDED:
+        start = spec.grid.bounding_box().start
+        grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(start, ttnn.CoreCoord(start.x + p["g_n"] - 1, start.y + p["g_m"] - 1))]
+        )
+        shape = [p["core_m_tiles"] * TILE, width]
+    else:
+        grid = spec.grid
+        shape = [p["M"], width]
+    return ttnn.MemoryConfig(
+        p["memory_layout"], ttnn.BufferType.L1, ttnn.ShardSpec(grid, shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+def _sharded_core_map(plan, input_memory_config):
+    """[(logical core, slice s, row r)] of the compute cores, row-major (= the multicast
+    groups' order: group = one grid row (BLOCK) / all WIDTH cores, phase = slice)."""
+    p = plan
+    spec = input_memory_config.shard_spec
+    if p["memory_layout"] == _ML.BLOCK_SHARDED:
+        start = spec.grid.bounding_box().start
+        return [(ttnn.CoreCoord(start.x + s, start.y + r), s, r) for r in range(p["g_m"]) for s in range(p["g_n"])]
+    cores = sorted(ttnn.corerange_to_cores(spec.grid), key=lambda c: (c.y, c.x))
+    return [(c, s, 0) for s, c in enumerate(cores[: p["g_n"]])]
+
+
 def _cb(index, dtype, page_size, num_pages, cores):
     return ttnn.CBDescriptor(
         total_size=page_size * num_pages,
@@ -248,34 +491,90 @@ def _cb(index, dtype, page_size, num_pages, cores):
     )
 
 
-def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_tensor, plan, grid):
+def _interleaved_core_map(plan, grid):
+    """[(logical core, ni, mi)]: the first g_m*g_n cores of the grid, row-major."""
+    num_active = plan["g_m"] * plan["g_n"]
+    return [(ttnn.CoreCoord(c % grid.x, c // grid.x), c % plan["g_n"], c // plan["g_n"]) for c in range(num_active)]
+
+
+def _core_range_set(coords):
+    """Minimal rectangles over a row-major core list (contiguous x run per grid row)."""
+    runs = {}
+    for c in coords:
+        lo, hi = runs.get(c.y, (c.x, c.x))
+        runs[c.y] = (min(lo, c.x), max(hi, c.x))
+    ranges = []
+    for y in sorted(runs):
+        x0, x1 = runs[y]
+        if ranges and ranges[-1][1] == (x0, x1) and ranges[-1][2] == y - 1:
+            ranges[-1][2] = y
+        else:
+            ranges.append([y, (x0, x1), y])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for y0, (x0, x1), y1 in ranges]
+    )
+
+
+def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, output_tensor, plan, grid):
     p = plan
     bm, bk, bn = p["block_m_tiles"], p["block_k_tiles"], p["block_n_tiles"]
     has_bias = p["has_bias"]
+    kx = p.get("k_exchange", False)  # sharded R4/R5 placement (shard input, shard output)
+    act_mcast = p.get("act_mcast", False)  # K exchange across > 1 channel slice
     act_dtype = input_tensor.dtype
     w_dtype = weight_tensor.dtype
     eb = p["elem_bytes"]
 
-    # ---- Core list: first g_m * g_n cores of the grid, row-major ----
-    num_active = p["g_m"] * p["g_n"]
-    coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(num_active)]
-    ranges = []
-    full_rows, rem = divmod(num_active, grid.x)
-    if full_rows:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, full_rows - 1)))
-    if rem:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
-    cores = ttnn.CoreRangeSet(ranges)
+    # ---- Core map: (core, n-slice index, m-row index) ----
+    if kx:
+        core_map = _sharded_core_map(p, input_tensor.memory_config())
+    else:
+        core_map = _interleaved_core_map(p, grid)
+    cores = _core_range_set([c for c, _, _ in core_map])
+    # Rotating multicast groups must be rectangles: a WIDTH core set spanning grid rows
+    # multicasts over its bounding rectangle, the extra cores being receive-only sinks.
+    sink_cores = []
+    mcast_cores = cores
+    if act_mcast:
+        bb = cores.bounding_box()
+        rect = [ttnn.CoreCoord(x, y) for y in range(bb.start.y, bb.end.y + 1) for x in range(bb.start.x, bb.end.x + 1)]
+        real = [c for c, _, _ in core_map]
+        if p["memory_layout"] == _ML.WIDTH_SHARDED and len(rect) > len(real):
+            if [(c.x, c.y) for c in rect[: len(real)]] != [(c.x, c.y) for c in real]:
+                raise NotImplementedError("conv2d_nhwc: WIDTH shard cores must be a row-major prefix of their grid")
+            sink_cores = rect[len(real) :]
+            mcast_cores = _core_range_set(rect)
+        elif len(rect) != len(real):
+            raise NotImplementedError("conv2d_nhwc: BLOCK shard grid must be a rectangle")
 
     # ---- Circular buffers (sizes derive from the knobs) ----
     tap_bytes = p["tap_width"] * eb
     cbs = [
+        # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
         _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
         _cb(CB_ACT_RM, act_dtype, p["T"], ACT_RM_DEPTH * bk, cores),
         _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], WEIGHT_DEPTH * bk * bn, cores),
-        _cb(CB_ACT_TILES, act_dtype, p["T"], bm * bk, cores),
-        _cb(CB_OUT_RM, output_tensor.dtype, p["T"], OUT_RM_DEPTH * bn, cores),
+        # Multicast landing zone: same address on every group core (incl. sinks).
+        _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk, mcast_cores),
     ]
+    if act_mcast:
+        cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], ACT_SEND_DEPTH * bm * bk, cores))
+    if kx:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_IN_SHARD, input_tensor, core_ranges=cores))
+        full_rows = p["core_m_tiles"] - (1 if p["out_tail"] else 0)
+        if full_rows > 0:
+            out_cb = ttnn.cb_descriptor_from_sharded_tensor(
+                CB_OUT_SHARD, output_tensor, total_size=full_rows * bn * p["T"], core_ranges=cores
+            )
+            # Tile-sized pages: one untilized tile-row (bn pages) = 32 output-shard sticks.
+            out_cb.format_descriptors = [
+                ttnn.CBFormatDescriptor(buffer_index=CB_OUT_SHARD, data_format=output_tensor.dtype, page_size=p["T"])
+            ]
+            cbs.append(out_cb)
+        if p["out_tail"]:
+            cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, p["T"], bn, cores))
+    else:
+        cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, p["T"], OUT_RM_DEPTH * bn, cores))
     partial_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_PARTIALS, data_format=ACC_DTYPE, page_size=p["T_acc"])]
     if has_bias:
         cbs.append(_cb(CB_BIAS_TILES, bias_tensor.dtype, p["T_w"], p["core_n_tiles"], cores))
@@ -287,18 +586,21 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         ttnn.CBDescriptor(total_size=bm * bn * p["T_acc"], core_ranges=cores, format_descriptors=partial_formats)
     )
 
-    # ---- Reader (NCRISC): window fetch + im2col gather ----
+    rows_in = p.get("rows_in", 1) if kx else 0
+    reader_k_blocks = p["kblocks_per_slice"] if kx else p["num_k_blocks"]
+
+    # ---- Reader (NCRISC): window / halo fetch + im2col gather ----
     reader_ct = [
         CB_ACT_WINDOW,
         CB_ACT_RM,
         bm,
         bk,
-        p["num_k_blocks"],
+        reader_k_blocks,
         p["num_n_blocks"],
         p["band_tiles"],
         p["tap_width"],
         eb,
-        p["C_in"] * eb,  # bytes of one DRAM input stick
+        p["C_in"] * eb,  # bytes of one DRAM input stick (R0)
         p["kH"],
         p["kW"],
         p["H"],
@@ -306,10 +608,14 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         p["H_out"],
         p["W_out"],
         p["M"],
+        1 if kx else 0,
+        CB_IN_SHARD,
+        p.get("shard_h", 1) if kx else 1,
+        max(rows_in, 1),
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    # ---- Writer (BRISC): weights, bias, output ----
+    # ---- Writer (BRISC): weights, bias, K-exchange multicast (R4/R5), output ----
     writer_ct = [
         CB_WEIGHT_TILES,
         CB_BIAS_TILES,
@@ -324,6 +630,12 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         1 if has_bias else 0,
         p["M"],
         eb,
+        1 if kx else 0,
+        CB_ACT_SEND,
+        CB_ACT_TILES,
+        p.get("kblocks_per_slice", 1),
+        1 if p.get("out_tail", False) else 0,
+        1 if act_mcast else 0,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -351,6 +663,12 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         p["out_subblock_w"],
         1 if has_bias else 0,
         p["core_n_tiles"],
+        1 if kx else 0,
+        CB_ACT_SEND,
+        p.get("kblocks_per_slice", 1),
+        CB_OUT_SHARD,
+        1 if p.get("out_tail", False) else 0,
+        1 if act_mcast else 0,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -360,23 +678,40 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
     w_addr = weight_tensor.buffer_address()
     b_addr = bias_tensor.buffer_address() if has_bias else 0
     out_addr = output_tensor.buffer_address()
-    for c, xy in enumerate(coords):
-        mi, ni = divmod(c, p["g_n"])
+    NHW = p["N"] * p["H"] * p["W"]
+    for xy, ni, mi in core_map:
         m_tile_start = mi * p["core_m_tiles"]
         m_tiles = min(p["core_m_tiles"], p["M_t"] - m_tile_start)
         num_m_blocks = _div_up(m_tiles, bm)
         n_tile_start = ni * p["core_n_tiles"]
-        reader_rt[xy.x][xy.y] = [
-            in_addr,
+        reader_args = [in_addr, m_tile_start, m_tiles, num_m_blocks, p["padding"], p["stride"], p["dilation"]]
+        if kx:
+            # Resident stick range + the NoC coords of this column's input shards (halo sources).
+            if p["memory_layout"] == _ML.WIDTH_SHARDED:
+                own_lo, own_hi, col = 0, NHW, [xy]
+            else:
+                own_lo, own_hi = mi * p["shard_h"], min(NHW, (mi + 1) * p["shard_h"])
+                col = [ttnn.CoreCoord(xy.x, xy.y - mi + r) for r in range(rows_in)]
+            reader_args += [own_lo, own_hi]
+            for c in col:
+                v = device.worker_core_from_logical_core(c)
+                reader_args += [v.x, v.y]
+        reader_rt[xy.x][xy.y] = reader_args
+        writer_rt[xy.x][xy.y] = [
+            w_addr,
+            b_addr,
+            out_addr,
             m_tile_start,
             m_tiles,
             num_m_blocks,
-            p["padding"],
-            p["stride"],
-            p["dilation"],
+            n_tile_start,
+            ni,
+            0,  # not a sink
         ]
-        writer_rt[xy.x][xy.y] = [w_addr, b_addr, out_addr, m_tile_start, m_tiles, num_m_blocks, n_tile_start]
-        compute_rt[xy.x][xy.y] = [num_m_blocks]
+        compute_rt[xy.x][xy.y] = [num_m_blocks, ni]
+    for xy in sink_cores:
+        # Receive-only: every round of every m-block (WIDTH: one m range for the whole group).
+        writer_rt[xy.x][xy.y] = [0, 0, 0, 0, p["M_t"], _div_up(p["M_t"], bm), 0, 0, 1]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_reader.cpp"),
@@ -387,7 +722,7 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_writer.cpp"),
-        core_ranges=cores,
+        core_ranges=mcast_cores,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),
@@ -399,4 +734,21 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(math_fidelity=MATH_FIDELITY, fp32_dest_acc_en=FP32_DEST_ACC_EN),
     )
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    if act_mcast:
+        # K exchange: one channel, groups = one grid row (BLOCK) / all WIDTH cores, rotating
+        # sender = the slice owner (phase = slice index, row-major order).
+        mcast = ttnn.Mcast(
+            device,
+            # The writer (WriterConfigDescriptor) issues on NOC_1 (preferred DRAM-write NoC).
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
+            mcast_cores,
+            mcast_cores.num_cores() if sink_cores else p["g_n"],
+            ttnn.McastRotatingSenderConfig(),
+            ttnn.McastCoreOrder.RowMajor,
+        )
+        mcast.attach(descriptor, "act_mcast", [writer], 0)
+    else:
+        ttnn.attach_absent_mcast(writer, "act_mcast")
+    descriptor.kernels = [reader, writer, compute]
+    return descriptor

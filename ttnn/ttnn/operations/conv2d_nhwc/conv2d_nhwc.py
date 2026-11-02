@@ -5,8 +5,10 @@
 
 One ttnn.generic_op dispatch per call: im2col gather (reader) -> tilize ->
 K-blocked matmul with packer-L1 accumulation -> bias -> untilize (compute) ->
-DRAM write (writer), over a 2-D (output-pixel x output-channel) core split.
-See op_design.md (Blocking Model) for the regime this implements (R0).
+output (writer). Regimes (op_design.md, Blocking Model):
+  R0    DRAM interleaved: 2-D (output-pixel x output-channel) core split.
+  R4/R5 BLOCK / WIDTH sharded: resident shard + NoC halo, own-slice im2col tilized and
+        multicast along the grid row (K exchange), output into the sharded L1 output.
 """
 
 from __future__ import annotations
@@ -16,10 +18,13 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .conv2d_nhwc_program_descriptor import (
+    channel_slices,
     conv_geometry,
     create_program_descriptor,
     l1_cap_bytes,
+    output_memory_config,
     select_blocking,
+    select_blocking_sharded,
     tile_bytes,
 )
 
@@ -85,7 +90,7 @@ INPUT_TAGGERS = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + verifier: strided)
+# 2. SUPPORTED (Phase 0 + verifier: strided; Refinement 1: BLOCK / WIDTH sharded)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -98,7 +103,11 @@ SUPPORTED = {
     "stride_mode": ["unit", "strided"],  # gather/window bounds are stride-parametric (verifier probe)
     "groups_mode": ["dense"],
     "dilation_mode": ["unit"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,  # R4: row multicast of tilized channel-slice im2col
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,  # R5: R4 with one multicast group
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -189,7 +198,12 @@ def validate(
     if bias is not None and int(bias.shape[-1]) != C_out:
         raise ValueError("conv2d_nhwc: bias C_out does not match the weight")
     geo = conv_geometry(
-        C_in=C_in, kH=kernel_size, kW=kernel_size, groups=groups, elem_bytes=_elem_bytes(input_tensor.dtype)
+        C_in=C_in,
+        kH=kernel_size,
+        kW=kernel_size,
+        groups=groups,
+        elem_bytes=_elem_bytes(input_tensor.dtype),
+        slices=channel_slices(input_tensor.memory_config()),
     )
     if int(weight_tensor.shape[-2]) != geo["K_t"] * 32:
         raise ValueError(
@@ -232,8 +246,12 @@ def prepare_conv2d_weights(
     input_memory_config,
     device,
 ):
-    """[C_out, C_in/g, kH, kW] -> [1, 1, K_t*32, C_out] TILE, K order [kh][kw*tap_width+ci],
-    each kernel-row band padded to whole tiles (band_tiles*32 rows)."""
+    """[C_out, C_in/g, kH, kW] -> [1, 1, K_t*32, C_out] TILE.
+
+    Interleaved: K order [kh][kw*tap_width+ci], each kernel-row band padded to whole tiles.
+    BLOCK / WIDTH (S channel slices of the input shard width, technique 6): K order
+    [slice][kh][kw*slice_width+ci], each (slice, kh) band padded to whole tiles. Columns stay
+    C_out wide: the slice-padding column tiles (technique 5) are zero-filled in-kernel."""
     import torch
 
     C_out = int(torch_weight.shape[0])
@@ -252,17 +270,19 @@ def prepare_conv2d_weights(
         who="prepare_conv2d_weights",
     )
     kH, kW = int(torch_weight.shape[2]), int(torch_weight.shape[3])
-    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=_elem_bytes(input_dtype))
-    tap_width, band_tiles = geo["tap_width"], geo["band_tiles"]
+    slices = channel_slices(input_memory_config)
+    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=_elem_bytes(input_dtype), slices=slices)
+    tap_width, band_tiles, S = geo["tap_width"], geo["band_tiles"], geo["S"]
     C_in_g = C_in // groups
     w = torch_weight.float().permute(2, 3, 1, 0)  # [kH, kW, C_in_g, C_out]
-    if tap_width != C_in_g:
-        w = torch.nn.functional.pad(w, (0, 0, 0, tap_width - C_in_g))
-    w = w.reshape(kH, kW * tap_width, C_out)
+    if S * tap_width != C_in_g:
+        w = torch.nn.functional.pad(w, (0, 0, 0, S * tap_width - C_in_g))
+    # [kH, kW, S, tap, C_out] -> [S, kH, kW*tap, C_out] (S == 1: the interleaved order)
+    w = w.reshape(kH, kW, S, tap_width, C_out).permute(2, 0, 1, 3, 4).reshape(S, kH, kW * tap_width, C_out)
     band_rows = band_tiles * 32
     if band_rows != kW * tap_width:
         w = torch.nn.functional.pad(w, (0, 0, 0, band_rows - kW * tap_width))
-    w = w.reshape(1, 1, kH * band_rows, C_out).contiguous()
+    w = w.reshape(1, 1, S * kH * band_rows, C_out).contiguous()
     return ttnn.from_torch(
         w,
         dtype=weight_dtype,
@@ -349,7 +369,9 @@ def conv2d_nhwc(
     )
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    plan = select_blocking(
+    in_mc = input_tensor.memory_config()
+    slices = channel_slices(in_mc)
+    common = dict(
         N=N,
         H=H,
         W=W,
@@ -363,10 +385,23 @@ def conv2d_nhwc(
         groups=groups,
         elem_bytes=_elem_bytes(input_tensor.dtype),
         weight_tile_bytes=tile_bytes(weight_tensor.dtype),
-        num_cores=grid.x * grid.y,
         has_bias=bias is not None,
         l1_cap_bytes=l1_cap_bytes(),
     )
+    if slices is not None:
+        shard_h = int(in_mc.shard_spec.shape[0])
+        rows_in = -(-(N * H * W) // shard_h) if in_mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else 1
+        plan = select_blocking_sharded(
+            **common,
+            memory_layout=in_mc.memory_layout,
+            slices=slices,
+            shard_h=shard_h,
+            rows_in=rows_in,
+        )
+        out_mc = output_memory_config(plan, in_mc)
+    else:
+        plan = select_blocking(**common, num_cores=grid.x * grid.y)
+        out_mc = ttnn.DRAM_MEMORY_CONFIG
     H_out, W_out = plan["H_out"], plan["W_out"]
     out_shape = [1, 1, N * H_out * W_out, C_out] if input_spatial is not None else [N, H_out, W_out, C_out]
     output_tensor = ttnn.allocate_tensor_on_device(
@@ -374,8 +409,8 @@ def conv2d_nhwc(
         input_tensor.dtype,
         input_tensor.layout,
         device,
-        ttnn.DRAM_MEMORY_CONFIG,
+        out_mc,
     )
-    descriptor = create_program_descriptor(input_tensor, weight_tensor, bias, output_tensor, plan, grid)
+    descriptor = create_program_descriptor(device, input_tensor, weight_tensor, bias, output_tensor, plan, grid)
     io = [input_tensor, weight_tensor] + ([bias] if bias is not None else []) + [output_tensor]
     return ttnn.generic_op(io, descriptor)
