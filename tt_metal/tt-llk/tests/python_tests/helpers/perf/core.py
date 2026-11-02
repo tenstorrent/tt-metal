@@ -24,7 +24,7 @@ from ..logger import logger
 from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
-from ..test_config import BuildMode, ProfilerBuild, TestConfig
+from ..test_config import LLK_CODE_SHIFT, BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 from . import window_hash
 from .schema import (
@@ -43,6 +43,10 @@ from .schema import (
     text_size_column,
 )
 from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
+
+# Stage 2 of the perf gate: the code positions (bytes) to measure every test at, in one session, e.g. "0 4 20 36 52".
+# The first position's rows go to the session's report, the others to perf_data/runs/p<shift>/.
+CODE_SHIFTS = [int(s) for s in os.environ.get("LLK_CODE_SHIFTS", "").split()]
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
@@ -796,6 +800,8 @@ def _selected_run_types(run_types):
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
+    # {shift: report} for the code positions after the first; set by the perf_report fixture.
+    SHIFT_REPORTS: ClassVar[dict] = {}
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
 
     def __init__(
@@ -979,7 +985,23 @@ class PerfConfig(TestConfig):
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
+        if not CODE_SHIFTS:
+            self._run_at_position(perf_report, run_count, first=True, last=True)
+            return
+        # Stage 2: every code position of this test, one after the other, each into its own report.
+        try:
+            for i, shift in enumerate(CODE_SHIFTS):
+                TestConfig.CODE_SHIFT = shift
+                self._run_at_position(
+                    perf_report if i == 0 else PerfConfig.SHIFT_REPORTS[shift],
+                    run_count,
+                    first=i == 0,
+                    last=i == len(CODE_SHIFTS) - 1,
+                )
+        finally:
+            TestConfig.CODE_SHIFT = LLK_CODE_SHIFT
 
+    def _run_at_position(self, perf_report: PerfReport, run_count, first, last):
         results = []
         counter_results_list = []
         code_sizes = {}
@@ -1001,7 +1023,9 @@ class PerfConfig(TestConfig):
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+            if last:
+                pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+            return
 
         PerfConfig.TEST_COUNTER += 1
 
@@ -1040,7 +1064,7 @@ class PerfConfig(TestConfig):
                             window_hash.fingerprint(
                                 TestConfig.OBJDUMP, elf_dir / f"{c}.elf"
                             )
-                            if window_hash.enabled()
+                            if window_hash.enabled() and first
                             else ""
                         ),
                     )
@@ -1128,19 +1152,21 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
-        window_hash.write_rows(
-            TestConfig.perf_run_dir(),
-            self.test_name,
-            PerfConfig._build_sweep_frame(
-                code_sizes,
-                self.formats_config,
-                self.unpack_to_dest,
-                self.dest_acc,
-                self.passed_templates,
-                self.passed_runtimes,
-            ),
-            window_rows,
-        )
+        # The window map (node id, loop fingerprint) comes from the first code position only.
+        if first:
+            window_hash.write_rows(
+                TestConfig.perf_run_dir(),
+                self.test_name,
+                PerfConfig._build_sweep_frame(
+                    code_sizes,
+                    self.formats_config,
+                    self.unpack_to_dest,
+                    self.dest_acc,
+                    self.passed_templates,
+                    self.passed_runtimes,
+                ),
+                window_rows,
+            )
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:

@@ -124,12 +124,16 @@ class TestOutcome:
     device_print_lines: list = field(default_factory=list)
 
 
+# Bytes to move all TRISC code by (stage 2 of the perf gate). LLK_CODE_SHIFTS runs several in one session:
+# PerfConfig.run sets TestConfig.CODE_SHIFT to each in turn.
 LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
 # The link flag that applies it; the object cache key leaves it out, so every position reuses the objects.
 CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
 
 
 class TestConfig:
+
+    CODE_SHIFT: ClassVar[int] = LLK_CODE_SHIFT
 
     # === STATIC VARIABLES ===
 
@@ -1353,8 +1357,14 @@ class TestConfig:
             *src_include_append,
         ]
 
+        # Each code position links its own ELFs; position 0 keeps the id it always had.
+        shift = (
+            [f"<<code-shift>>{TestConfig.CODE_SHIFT}"] if TestConfig.CODE_SHIFT else []
+        )
         self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+            str(
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + shift)
+            ).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
@@ -1873,7 +1883,11 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
-                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
+                    (
+                        [f"{CODE_SHIFT_FLAG}{TestConfig.CODE_SHIFT}"]
+                        if TestConfig.CODE_SHIFT
+                        else []
+                    ),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
