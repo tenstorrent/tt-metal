@@ -318,14 +318,14 @@ def prepare_front(mesh) -> None:
         front2.prepare(mesh)
 
 
-def read_front(residual, gamma_rows, down_inject):
+def read_front(residual, gamma_rows, down_inject, live_rows=None):
     """``gr_read_fused``'s ``read_front`` hook: the front above; the gathered stats stay internal."""
 
     if _front_v3_on():  # front3.py: front v2 with the reader reordered and per-source token unpack (x62)
         from . import front3
 
         gathered_stats, normalized, gathered_partials = front3.stats_recip_down_gather(
-            residual, gamma_rows, down_inject
+            residual, gamma_rows, down_inject, live_rows=live_rows
         )
     elif _front_v2_on():
         # front2.py: the cheaper exchanges, bit-identical valid rows (rows > 16: this front). Default OFF: its lockstep L1
@@ -342,11 +342,21 @@ def read_front(residual, gamma_rows, down_inject):
     return normalized, gathered_partials
 
 
-def gr_read_recip_last(module, residual):
+def gr_read_recip_last(module, residual, live_rows=None):
     """``gr_read``'s read with this front (two programs per read: the front and ``low_rank_gate``); the chain's
     rounding knobs (scaler ``chain``, matmul ``chain`` for the gate) fixed as gr_fold fixes them."""
 
-    return gr_read.gr_read_fused(module, residual, scaler_mode="chain", matmul="chain", read_front=read_front)
+    if live_rows is not None:  # the verify's live-row form: front v3 and gate v3 only, else the 32-row read as before
+        from . import front3
+
+        if not (_front_v3_on() and front3.fits(live_rows) and os.environ.get("QWEN38_GR_GATE_V3", "1") == "1"):
+            live_rows = None
+    return gr_read.gr_read_fused(
+        module, residual, scaler_mode="chain", matmul="chain", read_front=read_front, live_rows=live_rows
+    )
+
+
+gr_read_recip_last.supports_live_rows = True
 
 
 register(

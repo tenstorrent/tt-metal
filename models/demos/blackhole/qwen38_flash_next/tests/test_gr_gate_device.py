@@ -122,7 +122,7 @@ def bits(x):
 
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("rows", [1, 2, 4, 8])
+@pytest.mark.parametrize("rows", [1, 2, 4, 5, 8])
 def test_gate_candidates(mesh_device, rows):
     mesh = mesh_device
     mesh.enable_program_cache()

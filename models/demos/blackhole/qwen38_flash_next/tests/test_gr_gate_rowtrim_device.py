@@ -41,7 +41,7 @@ def run(flag, p, n, u, rows, mesh):
 
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("rows", [1, 2, 4])
+@pytest.mark.parametrize("rows", [1, 2, 4, 5, 6, 8])
 def test_rowtrim_bitwise_and_slope(mesh_device, rows):
     mesh = mesh_device
     try:
@@ -50,7 +50,13 @@ def test_rowtrim_bitwise_and_slope(mesh_device, rows):
             off, on = run(False, p, n, u, rows, mesh), run(True, p, n, u, rows, mesh)
             for d, (a, b) in enumerate(zip(off, on)):
                 for what, x, y in zip(("block", "injection"), a, b):
-                    assert torch.equal(bits(x), bits(y)), f"rows={rows} step {step} dev {d}: {what} differs"
+                    xb, yb = bits(x), bits(y)
+                    bad = (
+                        sorted({int(r) for r, _ in (xb != yb).reshape(xb.shape[-2], -1).nonzero().tolist()})
+                        if xb.shape == yb.shape
+                        else "shape"
+                    )
+                    assert torch.equal(xb, yb), f"rows={rows} step {step} dev {d}: {what} differs, rows {bad}"
             for t in (p, n, u):
                 ttnn.deallocate(t)
         logger.info(f"rows={rows}: flag off/on bit-identical over {STEPS} steps")

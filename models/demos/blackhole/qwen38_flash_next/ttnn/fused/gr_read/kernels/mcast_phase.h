@@ -17,6 +17,23 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
+#ifdef GR_LIVE_ROWS
+// Verify rows (GR_LIVE_ROWS valid rows of the 32-row tile): the rows past them are overwritten with zeros in the L1
+// tile before it is written, so the output page keeps today's 32-row contract (dead rows exact zeros) although the
+// program computed only the live rows.  GR_LIVE_ZERO_CB is a CB of a core-local zero tile (>= 1024 B).  A BF16 tile:
+// face 0 = rows 0..15 of columns 0..15 (32 B a row) at byte 0, face 1 at byte 512, faces 2 and 3 (rows 16..31) at 1024.
+FORCE_INLINE void gr_zero_dead_rows(uint32_t tile_addr) {
+    constexpr uint32_t FACE = 512, LIVE = GR_LIVE_ROWS * 32;
+    DataflowBuffer zero(GR_LIVE_ZERO_CB);
+    const uint32_t z = zero.get_read_ptr();
+    const uint64_t base = get_noc_addr(my_x[noc_index], my_y[noc_index], tile_addr);
+    noc_async_write(z, base + LIVE, FACE - LIVE);
+    noc_async_write(z, base + FACE + LIVE, FACE - LIVE);
+    noc_async_write(z, base + 2 * FACE, 2 * FACE);
+    noc_async_write_barrier();
+}
+#endif
+
 template <
     uint32_t SRC_CB,
     uint32_t DST_CB,
@@ -84,6 +101,11 @@ FORCE_INLINE void mcast_phase(const TilesArgs& tiles_args, const ExtraArgs& extr
         const uint32_t extra_bytes = get_tile_size(EXTRA_CB);
         for (uint32_t done = 0; done < count; done += batch) {
             extra_cb.wait_front(batch);
+#ifdef GR_LIVE_ROWS
+            for (uint32_t t = 0; t < batch; ++t) {
+                gr_zero_dead_rows(extra_cb.get_read_ptr() + t * extra_bytes);
+            }
+#endif
             for (uint32_t t = 0; t < batch; ++t) {
                 noc.async_write(
                     extra_cb,

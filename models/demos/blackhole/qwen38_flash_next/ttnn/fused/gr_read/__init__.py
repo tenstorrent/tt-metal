@@ -762,7 +762,7 @@ def gate_v2_enabled(environ=None) -> bool:
     return value == "1"
 
 
-def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain"):
+def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", out_rows: int | None = None):
     """Stages 3a+3b as one program: the four row cores multicast the low-rank row into the gate cores' CB
     while those cores prefetch their weight columns and normalized tiles; the injection tile comes from row core 3."""
 
@@ -779,7 +779,7 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain"):
     ):  # gate3.py: bit-identical valid rows, rows <= 16 only
         from . import gate3
 
-        return gate3.low_rank_gate3(gathered_partials, normalized, up, matmul=matmul)
+        return gate3.low_rank_gate3(gathered_partials, normalized, up, matmul=matmul, out_rows=out_rows)
     mesh = gathered_partials.device()
     block = fp.allocate((1, 1, rows, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
     injection = fp.allocate((1, 1, rows, BRANCHES), BF16, ttnn.TILE_LAYOUT, mesh)
@@ -932,6 +932,7 @@ def gr_read_fused(
     stats_gather=None,
     partial_gather=None,
     read_front=None,
+    live_rows: int | None = None,
 ):
     """The model-level read: the fused programs around the chain's two collectives; returns (block input, state).
     ``merged`` (default: on, unless the QWEN38_FUSED_GR_READ_MERGED=0 switch) runs normalize+down and low_rank+gate
@@ -947,6 +948,13 @@ def gr_read_fused(
 
     rows = residual_rows(residual)
     module.mesh_contract.validate_tensor(residual, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
+    # ``live_rows`` (the verify's k + 1 live rows of its 32-row residual tile; read_front forms and the gate v3 only): the programs
+    # run with that many rows over the same tile pages, and the block and injection come back as the 32-row tile with dead rows zero
+    out_rows = None
+    if live_rows is not None and live_rows != rows:
+        if read_front is None or not 2 <= live_rows <= 5 or live_rows > rows:
+            raise ValueError(f"GR live rows {live_rows} need a read_front form, 2..5 rows, within the {rows}-row tile")
+        out_rows, rows = rows, live_rows
     merged = merged_enabled() if merged is None else merged
     matmul = matmul_mode() if matmul is None else matmul
     gamma_rows = module.weights.norm_scale_rows
@@ -957,7 +965,10 @@ def gr_read_fused(
             "partial_gather / read_front fold the merged normalize_down form; the split forms keep the collectives"
         )
     if read_front is not None:
-        normalized, gathered_partials = read_front(residual, gamma_rows, module.weights.down_inject)
+        if out_rows is None:
+            normalized, gathered_partials = read_front(residual, gamma_rows, module.weights.down_inject)
+        else:
+            normalized, gathered_partials = read_front(residual, gamma_rows, module.weights.down_inject, live_rows=rows)
     else:
         if stats_gather is None:
             stats_local = stats(residual)
@@ -1001,7 +1012,12 @@ def gr_read_fused(
         )
         ttnn.deallocate(partial)
     if merged:
-        block, injection = low_rank_gate(gathered_partials, normalized, module.weights.up, matmul=matmul)
+        if out_rows is None:
+            block, injection = low_rank_gate(gathered_partials, normalized, module.weights.up, matmul=matmul)
+        else:
+            block, injection = low_rank_gate(
+                gathered_partials, normalized, module.weights.up, matmul=matmul, out_rows=out_rows
+            )
     else:
         low_rank_row, injection = low_rank(gathered_partials)
         block = gate(low_rank_row, normalized, module.weights.up, matmul=matmul)

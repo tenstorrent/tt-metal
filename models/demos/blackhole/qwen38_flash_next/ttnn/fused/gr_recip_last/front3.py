@@ -59,17 +59,35 @@ CB_UPACK, CB_UPACK_IN = 26, 27  # the norm core's packed u chunks; the workers' 
 UNPACK_SEM = 7  # program-local, on the transport cores: BRISC -> NCRISC "the data landed, unpack your sources"
 MAX_ROWS = 16
 ROWTRIM_ENV = "QWEN38_FRONT_ROWTRIM"  # default "1"; "0" off; "1" with rows <= ROWTRIM_MAX_ROWS: the norm core's rsqrt runs 2 iterations per face
-ROWTRIM_MAX_ROWS = 4
+ROWTRIM_MAX_ROWS = 8  # rows 5..8: 4 iterations (2 per 4 rows: one iteration is one column parity of 4 rows)
 ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); rsqrt_tile runs 8 in RC
 _STATE3: dict = {}
 
 
 def rowtrim_defines(rows: int) -> list[tuple[str, str]]:
-    """The norm core's compute define with ``QWEN38_FRONT_ROWTRIM=1`` (default) and ``rows <= 4``; empty otherwise (the kernel is as before)."""
+    """The norm core's compute define with ``QWEN38_FRONT_ROWTRIM=1`` (default) and ``rows <= 8`` (2 iterations per 4 rows); empty otherwise (the kernel is as before)."""
 
     if os.environ.get(ROWTRIM_ENV, "1") == "1" and 1 <= rows <= ROWTRIM_MAX_ROWS:
-        return [("QWEN38_FRONT_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS))]
+        return [("QWEN38_FRONT_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS * -(-rows // 4)))]
     return []
+
+
+UNPACK_ENV = "QWEN38_FRONT_UNPACK_SPLIT"  # default "1"; "0" off; rows >= 2: the u row's unpack on the down workers runs on NCRISC and BRISC
+UNPACK_DONE_SEM = 8  # program-local, on the down workers: BRISC -> NCRISC "my half of the u tiles is unpacked"
+UNPACK_MIN_ROWS = 2
+
+
+def unpack_split(rows: int, tiles: int) -> int:
+    """Tiles of the u row the worker's reader unpacks itself (the writer unpacks the rest); 0 = no split (rows == 1 or flag off)."""
+
+    return tiles // 2 if os.environ.get(UNPACK_ENV, "1") == "1" and rows >= UNPACK_MIN_ROWS else 0
+
+
+def unpack_defines(rows: int, tiles: int) -> list[tuple[str, str]]:
+    split = unpack_split(rows, tiles)
+    return (
+        [("QWEN38_FRONT_UNPACK_SPLIT", str(split)), ("QWEN38_FRONT_UNPACK_SEM", str(UNPACK_DONE_SEM))] if split else []
+    )
 
 
 LATE_ENV = "QWEN38_FRONT_CONST_LATE"  # default "1": the reader builds the scaler and eps tiles after the data push
@@ -103,8 +121,16 @@ def _persistent(mesh, slot_bytes: int, cores):
     once per mesh and slot size, before any trace capture (a peer's packet may land whatever program this device runs).
     """
 
+    if VERIFY_ROWS_PREPARED:
+        # with the verify's live-row read (5 rows, 62 KB of landing slots) one buffer, sized for the largest row count, serves every row
+        # count (each program lays its slots out from the start): the three per-count buffers (87 KB) plus a fourth clashed with the
+        # prefill SDPA's static CBs (L1 buffer at 1,173,120 against a CB region ending at 1,205,696)
+        slot_bytes = max(
+            slot_bytes, *(_slot_bytes(gr_read.PARTIAL_TILES, rows, len(cores))[0] for rows in VERIFY_ROWS_PREPARED)
+        )
     key = (id(mesh), slot_bytes)
     if key not in _STATE3:
+        gr_fold._MESH_KEEP.append(mesh)
         grid = mesh.compute_with_storage_grid_size()
         every = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         sem = ttnn.create_global_semaphore(mesh, every, 0)
@@ -140,6 +166,10 @@ DECODE_ROWS = (
 )  # the decode widths (powers of two, as tools/qwen38_batch_decode.row_read_buckets) this front serves
 
 
+# the verify's k + 1 rows of the live-row GR read (QWEN38_GR_VERIFY_LIVE_ROWS, mtp_v2): its landing buffer is made with the others
+VERIFY_ROWS_PREPARED = (5,) if os.environ.get("QWEN38_GR_VERIFY_LIVE_ROWS", "1") == "1" else ()
+
+
 def prepare(mesh) -> None:
     """Create the landing buffers of the decode row counts this front serves, at model construction: made lazily at the
     first call they land below the temporary L1 tensors of the warm pass and stay low after those are freed.  The same
@@ -147,7 +177,7 @@ def prepare(mesh) -> None:
 
     links = min(len(gr_fold.TRANSPORT["partials"]), gr_fold.line(mesh).links)
     cores = gr_fold.TRANSPORT["partials"][:links]
-    for rows in DECODE_ROWS:
+    for rows in (*DECODE_ROWS, *VERIFY_ROWS_PREPARED):
         if fits(rows):
             slot_b, in_packet = _slot_bytes(gr_read.PARTIAL_TILES, rows, links)
             if in_packet:
@@ -178,7 +208,7 @@ def _front_reader(cores, streams, consts, runtime, gate, extra, extra_rt, define
     )
 
 
-def _mcast_reader3(cores, streams, runtime, *, recv, recv2, zero_cb, extra):
+def _mcast_reader3(cores, streams, runtime, *, recv, recv2, zero_cb, extra, defines=()):
     """gr_recip_last._mcast_reader2 with mcast_reader4.cpp (unpacks the packed u row): ``extra`` compile args at the end."""
 
     compile_args = [*recv, *recv2, len(streams), *[cb for _, cb in streams], *[0] * (2 - len(streams)), zero_cb]
@@ -190,6 +220,7 @@ def _mcast_reader3(cores, streams, runtime, *, recv, recv2, zero_cb, extra):
         cores,
         compile_args,
         [(core, [a for args in stream_args for a in args]) for core, stream_args in runtime],
+        defines=defines,
     )
 
 
@@ -292,12 +323,20 @@ def _transport_program(mesh, stats, partials, rows, *, semaphores, cbs, kernels,
     return mesh_program
 
 
-def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | None = None):
+def stats_recip_down_gather(
+    residual, norm_scale, down_inject, *, links: int | None = None, live_rows: int | None = None
+):
     """The front as ONE program on gr_fold's cores and transports (the norm cores on row 2, the 6x2 down workers, the
     transport pair): stats -> u multicast -> per-stream matmul -> recip multicast -> scale and sum -> partials gather.
     Returns ``(gathered_stats, normalized', gathered_partials)`` in gr_fold's shapes and pages."""
 
     rows = gr_read.residual_rows(residual)
+    if (
+        live_rows is not None and live_rows != rows
+    ):  # the verify's 32-row tile with live_rows valid rows: same pages, fewer rows
+        if not 2 <= live_rows < rows or not fits(live_rows):
+            raise ValueError(f"GR front live rows must be 2..{MAX_ROWS} and below the {rows}-row tile, got {live_rows}")
+        rows = live_rows
     if not fits(rows):
         return _default_front(residual, norm_scale, down_inject, links=links)
     gr_read._expect(
@@ -411,6 +450,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
         recv2=(CB_RECIP_W, B, B, RECIP_READY),
         zero_cb=CB_ZERO,
         extra=[CB_UPACK_IN, rows * 32, 512],
+        defines=unpack_defines(rows, FT),
     )
     down = fp.compute_kernel(
         DOWN_STREAMS,
@@ -462,8 +502,10 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
         writer = fp.writer_kernel(
             RAW_WRITER,
             w_set,
-            [CB_OUT, gr_fold.PARTIALS_SCRATCH_CB, rows, p_scratch, *fp.accessor_args(gathered)],
+            [CB_OUT, gr_fold.PARTIALS_SCRATCH_CB, rows, p_scratch, *fp.accessor_args(gathered)]
+            + ([CB_UPACK_IN, CB_IN0, FT, 0, B, rows * 32, 512] if unpack_split(rows, FT) else []),
             runtime,
+            defines=unpack_defines(rows, FT),
         )
         return [reader_for(rank), compute, writer3, receiver, down, writer]
 
@@ -476,6 +518,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             fp.semaphore_descriptor(RECIP_READY, pw_set),
             fp.semaphore_descriptor(UNPACK_SEM, gr_read._core_set(list(transports))),
         ]
+        + ([fp.semaphore_descriptor(UNPACK_DONE_SEM, w_set)] if unpack_split(rows, FT) else [])
     )
     phases = [
         gr_fold.Transport(

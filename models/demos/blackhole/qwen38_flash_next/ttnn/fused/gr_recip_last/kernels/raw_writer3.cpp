@@ -13,6 +13,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "../../kernels/zones.h"
 
@@ -31,6 +32,46 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(4));
     DataflowBuffer src_cb(CB_OUT);
     DataflowBuffer scratch(SCRATCH_CB);
+#ifdef QWEN38_FRONT_UNPACK_SPLIT
+    {
+        // rows >= 2: the second half of the u row's unpack (the reader, NCRISC, does the first
+        // QWEN38_FRONT_UNPACK_SPLIT tiles).  Extra compile-time args after the accessor set: 0 landing cb, 1 u row cb,
+        // 2 tiles, 3 u semaphore id, 4 senders, 5 chunk bytes, 6 bf16 face bytes
+        constexpr uint32_t X = out_args.next_compile_time_args_offset();
+        constexpr uint32_t UNPACK_TILES = get_compile_time_arg_val(X + 2);
+        constexpr uint32_t UCHUNK = get_compile_time_arg_val(X + 5);
+        constexpr uint32_t UFACE = get_compile_time_arg_val(X + 6);
+        DataflowBuffer land(get_compile_time_arg_val(X + 0));
+        DataflowBuffer in0(get_compile_time_arg_val(X + 1));
+        Semaphore<> usem(get_compile_time_arg_val(X + 3));
+        Semaphore<> unpacked(QWEN38_FRONT_UNPACK_SEM);
+        usem.wait(get_compile_time_arg_val(X + 4));
+        const uint32_t land_addr = land.get_write_ptr();
+        const uint32_t in0_addr = in0.get_write_ptr();
+        const uint32_t in0_tile = get_tile_size(get_compile_time_arg_val(X + 1));
+        for (uint32_t t = QWEN38_FRONT_UNPACK_SPLIT; t < UNPACK_TILES; ++t) {
+            for (uint32_t c = 0; c < 2; ++c) {
+                volatile tt_l1_ptr uint32_t* from =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(land_addr + (t * 2 + c) * UCHUNK);
+                volatile tt_l1_ptr uint32_t* to =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_addr + t * in0_tile + c * UFACE);
+                for (uint32_t w = 0; w < UCHUNK / 4; w += 8) {
+                    const uint32_t a0 = from[w], a1 = from[w + 1], a2 = from[w + 2], a3 = from[w + 3];
+                    const uint32_t a4 = from[w + 4], a5 = from[w + 5], a6 = from[w + 6], a7 = from[w + 7];
+                    to[w] = a0;
+                    to[w + 1] = a1;
+                    to[w + 2] = a2;
+                    to[w + 3] = a3;
+                    to[w + 4] = a4;
+                    to[w + 5] = a5;
+                    to[w + 6] = a6;
+                    to[w + 7] = a7;
+                }
+            }
+        }
+        unpacked.up(1);
+    }
+#endif
     FUSED_ZONE("fz_gr2_w_partial");
     src_cb.wait_front(1);
     const uint32_t src = src_cb.get_read_ptr();

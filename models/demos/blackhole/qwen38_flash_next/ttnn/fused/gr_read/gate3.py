@@ -45,6 +45,7 @@ from . import (
 
 ENV = "QWEN38_GR_GATE_V3"
 MAX_ROWS = 16
+MAX_LIVE_ROWS = 5  # the verify rows (k + 1) the live-row form serves; the front v3 admits the same
 LOWRANK3 = fp.kernel_source(NAME, "lowrank_compute3.cpp")
 GATE3 = fp.kernel_source(NAME, "gate_compute3.cpp")
 
@@ -63,8 +64,13 @@ WRITER_T = fp.kernel_source(NAME, "writer_t.cpp")
 
 
 ROWTRIM_ENV = "QWEN38_GR_GATE_ROWTRIM"
-ROWTRIM_MAX_ROWS = 4
+ROWTRIM_MAX_ROWS = 8
 ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); the default kernels run 8
+
+
+def trim_iterations(rows: int) -> int:
+    """One iteration is half of 4 rows (one column parity): 2 iterations per 4 valid rows (rows 1..4 -> 2, 5..8 -> 4)."""
+    return ROWTRIM_ITERATIONS * -(-rows // 4)
 
 
 def rowtrim_defines(rows: int):
@@ -74,7 +80,7 @@ def rowtrim_defines(rows: int):
     import os
 
     if os.environ.get(ROWTRIM_ENV, "1") == "1" and 1 <= rows <= ROWTRIM_MAX_ROWS:
-        return [("QWEN38_GR_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS))]
+        return [("QWEN38_GR_ROWTRIM_ITERS", str(trim_iterations(rows)))]
     return []
 
 
@@ -90,9 +96,13 @@ def enabled(rows: int) -> bool:
     return os.environ.get(ENV, "1") == "1" and 1 <= rows <= MAX_ROWS  # default on (x49 A/B -0.41 ms)
 
 
-def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
+def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain", out_rows: int | None = None):
     """Stages 3a+3b as one program: the four row cores multicast the low-rank row into the gate cores' CB
-    while those cores prefetch their weight columns and normalized tiles; the injection tile comes from row core 3."""
+    while those cores prefetch their weight columns and normalized tiles; the injection tile comes from row core 3.
+
+    ``out_rows`` (the verify's 32-row tile, ``rows < out_rows``, rows >= 2): the block and the injection are allocated with
+    ``out_rows`` rows and their tiles are zero-filled past the ``rows`` live rows before they are written, so the consumers see
+    the 32-row form (dead rows exact zeros; the injection's dead rows are 0 where the 32-row program computes 1.0)."""
 
     shape = tuple(gathered_partials.shape)
     if len(shape) != 4 or shape[:2] != (TP_SIZE, 1) or shape[3] != PARTIAL_WIDTH or gathered_partials.dtype != FP32:
@@ -101,13 +111,21 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
     from .. import row_gather3  # QWEN38_GATE_GATHER=1: this program with the block-input gather folded in (row_gather3)
 
     gather_config = row_gather3.take_context()
-    if gather_config is not None and row_gather3.admits(gathered_partials, rows, gather_config):
+    if (
+        gather_config is not None
+        and out_rows in (None, rows)
+        and row_gather3.admits(gathered_partials, rows, gather_config)
+    ):
         return row_gather3.gate_gather(gathered_partials, normalized, up, gather_config, matmul=matmul)
     _expect(normalized, (1, 1, rows, FLAT_WIDTH), BF16, "GR normalized row")
     _expect(up, (1, 1, PARTIAL_WIDTH, FLAT_WIDTH), BF16, "GR up")
     mesh = gathered_partials.device()
-    block = fp.allocate((1, 1, rows, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
-    injection = fp.allocate((1, 1, rows, BRANCHES), BF16, ttnn.TILE_LAYOUT, mesh)
+    live = out_rows is not None and out_rows != rows
+    if live and not (2 <= rows <= MAX_LIVE_ROWS and rows < out_rows):
+        raise ValueError(f"GR gate live rows must be 2..{MAX_LIVE_ROWS} below the {out_rows}-row tile, got {rows}")
+    out = out_rows if live else rows
+    block = fp.allocate((1, 1, out, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
+    injection = fp.allocate((1, 1, out, BRANCHES), BF16, ttnn.TILE_LAYOUT, mesh)
     v2 = False
     t = LOW_RANK_TILES_PER_CORE
     n_producers = PARTIAL_TILES // t
@@ -156,6 +174,11 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
         else {}
     )
     writer_kw = {"source": WRITER_T, "defines": [("GT_DST_FACE", str(FACE_BF16_BYTES))]} if tiny else {}
+    if (
+        live
+    ):  # not tiny (rows >= 2): the stock writer and mcast writer with the dead-row zero fill (kernels/writer.cpp, mcast_phase.h)
+        writer_kw = {"defines": [("GR_LIVE_ROWS", str(rows)), ("GR_LIVE_ZERO_CB", "11")]}
+        mcast_writer_kw = {"defines": [("GR_LIVE_ROWS", str(rows)), ("GR_LIVE_ZERO_CB", "1")]}
     reader = _reader(
         p_set,
         [(gathered_partials, 0)],

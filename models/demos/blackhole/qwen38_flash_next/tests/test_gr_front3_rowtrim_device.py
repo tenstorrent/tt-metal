@@ -57,7 +57,7 @@ def same(a_runs, b_runs, report=None):
 
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("rows", [1, 2, 3, 4])
+@pytest.mark.parametrize("rows", [1, 2, 3, 4, 5, 6, 7, 8])
 def test_rowtrim_bitwise_and_slope(mesh_device, rows):
     mesh = mesh_device
     mesh.enable_program_cache()

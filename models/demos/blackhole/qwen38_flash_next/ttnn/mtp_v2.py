@@ -1186,6 +1186,8 @@ def _forward_layer_verify(
     """
 
     rows = layer_verify.rows
+    # QWEN38_GR_VERIFY_LIVE_ROWS (default "1"; "0" = the 32-row GR reads): both GR reads run their programs on the k + 1 live rows
+    gr_live_rows = rows if os.environ.get("QWEN38_GR_VERIFY_LIVE_ROWS", "1") == "1" and 2 <= rows < CHUNK_ROWS else None
     if _shape(residual) != RESIDUAL_ROWS_SHAPE or residual.dtype != ttnn.bfloat16:
         raise RuntimeError(f"verify residual rows must be BF16 {RESIDUAL_ROWS_SHAPE}, got {tensor_metadata(residual)}")
     dram = ttnn.DRAM_MEMORY_CONFIG
@@ -1206,7 +1208,9 @@ def _forward_layer_verify(
             raise ValueError("prepared PLE rows were supplied outside checkpoint layer 1")
         residual_owner = residual
 
-    attention_input, attention_gr_state = layer.attention_gr.read_rows(residual, flat_views=True)
+    attention_input, attention_gr_state = layer.attention_gr.read_rows(
+        residual, flat_views=True, live_rows=gr_live_rows
+    )
     if isinstance(layer.attention, Qwen38TTNNGDN):
         if selectors is not None:
             layer.attention.commit_rows(
@@ -1245,7 +1249,7 @@ def _forward_layer_verify(
     # residual_owner owns the buffer the GR state's residual reads (the PLE layer's pad result is a view of it).
     _deallocate(attention_owner, residual_owner, attention_gr_state.injection)
 
-    mlp_input, mlp_gr_state = layer.mlp_gr.read_rows(residual, flat_views=True)
+    mlp_input, mlp_gr_state = layer.mlp_gr.read_rows(residual, flat_views=True, live_rows=gr_live_rows)
     if layer_verify.moe_input is None:
         moe_input = mlp_input
     else:

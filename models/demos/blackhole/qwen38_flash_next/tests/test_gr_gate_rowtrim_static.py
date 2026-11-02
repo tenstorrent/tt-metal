@@ -17,8 +17,8 @@ DEFINE = "QWEN38_GR_ROWTRIM_ITERS"
 def test_default_on_and_off_switch(monkeypatch):
     monkeypatch.delenv(gate3.ROWTRIM_ENV, raising=False)
     assert gate3.rowtrim_defines(1) == [(DEFINE, "2")]
-    for rows in (8, 16):
-        assert gate3.rowtrim_defines(rows) == []
+    assert gate3.rowtrim_defines(8) == [(DEFINE, "4")]
+    assert gate3.rowtrim_defines(16) == []
     monkeypatch.setenv(gate3.ROWTRIM_ENV, "0")
     for rows in (1, 2, 4, 8, 16):
         assert gate3.rowtrim_defines(rows) == []
@@ -30,7 +30,13 @@ def test_on_small_rows_runs_two_iterations(monkeypatch, rows):
     assert gate3.rowtrim_defines(rows) == [(DEFINE, "2")]
 
 
-@pytest.mark.parametrize("rows", [5, 8, 16, 32])
+@pytest.mark.parametrize("rows", [5, 6, 7, 8])
+def test_on_rows_five_to_eight_runs_four_iterations(monkeypatch, rows):
+    monkeypatch.setenv(gate3.ROWTRIM_ENV, "1")
+    assert gate3.rowtrim_defines(rows) == [(DEFINE, "4")]
+
+
+@pytest.mark.parametrize("rows", [16, 32])
 def test_on_large_rows_keeps_eight(monkeypatch, rows):
     monkeypatch.setenv(gate3.ROWTRIM_ENV, "1")
     assert gate3.rowtrim_defines(rows) == []

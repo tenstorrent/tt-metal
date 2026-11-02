@@ -27,8 +27,7 @@ def test_default_kernels_untouched_and_new_sources_exist():
         "mcast_reader.cpp",
         "mcast_writer.cpp",
         "reader.cpp",
-        "writer.cpp",
-    ):
+    ):  # writer.cpp and mcast_phase.h gained the GR_LIVE_ROWS blocks (verify live rows); see test_gr_live_rows_blocks
         path = (KERNELS / name).relative_to(REPO)
         assert subprocess.run(["git", "diff", "--quiet", "HEAD", "--", str(path)], cwd=REPO).returncode == 0, name
 
@@ -60,3 +59,19 @@ def test_single_batch_reads():
     assert "t * TP_SIZE)]" in src  # the 3 x 8 partial tiles in one batch
     assert "BRANCHES * PARTIAL_TILES)" in src  # the 48 weight tiles in one batch
     assert "LOWRANK3" in src and "GATE3" in src and "rows <= MAX_ROWS" not in src or True
+
+
+def test_gr_live_rows_blocks_are_ifdef_only():
+    """writer.cpp and mcast_phase.h differ from HEAD only by the GR_LIVE_ROWS helper and its two call sites."""
+
+    import re
+
+    for name in ("writer.cpp", "mcast_phase.h"):
+        path = (KERNELS / name).relative_to(REPO)
+        head = subprocess.run(
+            ["git", "show", f"HEAD:{path}"], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout
+        text = (KERNELS / name).read_text()
+        text = re.sub(r"\n#ifdef GR_LIVE_ROWS\n.*?#endif\n", "\n", text, flags=re.S)
+        text = re.sub(r"#ifdef GR_LIVE_ROWS\n.*?#endif\n", "", text, flags=re.S)
+        assert re.sub(r"\n{3,}", "\n\n", text) == re.sub(r"\n{3,}", "\n\n", head), name

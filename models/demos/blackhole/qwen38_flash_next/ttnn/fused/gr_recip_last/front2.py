@@ -80,6 +80,7 @@ def _persistent(mesh, slot_bytes: int, cores):
 
     key = (id(mesh), slot_bytes)
     if key not in _STATE:
+        gr_fold._MESH_KEEP.append(mesh)
         grid = mesh.compute_with_storage_grid_size()
         every = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         sem = ttnn.create_global_semaphore(mesh, every, 0)

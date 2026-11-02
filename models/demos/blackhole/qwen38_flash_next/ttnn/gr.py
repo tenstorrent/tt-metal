@@ -883,7 +883,9 @@ class Qwen38TTNNGatedResidual:
                 configs[key] = self.prefill_dense.program_config(rows, k, n)
         return configs[key]
 
-    def read_rows(self, residual_rows, *, flat_views: bool = False) -> tuple[Any, Qwen38TTNNGatedResidualState]:
+    def read_rows(
+        self, residual_rows, *, flat_views: bool = False, live_rows: int | None = None
+    ) -> tuple[Any, Qwen38TTNNGatedResidualState]:
         """:meth:`read` for the residual rows ``[1,4,rows,640]`` of a chunk -> block rows ``[1,1,rows,640]``.
 
         ``flat_views``: the branch-major <-> flat walks as the 1-row read's ``ttnn.experimental.view`` (every branch
@@ -896,6 +898,8 @@ class Qwen38TTNNGatedResidual:
         rows = _shape(residual_rows)[2]  # residual_rows_shape admits 1..32, 128 and the slab counts
         self._validate_rows(residual_rows, residual_rows_shape(rows), label="GR residual rows")
         if flat_views and getattr(self, "_read_fused", None) is not None:
+            if live_rows is not None and getattr(self._read_fused, "supports_live_rows", False):
+                return self._read_fused(self, residual_rows, live_rows=live_rows)
             return self._read_fused(self, residual_rows)
         flat_rows_shape = (1, 1, rows, FLAT_LOCAL_WIDTH)
         tile_rows = max(rows, CHUNK_ROWS)

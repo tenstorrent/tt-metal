@@ -16,6 +16,23 @@ constexpr uint32_t NUM_STREAMS = get_compile_time_arg_val(0);
 constexpr uint32_t ACCESSOR_BASE = 4;
 constexpr uint32_t STREAM_RT_ARGS = 5;
 
+#ifdef GR_LIVE_ROWS
+// Verify rows (GR_LIVE_ROWS valid rows of the 32-row tile): the rows past them are overwritten with zeros in the L1
+// tile before it is written, so the output page keeps today's 32-row contract (dead rows exact zeros) although the
+// program computed only the live rows.  GR_LIVE_ZERO_CB is a CB of a core-local zero tile (>= 1024 B).  A BF16 tile:
+// face 0 = rows 0..15 of columns 0..15 (32 B a row) at byte 0, face 1 at byte 512, faces 2 and 3 (rows 16..31) at 1024.
+FORCE_INLINE void gr_zero_dead_rows(uint32_t tile_addr) {
+    constexpr uint32_t FACE = 512, LIVE = GR_LIVE_ROWS * 32;
+    DataflowBuffer zero(GR_LIVE_ZERO_CB);
+    const uint32_t z = zero.get_read_ptr();
+    const uint64_t base = get_noc_addr(my_x[noc_index], my_y[noc_index], tile_addr);
+    noc_async_write(z, base + LIVE, FACE - LIVE);
+    noc_async_write(z, base + FACE + LIVE, FACE - LIVE);
+    noc_async_write(z, base + 2 * FACE, 2 * FACE);
+    noc_async_write_barrier();
+}
+#endif
+
 template <typename Args>
 FORCE_INLINE void write_stream(const Args& args, uint32_t cb, uint32_t rt) {
     const uint32_t addr = get_arg_val<uint32_t>(rt);
@@ -29,6 +46,11 @@ FORCE_INLINE void write_stream(const Args& args, uint32_t cb, uint32_t rt) {
     DataflowBuffer dfb(cb);
     for (uint32_t done = 0; done < count; done += batch) {
         dfb.wait_front(batch);
+#ifdef GR_LIVE_ROWS
+        for (uint32_t t = 0; t < batch; ++t) {
+            gr_zero_dead_rows(dfb.get_read_ptr() + t * tile_bytes);
+        }
+#endif
         for (uint32_t t = 0; t < batch; ++t) {
             noc.async_write(
                 dfb, accessor, tile_bytes, {.offset_bytes = t * tile_bytes}, {.page_id = first + (done + t) * stride});

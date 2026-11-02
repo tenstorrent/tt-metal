@@ -101,7 +101,14 @@ void kernel_main() {
         const uint32_t land_addr = land.get_write_ptr();
         const uint32_t in0_addr = recv.get_write_ptr();
         const uint32_t in0_tile = get_tile_size(RECV_CB);
-        for (uint32_t t = 0; t < RECV_TILES; ++t) {
+#ifdef QWEN38_FRONT_UNPACK_SPLIT
+        // rows >= 2: this RISC unpacks the first QWEN38_FRONT_UNPACK_SPLIT tiles, the worker's writer (BRISC,
+        // raw_writer3.cpp) the rest; the writer raises the semaphore QWEN38_FRONT_UNPACK_SEM when its tiles are in
+        constexpr uint32_t UNPACK_TILES = QWEN38_FRONT_UNPACK_SPLIT;
+#else
+        constexpr uint32_t UNPACK_TILES = RECV_TILES;
+#endif
+        for (uint32_t t = 0; t < UNPACK_TILES; ++t) {
             for (uint32_t c = 0; c < 2; ++c) {
                 volatile tt_l1_ptr uint32_t* from =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(land_addr + (t * 2 + c) * CHUNK);
@@ -122,6 +129,10 @@ void kernel_main() {
                 }
             }
         }
+#ifdef QWEN38_FRONT_UNPACK_SPLIT
+        Semaphore<> unpacked(QWEN38_FRONT_UNPACK_SEM);
+        unpacked.wait(1);
+#endif
         recv.push_back(RECV_TILES);
     }
     {

@@ -86,6 +86,9 @@ FRONT_STATS_CBS = (
 STATS_NORM = fp.kernel_source(NAME, "stats_norm_compute.cpp")
 MCAST_WRITER2 = fp.kernel_source(NAME, "mcast_writer2.cpp")
 PROBED_CORES = TRANSPORT["stats"] + TRANSPORT["partials"]
+# The caches below are keyed by id(mesh): a strong reference to every mesh they have seen keeps a closed mesh's id from being reused by
+# a new mesh (a stale entry would hand out freed L1 addresses).  One mesh per process in the model; many in the tests.
+_MESH_KEEP: list = []
 _SEMAPHORES: dict[int, "LineSemaphores"] = {}
 _LINES: dict[int, "Line"] = {}
 
@@ -144,6 +147,7 @@ class LineSemaphores:
 def line_semaphores(mesh) -> LineSemaphores:
     key = id(mesh)
     if key not in _SEMAPHORES:
+        _MESH_KEEP.append(mesh)
         _SEMAPHORES[key] = LineSemaphores(mesh)
     return _SEMAPHORES[key]
 
@@ -200,6 +204,7 @@ class Line:
 def line(mesh) -> Line:
     key = id(mesh)
     if key not in _LINES:
+        _MESH_KEEP.append(mesh)
         _LINES[key] = Line(mesh)
     return _LINES[key]
 
