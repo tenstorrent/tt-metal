@@ -110,7 +110,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
-        padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
+        padding_value_as_u32 = pack_two_uint16_into_uint32({float_to_uint16(pad_value), 0});
     } else if (
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
         input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
