@@ -121,7 +121,6 @@ def emitted(tmp_path_factory):
             *_quasar_variant_include(),
             f"-I{_QUASAR_LLK}",
             f"-I{_QUASAR_LLK / 'common/inc'}",
-            f"-I{_QUASAR_LLK / 'common/inc/sfpu'}",
             f"-I{_QUASAR_LLK / 'llk_lib'}",
             f"-I{_TT_METAL / 'tt-llk/common'}",
             f"-I{_TT_METAL / 'hw/inc'}",

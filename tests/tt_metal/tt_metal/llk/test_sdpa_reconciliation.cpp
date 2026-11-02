@@ -26,7 +26,7 @@ void run_sdpa_recip(distributed::MeshDevice& mesh, std::uint32_t fidelity, std::
     const CoreCoord core{0, 0};
     constexpr std::uint32_t tiles = 3;
     constexpr std::uint32_t tile_bytes = 2048;
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto make_buffer = [&]() {
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = tiles * tile_bytes},
@@ -115,7 +115,7 @@ void run_sdpa_tail(
     constexpr std::uint32_t block_size = 2;
     constexpr std::uint32_t tile_bytes = sdpa_tail_elements * sizeof(bfloat16);
     const std::uint32_t tiles = block_size * num_blocks;
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto make_buffer = [&](std::uint32_t count) {
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = count * tile_bytes},
@@ -290,7 +290,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     const std::uint32_t row_tiles = layout == 2 ? 6 : qk_tiles;
     const std::uint32_t v_offset = layout == 2 ? 3 : 0;
     const bool separate_v = layout == 1;
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto make_buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = bytes},
@@ -496,8 +496,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.02);
 }
 
-Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) {
-    Program program = CreateProgram();
+Program make_sdpa_chunk_compile_program(distributed::MeshDevice& mesh_device, const std::vector<std::uint32_t>& args) {
+    Program program = CreateProgram(mesh_device);
     const CoreCoord core{0, 0};
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
         auto config = CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048);
@@ -571,7 +571,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSizeCompileLimits) {
     // gets the running max wrong on device (not the OV matmul, which supports kt_dim 1).
     for (const auto chunk : {1u, 2u, 3u, 5u}) {
         SCOPED_TRACE(::testing::Message() << "chunk=" << chunk);
-        auto program = make_sdpa_chunk_compile_program({chunk, 1, 1, 2, 2, 0, 0, 0});
+        auto program = make_sdpa_chunk_compile_program(this->device(), {chunk, 1, 1, 2, 2, 0, 0, 0});
         if (chunk >= 2) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
@@ -604,7 +604,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
         const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
         auto compile_args = args;
         compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0});
-        auto program = make_sdpa_chunk_compile_program(compile_args);
+        auto program = make_sdpa_chunk_compile_program(this->device(), compile_args);
         if (fits) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
@@ -617,7 +617,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
     for (const auto num_tiles_v : {14u, 15u}) {
         SCOPED_TRACE(::testing::Message() << "num_tiles_v=" << num_tiles_v << ", output_granularity=1");
         const bool fits = num_tiles_v / 1 + 1 <= 15;
-        auto program = make_sdpa_chunk_compile_program({2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
+        auto program = make_sdpa_chunk_compile_program(this->device(), {2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
         if (fits) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
@@ -643,7 +643,8 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
         SCOPED_TRACE(
             ::testing::Message() << "row_tiles=" << test[0] << ", v_tiles=" << test[1] << ", v_offset=" << test[2]
                                  << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]);
-        auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
+        auto program =
+            make_sdpa_chunk_compile_program(this->device(), {2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
         if (test[5]) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {

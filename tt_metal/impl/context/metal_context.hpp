@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <atomic>
 #include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
@@ -222,6 +223,11 @@ public:
     // Hang detection
     void on_dispatch_timeout_detected();
 
+    // Set when a Tensix BRISC is found with a halt record. Until the next init, halt checks throw at once and device
+    // close skips dispatch teardown.
+    bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
+    void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
+
 private:
     friend class ttsl::Indestructible<MetalContext>;
 
@@ -262,6 +268,8 @@ private:
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
+
+    std::atomic<bool> l1_ecc_halt_detected_{false};
 
     // The MetalEnv is normally owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor and own the env
