@@ -43,6 +43,7 @@ def test_attn_lean(mesh_device, pos):
     q1 = ttnn.to_torch(rope_lean_ttnn(q, cf, sf, P)).float()
     k1 = ttnn.to_torch(rope_lean_ttnn(k, cf, sf, P)).float()
     for name, a, b in (("q", q0, q1), ("k", k0, k1)):
+        assert a.shape == b.shape, (a.shape, b.shape)
         exact = (a == b).float().mean().item()
         print(f"pos {pos} {name}: shape {tuple(b.shape)} bit-exact {100 * exact:.2f}%  max|d| {(a - b).abs().max().item():.3e}")
         assert exact == 1.0
@@ -70,6 +71,7 @@ def test_attn_qgview(mesh_device):
     q1 = ttnn.rms_norm(q_h, weight=w, epsilon=1e-6)
     q1 = ttnn.to_torch(ttnn.reshape(ttnn.permute(q1, (1, 0, 2)), [1, 1, H, D])).float()
     for name, a, b in (("q", q0, q1), ("gate", g0, g1)):
+        assert a.shape == b.shape, (a.shape, b.shape)
         exact = (a == b).float().mean().item()
         print(f"qgview {name}: shape {tuple(b.shape)} bit-exact {100 * exact:.2f}%  max|d| {(a - b).abs().max().item():.3e}")
         assert exact == 1.0
@@ -87,10 +89,11 @@ def test_attn_tail(mesh_device):
                         layout=ttnn.TILE_LAYOUT, device=mesh_device)
     a0 = ttnn.transformer.concatenate_heads(ttnn.transpose(o, 1, 2))
     a0 = ttnn.to_torch(ttnn.multiply(a0, ttnn.sigmoid(g))).float()
-    a1 = ttnn.experimental.view(ttnn.permute(o, (2, 0, 1, 3)), ttnn.Shape([1, 1, 1, H * D]),
-                                ttnn.Shape([1, 1, ttnn.TILE_SIZE, H * D]))
+    a1 = ttnn.experimental.view(ttnn.permute(o, (2, 0, 1, 3)), ttnn.Shape([1, 1, H * D]),
+                                ttnn.Shape([1, ttnn.TILE_SIZE, H * D]))
     a1 = ttnn.to_torch(ttnn.multiply(a1, g, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
                                      memory_config=ttnn.L1_MEMORY_CONFIG)).float()
+    assert a0.shape == a1.shape, (a0.shape, a1.shape)
     exact = (a0 == a1).float().mean().item()
     print(f"tail: shape {tuple(a1.shape)} bit-exact {100 * exact:.2f}%  max|d| {(a0 - a1).abs().max().item():.3e}")
     assert exact == 1.0

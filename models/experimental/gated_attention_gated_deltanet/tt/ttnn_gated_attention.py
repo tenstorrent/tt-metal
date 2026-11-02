@@ -659,11 +659,11 @@ def gated_attention_forward_ttnn(
     attn_tail = lean and _os.environ.get("QWEN36_1C_ATTN_TAIL") == "1"
     if attn_tail:
         # QWEN36_1C_ATTN_TAIL: SDPA's [1, 1, H, D] -> [H, 1, 1, D] (one head per tile-row) by one permute, whose
-        # tile sequence IS [1, 1, 1, H*D], so a view finishes the head concat (was transpose + concatenate_heads).
+        # tile sequence IS [1, 1, H*D], so a view finishes the head concat (was transpose + concatenate_heads).
         H, Dh = num_attention_heads, head_dim
         attn_output = ttnn.permute(attn_output, (2, 0, 1, 3))
-        attn_output = ttnn.experimental.view(
-            attn_output, ttnn.Shape([1, 1, 1, H * Dh]), ttnn.Shape([1, 1, ttnn.TILE_SIZE, H * Dh])
+        attn_output = ttnn.experimental.view(  # [1, 1, H*D], the rank concatenate_heads returns
+            attn_output, ttnn.Shape([1, 1, H * Dh]), ttnn.Shape([1, ttnn.TILE_SIZE, H * Dh])
         )
     elif use_optimized_concat:
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
