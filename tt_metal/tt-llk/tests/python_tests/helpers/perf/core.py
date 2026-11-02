@@ -788,6 +788,9 @@ def _expand_run_types(text):
 def _selected_run_types(run_types):
     """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
+    # RC experiment (warmup-agent): LLK_RC_RT_FIRST narrows the run types of the first test of the session only.
+    if os.environ.get("LLK_RC_RT_FIRST") and PerfConfig.TEST_COUNTER == 0:
+        wanted = os.environ["LLK_RC_RT_FIRST"].strip()
     if not wanted:
         return list(run_types)
     names = _expand_run_types(wanted)
@@ -1028,7 +1031,11 @@ class PerfConfig(TestConfig):
         warm = (
             list(self.run_configs) if os.environ.get("LLK_WARMUP", "0") == "1" else []
         )
-        if not TestConfig.TEST_TARGET.run_simulator:
+        if (
+            not TestConfig.TEST_TARGET.run_simulator
+            or pre_names
+            or os.environ.get("LLK_RC_HOOK")
+        ):
             for templates, runtimes, run_type in warm + [by_name[n] for n in pre_names]:
                 self.current_run_type = run_type
                 if TestConfig.SPEED_OF_LIGHT:
