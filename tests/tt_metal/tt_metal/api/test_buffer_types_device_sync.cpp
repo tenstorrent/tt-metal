@@ -12,7 +12,7 @@
 // Wrapped so the device enums do not collide with the host ones. <cstdint> is already included above.
 // NOLINTNEXTLINE(modernize-concat-nested-namespaces): the included header opens its own namespace.
 namespace device_copy {
-#include "../../../../tt_metal/hw/inc/api/buffer_types.hpp"
+#include "tt_metal/hw/inc/api/buffer_types.hpp"
 }  // namespace device_copy
 
 namespace {
