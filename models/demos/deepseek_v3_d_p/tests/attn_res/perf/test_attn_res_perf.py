@@ -7,13 +7,9 @@ TP width and 640 rows per chip, so every per-chip shape matches Galaxy's and onl
 without gating until it has CI references.
 
 There is no QuietBox arm: QuietBox 2 has no layout AttnRes can run at a Galaxy-like shape.
-  * TP2 (SP2xTP2) does not fit: at a 3584-wide shard `attn_res_gather_softmax` needs 1658880 B of L1 per core
-    against 1572864 B. K3 never runs AttnRes at TP2.
-  * TP4 on a 2D torus-X ring cannot be cabled: the box's four chips are wired 2x2, so a 1x4 TORUS_X request falls
-    back to an unwrapped mesh, which the wrap guard rejects.
-  * TP4 on a 1D ring forms (KDA's QuietBox perf tests run on it), but `attn_res_gather_softmax` requires a 2D fabric
-    and rejects FABRIC_1D_RING at program creation.
-LoudBox covers the per-chip shapes on a small box, Galaxy the shipped topology.
+  * TP2: at a 3584-wide shard `attn_res_gather_softmax` needs 1658880 B of L1 per core against 1572864 B.
+  * TP4 on 2D torus-X: the four chips are wired 2x2, so a 1x4 TORUS_X request comes up unwrapped.
+  * TP4 on a 1D ring: `attn_res_gather_softmax` requires a 2D fabric.
 
 The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies), with the sealed snapshots the
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
@@ -35,8 +31,8 @@ dropped from the device time and mark where each residual call starts and ends.
 The gates are end-to-end time on the host clock, with no profiler attached. The host clock sees whole forwards,
 so each layer is a difference between forwards timed interleaved: the boundary layer is a 1-layer forward minus
 the same forward with the AttnRes calls taken out, and the ordinary layer is what the next `ORDINARY_LAYERS`
-layers add over it, divided by their count. A single ordinary layer is the difference of two ~5 ms eager
-forwards and moved by 17% between runs; averaged over 8 it holds to a few percent. Traced replays captured
+layers add over it, divided by their count; one ordinary layer alone is too small a difference of two ~5 ms
+eager forwards to time reliably. Traced replays captured
 forwards; untraced dispatches them eagerly, the way the K3 runtime runs prefill. Device time per layer is
 reported beside it: the sum over programs of the slowest chip's realtime-profiler window, with the per-op split.
 """
@@ -94,14 +90,9 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power): the median of runs
-# 41112791430, 41117934062 and 41130107396 (2026-10-30), on bh-glx-120-d08u08, -d06u02 and -d09u02. Traced held
-# within 0.4% across the three boxes (boundary 1716-1722, ordinary 140.4-141.2); untraced within 1.5% on the
-# boundary layer (4596-4664) and 4% on the ordinary one (313-326). Untraced is host-dispatch bound here, with
-# the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Off the pool,
-# bh-glx-120-b07u02 measures the traced boundary layer 6% high, so a run there may need
-# ATTN_RES_PERF_REPORT_ONLY=1. Those runs ended the walk in `handoff`, whose add the boundary layer then carried;
-# it now ends in `discard`, so the boundary references sit high by that add until re-baselined.
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power). Untraced is host-dispatch
+# bound, with the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Galaxies
+# off the pool can sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 1720.0, "ordinary": 141.0},
     "untraced": {"boundary": 4620.0, "ordinary": 323.0},
@@ -272,16 +263,14 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
-        # Unwrapped 2D, the fabric the AttnRes model suite runs on LoudBox. AttnRes takes its route from the opened
-        # fabric and has no 1D coverage, so this does not follow KDA's 1D.
+        # Unwrapped 2D, the fabric the AttnRes model suite runs on LoudBox; `attn_res_gather_softmax` needs 2D.
         pytest.param(
             (2, 4),
             fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4-fabric-2d",
         ),
-        # No QuietBox arm: TP2 overflows L1, its 2x2 wiring cannot ring TP4 on 2D torus-X, and the 1D ring it can
-        # form is rejected by `attn_res_gather_softmax`, which needs a 2D fabric. See the module docstring.
+        # No QuietBox arm: it has no layout AttnRes can run at a Galaxy-like shape. See the module docstring.
     ],
     indirect=True,
 )
@@ -322,9 +311,8 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
             pre_ffn = residual.read()
             residual.write(module(pre_ffn))
             residual.release(pre_ffn)
-        # Not `handoff`: its add settles the last deferred write, which mid-rank the next layer's read folds
-        # in instead. Layer 72 does not end a rank, and `baseline` has no counterpart, so it would bias the
-        # boundary layer. `discard` only frees.
+        # `discard`, not `handoff`: mid-rank the next read settles the last deferred write, and `baseline` has no
+        # counterpart to handoff's add, which would land in the boundary layer.
         residual.discard()
 
     def baseline(num_layers):
