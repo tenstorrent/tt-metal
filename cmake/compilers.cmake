@@ -20,3 +20,4 @@ function(CHECK_COMPILERS)
         message(WARNING "Unsupported compiler: ${CMAKE_CXX_COMPILER_ID} ! Only Clang and GCC are supported")
     endif()
 endfunction()
+# CI test only: trigger cmake-version for #63880
