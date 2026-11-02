@@ -125,14 +125,16 @@ SMM_SHAPES = dict(
     gu=(HIDDEN, INTER, ttnn.bfloat4_b), gdn=(HIDDEN, GDN_COLS, ttnn.bfloat8_b), attn=(HIDDEN, ATTN_COLS, ttnn.bfloat8_b)
 )
 TICK_MS = {128: (22.4, 1.6), 256: (32.5, 2.9), 512: (45.5, 3.2), 1024: (81.0, 3.0)}
-# the attention layers' chunked SDPA runs HiFi4 over 128-token q and k chunks. RESIDENT_PP_SDPA_FIDELITY=HiFi2 (opt-in,
-# not bit-identical; the ttnn TP prefill's fidelity): 1024 queries at a 255K context 155 -> 125 ms on P300
-# (sweep_pp_matmul --sdpa; 256-token k chunks were another -5%, 256-token q chunks 1.8x slower)
-SDPA_FIDELITY = os.environ.get("RESIDENT_PP_SDPA_FIDELITY", "HiFi4")
-# the chunked SDPA's k chunk (RESIDENT_PP_SDPA_KCHUNK=256: opt-in, not bit-identical; -5% at long context, -25% with
-# HiFi2 at 32K-130K on P300) and exp approximation (RESIDENT_PP_SDPA_EXP_APPROX=1, opt-in)
+# the attention layers' chunked SDPA: HiFi2 with the approximate exp (the default since 2026-11-01, the user's decision;
+# was HiFi4, exact exp). Softmax exp dominates the long-context ticks: SDPA -50% at 32K-130K, TTFT 4.35 -> 3.62 s at 32K,
+# 32.4 -> 21.9 s at 131K, 111 -> 78 s at 260K, with HF teacher-forced top-1 0.9375 -> 0.9413 and top-1 agreement / KL
+# against the ttnn TP prefill at 32K / 131K / 260K within noise (0.915 / 0.891 / 0.884 -> 0.922 / 0.884 / 0.891, KL
+# 0.028 / 0.032 / 0.037 either way; profiles/resident/prefill/acc1). RESIDENT_PP_SDPA_FIDELITY=HiFi4
+# RESIDENT_PP_SDPA_EXP_APPROX=0 restores the old numerics (A/B). RESIDENT_PP_SDPA_KCHUNK=256: opt-in, not bit-identical,
+# no gain with the approximate exp
+SDPA_FIDELITY = os.environ.get("RESIDENT_PP_SDPA_FIDELITY", "HiFi2")
 SDPA_KCHUNK = int(os.environ.get("RESIDENT_PP_SDPA_KCHUNK", "128"))
-SDPA_EXP_APPROX = os.environ.get("RESIDENT_PP_SDPA_EXP_APPROX", "0") == "1"
+SDPA_EXP_APPROX = os.environ.get("RESIDENT_PP_SDPA_EXP_APPROX", "1") == "1"
 # the handoff's copy engines per chip: one core per fabric link (kernels/handoff.cpp on cores (0, 0), (1, 0), ...), each
 # with its share of the jobs (split by bytes) and its own semaphore count
 HANDOFF_LINKS = int(os.environ.get("RESIDENT_PP_HANDOFF_LINKS", "2"))

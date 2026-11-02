@@ -132,13 +132,14 @@ def cool(s):
         time.sleep(s)
 
 
-def run_ttft(r, a, corpus, Ts):
+def run_ttft(r, a, corpus, Ts, logits=None):
     res = []
     for T in Ts:
         ids = corpus[:T]
-        if (
-            T < LONG
-        ):  # warm (a long prompt finds every program compiled by the shorter ones; it would only heat the chips)
+        if logits is not None:  # (--save-logits: the served path's first logits per prompt length)
+            logits[T] = r.served(ids).float().clone()
+        # warm (a long prompt finds every program compiled by the shorter ones; it would only heat the chips)
+        if T < LONG:
             r.served(ids)
         e2e = []
         for _ in range(a.reps):
@@ -323,6 +324,7 @@ def main():
     ap.add_argument("--op-reps", type=int, default=1)
     ap.add_argument("--corpus", default=CORPUS)
     ap.add_argument("--out", default="")
+    ap.add_argument("--save-logits", default="", help="ttft: save the first logits per prompt length")
     a = ap.parse_args()
     ints = lambda s: [int(x) for x in s.split(",") if x]
     a.T, a.chunk_T, a.queue_T, a.handoff_T = ints(a.T), ints(a.chunk_T), ints(a.queue_T), ints(a.handoff_T)
@@ -340,7 +342,8 @@ def main():
         corpus = torch.load(a.corpus)["ids"]
         longest = max(a.T + a.chunk_T + a.queue_T + a.handoff_T + [1])
         r = Served(mesh, a.max_len or longest + 1024, chunks, clock)
-        out["ttft"] = run_ttft(r, a, corpus, [T for T in a.T if T < LONG])
+        logits = {} if a.save_logits else None
+        out["ttft"] = run_ttft(r, a, corpus, [T for T in a.T if T < LONG], logits)
         if a.chunk_T:
             out["chunks"] = run_chunks(r, a, corpus)
         if a.queue_T:
@@ -349,7 +352,9 @@ def main():
             out["handoff"] = run_handoff(r, a, corpus)
         if any(T >= LONG for T in a.T):
             cool(a.long_cool)
-            out["ttft"] += run_ttft(r, a, corpus, [T for T in a.T if T >= LONG])
+            out["ttft"] += run_ttft(r, a, corpus, [T for T in a.T if T >= LONG], logits)
+        if a.save_logits:
+            torch.save(logits, a.save_logits)
     finally:
         if a.out:
             with open(a.out, "w") as f:
