@@ -109,6 +109,16 @@ P150_AND_RING = mesh_params(P150, RING4)
 
 NOT_WRITTEN = pytest.mark.xfail(raises=NotImplementedError, strict=True, reason="ttnn forward not written yet")
 
+# ttsim (TT_METAL_SIMULATOR) simulates one chip at about 1/100 of silicon speed. The ROW_GRIDS cases pad
+# to 16,384 rows per chip, so they skip there; each row-wise part also has a SIMULATOR_GRID case on one
+# chip, padded to SIMULATOR_ROWS, with random weights.
+ON_SIMULATOR = bool(os.environ.get("TT_METAL_SIMULATOR"))
+NOT_ON_SIMULATOR = pytest.mark.skipif(ON_SIMULATOR, reason="full padded length is too slow on ttsim")
+SINGLE_CHIP = mesh_params(P150)
+SIMULATOR_ROWS = 128
+# 120 rows: the real rows end inside the last tile, and the padding fills one more.
+SIMULATOR_GRID = [(1, 6, 20)]
+
 
 def device_config(config: MoonViTConfig, sp_axis: int | None) -> MoonViTConfig:
     """The config a test builds with. On one P150 (`sp_axis` None) the padded length is one ring

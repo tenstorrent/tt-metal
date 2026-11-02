@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device: `TT_Vision_MLP` against the reference `blocks[layer].mlp`."""
+"""Device: `TT_Vision_MLP` against the reference `blocks[layer].mlp`, which runs on the CPU."""
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
@@ -13,9 +14,12 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     device_config,
     row_grid,
     ROW_GRIDS,
-    NOT_WRITTEN,
+    NOT_ON_SIMULATOR,
     REFERENCE_LAYERS,
     P150_AND_RING,
+    SIMULATOR_GRID,
+    SIMULATOR_ROWS,
+    SINGLE_CHIP,
     sp_gather,
     sp_shard,
 )
@@ -23,13 +27,7 @@ from models.experimental.kimi_k3_moonvit_v2.tt.model_config import compute_kerne
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_mlp import TT_Vision_MLP
 
 
-@P150_AND_RING
-@REFERENCE_LAYERS
-@ROW_GRIDS
-@NOT_WRITTEN
-def test_vision_mlp(mesh_device, sp_axis, num_links, config, reference, size, layer):
-    config = device_config(config, sp_axis)
-    grid = row_grid(size, sp_axis)
+def check_vision_mlp(mesh_device, sp_axis, config, reference, layer, grid, rows) -> None:
     tt = TT_Vision_MLP(config, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
     tt.load_torch_state_dict(reference.vision_tower.encoder.blocks[layer].mlp.state_dict())
 
@@ -38,5 +36,21 @@ def test_vision_mlp(mesh_device, sp_axis, num_links, config, reference, size, la
     with torch.no_grad():
         golden = reference.vision_tower.encoder.blocks[layer].mlp(x)
 
-    out = tt(sp_shard(x, mesh_device, sp_axis, config.max_patches))
+    out = tt(sp_shard(x, mesh_device, sp_axis, rows))
     assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, h * w))
+
+
+@NOT_ON_SIMULATOR
+@P150_AND_RING
+@REFERENCE_LAYERS
+@ROW_GRIDS
+def test_vision_mlp(mesh_device, sp_axis, num_links, config, reference, size, layer):
+    config = device_config(config, sp_axis)
+    check_vision_mlp(mesh_device, sp_axis, config, reference, layer, row_grid(size, sp_axis), config.max_patches)
+
+
+@SINGLE_CHIP
+@pytest.mark.parametrize("reference", ["random"], indirect=True)
+def test_vision_mlp_small(mesh_device, sp_axis, num_links, config, reference):
+    """Sized for ttsim: one chip, SIMULATOR_ROWS rows."""
+    check_vision_mlp(mesh_device, sp_axis, config, reference, 0, SIMULATOR_GRID, SIMULATOR_ROWS)
