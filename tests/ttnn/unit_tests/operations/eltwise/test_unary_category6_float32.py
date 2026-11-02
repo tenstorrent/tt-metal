@@ -57,7 +57,9 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | bitcast                  |                                |                                |
 | round                    | decimals None, 0               | exact                          |
 |                          | decimals 6, 7                  | ULP ≤ 1                        |
-|                          | decimals < 0                   | abs ≤ 10^-decimals + 2 ULP     |
+|                          | decimals < 0, bf16 lattice     | abs ≤ 10^-decimals + 2 ULP     |
+|                          | fp32 near ties, decimals       | exact vs torch.round           |
+|                          | -1..-3, -6 and |x| < 2^24      | (#62176)                       |
 | selu                     | golden < SNB                   | exactly 0                      |
 |                          | default scale/alpha            | ULP ≤ 3                        |
 |                          | scale * alpha = 1              | ULP ≤ 1                        |
@@ -397,6 +399,9 @@ def test_round(device, decimals):
     |          |             | + 2 ULP                   | golden's float32 quotient can round to |
     |          |             |                           | the next step (62 ULP at decimals=-3,  |
     |          |             |                           | x = 1.447e8)                           |
+
+    These inputs are the bfloat16 lattice, so they miss the float32 near-ties
+    in #62176. Those are checked exactly by test_round_float32_near_ties.
     """
     input_tensor = generate_float32_bits()
 
@@ -422,6 +427,79 @@ def test_round(device, decimals):
     else:
         bound = 10.0**-decimals + 2 * ulp(golden)
         _assert_abs_within(golden, result, bound, label)
+
+
+# |x| < 2^24 is the range where the SFPU remainder correction matches torch.round.
+_ROUND_NEAR_TIE_LIMIT = 2.0**24
+
+# Reported in #62176. Each is one float32 ulp off a halfway multiple of 10^k.
+_ROUND_NEAR_TIE_REPORTED = {
+    -2: (50.000004, -1999850.1),
+    -3: (1499.9999,),
+}
+
+
+def _round_negative_decimal_inputs(decimals):
+    """Exact halfway multiples of 10^k and the float32 values on either side.
+
+    generate_float32_bits() is the bfloat16 lattice (low 16 mantissa bits clear),
+    which does not land on these ties. Values at or above 2^24 are dropped: past
+    there, torch.round follows float32 division by 10^k, which can leave the
+    real quotient, and the kernel keeps its original estimate.
+    """
+    scale = float(10 ** (-decimals))
+    ns = [0, 1, -1, 2, -2]
+    for exp in range(0, 23):
+        base = float(1 << exp)
+        for delta in range(-2, 3):
+            ns.append(base + delta)
+            ns.append(-(base + delta))
+    n = torch.tensor(ns, dtype=torch.float64)
+    real = (n + 0.5) * scale
+    ties = real.to(torch.float32)
+    ties = ties[ties.to(torch.float64) == real]
+
+    above = torch.nextafter(ties, torch.full_like(ties, math.inf))
+    below = torch.nextafter(ties, torch.full_like(ties, -math.inf))
+    pieces = [ties, above, below]
+    reported = _ROUND_NEAR_TIE_REPORTED.get(decimals)
+    if reported:
+        pieces.insert(0, torch.tensor(reported, dtype=torch.float32))
+    values = torch.cat(pieces)
+    values = values[values.abs() < _ROUND_NEAR_TIE_LIMIT]
+
+    values = values.flatten()
+    tile = 32 * 32
+    pad = (-values.numel()) % tile
+    if pad:
+        values = torch.cat([values, values[:1].repeat(pad)])
+    return values.reshape(-1, 32)
+
+
+@pytest.mark.parametrize("decimals", [-1, -2, -3, -6])
+def test_round_float32_near_ties(device, decimals):
+    """round(x, decimals < 0) on true float32 values next to a halfway step.
+
+    | decimals | Input                         | Check | Reason                          |
+    |----------|-------------------------------|-------|---------------------------------|
+    | -1,-2,-3,| exact ties (n+0.5)*10^k and  | exact | #62176: v * fl(10^decimals)     |
+    | -6       | ±1 float32 ulp, plus the      |       | lands on the wrong side of a    |
+    |          | three reported values,        |       | tie. bfloat16 inputs and the    |
+    |          | |x| < 2^24                    |       | one-step tolerance in           |
+    |          |                               |       | test_round do not catch it      |
+
+    Compared with torch.round, not a tolerance.
+    """
+    input_tensor = _round_negative_decimal_inputs(decimals)
+    if decimals in _ROUND_NEAR_TIE_REPORTED:
+        reported = torch.tensor(_ROUND_NEAR_TIE_REPORTED[decimals], dtype=torch.float32)
+        present = torch.isin(reported, input_tensor)
+        assert bool(present.all()), f"reported #62176 inputs missing for decimals={decimals}"
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+    result = ttnn.to_torch(ttnn.round(tt_in, decimals=decimals))
+    golden = torch.round(input_tensor, decimals=decimals)
+    assert_equal(golden, result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
