@@ -470,7 +470,7 @@ fans out from there, always in rank order with rank 0 first: the endpoint gets `
 driver is launched with `run_migration_driver.sh <manifest> <same list>`, which places one process per host
 (*Covering every rank*, above). Host order must be identical in all three.
 
-Launch order is A → B (wait for `[migration] device map (…) exported to …`) → C, and C logs `WORKER_READY`.
+Launch order is A → B (wait for rank 0's `[migration] merged KV chunk table -> …`) → C, and C logs `WORKER_READY`.
 Between runs, clear stale state:
 
 ```bash
@@ -486,7 +486,7 @@ cd <tt-llm-engine>/disaggregation/migration
 
 ls /dev/shm/mig_ep1_*      # all three queues must exist BEFORE starting B
 
-# ---- Terminal B — runner (wait for the device map export line before starting C) ----
+# ---- Terminal B — runner (wait for the merged KV chunk table line before starting C) ----
 cd $TT_METAL_HOME && $RUN $BINDING $HOST:1            # multi-host: $RUN $BINDING $HOSTSP
                                                       # (with an N-rank $BINDING)
 

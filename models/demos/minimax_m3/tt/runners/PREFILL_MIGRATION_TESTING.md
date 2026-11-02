@@ -175,7 +175,7 @@ cd /data/philei/tt-metal && ./m3_gate2_check.sh
 # ---- Terminal B — runner ----
 $RUN $M3/m3_binding_loopback_migration_1rank.yaml $HOST:1
 
-# ---- Terminal C — prefill + migrate (only after B exports the device map + LayerAck ready) ----
+# ---- Terminal C — prefill + migrate (only after B logs the merged KV chunk table) ----
 export PREFILL_MIGRATION_CLIENT_DIR="$MIG/python"
 python -m models.demos.common.prefill.runners.migration_driver \
   --manifest $M3/m3_producer_loopback_migration.yaml
@@ -275,7 +275,7 @@ rm -f /tmp/m3_kv_device_map.txt* /data/philei/tmp/m3_kv_chunk_table_pp.pb
 # ---- Terminal B — 2-rank runner ----
 $RUN $M3/m3_binding_loopback_migration_intragalaxy_2rank.yaml $HOST:2
 
-# ---- Terminal C — prefill + migrate (after B exports the device map + LayerAck ready) ----
+# ---- Terminal C — prefill + migrate (after B rank 0 logs the merged KV chunk table) ----
 export PREFILL_MIGRATION_CLIENT_DIR="$MIG/python"
 python -m models.demos.common.prefill.runners.migration_driver \
   --manifest $M3/m3_producer_loopback_migration_2rank.yaml

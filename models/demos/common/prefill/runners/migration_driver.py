@@ -704,6 +704,21 @@ def _deliver_device_map(timeout_s: int) -> None:
     deliver_device_map_to_local_workers([(mesh, chip, umd) for (mesh, chip), umd in device_map.items()])
 
 
+def _deliver_device_map_and_sync(timeout_s: int, world_size: int, error: str | None = None) -> None:
+    if error is None:
+        try:
+            _deliver_device_map(timeout_s)
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+    if world_size > 1:
+        ok = ttnn.distributed_context_allgather_int(int(error is None))
+        failed = [r for r, v in enumerate(ok) if not v]
+        if failed and error is None:
+            error = f"rank(s) {failed} failed before the device-map barrier"
+    if error is not None:
+        raise RuntimeError(f"[migration_driver] {error}")
+
+
 def _run_validator(rank: int, world_size: int, args) -> None:
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -721,8 +736,7 @@ def _run_validator(rank: int, world_size: int, args) -> None:
         f"src_pcc={cfg.verify} dst_verify={args.verify_migration}"
     )
 
-    _deliver_device_map(timeout_s)
-    ttnn.distributed_context_allgather_int(1)
+    _deliver_device_map_and_sync(timeout_s, world_size)
 
     resident = producer._mr_bcast_resident(rank, {})
     logger.info(f"[migration_driver] validator rank={rank}: GO received, {len(resident)} resident slot(s)")
@@ -880,11 +894,11 @@ def main() -> None:
     kv_table = producer._read_kv_chunk_table(timeout_s)
     completion_channel = connect_layer_completion_channel(timeout_s)
 
-    if kv_table is None:
-        raise RuntimeError("[migration_driver] no KV chunk table to publish to the migration endpoint")
-    _deliver_device_map(timeout_s)
-    if world_size > 1:
-        ttnn.distributed_context_allgather_int(1)
+    _deliver_device_map_and_sync(
+        timeout_s,
+        world_size,
+        None if kv_table is not None else "no KV chunk table to publish to the migration endpoint",
+    )
     from models.demos.common.prefill.runners.migration import migration_table_path
 
     driver.attach(migration_table_path())

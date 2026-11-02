@@ -226,10 +226,11 @@ Checked-in config: `$M3/m3_binding_loopback_migration_1rank.yaml` (runner) and
 # ---- Terminal A — endpoint id 1 (0.3, 0.4, then 0.5 prefill line). Confirm READY:
 /data/philei/tt-metal/m3_gate2_check.sh
 
-# ---- Terminal B — runner (0.3). The export comes after minutes of silence: the 9-config,
+# ---- Terminal B — runner (0.3). The table comes after minutes of silence: the 9-config,
 #      691200-entry table is built one Python call at a time.
 $RUN $M3/m3_binding_loopback_migration_1rank.yaml $HOST:1
-#   wait for:  [migration] device map (32 chips, ranks [0]) exported to /tmp/m3_kv_device_map.txt
+#   wait for:  [migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb
+#   after:     [migration] device map (32 chips, ranks [0]) exported to /tmp/m3_kv_device_map.txt
 #              [migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
 
 # ---- Terminal C — prefill + migrate + verify (0.3). Every verdict lands HERE; it first sends the table

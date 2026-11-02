@@ -10,6 +10,7 @@ from models.demos.common.prefill.runners import migration
 from models.demos.common.prefill.runners.migration import KvCacheStage, setup_kv_chunk_table
 
 STAGE_LAYOUTS = [[{"rank": 0}]]
+SHARED_TABLE_PATH = "/data/prefill_test/table.pb"
 
 
 class _Runtime:
@@ -26,14 +27,14 @@ class _Runtime:
 
 
 @pytest.fixture
-def exports(monkeypatch, tmp_path):
+def exports(monkeypatch):
     seen = []
 
     def export(mesh_device, kv_stages, mesh_shape, device_map_path):
         seen.append(device_map_path)
         return STAGE_LAYOUTS
 
-    monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", str(tmp_path / "table.pb"))
+    monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", SHARED_TABLE_PATH)
     monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_device_map.txt")
     monkeypatch.setattr(migration, "export_device_map_file_and_gather_stage_layouts", export)
     return seen
@@ -45,12 +46,12 @@ def _setup(runtime, *, rank=0, num_ranks=1):
     )
 
 
-def test_rank0_exports_device_map_and_builds_table(exports, tmp_path):
+def test_rank0_exports_device_map_and_builds_table(exports):
     runtime = _Runtime([KvCacheStage(0x1000, 0, 4)])
 
     assert _setup(runtime) is None
     assert exports == ["/tmp/prefill_device_map.txt"]
-    assert runtime.built == [(str(tmp_path / "table.pb"), STAGE_LAYOUTS)]
+    assert runtime.built == [(SHARED_TABLE_PATH, STAGE_LAYOUTS)]
 
 
 def test_non_first_rank_exports_but_never_builds(exports):
@@ -61,8 +62,8 @@ def test_non_first_rank_exports_but_never_builds(exports):
     assert not runtime.built
 
 
-def test_shared_device_map_path_rejected_multi_rank(monkeypatch, exports, expect_error, tmp_path):
-    monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", str(tmp_path / "device_map.txt"))
+def test_shared_device_map_path_rejected_multi_rank(monkeypatch, exports, expect_error):
+    monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/data/prefill_test/device_map.txt")
 
     with expect_error(ValueError, "not on per-host storage"):
         _setup(_Runtime([KvCacheStage(0x1000, 0, 4)]), num_ranks=2)
