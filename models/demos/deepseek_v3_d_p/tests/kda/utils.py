@@ -27,7 +27,12 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDARecurrenceProgramConfig,
     kimi_k3_program_config,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, convolution_tail_from_device_layout, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.kda import (
+    KDA_CONVOLUTION_SEGMENT_CHANNELS,
+    KdaState,
+    convolution_tail_from_device_layout,
+    ttKDA,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
@@ -160,6 +165,14 @@ def reconstruct_state_at_sp_rank(
     return torch.cat(tp_shards, dim=1)
 
 
+def _convolution_rows(shard: torch.Tensor, width: int) -> torch.Tensor:
+    """One chip's device-layout tail of ``width`` channels as ``[1, K-1, W]`` rows; K-1 is read off its pages."""
+    segments = width // KDA_CONVOLUTION_SEGMENT_CHANNELS
+    if shard.shape[-2] != segments:
+        raise ValueError(f"tail shard {tuple(shard.shape)} does not hold {segments} segments of {width} channels")
+    return convolution_tail_from_device_layout(shard, shard.shape[-1] // KDA_CONVOLUTION_SEGMENT_CHANNELS)
+
+
 def reconstruct_convolution_at_sp_rank(
     tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -169,7 +182,7 @@ def reconstruct_convolution_at_sp_rank(
     local_width: int,
 ) -> torch.Tensor:
     """Reconstruct grouped Q/K/V convolution state at one sequence rank, as ``[1, K-1, W]`` rows."""
-    shards = [convolution_tail_from_device_layout(shard) for shard in _device_shards(tensor)]
+    shards = [_convolution_rows(shard, 3 * local_width) for shard in _device_shards(tensor)]
     columns = tuple(mesh_device.shape)[1]
     tp_size = tuple(mesh_device.shape)[tp_axis]
     physical = []

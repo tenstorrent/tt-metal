@@ -182,7 +182,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
                 )
                 assert_bit_identical(
                     want_conv,
-                    convolution_tail_from_device_layout(conv_shards[(row, col)][batch]),
+                    convolution_tail_from_device_layout(conv_shards[(row, col)][batch], geometry.conv_history),
                     name=f"conv slot{slot} L{layer} ({row},{col})",
                 )
 
@@ -232,7 +232,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
             assert_bit_identical(want_rec, rec_shards[(0, col)][batch], name=f"replay S slot{slot} L{layer} col{col}")
             assert_bit_identical(
                 want_conv,
-                convolution_tail_from_device_layout(conv_shards[(0, col)][batch]),
+                convolution_tail_from_device_layout(conv_shards[(0, col)][batch], geometry.conv_history),
                 name=f"replay conv slot{slot} L{layer} col{col}",
             )
 
