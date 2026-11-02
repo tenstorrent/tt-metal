@@ -98,3 +98,46 @@ def test_perf_probe_dw_width_7x7x1024(device):
 
 def test_perf_probe_dw_block_28x28x256(device):
     _dw(device, (1, 28, 28, 256), 1, ML.BLOCK_SHARDED)
+
+
+# Refinement 6: the four ResNet50 HEIGHT perf cases (batch 16, bf16 x bf8b, bias), pinned geometry.
+RESNET_HEIGHT = {
+    "layer1_3x3": ((16, 56, 56, 64), 64, 3, 1, 1, (480, 64), 105),
+    "layer2_ds": ((16, 56, 56, 128), 128, 3, 1, 2, (457, 128), 110),
+    "layer2_3x3": ((16, 28, 28, 128), 128, 3, 1, 1, (128, 128), 98),
+    "shortcut_1x1_s2": ((16, 56, 56, 64), 256, 1, 0, 2, (457, 64), 110),
+}
+
+
+def _resnet_height(device, name):
+    shape, C_out, k, pad, stride, shard, cores = RESNET_HEIGHT[name]
+    run_sharded(
+        device,
+        shape,
+        C_out,
+        k,
+        pad,
+        stride,
+        ML.HEIGHT_SHARDED,
+        True,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        shard_shape=shard,
+        num_cores=cores,
+    )
+
+
+def test_perf_probe_resnet_layer1_3x3(device):
+    _resnet_height(device, "layer1_3x3")
+
+
+def test_perf_probe_resnet_layer2_ds(device):
+    _resnet_height(device, "layer2_ds")
+
+
+def test_perf_probe_resnet_layer2_3x3(device):
+    _resnet_height(device, "layer2_3x3")
+
+
+def test_perf_probe_resnet_shortcut_1x1_s2(device):
+    _resnet_height(device, "shortcut_1x1_s2")

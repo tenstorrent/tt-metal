@@ -53,7 +53,12 @@ constexpr uint32_t num_col_shards = get_compile_time_arg_val(20);  // input shar
 // window / shard stick] (one K-block per n-block); dense: [kh][kw x tap_width] K-blocks.
 constexpr bool depthwise = get_compile_time_arg_val(21) != 0;
 constexpr uint32_t block_n_tiles = get_compile_time_arg_val(22);
-constexpr auto input_args = TensorAccessorArgs<23>();
+// Tap-major K-blocks (stride 1, dilation 1, whole-tile taps): a K-block's RM data is, per tap, one
+// contiguous 32-pixel x tap_width block (compute tilizes one tap wide), so the 32 pixels of a tap
+// that lie in one output row are ONE contiguous run of input sticks: one read per run instead of one
+// read per pixel. Off: [pixel][K-block columns] rows (band runs, one read per pixel per band).
+constexpr bool tap_major = get_compile_time_arg_val(23) != 0;
+constexpr auto input_args = TensorAccessorArgs<24>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t tap_bytes = tap_width * elem_bytes;
@@ -419,6 +424,79 @@ FORCE_INLINE void gather_tile_row(
     }
 }
 
+// gather_tile_row_taps (tap_major): 32 pixels from `pix` x the K-block's taps [k0 / tap_width, ...).
+// Tap j of the block lands at dst_base + j * 32 * tap_bytes (tap_width/32 tile-sized RM pages: rows =
+// pixels). Per tap, pixels whose tap stick is in-image form runs along an output row (stride 1: the
+// source sticks are consecutive), each one read; padding taps and pixels >= M are zero runs.
+template <typename Source>
+FORCE_INLINE void gather_tile_row_taps(
+    uint64_t zeros_noc, const Source& src, uint32_t k0, uint32_t pix0, uint32_t dst_base, int32_t padding) {
+    constexpr uint32_t hw_out = H_out * W_out;
+    constexpr uint32_t taps_per_block = kblock_elems / tap_width;
+    constexpr uint32_t tap_block_bytes = TILE_DIM * tap_bytes;
+    const uint32_t n0 = pix0 / hw_out;
+    const uint32_t rem0 = pix0 - n0 * hw_out;
+    const uint32_t ho0 = rem0 / W_out;
+    const uint32_t wo0 = rem0 - ho0 * W_out;
+    const uint32_t tap0 = k0 / tap_width;
+    for (uint32_t j = 0; j < taps_per_block; ++j) {
+        const uint32_t tap = tap0 + j;
+        const int32_t kh = static_cast<int32_t>(tap / kW);
+        const int32_t kw = static_cast<int32_t>(tap - (tap / kW) * kW);
+        uint32_t dst = dst_base + j * tap_block_bytes;
+        uint32_t pix = pix0, n = n0, ho = ho0, wo = wo0;
+        uint32_t r = 0;
+        while (r < TILE_DIM) {
+            if (pix >= M) {
+                zero_run(zeros_noc, dst, (TILE_DIM - r) * tap_bytes);
+                break;
+            }
+            const int32_t h = static_cast<int32_t>(ho) - padding + kh;
+            const int32_t w = static_cast<int32_t>(wo) - padding + kw;
+            // Pixels left in this output row (and tile-row, and tensor).
+            uint32_t run = W_out - wo;
+            run = run < TILE_DIM - r ? run : TILE_DIM - r;
+            run = run < M - pix ? run : M - pix;
+            if (h < 0 || h >= static_cast<int32_t>(H)) {
+                zero_run(zeros_noc, dst, run * tap_bytes);
+            } else {
+                // In-image span of the run: w in [0, W).
+                uint32_t lead = w < 0 ? static_cast<uint32_t>(-w) : 0;
+                lead = lead < run ? lead : run;
+                const int32_t w_in = w + static_cast<int32_t>(lead);
+                uint32_t body = run - lead;
+                const int32_t room = static_cast<int32_t>(W) - w_in;
+                if (room <= 0) {
+                    body = 0;
+                } else if (static_cast<uint32_t>(room) < body) {
+                    body = static_cast<uint32_t>(room);
+                }
+                if (lead > 0) {
+                    zero_run(zeros_noc, dst, lead * tap_bytes);
+                }
+                if (body > 0) {
+                    src.read(static_cast<int32_t>(n * H) + h, w_in, 0, dst + lead * tap_bytes, body * tap_bytes);
+                }
+                const uint32_t tail = run - lead - body;
+                if (tail > 0) {
+                    zero_run(zeros_noc, dst + (lead + body) * tap_bytes, tail * tap_bytes);
+                }
+            }
+            dst += run * tap_bytes;
+            r += run;
+            pix += run;
+            wo += run;
+            if (wo == W_out) {
+                wo = 0;
+                if (++ho == H_out) {
+                    ho = 0;
+                    ++n;
+                }
+            }
+        }
+    }
+}
+
 void kernel_main() {
     [[maybe_unused]] const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -500,32 +578,40 @@ void kernel_main() {
         }
         WindowSource window_src{window_base, row_lo, col_lo, win_w};
         ShardSource shard_src{};
-        if constexpr (!k_exchange) {
-            const auto input = TensorAccessor(input_args, input_addr);
-            for (int32_t row = row_lo; row <= row_hi; ++row) {
-                const int32_t c0 = row == row_lo ? col_lo : mid_lo;
-                const int32_t c1 = row == row_hi ? last_hi : mid_hi;
-                uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
-                uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
-                for (int32_t c = c0; c <= c1; ++c, ++s) {
-                    noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
-                    dst += tap_bytes;
+        {
+#ifdef ABL_ZONE
+            DeviceZoneScopedN("FETCH");
+#endif
+            if constexpr (!k_exchange) {
+                const auto input = TensorAccessor(input_args, input_addr);
+                for (int32_t row = row_lo; row <= row_hi; ++row) {
+                    const int32_t c0 = row == row_lo ? col_lo : mid_lo;
+                    const int32_t c1 = row == row_hi ? last_hi : mid_hi;
+                    uint32_t dst =
+                        window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
+                    uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
+                    for (int32_t c = c0; c <= c1; ++c, ++s) {
+                        noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
+                        dst += tap_bytes;
+                    }
                 }
+            } else {
+                // ---- fetch_halo_block: window sticks [win_lo, win_hi] outside [own_lo, own_hi) ----
+                // (mirrors host _window_stick_range / _halo_sticks)
+                const int32_t win_lo = row_lo * static_cast<int32_t>(W) + col_lo;
+                const int32_t win_hi = row_hi * static_cast<int32_t>(W) + last_hi;
+                const int32_t b_end = own_lo < win_hi + 1 ? own_lo : win_hi + 1;
+                const int32_t n_before = b_end > win_lo ? b_end - win_lo : 0;
+                const int32_t after_lo = own_hi > win_lo ? own_hi : win_lo;
+                const int32_t n_after = win_hi + 1 > after_lo ? win_hi + 1 - after_lo : 0;
+                shard_src = ShardSource{shard_base, window_base, own_lo, own_hi, win_lo, after_lo, n_before};
+#ifndef ABL_FETCH
+                fetch_sticks(win_lo, win_lo + n_before, window_base);
+                fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * tap_bytes);
+#endif
             }
-        } else {
-            // ---- fetch_halo_block: window sticks [win_lo, win_hi] outside [own_lo, own_hi) ----
-            // (mirrors host _window_stick_range / _halo_sticks)
-            const int32_t win_lo = row_lo * static_cast<int32_t>(W) + col_lo;
-            const int32_t win_hi = row_hi * static_cast<int32_t>(W) + last_hi;
-            const int32_t b_end = own_lo < win_hi + 1 ? own_lo : win_hi + 1;
-            const int32_t n_before = b_end > win_lo ? b_end - win_lo : 0;
-            const int32_t after_lo = own_hi > win_lo ? own_hi : win_lo;
-            const int32_t n_after = win_hi + 1 > after_lo ? win_hi + 1 - after_lo : 0;
-            shard_src = ShardSource{shard_base, window_base, own_lo, own_hi, win_lo, after_lo, n_before};
-            fetch_sticks(win_lo, win_lo + n_before, window_base);
-            fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * tap_bytes);
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
         set_local_read_state();
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
@@ -545,10 +631,21 @@ void kernel_main() {
                 for (uint32_t t = 0; t < block_m_tiles; ++t) {
                     const uint32_t tile = t0 + t;
                     cb_reserve_back(cb_act_rm, block_k_tiles);
+#ifdef ABL_GZONE
+                    DeviceZoneScopedN("GATHER");
+#endif
                     const uint32_t dst_base = get_write_ptr(cb_act_rm);
-                    if (tile >= t1) {
+#ifdef ABL_GATHER
+                    if (true) {
+                    } else
+#endif
+                        if (tile >= t1) {
                         // Ragged block tail: tile-row past the core's range.
                         zero_run(zeros_noc, dst_base, TILE_DIM * im2col_row_bytes);
+                    } else if constexpr (tap_major && k_exchange) {
+                        gather_tile_row_taps(zeros_noc, shard_src, k0, tile * TILE_DIM, dst_base, padding);
+                    } else if constexpr (tap_major) {
+                        gather_tile_row_taps(zeros_noc, window_src, k0, tile * TILE_DIM, dst_base, padding);
                     } else if constexpr (k_exchange) {
                         gather_tile_row(
                             zeros_noc,

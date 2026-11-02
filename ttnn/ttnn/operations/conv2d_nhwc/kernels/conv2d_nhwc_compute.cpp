@@ -67,6 +67,12 @@ constexpr bool fuse_relu = get_compile_time_arg_val(23) != 0;
 // sum_tap act[tap][ct] * row_bcast(w[tap][ct]), accumulated in DEST (no matmul).
 constexpr bool depthwise = get_compile_time_arg_val(24) != 0;
 constexpr uint32_t taps = get_compile_time_arg_val(25);
+// Dense tilize width in tiles: bk ([pixel][K-block] RM rows), or one tap (tap-major K-blocks: the
+// reader lays each tap's 32 pixels out as a contiguous 32 x tap_width block). Either way the tiles
+// come out in K order, tile-row by tile-row.
+constexpr uint32_t tilize_w = get_compile_time_arg_val(26);
+static_assert(block_k_tiles % tilize_w == 0, "a K-block is whole tilize blocks");
+constexpr uint32_t tilize_blocks_per_row = block_k_tiles / tilize_w;
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -87,12 +93,21 @@ struct TilizeKBlock {
     uint32_t my_slice;
     ALWI void tilize_own() const {
         PACK((llk_pack_reconfig_l1_acc(0)));
-        tilize<block_k_tiles, cb_act_rm, cb_act_send>(block_m_tiles);
+        tilize<tilize_w, cb_act_rm, cb_act_send>(block_m_tiles * tilize_blocks_per_row);
     }
     ALWI void operator()(uint32_t block, uint32_t, bool) const {
         if constexpr (!act_mcast) {
+#ifdef ABL_TILIZE
+            for (uint32_t t = 0; t < block_m_tiles; ++t) {
+                cb_wait_front(cb_act_rm, block_k_tiles);
+                cb_pop_front(cb_act_rm, block_k_tiles);
+            }
+            cb_reserve_back(cb_act_tiles, block_m_tiles * block_k_tiles);
+            cb_push_back(cb_act_tiles, block_m_tiles * block_k_tiles);
+            return;
+#endif
             PACK((llk_pack_reconfig_l1_acc(0)));
-            tilize<block_k_tiles, cb_act_rm, cb_act_tiles>(block_m_tiles);
+            tilize<tilize_w, cb_act_rm, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
         } else {
             constexpr uint32_t first = act_send_depth < kblocks_per_slice ? act_send_depth : kblocks_per_slice;
             if (block == 0) {
@@ -242,31 +257,41 @@ void kernel_main() {
             for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
                 // conv_matmul_block: caller owns the accumulator's single reserve / push.
                 partials.reserve_back(block_out_tiles);
-                matmul_block<
-                    false,
-                    true,
-                    LastBlockTarget::Interm,
-                    OutputCBLayout::TileRowMajor,
-                    matmul_config::InitMode::ShortAfterPreKBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    NoPostCompute,
-                    TilizeKBlock,
-                    NoPostKBlock,
-                    0,
-                    NoKBlockInnerDimFn,
-                    NoIn0Source,
-                    NoIn1BaseOffset,
-                    true>(
-                    act_tiles,
-                    weight_tiles,
-                    partials,
-                    partials,
-                    shape,
-                    {},
-                    TilizeKBlock{my_slice},
-                    block_n_tiles,
-                    block_n_tiles);
+#ifdef ABL_MATMUL
+                for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                    TilizeKBlock{my_slice}(kb, 0, false);
+                    cb_wait_front(cb_act_tiles, block_m_tiles * block_k_tiles);
+                    cb_wait_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
+                    cb_pop_front(cb_act_tiles, block_m_tiles * block_k_tiles);
+                    cb_pop_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
+                }
+                if (false)
+#endif
+                    matmul_block<
+                        false,
+                        true,
+                        LastBlockTarget::Interm,
+                        OutputCBLayout::TileRowMajor,
+                        matmul_config::InitMode::ShortAfterPreKBlock,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        NoPostCompute,
+                        TilizeKBlock,
+                        NoPostKBlock,
+                        0,
+                        NoKBlockInnerDimFn,
+                        NoIn0Source,
+                        NoIn1BaseOffset,
+                        true>(
+                        act_tiles,
+                        weight_tiles,
+                        partials,
+                        partials,
+                        shape,
+                        {},
+                        TilizeKBlock{my_slice},
+                        block_n_tiles,
+                        block_n_tiles);
                 partials.push_back(block_out_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
