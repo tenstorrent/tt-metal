@@ -20,6 +20,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import attn_fused as AF
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
+from models.demos.blackhole.deepseek_v41_flash.tt import sparse_split as SS
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     HEAD_DIM,
     LOCAL_HEADS,
@@ -105,23 +106,37 @@ class _PagedMixin:
         qh = (
             ttnn.reshape(q32, (1, PAD_HEADS, 1, HEAD_DIM)) if T == 1 else ttnn.permute(q32, (0, 2, 1, 3))
         )  # [1,32,T,512] RM (heads x users)
-        o = ttnn.transformer.sparse_sdpa(
-            qh,
-            self.kv.pool,
-            idx,
-            HEAD_DIM,
-            kv_format=(
-                ttnn.transformer.SparseKVFormat.BF16
-                if self.kv.dtype == ttnn.bfloat16
-                else ttnn.transformer.SparseKVFormat.FP8_E4M3
-            ),
-            scale=self.scale,
-            k_chunk_size=int(
-                os.environ.get("DSV41_SPARSE_KCHUNK", "128")
-            ),  # call-time arm: sparse_sdpa key chunk (decode: 8 rows on 8 cores, each row loops over its 640 entries)
-            compute_kernel_config=self._ckc_sp_call(),
-            attention_sink=self.sp_sink,
-        )
+        split = int(
+            os.environ.get("DSV41_SPARSE_SPLIT", "0")
+        )  # call-time arm: key-split sparse_sdpa (tt/sparse_split.py), cores per query row
+        if split > 1 and T > 1:
+            o = SS.sparse_sdpa_split(
+                qh,
+                self.kv.pool,
+                idx,
+                HEAD_DIM,
+                self.scale,
+                int(os.environ.get("DSV41_SPARSE_SPLIT_KCHUNK", "128")),
+                split,
+                self.ckc_sp,
+                self.sp_sink,
+            )
+        else:
+            o = ttnn.transformer.sparse_sdpa(
+                qh,
+                self.kv.pool,
+                idx,
+                HEAD_DIM,
+                kv_format=(
+                    ttnn.transformer.SparseKVFormat.BF16
+                    if self.kv.dtype == ttnn.bfloat16
+                    else ttnn.transformer.SparseKVFormat.FP8_E4M3
+                ),
+                scale=self.scale,
+                k_chunk_size=int(os.environ.get("DSV41_SPARSE_KCHUNK", "128")),
+                compute_kernel_config=self._ckc_sp_call(),
+                attention_sink=self.sp_sink,
+            )
         ttnn.deallocate(qh)
         ttnn.deallocate(idx)
         if T <= 32 and AF.flag("DSV41_ATTN_POSTFUSE"):
