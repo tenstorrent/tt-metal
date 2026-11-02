@@ -157,11 +157,7 @@ def test_device_weight_placement(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [_FABRIC_1D], indirect=True)
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
     config = KDAConfig(
         hidden_size=256,
