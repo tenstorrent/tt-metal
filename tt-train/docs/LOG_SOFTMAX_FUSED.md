@@ -1,5 +1,8 @@
 # Fused corrected log_softmax prototype
 
+For branch state, transfer instructions, build caveats and next steps, see the
+[handoff document](LOG_SOFTMAX_HANDOFF.md).
+
 This branch keeps the corrected composite as `ops::log_softmax_composite` and routes
 supported `ops::log_softmax` calls through one device program for forward and one
 for backward. The composite branch and draft PR #63429 remain unchanged.
