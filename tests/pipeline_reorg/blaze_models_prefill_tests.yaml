@@ -1919,40 +1919,13 @@
   sp_config: sc1
 
 
-# ===== Disaggregated prefill -- keep adjacent; trunk, DFlash and MTP entries each share a launcher =====
+# ===== Disaggregated prefill -- keep adjacent; trunk, DSpark and MTP entries each share a launcher =====
 
-# 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
+# 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads GLM-5.3,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
 # reads it back and PCCs it against the golden KV cache.
 # A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
-  test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      # Mesh bringup, weight load and the staggered device teardown dominate the step; the chunk loop
-      # is a couple of minutes of it. Budget covers those plus the up-to-120s producer connect.
-      # Must match the shield/demo budget.
-      timeout: 40
-      tier: 1
-      release_ready: true
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
-# 4-galaxy (SC4) disaggregated prefill for GLM-5.3: the same launcher script as the Kimi-K2.7 entry above
-# under a different model key, but GLM-5.3 owns TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over
+# GLM-5.3 owns TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
@@ -1973,36 +1946,10 @@
       # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
       # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
       # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
-      # Counts against the shield/demo budget together with the Kimi entry.
       timeout: 60
       tier: 1
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
-- name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 --variant dflash
-  test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache, dflash]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      # 36 min warm. Sized off a cold host instead: the TTNN weight cache is NFS-mounted and the four
-      # ranks pull it concurrently, which stretches model construction ~6x.
-      timeout: 60
-      tier: 1
-      release_ready: true
-  owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
   budget_type: demo
   sp_config: sc4
@@ -2061,27 +2008,6 @@
 
 
 
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
-  test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1_high_power:
-      timeout: 70
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
 - name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2098,29 +2024,6 @@
     bh_sc1_high_power:
       timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1 --variant dflash
-  test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache, dflash]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1:
-      # 25-50 min warm. Sized off a cold host instead: one rank builds all 61 layers out of the
-      # NFS-mounted TTNN weight cache, which runs ~16 s/layer warm and ~100 s/layer cold.
-      timeout: 120
-  owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
   budget_type: demo
   sp_config: sc1
