@@ -423,9 +423,9 @@ void kernel_main() {
                     {});
                 noc.async_read_barrier();
             };
-            // This shard's kept FULL blocks of the slice in the scratch, as bits (block b: word b/32, bit b%32).
-            // Block 0 forced: every (Q chunk, shard) computes at least one block, compute creates each chunk's state
-            // on piece 0, and the pre-pass forces the same block (the bias row is patched to match below).
+            // This shard's kept FULL blocks of the slice in the scratch, as bits (block b: word b/32, bit b%32):
+            // exactly the mask's, so a (Q chunk, shard) may keep none (compute creates a chunk's state at its first
+            // kept block, wherever that is).
             constexpr uint32_t kBlockWords = plan_block_words;
             constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / pooled_bias_gen::kBlockTiles;
             uint32_t full_bits[kBlockWords];  // the shard's full blocks, once per ring iteration
@@ -450,7 +450,6 @@ void kernel_main() {
                 for (uint32_t w = 0; w < kBlockWords; ++w) {
                     words[w] &= full_bits[w];
                 }
-                words[0] |= 1u;
             };
             // Piece k is kept when any of its blocks is: the streaming / chain-union granularity.
             const auto piece_bits = [&](const uint32_t* words, uint32_t& lo, uint32_t& hi) {
@@ -518,16 +517,15 @@ void kernel_main() {
                     ++i1;
                 }
                 if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
-                    // Chain / group members stream every piece that holds a full block of this shard (block 0
-                    // forced, as in row_block_bits): a superset of the members' union that needs no mask reads (the
-                    // union read every member's row per ring iteration, ~200 us while compute idled, and at these
-                    // densities it is nearly every piece anyway). The same on every member (it depends on the shard
-                    // only) and inside every live piece, so compute agrees; it skips a piece it keeps no block of.
+                    // Chain / group members stream every piece that holds a full block of this shard: a superset of the
+                    // members' union that needs no mask reads (the union read every member's row per ring iteration,
+                    // ~200 us while compute idled, and at these densities it is nearly every piece anyway). The same on
+                    // every member (it depends on the shard only) and inside every live piece, so compute agrees; it
+                    // skips a piece it keeps no block of.
                     uint32_t words[kBlockWords];
                     for (uint32_t w = 0; w < kBlockWords; ++w) {
                         words[w] = full_bits[w];
                     }
-                    words[0] |= 1u;
                     piece_bits(words, ulo, uhi);
                 }
                 for (uint32_t i = i0; i < i1; ++i) {
@@ -895,16 +893,6 @@ void kernel_main() {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
                                 read_chunk_row(nq, res_qc[i]);
-                                // Block 0 of every live shard is forced exact by every ring iteration's bits (above),
-                                // so mark it exact in the row the bias is generated from (no double counting).
-                                {
-                                    CoreLocalMem<volatile uint32_t> row(scratch);
-                                    for (uint32_t s = 0; s < ring_size; ++s) {
-                                        if (block_is_full(s, 0)) {
-                                            row[s * mask_nb_pad] = 1u;
-                                        }
-                                    }
-                                }
                                 CircularBuffer cb_bias(cb_pooled_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
                                 // Block-form row: exact iff the block's own bit is set on a full block.

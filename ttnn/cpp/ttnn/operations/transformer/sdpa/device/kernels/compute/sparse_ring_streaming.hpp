@@ -845,11 +845,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * Steps are per piece: per streamed piece, one step per group of the head's resident chunks that keep a block of it,
  * grouped until their compact scores fill kQkCap tiles; each chunk has its own run table of kept blocks (its Q
  * rows against those blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for
- * another chain member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of
- * a head on piece 0 creates every slot's state before any other piece. Dropped blocks are pooled by the column bias of
- * the pooled chunks that follow the local pieces on the pass's first active ring iteration: one full-width step per
- * resident chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the pooled K/V
- * entry).
+ * another chain member is drained. A slot's state is created by its first step, at whichever piece (or pooled entry)
+ * that falls; a chunk that keeps no block in the whole op gets a zero output. Dropped blocks are pooled by the column
+ * bias of the pooled chunks that follow the local pieces on the pass's first active ring iteration: one full-width
+ * step per resident chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the
+ * pooled K/V entry).
  *
  * The Q chunks a core owns can span two heads (a contiguous flat split); the reader streams the heads' pieces
  * interleaved per k, in head order, and this function mirrors that order. On the last ring iteration the normalized
@@ -941,7 +941,7 @@ void sdpa_ring_resident(
     constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     // Blocks of kBlockTiles tiles (block_tiles); a piece holds kBlocksPerPiece of them. The plan page carries this
-    // shard's kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks, block 0 forced).
+    // shard's kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks).
     constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
     constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
     constexpr uint32_t kBW = plan_block_words;
@@ -1136,7 +1136,6 @@ void sdpa_ring_resident(
     // into one run, never across pieces), stepped up to the scratch capacity; then the entries popped.
     const auto step_pieces = [&](uint32_t head_mask, const uint8_t* ks, uint32_t np) {
         uint32_t n_group = 0;
-        uint32_t group_mask = 0;
         for (uint32_t i = 0; i < n_res; ++i) {
             if (((head_mask >> i) & 1u) == 0) {
                 continue;
@@ -1170,13 +1169,8 @@ void sdpa_ring_resident(
             m_width[n_group] = static_cast<uint8_t>(width);
             m_nruns[n_group] = static_cast<uint8_t>(cnt);
             ++n_group;
-            group_mask |= 1u << i;
         }
         if (n_group > 0) {
-            // Block 0 of piece 0 is forced kept for every chunk, so piece 0 creates every slot of the head before any
-            // other piece touches one, and no later step meets an uninitialized slot.
-            ASSERT(ks[0] != 0 || group_mask == head_mask);
-            ASSERT(ks[0] == 0 || (initialized & group_mask) == group_mask);
             step_entries = np;
             run_groups(n_group, false);
             step_entries = 1;
@@ -1287,9 +1281,20 @@ void sdpa_ring_resident(
     if (is_last_ring_iter) {
         // Normalize every resident chunk, in slot order, into cb_out for the writer: the sum and out slots are
         // consumed from the front. Then release the unused slots, the max slots and Q, so every slot CB is empty with
-        // its pointers back at the base.
+        // its pointers back at the base. A chunk that kept no block anywhere (its slot was never written: stale L1)
+        // gets zeros, made as x - x from the identity scale tile (finite, fronted for the whole op), so its rows stay
+        // finite for the layers that consume them.
         for (uint32_t i = 0; i < n_res; ++i) {
-            ASSERT((initialized >> i) & 1u);
+            if (((initialized >> i) & 1u) == 0) {
+                reconfig_data_format(cb_identity_scale_in, cb_identity_scale_in);
+                pack_reconfig_data_format(cb_out);
+                configure_single_tile_pack(cb_out);
+                zero_block(cb_identity_scale_in, cb_out, out_tiles);
+                pack_reconfig_data_format(cb_recip_scratch);  // normalize_row_streaming's exit state
+                sdpa_cb_pop_front_out_of_line(cb_sum_in, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
+                continue;
+            }
             normalize_row_streaming<
                 false,
                 vDHt,

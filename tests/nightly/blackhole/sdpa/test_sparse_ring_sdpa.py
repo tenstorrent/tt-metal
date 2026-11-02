@@ -17,9 +17,10 @@ inputs and checks the sparse output against:
 
 Small geometries gate on 0.999 PCC to the reference. Production lengths (MiniMax-H3 5 / 10 / 15 s) gate against the
 dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases cover: keep-all, random densities,
-partial last blocks and a logical_n tail, mask structures (random, band, clustered, uneven rows), minimal masks,
-per-head masks, determinism, new inputs on a cached program, several Q passes, pair steps (r1024k256: three blocks of
-one head per core) and the kept-only mode. Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring);
+partial last blocks, a logical_n tail and a shard with less than one block of live tokens, mask structures (random,
+band, clustered, uneven rows), minimal masks, masks without block 0, Q blocks that keep nothing (zero output
+kept-only), per-head masks, determinism, new inputs on a cached program, several Q passes, pair steps (r1024k256:
+three blocks of one head per core) and the kept-only mode. Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring);
 production lengths are skipped on CI.
 """
 
@@ -83,12 +84,12 @@ def _block_lengths(geo, S):
     return lens
 
 
-def make_mask(geo, S, H, *, density, band=1, seed=0):
+def make_mask(geo, S, H, *, density, band=1, seed=0, keep_block0=True):
     """[S, H, nb_pad, S * nb_pad] 0/1 block mask: shard s's local Q block qb keeps global block (s', b).
 
-    Kept: block 0 of every shard (the op needs one exact block per shard), the diagonal band |i - j| <= band in
-    global block order, and other full blocks at random with probability `density`. Only full 64-token blocks may
-    be exact; partial and padding blocks are always pooled or ignored.
+    Kept: block 0 of every shard (as Sol's pre-pass selects it; keep_block0=False leaves it to chance), the diagonal
+    band |i - j| <= band in global block order (none for band < 0), and other full blocks at random with probability
+    `density`. Only full 64-token blocks may be exact; partial and padding blocks are always pooled or ignored.
     """
     g = torch.Generator().manual_seed(seed)
     nb, nb_pad = geo.nb(), geo.nb_pad()
@@ -100,7 +101,8 @@ def make_mask(geo, S, H, *, density, band=1, seed=0):
     for s in range(S):
         q_index = s * nb + torch.arange(nb_pad)
         mask[s, :, (q_index[:, None] - k_index[None, :]).abs() <= band] = 1
-    mask[..., torch.arange(S) * nb_pad] = 1  # block 0 of every shard
+    if keep_block0:
+        mask[..., torch.arange(S) * nb_pad] = 1
     mask = mask * full.to(torch.int64)  # full blocks only
     mask[:, :, nb:] = 0  # padding Q rows
     return mask
@@ -110,15 +112,15 @@ MASK_STRUCTURES = ["random", "band", "clustered", "uneven"]
 CLUSTER = 8  # blocks per side of a clustered tile: two 256-token pieces
 
 
-def make_structured_mask(geo, S, H, *, structure, density, seed=0):
-    """make_mask with kept blocks laid out by `structure`, at about `density` before the forced blocks:
+def make_structured_mask(geo, S, H, *, structure, density, seed=0, keep_block0=True):
+    """make_mask with kept blocks laid out by `structure`, at about `density` before the always-kept blocks:
 
       random     each block independently with probability `density`
       band       the diagonal band of global half-width density * N / 2 (N blocks in the sequence), every head
       clustered  CLUSTER x CLUSTER tiles of (Q, K) blocks kept whole, each with probability `density`, per head
       uneven     each Q block its own probability, exponential with mean `density` (some near empty, some dense)
 
-    Block 0 of every shard and the diagonal are always kept; only full blocks may be kept.
+    The diagonal and (keep_block0) block 0 of every shard are always kept; only full blocks may be kept.
     """
     g = torch.Generator().manual_seed(seed)
     nb, nb_pad = geo.nb(), geo.nb_pad()
@@ -144,7 +146,8 @@ def make_structured_mask(geo, S, H, *, structure, density, seed=0):
     else:
         raise ValueError(f"unknown mask structure {structure}")
     keep |= (dist == 0)[:, None]  # the diagonal
-    keep[..., torch.arange(S) * nb_pad] = True  # block 0 of every shard
+    if keep_block0:
+        keep[..., torch.arange(S) * nb_pad] = True
     mask = keep.to(torch.int64) * full.to(torch.int64)  # full blocks only
     mask[:, :, nb:] = 0  # padding Q rows
     return mask
@@ -167,7 +170,8 @@ def pool(x, geo, S):
 def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled=True, heads=None, shards=None):
     """fp64 block-sparse attention: kept blocks exact, other valid blocks one pooled entry of weight len.
 
-    pooled=False: kept blocks only (no pooled entries); the softmax normalizes over the kept blocks.
+    pooled=False: kept blocks only (no pooled entries); the softmax normalizes over the kept blocks, and a row with
+    nothing to attend is zero (the op's contract).
     heads / shards: compute only these (the rest of the output stays NaN), in 512-row chunks, so a slice of a
     production-size call is checked exactly in seconds; _pcc compares the computed entries only.
     """
@@ -194,7 +198,7 @@ def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled
             le = le.masked_fill(~exact, float("-inf"))
             lp = (qh @ pk.T) * scale + log_len[None, :]
             lp = lp.masked_fill(keep | ~valid[None, :] | (not pooled), float("-inf"))
-            w = torch.softmax(torch.cat([le, lp], dim=1), dim=1)
+            w = torch.softmax(torch.cat([le, lp], dim=1), dim=1).nan_to_num(0.0)  # an empty row: NaN -> 0
             out[0, h, rows] = (w[:, : le.shape[1]] @ vh + w[:, le.shape[1] :] @ pv).float()
     return out
 
@@ -443,6 +447,18 @@ def test_ragged_shards(runtime, geom, density):
     _check(f"ragged d{density} {geom}", r, _density(mask, case.geo, case.S), dense_min=dense_min, ref_min=0.999)
 
 
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+def test_sub_block_shard_tail(runtime, pooled):
+    """logical_n leaves the last shard 32 live tokens: no full block, so no exact block anywhere in that shard; its
+    ring iteration streams no piece (kept-only: those keys are never attended; pooled: one pooled entry)."""
+    geo = Geometry(1024, 1024 * (MESH_CONFIG.sp_size - 1) + 32, 256)
+    case = Case(runtime, geo)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=20)
+    r = case.run(*case.inputs(20), mask, want_dense=False, pooled=pooled)
+    mode = "pooled" if pooled else "kept-only"
+    _check(f"sub-block tail {mode}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+
+
 @pytest.mark.parametrize("density", [0.1, 0.35])
 @pytest.mark.parametrize("structure", MASK_STRUCTURES)
 def test_mask_structures(runtime, structure, density):
@@ -472,6 +488,58 @@ def test_heads_differ(runtime):
     mask[:, -1] = make_mask(case.geo, case.S, 1, density=0.0, band=0)[:, 0]
     r = case.run(*case.inputs(4), mask)
     _check("heads differ", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+def _empty_rows(mask, geo, S):
+    """[H, S * rows] True on the query rows whose Q block keeps no block in any shard."""
+    empty = mask.sum(-1) == 0  # [S, H, nb_pad]
+    return empty[:, :, torch.arange(geo.rows) // BLOCK].permute(1, 0, 2).reshape(mask.shape[1], S * geo.rows)
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("structure", ["random", "band"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1024k512", "r1184k256"])
+def test_without_block0(runtime, geom, structure, pooled):
+    """Masks that leave block 0 of the shards to chance (VSA's selection, a windowed band): the op attends exactly
+    the mask. Many (Q block, shard) pairs keep nothing, so a Q block's softmax state is created at whichever piece and
+    ring iteration its first kept block arrives, next to blocks stepped together with it that already have state."""
+    geo = ALIGNED.get(geom) or RAGGED[geom]
+    case = Case(runtime, geo)
+    if structure == "random":
+        mask = make_mask(geo, case.S, case.H, density=0.05, band=-1, seed=18, keep_block0=False)
+    else:
+        mask = make_structured_mask(geo, case.S, case.H, structure="band", density=0.1, seed=18, keep_block0=False)
+    assert not mask[:, :, : geo.nb(), torch.arange(case.S) * geo.nb_pad()].all(), "every row keeps block 0"
+    r = case.run(*case.inputs(18), mask, want_dense=False, pooled=pooled)
+    mode = "pooled" if pooled else "kept-only"
+    _check(f"no block 0 {structure} {mode} {geom}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+@pytest.mark.parametrize("passes", [1, 2])
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+def test_empty_q_blocks(runtime, pooled, passes):
+    """Q blocks that keep no block anywhere (VSA's padding blocks): a whole head, every third Q block of the first
+    shard, and the last head on the last shard. Kept-only, nothing enters their softmax and the op writes zeros
+    (finite: the rows flow into later layers); with the pooled route they attend the pooled entries only."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    q_blocks_per_pass = None
+    if passes > 1:
+        most, fewest = case.blocks_per_core()
+        q_blocks_per_pass = -(-most // passes)
+        if -(-most // q_blocks_per_pass) != passes or passes > fewest:
+            pytest.skip(f"{most} / {fewest} blocks per core cannot be split into {passes} passes")
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=19, keep_block0=False)
+    mask[:, 1] = 0
+    mask[0, :, ::3] = 0
+    mask[case.S - 1, case.H - 1] = 0
+    r = case.run(*case.inputs(19), mask, want_dense=False, pooled=pooled, q_blocks_per_pass=q_blocks_per_pass)
+    mode = "pooled" if pooled else "kept-only"
+    _check(f"empty q blocks {mode} passes {passes}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    if not pooled:
+        empty = _empty_rows(mask, geo, case.S)[:, : geo.logical_n]
+        out = r["sparse"][0]
+        assert (out[empty] == 0).all(), f"empty Q blocks: max |out| {out[empty].abs().max().item():.3e}"
 
 
 def test_determinism(runtime):

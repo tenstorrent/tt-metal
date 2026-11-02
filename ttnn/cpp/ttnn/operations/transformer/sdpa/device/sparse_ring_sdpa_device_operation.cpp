@@ -315,21 +315,6 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         mask.logical_shape());
     const uint32_t nkc_local = tt::div_up(N_local_kv, args.get_k_chunk_size());
     TT_FATAL(nkc_local <= 64, "SparseRingSDPA: at most 64 K pieces per shard ({} given)", nkc_local);
-    // Every shard inside logical_n must hold at least one full block. Only full blocks are ever computed exactly; a
-    // shard with a live tail shorter than one block has none, so its ring iteration streams nothing, compute runs no
-    // step for it, and the writer waits forever. Pad logical_n up or re-shard so no shard has a sub-block tail.
-    for (uint32_t s = 0; s < args.ring_size; ++s) {
-        const int64_t valid = std::min<int64_t>(
-            static_cast<int64_t>(N_local_kv),
-            static_cast<int64_t>(args.logical_n) - static_cast<int64_t>(s) * static_cast<int64_t>(N_local_kv));
-        TT_FATAL(
-            valid <= 0 || valid >= block_size,
-            "SparseRingSDPA: shard {} holds {} valid tokens; every shard inside logical_n needs a full {}-token "
-            "block",
-            s,
-            valid,
-            block_size);
-    }
 }
 
 void SparseRingSDPADeviceOperation::validate_on_program_cache_hit(

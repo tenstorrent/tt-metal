@@ -18,8 +18,8 @@ namespace ttnn::transformer {
 
 // Block-sparse ring attention, non-causal, no joint tokens. The ring all-gather of K/V is fused, as in
 // ring_joint_scaled_dot_product_attention. Blocks are square, `block_size` tokens (B): per (head, local B-row Q
-// block), `block_mask` names the global B-token K blocks computed exactly. Block 0 of every shard inside logical_n is
-// always computed (it is part of every row's kept set), so no row has an empty softmax. Two modes:
+// block), `block_mask` names the global B-token K blocks computed exactly, and nothing else is added to it. A Q block
+// whose softmax has no entry at all (no kept block, and no pooled entry in kept-only mode) outputs zeros. Two modes:
 //   Sol-Attn: pass pooled_k / pooled_v. Every other block enters the same softmax through its pooled entry
 //             (score q * mean(k), value mean(v), weight = the block's token count).
 //   kept blocks only (e.g. the VSA fine branch): omit both; the softmax normalizes over the kept blocks. block_size is
