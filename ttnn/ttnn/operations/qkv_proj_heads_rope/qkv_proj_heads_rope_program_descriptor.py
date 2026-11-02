@@ -144,6 +144,18 @@ def _subblock(block_m, n_tiles, dest_tiles):
     return best
 
 
+def _block_m(rows_max, rows_min, cap):
+    """block_m <= cap: M-groups walking the same block count first (W rounds only line up across an
+    N-group then, see _core_assignment), then fewest blocks, then fewest nominal rows (each block computes
+    block_m rows, valid or not)."""
+
+    def cost(block_m):
+        blocks = _div_up(rows_max, block_m)
+        return (blocks != _div_up(rows_min, block_m), blocks, blocks * block_m)
+
+    return min(range(1, min(rows_max, cap) + 1), key=lambda b: (cost(b), -b))
+
+
 def select_blocking(device, batch, seq, compute_kernel_config):
     """Selection function (op_design.md, Core assignment): occupancy first (5% slack), then min ingress."""
     grid = device.compute_with_storage_grid_size()
@@ -162,7 +174,7 @@ def select_blocking(device, batch, seq, compute_kernel_config):
         if cap < 1:
             continue
         rows_max = _div_up(mt, grid_m)
-        block_m = min(rows_max, cap)
+        block_m = _block_m(rows_max, mt // grid_m, cap)
         num_blocks = _div_up(rows_max, block_m)
         tiles_max = rows_max * n_tiles
         ingress = K_TILES * (rows_max + num_blocks * n_tiles)
