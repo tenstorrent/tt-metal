@@ -1581,6 +1581,22 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-11-02 02:27: the capstone in two rounds: 3 h 55 min for 32 x 1 M, then all 32 repeats restored and answered in 145 s
+
+`served_8x4_needle1m_32_apc_r2` (32 x 1 038 673-token needle prompts submitted together, 256 tokens with `ignore_eos`,
+two rounds, the working tree: the region-plan kernel, 4096-token expert sub-chunks, the paged sparse keys, the KDA
+snapshot ring on device with one entry per slot). Round 1 = the capstone: 32/32 needles, TTFT 14 093 s (3 h 55 min)
+for all 32 against 16 723 s (4 h 39 min) on 10-31, the 2036 wave steps at 6.6-7.1 s (8.2 before), the DRAM log flat
+at 197 MiB free / 174 MiB largest block per bank through the whole prefill (the 32-user cell holds at 4096 with the
+ring). Batch-32 decode from the wall clock of the every-32-steps markers: 61.1 ms per step = 16.4 tok/s per user,
+524 tok/s aggregate (the marker's own "0.2 ms" is the resident chain's enqueue time). Round 2: all 32 repeats hit
+(restored at 1 032 192, ~1 s each including the live-row shield saves), the 6 481-token continuations ran as four
+waves of 7-8 rows per step for 4 steps, all 32 needles answered in 145 s (TTFT 27 s for the first group, 137 s for
+the rest) against 14 101 s cold; the batch-32 decode 61.2 ms per step again. 31/32 answers are bit-identical to round
+1 over ~253 greedy tokens; the first-restored user, decoding alone one token per wave step while the other 31
+continuations prefilled, flipped a near-tie at its third token ("wants me to find" vs "is asking for"), the known
+cross-path ulp sensitivity rather than a restore defect; the stage's rc=1 is that text check only.
+
 ### 2026-11-01 20:47: the served c1 1 M ladder: 494.8 -> 456.9 s, memory-safe (plan kernel + paged keys + 4096 sub-chunks)
 
 Five served single-user 1 M needle runs (`served_8x4_needle1m_1_*`, 1 038 673 tokens, the needle found and the
