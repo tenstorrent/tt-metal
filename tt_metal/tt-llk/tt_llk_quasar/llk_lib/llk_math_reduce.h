@@ -423,6 +423,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
  *       cannot use. Run init again whenever either format changes.
  * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
  *       FPU path to it.
+ * @note Int8 scalar SUM/AVG is not supported because the partials saturate in SrcB. Use the SFPU reduce instead.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataFormat src_b_format, const TensorShape tensor_shape)
