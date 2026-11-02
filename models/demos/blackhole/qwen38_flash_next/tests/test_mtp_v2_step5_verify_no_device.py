@@ -825,6 +825,8 @@ def _mtp_input(fake) -> mtp_module.Qwen38TTNNMTPInput:
     torch.manual_seed(93)
     mixer.weights = SimpleNamespace(
         released=False,
+        fc_embedding_ws=None,  # the fake device has no bank-sharded copies (the interleaved rows path)
+        fc_hidden_ws=None,
         epsilon=1e-6,
         embedding_norm_scale=FakeTensor(
             [piece.clone() for piece in torch.chunk((1.0 + 0.1 * torch.randn(1, 1, 1, 2560)), TP, dim=3)], FP32, TILE, 3
@@ -1037,6 +1039,7 @@ def test_qsa_verify_methods_are_the_chunk_ops_plus_two_block_writes_without_host
         "_validate_rope_rows",
         "_validate_verify_inputs",
         "_all_gather_hidden_rows",
+        "_project_merged_rows",  # QWEN38_QSA_VERIFY_MERGED: one merged linear for the five projections
         "_index_projection_rows",
         "_write_compressed_index_verify",
         "_score_blocks_chunk",

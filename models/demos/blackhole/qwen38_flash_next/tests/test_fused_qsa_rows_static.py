@@ -87,7 +87,7 @@ def test_the_verify_path_takes_program_two_when_the_pass_carries_its_scalars() -
 
     source = inspect.getsource(qsa_module.Qwen38TTNNQSA.forward_verify_generic)
     hook = "if self._rows_fused is not None and verify.position is not None:"
-    assert hook in source and "self._main_tail_rows_step(full_hidden, cos, sin, state, verify, constants)" in source
+    assert hook in source and "self._main_tail_rows_step(" in source
     assert source.index(hook) < source.index("self._main_projection_rows(full_hidden, None, cos, sin, constants)")
     step = inspect.getsource(qsa_module.Qwen38TTNNQSA._main_tail_rows_step)
     assert "self._rows_fused.main_tail_rows(" in step and "rows=verify.rows_u32" in step
@@ -224,7 +224,7 @@ def test_the_verify_path_takes_program_five_around_sparse_sdpa_when_switched_on(
     tail = inspect.getsource(qsa_module.Qwen38TTNNQSA._main_tail_rows_step)
     assert "if self._post_attention_rows is not None:" in tail
     assert tail.index("return sparse_query, None, qg_ws") < tail.index(
-        "gate = self._gate_from_qg(qg_ws, rows, full_hidden)"
+        "gate = self._gate_from_qg(qg_ws, rows, full_hidden, qg_first)"
     )
     attention = inspect.getsource(qsa_module.Qwen38TTNNQSA._sparse_value_attention_rows)
     hook = "if qg_ws is not None:"
@@ -234,7 +234,10 @@ def test_the_verify_path_takes_program_five_around_sparse_sdpa_when_switched_on(
         < attention.index(hook)
         < attention.index("local = ttnn.slice(")
     )
-    assert "self._post_attention_rows(sparse_output, qg_ws, memory_config=self.out_act_memory_config)" in attention
+    assert (
+        "self._post_attention_rows(\n                    sparse_output, qg_ws, memory_config=self.out_act_memory_config, qg_first=qg_first"
+        in attention
+    )
     project = inspect.getsource(qsa_module.Qwen38TTNNQSA._project_output_rows)
     assert "in_shard = rows == CHUNK_ROWS and local_attention.memory_config() == self.out_act_memory_config" in project
     assert "if not in_shard:" in project and project.index("if not in_shard:") < project.index(
@@ -285,17 +288,19 @@ def test_admission_of_programs_four_and_five_serves_the_row_tile_forms_and_leave
 def test_the_qg_shard_travels_as_its_own_argument_and_every_hook_asks_its_predicate() -> None:
     attention = inspect.getsource(qsa_module.Qwen38TTNNQSA._sparse_value_attention_rows)
     assert "qg_ws=None," in attention and "if qg_ws is not None:" in attention
-    assert "self._post_attention_rows_admits(sparse_output, qg_ws)" in attention
-    assert "gate = self._gate_from_qg(qg_ws, rows, state.packed_kv_cache)" in attention  # the chain's gate otherwise
+    assert "self._post_attention_rows_admits(" in attention and "sparse_output, qg_ws, qg_first" in attention
+    assert (
+        "gate = self._gate_from_qg(qg_ws, rows, state.packed_kv_cache, qg_first)" in attention
+    )  # the chain's gate otherwise
     tail = inspect.getsource(qsa_module.Qwen38TTNNQSA._main_tail_rows_step)
-    assert "return sparse_query, None, qg_ws" in tail and "return sparse_query, gate, None" in tail
-    assert "gate = self._gate_from_qg(qg_ws, rows, full_hidden)" in tail
+    assert "return sparse_query, None, qg_ws, qg_first" in tail and "return sparse_query, gate, None, qg_first" in tail
+    assert "gate = self._gate_from_qg(qg_ws, rows, full_hidden, qg_first)" in tail
     helper = inspect.getsource(qsa_module.Qwen38TTNNQSA._gate_from_qg)
     assert "_retag_tensor(gate, reference=reference, shard_dim=1)" in helper  # the helper reads no caller's local
     assert "full_hidden" not in helper.split('"""')[-1]  # (the docstring may name it; the body may not)
     verify = inspect.getsource(qsa_module.Qwen38TTNNQSA.forward_verify_generic)
-    assert "sparse_query, gate, qg_ws = self._main_tail_rows_step(" in verify
-    assert "sparse_query=sparse_query, qg_ws=qg_ws" in verify
+    assert "sparse_query, gate, qg_ws, qg_first = self._main_tail_rows_step(" in verify
+    assert "sparse_query=sparse_query, qg_ws=qg_ws, qg_first=qg_first" in verify
     # the chunk body, the lanes and the lane verify never hand a qg shard: their gate stays the chain's
     for method in ("forward_chunk_generic", "forward_decode_lanes", "forward_verify_lanes"):
         source = inspect.getsource(getattr(qsa_module.Qwen38TTNNQSA, method))

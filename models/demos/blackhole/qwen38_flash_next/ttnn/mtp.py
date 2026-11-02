@@ -57,7 +57,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
 
 # QWEN38_MTP_MIXER_SHARDED (default "1"; "0" keeps the interleaved path and builds no sharded copy): the 1-row mixer (__call__, the MTP draft rows) runs fc_embedding and fc_hidden as
 # stock DRAM-sharded matmuls on a second, bank-sharded copy of the two weights (cache files named *.dram-sharded-bank<N>,
-# beside the interleaved ones: a tensorbin of one layout is never loaded as the other).  rows() keeps the interleaved weights.
+# beside the interleaved ones: a tensorbin of one layout is never loaded as the other).  rows() at 32 rows (the verify alignment) uses them too; other row counts keep the interleaved weights.
 MIXER_SHARDED_ENV = "QWEN38_MTP_MIXER_SHARDED"
 MIXER_STORAGE_CORES = 5  # activation L1 storage cores of the mixer matmuls (K = 2560 -> 512 per core)
 
@@ -840,8 +840,12 @@ class Qwen38TTNNMTPInput:
         )
         ttnn.deallocate(normalized_embedding)
         ttnn.deallocate(normalized_hidden)
-        projected_embedding = self._project_rows(full_embedding, self.weights.fc_embedding, rows=rows)
-        projected_hidden = self._project_rows(full_hidden, self.weights.fc_hidden, rows=rows)
+        projected_embedding = self._project_rows(
+            full_embedding, self.weights.fc_embedding, rows=rows, weight_ws=self.weights.fc_embedding_ws
+        )
+        projected_hidden = self._project_rows(
+            full_hidden, self.weights.fc_hidden, rows=rows, weight_ws=self.weights.fc_hidden_ws
+        )
         ttnn.deallocate(full_embedding)
         ttnn.deallocate(full_hidden)
         self._validate_input(projected_embedding, label="projected embedding rows", shape=embedding_shape)
@@ -855,7 +859,45 @@ class Qwen38TTNNMTPInput:
         self._validate_input(output, label="fused output rows", shape=residual_shape)
         return output
 
-    def _project_rows(self, gathered, weight, *, rows: int):
+    def _project_rows_sharded(self, gathered, weight_ws):
+        """:meth:`_project_rows` at 32 rows on the bank-sharded copy (QWEN38_MTP_MIXER_SHARDED): one stock DRAM-sharded
+        matmul per batch slice ``[1,1,32,2560]`` (the branches of the hidden), the outputs concatenated on dim 1;
+        the same K order as the interleaved program (the one-row mixer's pinned equality)."""
+
+        act_config, program_config = self._dram_sharded_programs()
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        shape = _shape(gathered)
+        outputs = []
+        for branch in range(shape[1]):
+            piece = (
+                gathered
+                if shape[1] == 1
+                else ttnn.slice(
+                    gathered, (0, branch, 0, 0), (shape[0], branch + 1, shape[2], shape[3]), memory_config=dram
+                )
+            )
+            act_ws = ttnn.to_memory_config(piece, act_config)
+            if piece is not gathered:
+                ttnn.deallocate(piece)
+            out_ws = ttnn.linear(
+                act_ws,
+                weight_ws,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=program_config,
+                compute_kernel_config=self.projection_compute_config,
+            )
+            ttnn.deallocate(act_ws)
+            outputs.append(ttnn.to_memory_config(out_ws, dram))
+            ttnn.deallocate(out_ws)
+        if len(outputs) == 1:
+            return outputs[0]
+        output = ttnn.concat(outputs, dim=1, memory_config=dram)
+        for tensor in outputs:
+            ttnn.deallocate(tensor)
+        return output
+
+    def _project_rows(self, gathered, weight, *, rows: int, weight_ws=None):
         """``ttnn.linear`` of the gathered rows ``[1,B,rows,2560]`` by ``weight`` in the 32-row form's program: one
         call at 32 rows; at 128 rows one call per 32-row tile (the tiles sliced along the rows, projected with the
         32-row call's shapes, the outputs concatenated).  A 128-row ``ttnn.linear`` would pick its own matmul program,
@@ -863,6 +905,8 @@ class Qwen38TTNNMTPInput:
         result."""
 
         dram = ttnn.DRAM_MEMORY_CONFIG
+        if rows == ttnn.TILE_SIZE and weight_ws is not None and mixer_sharded_enabled():
+            return self._project_rows_sharded(gathered, weight_ws)
 
         def project(tile):
             return ttnn.linear(
