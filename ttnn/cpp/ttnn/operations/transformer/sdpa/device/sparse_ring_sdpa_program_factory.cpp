@@ -655,6 +655,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     tt::tt_metal::Buffer* const attention_sink_buf = nullptr;
     tt::tt_metal::Buffer* const pooled_k_buf = pooled_route ? tensor_args.pooled_k->buffer() : nullptr;
     tt::tt_metal::Buffer* const pooled_v_buf = pooled_route ? tensor_args.pooled_v->buffer() : nullptr;
+    tt::tt_metal::Buffer* const block_counts_buf =
+        tensor_args.block_counts.has_value() ? tensor_args.block_counts->buffer() : nullptr;
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
@@ -664,6 +666,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     TensorAccessorArgs(tensor_args.block_mask.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(pooled_k_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(pooled_v_buf).append_to(reader_compile_time_args);
+    TensorAccessorArgs(block_counts_buf).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -920,10 +923,20 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // iteration's records in place until the iteration ends (keeping them off the compute threads' stack), while the
     // reader fills the next one. Counted in the fit check like every slot-dependent CB. One pooled chunk of bias tiles
     // in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
+    // With block_counts, one page of a byte per global block (the given count capped by the geometry), filled by the
+    // reader once and read in place by reader and compute for the whole op. The key bias: one column-bias tile per
+    // block of a streamed piece whose real tokens end inside a tile, a piece's tiles contiguous (never across the CB
+    // end: both sides skip to the base with dummy pages) and held by its step until it ends. Two pieces' worth, so
+    // the reader can fill the next piece's while a step holds one. Such blocks exist only with block_counts or a
+    // logical_n off a tile boundary; otherwise neither CB is allocated.
     constexpr uint32_t kResidentGroup = 4;
+    const bool has_block_counts = tensor_args.block_counts.has_value();
+    const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
+    const uint32_t key_bias_tiles =
+        (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
-            recip_scratch, sum_in, sparse_plan, pooled_bias;
+            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias;
     };
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
@@ -950,6 +963,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // Without the pooled route nothing reads the bias CB; it is not allocated.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
+        l.block_counts = has_block_counts ? alloc(block_counts_bytes, 1, tt::DataFormat::UInt32)
+                                          : std::numeric_limits<uint32_t>::max();  // inactive
+        l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
+                                        : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
     const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
@@ -1055,6 +1072,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Without the pooled route the bias CB is not allocated; the kernels still take an id (and its tile size), so
     // they get Q's, which they never touch through it.
     const uint32_t cb_pooled_bias = pooled_route ? cbs.pooled_bias : cbs.q_in;
+    const uint32_t cb_block_counts = has_block_counts ? cbs.block_counts : cbs.q_in;
+    const uint32_t cb_key_bias = key_bias_tiles > 0 ? cbs.key_bias : cbs.q_in;
 
     // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
     // the scale inside its exp, so neither is allocated. Their slots in the shared CB argument block stay.
@@ -1320,6 +1339,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"sparse_logical_n", static_cast<uint32_t>(args.logical_n)},
         {"cb_sparse_plan", cb_sparse_plan},
         {"cb_pooled_bias", cb_pooled_bias},
+        // Real tokens per block: given (block_counts) or the geometric lengths; see the CB layout above.
+        {"has_block_counts", has_block_counts ? 1u : 0u},
+        {"cb_block_counts", cb_block_counts},
+        {"key_bias_tiles", key_bias_tiles},
+        {"cb_key_bias", cb_key_bias},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1492,13 +1516,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_args.append(reader_signaler_args);
 
         // Block-sparse args, read by the kernel at rotated_args_base. Word offsets from there:
-        //   +0 mask, +1 pooled K, +2 pooled V, +3 bias (0: generated), +4 n_members, +5 my_start, then the
+        //   +0 mask, +1 pooled K, +2 pooled V, +3 block counts (null: geometric), +4 n_members, +5 my_start, then the
         //   kPooledBiasTableWords packed bf16 table, then members (start, count)..., then the group delivery words.
         // Buffer entries are registered as bindings and re-patched on cache hits by the descriptor adapter.
         reader_args.push_back(tensor_args.block_mask.buffer());
         reader_args.push_back(pooled_k_buf);  // null without the pooled route; positions do not move
         reader_args.push_back(pooled_v_buf);
-        reader_args.push_back(0u);
+        reader_args.push_back(block_counts_buf);
         // Linear head chains: the chain's members as (Q block start within the head, count) plus this core's own
         // start. At stream position j every member is on Q block start_m + j, so each core derives the same
         // chain-wide kept set and the chain skips a piece nobody needs in lockstep. Non-participants (head-boundary

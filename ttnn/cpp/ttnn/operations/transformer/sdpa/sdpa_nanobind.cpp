@@ -189,7 +189,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
     uint32_t block_size,
-    std::optional<uint32_t> q_blocks_per_pass) {
+    std::optional<uint32_t> q_blocks_per_pass,
+    const std::optional<ttnn::Tensor>& block_counts) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -214,7 +215,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                              : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
         block_size,
-        q_blocks_per_pass);
+        q_blocks_per_pass,
+        block_counts);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -902,6 +904,11 @@ void bind_sdpa(nb::module_& mod) {
                 into the same number of passes and each pass replays the ring over the K/V gathered once. Defaults
                 to None: the most blocks whose buffers fit L1. The pass count may not exceed the smallest number of
                 blocks a working core holds.
+            block_counts (ttnn.Tensor, optional): [1, 1, 1, ring_size * nb_pad] uint32 ROW_MAJOR, replicated: the
+                real tokens of each global block (0 to block_size, real tokens first), for padding inside the
+                sequence (e.g. VSA's ragged 4x4x4 tiles). Tokens past a block's count are never attended; a block of
+                count 0 is never computed or pooled. Defaults to None: full blocks except the shard and logical_n
+                tails.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -930,7 +937,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("ccl_core_grid_offset"),
         nb::arg("use_column_major_ccl") = false,
         nb::arg("block_size") = 64,
-        nb::arg("q_blocks_per_pass") = nb::none());
+        nb::arg("q_blocks_per_pass") = nb::none(),
+        nb::arg("block_counts").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

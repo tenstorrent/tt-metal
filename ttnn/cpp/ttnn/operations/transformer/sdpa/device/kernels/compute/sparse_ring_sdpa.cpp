@@ -99,16 +99,30 @@ void kernel_main() {
     // depth to keep a pair from wrapping the CB end.
     constexpr bool pair_steps = get_named_compile_time_arg_val("pair_steps") == 1;
     constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
+    // Real tokens per block (the reader's byte table, read in place for the whole op; geometric without the
+    // block_counts input) and the key-bias tiles of blocks whose real tokens end inside a tile.
+    constexpr bool has_block_counts = get_named_compile_time_arg_val("has_block_counts") == 1;
+    constexpr uint32_t cb_block_counts = get_named_compile_time_arg_val("cb_block_counts");
+    constexpr uint32_t cb_key_bias = get_named_compile_time_arg_val("cb_key_bias");
+    constexpr uint32_t key_bias_tiles = get_named_compile_time_arg_val("key_bias_tiles");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
 
     // The identity scale stays fronted for the whole op.
     CircularBuffer(cb_identity_scale_in).wait_front(1);
+    [[maybe_unused]] const volatile uint8_t* block_counts = nullptr;
+    if constexpr (has_block_counts) {
+        CircularBuffer(cb_block_counts).wait_front(1);
+        block_counts = reinterpret_cast<const volatile uint8_t*>(ckernel::get_tile_address(cb_block_counts, 0));
+        invalidate_l1_cache();
+    }
 
     const uint32_t q_per_core = global_q_end - global_q_start;
     // The K/V CBs' read position in entries, carried across ring iterations and passes (the CBs are never reset).
     uint32_t kv_pos = 0;
+    // The key-bias CB's read position in pages, carried the same way (the reader tracks the same).
+    uint32_t kb_pos = 0;
     for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
         const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
         const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
@@ -189,7 +203,10 @@ void kernel_main() {
                 plan_rec_base,
                 num_q_passes,
                 pair_steps,
-                kv_cb_pages>(
+                kv_cb_pages,
+                has_block_counts,
+                cb_key_bias,
+                key_bias_tiles>(
                 pass_q_start,
                 pass_q_end,
                 num_q_chunks,
@@ -203,8 +220,13 @@ void kernel_main() {
                 global_n_padded_tiles,
                 initialized_slots,
                 kv_pos,
+                kb_pos,
                 is_last_ring_iter,
-                is_first_active_iter);
+                is_first_active_iter,
+                block_counts);
         }
+    }
+    if constexpr (has_block_counts) {
+        CircularBuffer(cb_block_counts).pop_front(1);
     }
 }

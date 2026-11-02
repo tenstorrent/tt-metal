@@ -344,6 +344,7 @@ template <
     uint32_t cb_prev_out,
     uint32_t cb_out,
     uint32_t cb_pooled_bias,
+    uint32_t cb_key_bias,
     uint32_t v_cb_physical_width_t,
     uint32_t qk_cap,
     uint32_t stats_cap,
@@ -356,7 +357,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const uint8_t* n_runs,
     const uint32_t initialized_mask,
     const bool apply_col_bias,
-    const uint32_t n_entries) {
+    const uint32_t n_entries,
+    const uint8_t* bias_cols,
+    const uint32_t n_bias) {
     constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
     // A step covers n_entries (1, or 2 with kStepPieces == 2: pair steps) consecutive K/V entries of the CB. Run
@@ -480,6 +483,30 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             end_mask_l1_accumulate();
             CircularBuffer(cb_pooled_bias).pop_front(Sk_chunk_t);
         }
+    }
+    if (n_bias > 0) {
+        // Key bias: a kept block whose real tokens end inside a tile was computed over that whole tile; its padding
+        // columns get the large negative bias before the max. Bias tile e (fronted in cb_key_bias by the caller, who
+        // pops them after the step) belongs at step column bias_cols[e], in every member whose runs cover it.
+        begin_mask_l1_accumulate<false>(cb_qkt_im, cb_key_bias);
+        for (uint32_t e = 0; e < n_bias; ++e) {
+            const uint32_t bc = bias_cols[e];
+            for (uint32_t g = 0; g < n_slots; ++g) {
+                uint32_t col = 0;
+                for (uint32_t s = 0; s < n_runs[g]; ++s) {
+                    const uint32_t rc = run_col(g, s);
+                    const uint32_t rw = run_wd(g, s);
+                    if (bc >= rc && bc < rc + rw) {
+                        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                            l1_acc_tile_run(cb_key_bias, e, cb_qkt_im, sidx(g, r, col + bc - rc), 1);
+                        }
+                        break;
+                    }
+                    col += rw;
+                }
+            }
+        }
+        end_mask_l1_accumulate();
     }
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
 
@@ -894,7 +921,10 @@ template <
     uint32_t plan_rec_base,
     uint32_t num_q_passes,
     bool pair_steps,
-    uint32_t kv_cb_pages>
+    uint32_t kv_cb_pages,
+    bool has_block_counts,
+    uint32_t cb_key_bias,
+    uint32_t key_bias_tiles>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -909,8 +939,10 @@ void sdpa_ring_resident(
     const uint32_t global_n_padded_tiles,
     uint32_t& initialized_slots,
     uint32_t& kv_pos,
+    [[maybe_unused]] uint32_t& kb_pos,
     const bool is_last_ring_iter,
-    const bool is_first_active_iter) {
+    const bool is_first_active_iter,
+    [[maybe_unused]] const volatile uint8_t* block_counts) {
     // PACK_DONE capacity 15: the compact step's interleaved S5/S6 posts one token per S5 batch (see the step).
     init_sdpa_streaming_semaphores<15>();
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
@@ -941,7 +973,7 @@ void sdpa_ring_resident(
     constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     // Blocks of kBlockTiles tiles (block_tiles); a piece holds kBlocksPerPiece of them. The plan page carries this
-    // shard's kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks).
+    // shard's kept-block bits per resident chunk (block b: word b/32, bit b%32; only blocks holding a real token).
     constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
     constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
     constexpr uint32_t kBW = plan_block_words;
@@ -1031,6 +1063,29 @@ void sdpa_ring_resident(
     const auto block_kept = [&](uint32_t i, uint32_t b) -> bool {
         return b < kBW * 32 && ((plan_word(i, b >> 5) >> (b & 31)) & 1u) != 0;
     };
+    // Real tokens of local block b of this ring iteration's shard, as the reader counts them (its byte table, or
+    // the geometric length; chunked_prefill_utils.hpp).
+    constexpr uint32_t kMaskNb = get_named_compile_time_arg_val("mask_nb");
+    [[maybe_unused]] constexpr uint32_t kMaskNbPad = get_named_compile_time_arg_val("mask_nb_pad");
+    [[maybe_unused]] constexpr uint32_t kLogicalN = get_named_compile_time_arg_val("sparse_logical_n");
+    const auto blk_count = [&](uint32_t b) -> uint32_t {
+        if (b >= kMaskNb) {
+            return 0;
+        }
+        if constexpr (has_block_counts) {
+            return block_counts[ring_id * kMaskNbPad + b];
+        } else {
+            return sparse_blocks::geometric_len<kBlockTiles * 32>(local_padded_Nt * 32, kLogicalN, kMaskNb, ring_id, b);
+        }
+    };
+    // Key-bias tiles the reader pushes after piece k: one per block whose real tokens end inside a tile.
+    [[maybe_unused]] const auto piece_bias_tiles = [&](uint32_t k) -> uint32_t {
+        uint32_t n = 0;
+        for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+            n += blk_count(k * kBlocksPerPiece + j) % 32 != 0 ? 1u : 0u;
+        }
+        return n;
+    };
     // Which resident chunks have state in their slot. Carried across ring iterations in initialized_slots: the slots
     // persist in L1 between calls.
     uint32_t initialized = is_first_active_iter ? 0u : initialized_slots;
@@ -1053,6 +1108,9 @@ void sdpa_ring_resident(
     // keeps a block, up to the scratch capacity): run_cols[g * kRunStride + s] is the step column where run s of
     // member g starts, run_ws[...] its width in tiles (adjacent kept blocks merged), n_runs[g] the run count.
     uint32_t step_entries = 1;  // K/V entries of the steps run_groups issues next (2 for a pair)
+    // Key-bias tiles of the steps run_groups issues next (step columns, one per fronted cb_key_bias tile).
+    const uint8_t* step_bias_cols = nullptr;
+    uint32_t step_n_bias = 0;
     const auto run_step = [&](const uint8_t* slots,
                               const uint32_t n_slots,
                               const uint8_t* run_cols,
@@ -1082,10 +1140,21 @@ void sdpa_ring_resident(
             cb_prev_out,
             cb_out,
             cb_pooled_bias,
+            cb_key_bias,
             v_cb_physical_width_t,
             kQkCap,
             kStatsCap,
-            kStepPieces>(slots, n_slots, run_cols, run_ws, n_runs, initialized, apply_col_bias, step_entries);
+            kStepPieces>(
+            slots,
+            n_slots,
+            run_cols,
+            run_ws,
+            n_runs,
+            initialized,
+            apply_col_bias,
+            step_entries,
+            step_bias_cols,
+            step_n_bias);
         for (uint32_t g = 0; g < n_slots; ++g) {
             initialized |= 1u << slots[g];
         }
@@ -1115,8 +1184,8 @@ void sdpa_ring_resident(
         kv_pos = kv_pos + 1 == kv_cb_pages ? 0 : kv_pos + 1;
     };
 
-    // Tail of piece k (logical_n boundary or padded local shard tail): only full blocks are ever kept, so no kept
-    // block reaches into it and the steps need no in-entry masking (checked in step_pieces).
+    // Live tiles of piece k (logical_n boundary or padded local shard tail). A kept block covers only the tiles that
+    // hold its real tokens, so it never reaches past them (checked in step_pieces).
     const auto active_sk = [&](uint32_t k) -> uint32_t {
         if constexpr (global_n_mask_enabled) {
             if (ring_iter_needs_global_n_mask && k == global_n_mask_chunk_id) {
@@ -1135,6 +1204,22 @@ void sdpa_ring_resident(
     // the step's columns (piece p's tile t is column p * Sk_chunk_t + t; adjacent kept blocks of one piece merged
     // into one run, never across pieces), stepped up to the scratch capacity; then the entries popped.
     const auto step_pieces = [&](uint32_t head_mask, const uint8_t* ks, uint32_t np) {
+        // The tiles holding each block's real tokens (block p * kBlocksPerPiece + j of the step), and the step column
+        // of every block's last tile when its real tokens end inside it (one key-bias tile each, in the reader's push
+        // order).
+        uint8_t blk_tiles[kRunStride];
+        uint8_t bias_cols[kRunStride];
+        uint32_t n_bias = 0;
+        for (uint32_t p = 0; p < np; ++p) {
+            for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                const uint32_t c = blk_count(ks[p] * kBlocksPerPiece + j);
+                const uint32_t tiles = (c + 31) / 32;
+                blk_tiles[p * kBlocksPerPiece + j] = static_cast<uint8_t>(tiles);
+                if (c % 32 != 0) {
+                    bias_cols[n_bias++] = static_cast<uint8_t>(p * Sk_chunk_t + j * kBlockTiles + tiles - 1);
+                }
+            }
+        }
         uint32_t n_group = 0;
         for (uint32_t i = 0; i < n_res; ++i) {
             if (((head_mask >> i) & 1u) == 0) {
@@ -1144,22 +1229,23 @@ void sdpa_ring_resident(
             uint32_t width = 0;
             for (uint32_t p = 0; p < np; ++p) {
                 [[maybe_unused]] const uint32_t sk = active_sk(ks[p]);
-                bool prev_kept = false;
+                bool prev_open = false;  // the previous block is kept and covers all its tiles: a run continues
                 for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
                     const bool kept = block_kept(i, ks[p] * kBlocksPerPiece + j);
+                    const uint32_t tiles = blk_tiles[p * kBlocksPerPiece + j];
                     if (kept) {
-                        // Kept blocks are full blocks: never in the padded tail of the piece.
-                        ASSERT((j + 1) * kBlockTiles <= sk);
-                        if (prev_kept) {
-                            m_ws[n_group * kRunStride + cnt - 1] += kBlockTiles;
+                        // The reader keeps only blocks with a real token; their tiles end inside the live part.
+                        ASSERT(tiles > 0 && j * kBlockTiles + tiles <= sk);
+                        if (prev_open) {
+                            m_ws[n_group * kRunStride + cnt - 1] += tiles;
                         } else {
                             m_cols[n_group * kRunStride + cnt] = static_cast<uint8_t>(p * Sk_chunk_t + j * kBlockTiles);
-                            m_ws[n_group * kRunStride + cnt] = kBlockTiles;
+                            m_ws[n_group * kRunStride + cnt] = static_cast<uint8_t>(tiles);
                             ++cnt;
                         }
-                        width += kBlockTiles;
+                        width += tiles;
                     }
-                    prev_kept = kept;
+                    prev_open = kept && tiles == kBlockTiles;
                 }
             }
             if (cnt == 0) {
@@ -1170,10 +1256,32 @@ void sdpa_ring_resident(
             m_nruns[n_group] = static_cast<uint8_t>(cnt);
             ++n_group;
         }
+        // The step's key-bias tiles: one piece's (pair steps pair at most one piece that has any), contiguous from
+        // the CB front; the reader skipped to the base with dummy pages when they would have crossed the end.
+        if constexpr (key_bias_tiles > 0) {
+            if (n_bias > 0) {
+                ASSERT(n_bias <= kBlocksPerPiece);
+                if (kb_pos + n_bias > key_bias_tiles) {
+                    CircularBuffer(cb_key_bias).wait_front(key_bias_tiles - kb_pos);
+                    CircularBuffer(cb_key_bias).pop_front(key_bias_tiles - kb_pos);
+                    kb_pos = 0;
+                }
+                CircularBuffer(cb_key_bias).wait_front(n_bias);
+            }
+        }
         if (n_group > 0) {
             step_entries = np;
+            step_bias_cols = bias_cols;
+            step_n_bias = n_bias;
             run_groups(n_group, false);
             step_entries = 1;
+            step_n_bias = 0;
+        }
+        if constexpr (key_bias_tiles > 0) {
+            if (n_bias > 0) {
+                CircularBuffer(cb_key_bias).pop_front(n_bias);
+                kb_pos = kb_pos + n_bias == key_bias_tiles ? 0 : kb_pos + n_bias;
+            }
         }
         for (uint32_t p = 0; p < np; ++p) {
             pop_kv();
@@ -1191,7 +1299,8 @@ void sdpa_ring_resident(
     }
     if (pair_steps && one_head && n_res > 0) {
         // One head, so the reader's entries are this head's streamed pieces in k order. Step them two at a time when
-        // neither is a masked tail piece and the pair does not wrap the K/V CB end; otherwise one at a time.
+        // neither is a masked tail piece, the pair does not wrap the K/V CB end and at most one of the two has
+        // key-bias tiles (a step holds one piece's, contiguous in the CB); otherwise one at a time.
         constexpr uint32_t kMaxPieces = 64;  // the union words' range
         uint8_t ks[kMaxPieces];              // bytes: the compute threads' stack shares 4 KB with their globals
         uint32_t n_ks = 0;
@@ -1202,8 +1311,11 @@ void sdpa_ring_resident(
         }
         const uint32_t all = n_res >= 32 ? 0xFFFFFFFFu : (1u << n_res) - 1u;
         for (uint32_t idx = 0; idx < n_ks;) {
-            const bool pair = idx + 1 < n_ks && active_sk(ks[idx]) == Sk_chunk_t &&
-                              active_sk(ks[idx + 1]) == Sk_chunk_t && kv_pos + 2 <= kv_cb_pages;
+            bool pair = idx + 1 < n_ks && active_sk(ks[idx]) == Sk_chunk_t && active_sk(ks[idx + 1]) == Sk_chunk_t &&
+                        kv_pos + 2 <= kv_cb_pages;
+            if constexpr (key_bias_tiles > 0) {
+                pair = pair && (piece_bias_tiles(ks[idx]) == 0 || piece_bias_tiles(ks[idx + 1]) == 0);
+            }
             const uint32_t np = pair ? 2u : 1u;
             step_pieces(all, ks + idx, np);
             idx += np;

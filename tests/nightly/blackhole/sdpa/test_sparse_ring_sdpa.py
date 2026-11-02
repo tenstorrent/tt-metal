@@ -19,8 +19,10 @@ Small geometries gate on 0.999 PCC to the reference. Production lengths (MiniMax
 dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases cover: keep-all, random densities,
 partial last blocks, a logical_n tail and a shard with less than one block of live tokens, mask structures (random,
 band, clustered, uneven rows), minimal masks, masks without block 0, Q blocks that keep nothing (zero output
-kept-only), per-head masks, determinism, new inputs on a cached program, several Q passes, pair steps (r1024k256:
-three blocks of one head per core) and the kept-only mode. Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring);
+kept-only), kept partial blocks, padding inside the sequence (the block_counts input: ragged and empty blocks at
+random and VSA's ragged 4x4x4 layout), per-head masks, determinism, new inputs on a cached program, several Q passes,
+pair steps (r1024k256: three blocks of one head per core) and the kept-only mode. Runs on a single ring (1xN) or the
+4x8 Galaxy (TP=4 heads x SP=8 ring);
 production lengths are skipped on CI.
 """
 
@@ -73,28 +75,64 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _block_lengths(geo, S):
-    """[S, nb_pad] valid tokens per block (64, a partial last block, the logical_n tail, or 0 for padding)."""
+def _block_lengths(geo, S, counts=None):
+    """[S, nb_pad] real tokens per block: the geometric length (64, a partial last block, the logical_n tail, or 0
+    for padding), or the block_counts input `counts` ([S * nb_pad]) capped by it, as the op counts them."""
     lens = torch.zeros(S, geo.nb_pad(), dtype=torch.int64)
     for s in range(S):
         for b in range(geo.nb()):
             start = s * geo.rows + b * BLOCK
             end = min(start + BLOCK, (s + 1) * geo.rows, geo.logical_n)
             lens[s, b] = max(0, end - start)
+    if counts is not None:
+        lens = torch.minimum(lens, counts.reshape(S, geo.nb_pad()).to(torch.int64))
     return lens
 
 
-def make_mask(geo, S, H, *, density, band=1, seed=0, keep_block0=True):
+def random_counts(geo, S, seed=0):
+    """[S * nb_pad] block_counts with padding anywhere in the sequence: each block full (70 %), ragged 1-63 tokens
+    (20 %), exactly 32 (5 %: trimmed to one tile, no key bias) or empty (5 %)."""
+    g = torch.Generator().manual_seed(seed)
+    u = torch.rand(S, geo.nb_pad(), generator=g)
+    ragged = torch.randint(1, BLOCK, (S, geo.nb_pad()), generator=g)
+    c = torch.where(u < 0.7, BLOCK, torch.where(u < 0.9, ragged, torch.where(u < 0.95, 32, 0)))
+    return torch.minimum(c, _block_lengths(geo, S)).reshape(-1)
+
+
+def vsa_counts(geo, S, grid, prefix):
+    """[S * nb_pad] block_counts of VSA's layout (models/tt_dit/pipelines/minimax_h3/vsa_geometry.py on
+    sadesoye/vsa-ring-sparse): the prefix segments chopped into 64-token blocks (a ragged tail each), then the video
+    grid (t, h, w) in 4 x 4 x 4 tiles, cube-major, one tile per block (ragged at the t / h / w edges), then padding
+    blocks. None if the layout does not fit the sequence."""
+    blocks = []
+    for n in prefix:
+        blocks += [BLOCK] * (n // BLOCK) + ([n % BLOCK] if n % BLOCK else [])
+    T, Hg, W = grid
+    for t0 in range(0, T, 4):
+        for h0 in range(0, Hg, 4):
+            for w0 in range(0, W, 4):
+                blocks.append(min(4, T - t0) * min(4, Hg - h0) * min(4, W - w0))
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    if len(blocks) > S * nb:
+        return None
+    counts = torch.zeros(S * nb_pad, dtype=torch.int64)
+    for n, c in enumerate(blocks):
+        counts[(n // nb) * nb_pad + n % nb] = c
+    return counts
+
+
+def make_mask(geo, S, H, *, density, band=1, seed=0, keep_block0=True, counts=None):
     """[S, H, nb_pad, S * nb_pad] 0/1 block mask: shard s's local Q block qb keeps global block (s', b).
 
     Kept: block 0 of every shard (as Sol's pre-pass selects it; keep_block0=False leaves it to chance), the diagonal
-    band |i - j| <= band in global block order (none for band < 0), and other full blocks at random with probability
-    `density`. Only full 64-token blocks may be exact; partial and padding blocks are always pooled or ignored.
+    band |i - j| <= band in global block order (none for band < 0), and other blocks at random with probability
+    `density`. Only full 64-token blocks are kept, as Sol's pre-pass keeps them; with `counts` (a block_counts
+    tensor, or the geometric lengths) every block with a real token may be.
     """
     g = torch.Generator().manual_seed(seed)
     nb, nb_pad = geo.nb(), geo.nb_pad()
-    lens = _block_lengths(geo, S)  # [S, nb_pad]
-    full = (lens == BLOCK).reshape(-1)  # [S * nb_pad]
+    lens = _block_lengths(geo, S, counts)  # [S, nb_pad]
+    full = ((lens == BLOCK) if counts is None else (lens > 0)).reshape(-1)  # [S * nb_pad]
     mask = (torch.rand(S, H, nb_pad, S * nb_pad, generator=g) < density).to(torch.int64)
     k_global = torch.arange(S * nb_pad)
     k_index = (k_global // nb_pad) * nb + (k_global % nb_pad)  # global block number in sequence order
@@ -103,7 +141,7 @@ def make_mask(geo, S, H, *, density, band=1, seed=0, keep_block0=True):
         mask[s, :, (q_index[:, None] - k_index[None, :]).abs() <= band] = 1
     if keep_block0:
         mask[..., torch.arange(S) * nb_pad] = 1
-    mask = mask * full.to(torch.int64)  # full blocks only
+    mask = mask * full.to(torch.int64)  # keepable blocks only
     mask[:, :, nb:] = 0  # padding Q rows
     return mask
 
@@ -153,9 +191,9 @@ def make_structured_mask(geo, S, H, *, structure, density, seed=0, keep_block0=T
     return mask
 
 
-def pool(x, geo, S):
-    """[1, H, S * rows, D] -> [1, H, S * nb_pad, D] per-block mean over the valid tokens (zero for padding)."""
-    lens = _block_lengths(geo, S)
+def pool(x, geo, S, counts=None):
+    """[1, H, S * rows, D] -> [1, H, S * nb_pad, D] per-block mean over the real tokens (zero for padding)."""
+    lens = _block_lengths(geo, S, counts)
     _, H, _, Dh = x.shape
     out = torch.zeros(1, H, S * geo.nb_pad(), Dh)
     for s in range(S):
@@ -167,8 +205,11 @@ def pool(x, geo, S):
     return out
 
 
-def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled=True, heads=None, shards=None):
-    """fp64 block-sparse attention: kept blocks exact, other valid blocks one pooled entry of weight len.
+def sparse_reference(
+    q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled=True, heads=None, shards=None, counts=None
+):
+    """fp64 block-sparse attention: kept blocks exact over their real tokens, every other block with a real token
+    one pooled entry of weight len (its real tokens: the geometric length, or `counts`, the block_counts input).
 
     pooled=False: kept blocks only (no pooled entries); the softmax normalizes over the kept blocks, and a row with
     nothing to attend is zero (the op's contract).
@@ -177,13 +218,13 @@ def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled
     """
     _, H, _, _ = q.shape
     nb, nb_pad = geo.nb(), geo.nb_pad()
-    lens = _block_lengths(geo, S).reshape(-1)  # [S * nb_pad]
+    lens = _block_lengths(geo, S, counts).reshape(-1)  # [S * nb_pad]
     valid = lens > 0
     log_len = torch.where(valid, lens.clamp(min=1).double().log(), torch.zeros_like(lens, dtype=torch.float64))
-    # token -> padded global block id, and which tokens are real
+    # token -> padded global block id, and which tokens are real (the first lens of each block)
     tok = torch.arange(S * geo.rows)
     tok_block = (tok // geo.rows) * nb_pad + (tok % geo.rows) // BLOCK
-    tok_valid = tok < geo.logical_n
+    tok_valid = (tok % geo.rows) % BLOCK < lens[tok_block]
     out = torch.full((1, H, S * geo.rows, q.shape[3]), float("nan"))
     for h in range(H) if heads is None else heads:
         kh, vh = k[0, h].double(), v[0, h].double()
@@ -284,15 +325,34 @@ class Case:
         return -(-total // cores), max(1, total // cores)
 
     def run(
-        self, q, k, v, mask, *, want_dense=True, want_ref=True, q_blocks_per_pass=None, pooled=True, dense_floor=False
+        self,
+        q,
+        k,
+        v,
+        mask,
+        *,
+        want_dense=True,
+        want_ref=True,
+        q_blocks_per_pass=None,
+        pooled=True,
+        dense_floor=False,
+        counts=None,
     ):
         """pooled=False omits pooled K / V: kept blocks only (the VSA fine-branch mode). dense_floor=True (with
-        want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"])."""
+        want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"]). counts: the
+        block_counts input ([S * nb_pad] real tokens per global block), also used by the pooling and the reference."""
         rt, geo = self.rt, self.geo
         tq, tk, tv = (self._upload(x, self.seq_dims) for x in (q, k, v))
-        pooled_k, pooled_v = (pool(x, geo, self.S).bfloat16().float() for x in (k, v))
+        pooled_k, pooled_v = (pool(x, geo, self.S, counts).bfloat16().float() for x in (k, v))
         t_mask = self._upload(mask, self.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         t_pk, t_pv = (self._upload(x, self.dims(None, 1)) for x in (pooled_k, pooled_v)) if pooled else (None, None)
+        t_counts = (
+            None
+            if counts is None
+            else self._upload(
+                counts.reshape(1, 1, 1, -1), self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+        )
         out = ttnn.transformer.sparse_ring_sdpa(
             tq,
             tk,
@@ -316,6 +376,7 @@ class Case:
             use_column_major_ccl=True,
             block_size=BLOCK,
             q_blocks_per_pass=q_blocks_per_pass,
+            block_counts=t_counts,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -353,7 +414,9 @@ class Case:
         else:
             sl = dict(heads=sorted({0, 1, self.H // 2, self.H - 1}))
         ref = (
-            sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, **sl)
+            sparse_reference(
+                q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, counts=counts, **sl
+            )
             if want_ref
             else None
         )
@@ -366,9 +429,11 @@ class Case:
         }
 
 
-def _density(mask, geo, S):
-    full = (_block_lengths(geo, S) == BLOCK).reshape(-1)
-    return float(mask[:, :, : geo.nb()][..., full].float().mean())
+def _density(mask, geo, S, counts=None):
+    """Kept fraction of the keepable blocks (full ones; with counts, every block with a real token)."""
+    lens = _block_lengths(geo, S, counts).reshape(-1)
+    keepable = (lens == BLOCK) if counts is None else (lens > 0)
+    return float(mask[:, :, : geo.nb()][..., keepable].float().mean())
 
 
 def _check(tag, r, density, *, dense_min, ref_min):
@@ -457,6 +522,73 @@ def test_sub_block_shard_tail(runtime, pooled):
     r = case.run(*case.inputs(20), mask, want_dense=False, pooled=pooled)
     mode = "pooled" if pooled else "kept-only"
     _check(f"sub-block tail {mode}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("geom", list(RAGGED))
+def test_kept_partial_blocks(runtime, geom, pooled):
+    """Mask bits on a shard's partial last block and on the logical_n tail block: computed exactly over their real
+    tokens (only the tiles holding them; a key bias inside the tile logical_n ends in)."""
+    geo = RAGGED[geom]
+    case = Case(runtime, geo)
+    live = _block_lengths(geo, case.S).reshape(-1)
+    mask = make_mask(geo, case.S, case.H, density=0.3, seed=22, counts=live)
+    r = case.run(*case.inputs(22), mask, want_dense=False, pooled=pooled)
+    mode = "pooled" if pooled else "kept-only"
+    _check(f"kept partial {mode} {geom}", r, _density(mask, geo, case.S, live), dense_min=None, ref_min=0.999)
+
+
+# VSA-like padding inside the sequence (the block_counts input): a small VSA layout (two prefix segments, a video grid
+# in ragged 4 x 4 x 4 tiles, padding blocks after them) and ragged / empty blocks at random.
+VSA_SMALL = dict(grid=(17, 12, 22), prefix=(100, 70))
+
+
+def _counts_for(structure, geo, S, seed):
+    if structure == "random":
+        return random_counts(geo, S, seed=seed)
+    counts = vsa_counts(geo, S, **VSA_SMALL)
+    if counts is None:
+        pytest.skip(f"the VSA layout does not fit {S} shards of {geo.rows} rows")
+    return counts
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("structure", ["random", "vsa"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1024k512"])
+def test_block_counts(runtime, geom, structure, pooled):
+    """Blocks with fewer real tokens than 64 anywhere in the sequence, and empty blocks: tokens past a block's
+    count are never attended (its tiles trimmed, a key bias in the tile its count ends in), an empty block is
+    never computed or pooled, and the pooled entries weigh the real tokens. The same mask without the counts
+    attends the padding tokens, so it must be far from the counts reference (the counts reach the kernels)."""
+    geo = ALIGNED[geom]
+    case = Case(runtime, geo)
+    counts = _counts_for(structure, geo, case.S, seed=21)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=21, keep_block0=False, counts=counts)
+    q, k, v = case.inputs(21)
+    r = case.run(q, k, v, mask, want_dense=False, pooled=pooled, counts=counts)
+    mode = "pooled" if pooled else "kept-only"
+    tag = f"counts {structure} {mode} {geom}"
+    _check(tag, r, _density(mask, geo, case.S, counts), dense_min=None, ref_min=0.999)
+    without = case.run(q, k, v, mask, want_dense=False, want_ref=False, pooled=pooled)["sparse"]
+    p_without = _pcc(r["ref"], without)
+    logger.info(f"[{tag}] without the counts: pcc vs reference {p_without:.5f}")
+    assert p_without < 0.999, f"{tag}: the counts made no difference (pcc without them {p_without:.5f})"
+
+
+def test_block_counts_passes(runtime):
+    """block_counts with the Q blocks split into two passes: the counts table and the key bias outlive a pass."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    most, fewest = case.blocks_per_core()
+    q_blocks_per_pass = -(-most // 2)
+    if -(-most // q_blocks_per_pass) != 2 or fewest < 2:
+        pytest.skip(f"{most} / {fewest} blocks per core cannot be split into 2 passes")
+    counts = random_counts(geo, case.S, seed=23)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=23, keep_block0=False, counts=counts)
+    r = case.run(
+        *case.inputs(23), mask, want_dense=False, pooled=False, counts=counts, q_blocks_per_pass=q_blocks_per_pass
+    )
+    _check("counts passes 2", r, _density(mask, geo, case.S, counts), dense_min=None, ref_min=0.999)
 
 
 @pytest.mark.parametrize("density", [0.1, 0.35])
@@ -684,3 +816,20 @@ def test_production_kept_only_10s(runtime, density):
     mask = make_mask(geo, case.S, case.H, density=density, seed=17)
     r = case.run(*case.inputs(17), mask, want_ref="slice", dense_floor=True, pooled=False)
     _check_vs_dense_floor(f"kept-only 10s d{density}", r, _density(mask, geo, case.S))
+
+
+@SLOW
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+def test_production_vsa_15s(runtime, pooled):
+    """VSA's 15 s 768p layout (sadesoye/vsa-ring-sparse: video grid 107 x 24 x 42, prefix segments of 512, 1008 and
+    1200 tokens): 1,825 blocks with ragged tiles at every w edge and the t edge, padded to 14656 rows per device.
+    Kept blocks at density 0.1. Gated against the dense op's accuracy floor on the same inputs."""
+    geo = Geometry(14656, 14656 * MESH_CONFIG.sp_size, 256, dense_chunks=(256, 512))
+    case = Case(runtime, geo)
+    counts = vsa_counts(geo, case.S, grid=(107, 24, 42), prefix=(512, 1008, 1200))
+    if counts is None:
+        pytest.skip(f"the VSA layout does not fit {case.S} shards of {geo.rows} rows")
+    mask = make_mask(geo, case.S, case.H, density=0.1, seed=24, keep_block0=False, counts=counts)
+    r = case.run(*case.inputs(24), mask, want_ref="slice", dense_floor=True, pooled=pooled, counts=counts)
+    mode = "pooled" if pooled else "kept-only"
+    _check_vs_dense_floor(f"vsa 15s {mode}", r, _density(mask, geo, case.S, counts))

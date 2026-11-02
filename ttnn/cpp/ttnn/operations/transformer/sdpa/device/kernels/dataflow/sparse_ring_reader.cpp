@@ -68,7 +68,7 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(39);
 
     // Tensor accessors from slot 43: Q, K, V, gathered K, gathered V, the (absent) attention sink's placeholder,
-    // then the block mask, pooled K and pooled V.
+    // then the block mask, pooled K, pooled V and the block counts.
     constexpr uint32_t kFirstAccessorArgOffset = 43;
     constexpr auto q_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -79,7 +79,8 @@ void kernel_main() {
     constexpr auto mask_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
     constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chains_base_offset = pooled_v_args.next_compile_time_args_offset();
+    constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = block_counts_args.next_compile_time_args_offset();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -143,9 +144,10 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(sparse_args_base + 0);
     [[maybe_unused]] const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
     [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
-    // +3: bias tensor address slot (the bias is generated). +4: head chain member count, +5: this core's first Q
+    // +3: block counts address (none: geometric counts). +4: head chain member count, +5: this core's first Q
     // chunk in the chain. Then the packed bf16 bias-per-token-count table (pooled_bias_gen::kTableWords words), the
     // members (start, count) and the head group's delivery arguments.
+    [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
     const uint32_t group_n_members = get_arg_val<uint32_t>(sparse_args_base + 4);
     const uint32_t pooled_bias_table_base = sparse_args_base + 6;
     const uint32_t group_members_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
@@ -183,6 +185,14 @@ void kernel_main() {
     static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
     // Float16_b 32x32 bias tiles (pooled_bias_gen.hpp); the CB only exists with the pooled route.
     constexpr uint32_t pooled_bias_tile_bytes = pooled_route ? get_tile_size(cb_pooled_bias) : 2048u;
+    // Real tokens per block: the block_counts input (capped by the geometry) in a byte table this reader fills once,
+    // or the geometric lengths. Key bias: one tile per block of a streamed piece whose real tokens end inside a tile
+    // (key_bias_tiles = 0: no block can, and the CB does not exist).
+    constexpr bool has_block_counts = get_named_compile_time_arg_val("has_block_counts") == 1;
+    constexpr uint32_t cb_block_counts = get_named_compile_time_arg_val("cb_block_counts");
+    constexpr uint32_t cb_key_bias = get_named_compile_time_arg_val("cb_key_bias");
+    constexpr uint32_t key_bias_tiles = get_named_compile_time_arg_val("key_bias_tiles");
+    constexpr uint32_t key_bias_tile_bytes = key_bias_tiles > 0 ? get_tile_size(cb_key_bias) : 2048u;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -252,14 +262,50 @@ void kernel_main() {
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
     // Pooled chunks are consumed on the first active ring iteration of every pass.
     bool pooled_pending = true;
-    // Block b of shard s can be exact only if it is a FULL block (partial shard / logical_n tails are always
-    // pooled, so a set mask bit on them is ignored here and in the bias generator alike).
-    const auto block_is_full = [&](uint32_t s, uint32_t b) -> bool {
-        return pooled_bias_gen::block_len(
-                   pooled_bias_gen::Geometry{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad}, s, b) ==
-               pooled_bias_gen::kBlockTokens;
+    // Real tokens of block b of shard s. Block b is computed exactly iff its mask bit is set and it holds a real
+    // token; tokens past its count are never attended (compute trims the block's tiles and adds the key bias).
+    const pooled_bias_gen::Geometry geo{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
+    [[maybe_unused]] volatile tt_l1_ptr uint8_t* counts_table = nullptr;
+    if constexpr (has_block_counts) {
+        // One byte per global block, read in place by compute for the whole op. The given counts (one uint32 page of
+        // n_blocks_pad words) are staged in the plan page's scratch, which holds a whole mask row of the same size;
+        // the plan's later reserves return the same page.
+        CircularBuffer cb_counts(cb_block_counts);
+        cb_counts.reserve_back(1);
+        counts_table = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_counts.get_write_ptr());
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(1);
+        const uint32_t stage = cb_plan.get_write_ptr() + 64;
+        noc.async_read(
+            TensorAccessor(block_counts_args, block_counts_addr),
+            CoreLocalMem<uint32_t>(stage),
+            mask_row_bytes,
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
+        CoreLocalMem<volatile uint32_t> given(stage);
+        for (uint32_t s = 0; s < ring_size; ++s) {
+            for (uint32_t b = 0; b < mask_nb_pad; ++b) {
+                const uint32_t g = s * mask_nb_pad + b;
+                const uint32_t len = pooled_bias_gen::block_len(geo, s, b);
+                counts_table[g] = static_cast<uint8_t>(given[g] < len ? given[g] : len);
+            }
+        }
+        cb_counts.push_back(1);
+    }
+    const auto block_count = [&](uint32_t s, uint32_t b) -> uint32_t {
+        if (b >= mask_nb) {
+            return 0;  // padding past the shard's blocks (the last piece can reach past them)
+        }
+        if constexpr (has_block_counts) {
+            return counts_table[s * mask_nb_pad + b];
+        } else {
+            return pooled_bias_gen::block_len(geo, s, b);
+        }
     };
 
+    // Key-bias CB position in pages, carried across ring iterations and passes (compute tracks the same: kb_pos).
+    [[maybe_unused]] uint32_t kb_pos = 0;
     // A pass's Q blocks are read once, on its first active ring iteration.
     bool q_pushed = false;
     // Pieces this core has pushed through the group stream since launch. The producer's delivered count and the
@@ -423,18 +469,18 @@ void kernel_main() {
                     {});
                 noc.async_read_barrier();
             };
-            // This shard's kept FULL blocks of the slice in the scratch, as bits (block b: word b/32, bit b%32):
-            // exactly the mask's, so a (Q chunk, shard) may keep none (compute creates a chunk's state at its first
-            // kept block, wherever that is).
+            // This shard's kept blocks of the slice in the scratch, as bits (block b: word b/32, bit b%32): the mask's
+            // blocks that hold a real token, so a (Q chunk, shard) may keep none (compute creates a chunk's state at
+            // its first kept block, wherever that is).
             constexpr uint32_t kBlockWords = plan_block_words;
             constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / pooled_bias_gen::kBlockTiles;
-            uint32_t full_bits[kBlockWords];  // the shard's full blocks, once per ring iteration
+            uint32_t live_bits[kBlockWords];  // the shard's blocks holding a real token, once per ring iteration
             for (uint32_t w = 0; w < kBlockWords; ++w) {
-                full_bits[w] = 0;
+                live_bits[w] = 0;
             }
             for (uint32_t b = 0; b < mask_nb; ++b) {
-                if (block_is_full(ring_id, b)) {
-                    full_bits[b >> 5] |= 1u << (b & 31);
+                if (block_count(ring_id, b) != 0) {
+                    live_bits[b >> 5] |= 1u << (b & 31);
                 }
             }
             const auto row_block_bits = [&](uint32_t* words) {
@@ -448,7 +494,7 @@ void kernel_main() {
                     }
                 }
                 for (uint32_t w = 0; w < kBlockWords; ++w) {
-                    words[w] &= full_bits[w];
+                    words[w] &= live_bits[w];
                 }
             };
             // Piece k is kept when any of its blocks is: the streaming / chain-union granularity.
@@ -517,14 +563,14 @@ void kernel_main() {
                     ++i1;
                 }
                 if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
-                    // Chain / group members stream every piece that holds a full block of this shard: a superset of the
+                    // Chain / group members stream every piece that holds a live block of this shard: a superset of the
                     // members' union that needs no mask reads (the union read every member's row per ring iteration,
                     // ~200 us while compute idled, and at these densities it is nearly every piece anyway). The same on
                     // every member (it depends on the shard only) and inside every live piece, so compute agrees; it
                     // skips a piece it keeps no block of.
                     uint32_t words[kBlockWords];
                     for (uint32_t w = 0; w < kBlockWords; ++w) {
-                        words[w] = full_bits[w];
+                        words[w] = live_bits[w];
                     }
                     piece_bits(words, ulo, uhi);
                 }
@@ -660,6 +706,37 @@ void kernel_main() {
                 }
                 if (v_chain.should_forward(nv, 0)) {
                     v_chain.forward(noc, v_addr);
+                }
+            };
+            // After each streamed piece's K/V: one key-bias tile per block of the piece whose real tokens end inside a
+            // tile (count % 32 real columns in its last tile), in block order. Compute addresses a piece's tiles from
+            // the CB front and holds them for the piece's step, so they must not cross the CB end: when they would,
+            // dummy pages fill it first (compute pops them the same way).
+            const auto push_key_bias = [&](uint32_t k) {
+                if constexpr (key_bias_tiles > 0) {
+                    uint32_t n = 0;
+                    for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                        n += block_count(ring_id, k * kBlocksPerPiece + j) % 32 != 0 ? 1u : 0u;
+                    }
+                    if (n == 0) {
+                        return;
+                    }
+                    CircularBuffer cb_kb(cb_key_bias);
+                    if (kb_pos + n > key_bias_tiles) {
+                        cb_kb.reserve_back(key_bias_tiles - kb_pos);
+                        cb_kb.push_back(key_bias_tiles - kb_pos);
+                        kb_pos = 0;
+                    }
+                    for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                        const uint32_t real_cols = block_count(ring_id, k * kBlocksPerPiece + j) % 32;
+                        if (real_cols != 0) {
+                            cb_kb.reserve_back(1);
+                            pooled_bias_gen::generate_key_bias_tile<key_bias_tile_bytes>(
+                                noc, cb_kb.get_write_ptr(), real_cols, pooled_bias_table_base);
+                            cb_kb.push_back(1);
+                        }
+                    }
+                    kb_pos = kb_pos + n == key_bias_tiles ? 0 : kb_pos + n;
                 }
             };
             uint32_t n_pieces = 0;  // pieces streamed this iteration (the first pass counts them)
@@ -828,6 +905,7 @@ void kernel_main() {
                                     } else {
                                         stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
                                     }
+                                    push_key_bias(k);
                                 }
                             }
                             i0 = i1;
@@ -852,8 +930,6 @@ void kernel_main() {
                         scratch = cb_plan.get_write_ptr() + 64;
                     }
                     constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
-                    const pooled_bias_gen::Geometry geo{
-                        kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
                     for (uint32_t i0 = 0; i0 < n_res;) {
                         uint32_t i1 = i0;
                         while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
@@ -895,7 +971,7 @@ void kernel_main() {
                                 read_chunk_row(nq, res_qc[i]);
                                 CircularBuffer cb_bias(cb_pooled_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
-                                // Block-form row: exact iff the block's own bit is set on a full block.
+                                // Block-form row: exact iff the block's own bit is set on a block with a real token.
                                 pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes>(
                                     noc,
                                     cb_bias.get_write_ptr(),
@@ -903,7 +979,8 @@ void kernel_main() {
                                     tiles,
                                     geo,
                                     CoreLocalMem<volatile uint32_t>(scratch),
-                                    pooled_bias_table_base);
+                                    pooled_bias_table_base,
+                                    block_count);
                                 cb_bias.push_back(Sk_chunk_t);
                             }
                         }

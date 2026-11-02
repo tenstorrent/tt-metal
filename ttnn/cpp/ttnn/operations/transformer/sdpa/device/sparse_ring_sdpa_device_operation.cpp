@@ -300,6 +300,20 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
             n_blocks_pad,
             pk.logical_shape());
     }
+    if (tensor_args.block_counts.has_value()) {
+        const auto& counts = *tensor_args.block_counts;
+        TT_FATAL(
+            counts.layout() == Layout::ROW_MAJOR && counts.dtype() == DataType::UINT32,
+            "block_counts must be uint32 row-major");
+        TT_FATAL(
+            counts.buffer() != nullptr && counts.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "block_counts must be in DRAM");
+        TT_FATAL(
+            counts.logical_shape().volume() == n_blocks_pad && counts.logical_shape()[-1] == n_blocks_pad,
+            "block_counts must be [1, 1, 1, n_blocks_pad = block_mask width {}], got {}",
+            n_blocks_pad,
+            counts.logical_shape());
+    }
     const uint32_t nb_pad = n_blocks_pad / args.ring_size;
     TT_FATAL(
         n_blocks_pad % (32 * args.ring_size) == 0,
@@ -352,6 +366,9 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         input_tensors.push_back(*tensor_args.pooled_k);
         input_tensors.push_back(*tensor_args.pooled_v);
     }
+    if (tensor_args.block_counts.has_value()) {
+        input_tensors.push_back(*tensor_args.block_counts);
+    }
     // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
     // The slots per pass and the K/V CB depth are derived from these inputs plus the live L1 top
     // (lowest_occupied_compute_l1_address), which is not keyed: a cached program keeps the choice of the call that
@@ -368,7 +385,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.all_gather_tensor_args,
         args.block_size,
         args.q_blocks_per_pass,
-        tensor_args.pooled_route());
+        tensor_args.pooled_route(),
+        tensor_args.block_counts.has_value());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -433,7 +451,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const uint32_t block_size,
-    const std::optional<uint32_t> q_blocks_per_pass) {
+    const std::optional<uint32_t> q_blocks_per_pass,
+    const std::optional<ttnn::Tensor>& block_counts) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -502,7 +521,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .gathered_v = persistent_output_buffer_v,
         .block_mask = block_mask,
         .pooled_k = pooled_k,
-        .pooled_v = pooled_v};
+        .pooled_v = pooled_v,
+        .block_counts = block_counts};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

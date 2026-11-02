@@ -56,6 +56,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     uint32_t block_size = 64,
-    std::optional<uint32_t> q_blocks_per_pass = std::nullopt);
+    std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
+    const std::optional<ttnn::Tensor>& block_counts = std::nullopt);
 
 }  // namespace ttnn::prim

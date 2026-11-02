@@ -102,6 +102,8 @@ struct SparseRingSDPAParams {
 //               sequence. Present (Sol-Attn): every block the mask drops enters the softmax as one pooled entry
 //               weighted by its token count, through the column bias the reader generates (pooled_bias_gen.hpp).
 //               Absent (kept blocks only, e.g. the VSA fine branch): the softmax normalizes over the kept blocks.
+//   block_counts OPTIONAL uint32 row-major [1, 1, 1, n_blocks_pad]: real tokens of each global block (real tokens
+//               first). Absent: the geometric lengths (full blocks, the shard tails and the logical_n tail).
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
@@ -111,6 +113,7 @@ struct SparseRingSDPAInputs {
     Tensor block_mask;
     std::optional<Tensor> pooled_k;
     std::optional<Tensor> pooled_v;
+    std::optional<Tensor> block_counts;
 
     // The pooled route (Sol-Attn's correction for the dropped blocks) runs iff pooled K / V are given.
     bool pooled_route() const { return pooled_k.has_value(); }

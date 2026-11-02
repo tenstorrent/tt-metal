@@ -33,6 +33,12 @@ namespace ttnn::transformer {
 //   block_mask [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR; != 0 keeps global block s * nb_pad + b
 //   pooled_k   optional [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
 //   pooled_v   optional [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean V
+//   block_counts optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, replicated; real tokens of global block
+//              s * nb_pad + b (0..B, real tokens first in the block), for padding inside the sequence (e.g. VSA's
+//              ragged 4x4x4 tiles). Tokens past a block's count are never attended, and a block of count 0 never
+//              computed or pooled. Absent: every block is full except the shard tails and the logical_n tail.
+//   A block is computed exactly iff its mask entry is != 0 and it holds a real token; the pooled entry of a block
+//   weighs its real tokens and covers the blocks that are not computed exactly.
 // Returns the attention output, [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
@@ -57,6 +63,7 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     uint32_t block_size = 64,
-    std::optional<uint32_t> q_blocks_per_pass = std::nullopt);
+    std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
+    const std::optional<ttnn::Tensor>& block_counts = std::nullopt);
 
 }  // namespace ttnn::transformer
