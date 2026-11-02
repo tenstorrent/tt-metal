@@ -7,6 +7,7 @@ repetition (op-id ranges of layer_arms.json) with the OpRecorder rows (oprows.js
 import csv
 import json
 import os
+import re
 import statistics
 import sys
 from collections import defaultdict
@@ -45,7 +46,19 @@ def main():
         if oid not in want:
             continue
         try:
-            dig[oid][int(r["DEVICE ID"])] = (float(r[K] or 0), float(r[FS] or 0), float(r[FE] or 0))
+            f_ = lambda c: float(r.get(c) or 0)
+            dig[oid][int(r["DEVICE ID"])] = (
+                float(r[K] or 0),
+                float(r[FS] or 0),
+                float(r[FE] or 0),
+                f_("CORE COUNT"),
+                f_("AVAILABLE WORKER CORE COUNT"),
+                f_("DEVICE BRISC KERNEL DURATION [ns]"),
+                f_("DEVICE NCRISC KERNEL DURATION [ns]"),
+                f_("DEVICE TRISC0 KERNEL DURATION [ns]"),
+                f_("DEVICE TRISC1 KERNEL DURATION [ns]"),
+                f_("DEVICE TRISC2 KERNEL DURATION [ns]"),
+            )
         except ValueError:
             pass
     out = []
@@ -62,7 +75,8 @@ def main():
             ops = []
             for i in ids:
                 per = dig[i]
-                for d, (k, fs, fe) in per.items():
+                for d, v_ in per.items():
+                    k, fs, fe = v_[0], v_[1], v_[2]
                     chip[d] += k
                     starts[d] = min(starts[d], fs)
                     ends[d] = max(ends[d], fe)
@@ -102,6 +116,8 @@ def main():
                 "CCL" in cat or "all_gather" in row["op"] or "reduce_scatter" in row["op"] or "all_to_all" in row["op"]
             )
             cls = B.classify(mean_s, fast * 1e-9, ideal, dram_t, comp_t, fab_t, is_ccl)
+            vv = [v for r in reps for v in r["ops"][j][2].values()]
+            mn = lambda i: statistics.mean(v[i] for v in vv)
             table.append(
                 dict(
                     cat=cat,
@@ -113,8 +129,26 @@ def main():
                     cls=cls,
                     dram=mod["dram"],
                     note=mod["note"],
+                    cores=mn(3),
+                    avail=mn(4),
+                    br=mn(5) * 1e-3,
+                    nc=mn(6) * 1e-3,
+                    t1=mn(8) * 1e-3,
+                    t2=mn(9) * 1e-3,
                 )
             )
+        for r_ in table:
+            if r_["name"].startswith(
+                "sparse_sdpa"
+            ):  # launched on the whole grid (CORE COUNT = 120) but one core per query row does the work (tokens are split over cores, S = 8 rows)
+                m_ = re.search(r"rows (\d+)", r_["note"])
+                if m_:
+                    r_["cores"] = min(r_["cores"], float(m_.group(1)))
+                    r_["note"] += " (launched on all cores, only one core per query row works)"
+            if r_["name"].startswith("moe_compute"):
+                r_[
+                    "note"
+                ] += " (32-core DRAM-reader ring by design: its ceiling is DRAM bandwidth and the busiest chip, not the core count)"
         perop[name] = table
     P(
         f"# Single-layer loop: layer {layer}, B=8 k=3 T=8, eager under the device profiler, run {os.path.basename(run)}\n"
@@ -154,13 +188,42 @@ def main():
         for k, v in sorted(cats.items(), key=lambda kv: -(kv[1][1] - kv[1][3])):
             P(f"| {k} | {v[0]} | {v[1]:.1f} | {v[2]:.1f} | {v[3]:.1f} | {v[1]-v[3]:.1f} |")
         if name == first or "--all-ops" in sys.argv:
-            P(f"\n### arm {name}: every op, ranked by time above ideal\n")
-            P("| op | measured us (mean / slowest / fastest chip) | ideal us | ratio | cause | note |")
-            P("|---|---|---|---|---|---|")
+            P(
+                f"\n### arm {name}: every op, ranked by time above ideal (cores used / available, achieved fraction of the roofline = ideal / measured, per-RISC kernel times)\n"
+            )
+            P(
+                "| op | measured us (mean / slowest / fastest chip) | ideal us | roofline fraction | cores used / available | BRISC / NCRISC / TRISC1 / TRISC2 us | cause | note |"
+            )
+            P("|---|---|---|---|---|---|---|---|")
             for r in sorted(t, key=lambda r: -(r["mean"] - r["ideal"]))[:45]:
                 P(
-                    f"| {r['cat']}: {r['name'][:60]} | {r['mean']:.1f} / {r['slow']:.1f} / {r['fast']:.1f} | {r['ideal']:.1f} | {r['mean']/max(r['ideal'],1e-3):.1f} | {r['cls']} | {r['note']} |"
+                    f"| {r['cat']}: {r['name'][:60]} | {r['mean']:.1f} / {r['slow']:.1f} / {r['fast']:.1f} | {r['ideal']:.1f} | {min(1.0, r['ideal']/max(r['mean'],1e-3)):.2f} | {r['cores']:.0f} / {r['avail']:.0f} | {r['br']:.1f} / {r['nc']:.1f} / {r['t1']:.1f} / {r['t2']:.1f} | {r['cls']} | {r['note']} |"
                 )
+            P(
+                f"\n### arm {name}: parallelism-limited ops (cores used << available and not at the DRAM / fabric ceiling)\n"
+            )
+            P(
+                "Upper BOUND, not an estimate: measured x cores_used / cores_available is the time if the op scaled perfectly over all available cores (it ignores the DRAM ceiling, per-core fixed costs, synchronisation, and ops that are latency bound; the real gain is at most measured - max(bound, ideal)). 'available' is the profiler's AVAILABLE WORKER CORE COUNT of the op (the sub-grid the op was launched on).\n"
+            )
+            P(
+                "| rank | op | cores used / available | measured us | ideal us | bound if spread over all us | potential (measured - max(bound, ideal)) us | cause class |"
+            )
+            P("|---|---|---|---|---|---|---|---|")
+            lim = []
+            for r in t:
+                if (
+                    r["avail"] > 0
+                    and not r["name"].startswith("moe_compute")
+                    and r["cores"] < 0.5 * r["avail"]
+                    and r["cls"] not in ("at ceiling", "fabric transfer", "wait for the slowest chip")
+                ):
+                    bound = r["mean"] * r["cores"] / r["avail"]
+                    lim.append((r["mean"] - max(bound, r["ideal"]), bound, r))
+            for i, (pot, bound, r) in enumerate(sorted(lim, key=lambda x: -x[0])[:25]):
+                P(
+                    f"| {i+1} | {r['cat']}: {r['name'][:56]} | {r['cores']:.0f} / {r['avail']:.0f} | {r['mean']:.1f} | {r['ideal']:.1f} | {bound:.1f} | {pot:.1f} | {r['cls']} |"
+                )
+            P(f"\nsum of the potentials over these ops: {sum(x[0] for x in lim):.1f} us (upper bound)")
     text = "\n".join(out) + "\n"
     if "--md" in sys.argv:
         open(arg("--md"), "w").write(text)

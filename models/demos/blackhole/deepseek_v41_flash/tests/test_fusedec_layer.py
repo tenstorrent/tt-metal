@@ -78,12 +78,39 @@ def test_fusedec_layer(mesh_device):
     states = {k: ss.build(dec.pos) for k, ss in dec.step_states.items()}
     x, pre = dec.embedding.forward(tokens)
     layers = {lid: (layer, st) for lid, layer, st in dec.layers}
-    for lid in sorted(layers):
-        if (
-            lid < LAYER
-        ):  # the kv source layers (layer 2 for layer 3): eager, outside the measurement; sets source.last_lat
-            lay, st = layers[lid]
-            x, pre = lay.forward(x, pre, states[st])
+    if os.environ.get("FD_SYNTH", "1") == "1":
+        # no real layer 2: synthetic stand-ins of the right shape for what layer 3 reads from its kv source: the pooled latent rows of the step (source.last_lat, bf16 TILE [1,1,T,512]) and the
+        # indexer selection of the step (st["topk_ids"], uint32 [rows,1,1,512], distinct valid entries, random); no real state
+        lay, st = layers[LAYER]
+        g = torch.Generator().manual_seed(5)
+        lat = ttnn.from_torch(
+            torch.randn(1, 1, T, 512, generator=g).to(torch.bfloat16),
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        src = getattr(lay.attention, "source", None)
+        if src is not None:
+            src.last_lat = lat
+        ratio = getattr(lay.attention, "ratio", 0)
+        nent = max(int(base.min()) // max(ratio, 1) - 1, 512)
+        if ratio and (runner.cur_bucket or 0) > 512:
+            ids = torch.stack([torch.randperm(nent, generator=g)[:512] for _ in range(T * md.shape[0])]).to(torch.int32)
+            states[st]["topk_ids"] = ttnn.from_torch(
+                ids.sort(dim=1).values.reshape(-1, 1, 1, 512),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape)),
+            )
+    else:
+        for lid in sorted(layers):
+            if lid < LAYER:  # real kv source layers, eager, outside the measurement
+                lay, st = layers[lid]
+                x, pre = lay.forward(x, pre, states[st])
     lay, st = layers[LAYER]
     ttnn.synchronize_device(md)
     _ = [lay.forward(x, pre, states[st]) for _ in range(2)]  # warm-up (program compile, persistent buffers)
@@ -120,6 +147,13 @@ def test_fusedec_layer(mesh_device):
                 rec_["bit_equal"] = all(torch.equal(a, b) for a, b in zip(ref, outs))
             arms_out[name] = rec_
             print("LAYERARM " + json.dumps({name: rec_}), flush=True)
+            json.dump(
+                dict(arms=arms_out, layer=LAYER), open(os.path.join(out_dir, "layer_arms.json"), "w")
+            )  # after every arm: a later arm that crashes the process keeps the earlier ones
+            json.dump(
+                dict(rows=rec.rows, marks=rec.marks, traces={}, meta=dict(layers=H.LAYERS, B=H.B, k=H.K, T=T)),
+                open(os.path.join(out_dir, "oprows.json"), "w"),
+            )
         finally:
             for k, v in old.items():
                 if v is None:
@@ -131,4 +165,30 @@ def test_fusedec_layer(mesh_device):
         dict(rows=rec.rows, marks=rec.marks, traces={}, meta=dict(layers=H.LAYERS, B=H.B, k=H.K, T=T)),
         open(os.path.join(out_dir, "oprows.json"), "w"),
     )
+    if os.environ.get("FD_MOE_DUMP") == "1":
+        # the MoE block alone on a deterministic synthetic ffn input (independent of the attention / KV state), real routed ids: outputs of all 32 chips saved for a cross-process comparison (bfp8 vs bfp4 experts)
+        gg = torch.Generator().manual_seed(11)
+        nrows = md.shape[0]
+        hh = (torch.randn(nrows, 1, T, 5120, generator=gg) * 0.5).to(torch.bfloat16)
+        h = ttnn.from_torch(
+            hh,
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape)),
+        )
+        ht = ttnn.from_torch(
+            hh.reshape(nrows * T, 1, 1, 5120),
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape)),
+        )
+        for _ in range(2):
+            mo = lay.moe.forward(h, ht)
+        ttnn.synchronize_device(md)
+        torch.save([ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(mo)], os.path.join(out_dir, "moe_out.pt"))
+        print("FD_MOE_DUMP saved", flush=True)
     print("FD_LAYER_DONE", flush=True)

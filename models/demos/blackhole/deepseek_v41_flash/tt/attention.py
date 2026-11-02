@@ -208,6 +208,19 @@ class DSV41Attention:
         self.wo_b = up(
             w["wo_b"].T.reshape(1, 1, N_GROUPS * O_LORA, DIM), dtype=wdt, mapper=col_shard(2)
         )  # [8*1024, 5120]
+        if os.environ.get("DSV41_ATTN_BFP4_ARM") == "1":
+            # call-time arm of the single-layer loop (DSV41_ATTN_BFP4=1): the same four projections stored as bfp4, next to the bfp8 ones (OPT-007: reduced-weight attention projections)
+            b4 = ttnn.bfloat4_b
+            self.wqkv_b4 = up(
+                torch.cat([w["wq_a"].T, w["wkv"].T], dim=1).reshape(1, 1, DIM, Q_LORA + HEAD_DIM), dtype=b4
+            )
+            self.wq_b_b4 = up(w["wq_b"].T.reshape(1, 1, Q_LORA, N_HEADS * HEAD_DIM), dtype=b4, mapper=col_shard(3))
+            self.wo_a_b4 = up(
+                torch.cat([torch.zeros(HEAD_DIM, wo_a.shape[1]), wo_a.float()]).reshape(1, 1, -1, N_GROUPS * O_LORA),
+                dtype=b4,
+                mapper=col_shard(3),
+            )
+            self.wo_b_b4 = up(w["wo_b"].T.reshape(1, 1, N_GROUPS * O_LORA, DIM), dtype=b4, mapper=col_shard(2))
         # attention sink, pre-divided by the softmax scale (the kernel multiplies sinks by `scale`)
         sink = (w["attn_sink"].float() / self.scale).reshape(N_GROUPS, LOCAL_HEADS)
         sinks = torch.zeros(N_GROUPS, PAD_HEADS, 32)
@@ -234,6 +247,15 @@ class DSV41Attention:
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
+        )
+        self.ckc_hifi2 = (
+            ttnn.init_device_compute_kernel_config(  # DSV41_ATTN_LIN_HIFI2=1: HiFi2, fp32 accumulation kept
+                md.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
         )
         self.ckc_sdpa = ttnn.init_device_compute_kernel_config(
             md.arch(),
@@ -328,6 +350,10 @@ class DSV41Attention:
     # ---- helpers --------------------------------------------------------------------------------------
     def _lin(self, x, w, name, **kw):
         ckc = self.ckc_lofi if os.environ.get("DSV41_ATTN_LIN_LOFI") == "1" else self.ckc
+        if os.environ.get("DSV41_ATTN_LIN_HIFI2") == "1":
+            ckc = self.ckc_hifi2
+        if os.environ.get("DSV41_ATTN_BFP4") == "1" and hasattr(self, "wqkv_b4"):
+            w = {"QKV": self.wqkv_b4, "QB": self.wq_b_b4, "OA": self.wo_a_b4, "OB": self.wo_b_b4}.get(name, w)
         if (
             int(x.shape[-2]) > 32
         ):  # spec verify with > 32 rows (DSV41_SPEC_ROWS): the tuned 1D configs are per_core_M = 1 (<= 32 rows)

@@ -278,7 +278,12 @@ def paged_kv_step(
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, rows, topk_out]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
     )
-    cores = [ttnn.CoreCoord(i % 8, i // 8) for i in range(rows)]
+    nsplit = int(
+        os.environ.get("DSV41_KVSTEP_SPLIT", "1")
+    )  # cores per query row (tt/paged_kernels/paged_kv_step_split.cpp); 1 = the single-core kernel
+    if nsplit not in (2, 4, 8) or rows * nsplit > 120 or topk_out % (16 * nsplit):
+        nsplit = 1
+    cores = [ttnn.CoreCoord(i % 8, i // 8) for i in range(rows * nsplit)]
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     pos_b = (rows * 4 + 63) // 64 * 64
     total = pos_b + 16384 + 16384 + (maxp * 4 + 63) // 64 * 64 + 2048 + 1024 + 1024 + topk_out * 4
@@ -304,13 +309,13 @@ def paged_kv_step(
         int(write_kv),
         0,
         int(pool.dtype == ttnn.fp8_e4m3),
-    ]
+    ] + ([nsplit] if nsplit > 1 else [])
     ct += _acc(kv) + _acc(lat_t) + _acc(pos) + _acc(page_table) + _acc(ids_t) + _acc(pool) + _acc(out)
     rt = ttnn.RuntimeArgs()
     for i, c in enumerate(cores):
         rt[c.x][c.y] = [i]
     k = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/paged_kv_step.cpp",
+        kernel_source=f"{KDIR}/{'paged_kv_step_split.cpp' if nsplit > 1 else 'paged_kv_step.cpp'}",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
         compile_time_args=ct,

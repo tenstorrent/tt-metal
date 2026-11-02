@@ -13,6 +13,31 @@ import ttnn
 WORKERS = int(os.environ.get("DSV41_CCL_WORKERS", "1"))
 
 
+def _links(
+    ccl,
+):  # DSV41_CCL_LINKS_CALL (call-time arm of the single-layer loop, tt-opt OPT-009 / sync settings): links per collective
+    v = os.environ.get("DSV41_CCL_LINKS_CALL")
+    return int(v) if v else ccl.num_links
+
+
+def _w(default):  # DSV41_CCL_WORKERS_CALL: workers per link
+    v = os.environ.get("DSV41_CCL_WORKERS_CALL")
+    return int(v) if v else default
+
+
+def _extra(
+    rs=False,
+):  # DSV41_CCL_BUFFERS_CALL (num_buffers_per_channel), DSV41_CCL_CHUNKS_CALL (chunks_per_sync, reduce_scatter only)
+    kw = {}
+    b = os.environ.get("DSV41_CCL_BUFFERS_CALL")
+    if b:
+        kw["num_buffers_per_channel"] = int(b)
+    c = os.environ.get("DSV41_CCL_CHUNKS_CALL")
+    if c and rs:
+        kw["chunks_per_sync"] = int(c)
+    return kw
+
+
 class LeanSems:
     """Own ping-pong semaphores for the one-worker ops: sharing the CCLManager's semaphores between ops of different worker counts gave wrong results at T < 16
     (measured: RS(w1)+AG(default) and RS+AG(w1) pairs after each other on the same semaphores: PCC 0.88 / 0.93 against 1.0).
@@ -53,12 +78,13 @@ def _allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None, axi
         tensor,
         dim=3,
         multi_device_global_semaphore=sems(ccl_manager).rs_sem(),
-        num_links=ccl_manager.num_links,
+        num_links=_links(ccl_manager),
         memory_config=mem,
         topology=ccl_manager.topology,
         cluster_axis=axis,
         barrier_semaphore=sems(ccl_manager).barrier(),
-        num_workers_per_link=WORKERS,
+        num_workers_per_link=_w(WORKERS),
+        **_extra(True),
     )
     tensor.deallocate(True)
     gathered = ttnn.experimental.all_gather_async(
@@ -68,10 +94,11 @@ def _allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None, axi
         mesh_device=ccl_manager.mesh_device,
         topology=ccl_manager.topology,
         multi_device_global_semaphore=sems(ccl_manager).ag_sem(),
-        num_links=ccl_manager.num_links,
+        num_links=_links(ccl_manager),
         memory_config=mem,
         barrier_semaphore=sems(ccl_manager).barrier(),
-        num_workers_per_link=WORKERS,
+        num_workers_per_link=_w(WORKERS),
+        **_extra(False),
     )
     scattered.deallocate(True)
     return gathered
@@ -86,10 +113,11 @@ def _allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, lin
         mesh_device=ccl_manager.mesh_device,
         topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
         multi_device_global_semaphore=sems(ccl_manager).ag_sem() if lean else ccl_manager.get_ag_ping_pong_semaphore(),
-        num_links=ccl_manager.num_links,
+        num_links=_links(ccl_manager),
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         barrier_semaphore=sems(ccl_manager).barrier() if lean else ccl_manager.get_barrier_semaphore(),
-        num_workers_per_link=WORKERS if lean else None,
+        num_workers_per_link=_w(WORKERS) if lean else None,
+        **_extra(False),
     )
 
 
@@ -119,10 +147,11 @@ def reduce_scatter_lean(tensor, ccl_manager, cluster_axis=1, memory_config=None)
         tensor,
         dim=3,
         multi_device_global_semaphore=sems(ccl_manager).rs_sem(),
-        num_links=ccl_manager.num_links,
+        num_links=_links(ccl_manager),
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         topology=ccl_manager.topology,
         cluster_axis=cluster_axis,
         barrier_semaphore=sems(ccl_manager).barrier(),
-        num_workers_per_link=WORKERS,
+        num_workers_per_link=_w(WORKERS),
+        **_extra(True),
     )

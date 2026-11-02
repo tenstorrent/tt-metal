@@ -177,7 +177,9 @@ def _inject_routes(md, dec, R, U, n, seed):
         s0 = int(rng.integers(0, S - n + 1))
         ids = Rl[s0 : s0 + n][:, us].transpose(1, 0, 2).reshape(-1, 6)  # user-major rows
         ids = torch.from_numpy(np.ascontiguousarray(ids[: rows * T])).to(torch.int32).reshape(rows * T, 1, 1, 6)
-        sc = torch.rand(rows * T, 6) + 0.1
+        sc = (
+            torch.rand(rows * T, 6, generator=torch.Generator().manual_seed(1000 + int(lid))) + 0.1
+        )  # seeded: the same scores in every process (cross-process comparisons)
         sc = (sc / sc.sum(1, keepdim=True)).to(torch.bfloat16).reshape(rows * T, 1, 1, 6)
         t_i = ttnn.from_torch(
             ids,

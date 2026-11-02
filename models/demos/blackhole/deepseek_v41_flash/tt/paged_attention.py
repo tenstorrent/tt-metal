@@ -63,6 +63,22 @@ class _PagedMixin:
             packer_l1_acc=False,
         )
 
+    def _ckc_sp_call(self):
+        """DSV41_SPARSE_FID=<HiFi4|HiFi2|LoFi> (call-time arm): fidelity of sparse_sdpa; default = the build-time config (HiFi4 / fp32 accumulation)."""
+        f = os.environ.get("DSV41_SPARSE_FID")
+        if not f:
+            return self.ckc_sp
+        cache = self.__dict__.setdefault("_ckc_sp_alt", {})
+        if f not in cache:
+            cache[f] = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=getattr(ttnn.MathFidelity, f),
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        return cache[f]
+
     # ---- the paged step -------------------------------------------------------------------------------------------------------------
     def _paged_attend(self, q, lat, st, ratio, src_off, topk_out):
         """q: [1,T,(9)32,512] RoPE'd tile (row 0 = kv vector, rows 1..8 = heads) -> attention output [1,T,32,512] (tile), same layout as SDPA decode."""
@@ -100,8 +116,10 @@ class _PagedMixin:
                 else ttnn.transformer.SparseKVFormat.FP8_E4M3
             ),
             scale=self.scale,
-            k_chunk_size=128,
-            compute_kernel_config=self.ckc_sp,
+            k_chunk_size=int(
+                os.environ.get("DSV41_SPARSE_KCHUNK", "128")
+            ),  # call-time arm: sparse_sdpa key chunk (decode: 8 rows on 8 cores, each row loops over its 640 entries)
+            compute_kernel_config=self._ckc_sp_call(),
             attention_sink=self.sp_sink,
         )
         ttnn.deallocate(qh)
