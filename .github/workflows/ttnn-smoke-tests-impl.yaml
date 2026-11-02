@@ -42,6 +42,11 @@ on:
         type: boolean
         default: false
         description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/ttnn_merge_gate_tests.yaml
+        description: "Test list to run"
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
@@ -52,7 +57,7 @@ jobs:
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
       skip-args-quasar: ${{ steps.skip-list.outputs.skip-args-quasar }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
       TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
     steps:
       - name: Checkout the repository
