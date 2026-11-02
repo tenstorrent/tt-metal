@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <memory>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
@@ -162,6 +163,21 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         TT_FATAL(
             config_->allocator_mode == AllocatorMode::HYBRID,
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
+        // TT_METAL_PER_CORE_L1_BOTTOM_UP=1 (tt-blaze DS41F-0138, 2026-11-02): place per-core buffers from the BOTTOM of
+        // L1 while lockstep buffers keep the default top-down placement. Interleaved from the same end, per-core
+        // buffers of different sizes (and their transient frees) leave holes at different addresses on every core, and
+        // a later lockstep allocation -- which needs ONE address free on every core -- fails with hundreds of KB free
+        // per bank
+        // ("0 B remained placeable across 0 window(s)"). Grown from opposite ends they never interleave: the lockstep
+        // set is contiguous at the top and only capacity can fail. Read once; a TT_ name so tt-run forwards it to every
+        // rank.
+        static const bool per_core_bottom_up = [] {
+            const char* v = std::getenv("TT_METAL_PER_CORE_L1_BOTTOM_UP");
+            return v != nullptr && v[0] == '1';
+        }();
+        if (per_core_bottom_up) {
+            bottom_up = true;
+        }
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
         TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
