@@ -76,6 +76,22 @@ void sdpa_fw_recip_tile_first_column(uint32_t idst) {
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
 //
+// DST[i] = max(DST[i], cb_max[idx0 + i]) for i < n, column vectors, DST[n + i] as scratch: a running max
+// folded with new maxes (the K/V loop's step max, a merger's partial). Inside the caller's DST pass. Not
+// inlined, like the other helpers the merge shares with the loop: their inits are text the kernel, close to
+// its size cap, would otherwise carry once per call site.
+__attribute__((noinline)) void fold_max_in_dst(uint32_t cb_max, uint32_t idx0, uint32_t n) {
+    reconfig_data_format_srca(cb_max);
+    copy_init(cb_max);
+    for (uint32_t i = 0; i < n; ++i) {
+        copy_tile(cb_max, /* tile_idx */ idx0 + i, /* register idx */ n + i);
+    }
+    binary_max_tile_init();
+    for (uint32_t i = 0; i < n; ++i) {
+        binary_max_tile(i, n + i, i, VectorMode::C);
+    }
+}
+
 // Max over rows [row0, row0 + n) of the score CB, folded with their running max, packed to
 // cb_cur_max[row]. One DST pass: slot i holds row i's max, slot n + i its previous max, so n <= 4 without
 // the fold and n <= 2 with it.
@@ -104,15 +120,7 @@ void update_row_max_values(
     reduce_uninit();
 
     if (do_eltwise_max) {
-        reconfig_data_format_srca(cb_attention_weights, cb_prev_max);
-        copy_init(cb_prev_max);
-        for (uint32_t i = 0; i < n; ++i) {
-            copy_tile(cb_prev_max, /* tile_idx */ row0 + i, /* register idx */ n + i);
-        }
-        binary_max_tile_init();
-        for (uint32_t i = 0; i < n; ++i) {
-            binary_max_tile(i, n + i, i, VectorMode::C);
-        }
+        fold_max_in_dst(cb_prev_max, row0, n);
     }
     tile_regs_commit();
 
@@ -318,17 +326,24 @@ void matmul_qk_by_v(
     cb_push_back(cb_cur_mm_out, rows * Wt);
 }
 
-// exp(scale * (prev_max - cur_max)) for rows [row0, row0 + n) -> cb_exp_max_diff[row], n <= 4 (one DST slot
-// per row).
+// cb_exp_max_diff[out0 + i] = exp(scale * (prev_max[prev0 + i] - cur_max[cur0 + i])) for i < n, n <= 4 (one
+// DST slot per row). The K/V loop passes the row for all three; a merger reads the partial's max from its
+// slot in the partial row and packs one alpha at a time.
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-void update_exp_max_diffs(
-    uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row0, uint32_t n) {
+__attribute__((noinline)) void update_exp_max_diffs(
+    uint32_t cb_prev_max_value,
+    uint32_t prev0,
+    uint32_t cb_cur_max_value,
+    uint32_t cur0,
+    uint32_t cb_exp_max_diff,
+    uint32_t out0,
+    uint32_t n) {
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     sub_init(cb_prev_max_value, cb_cur_max_value);
     sdpa_exp_tile_scaled_init<scaler_fp32>();
     tile_regs_acquire();
     for (uint32_t i = 0; i < n; ++i) {
-        sub_tiles(cb_prev_max_value, cb_cur_max_value, /* tile_idx */ row0 + i, /* tile_idx */ row0 + i, i);
+        sub_tiles(cb_prev_max_value, cb_cur_max_value, /* tile_idx */ prev0 + i, /* tile_idx */ cur0 + i, i);
     }
     // First-column scaled exp: both max values are column vectors, so only column 0 has data and the
     // SFPU runs 4x fewer iterations than a full-tile exp.
@@ -340,24 +355,41 @@ void update_exp_max_diffs(
     tile_regs_wait();
     pack_to(cb_exp_max_diff);
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile</* out_of_order */ true>(i, cb_exp_max_diff, /* offset */ row0 + i);
+        pack_tile</* out_of_order */ true>(i, cb_exp_max_diff, /* offset */ out0 + i);
     }
     tile_regs_release();
 }
 
-// cur_sum[row] = prev_sum[row] * exp_max_diff[row] + cur_sum[row] for rows [row0, row0 + n), in place.
-// Two DST slots per row (product, current sum), so n <= 2.
-void update_cur_exp_sums_inplace(
-    uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_exp, uint32_t cb_exp_max_diff, uint32_t row0, uint32_t n) {
-    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
-    mul_bcast_cols_init(cb_prev_sum_exp, cb_exp_max_diff);
+// cb_out[out0 + i] = sum_a[a0 + i] * alpha_a[a0 + i] + sum_b[b0 + i] [* alpha_b[a0 + i]] for i < n; the alphas
+// sit at the row's slot. Two DST slots per row (the two terms), so n <= 2. The K/V loop runs it in place
+// (cb_out = sum_b = the step's sums, no alpha_b); a merger adds the partial's sum scaled by its alpha.
+template <bool scale_b>
+void update_cur_exp_sums(
+    uint32_t cb_sum_a,
+    uint32_t cb_alpha_a,
+    uint32_t a0,
+    uint32_t cb_sum_b,
+    uint32_t cb_alpha_b,
+    uint32_t b0,
+    uint32_t cb_out,
+    uint32_t out0,
+    uint32_t n) {
+    reconfig_data_format(cb_sum_a, cb_alpha_a);  // reconfig data format to precise
+    mul_bcast_cols_init(cb_sum_a, cb_alpha_a);
     tile_regs_acquire();
     for (uint32_t i = 0; i < n; ++i) {
-        mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, row0 + i, row0 + i, i);
+        mul_tiles_bcast_cols(cb_sum_a, cb_alpha_a, a0 + i, a0 + i, i);
     }
-    copy_init(cb_cur_sum_exp);
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_cur_sum_exp, /* tile_idx */ row0 + i, /* register idx */ n + i);
+    if constexpr (scale_b) {
+        reconfig_data_format(cb_sum_a, cb_sum_b, cb_alpha_a, cb_alpha_b);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_tiles_bcast_cols(cb_sum_b, cb_alpha_b, b0 + i, a0 + i, n + i);
+        }
+    } else {
+        copy_init(cb_sum_b);
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(cb_sum_b, /* tile_idx */ b0 + i, /* register idx */ n + i);
+        }
     }
     add_binary_tile_init();
     for (uint32_t i = 0; i < n; ++i) {
@@ -366,9 +398,9 @@ void update_cur_exp_sums_inplace(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_to(cb_cur_sum_exp);
+    pack_reconfig_data_format(cb_out);
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile</* out_of_order */ true>(i, cb_cur_sum_exp, /* offset */ row0 + i);
+        pack_tile</* out_of_order */ true>(i, cb_out, /* offset */ out0 + i);
     }
     tile_regs_release();
 }
@@ -506,57 +538,40 @@ void merge_partial(
     for (uint32_t r = 0; r < rows; ++r) {
         cb_wait_front(cb_partial_in, tiles_per_row);
 
-        // (1) DST: 0 = m_own, 1 = m_p, 2 = m_p. m = max(0, 1) -> 1; alpha_own = exp(0 - 1) -> 0;
-        //     alpha_p = exp(2 - 1) -> 2. Column vectors, so the exp runs on the first column only.
+        // (1) m = max(m_own, m_p) -> cb_cur_max[r], then alpha_own = exp(scale * (m_own - m)) and
+        //     alpha_p = exp(scale * (m_p - m)), the K/V loop's max fold and alpha step with the partial's max
+        //     read from its slot in the partial row. The maxes are bf16 values, so the FPU subtraction is
+        //     exact. Each CB is pushed a row at a time: the row's tiles are read back within the iteration.
         tile_regs_acquire();
         reconfig_data_format_srca(cb_prev_max);
         copy_init(cb_prev_max);
         copy_tile(cb_prev_max, r, 0);
-        reconfig_data_format_srca(cb_partial_in);
-        copy_init(cb_partial_in);
-        copy_tile(cb_partial_in, kPartialMaxTile, 1);
-        copy_tile(cb_partial_in, kPartialMaxTile, 2);
-        binary_max_tile_init();
-        binary_max_tile(0, 1, 1, VectorMode::C);
-        sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0);
-        sub_binary_tile(2, 1, 2);
-        sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(0);
-        sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(2);
+        fold_max_in_dst(cb_partial_in, kPartialMaxTile, 1U);
         tile_regs_commit();
         tile_regs_wait();
         cb_reserve_back(cb_cur_max, 1);
         pack_reconfig_data_format(cb_cur_max);
-        pack_tile(1, cb_cur_max);
+        pack_tile(0, cb_cur_max);
         cb_push_back(cb_cur_max, 1);
-        cb_reserve_back(cb_alpha_own, 1);
-        cb_reserve_back(cb_alpha_p, 1);
-        pack_reconfig_data_format(cb_alpha_own);
-        pack_tile(0, cb_alpha_own);
-        pack_tile(2, cb_alpha_p);
-        cb_push_back(cb_alpha_own, 1);
-        cb_push_back(cb_alpha_p, 1);
         tile_regs_release();
+        cb_wait_front(cb_cur_max, r + 1U);
+        cb_reserve_back(cb_alpha_own, 1);
+        update_exp_max_diffs<scaler_fp32, scaler_bf16>(cb_prev_max, r, cb_cur_max, r, cb_alpha_own, 0U, 1U);
+        cb_push_back(cb_alpha_own, 1);
+        cb_reserve_back(cb_alpha_p, 1);
+        update_exp_max_diffs<scaler_fp32, scaler_bf16>(
+            cb_partial_in, kPartialMaxTile, cb_cur_max, r, cb_alpha_p, 0U, 1U);
+        cb_push_back(cb_alpha_p, 1);
         cb_wait_front(cb_alpha_own, r + 1U);
         cb_wait_front(cb_alpha_p, r + 1U);
 
-        // (2) sum = sum_own * alpha_own + sum_p * alpha_p on the FPU (broadcast multiplies from the CBs,
-        //     the path the in-loop sum update takes too), then the partial's output tiles times alpha_p,
+        // (2) sum = sum_own * alpha_own + sum_p * alpha_p on the FPU (the K/V loop's sum update with the
+        //     partial's sum as the scaled second term), then the partial's output tiles times alpha_p,
         //     packed into the output row.
-        reconfig_data_format(cb_prev_sum_exp, cb_alpha_own);
-        mul_bcast_cols_init(cb_prev_sum_exp, cb_alpha_own);
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(cb_prev_sum_exp, cb_alpha_own, r, r, 0);
-        mul_tiles_bcast_cols(cb_partial_in, cb_alpha_p, kPartialSumTile, r, 1);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
-        tile_regs_commit();
-        tile_regs_wait();
         cb_reserve_back(cb_cur_sum_exp, 1);
-        pack_reconfig_data_format(cb_cur_sum_exp);
-        pack_tile(0, cb_cur_sum_exp);
+        update_cur_exp_sums</* scale_b */ true>(
+            cb_prev_sum_exp, cb_alpha_own, r, cb_partial_in, cb_alpha_p, kPartialSumTile, cb_cur_sum_exp, 0U, 1U);
         cb_push_back(cb_cur_sum_exp, 1);
-        tile_regs_release();
         pack_reconfig_data_format(cb_cur_mm_out);  // the unpacker keeps the config above: all four CBs are fp32
         for (uint32_t t0 = 0; t0 < Wt; t0 += block_size) {
             tile_regs_acquire();
