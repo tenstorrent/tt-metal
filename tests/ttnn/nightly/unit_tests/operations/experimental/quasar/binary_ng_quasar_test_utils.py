@@ -29,15 +29,6 @@ def _height_sharded_config(shard_shape, core_grid):
     )
 
 
-def _dram_height_sharded_config(shard_shape, core_grid):
-    # core_grid is in DRAM-bank coordinates, not worker-core coordinates.
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-
 def _block_sharded_config(shard_shape, core_grid):
     return ttnn.create_sharded_memory_config(
         shard_shape,
@@ -74,7 +65,7 @@ _OPS = {
     "minimum": (lambda: ttnn.experimental.quasar.minimum, torch.minimum),
 }
 
-# PCC thresholds. NEVER weakened below what the descriptor path achieves for the same config.
+# PCC thresholds. Never weaken these.
 _PCC = {ttnn.bfloat16: 0.997, ttnn.float32: 0.9999}
 
 # Default shape for _run_mixed: a 16x16-tile square (256 tiles). See test_binary_ng_no_bcast.py for the
