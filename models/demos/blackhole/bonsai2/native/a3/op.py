@@ -51,7 +51,7 @@ def worker_cores_rect(device, workers_per_bank: int):
 def worker_cores(device, workers_per_bank: int, avoid=AVOID):
     import os
 
-    if os.environ.get("BONSAI_A3_RECT") == "1":
+    if os.environ.get("BONSAI_A3_RECT", "1") == "1" and workers_per_bank == 4:  # default; =0 for the scattered set
         return worker_cores_rect(device, workers_per_bank)
     """[(core, bank, sub)] -- the optimal reader per bank, plus a neighbour per extra worker."""
     primary = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
@@ -536,8 +536,8 @@ def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=
     import numpy as np
     import torch
 
-    if shared_exp is None:  # A2b 256 B code tiles, opt-in while it is being measured
-        shared_exp = os.environ.get("BONSAI_A2B") == "1"
+    if shared_exp is None:  # A2b 256 B code tiles by default; BONSAI_A2B=0 for the 320 B Bfp2_b tiles
+        shared_exp = os.environ.get("BONSAI_A2B", "1") == "1"
     banks = device.dram_grid_size().x
     rows = {}
 
