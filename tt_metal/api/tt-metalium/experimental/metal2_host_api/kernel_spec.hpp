@@ -65,36 +65,10 @@ namespace tt::tt_metal::experimental {
 //
 // PLACEMENT: The nodes the kernel runs on are derived from WorkUnitSpec membership.
 //
-// NAMES AND SCOPES: Kernel source code reaches each resource binding and argument by name
-//   (a binding's accessor_name, or an argument's name). Unscoped names are grouped by kind:
-//   dfb::<name>, args::<name>, and so on.
-//   A name may instead be scoped, written "<scope>.<name>". All of a kernel's names in one
-//   scope, of every kind, are emitted together as static members of one struct, so kernel
-//   code spells them <scope>::<name>. A scope is a C++ type, so device code can be written
-//   once and used with any scope that has the names it needs:
-//     template <typename Scope> void op() { DataflowBuffer in(Scope::in); auto n = get_arg(Scope::n); }
-//   This lets one kernel combine several pieces of device code (or several uses of one piece),
-//   each with its own names, as kernel fusion needs.
-//   Each scope also gets by-name binding lookups, the counterparts of dfb::get_token_if_present
-//   and so on: <scope>::get_dfb_token_if_present<"name">(), and likewise get_tensor_ and
-//   get_scratch_. (Through a template parameter: Scope::template get_dfb_token_if_present<"name">().)
-//   Rules:
-//    - There is one level of scope.
-//    - Names in one scope are unique across all kinds, and don't collide with the members the
-//      generator adds: the lookups, and the type alias <name>_t of each tensor binding.
-//    - A scope may not be named after a namespace the generated kernel headers declare or use:
-//      args, dfb, pipe, sem, scratch, tensor, sem_internal, binding_details, experimental,
-//      internal, std, tensor_accessor.
-//    - Scopes belong to their KernelSpec: two KernelSpecs may use the same scope independently.
-//   Sharing a binding between scopes: a kernel binds a given resource once, under one name (see
-//   each binding kind's rules). To make it visible in another scope as well, alias it in kernel
-//   code, in a view of that scope:
-//     struct b_view : b { static constexpr const auto& in = a::out; };  // b's names, plus a::out as `in`
-//     op<b_view>();
-//   Each scope's code then constructs its own device objects from its own names, as a kernel
-//   would: for a shared DFB, that's one DataflowBuffer per scope. (Two DataflowBuffer objects
-//   for one DFB endpoint work correctly, but can confuse device-side debug tooling's bookkeeping.)
-//   Not yet supported: scoped arguments of a TT_KERNEL entry, and scoped names under emulation.
+// SCOPED NAMES: Used when composing several pieces of device code into one fused kernel.
+//   (Ordinary kernels don't need them). Any accessor_name or argument name may be written
+//   "<scope>.<name>", and kernel code then reaches it as <scope>::<name>.
+//   See tech_reports/NamedKernelArgs/scoped_names.md.
 //
 // ============================================================================
 
@@ -102,7 +76,6 @@ namespace tt::tt_metal::experimental {
 using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
 // Maximum length of a resource binding's accessor_name (DFB, semaphore, scratchpad, tensor).
-// For a scoped accessor_name, the limit applies to the whole "<scope>.<name>".
 //
 // MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side.
 inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;
@@ -236,10 +209,10 @@ struct KernelSpec {
     // Currently, only arguments of uint32_t are supported.
 
     struct RuntimeArgSchema {
-        // Runtime argument names (must be unique, valid C++ identifiers; may be scoped, see NAMES AND SCOPES.)
+        // Runtime argument names (must be unique, valid C++ identifiers, or scoped names.)
         Group<std::string> runtime_arg_names;
 
-        // Common runtime argument names (must be unique, valid C++ identifiers; may be scoped, see NAMES AND SCOPES.)
+        // Common runtime argument names (must be unique, valid C++ identifiers, or scoped names.)
         Group<std::string> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};

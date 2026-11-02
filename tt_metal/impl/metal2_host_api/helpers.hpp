@@ -110,7 +110,7 @@ inline bool IsValidCppIdentifier(std::string_view s) {
 
 // A kernel-visible name (an argument name, a binding's accessor_name, or a tensor binding sequence_name)
 // is a C++ identifier, or a scoped name "<scope>.<name>" whose two parts are C++ identifiers.
-// (One level of scope only. See "NAMES AND SCOPES" in kernel_spec.hpp.)
+// (One level of scope only. See tech_reports/NamedKernelArgs/scoped_names.md.)
 // KERNEL_VISIBLE_NAME_RULE states the rule for validation error messages.
 inline constexpr std::string_view KERNEL_VISIBLE_NAME_RULE =
     "a valid C++ identifier, or a scoped name '<scope>.<name>' of two C++ identifiers";

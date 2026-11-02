@@ -179,7 +179,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 // Scoped Args Readback
 // ============================================================================
 //
-// Scoped RTAs, CRTAs and CTAs ("scope.name"; see NAMES AND SCOPES in kernel_spec.hpp) deliver their
+// Scoped RTAs, CRTAs and CTAs ("scope.name"; see tech_reports/NamedKernelArgs/scoped_names.md) deliver their
 // values on real WH/BH hardware. One templated piece of device code reads two scopes, a and b, which
 // have the same names; an unscoped arg shares a name with them too. The kernel reports every value
 // to a host-known L1 location, and each must come back from its own slot.

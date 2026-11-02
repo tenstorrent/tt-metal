@@ -60,7 +60,7 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
     }
 }
 
-// Scoped names ("scope.name"; see "NAMES AND SCOPES" in kernel_spec.hpp)
+// Scoped names ("scope.name"; see tech_reports/NamedKernelArgs/scoped_names.md)
 // Every name in one scope, of every kind, becomes a static member of one generated struct named
 // after the scope. So within a scope, names must be unique across all kinds, and must not collide
 // with the members the generator adds itself. (The per-kind checks have already run: each name

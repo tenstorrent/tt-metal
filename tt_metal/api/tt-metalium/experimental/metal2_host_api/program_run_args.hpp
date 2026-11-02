@@ -55,7 +55,6 @@ struct ProgramRunArgs {
         // Per-node runtime argument values.
         // Arguments are keyed by argument name and then by node:
         //   runtime_arg_values[name][node] = value.
-        // (A scoped argument's name is its full name, "<scope>.<name>".)
         //
         // When calling SetProgramRunArgs:
         //  Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be

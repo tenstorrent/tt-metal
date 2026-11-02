@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Local invariants of scoped names ("NAMES AND SCOPES" in kernel_spec.hpp): any kernel-visible name
+// Local invariants of scoped names (tech_reports/NamedKernelArgs/scoped_names.md): any kernel-visible name
 // may be written "<scope>.<name>"; there is one level of scope; names in one scope are unique across
 // all kinds; and a scope may not be named after a generated namespace.
 

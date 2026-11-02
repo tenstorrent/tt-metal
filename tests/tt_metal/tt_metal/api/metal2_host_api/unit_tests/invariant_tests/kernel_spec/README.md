@@ -148,7 +148,7 @@ struct KernelSpec {
 
 ### Scoped names
 
-Any of the names above may be scoped, written `"<scope>.<name>"` (see "NAMES AND SCOPES" in `kernel_spec.hpp`), as
+Any of the names above may be scoped, written `"<scope>.<name>"` (see `tech_reports/NamedKernelArgs/scoped_names.md`), as
 may a tensor binding sequence's `sequence_name` in `advanced_options`. Invariants:
 
 - `<scope>` and `<name>` are each a valid C++ identifier: there is one level of scope.

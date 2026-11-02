@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// JIT-compile tests for scoped names ("NAMES AND SCOPES" in kernel_spec.hpp): every kind of
+// JIT-compile tests for scoped names (tech_reports/NamedKernelArgs/scoped_names.md): every kind of
 // kernel-visible name, scoped, lands in kernel_scopes_generated.h as a static member of its scope's
 // struct, and device code can be templated on a scope (mock Wormhole).
 
@@ -173,7 +173,7 @@ TT_KERNEL void entry(uint32_t num_tiles) { (void)num_tiles; }
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_ScopesShareABindingThroughAKernelSideAliasJITSmoke) {
-    // The documented way to share a binding between scopes (NAMES AND SCOPES in kernel_spec.hpp):
+    // The documented way to share a binding between scopes (tech_reports/NamedKernelArgs/scoped_names.md):
     // bind it once, in one scope, and alias it in kernel code, in a view of the other scope.
     NodeCoord node{0, 0};
 

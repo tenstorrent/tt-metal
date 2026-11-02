@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 // sequence_name) is either unscoped ("name") or scoped ("scope.name"). Kernel code reaches an
 // unscoped name in its kind's namespace (args::name, dfb::name, ...), and a scoped name as a
 // static member of the generated struct for its scope (scope::name).
-// See "NAMES AND SCOPES" in kernel_spec.hpp.
+// See tech_reports/NamedKernelArgs/scoped_names.md.
 inline constexpr char SCOPE_SEPARATOR = '.';
 
 struct ScopedName {
