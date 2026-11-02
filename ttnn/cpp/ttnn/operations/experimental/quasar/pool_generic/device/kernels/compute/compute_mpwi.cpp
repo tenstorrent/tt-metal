@@ -259,11 +259,14 @@ void kernel_main() {
 
             pack_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_tmp_cb_id);
+            // pack_reconfig_data_format only reprograms the packer format; pack_init aims it at the new output.
+            pack_init(pack_tmp_cb_id);
             pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output data)
             pack_tmp_cb.push_back(1);
 
             pack_idx_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_idx_tmp_cb_id);
+            pack_init(pack_idx_tmp_cb_id);
             pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output indexes)
             pack_idx_tmp_cb.push_back(1);
 
@@ -273,6 +276,7 @@ void kernel_main() {
             if (!is_last_iteration) {
                 compute_tmp_idx_cb.reserve_back(1);
                 pack_reconfig_data_format(compute_tmp_idx_cb_id);
+                pack_init(compute_tmp_idx_cb_id);
                 pack_tile<true>(
                     index_scratch_out_dst_idx,
                     compute_tmp_idx_cb_id,
