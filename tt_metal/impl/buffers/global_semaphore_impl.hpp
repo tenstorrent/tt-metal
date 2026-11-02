@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -19,8 +20,10 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
+struct GlobalSemaphoreSlotLease;
 
-// GlobalSemaphoreImpl is implemented as a wrapper around a sharded buffer
+// GlobalSemaphoreImpl is implemented as a wrapper around a sharded buffer, or around a slot of the
+// MeshDevice's GlobalSemaphore pool.
 // This can be updated in the future to be its own container with optimized dispatch functions
 class GlobalSemaphoreImpl {
 public:
@@ -40,12 +43,16 @@ public:
         BufferType buffer_type,
         uint64_t address);
 
+    // Takes a slot from the pool of `cq`'s device and sets it to 0 through `cq`.
+    GlobalSemaphoreImpl(distributed::MeshCommandQueue& cq, CoreRangeSet cores);
+
     // Copy/move semantics
     GlobalSemaphoreImpl(const GlobalSemaphoreImpl&) = default;
     GlobalSemaphoreImpl& operator=(const GlobalSemaphoreImpl&) = default;
     GlobalSemaphoreImpl(GlobalSemaphoreImpl&&) noexcept = default;
     GlobalSemaphoreImpl& operator=(GlobalSemaphoreImpl&&) noexcept = default;
 
+    // Throws if the MeshDevice has been destroyed.
     distributed::MeshDevice& device() const;
 
     const CoreRangeSet& cores() const;
@@ -53,6 +60,8 @@ public:
     BufferType buffer_type() const;
 
     DeviceAddr address() const;
+
+    bool is_pool_backed() const { return lease_ != nullptr; }
 
     // `mesh_cq` must belong to this semaphore's device. It is only used with fast dispatch; it is ignored on slow
     // dispatch / simulator.
@@ -64,9 +73,11 @@ private:
         BufferType buffer_type,
         std::optional<uint64_t> address,
         distributed::MeshCommandQueue& mesh_cq);
+    std::shared_ptr<distributed::MeshDevice> lock_device() const;
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
-    distributed::MeshDevice* device_;
+    std::shared_ptr<const GlobalSemaphoreSlotLease> lease_;
+    std::weak_ptr<distributed::MeshDevice> device_;
     CoreRangeSet cores_;
 };
 
