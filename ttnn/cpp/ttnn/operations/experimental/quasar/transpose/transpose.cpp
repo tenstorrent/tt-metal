@@ -290,14 +290,25 @@ inline Tensor transpose_(
                 const uint64_t Wt = tt::div_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
                 const uint64_t Ht = tt::div_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
                 const uint64_t tile_size = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype()));
-                const uint64_t cb_size_for_rm = (2 * Wt + 2 * Ht + Ht * Wt) * tile_size;
+                uint64_t required = (2 * Wt + 2 * Ht + Ht * Wt) * tile_size;
                 auto* device = a.device();
-                auto lowest_address = device->lowest_occupied_compute_l1_address();
-                uint32_t max_l1_space =
+                const auto& allocator = device->allocator();
+                // The output buffer is allocated after lowest_occupied_compute_l1_address() is
+                // sampled, so an L1 output's per-bank footprint has to be reserved up front.
+                if (output_mem_constructed.buffer_type() == BufferType::L1) {
+                    const auto output_spec = ttnn::prim::qsr::TransposeDeviceOperation::compute_output_specs(
+                        ttnn::prim::qsr::TransposeParams{
+                            .dim = transpose_dim, .output_mem_config = output_mem_constructed, .pad_value = pad_value},
+                        ttnn::prim::qsr::TransposeInputs{.input = a});
+                    required += output_spec.compute_consumed_memory_bytes_per_bank(
+                        allocator->get_alignment(BufferType::L1), allocator->get_num_banks(BufferType::L1));
+                }
+                const auto lowest_address = device->lowest_occupied_compute_l1_address();
+                const uint64_t l1_top =
                     lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-                max_l1_space =
-                    max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-                if (cb_size_for_rm > max_l1_space) {
+                const uint64_t l1_base = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+                const uint64_t max_l1_space = l1_top > l1_base ? l1_top - l1_base : 0;
+                if (required > max_l1_space) {
                     return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
                 }
             }
