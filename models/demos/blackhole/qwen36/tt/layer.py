@@ -85,6 +85,11 @@ class Qwen36DecoderLayer:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            # The ternary decode stack's defaults (counted 2026-11-01 19:13 with these, see agentA/runs/e2e_c3_*);
+            # an explicit =0 still turns each off.
+            for _f in ("QWEN36_1C_GDN_RECT", "QWEN36_1C_GDN_HMI", "QWEN36_1C_CONV_HM", "QWEN36_1C_GDN_TRIM", "QWEN36_1C_GDN_HMO"):
+                os.environ.setdefault(_f, "1")
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
         self._tp1_gdn = self.num_devices == 1 and not self.is_full_attention and os.environ.get("QWEN36_TP1_GDN") == "1"
@@ -180,6 +185,69 @@ class Qwen36DecoderLayer:
             gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
             self.attention = Qwen36GatedDeltaNet(mesh_device, GDNConfig.from_args(args), gdn_state, gdn_cache)
 
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            # Exact-ternary projections from the PQ2_0 GGUF (bonsai2/native/a3), decode only.
+            from models.demos.blackhole.bonsai2.native.a3.linear import (
+                TernaryLinear,
+                attn_qkv_rows,
+                attn_qkv_shape,
+                gdn_in_rows,
+                gdn_in_shape,
+                sites,
+            )
+            from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
+
+            _sh = shared_for(mesh_device)
+            _cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_linear")
+            os.makedirs(_cache, exist_ok=True)
+            if self.is_full_attention and isinstance(self.attention, Qwen36GatedAttention):
+                if "attn_qkv" in sites() and self.attention.weights.fused_qkv is not None:
+                    import dataclasses
+
+                    self.attention.weights = dataclasses.replace(
+                        self.attention.weights,
+                        fused_qkv=TernaryLinear(
+                            _sh,
+                            f"blk.{layer_num}.attn_qkv_fused",
+                            _cache,
+                            rows=lambda: attn_qkv_rows(_sh, layer_num),
+                            shape=attn_qkv_shape(_sh, layer_num),
+                        ),
+                    )
+                if "attn_o" in sites():
+                    import dataclasses
+
+                    self.attention.weights = dataclasses.replace(
+                        self.attention.weights,
+                        o_proj=TernaryLinear(_sh, f"blk.{layer_num}.attn_output.weight", _cache),
+                    )
+            elif self._tp1_gdn:
+                if "gdn_out" in sites():
+                    self.attention._native_out = TernaryLinear(
+                        _sh, f"blk.{layer_num}.ssm_out.weight", _cache, out_mem=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                if "gdn_in" in sites():
+                    import torch
+
+                    self.attention._native_in = TernaryLinear(
+                        _sh,
+                        f"blk.{layer_num}.gdn_in",
+                        _cache,
+                        rows=lambda: gdn_in_rows(_sh, layer_num),
+                        shape=gdn_in_shape(_sh, layer_num),
+                    )
+                    _g = substate(state_dict, f"layers.{layer_num}.linear_attn")
+                    _ab = torch.cat([_g["in_proj_a.weight"], _g["in_proj_b.weight"]], 0)  # [2*Nv, dim], bf16 in the GGUF
+                    self.attention._native_ab = ttnn.as_tensor(
+                        _ab,
+                        preprocess=lambda t: t.T.contiguous(),
+                        dtype=ttnn.bfloat16,  # a/b are BF16 in the GGUF: kept exact
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        cache_file_name=(tensor_cache_path / f"layers.{layer_num}" / "native_ab") if tensor_cache_path else None,
+                    )
+
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
         if args.is_moe_layer(layer_num):
@@ -192,7 +260,32 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl, layer_num=layer_num)
+        # BONSAI_NATIVE site ffnorm: the decode ff RMSNorm runs fused into the exact-ternary MLP's input prep
+        self._ff_gamma = None
+        if getattr(getattr(self, "feed_forward", None), "native", None) is not None:
+            from models.demos.blackhole.bonsai2.native.a3 import op as _a3op
+            from models.demos.blackhole.bonsai2.native.a3.linear import sites as _sites
+
+            if "ffnorm" in _sites():
+                self._ff_gamma = _a3op.norm_gamma(
+                    mesh_device, state_dict[f"layers.{layer_num}.post_attention_layernorm.weight"]
+                )
+                self._norm_eps = args.norm_eps
+        # BONSAI_NATIVE site attnnorm: the decode attention RMSNorm runs fused into the prep of the exact-ternary
+        # attention qkv / GDN in-projection; GDN also takes the normalized rows (for its dense a|b matmul).
+        self._attn_native = None
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            from models.demos.blackhole.bonsai2.native.a3 import op as _a3op
+            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear as _TL
+            from models.demos.blackhole.bonsai2.native.a3.linear import sites as _sites
+
+            _nat = (getattr(getattr(self.attention, "weights", None), "fused_qkv", None) if self.is_full_attention
+                    else getattr(self.attention, "_native_in", None))
+            if "attnnorm" in _sites() and isinstance(_nat, _TL):
+                self._attn_native = _nat
+                self._attn_gamma = _a3op.norm_gamma(mesh_device, state_dict[f"layers.{layer_num}.input_layernorm.weight"])
+                self._norm_eps = args.norm_eps
 
     def _make_norm(
         self,
@@ -316,7 +409,12 @@ class Qwen36DecoderLayer:
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
         sharded_norm = self._sharded_norm_1c and mode == "decode"
-        if sharded_norm:
+        fuse_attn = self._attn_native is not None and mode == "decode"
+        if fuse_attn:  # rmsprep; full attention passes x itself (its qkv picks up the fused prep)
+            attn_input = self._attn_native.norm(x, self._attn_gamma, self._norm_eps, emit=not self.is_full_attention)
+            if attn_input is None:
+                attn_input = x
+        elif sharded_norm:
             attn_input = sharded_decode_norm(self.attention_norm, x, self.args, ttnn.L1_MEMORY_CONFIG)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
@@ -425,10 +523,19 @@ class Qwen36DecoderLayer:
             attn_output = self.attention.forward(
                 attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
             )
-        ttnn.deallocate(attn_input)
+        if attn_input is not x:
+            ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        fuse_ff = self._ff_gamma is not None and mode == "decode"
+        h = ttnn.add(x, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG) if fuse_ff else ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
+
+        if fuse_ff:  # norm + Hadamard prep in one op (bonsai2/native/a3/kernels/rmsprep_kernel.cpp)
+            ff_output = self.feed_forward.native.forward_residual(h, self._ff_gamma, self._norm_eps)
+            output = ttnn.add(h, ff_output)
+            ttnn.deallocate(h)
+            ttnn.deallocate(ff_output)
+            return output
 
         if sharded_norm:
             ff_input = sharded_decode_norm(

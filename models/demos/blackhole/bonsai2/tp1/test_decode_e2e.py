@@ -87,7 +87,7 @@ def test_decode_e2e(mesh_device):
         # Every QWEN36_* variable that is SET, so each JSON stands on its own: a result is only
         # interpretable next to the exact flags that produced it, and listing a fixed four silently
         # mislabelled earlier runs (FUSED_QKV / OPROJ_1D / ALL_BFP4 appeared only in the log header).
-        "flags": {k: v for k, v in sorted(os.environ.items()) if k.startswith("QWEN36_")},
+        "flags": {k: v for k, v in sorted(os.environ.items()) if k.startswith(("QWEN36_", "BONSAI_"))},
         "reference": os.path.realpath(ref_path),
         "top1_top5_second_half": acc(scored),
         "top1_top5_all": acc(range(n)),

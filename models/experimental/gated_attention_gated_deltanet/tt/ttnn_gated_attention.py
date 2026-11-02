@@ -303,7 +303,11 @@ def gated_attention_forward_ttnn(
     ckc = compute_kernel_config
     qkv_fused = None
     if fused_qkv_weight is not None:
-        qkv_fused = ttnn.linear(hidden_states, fused_qkv_weight, compute_kernel_config=ckc, memory_config=memory_config)
+        if isinstance(fused_qkv_weight, ttnn.Tensor):
+            qkv_fused = ttnn.linear(hidden_states, fused_qkv_weight, compute_kernel_config=ckc, memory_config=memory_config)
+        else:  # bonsai2 BONSAI_NATIVE=pq2_0: exact-ternary TernaryLinear, decode only
+            assert T <= ttnn.TILE_SIZE, "exact-ternary qkv is decode-only"
+            qkv_fused = fused_qkv_weight.forward(hidden_states, out_mem=memory_config)
         _qg_n = num_attention_heads * head_dim * 2
         _kv_n = num_key_value_heads * head_dim
         _total = _qg_n + 2 * _kv_n
@@ -672,24 +676,34 @@ def gated_attention_forward_ttnn(
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
 
     # Apply sigmoid gate
-    if attn_tail:
-        # sigmoid rides on the multiply, which writes L1 so the o_proj's to_memory_config below is a no-op.
+    # One rule for both paths: the decode o_proj reads L1 (QWEN36_1C_OPROJ_1D's 1D config, or the exact-ternary
+    # TernaryLinear), so the gate multiply writes L1 and the o_proj's to_memory_config is a no-op. Under ATTN_TAIL
+    # always; for a ternary o_proj by default (A's BONSAI_ATTN_GATE_L1), decode only -- a prefill-sized L1
+    # activation clashes with the prefill CBs (C's 28e517fe401 guard).
+    _gate_l1 = attn_tail or (
+        not isinstance(o_proj_weight, ttnn.Tensor)
+        and _os.environ.get("BONSAI_ATTN_GATE_L1", "1") == "1"
+        and T <= ttnn.TILE_SIZE
+    )
+    _gate_mc = {"memory_config": ttnn.L1_MEMORY_CONFIG} if _gate_l1 else {}
+    if attn_tail:  # sigmoid rides on the multiply
         attn_output = ttnn.multiply(
-            attn_output,
-            gate,
-            input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], **_gate_mc
         )
     else:
         gate = ttnn.sigmoid(gate)
-        attn_output = ttnn.multiply(attn_output, gate)
+        attn_output = ttnn.multiply(attn_output, gate, **_gate_mc)
     ttnn.deallocate(gate)
 
     # Output projection
     # 2c (QWEN36_1C_OPROJ_1D): the 110-core 1D mcast config with the activation in L1. Measured on
     # this shape: 137.3 us today (DRAM activation, auto config) -> 102.2 us, and the L1 placement on
     # its own changes nothing (137.7), so the config is what buys the time.
-    if _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
+    if not isinstance(o_proj_weight, ttnn.Tensor):
+        # bonsai2 BONSAI_NATIVE=pq2_0: an exact-ternary TernaryLinear (decode only); a ttnn weight never gets here.
+        assert T <= ttnn.TILE_SIZE, "exact-ternary o_proj is decode-only"
+        attn_output = o_proj_weight.forward(attn_output, out_mem=memory_config)
+    elif _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
         from models.demos.blackhole.qwen36.tt import tp_common as _tpc
 
         _grid = device.compute_with_storage_grid_size()

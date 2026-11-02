@@ -631,6 +631,7 @@ Tensor from_buffer_impl(
                 "prefill ops for now; host-side construction via from_buffer is not supported.");
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::INVALID: {
             TT_THROW("Unreachable");
         }

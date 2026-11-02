@@ -23,6 +23,9 @@ enum class DataType {
     UINT32 = 2,
     BFLOAT8_B = 3,
     BFLOAT4_B = 4,
+    // 2-bit block float. Tiles are 320 B (64 B of exponents + 256 B of 2-bit data).
+    // Values decode as 01=+1, 11=-1, 00=0; 10 is not produced and reads as -Inf.
+    BFLOAT2_B = 11,
     UINT8 = 5,
     UINT16 = 6,
     INT32 = 7,

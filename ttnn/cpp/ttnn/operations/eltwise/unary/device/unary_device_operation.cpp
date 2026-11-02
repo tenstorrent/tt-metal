@@ -291,6 +291,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                         case DataType::INT8: return sizeof(int8_t);
                         case DataType::BFLOAT8_B:
                         case DataType::BFLOAT4_B: return sizeof(std::byte);
+                        case DataType::BFLOAT2_B: return sizeof(std::byte);
                         default: TT_THROW("Unary: unsupported output dtype");
                     }
                 }();

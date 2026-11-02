@@ -200,6 +200,7 @@ Tensor full_impl(
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT8_B: {
             tt::tt_metal::TensorSpec tensor_spec(
                 shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));

@@ -719,6 +719,9 @@ class TPGatedDeltaNet:
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
+        _nat = getattr(self, "_native_out", None)
+        if _nat is not None and x.shape[-2] <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0: exact-ternary decode
+            return _nat.forward(x)
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             return tpc.matmul_1d_decode(
@@ -756,6 +759,39 @@ class TPGatedDeltaNet:
         keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
+        _nat = getattr(self, "_native_in", None)
+        if _nat is not None and S <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0 decode
+            if os.environ.get("BONSAI_GDN_IN_SPLIT", "1") == "1" and x.shape[-2] == S:  # the A3 writes qkv and z itself
+                qkv, z = _nat.forward(x, out_mem=_proj_mc, split=qz)
+            else:
+                qkvz = _nat.forward(x, out_mem=ttnn.L1_MEMORY_CONFIG)
+                qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz), memory_config=_proj_mc)
+                z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az), memory_config=_proj_mc)
+                ttnn.deallocate(qkvz)
+            # a|b is N = 3 tiles: ttnn's auto config takes 113 us on 3 cores; in0_block_w=40 takes 12.8 (bench/a3_ab.py)
+            ab = ttnn.linear(
+                x,
+                self._native_ab,
+                compute_kernel_config=self.cfg,
+                memory_config=_proj_mc,
+                program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(self._native_ab.shape[-1] // 32, 1),
+                    in0_block_w=40,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=1,
+                    per_core_N=1,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+                if S <= tpc.TILE_SIZE
+                else None,  # prefill (C): per_core_M=1 on 3 cores can't hold S/32 row blocks; ttnn auto
+            )
+            a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=_proj_mc)
+            b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=_proj_mc)
+            ttnn.deallocate(ab)
+            return qkv, z, a, b
         if self._fuse_ab:
             # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
             if self._fuse_agmm and S > tpc.TILE_SIZE:
@@ -1757,7 +1793,10 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_r)
             out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
             ttnn.deallocate(out_n)
-        gated = _silu_mul(out_f, z, _L1)
+        # BONSAI_NATIVE: the exact-ternary out-proj reads bf16, so the gate emits it (no separate typecast op)
+        _bf = (ttnn.bfloat16 if getattr(self, "_native_out", None) is not None and B <= tpc.TILE_SIZE
+               and os.environ.get("BONSAI_GDN_GATE_BF16", "1") == "1" else None)
+        gated = _silu_mul(out_f, z, _L1, dtype=_bf)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 

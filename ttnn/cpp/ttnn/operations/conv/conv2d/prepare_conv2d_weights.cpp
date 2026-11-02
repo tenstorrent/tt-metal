@@ -1042,6 +1042,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
         case DataType::UINT16: return fold_weights.template operator()<uint16_t>(storage);
         case DataType::BFLOAT8_B: return fold_weights.template operator()<float>(storage);
         case DataType::BFLOAT4_B: return fold_weights.template operator()<uint32_t>(storage);
+        case DataType::BFLOAT2_B: return fold_weights.template operator()<uint32_t>(storage);
         default:
             TT_THROW(
                 "Unsupported input data type for to_folded_weight_layout: {} (type id: {})",

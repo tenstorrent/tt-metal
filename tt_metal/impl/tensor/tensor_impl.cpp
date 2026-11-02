@@ -67,6 +67,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
         case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT8_B:
         case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
         case DataType::INVALID: TT_THROW("Invalid data type");

@@ -48,6 +48,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) 
     switch (dtype) {
         case tt::tt_metal::DataType::BFLOAT8_B: os << "bfloat8_b"; break;
         case tt::tt_metal::DataType::BFLOAT4_B: os << "bfloat4_b"; break;
+        case tt::tt_metal::DataType::BFLOAT2_B: os << "bfloat4_b"; break;
         case tt::tt_metal::DataType::BFLOAT16: os << "bfloat16"; break;
         case tt::tt_metal::DataType::FLOAT32: os << "float32"; break;
         case tt::tt_metal::DataType::UINT8: os << "uint8"; break;
