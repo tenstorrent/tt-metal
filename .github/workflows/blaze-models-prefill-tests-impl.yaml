@@ -43,7 +43,9 @@ on:
         type: number
         default: 120
         description: >-
-          Seconds without dispatch progress before tt-triage fires; 0 or less disables it.
+          Seconds without dispatch progress before tt-triage fires; 0 or less disables this global
+          watchdog. The triage hook stays armed either way, so a timeout the test arms itself (the
+          prefill runner's per-chunk TT_PREFILL_CHUNK_TIMEOUT_SECONDS) still runs tt-triage.
 
 permissions:
   id-token: write
@@ -214,7 +216,9 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
+          # Always arm the hook: with hang-detection-timeout 0 the global watchdog is off, and the hook
+          # only runs on a timeout the test arms itself.
+          auto-triage: true
           hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
           triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
           hang-report-test-id: "tests/pipeline_reorg/blaze_models_prefill_tests.py::${{ matrix.test-group.name }}"
