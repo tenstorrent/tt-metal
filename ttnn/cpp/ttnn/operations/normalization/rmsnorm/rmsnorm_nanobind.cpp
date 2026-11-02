@@ -26,7 +26,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             arch (tt.ARCH): The device architecture.
 
         Returns:
-            ttnn.DeviceComputeKernelConfig: The default compute config for RMS norm (HiFi4, approx_mode=True, fp32_dest_acc_en=False).
+            ttnn.DeviceComputeKernelConfig: The default compute config for RMS norm (HiFi4, approx_mode=False, fp32_dest_acc_en=True).
         )doc");
 
     const auto* doc = R"doc(
@@ -50,7 +50,15 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             bias (ttnn.Tensor, optional): Defaults to `None`.
             residual_input_tensor (ttnn.Tensor, optional): Defaults to `None`.
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`, which uses
+                :func:`ttnn.rmsnorm_default_compute_config` (HiFi4, math_approx_mode=False, fp32_dest_acc_en=True).
+                Fields that trade accuracy for speed:
+
+                - fp32_dest_acc_en: True accumulates in FP32 (more accurate, can be slower). False accumulates in
+                  BFLOAT16, which loses accuracy as the row gets wider.
+                - math_fidelity: HiFi4 is the most accurate, LoFi the least.
+                  :func:`ttnn.init_device_compute_kernel_config` defaults it to LoFi.
+                - math_approx_mode: True uses an approximate rsqrt.
 
         Returns:
             ttnn.Tensor: the output tensor.
