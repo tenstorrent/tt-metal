@@ -18,6 +18,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "api/dataflow/circular_buffer.h"
 
 constexpr uint32_t cb_qkv = 0, cb_state = 1, cb_diag = 2, cb_work = 3;
@@ -32,6 +33,12 @@ void kernel_main() {
     constexpr uint32_t v_t = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t per_core = get_compile_time_arg_val(3);
+    // CHAIN_ROUND=1: round the running sum to bf16 after every tap, which is what the model's ttnn chain
+    // (mul, then K-1 macs, each writing a bf16 tensor) does, so the op can be bit-exact with it.
+    constexpr uint32_t chain_round = get_compile_time_arg_val(4);
+    constexpr uint32_t do_silu = get_compile_time_arg_val(5);  // 0 only for the stage-by-stage equivalence test
+    constexpr uint32_t F32 = static_cast<uint32_t>(DataFormat::Float32);
+    constexpr uint32_t BF16 = static_cast<uint32_t>(DataFormat::Float16_b);
 
     compute_kernel_hw_startup(cb_state, cb_diag, cb_work);
     silu_tile_init();
@@ -51,18 +58,33 @@ void kernel_main() {
         const uint32_t nn = (per_core - i0 < GROUP) ? (per_core - i0) : GROUP;
         work.reserve_back(nn);
         tile_regs_acquire();
-        for (uint32_t i = 0; i < nn; i++) {
-            const uint32_t c = i0 + i;
-            // tap 0 seeds Dst[i] (a matmul clears the slot); taps 1..K-1 accumulate into it.
+        if constexpr (chain_round) {
             for (uint32_t j = 0; j < K; j++) {
-                matmul_tiles(cb_state, cb_diag, j * per_core + c, j * per_core + c, i);
+                for (uint32_t i = 0; i < nn; i++) {
+                    matmul_tiles(cb_state, cb_diag, j * per_core + i0 + i, j * per_core + i0 + i, i);
+                }
+                typecast_tile_init<F32, BF16>();
+                for (uint32_t i = 0; i < nn; i++) {
+                    typecast_tile<F32, BF16>(i);
+                }
+            }
+            silu_tile_init();
+        } else {
+            for (uint32_t i = 0; i < nn; i++) {
+                const uint32_t c = i0 + i;
+                // tap 0 seeds Dst[i] (a matmul clears the slot); taps 1..K-1 accumulate into it.
+                for (uint32_t j = 0; j < K; j++) {
+                    matmul_tiles(cb_state, cb_diag, j * per_core + c, j * per_core + c, i);
+                }
             }
         }
         // SiLU is a MATH-thread (SFPU) op, so it has to run inside the acquire..commit window. Running
         // it after tile_regs_wait executes it on the PACK thread, which is a correctness bug, not just
         // a scheduling one.
-        for (uint32_t i = 0; i < nn; i++) {
-            silu_tile(i);
+        if constexpr (do_silu) {
+            for (uint32_t i = 0; i < nn; i++) {
+                silu_tile(i);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
