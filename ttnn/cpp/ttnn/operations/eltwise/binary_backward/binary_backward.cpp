@@ -5,6 +5,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include <numbers>
+#include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -88,16 +89,10 @@ std::vector<Tensor> _min_or_max_bw(
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
     Tensor t_sub_eqz = ttnn::eqz(t_sub, output_mem_config);
     Tensor t_sub_ltz = ttnn::ltz(t_sub, output_mem_config);
-    Tensor grad_other = ttnn::add(
-        ttnn::multiply(t_sub_ltz, grad, std::nullopt, output_mem_config),
-        ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    Tensor grad_input = ttnn::add(
-        ttnn::multiply(t_sub_gtz, grad, std::nullopt, output_mem_config),
-        ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
+    // Selects rather than mask multiplies: in float32, 0 * inf and 0 * nan are NaN.
+    Tensor tie = ttnn::where(t_sub_eqz, t_scale_grad, 0.0f, output_mem_config);
+    Tensor grad_other = ttnn::where(t_sub_ltz, grad, tie, output_mem_config);
+    Tensor grad_input = ttnn::where(t_sub_gtz, grad, tie, output_mem_config);
 
     if (min_or_max) {
         // MAX
@@ -309,41 +304,54 @@ std::vector<Tensor> xlogy_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+
     Tensor grad1_result = ttnn::log(other, true, output_mem_config);
+    // eqz(a), eqz(grad) and le(b, 0) all stay standalone dispatches. Folded as operand
+    // activations the two EQZ would run after the LLK broadcast datacopy on a
+    // subtile-broadcast operand, which reads a bfloat16 subnormal as zero, so the guard
+    // would fire for an a or a grad that is not zero. Folding LEZ would separately change
+    // which b counts as zero, since le(b, 0.0f) is denormals-are-zero and LEZ is not.
+    //
+    // torch takes grad_a as zero for a zero upstream gradient whenever b is not nan, so a
+    // zero gradient joins the a == 0 case rather than reaching the multiply and forming
+    // 0 * -inf (b == 0) or 0 * nan (b < 0). b == nan still falls through, since le(nan, 0)
+    // is false.
     grad1_result = ttnn::where(
         ttnn::logical_and(
-            ttnn::eqz(input_a, output_mem_config),
+            ttnn::logical_or(
+                ttnn::eqz(input_a, output_mem_config),
+                ttnn::eqz(grad_tensor, output_mem_config),
+                std::nullopt,
+                output_mem_config),
             ttnn::le(other, 0.0f, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
         0.0f,
         ttnn::where(ttnn::ltz(other, output_mem_config), std::nanf(" "), grad1_result, output_mem_config),
         output_mem_config);
-    grad1_result = ttnn::where(
-        ttnn::eq(input_a, std::nanf(" "), std::nullopt, output_mem_config),
-        std::nanf(" "),
-        grad1_result,
-        output_mem_config);
+    // A where on eq(input_a, nan) stood here. Nothing is equal to nan, itself
+    // included, so it never selected and cost two dispatches to never select.
+    // Removing it is not a behaviour change; torch.xlogy takes log(b) as the
+    // gradient in a whatever a is, so it would have been wrong if it had fired.
     grad1_result = ttnn::multiply(grad_tensor, grad1_result, std::nullopt, output_mem_config);
 
     grad.emplace_back(grad1_result);
     Tensor div_result =
-        ttnn::multiply(input_a, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(input_a, other, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
     Tensor grad2_result = ttnn::multiply(grad_tensor, div_result, std::nullopt, output_mem_config);
-    grad2_result = where(
-        ttnn::eqz(other, output_mem_config),
-        ttnn::multiply(
-            ttnn::sign(grad_tensor, output_mem_config),
-            std::numeric_limits<float>::infinity(),
-            std::nullopt,
-            output_mem_config),
-        grad2_result,
-        output_mem_config);
-    grad2_result = ttnn::where(
-        ttnn::eq(other, std::nanf(" "), std::nullopt, output_mem_config),
-        std::nanf(" "),
-        grad2_result,
-        output_mem_config);
+    // A where on eqz(b) selecting sign(grad) * inf stood here. It never read a, so it had
+    // the wrong sign for every negative a and returned an infinity where a == 0 asks for
+    // nan. The arithmetic it overrode gets those right: grad_b is grad * (a * reciprocal(b)),
+    // and reciprocal(0) is inf, so it gives sign(grad * a) * inf, and nan for 0 / 0 in
+    // float32. The multiply takes 0 * x as 0 on this hardware, so there 0 / 0 gives 0. A subnormal
+    // grad or a is the one case it gets wrong: the multiply reads it as zero, so the result
+    // is nan (0 in bfloat16) where torch and the removed where give an infinity.
+    // The matching where on eq(b, nan) is gone because nothing is equal to nan. What it
+    // was reaching for is a real gap and is filed on its own: grad_b is 0 or inf where b
+    // is nan and torch.xlogy has nan.
     grad.emplace_back(grad2_result);
     return grad;
 }
@@ -821,13 +829,18 @@ std::vector<ComplexTensor> div_bw(
     const ComplexTensor& other,
     const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor_res;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    // Both zero tests run as operand activations of the logical_and, one dispatch instead of three.
+    const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
     Tensor condition_nan = ttnn::logical_and(
-        ttnn::eqz(other.real(), output_mem_config),
-        ttnn::eqz(other.imag(), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    ComplexTensor grad_a =
-        ttnn::operations::complex_binary::divide(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
+        other.real(), other.imag(), std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_zero);
+    // Complex divide is multiply-by-reciprocal, and all three divisions below divide by
+    // `other`. The reciprocal of a conjugate is the conjugate of the reciprocal -- the
+    // denominator a*a + b*b is the same either way -- so one reciprocal serves all three.
+    const ComplexTensor recip_other = ttnn::reciprocal(other, output_mem_config);
+    ComplexTensor grad_a = ttnn::operations::complex_binary::multiply(
+        grad_tensor, ttnn::conj(recip_other, output_mem_config), output_mem_config);
     Tensor grad_a_r = where(condition_nan, std::nanf(""), ttnn::real(grad_a, output_mem_config), output_mem_config);
     Tensor grad_a_i = where(condition_nan, std::nanf(""), ttnn::imag(grad_a, output_mem_config), output_mem_config);
     grad_a = ComplexTensor({grad_a_r, grad_a_i});
@@ -839,8 +852,10 @@ std::vector<ComplexTensor> div_bw(
     ComplexTensor grad_b = ttnn::operations::complex_binary::multiply(
         neg_grad,
         ttnn::conj(
-            ttnn::operations::complex_binary::divide(
-                ttnn::operations::complex_binary::divide(input_a, other, output_mem_config), other, output_mem_config),
+            ttnn::operations::complex_binary::multiply(
+                ttnn::operations::complex_binary::multiply(input_a, recip_other, output_mem_config),
+                recip_other,
+                output_mem_config),
             output_mem_config),
         output_mem_config);
     neg_grad.deallocate();

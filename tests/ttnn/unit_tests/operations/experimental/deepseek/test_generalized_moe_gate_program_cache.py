@@ -13,7 +13,7 @@ TensorSpec (logical) of all five tensors. The framework default hashes the whole
 tensor_args (which hold exactly those five tensors), i.e. the same distinctions and the same
 logical-shape keying (the op's own hash comment states it is "same as the framework's default hash").
 
-Setup mirrors models/common/tests/modules/moe/test_generalized_moe_gate.py (ungrouped, 256 experts,
+Setup mirrors models/common/tests/moe/test_generalized_moe_gate.py (ungrouped, 256 experts,
 one token/core, HEIGHT_SHARDED L1).
 
 - Same config, two live allocations with different data -> reuse (1 entry), and the second
@@ -166,7 +166,7 @@ def _assert_matches_own_inputs(case, res, res_idx):
 
 def run_gate(device, batch_size, topk, enable_sigmoid, output_softmax, seed=42):
     """Run generalized_moe_gate once and return the sorted device-selected expert indices.
-    Exact top-k correctness is covered by models/common/tests/modules/moe/test_generalized_moe_gate.py."""
+    Exact top-k correctness is covered by models/common/tests/moe/test_generalized_moe_gate.py."""
     _, res_idx = _run(device, _allocate(device, batch_size, topk, enable_sigmoid, output_softmax, seed))
     return torch.sort(ttnn.to_torch(res_idx)[:, 0, :topk].to(torch.int64), dim=-1).values
 

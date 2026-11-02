@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -374,4 +374,8 @@ void kernel_main() {
     route_info[2] = 0;
     route_info[3] = 0;
     cb_push_back(cb_route_info_id, 1);
+
+    // The untilizer credit returns ask for posted atomics, but Blackhole issues every atomic as non-posted. Their
+    // responses must land before exit, or they leak into the next kernel's atomic counter.
+    noc_async_atomic_barrier();
 }

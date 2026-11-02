@@ -25,6 +25,7 @@ Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
@@ -479,7 +480,12 @@ class Qwen3VlVisionMLP(Module):
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
-        self._act = hidden_act
+        if hidden_act in ("gelu_pytorch_tanh", "gelu_new"):
+            act = "gelu_tanh"
+        elif hidden_act.startswith("gelu"):
+            act = "gelu"
+        else:
+            act = "silu"
 
         if self._p.tp:
             if intermediate_size % self._p.tp_factor != 0:
@@ -491,16 +497,15 @@ class Qwen3VlVisionMLP(Module):
                 ccl_manager=self._p.ccl_manager,
                 compute_kernel_config=linear_compute_kernel_config,
             )
-            self.linear_fc1 = ColParallelLinear(hidden_size, intermediate_size, bias=True, **kw)
+            self.linear_fc1 = ColParallelLinear(hidden_size, intermediate_size, bias=True, activation_fn=act, **kw)
             self.linear_fc2 = RowParallelLinear(intermediate_size, hidden_size, bias=True, **kw)
         else:
             kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
-            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, **kw)
+            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, activation_fn=act, **kw)
             self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, **kw)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_fc1.forward(x)
-        x = ttnn.gelu(x) if self._act.startswith("gelu") else ttnn.silu(x)
         # `RowParallelLinear` reduce-scatters, so its result is fractured on columns; the residual add
         # and the next LayerNorm both need the full width back (cf. `Qwen3VlMlp` in model_qwen3vl.py).
         return _row_parallel_seq_forward(self.linear_fc2, x, self._p)
@@ -864,11 +869,9 @@ class Qwen3VlVisionPatchMerger(Module):
     independently over `hidden_size`, while post-shuffle normalizes the concatenated group of four over
     `hidden_size * merge ** 2`. Different statistics, so the two are not interchangeable.
 
-    The reference uses `nn.GELU()` here -- the exact erf form -- where the block MLP uses
-    `gelu_pytorch_tanh`. Both map to `ttnn.gelu`'s default (accurate) mode: the two torch forms differ
-    by at most 4.7e-4, which is ~23x below the 1.1e-2 bf16 quantization noise floor, so the distinction
-    is not observable at this precision. Do not switch to `fast_and_approximate_mode=True`, which is
-    2.4e-2 and would be.
+    The reference uses `nn.GELU()` here -- the exact erf form, `ttnn.gelu`'s default -- where the
+    block MLP uses `gelu_pytorch_tanh` (`GeluVariant.Tanh`). Do not switch to
+    `fast_and_approximate_mode=True`: that is a piecewise-linear LUT (~2.4e-2 error), not tanh.
     """
 
     def __init__(
@@ -922,10 +925,26 @@ class Qwen3VlVisionPatchMerger(Module):
             raise ValueError(msg)
 
         if self.use_postshuffle_norm:
-            x = self.norm.forward(ttnn.reshape(x, (-1, self.merged_size)))
+            x = self.norm.forward(_reshape_tiled_rows(x, (-1, self.merged_size)))
         else:
-            x = ttnn.reshape(self.norm.forward(x), (-1, self.merged_size))
+            x = _reshape_tiled_rows(self.norm.forward(x), (-1, self.merged_size))
         return _row_parallel_forward(self.linear_fc2, ttnn.gelu(self.linear_fc1.forward(x)), self._p)
+
+
+def _reshape_tiled_rows(x: ttnn.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
+    """`ttnn.reshape` for a TILE tensor whose row count changes, without the op's per-shape residue.
+
+    `ttnn.reshape` on a tiled tensor that folds rows into columns (the merge groups here) goes through
+    `reshape_tiled`, which leaves a buffer of half the tensor's size allocated per distinct shape for the
+    life of the cached program. The row-major round trip is a plain view between two layout conversions.
+    """
+    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    view = ttnn.reshape(rm, shape)
+    out = ttnn.to_layout(view, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(rm)
+    if view.is_allocated():
+        ttnn.deallocate(view)
+    return out
 
 
 class Qwen3VlVisionModel(Module):
@@ -937,7 +956,8 @@ class Qwen3VlVisionModel(Module):
 
     The position table is kept on the host rather than the device: interpolating it is a pure function
     of `grid_thw` and the table, so `prepare_pos_embeds` settles it with host arithmetic and the result
-    is uploaded, as with the rotary tensors.
+    is uploaded, as with the rotary tensors. Being no `Parameter`, it is saved to and loaded from the
+    weight cache next to them by `save` and `load`.
     """
 
     def __init__(
@@ -1024,6 +1044,17 @@ class Qwen3VlVisionModel(Module):
         weight = state.pop("pos_embed.weight", None)
         if weight is not None:
             self._pos_embed_weight = weight.detach().float()
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        if self._pos_embed_weight is None:
+            msg = "pos_embed weight is unavailable; call load_torch_state_dict first"
+            raise ValueError(msg)
+        super().save(directory, prefix=prefix)
+        torch.save(self._pos_embed_weight, Path(directory) / f"{prefix}pos_embed.weight.pt")
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+        self._pos_embed_weight = torch.load(Path(directory) / f"{prefix}pos_embed.weight.pt")
 
     def prepare_pos_embeds(self, grid_thw: torch.Tensor) -> torch.Tensor:
         """The `(total_patches, hidden_size)` interpolated position embedding, on the host."""

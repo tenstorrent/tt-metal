@@ -31,7 +31,7 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # Empty: https://github.com/tenstorrent/tt-metal/issues/54973
     mla_trace_defaults = ()
     # The drafter golden is keyed to prefill_trace_default's prompt, so the two move together.
-    dflash_model_default = "/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash"
+    dflash_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-DFlash"
     dflash_golden_default = "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/dflash_27_context_kv_55k"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
@@ -43,6 +43,10 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # num_target_layers=61 / hidden_size=7168 match, and it taps layer outputs (1, 12, 24, 35, 47, 58) of
     # it. No other model may enable PREFILL_DFLASH.
     supports_dflash = True
+
+    # PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated KV cache.
+    supports_tp_shard_kv = True
+    tp_shard_kv_default = True
 
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"

@@ -1,27 +1,29 @@
-# Datacopy (unpack_to_dest), then BinarySfpu SfpuElwadd:
+# Datacopy through SrcA or unpack_to_dest, then BinarySfpu SfpuElwadd:
 # adds dest tile 0 + dest tile 1 and writes the result to dest tile 2.
 
 dest_acc: true
 
 operands:
   - name: "input_A"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 128]
     format: "Float32"
   - name: "datacopy_out"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 128]
     format: "Float32"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        unpack_to_dest: true
+        unpack_to_dest: all
       - type: "BinarySfpu"
-        block_size: [32, 32]
+        block_tiles: [1, 1]
         operation: "SfpuElwadd"
         approximation_mode: false
         iterations: 32
@@ -31,5 +33,5 @@ operations:
           dest: 2
     pack:
       - output: "datacopy_out"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         packer: "Packer"

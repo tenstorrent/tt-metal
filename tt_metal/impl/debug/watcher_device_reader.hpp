@@ -8,12 +8,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "debug_helpers.hpp"
 #include "impl/context/metal_env_impl.hpp"
 
@@ -32,6 +33,7 @@ public:
         FILE* f,
         ChipId device_id,
         const std::vector<std::string>& kernel_names,
+        std::mutex& kernel_names_mutex,
         tt::tt_metal::MetalEnvImpl& env,
         WatcherServer& watcher_server);
     ~WatcherDeviceReader();
@@ -51,7 +53,12 @@ private:
     ChipId device_id;
     tt::tt_metal::MetalEnvImpl& env;
     WatcherServer& watcher_server;  // Reference to the parent object
+    // Owned by the watcher server and appended to by kernel registration while a dump runs; read only through
+    // kernel_name() / num_kernel_names(), which take kernel_names_mutex.
     const std::vector<std::string>& kernel_names;
+    std::mutex& kernel_names_mutex;
+    std::string kernel_name(size_t kernel_id) const;
+    size_t num_kernel_names() const;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
     std::map<HalProgrammableCoreType, EnableSymbolsInfo> symbols_info_cache_;
     // Consecutive polls that saw a partially written NOC sanitize record, per (core, noc).

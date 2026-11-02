@@ -27,7 +27,7 @@ void kernel_main() {
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_to_dst_init_short(tt::CBIndex::c_0);
+    copy_init(tt::CBIndex::c_0);
     experimental::pack_untilize_dest_init<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(OutOp(out_cb.write_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {

@@ -1,0 +1,270 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Single-chip TTNN Chronos2Encoder (N x block + final norm). One upload/download.
+
+reference : models/experimental/chronos_forecast/reference/chronos2/model.py
+    h = block(h) for each block  # time + group + FF, masks/RoPE reused
+    h = final_layer_norm(h)      # eval: dropouts are no-ops
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+
+from models.experimental.chronos_forecast.tt.encoder_block import TtEncoderBlock, TtEncoderBlockWeights
+from models.experimental.chronos_forecast.tt.mha_core import maybe_upload_mask
+from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
+
+
+@dataclass(frozen=True)
+class TtEncoderWeights:
+    """Host-side weights: per-block weights + final norm."""
+
+    blocks: tuple  # tuple[TtEncoderBlockWeights, ...]
+    final_rms_weight: torch.Tensor  # (d,)
+    final_eps: float = 1e-6
+
+    @classmethod
+    def from_torch_encoder(cls, encoder) -> "TtEncoderWeights":
+        """Extract weights from a reference ``Chronos2Encoder``."""
+        blocks = tuple(TtEncoderBlockWeights.from_torch_block(b) for b in encoder.block)
+        return cls(
+            blocks=blocks,
+            final_rms_weight=encoder.final_layer_norm.weight.detach().clone(),
+            final_eps=encoder.final_layer_norm.variance_epsilon,
+        )
+
+
+class TtEncoder:
+    """TTNN encoder. Weights move host -> device once in ``__init__``."""
+
+    def __init__(self, device, weights: TtEncoderWeights, precision: TtChronosPrecision | None = None):
+        self.device = device
+        self.weights = weights
+        self.blocks = [TtEncoderBlock(device, w, precision) for w in weights.blocks]
+        self._final_norm = self._move_final_norm_to_device(device, weights)
+
+    @staticmethod
+    def _move_final_norm_to_device(device, weights: TtEncoderWeights):
+        import ttnn
+
+        return ttnn.from_torch(
+            weights.final_rms_weight.detach().to(torch.float32).reshape(1, -1).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_device(
+        self,
+        x,
+        cos,
+        sin,
+        time_mask,
+        group_mask,
+        *,
+        diagonal_group_attention: bool = False,
+        group_block: int | None = None,
+        l1_series_chunk: int | None = None,
+        embed=None,
+        tail_start: int | None = None,
+        head=None,
+    ):
+        """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
+
+        With ``l1_series_chunk`` the encoder runs on chunks of that many series
+        with every intermediate in L1. Chunks must not split an attention group:
+        use diagonal group attention, or a multiple of ``group_block``.
+
+        Optional stages run on each chunk in the same memory: ``embed(x, memory_config)``
+        maps the (borrowed) input to the encoder input, ``tail_start`` keeps rows
+        [tail_start, T) after the last block (the final norm is per token), and
+        ``head(normed, memory_config)`` consumes the normed rows and returns the output
+        in DRAM. Only the input and output are then in DRAM.
+        """
+        import ttnn
+
+        if l1_series_chunk is not None:
+            if not diagonal_group_attention and (group_block is None or l1_series_chunk % group_block):
+                raise ValueError("L1 series chunks must hold whole attention groups")
+            return self._forward_l1_chunked(
+                x,
+                cos,
+                sin,
+                time_mask,
+                group_mask,
+                l1_series_chunk,
+                diagonal_group_attention,
+                group_block,
+                embed=embed,
+                tail_start=tail_start,
+                head=head,
+            )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        if embed is not None:
+            x = embed(x, dram)
+        for block in self.blocks:
+            x = block.forward_device(
+                x,
+                cos,
+                sin,
+                time_mask,
+                group_mask,
+                diagonal_group_attention=diagonal_group_attention,
+                group_block=group_block,
+            )
+        return self._final(x, dram, tail_start, head)
+
+    def _final(self, h, mem, tail_start: int | None, head):
+        """Tail slice, final norm and head of one (chunk) stream; consumes ``h``."""
+        import ttnn
+
+        if tail_start is not None:
+            begin, end = [0] * len(h.shape), list(h.shape)
+            begin[-2] = tail_start
+            tail = ttnn.slice(h, begin, end, memory_config=mem)
+            ttnn.deallocate(h)
+            h = tail
+        out = ttnn.rms_norm(
+            h,
+            epsilon=self.weights.final_eps,
+            weight=self._final_norm,
+            memory_config=mem if head is not None else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(h)
+        return out if head is None else head(out, mem)
+
+    @staticmethod
+    def _chunk_group_mask(group_mask, seq_len: int, first_block: int, num_blocks: int):
+        """Rows of a (T*nb,1,S,S) time-major block mask for blocks [first, first+num); SDPA wants it in DRAM."""
+        import ttnn
+
+        if group_mask is None or group_mask.shape[0] == 1:
+            return group_mask
+        total_blocks = group_mask.shape[0] // seq_len
+        if first_block == 0 and num_blocks == total_blocks:
+            # A full-range slice can alias the input, and the caller frees chunk masks.
+            return group_mask
+        s = group_mask.shape[-1]
+        per_time = ttnn.reshape(group_mask, (seq_len, total_blocks, s, s))
+        part = ttnn.slice(
+            per_time,
+            (0, first_block, 0, 0),
+            (seq_len, first_block + num_blocks, s, s),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(part, (seq_len * num_blocks, 1, s, s))
+
+    def _forward_l1_chunked(
+        self,
+        x,
+        cos,
+        sin,
+        time_mask,
+        group_mask,
+        series_chunk: int,
+        diagonal: bool,
+        group_block: int | None,
+        *,
+        embed=None,
+        tail_start: int | None = None,
+        head=None,
+    ):
+        """Chunks never split a group, so each runs all blocks without leaving L1."""
+        import ttnn
+
+        l1 = ttnn.L1_MEMORY_CONFIG
+        shape = list(x.shape)
+        batch_dim = len(shape) - 3
+        seq_len = shape[-2]
+        cos_l1 = ttnn.to_memory_config(cos, l1)
+        sin_l1 = ttnn.to_memory_config(sin, l1)
+        chunks = []
+        for start in range(0, shape[batch_dim], series_chunk):
+            begin, end = [0] * len(shape), list(shape)
+            begin[batch_dim] = start
+            end[batch_dim] = min(start + series_chunk, shape[batch_dim])
+            chunk_mask = None
+            if not diagonal:
+                chunk_mask = self._chunk_group_mask(
+                    group_mask, seq_len, start // group_block, (end[batch_dim] - start) // group_block
+                )
+            h = ttnn.slice(x, begin, end, memory_config=l1)
+            if embed is not None:
+                embedded = embed(h, l1)
+                ttnn.deallocate(h)
+                h = embedded
+            for block in self.blocks:
+                h = block.forward_device(
+                    h,
+                    cos_l1,
+                    sin_l1,
+                    time_mask,
+                    chunk_mask,
+                    diagonal_group_attention=diagonal,
+                    group_block=group_block,
+                    memory_config=l1,
+                )
+            out = self._final(h, l1, tail_start, head)
+            if chunk_mask is not None and chunk_mask is not group_mask:
+                ttnn.deallocate(chunk_mask)
+            chunks.append(out)
+        ttnn.deallocate(cos_l1)
+        ttnn.deallocate(sin_l1)
+        if len(chunks) == 1:
+            return chunks[0]
+        out = ttnn.concat(chunks, dim=len(chunks[0].shape) - 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for chunk in chunks:
+            ttnn.deallocate(chunk)
+        return out
+
+    def forward(
+        self,
+        x_host: torch.Tensor,
+        cos_host: torch.Tensor,
+        sin_host: torch.Tensor,
+        time_mask_host: torch.Tensor,
+        group_mask_host: torch.Tensor,
+    ) -> torch.Tensor:
+        """Host (B,T,d) + cos/sin + masks -> host (B,T,d) float for PCC."""
+        import ttnn
+
+        _b, t, _d = x_host.shape
+
+        def _upload(m: torch.Tensor):
+            return ttnn.from_torch(
+                m.detach().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        x = _upload(x_host)
+        cos = ttnn.unsqueeze(_upload(cos_host), 1)
+        sin = ttnn.unsqueeze(_upload(sin_host), 1)
+        # Time masks attend over T; group masks attend over B (post-flip seq).
+        time_mask = maybe_upload_mask(self.device, time_mask_host, seq_len=t)
+        group_mask = maybe_upload_mask(self.device, group_mask_host, seq_len=_b)
+
+        x = self.forward_device(x, cos, sin, time_mask, group_mask)
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        if time_mask is not None:
+            ttnn.deallocate(time_mask)
+        if group_mask is not None:
+            ttnn.deallocate(group_mask)
+
+        # ttnn.linear promotes 3D host inputs to 4D on device; restore (B,T,d).
+        host = ttnn.to_torch(x).float()
+        if host.dim() == 4 and host.shape[0] == 1:
+            host = host.squeeze(0)
+        host = host[:, :t, :]
+        ttnn.deallocate(x)
+        return host
+
+    __call__ = forward

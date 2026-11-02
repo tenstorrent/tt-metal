@@ -12,7 +12,7 @@
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
 #include "internal/tt-1xx/risc_common.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "fabric_2d_route_interface.h"
 
 using namespace tt::tt_fabric;
@@ -259,7 +259,7 @@ inline void fabric_set_2d_intermesh_landing_route(
 }
 
 // Single-hop poke: the destination is exactly one fabric hop away, so this writes LOCAL_DELIVER at
-// the destination's map slot on the hop's axis. Z uses the Y-axis slot.
+// the destination's map slot. Z uses the express axis's slot.
 inline void fabric_set_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
@@ -281,12 +281,21 @@ inline void fabric_set_single_hop_unicast_route_from_direction(
     const uint32_t dst_y = dst_dev_id / mesh_x_size;
     const uint32_t dst_x = dst_dev_id % mesh_x_size;
 
-    // The receiving router's decode axis matches the hop axis: N/S/Z hops read the Y byte, E/W hops
-    // the X byte. Other map slots are intentionally left untouched under the one-hop contract.
+    // The receiving router's decode axis matches the hop axis: N/S hops read the Y byte, E/W hops the
+    // X byte, and Z hops whichever byte a Z-facing router decodes (Fabric2DRoutingConfig::decode_action).
+    // Other map slots are intentionally left untouched under the one-hop contract.
     switch (next_hop_direction) {
         case eth_chan_directions::NORTH:
         case eth_chan_directions::SOUTH:
-        case eth_chan_directions::Z: packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER; break;
+            packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            break;
+        case eth_chan_directions::Z:
+            if (Fabric2DRoutingConfig::express_on(Fabric2DAxis::X)) {
+                packet_header->route_buffer[mesh_y_size + dst_x] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            } else {
+                packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER;
+            }
+            break;
         case eth_chan_directions::EAST:
         case eth_chan_directions::WEST:
             packet_header->route_buffer[mesh_y_size + dst_x] = Routing2DCodec::ACTION_LOCAL_DELIVER;

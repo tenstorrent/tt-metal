@@ -18,7 +18,10 @@ class Cluster;
 
 namespace tt::tt_metal {
 class Hal;
-}
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 
@@ -38,12 +41,13 @@ struct FabricTelemetrySample {
  * are maintained by the router.  Memory access and HAL-dependent conversions are handled internally so that
  * applications can rely entirely on the public `tt::tt_fabric` types.
  *
+ * @param mesh_device Mesh device whose context the node belongs to.
  * @param fabric_node_id Logical fabric node identifier (mesh, chip) to query.
  * @return Telemetry samples, one per active Ethernet channel on the node. Returns an empty vector if the node has no
  *         active channels.
  */
 [[nodiscard]] std::vector<FabricTelemetrySample> read_fabric_telemetry(
-    const tt::tt_fabric::FabricNodeId& fabric_node_id);
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const tt::tt_fabric::FabricNodeId& fabric_node_id);
 
 /**
  * @brief Read telemetry snapshot for a specific Ethernet channel without MetalContext dependency.

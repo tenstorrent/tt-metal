@@ -17,6 +17,10 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
     constexpr auto dfb_in1_id = tt::CBIndex::c_1;
     constexpr auto dfb_in2_id = tt::CBIndex::c_2;
     constexpr auto dfb_out_id = tt::CBIndex::c_3;
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_in1(dfb_in1_id);
+    DataflowBuffer dfb_in2(dfb_in2_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     // output = input_a + value * input_b * input_c
     ckl::eltwise_chain(
@@ -27,14 +31,16 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
             ckl::input(
                 dfb_in1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::input(
-                dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{},
+                dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_in1, dfb_in2},
         // Step 2: (input_b * input_c) * value -> DST[0]
         ckl::runtime_if(scalar_arg != 1u, ckl::MulUnary<ckl::Dst::D0>{scalar_arg}),  // DST[0] * scalar -> DST[0]
         // Now wait for input_a (only when we need it)
         // Step 3: Load A and add with result DST[0] + dfb_in0_id -> DST[0]
-        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(dfb_in0_id), ckl::DestReuseType::DEST_TO_SRCA>{},
+        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(dfb_in0_id), ckl::DestReuseType::DEST_TO_SRCA>{dfb_in0},
         ckl::PackTile<ckl::output(
-            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out});
 }
 
 void kernel_main() {

@@ -42,9 +42,10 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <impl/context/metal_context.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
@@ -278,7 +279,6 @@ static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(c
         case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
     }
     reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
@@ -586,6 +586,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -594,13 +597,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -626,12 +633,19 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
          math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
+            continue;
+        }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
             continue;
         }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
@@ -661,12 +675,19 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
          math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
+            continue;
+        }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
             continue;
         }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
@@ -679,7 +700,7 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -705,6 +726,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -717,13 +741,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -750,6 +778,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -758,13 +789,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -791,12 +826,19 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
          math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
+            continue;
+        }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
             continue;
         }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
@@ -809,7 +851,7 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -876,12 +918,15 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     }
 }
 
-// Quasar-only: MxFp4 column-reduce (SUM) exercising the 2x-packed src-register format via GAPOOL.
-// Mirrors the LLK test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer. Only the
+// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL with the reader's Float16_b scaler, so it runs the
+// plain MxFp4 -> Float16_b path; the 2x-packed path also needs an MxFp4 scaler. Only the
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,
@@ -896,8 +941,9 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        .math_fidelity = MathFidelity::HiFi4,
-        // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
+        // Quasar's first fidelity phase covers the Float16_b operands in full
+        .math_fidelity = MathFidelity::LoFi,
+        // Plain MxFp4 path: the reader's scaler is Float16_b (see the comment above the test)
         .input_format = tt::DataFormat::MxFp4,
     };
     run_single_core_reduce_program(this->device(), test_config);

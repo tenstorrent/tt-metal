@@ -62,12 +62,11 @@ export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
 stays 32-token-block aligned).
 
-**`PREFILL_MOCK_MIGRATION=1` is single-rank only** — the runner rejects it for `num_ranks > 1`, because each
-rank would publish a table covering just its own layer slice and a merged mock table is not implemented. So
-**Gate 1** needs a 1-rank binding. `PREFILL_ENABLE_MIGRATION=1` (Gate 2) has no such restriction: the real
-path merges the per-rank stage layouts through the worker
-(`deliver_device_map_and_gather_stage_layouts`), so a pipelined runner publishes one table spanning every
-rank's layers. Gate 2 runs on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
+**`PREFILL_ENABLE_MIGRATION` picks the table's consumer, not whether one is built.** Every run all-gathers
+the per-rank stage layouts and rank 0 builds one merged table spanning every rank's layers. `1` (Gate 2)
+hands it to a live migration worker over the client queues (`deliver_device_map_and_gather_stage_layouts`)
+and blocks on the worker's ready; `0` (Gate 1, mock migration) leaves it on disk for an offline reader such as
+`prefill_producer`. Both run on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
 read-back side.
 
 ---
@@ -203,6 +202,12 @@ export PREFILL_MODEL=my_model PREFILL_NUM_LAYERS=<L> \
 Left unset, the producer falls back to the adapter defaults (61 layers), which will not match a deeper
 runner. The ack count is `num_layers × chunks`, so the drain hangs.
 
+With `PREFILL_FORWARD_TOKENS_BUDGET` above the chunk size (packed forwards, `ADDING_A_PREFILL_MODEL.md`
+section 2.1) both modules pack each forward with one run of consecutive chunks per slot, round-robin (or
+shuffled for `interleave: random`) until it holds `budget / chunk_size` chunks or no slot has more, and fill the
+rest with empty chunks. `p_burst` must be 0 there, and the warm-up chunks go out a full forward at a time.
+Layer completions still count per chunk.
+
 For an arbitrary mapping instead of a uniform offset, replace `dst_slot_offset` with `pairs` (CLI
 equivalent: `--migrations "0:3,1:2"`). Source and destination sets must be disjoint in loopback, and
 duplicate destinations are rejected.
@@ -251,9 +256,9 @@ knob existed, so existing legs are unaffected.
 
 Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
 host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
-closest existing coverage is the on-device producer/runner PCC gate
-`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
-fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
+closest existing coverage is the on-device producer/runner PCC gate `runners/ci/run_multirank_pcc.sh`,
+which drives the producer end to end and fails if any resident slot's KV PCC is below threshold, though
+it is not multi-turn-specific.
 
 ---
 
@@ -419,7 +424,7 @@ asserts when a chunk overruns the cache — it no longer derives from a chunk co
 In the binding, replace the migration block with:
 
 ```yaml
-  PREFILL_MOCK_MIGRATION: "1"
+  PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
   PREFILL_NUM_USERS: "2"
@@ -442,17 +447,17 @@ Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_P
 `0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
-serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
-`_migration_enabled` block, so **every rank on either path** publishes its own host-local sidecar. It has to
-be: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the migration
-client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+serialises the device map there too: **every rank on either path** publishes its own host-local JSON sidecar.
+It has to: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the
+migration client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+`PREFILL_MIGRATION_EXPORT_TO_FILE=1` is the third transport — a plain-text map at
+`PREFILL_MIGRATION_DEVICE_MAP_PATH` for a worker that reads it off disk — and it suppresses the JSON sidecar,
+so a device-less read-back cannot run alongside it.
 
-That call **had** regressed to living under `if _mock_migration:` only, and the symptom is exactly as quiet as
-you would fear — a real-migration run published no sidecar, each reader polled 60 s, logged `device map ... not
-found; skipping KV read`, and every PCC plus the `--dump-src-kv` reference vanished with nothing raising. If
-you see that line, check this call before suspecting the table. Beware the confusing variant too: a *stale*
-map left in `/tmp` by an earlier mock run makes the same misconfiguration look like it works. Gate 1 remains
-the cheapest way to separate a table problem from a transport problem.
+A reader that polls 60 s and logs `device map ... not found; skipping KV read` loses every PCC and the
+`--dump-src-kv` reference with nothing raising; check the sidecar before suspecting the table. Beware the
+inverse too: a *stale* map left in `/tmp` by an earlier run makes the same misconfiguration look like it
+works. Gate 1 remains the cheapest way to separate a table problem from a transport problem.
 
 ## Gate 2 — loopback migration
 
@@ -472,7 +477,7 @@ Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear sta
 
 ```bash
 pkill -f migration_endpoint ; pkill prte
-rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* /tmp/migration_done.sentinel*
+rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* /tmp/migration_done.sentinel*
 ```
 
 ```bash
@@ -558,6 +563,7 @@ gets a branch there, and both gates work.
 | H2D socket | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` | — |
 | layer depth | `PREFILL_NUM_LAYERS` | same var, exported | — |
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
+| tokens per forward | `PREFILL_FORWARD_TOKENS_BUDGET` (default the chunk size) | `model.forward_tokens_budget` or the same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
 | device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `migration.device_map_path` | — |

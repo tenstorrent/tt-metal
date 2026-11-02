@@ -24,7 +24,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
@@ -48,7 +48,7 @@ namespace unit_tests_common::basic::test_device_init {
 /// @return
 bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto mesh_workload = distributed::MeshWorkload();
 
     CoreCoord compute_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -76,33 +76,22 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
 }  // namespace unit_tests_common::basic::test_device_init
 
 namespace {
-// gtest evaluates INSTANTIATE_TEST_SUITE_P generators at test-registration time
-// (inside InitGoogleTest), BEFORE --gtest_filter is applied. Calling
-// GetNumAvailableDevices() directly here forces full MetalContext/Cluster creation
-// at process startup, which throws on hosts without silicon and would abort the
-// whole binary — including the host-only CPU_* tests that run on the device-less
-// github_hosted_cpu CI runner.
-//
-// Probe for silicon first via PCI enumeration only (get_physical_architecture()
-// does not create a MetalContext and returns ARCH::Invalid when no devices are
-// present). Fall back to a single-device parameterization only in that genuinely
-// hardware-less case; on a device runner any discovery failure from
-// GetNumAvailableDevices() (malformed cluster descriptor, UMD errors, ...) must
-// propagate and fail loudly rather than silently shrink the parameterization.
-// The DeviceParamFixture tests themselves are device tests and are excluded on
-// the CPU-only leg by the CPU_-filter split anyway.
-unsigned int num_available_devices_or_one() {
-    if (get_physical_architecture() == tt::ARCH::Invalid) {
-        return 1;
-    }
-    return tt::tt_metal::GetNumAvailableDevices();
+// gtest evaluates INSTANTIATE_TEST_SUITE_P generators at test-registration time, before
+// --gtest_filter is applied, so the generator must not touch the device. Querying the device
+// count there creates a MetalContext/Cluster in every process that runs this binary: it throws
+// on hosts without silicon, and blocks on the CHIP_IN_USE lock in a child process spawned
+// (e.g. by DispatchTelemetryHostL1WaitTest) while the parent owns the device.
+constexpr int kAllDevices = -1;
+
+unsigned int resolve_num_devices(int param) {
+    return param == kAllDevices ? tt::tt_metal::GetNumAvailableDevices() : static_cast<unsigned int>(param);
 }
 }  // namespace
 
-INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, num_available_devices_or_one()));
+INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, kAllDevices));
 
 TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
-    unsigned int num_devices = GetParam();
+    unsigned int num_devices = resolve_num_devices(GetParam());
     ASSERT_TRUE(num_devices > 0);
     vector<ChipId> ids;
     for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
@@ -117,7 +106,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 }
 
 TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
-    unsigned int num_devices = GetParam();
+    unsigned int num_devices = resolve_num_devices(GetParam());
     unsigned int num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
     if (num_devices > num_pci_devices) {
         GTEST_SKIP();

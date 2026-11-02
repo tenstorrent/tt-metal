@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.reduce import reduce_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import fidelity_source_formats
 from helpers.llk_params import ReduceDimension, ReducePool
 
 
@@ -44,10 +45,13 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
             f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>"
-            f"({compute_unit.src_a.tile_shape.cpp_value});\n"
+            f"({src_a_format}, {src_b_format}, {compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def calculate(

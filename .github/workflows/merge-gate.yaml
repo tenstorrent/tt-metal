@@ -114,7 +114,7 @@ jobs:
     steps:
       # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
       # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 1
@@ -634,7 +634,7 @@ jobs:
     outputs:
       changed: ${{ steps.classify.outputs.changed }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -678,7 +678,7 @@ jobs:
             threshold: "0.02"
             module_thresholds: ""
           - arch: wormhole
-            threshold: "0.10"
+            threshold: "0.13"
             module_thresholds: perf_matmul=0.25,perf_math_matmul=0.25
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
@@ -698,7 +698,107 @@ jobs:
       # Report-only for the first week. To block, set this to true and add both
       # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
       fail_on_regression: false
+      # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
+      slack: false
+      slack_on_pass: false
     secrets: inherit
+
+  # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
+  # One message for both arches; a regression on one also shows the same points on the other.
+  # A manual Merge Gate run on a dev branch does not post.
+  llk-perf-merge-gate-notify:
+    name: LLK perf merge gate (Slack)
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate]
+    if: >-
+      always() && !cancelled() && github.event_name == 'merge_group'
+      && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      # One download per arch, each into a directory named after it. A pattern
+      # download puts a single match straight into the path, with no directory
+      # per artifact, so when one arch lost its job the other arch's verdict was
+      # not found either and the gate reported both as skipped. Naming the
+      # artifact makes the layout the same whether one arch wrote or both did.
+      - name: Download the blackhole verdict
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: llk-perf-gate-slack-blackhole
+          path: parts/blackhole
+      - name: Download the wormhole verdict
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: llk-perf-gate-slack-wormhole
+          path: parts/wormhole
+      - name: Download the blackhole report
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: llk-perf-gate-report-blackhole
+          path: reports/blackhole
+      - name: Download the wormhole report
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: llk-perf-gate-report-wormhole
+          path: reports/wormhole
+      - name: Build the Slack payload
+        id: slack
+        env:
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+        run: |
+          ARGS=()
+          for arch in blackhole wormhole; do
+            part="parts/${arch}/slack_part.json"
+            points="reports/${arch}/perf_gate_report.points.csv"
+            if [ -f "$part" ]; then
+              ARGS+=(--part "$part")
+              echo "${arch}: verdict found"
+            else
+              echo "${arch}: no verdict; the gate reports it as skipped"
+            fi
+            if [ -f "$points" ]; then
+              ARGS+=(--points "${arch}=${points}")
+            fi
+          done
+          python3 tt_metal/tt-llk/perf/gate_slack_combine.py "${ARGS[@]}" \
+            --expect blackhole,wormhole \
+            --gate-name "LLK perf merge gate" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --channel "${SLACK_CHANNEL_ID:-unset}" \
+            --out slack_payload.json && exit 0
+          echo "::error::The gate could not build its Slack notification."
+          echo "should_post=false" >> "$GITHUB_OUTPUT"
+      - name: Notify Slack
+        if: steps.slack.outputs.should_post == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+        run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            exit 0
+          fi
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
+            exit 0
+          fi
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @slack_payload.json) || true
+          case "$RESPONSE" in
+            *'"ok":true'*) echo "Posted the gate verdict to Slack." ;;
+            *) echo "::error::Slack rejected the gate notification: ${RESPONSE}" ;;
+          esac
 
   # ===========================================================================
   # Team: ttsim

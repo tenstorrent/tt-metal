@@ -12,8 +12,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <hostdevcommon/fabric_mux_v2_common.h>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"
 
 namespace tt::tt_fabric {
 namespace {
@@ -60,8 +65,10 @@ struct FabricMuxV2ClientConnectionRtArgs {
     uint32_t flow_control_sem_id = 0;
     uint32_t teardown_sem_id = 0;
     uint32_t mux_status_address = 0;
+    // For a mux in program-local L1, the addresses above are offsets from the address the mux publishes here.
+    uint32_t l1_base_semaphore_id = kFabricMuxV2NoL1BaseSemaphore;
 
-    static constexpr size_t kWordCount = 11;
+    static constexpr size_t kWordCount = 12;
 
     std::array<uint32_t, kWordCount> serialize() const {
         return {
@@ -76,6 +83,7 @@ struct FabricMuxV2ClientConnectionRtArgs {
             flow_control_sem_id,
             teardown_sem_id,
             mux_status_address,
+            l1_base_semaphore_id,
         };
     }
 };
@@ -105,6 +113,7 @@ size_t FabricMuxV2Config::MemoryRegion::get_address(size_t offset) const {
 size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_address + (unit_size * num_units); }
 
 FabricMuxV2Config::FabricMuxV2Config(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     uint8_t num_channels,
     uint8_t num_buffers_per_channel,
     size_t channel_buffer_size_bytes,
@@ -119,11 +128,13 @@ FabricMuxV2Config::FabricMuxV2Config(
     TT_FATAL(num_buffers_per_channel_ > 0, "FabricMuxV2Config requires at least one buffer per channel");
     validate_forwarder_service_burst_size(forwarder_service_burst_size_);
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& metal_env = mesh_device.impl().metal_env();
+    const auto& hal = metal_env.get_hal();
     noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);
     per_channel_scalar_region_stride_bytes_ = noc_aligned_address_size_bytes_;
 
-    const size_t max_channel_buffer_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const size_t max_channel_buffer_size_bytes =
+        metal_env.get_control_plane().get_fabric_context().get_fabric_channel_buffer_size_bytes();
     TT_FATAL(
         channel_buffer_size_bytes_ <= max_channel_buffer_size_bytes,
         "FabricMuxV2 channel buffer size must be <= {}, got {}",
@@ -222,6 +233,9 @@ void FabricMuxV2Config::append_client_connection_rt_args(
     connection_rt_args.flow_control_sem_id = client_semaphores.flow_control_sem_id;
     connection_rt_args.teardown_sem_id = client_semaphores.teardown_sem_id;
     connection_rt_args.mux_status_address = to_uint32_checked(status_region_.get_address(), "mux_status_address");
+    if (in_program_local_l1_) {
+        connection_rt_args.l1_base_semaphore_id = l1_base_semaphore_id_;
+    }
 
     const auto serialized_rt_args = connection_rt_args.serialize();
     worker_args.insert(worker_args.end(), serialized_rt_args.begin(), serialized_rt_args.end());
@@ -249,7 +263,38 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
          to_uint32_checked(channel_buffer_size_bytes_, "channel_buffer_size_bytes")},
         {"fabric_mux_v2_per_channel_scalar_region_stride_bytes",
          to_uint32_checked(per_channel_scalar_region_stride_bytes_, "per_channel_scalar_region_stride_bytes")},
-        {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_}};
+        {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_},
+        {"fabric_mux_v2_in_program_local_l1", static_cast<uint32_t>(in_program_local_l1_)},
+        {"fabric_mux_v2_program_local_l1_cb_index", program_local_l1_cb_index_},
+        {"fabric_mux_v2_l1_base_semaphore_id", l1_base_semaphore_id_}};
+}
+
+uint32_t FabricMuxV2Config::validate_program_local_l1_placement() const {
+    TT_FATAL(!in_program_local_l1_, "FabricMuxV2 config is already placed in program-local L1");
+    TT_FATAL(
+        status_region_.base_address == 0,
+        "A FabricMuxV2 placed in program-local L1 must be configured with base_l1_address = 0 so its addresses are "
+        "offsets into the map, but its map starts at {}",
+        status_region_.base_address);
+    return to_uint32_checked(memory_map_end_address_, "memory_map_end_address");
+}
+
+void FabricMuxV2Config::place_in_program_local_l1(
+    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t map_size = validate_program_local_l1_placement();
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, map_size);
+    in_program_local_l1_ = true;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+}
+
+void FabricMuxV2Config::place_in_program_local_l1(
+    tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t map_size = validate_program_local_l1_placement();
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, map_size);
+    in_program_local_l1_ = true;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
 }
 
 void add_fabric_mux_v2_to_program(

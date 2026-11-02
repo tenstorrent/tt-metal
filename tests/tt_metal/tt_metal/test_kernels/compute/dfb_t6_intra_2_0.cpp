@@ -13,6 +13,8 @@
 // Both bindings must use DISTINCT accessor_names ("out" / "in"), even
 // though they resolve to the same DFB — M2 maps duplicate names oddly for INTRA
 // (only one Neo's slice gets touched). Reference dfb::out only.
+//
+// Both sides of this self-loop are STRIDED, so every reserve/push/wait/pop below moves one entry.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_buffer.h"
