@@ -97,12 +97,19 @@ def mhc_mixes_cn(
     )
     p_set, q_set = cs(pcores), cs(post_cores)
     u_set = cs(pcores + post_cores)
-    mk = lambda shape, dt=f32, lay=ttnn.TILE_LAYOUT: ttnn.allocate_tensor_on_device(
-        ttnn.Shape(shape), dt, lay, mesh, ttnn.DRAM_MEMORY_CONFIG
+    mk = lambda shape, dt=f32, lay=ttnn.TILE_LAYOUT, mc=ttnn.DRAM_MEMORY_CONFIG: ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), dt, lay, mesh, mc
     )
+    # DSV41_MHC_H_L1=h|rm|both (call-time arm): the collapse output h (read by the router / shared expert) and / or its row-major copy (the MoE dispatch input) in L1 interleaved
+    hl1 = os.environ.get("DSV41_MHC_H_L1", "")
+    L1 = ttnn.L1_MEMORY_CONFIG
     pre, post, comb = mk([T, 1, 1, 4]), mk([T, 1, 4, 1]), mk([T, 1, 4, 4])
-    h = mk([1, 1, T, D], bf16)
-    rm = mk([T, 1, 1, D], bf16, ttnn.ROW_MAJOR_LAYOUT) if emit_rm else None
+    h = mk([1, 1, T, D], bf16, mc=L1 if hl1 in ("h", "both") else ttnn.DRAM_MEMORY_CONFIG)
+    rm = (
+        mk([T, 1, 1, D], bf16, ttnn.ROW_MAJOR_LAYOUT, L1 if hl1 in ("rm", "both") else ttnn.DRAM_MEMORY_CONFIG)
+        if emit_rm
+        else None
+    )
     rm_t = rm if emit_rm else h
     pns = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(*pc)) for pc in post_cores]
     pn = pns[0]
