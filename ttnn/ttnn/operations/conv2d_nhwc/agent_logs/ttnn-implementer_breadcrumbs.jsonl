@@ -9,3 +9,4 @@
 {"event":"test_run","status":"pass","tests":"unit sharded+depthwise+base 117 pass; golden -k HEIGHT 100 pass 0 fail; translated -k HEIGHT 137 pass 0 fail","ts":"2026-11-02T12:52:17+00:00"}
 {"event":"test_run","status":"pass","test":"test_conv2d_nhwc_sharded.py -k height + perf probes resnet","note":"tap-major gather: layer1 116k->62k cyc, layer2 3x3 81k->44k","ts":"2026-11-02T13:06:53+00:00"}
 {"event":"test_run","status":"pass","test":"perf_probe -k resnet/bf16/guard","note":"LoFi bf16xbf8b rel_rms<=0.025; per-bank stateful weight reads","ts":"2026-11-02T13:29:27+00:00"}
+{"event":"test_run","status":"pass","test":"test_conv2d_nhwc_sharded.py -k height (19)","note":"split gather header, output alignment, rect weight mcast, resident fallback","ts":"2026-11-02T13:41:54+00:00"}

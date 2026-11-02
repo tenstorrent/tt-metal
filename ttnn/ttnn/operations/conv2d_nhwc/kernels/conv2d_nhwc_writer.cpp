@@ -63,6 +63,11 @@ constexpr uint32_t MAX_WEIGHT_TRIDS = 15;  // read transaction ids 1..15
 constexpr auto weight_args = TensorAccessorArgs<24>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+// Split gather (R3): the reader's gather compile-time args follow (this instance's own window / rm
+// CBs); the writer gathers the odd m-blocks once its weights and bias are loaded.
+#define GATHER_CT_BASE (output_args.next_compile_time_args_offset())
+#include "conv2d_nhwc_gather.hpp"
+constexpr uint32_t WRITER_RT_ARGS = 10;  // the writer's own runtime args; the reader's follow (split gather)
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
     get_named_compile_time_arg_val("act_mcast_ct_offset"),
     get_named_compile_time_arg_val("act_mcast_rt_offset")>();
@@ -257,7 +262,15 @@ void kernel_main() {
                 cb_push_back(cb_weight_tiles, chunk_rows(c) * block_n_tiles);
             }
         }
+        if (is_sink) {
+            return;  // an input core holding no output shard: it only receives the multicast
+        }
         load_bias();
+    }
+
+    // ---- split gather (R3): the odd m-blocks' fetch + im2col gather, into this RISC's own CBs ----
+    if constexpr (conv_gather::num_gather_roles > 1) {
+        conv_gather::gather_m_blocks(WRITER_RT_ARGS, 1);
     }
 
     const uint32_t m_tile_end = m_tile_start + m_tiles_this_core;

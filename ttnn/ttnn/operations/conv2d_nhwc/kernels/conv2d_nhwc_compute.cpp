@@ -78,6 +78,9 @@ static_assert(block_k_tiles % tilize_w == 0, "a K-block is whole tilize blocks")
 constexpr bool weights_resident = get_compile_time_arg_val(27) != 0;
 constexpr uint32_t weight_kblock_tiles = block_k_tiles * block_n_tiles;
 constexpr uint32_t resident_weight_tiles = num_k_blocks * weight_kblock_tiles;
+// Split gather (R3): odd m-blocks' RM im2col arrives in cb_act_rm2 (gathered by the writer RISC).
+constexpr uint32_t cb_act_rm2 = get_compile_time_arg_val(28);
+constexpr uint32_t num_gather_roles = get_compile_time_arg_val(29);
 constexpr uint32_t tilize_blocks_per_row = block_k_tiles / tilize_w;
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
@@ -97,6 +100,7 @@ using namespace compute_kernel_lib;
 //          reader's gather feeding it) overlaps the other slices' turns. One slice: as R0.
 struct TilizeKBlock {
     uint32_t my_slice;
+    uint32_t m_block = 0;
     ALWI void tilize_own() const {
         PACK((llk_pack_reconfig_l1_acc(0)));
         tilize<tilize_w, cb_act_rm, cb_act_send>(block_m_tiles * tilize_blocks_per_row);
@@ -104,8 +108,9 @@ struct TilizeKBlock {
     ALWI void operator()(uint32_t block, uint32_t, bool) const {
         tilize_kblock(block);
         if constexpr (weights_resident) {
-            // in1 is NoWaitNoPop: the resident weights must have landed (idempotent after the first).
-            cb_wait_front(cb_weight_tiles, resident_weight_tiles);
+            // in1 is NoWaitNoPop: K-blocks 0..block of the resident weights must have landed (the
+            // writer pushes them chunk by chunk; idempotent once all are in).
+            cb_wait_front(cb_weight_tiles, (block + 1) * weight_kblock_tiles);
         }
     }
     ALWI void tilize_kblock(uint32_t block) const {
@@ -120,7 +125,11 @@ struct TilizeKBlock {
             return;
 #endif
             PACK((llk_pack_reconfig_l1_acc(0)));
-            tilize<tilize_w, cb_act_rm, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
+            if (num_gather_roles > 1 && (m_block & 1)) {
+                tilize<tilize_w, cb_act_rm2, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
+            } else {
+                tilize<tilize_w, cb_act_rm, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
+            }
         } else {
             constexpr uint32_t first = act_send_depth < kblocks_per_slice ? act_send_depth : kblocks_per_slice;
             if (block == 0) {
@@ -279,7 +288,7 @@ void kernel_main() {
                 partials.reserve_back(block_out_tiles);
 #ifdef ABL_MATMUL
                 for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-                    TilizeKBlock{my_slice}(kb, 0, false);
+                    TilizeKBlock{my_slice, m_block}(kb, 0, false);
                     cb_wait_front(cb_act_tiles, block_m_tiles * block_k_tiles);
                     cb_pop_front(cb_act_tiles, block_m_tiles * block_k_tiles);
                     if constexpr (!weights_resident) {
@@ -311,7 +320,7 @@ void kernel_main() {
                         partials,
                         shape,
                         {},
-                        TilizeKBlock{my_slice},
+                        TilizeKBlock{my_slice, m_block},
                         block_n_tiles,
                         block_n_tiles,
                         {},

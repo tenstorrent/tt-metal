@@ -96,6 +96,18 @@ HEIGHT_SINGLE_K_PIPELINE = True
 # Resident weights are read + multicast in this many chunks (K-row ranges): chunk c is multicast
 # while the reads of chunks c+1.. are in flight. 1 = one read barrier, then one multicast.
 WEIGHT_MCAST_CHUNKS = 1
+# Single-K pipeline with resident weights: split K into (up to) this many K-blocks, each one weight
+# multicast chunk, so the first m-block's matmul overlaps the weight multicast. 1 = one K-block.
+HEIGHT_RESIDENT_KBLOCKS = 1
+# R3 split gather: the writer RISC (idle once the resident weights are multicast) fetches + gathers
+# the odd m-blocks into its own window / rm CBs while the reader takes the even ones; compute
+# tilizes m-block i from the CB of RISC i % 2. Used with the single-K pipeline when it fits.
+SPLIT_GATHER = False
+# R3: place output shard r on the input core whose shard best covers its window (monotone in r),
+# instead of on input core r. Identical for stride-1 convs; for strided convs it turns most of the
+# window from far-away halo into the resident shard. The weight multicast then spans every input
+# core (the ones holding no output shard receive only).
+HEIGHT_ALIGN_OUTPUT = True
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
 # descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
 # accumulator (partials) page format. The public signature takes no compute_kernel_config,
@@ -135,6 +147,8 @@ CB_OUT_RM = 7  # R0: untilized tile-rows for the DRAM writer; R4/R5: the ragged-
 CB_IN_SHARD = 8  # R4/R5: zero-copy view of the resident input shard
 CB_OUT_SHARD = 9  # R4/R5: zero-copy view of the output shard (untilize target)
 CB_ACT_SEND = 10  # R4/R5: own-slice tilized K-blocks awaiting the row multicast
+CB_ACT_WINDOW2 = 11  # R3 split gather: the writer RISC's halo window (odd m-blocks)
+CB_ACT_RM2 = 12  # R3 split gather: the writer RISC's RM im2col (odd m-blocks)
 
 _ML = ttnn.TensorMemoryLayout
 K_EXCHANGE_LAYOUTS = (_ML.BLOCK_SHARDED, _ML.WIDTH_SHARDED)
@@ -547,12 +561,33 @@ def select_blocking_sharded(
     T_w = weight_tile_bytes
     T_acc = tile_bytes(acc_dtype)
     win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, kW=kW, padding=padding, stride=stride, dilation=dilation)
+    # R3: output shard r is computed on (and placed on) the core of input shard out_shards[r].
+    # BLOCK: grid row r. HEIGHT: the input shard whose sticks best cover the shard's window, so the
+    # halo is small and comes from neighbours (strided convs: output row r's window sits ~stride x
+    # further into the input than shard r; HEIGHT_ALIGN_OUTPUT off = shard r, the first g_m cores).
+    # Resident weights (R3, dense): the whole weight slice lives in L1 for the kernel's life.
+    # Cleared below (streamed K-blocks, unaligned output) when no resident blocking fits.
+    weights_resident = WEIGHTS_RESIDENT and memory_layout == _ML.HEIGHT_SHARDED and not dw
+    out_shards = list(range(g_m))
+    if weights_resident and HEIGHT_ALIGN_OUTPUT:
+        out_shards = []
+        for r in range(g_m):
+            lo, hi = _window_stick_range(r * core_m_tiles * TILE, min((r + 1) * core_m_tiles * TILE, M) - 1, **win_kw)
+            first = out_shards[-1] + 1 if out_shards else 0
+            last = rows_in - (g_m - r)  # leave a core for every later output shard
+            cands = range(max(first, min(lo // shard_h, last)), min(last, hi // shard_h) + 1)
+            best = max(
+                cands or [max(first, min(lo // shard_h, last))],
+                key=lambda c: (min(hi + 1, (c + 1) * shard_h) - max(lo, c * shard_h), -c),
+            )
+            out_shards.append(best)
 
     def halo_max(bm):
         best = 0
         for r in range(g_m):
+            c = out_shards[r]
             own_lo, own_hi = (
-                (0, NHW) if memory_layout == _ML.WIDTH_SHARDED else (r * shard_h, min(NHW, (r + 1) * shard_h))
+                (0, NHW) if memory_layout == _ML.WIDTH_SHARDED else (c * shard_h, min(NHW, (c + 1) * shard_h))
             )
             m_start = r * core_m_tiles
             m_tiles = min(core_m_tiles, M_t - m_start)
@@ -571,9 +606,13 @@ def select_blocking_sharded(
         return min(ACT_SEND_DEPTH, slice_k_tiles // bk)
 
     def rm_rows(bm, deep=False):
-        return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm) if (act_mcast or deep) else ACT_RM_DEPTH
+        # deep (single-K pipeline): one whole m-block ahead is enough — compute pops m-block i's rows
+        # at its tilize, so the reader fills them with m-block i+1 during the matmul.
+        if act_mcast:
+            return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm)
+        return ACT_RM_KBLOCKS * bm if deep else ACT_RM_DEPTH
 
-    def footprint(bm, bk, halo, deep=False):
+    def footprint(bm, bk, halo, deep=False, roles=1):
         if dw:  # bk = taps * nt_s (bn = the whole slice: the output shard row)
             return (
                 max(halo, 1) * tap_width * elem_bytes
@@ -585,8 +624,8 @@ def select_blocking_sharded(
                 + (nt_s * T if out_tail else 0)
             )
         return (
-            max(halo, 1) * tap_width * elem_bytes
-            + rm_rows(bm, deep) * bk * T
+            roles * max(halo, 1) * tap_width * elem_bytes
+            + roles * rm_rows(bm, deep) * bk * T
             + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
             + (slice_k_tiles if weights_resident else SHARDED_WEIGHT_DEPTH * bk) * nt_s * T_w
@@ -604,7 +643,6 @@ def select_blocking_sharded(
         and dilation == 1
         and tap_width % TILE == 0
     )
-    weights_resident = WEIGHTS_RESIDENT and memory_layout == _ML.HEIGHT_SHARDED and not dw
     k_divs_desc = (
         [taps * nt_s]
         if dw
@@ -616,29 +654,52 @@ def select_blocking_sharded(
         # largest bk: every K-block is one multicast handshake + one partials pass (technique 8).
         for bm in sorted(_divisors(core_m_tiles), reverse=True):
             halo = halo_max(bm)
-            _fbk = int(_os.environ.get("CONV2D_NHWC_BK", "0"))  # ABLATION-TEMP
-            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget and (not _fbk or d <= _fbk)), None)
+            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget), None)
             if bk is not None:
                 return bm, bk, halo
         return None
 
-    def walk_single_k(budget):
+    def walk_single_k(budget, roles=1):
         # R3 with resident weights: extra m-blocks re-read nothing, so take the whole K as ONE
         # K-block (the matmul accumulates in DEST: no packer-L1 partials passes, one tilize ->
         # matmul switch per m-block) and make cb_act_rm one whole m-block deep, so the reader
         # gathers m-block i+1 while compute works on m-block i. Largest bm that fits.
+        bk = slice_k_tiles // resident_kblocks
         for bm in sorted(_divisors(core_m_tiles), reverse=True):
             halo = halo_max(bm)
-            if footprint(bm, slice_k_tiles, halo, True) <= budget:
-                return bm, slice_k_tiles, halo
+            if footprint(bm, bk, halo, True, roles) <= budget and (roles == 1 or _div_up(core_m_tiles, bm) > 1):
+                return bm, bk, halo
         return None
+
+    # Resident weights arrive as one multicast chunk per K-block: the first m-block's matmul starts
+    # on K-block 0 while the later chunks are still in flight. The largest count <= the knob that
+    # divides K into whole taps (tap-major).
+    resident_kblocks = next(
+        (
+            d
+            for d in range(HEIGHT_RESIDENT_KBLOCKS, 0, -1)
+            if slice_k_tiles % d == 0 and (not tap_major or (slice_k_tiles // d) % tap_tiles == 0)
+        ),
+        1,
+    )
 
     deep_rm = False
     choice = None
-    if weights_resident and HEIGHT_SINGLE_K_PIPELINE and not _os.environ.get("CONV2D_NHWC_NOSK"):  # ABLATION-TEMP
-        choice = walk_single_k(SHARDED_CB_BUDGET_BYTES)
-        deep_rm = choice is not None and not _os.environ.get("CONV2D_NHWC_NODEEP")  # ABLATION-TEMP
-    choice = choice or walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
+    roles = 1
+    if weights_resident and HEIGHT_SINGLE_K_PIPELINE:
+        if SPLIT_GATHER:
+            choice = walk_single_k(SHARDED_CB_BUDGET_BYTES, 2)
+            roles = 2 if choice else 1
+        choice = choice or walk_single_k(SHARDED_CB_BUDGET_BYTES)
+        deep_rm = choice is not None
+    if weights_resident and not choice:
+        choice = walk(SHARDED_CB_BUDGET_BYTES)  # resident weights, K-blocked whole-shard walk
+    if not choice:
+        # Too big to keep resident: stream the weights per K-block; the output stays on the first
+        # g_m cores (the streamed column multicast needs the compute cores as its group).
+        weights_resident = False
+        out_shards = list(range(g_m))
+        choice = walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
     if not choice:
         raise UnsupportedAxisValue("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
     bm, bk, halo = choice
@@ -658,9 +719,8 @@ def select_blocking_sharded(
         # Resident: the CB holds every K-block (depth = the K-block count).
         "weight_depth": DW_WEIGHT_DEPTH if dw else (slice_k_tiles // bk if weights_resident else SHARDED_WEIGHT_DEPTH),
         "weights_resident": weights_resident,
-        "weight_chunk_rows": _div_up(
-            slice_k_tiles, int(_os.environ.get("CONV2D_NHWC_WCH", WEIGHT_MCAST_CHUNKS))
-        ),  # ABLATION-TEMP env
+        # Resident: one multicast chunk per K-block when K is blocked, else WEIGHT_MCAST_CHUNKS.
+        "weight_chunk_rows": bk if kbps > 1 else _div_up(slice_k_tiles, WEIGHT_MCAST_CHUNKS),
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
         # Depthwise weights are a few tap tiles per slice: each core reads its own.
         # HEIGHT (R1): every core needs the same weights (dense and depthwise): one group.
@@ -712,7 +772,9 @@ def select_blocking_sharded(
         "T": T,
         "T_w": T_w,
         "T_acc": T_acc,
-        "footprint": footprint(bm, bk, halo, deep_rm),
+        "footprint": footprint(bm, bk, halo, deep_rm, roles),
+        "num_gather_roles": roles,
+        "out_shards": out_shards,
     }
 
 
@@ -729,8 +791,9 @@ def output_memory_config(plan, input_memory_config):
         grid = ttnn.CoreRangeSet([ttnn.CoreRange(start, end)])
         shape = [p["core_m_tiles"] * TILE, width]
     elif p["memory_layout"] == _ML.HEIGHT_SHARDED:
-        # R3: the first g_m input cores, core_m_tiles whole tile-rows each (all C_out channels).
-        grid = _core_range_set(height_shard_cores(input_memory_config, p["g_m"]))
+        # R3: input cores out_shards[r], core_m_tiles whole tile-rows each (all C_out channels).
+        in_cores = height_shard_cores(input_memory_config, p["rows_in"])
+        grid = _core_range_set([in_cores[c] for c in p["out_shards"]])
         shape = [p["core_m_tiles"] * TILE, width]
     else:
         grid = spec.grid
@@ -748,7 +811,8 @@ def _sharded_core_map(plan, input_memory_config):
         cm = _block_col_major(input_memory_config)
         return [(_block_core(start, s, r, cm), s, r) for r in range(p["g_m"]) for s in range(p["g_n"])]
     if p["memory_layout"] == _ML.HEIGHT_SHARDED:
-        return [(c, 0, r) for r, c in enumerate(height_shard_cores(input_memory_config, p["g_m"]))]
+        in_cores = height_shard_cores(input_memory_config, p["rows_in"])
+        return [(in_cores[c], 0, r) for r, c in enumerate(p["out_shards"])]
     cores = sorted(ttnn.corerange_to_cores(spec.grid), key=lambda c: (c.y, c.x))
     return [(c, s, 0) for s, c in enumerate(cores[: p["g_n"]])]
 
@@ -768,20 +832,29 @@ def _interleaved_core_map(plan, grid):
 
 
 def _core_range_set(coords):
-    """Minimal rectangles over a row-major core list (contiguous x run per grid row)."""
-    runs = {}
+    """Rectangles over a row-major core list, iterating in the list's row-major order: one range per
+    contiguous x run of a grid row; consecutive rows merge only when each is one identical run."""
+    rows = {}
     for c in coords:
-        lo, hi = runs.get(c.y, (c.x, c.x))
-        runs[c.y] = (min(lo, c.x), max(hi, c.x))
-    ranges = []
-    for y in sorted(runs):
-        x0, x1 = runs[y]
-        if ranges and ranges[-1][1] == (x0, x1) and ranges[-1][2] == y - 1:
-            ranges[-1][2] = y
-        else:
-            ranges.append([y, (x0, x1), y])
+        rows.setdefault(c.y, []).append(c.x)
+    ranges = []  # [y0, (x0, x1), y1, single-run row]
+    for y in sorted(rows):
+        xs = sorted(rows[y])
+        runs = []
+        for x in xs:
+            if runs and x == runs[-1][1] + 1:
+                runs[-1][1] = x
+            else:
+                runs.append([x, x])
+        single = len(runs) == 1
+        for x0, x1 in runs:
+            prev = ranges[-1] if ranges else None
+            if single and prev and prev[3] and prev[1] == (x0, x1) and prev[2] == y - 1:
+                prev[2] = y
+            else:
+                ranges.append([y, (x0, x1), y, single])
     return ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for y0, (x0, x1), y1 in ranges]
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for y0, (x0, x1), y1, _ in ranges]
     )
 
 
@@ -803,6 +876,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
                     "weight_mcast",
                     "tap_major",
                     "weights_resident",
+                    "num_gather_roles",
                     "out_subblock_h",
                     "out_subblock_w",
                     "core_m_tiles",
@@ -837,13 +911,30 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     else:
         core_map = _interleaved_core_map(p, grid)
     cores = _core_range_set([c for c, _, _ in core_map])
-    # The multicast helper covers at most 3 receiver rectangles; beyond that each core reads
-    # its own weights (same writer path, weight_mcast off).
-    weight_mcast = weight_mcast and len(cores.ranges()) <= MCAST_MAX_RECTANGLES
     # Rotating multicast groups must be rectangles: a WIDTH core set spanning grid rows
     # multicasts over its bounding rectangle, the extra cores being receive-only sinks.
     sink_cores = []
     mcast_cores = cores
+    # R3 resident weights: multicast to every input core (fewest rectangles; the output-aligned
+    # compute set can be gappy); input cores holding no output shard only receive (sinks).
+    weight_group = cores
+    weight_sender = 0
+    if is_height and p.get("weights_resident", False):
+        # The bounding rectangle of the input cores: one multicast rectangle (a ragged last grid
+        # row would otherwise make two, and every rectangle re-sends the whole weight slice).
+        bb = _core_range_set(height_shard_cores(input_tensor.memory_config(), p["rows_in"])).bounding_box()
+        rect = [ttnn.CoreCoord(x, y) for y in range(bb.start.y, bb.end.y + 1) for x in range(bb.start.x, bb.end.x + 1)]
+        weight_group = _core_range_set(rect)
+        used = {(c.x, c.y) for c, _, _ in core_map}
+        sink_cores = [c for c in rect if (c.x, c.y) not in used]
+        mcast_cores = weight_group
+        first = core_map[0][0]
+        weight_sender = next(i for i, c in enumerate(rect) if (c.x, c.y) == (first.x, first.y))
+    # The multicast helper covers at most 3 receiver rectangles; beyond that each core reads
+    # its own weights (same writer path, weight_mcast off).
+    weight_mcast = weight_mcast and len(weight_group.ranges()) <= MCAST_MAX_RECTANGLES
+    if is_height and not weight_mcast:  # no multicast: every compute core reads its own weights
+        sink_cores, mcast_cores = [], cores
     if act_mcast:
         bb = cores.bounding_box()
         rect = [ttnn.CoreCoord(x, y) for y in range(bb.start.y, bb.end.y + 1) for x in range(bb.start.x, bb.end.x + 1)]
@@ -862,12 +953,23 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
         _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
         _cb(CB_ACT_RM, act_dtype, p["T"], p["act_rm_rows"] * bk, cores),
-        _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * weight_block_tiles, cores),
+        # Weight multicast landing slot: same address on every weight-group core (incl. sinks).
+        _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * weight_block_tiles, weight_group),
         # Multicast landing zone: same address on every group core (incl. sinks).
-        _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * act_tile_pages, mcast_cores),
+        _cb(
+            CB_ACT_TILES,
+            act_dtype,
+            p["T"],
+            (ACT_RECV_DEPTH if act_mcast else 1) * act_tile_pages,
+            mcast_cores if act_mcast else cores,
+        ),
     ]
     if act_mcast:
         cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], p["act_send_depth"] * bm * bk, cores))
+    gather_roles = p.get("num_gather_roles", 1)
+    if gather_roles > 1:
+        cbs.append(_cb(CB_ACT_WINDOW2, act_dtype, tap_bytes, p["window_sticks_max"], cores))
+        cbs.append(_cb(CB_ACT_RM2, act_dtype, p["T"], p["act_rm_rows"] * bk, cores))
     if kx:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_IN_SHARD, input_tensor, core_ranges=cores))
         full_rows = p["core_m_tiles"] - (1 if p["out_tail"] else 0)
@@ -924,8 +1026,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if dw else 0,
         bn,
         1 if p.get("tap_major", False) else 0,
+        gather_roles,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # The writer carries the same gather args (its own window / rm CBs) for the split gather.
+    writer_gather_ct = [CB_ACT_WINDOW2, CB_ACT_RM2] + reader_ct[2:]
 
     # ---- Writer (BRISC): weights, bias, K-exchange multicast (R4/R5), output ----
     writer_ct = [
@@ -961,6 +1066,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct.extend(writer_gather_ct)
 
     # ---- Compute ----
     compute_ct = [
@@ -992,6 +1098,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p["taps"],
         p.get("tilize_w", bk),
         1 if p.get("weights_resident", False) else 0,
+        CB_ACT_RM2,
+        gather_roles,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -1026,7 +1134,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             if p["memory_layout"] == _ML.WIDTH_SHARDED:
                 own_lo, own_hi, col = 0, NHW, [xy]
             elif p["memory_layout"] == _ML.HEIGHT_SHARDED:
-                own_lo, own_hi = mi * p["shard_h"], min(NHW, (mi + 1) * p["shard_h"])
+                c = p["out_shards"][mi]
+                own_lo, own_hi = c * p["shard_h"], min(NHW, (c + 1) * p["shard_h"])
                 col = halo_cores
             else:
                 own_lo, own_hi = mi * p["shard_h"], min(NHW, (mi + 1) * p["shard_h"])
@@ -1048,7 +1157,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             ni,
             0,  # not a sink
             1 if mi == 0 else 0,  # weight_mcast: grid row 0 reads the column's weights
-        ]
+        ] + (reader_args if gather_roles > 1 else [])
         compute_rt[xy.x][xy.y] = [num_m_blocks, ni]
     for xy in sink_cores:
         # Receive-only: every round of every m-block (WIDTH: one m range for the whole group).
@@ -1115,9 +1224,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         w_mcast = ttnn.Mcast(
             device,
             ttnn.McastConfig(noc=_wnoc, handshake=True),
-            cores,
-            p["g_m"],
-            ttnn.McastFixedSenderConfig(sender_index=0),
+            weight_group,
+            weight_group.num_cores() if weight_group is not cores else p["g_m"],
+            ttnn.McastFixedSenderConfig(sender_index=weight_sender),
             weight_order,
         )
         w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)

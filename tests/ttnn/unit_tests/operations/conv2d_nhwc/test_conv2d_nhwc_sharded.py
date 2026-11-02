@@ -269,6 +269,42 @@ def test_conv2d_nhwc_height_bf16_bf8b(device, activation):
     )
 
 
+@pytest.mark.parametrize(
+    "input_shape, C_out, k, padding, stride, shard_shape, num_cores",
+    [
+        # Strided: output shards placed on the input cores covering their windows (gappy core set,
+        # weight multicast over the input grid with receive-only sinks), split-free single-K pipeline.
+        pytest.param((16, 56, 56, 128), 128, 3, 1, 2, (457, 128), 110, id="resnet_layer2_ds"),
+        pytest.param((16, 56, 56, 64), 256, 1, 0, 2, (457, 64), 110, id="resnet_shortcut_1x1_s2"),
+        # Stride 1, tap-major gather, ragged last core (fewer m-blocks than the rest).
+        pytest.param((16, 56, 56, 64), 64, 3, 1, 1, (480, 64), 105, id="resnet_layer1"),
+    ],
+)
+def test_conv2d_nhwc_height_resnet_pinned(device, input_shape, C_out, k, padding, stride, shard_shape, num_cores):
+    """Refinement 6: the ResNet50 HEIGHT perf configs (bf16 x bf8b, bias) at their pinned geometry."""
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_cores:
+        pytest.skip(f"needs {num_cores} cores")
+    run_sharded(
+        device,
+        input_shape,
+        C_out,
+        k,
+        padding,
+        stride,
+        ML.HEIGHT_SHARDED,
+        True,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        shard_shape=shard_shape,
+        num_cores=num_cores,
+    )
+
+
+def test_conv2d_nhwc_height_weights_streamed(device):
+    """Weights too large to keep resident (fp32, 512->512 3x3): streamed K-blocks, unaligned output."""
+    run_sharded(device, (1, 14, 14, 512), 512, 3, 1, 2, ML.HEIGHT_SHARDED, True)
+
+
 def test_conv2d_nhwc_height_resnet_layer2_pinned(device):
     """ResNet50 layer2 3x3 at its production HEIGHT geometry (128-stick shards on 98 cores)."""
     if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < 98:
