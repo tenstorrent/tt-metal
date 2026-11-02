@@ -494,6 +494,10 @@ class GroupNorm(Module):
         self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
             mesh_device.core_grid, num_padded_channels, num_padded_groups
         )
+        # Virtual columns of self.core_grid, as ttnn.group_norm computes them.
+        self._grid_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
+            self.core_grid, num_padded_channels, num_padded_groups
+        )
 
         weight_shape = [
             self.num_devices,
@@ -577,7 +581,7 @@ class GroupNorm(Module):
             input_mask=self.mask.data,
             num_groups=self.num_padded_groups,
             epsilon=self.eps,
-            core_grid=self.core_grid,
+            core_grid=self._core_grid_for(height * width, batch_size),
             inplace=False,
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
@@ -588,6 +592,27 @@ class GroupNorm(Module):
         x = x.reshape([batch_size, height, width, channels])
 
         return _apply_activation_fn(x, self.activation_fn)
+
+    def _core_grid_for(self, hw: int, num_batches: int) -> ttnn.CoreGrid:
+        """self.core_grid, with fewer rows of cores if the input's tile rows don't split evenly over them.
+
+        ttnn.group_norm rejects a grid whose virtual rows don't divide the input's tile rows. The
+        columns are kept: the weight, bias and mask layout depends on them.
+        """
+        grid = self.core_grid
+        rows_per_y = grid.x // self._grid_virtual_cols
+        # The tiled input pads each batch's rows to whole tiles, so count them per batch.
+        num_tile_rows = num_batches * math.ceil(hw / 32)
+        for y in range(grid.y, 0, -1):
+            num_virtual_rows = rows_per_y * y
+            if (
+                num_virtual_rows <= num_tile_rows
+                and num_tile_rows % num_virtual_rows == 0
+                and (num_virtual_rows < num_batches or num_virtual_rows % num_batches == 0)
+            ):
+                return grid if y == grid.y else ttnn.CoreGrid(x=grid.x, y=y)
+        # None fits; ttnn.group_norm reports it.
+        return grid
 
 
 class DistributedGroupNorm(Module):
