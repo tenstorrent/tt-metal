@@ -11,6 +11,9 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
+// The SDPA forward chunking every ring step runs with, for a per-device shard of seq_len rows.
+SDPAForwardProgramConfig ring_chunking(uint32_t seq_len);
+
 // Forward Program Factory: one SDPA forward program per device, so the SDPA shared variables are reused.
 struct RingSDPAFwProgramFactory {
     using shared_variables_t = sdpa_fw::device::SDPAForwardProgramFactory::shared_variables_t;
