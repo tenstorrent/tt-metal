@@ -191,6 +191,10 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"exp2", {{"SFPU_OP_CHAIN_0", "exp2_tile_init(); exp2_tile(0);"}}},
     {"heaviside", {{"SFPU_OP_CHAIN_0", "heaviside_tile_init(); heaviside_tile(0, 0x3F000000u);"}}},  // 0.5 at 0
     {"expm1", {{"SFPU_OP_CHAIN_0", "expm1_tile_init(); expm1_tile(0);"}}},
+    // expm1_tile's iteration count and vector mode; the lanes each writes are in sfpu_partial_tile_ops.
+    {"expm1_r2", {{"SFPU_OP_CHAIN_0", "expm1_tile_init(); expm1_tile<false, DST_ACCUM_MODE, 2>(0, VectorMode::R);"}}},
+    {"expm1_c8", {{"SFPU_OP_CHAIN_0", "expm1_tile_init(); expm1_tile<false, DST_ACCUM_MODE, 8>(0, VectorMode::C);"}}},
+    {"expm1_r1", {{"SFPU_OP_CHAIN_0", "expm1_tile_init(); expm1_tile<false, DST_ACCUM_MODE, 1>(0, VectorMode::R);"}}},
     // base_scale = 1 / ln(10): log10
     {"log_with_base", {{"SFPU_OP_CHAIN_0", "log_with_base_tile_init(); log_with_base_tile(0, 0x3EDE5BD9u);"}}},
     {"tiled_prod", {{"SFPU_OP_CHAIN_0", "tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
@@ -782,6 +786,24 @@ bool is_add_top_row_element(size_t element_in_tile) {
     return element_in_tile < 64 || (element_in_tile >= 256 && element_in_tile < 320);
 }
 
+// Unary ops that write only part of the tile: the faces their vector mode visits (R: 0 and 1, C: 0 and 2)
+// and the SFPU iterations they run per face.
+const std::map<std::string, std::pair<std::array<bool, 4>, size_t>> sfpu_partial_tile_ops = {
+    {"expm1_r2", {{true, true, false, false}, 2}},
+    {"expm1_c8", {{true, false, true, false}, 8}},
+    {"expm1_r1", {{true, true, false, false}, 1}},
+};
+
+bool is_partial_tile_sfpu_op(const std::string& op_name) { return sfpu_partial_tile_ops.contains(op_name); }
+
+// Iteration k of a face writes face rows 4*(k/2)..4*(k/2)+3, even columns for even k and odd for odd k (the
+// lane map of tiled_prod's golden), so face element (row, col) is written by iteration 2*(row/4) + col%2.
+bool is_written_by_partial_tile_op(const std::string& op_name, size_t element_in_tile) {
+    const auto& [faces, iterations] = sfpu_partial_tile_ops.at(op_name);
+    const size_t row = (element_in_tile % 256) / 16, col = element_in_tile % 16;
+    return faces[element_in_tile / 256] && 2 * (row / 4) + col % 2 < iterations;
+}
+
 // Non-negative Int8 operands, packed four per word (sign bit clear, so sign-magnitude == value).
 // Divisors stay >= 1; rsub_int keeps RHS >= LHS so the result is non-negative too.
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_non_negative_int8_binary_inputs(
@@ -1126,7 +1148,7 @@ float sfpu_function(const std::string& op_name, float input) {
         }
         return input == 0.0f ? 0.5f : 1.0f;
     }
-    if (op_name == "expm1") {
+    if (op_name.starts_with("expm1")) {
         return static_cast<float>(std::expm1(d));
     }
     if (op_name == "log_with_base") {
@@ -1433,7 +1455,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         op_name == "tanh_derivative" || op_name == "i0" || op_name == "i1") {
         return uniform(-4.0f, 4.0f);
     }
-    if (op_name == "power_iterative" || op_name == "expm1") {
+    if (op_name == "power_iterative" || op_name.starts_with("expm1")) {
         return uniform(-2.0f, 2.0f);
     }
     if (op_name == "celu" || op_name == "elu" || op_name == "selu" || op_name == "softshrink" ||
@@ -2235,6 +2257,14 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
             std::transform(input.begin(), input.end(), golden.begin(), [&](const bfloat16& val) {
                 return sfpu_util::sfpu_function(test_config.sfpu_op, val);
             });
+        }
+        if (sfpu_util::is_partial_tile_sfpu_op(test_config.sfpu_op)) {
+            // Only the lanes the vector mode and iteration count reach are written; the rest keep the input.
+            for (size_t i = 0; i < golden.size(); ++i) {
+                if (!sfpu_util::is_written_by_partial_tile_op(test_config.sfpu_op, i % 1024)) {
+                    golden[i] = input[i];
+                }
+            }
         }
         packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     }
@@ -3451,6 +3481,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "exp2"),
         std::make_tuple(1, "heaviside"),
         std::make_tuple(1, "expm1"),
+        std::make_tuple(1, "expm1_r2"),
+        std::make_tuple(1, "expm1_c8"),
+        std::make_tuple(1, "expm1_r1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
         std::make_tuple(1, "tiled_prod_next_tile"),
@@ -3721,6 +3754,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "exp2"),
         std::make_tuple(1, "heaviside"),
         std::make_tuple(1, "expm1"),
+        std::make_tuple(1, "expm1_r2"),
+        std::make_tuple(1, "expm1_c8"),
+        std::make_tuple(1, "expm1_r1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
         std::make_tuple(1, "tiled_prod_next_tile"),
