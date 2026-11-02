@@ -204,7 +204,10 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
-        // The zeroed SrcA bank serves ELWADD for both the plain and the acc_to_dest broadcast.
+        // One zeroed SrcA bank per tile serves ELWADD; dest reuse consumes one SrcA bank per face.
+        static_assert(
+            !acc_to_dest || binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
+            "accumulate into dest with broadcast scalar is not supported with dest reuse!");
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);

@@ -533,11 +533,7 @@ inline void eltwise_unary_configure_mop(
 
         // ELWADD moves 8 rows/cycle (vs MOVB2D's 4) but routes through the FPU, which interprets
         // UInt16 bit patterns as floats and flushes values with exp=0. UInt16 falls back to MOVB2D.
-        // MOVB2D cannot accumulate, so acc_to_dest always takes ELWADD and excludes UInt16.
-        if constexpr (acc_to_dest)
-        {
-            LLK_ASSERT(dst_format != to_underlying(DataFormat::UInt16), "acc_to_dest broadcast does not support UInt16");
-        }
+        // MOVB2D cannot accumulate, so acc_to_dest always takes ELWADD; the init rejects UInt16.
         constexpr std::uint32_t dest_accum = acc_to_dest ? p_elwise::DEST_ACCUM_EN : p_elwise::DEST_ACCUM_DIS;
 
         if constexpr (bcast_type == BroadcastType::SCALAR)
@@ -590,7 +586,9 @@ inline void eltwise_unary_configure_mop(
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
- * @tparam acc_to_dest: Accumulate a B2D broadcast into dest instead of overwriting it; not supported for UInt16 or unpack-to-dest.
+ * @tparam acc_to_dest: Accumulate a B2D broadcast into dest instead of overwriting it; must match @ref _llk_unpack_A_init_ and
+ *         @ref _llk_unpack_A_ (a mismatch drops the accumulation or hangs on SrcA). Needs a set dst_format that is not UInt16,
+ *         and FP32 dest for Int8/UInt8/Int32; not supported with unpack-to-dest.
  * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
  * @note COL broadcast supports only a full 32x32 tile (16-row faces, 2x2 face grid).
@@ -609,6 +607,12 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_format = 255)
 {
     static_assert(!acc_to_dest || (type == DataCopyType::B2D && src_b_bcast_type != BroadcastType::NONE), "acc_to_dest is supported only for B2D broadcasts");
+    if constexpr (acc_to_dest)
+    {
+        // ELWADD accumulates, so UInt16 (MOVB2D only) and an unset format are rejected; INT8 math needs FP32 dest.
+        LLK_ASSERT(dst_format != 255 && dst_format != to_underlying(DataFormat::UInt16), "acc_to_dest broadcast needs a set dst_format other than UInt16");
+        LLK_ASSERT(is_fp32_dest_acc_en || !is_int8_or_int32_format(dst_format), "acc_to_dest broadcast of Int8/UInt8/Int32 requires FP32 Dest mode");
+    }
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");

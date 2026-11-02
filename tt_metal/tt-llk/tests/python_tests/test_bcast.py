@@ -28,7 +28,7 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import generate_stimuli, signed_cancelling_operands
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -186,6 +186,8 @@ def _run_unpack_bcast_test(
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
     )
+    if acc_to_dest is not None:
+        src_A, src_B = signed_cancelling_operands(src_A, src_B)
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         BCAST_DEST_SYNC,
@@ -285,13 +287,20 @@ def _run_unpack_bcast_test(
     # --- Assertions ------------------------------------------------------
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
-    # Pretty red/green diff output via passed_test (tolerance-based)
+    # acc_to_dest: a Float16_b sum rounds once (1 step); Bfp8_b stimuli sit on a 1/16 grid where every
+    # sum is exact, and a non-accumulating broadcast copies exactly.
+    max_ulp = None
+    if acc_to_dest is not None:
+        max_ulp = (
+            1 if acc_to_dest and formats.input_format == DataFormat.Float16_b else 0
+        )
     tile_shape = construct_tile_shape(tile_dimensions)
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
         tile_shape=tile_shape,
+        max_ulp=max_ulp,
     )
 
     # Datacopy/bcast should be bit-exact for float formats (no compute loss); an accumulated sum rounds.
@@ -328,9 +337,24 @@ def test_unpack_bcast(
 BCAST_ACC_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
 )
-BCAST_ACC_TILE_DIMENSIONS = [32, 32]
 BCAST_ACC_INPUT_DIMENSIONS = [128, 64]
 BCAST_ACC_TYPES = [BroadcastType.Column, BroadcastType.Row, BroadcastType.Scalar]
+
+
+def get_valid_acc_tile_dimensions(formats, broadcast_type):
+    # TODO(#47328): Column broadcast for tiny tiles needs kernel support
+    if broadcast_type == BroadcastType.Column:
+        return [[32, 32]]
+    return get_valid_tile_dimensions_bcast(formats)
+
+
+def get_seed_broadcast_type(dest_acc, broadcast_type, tile_dimensions):
+    """The WH row case seeds with a column (32x32) or scalar broadcast, keeping the plain row broadcast out."""
+    if not _is_wh_row_dest_acc(dest_acc, broadcast_type):
+        return broadcast_type
+    if tile_dimensions == [32, 32]:
+        return BroadcastType.Column
+    return BroadcastType.Scalar
 
 
 def get_valid_acc_to_dest(dest_acc, broadcast_type):
@@ -344,30 +368,29 @@ def get_valid_acc_to_dest(dest_acc, broadcast_type):
     formats=BCAST_ACC_FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     broadcast_type=BCAST_ACC_TYPES,
+    tile_dimensions=get_valid_acc_tile_dimensions,
     acc_to_dest=get_valid_acc_to_dest,
 )
 def test_unpack_bcast_acc_to_dest(
     formats,
     dest_acc,
     broadcast_type,
+    tile_dimensions,
     acc_to_dest,
 ):
     """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
     Accumulating gives seed_bcast(A) + bcast(B); acc_to_dest=False is the matched overwrite control, bcast(B).
-    The WH row case seeds with a column broadcast to keep the plain row broadcast out of the accumulating cell.
+    Both operands carry signed and exactly cancelling lanes.
     """
-    seed_broadcast_type = (
-        BroadcastType.Column
-        if _is_wh_row_dest_acc(dest_acc, broadcast_type)
-        else broadcast_type
-    )
     _run_unpack_bcast_test(
         formats,
         dest_acc,
-        BCAST_ACC_TILE_DIMENSIONS,
+        tile_dimensions,
         broadcast_type,
         BCAST_ACC_INPUT_DIMENSIONS,
         acc_to_dest=acc_to_dest,
-        seed_broadcast_type=seed_broadcast_type,
+        seed_broadcast_type=get_seed_broadcast_type(
+            dest_acc, broadcast_type, tile_dimensions
+        ),
     )

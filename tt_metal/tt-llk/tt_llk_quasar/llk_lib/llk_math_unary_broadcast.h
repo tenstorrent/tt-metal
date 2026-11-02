@@ -248,16 +248,26 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  * @tparam unpack_to_dest: UNP path wrote to dest
  * @tparam acc_to_dest: Accumulate the broadcast into dest instead of overwriting it; not supported with unpack_to_dest.
  * @param tensor_shape: Passed to addrmod / MOP setup
+ * @param src_format: Register format of the broadcast operand; with acc_to_dest it must not be Float32, Int32 or Int16,
+ *        nor Int8/UInt8 with a 16-bit dest.
  * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching
  *       BROADCAST_TYPE/unpack_to_dest/acc_to_dest.
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest, bool acc_to_dest = false>
-inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape)
+inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape, [[maybe_unused]] const DataFormat src_format)
 {
     LLK_ASSERT(
         tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
         "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
+    if constexpr (acc_to_dest)
+    {
+        // ELWADD reads the operand from SrcB: 32-bit formats need unpack-to-dest, Int16 is MOV-only, INT8 math needs a 32-bit dest.
+        LLK_ASSERT(
+            src_format != DataFormat::Float32 && src_format != DataFormat::Int32 && src_format != DataFormat::Int16 &&
+                (EN_32BIT_DEST || (src_format != DataFormat::Int8 && src_format != DataFormat::UInt8)),
+            "acc_to_dest broadcast does not support Float32, Int32, Int16, or Int8/UInt8 with a 16-bit dest");
+    }
 
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
     _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest, acc_to_dest>(tensor_shape);

@@ -27,7 +27,11 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    generate_stimuli,
+    signed_cancelling_operands,
+)
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
@@ -155,6 +159,8 @@ def test_unary_broadcast_quasar(
         spec_B=spec,
         tile_dimensions=TILE_DIMENSIONS,
     )
+    if acc_to_dest is not None:
+        src_A, src_B = signed_cancelling_operands(src_A, src_B)
 
     if not is_perf:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -250,13 +256,11 @@ def test_unary_broadcast_quasar(
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
+    # acc_to_dest: the Float16_b sum rounds once (1 step); the non-accumulating control copies exactly.
+    max_ulp = None if acc_to_dest is None else (1 if acc_to_dest else 0)
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     ), "Result tensor and golden tensor do not match"
-    if acc_to_dest is False:
-        assert torch.equal(
-            golden_tensor, res_tensor
-        ), "Non-accumulating control must match the broadcast of B bit-exactly"
 
 
 # acc_to_dest broadcasts through ELWADD with dest accumulation; 32-bit inputs unpack straight to Dest instead.
@@ -282,6 +286,7 @@ def test_unary_broadcast_acc_to_dest_quasar(
     """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
     Accumulating gives bcast(A) + bcast(B); acc_to_dest=False is the matched overwrite control, bcast(B).
+    Both operands carry signed and exactly cancelling lanes.
     """
     test_unary_broadcast_quasar(
         formats,

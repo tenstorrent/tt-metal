@@ -25,17 +25,20 @@ static_assert(!unpack_to_dest, "acc_to_dest is not supported when unpacking to d
 #include "llk_unpack_common.h"
 
 template <ckernel::BroadcastType bcast_type, bool acc_to_dest>
-inline void unpack_block(const RuntimeParams& params, const ckernel::TensorShape tensor_shape, const std::uint32_t block, const Operand& buffer)
+inline void unpack_block(
+    const ckernel::TensorShape tensor_shape,
+    const Operand& buffer,
+    const std::uint32_t first_tile,
+    const std::uint32_t num_tiles,
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
     _llk_unpack_A_init_<bcast_type, acc_to_dest, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
-        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
-    for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, src_format, dst_format);
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
     {
         _llk_unpack_A_<bcast_type, acc_to_dest, EltwiseBinaryReuseDestType::NONE, false /*unpack_to_dest*/>(
-            L1_ADDRESS(buffer[(block * params.NUM_TILES_IN_BLOCK) + tile]), formats.unpack_A_src, formats.unpack_A_dst);
+            L1_ADDRESS(buffer[first_tile + tile]) /*address*/, src_format, dst_format);
     }
 }
 
@@ -44,23 +47,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t num_faces          = params.num_faces;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
+    const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        params.TEST_FACE_R_DIM,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        params.num_faces);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, TEST_FACE_R_DIM, TEST_FACE_R_DIM, num_faces, num_faces);
     _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
-    const ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, params.TEST_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
 
-    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(params.NUM_BLOCKS); ++block)
+    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
     {
-        unpack_block<SEED_BROADCAST_TYPE, false /*acc_to_dest*/>(params, tensor_shape, block, params.buffer_A);
-        unpack_block<BROADCAST_TYPE, ACC_TO_DEST>(params, tensor_shape, block, params.buffer_B);
+        const std::uint32_t first_tile = block * NUM_TILES_IN_BLOCK;
+        unpack_block<SEED_BROADCAST_TYPE, false /*acc_to_dest*/>(
+            tensor_shape, buffer_A, first_tile, NUM_TILES_IN_BLOCK, formats.unpack_A_src, formats.unpack_A_dst);
+        unpack_block<BROADCAST_TYPE, ACC_TO_DEST>(tensor_shape, buffer_B, first_tile, NUM_TILES_IN_BLOCK, formats.unpack_A_src, formats.unpack_A_dst);
     }
     _llk_unpack_A_uninit_<BROADCAST_TYPE>();
 }
@@ -74,21 +82,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 
 template <BroadcastType bcast_type, bool acc_to_dest>
-inline void broadcast_block(const RuntimeParams& params)
+inline void broadcast_block(const ckernel::TensorShape tensor_shape, const std::uint32_t num_tiles, const std::uint32_t math_format)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-    const ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, params.TEST_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::B2D, is_fp32_dest_acc_en, bcast_type, false /*is_int_fpu_en*/, PackMode::Default, acc_to_dest>(
-        tensor_shape, formats.math);
-    for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+        tensor_shape, math_format);
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
     {
         LLK_ASSERT(
             (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::B2D, dest_sync, is_fp32_dest_acc_en, bcast_type, false /*unpack_to_dest*/, acc_to_dest>(
-            tile, formats.math, formats.math, tensor_shape);
+            tile, math_format, math_format, tensor_shape);
     }
 }
 
@@ -97,14 +100,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
+    const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
+#endif
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(params.NUM_BLOCKS); ++block)
+    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
-        broadcast_block<SEED_BROADCAST_TYPE, false /*acc_to_dest*/>(params);
-        broadcast_block<BROADCAST_TYPE, ACC_TO_DEST>(params);
+        broadcast_block<SEED_BROADCAST_TYPE, false /*acc_to_dest*/>(tensor_shape, NUM_TILES_IN_BLOCK, formats.math);
+        broadcast_block<BROADCAST_TYPE, ACC_TO_DEST>(tensor_shape, NUM_TILES_IN_BLOCK, formats.math);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
     _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, false /*unpack_to_dest*/>();
@@ -122,25 +134,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t num_faces          = params.num_faces;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
+    const Operand& buffer_Res              = params.buffer_Res;
+#endif
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src,
-        formats.pack_dst,
-        params.TEST_FACE_R_DIM * params.TEST_FACE_C_DIM * params.num_faces /*tile_size*/,
-        params.TEST_FACE_R_DIM,
-        TILE_C_DIM,
-        params.num_faces);
-    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+        formats.pack_src, formats.pack_dst, TEST_FACE_R_DIM * TEST_FACE_C_DIM * num_faces /*tile_size*/, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 
-    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(params.NUM_BLOCKS); ++block)
+    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
     {
         _llk_packer_wait_for_math_done_();
-        for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
         {
             LLK_ASSERT(
                 (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                tile, L1_ADDRESS(params.buffer_Res[(block * params.NUM_TILES_IN_BLOCK) + tile]));
+                tile, L1_ADDRESS(buffer_Res[(block * NUM_TILES_IN_BLOCK) + tile]) /*address*/);
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

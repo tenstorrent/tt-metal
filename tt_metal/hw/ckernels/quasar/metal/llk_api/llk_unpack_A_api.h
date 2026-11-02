@@ -82,7 +82,7 @@ inline void llk_unpack_A_init(
 
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
         static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
-        static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
+        static_assert(acc_to_dest == false, "acc_to_dest is not supported with dest reuse on Quasar");
         static_assert(BType == BroadcastType::NONE, "On Quasar, only BroadcastType::NONE is supported for dest reuse");
 
         // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
@@ -146,7 +146,7 @@ inline void llk_unpack_A_init(
  * every call between the two lands in the same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
- * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
+ * @tparam acc_to_dest: Ignored at execute; selected by llk_unpack_A_init, which must use the same value
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
  * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
  * format
@@ -209,7 +209,7 @@ inline void llk_unpack_A(
  * unpack tile by tile.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
- * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
+ * @tparam acc_to_dest: Ignored at execute; selected by llk_unpack_A_init, which must use the same value
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
  * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand
  * through UNP_DEST regardless of format
