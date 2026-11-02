@@ -1,0 +1,48 @@
+---
+# torrentci#1821 S6 canary step 1: tt-smi -s on one n150 through the VM path.
+# The ci-build image has no tt-smi (dockerfile/Dockerfile installs it only in
+# the ci-test stages), so the step fetches the same release binary GHA's
+# ci-test image uses (TT_SMI_VERSION 6.7.0, docker-bake.hcl) and checks its
+# sha256. No packages: a card job with packages is refused until
+# torrentci#2153 S3e-2 and torrentci#2180. Run it by hand.
+jobs:
+  - id: card-smi-n150
+    description: "S6 canary: tt-smi -s on one n150 (VM path, vfio-vm)"
+    timeout: 20m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_SMI_VERSION, value: 6.7.0}
+      - {name: TT_SMI_SHA256, value: 13ba3d41c77254c733b8dd70a53323fcc6da20f7869b2326b04be180f23f7942}
+    steps:
+      - id: devices
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME"
+            - ls -l /dev/tenstorrent/
+            - lspci -d 1e52: -nn || true
+      - id: fetch-tt-smi
+        kind: shell
+        shell:
+          run:
+            - >-
+              curl -fsSL --proto =https -o /tmp/tt-smi
+              "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-24.04"
+            - echo "${TT_SMI_SHA256}  /tmp/tt-smi" | sha256sum -c -
+            - chmod +x /tmp/tt-smi
+            - /tmp/tt-smi --version
+      - id: tt-smi
+        kind: shell
+        shell:
+          run:
+            - /tmp/tt-smi -ls
+            - /tmp/tt-smi -s
