@@ -409,6 +409,11 @@ jobs:
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
+          # trial: the first Blackhole leg fails, as a lost runner or a failing test would.
+          if [[ "${{ matrix.test-group.name }}" == *"_blackhole group 1/"* ]]; then
+            echo "::error::trial: forced failure of this leg"
+            exit 1
+          fi
           ${{ matrix.test-group.cmd }}
 
       - name: Upload performance data
