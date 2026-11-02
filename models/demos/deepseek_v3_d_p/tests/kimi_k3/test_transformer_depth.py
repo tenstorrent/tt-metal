@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     resolve_checkpoint,
     resolve_trace,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -203,6 +204,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         weight_cache_path=cache,
     )
 
+    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
     kvpe = None
@@ -273,8 +275,8 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         # rather than lazy.
         model.forward(tokens_tt, kvpe_cache=kvpe, layer_tap=tap)
     finally:
-        if model.kda_states is not None:
-            model.kda_states.deallocate()
+        if slabs is not None:
+            slabs.deallocate()
 
     # Report the inner taps first: when a layer's output is wrong, these say which half.
     for local_idx in range(num_layers):

@@ -5,16 +5,21 @@
 """TTNN port of BEVFormer's NMS-free box coder, from UniAD's ``TtNMSFreeCoder``
 (``models/experimental/uniad/tt/ttnn_nms_free_coder.py``).
 
-The top-k selection, the box decoding and the ``post_center_range`` and ``score_threshold`` tests
-run on device, on fixed ``(bs, max_num)`` tensors, with the tests as a validity mask. Only dropping
-the invalid boxes runs on host (:meth:`TtNMSFreeCoder.compact`): it leaves a data-dependent number
+The top-k selection, the box decoding, the ``post_center_range`` and ``score_threshold`` tests
+and upstream ``BEVFormerHead.get_bboxes``' move of z to the box's bottom face run on device, on
+fixed ``(bs, max_num)`` tensors, with the tests as a validity mask. Only dropping the invalid boxes
+runs on host (:meth:`TTNMSFreeCoder.compact`): it leaves a data-dependent number
 of boxes, and ttnn and trace shapes are fixed. With BEVFormer's configs, which set no score
 threshold, it drops none: the head scales the centers into ``pc_range``, inside
 ``post_center_range``.
 """
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import (
+from models.experimental.bevformer.model_config import (
+    BOX_CENTER,
+    BOX_H,
+    BOX_Z,
+    CODER_BISECTION_STEPS,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -22,23 +27,15 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_WL,
     CODE_XY,
     CODE_Z,
-)
-from models.experimental.bevformer.config.head_config import (
-    BOX_CENTER,
     MAX_NUM,
     NUM_CLASSES,
-    PC_RANGE,
     POST_CENTER_RANGE,
+    SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_head import SCORE_DTYPE
-
-# Bisection steps that narrow the k-th logit's bracket around the bfloat16 pivot, 2^-5 of the
-# pivot wide, down to one float32 value; 19 suffice, the rest is margin. See TtNMSFreeCoder.topk.
-PIVOT_BISECTION_STEPS = 22
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``config/decoder_config.py``'s code, centers in metres) to
+    """Box predictions (``model_config.py``'s box code, centers in metres) to
     ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return ttnn.concat(
         [
@@ -53,15 +50,13 @@ def denormalize_bbox(normalized_bboxes):
     )
 
 
-class TtNMSFreeCoder:
+class TTNMSFreeCoder:
     """BEVFormer's NMS-free box coder with top-k and decoding on device; the arguments after
-    ``device`` are ``reference.nms_free_coder.NMSFreeCoder``'s."""
+    ``device`` are the ones of ``reference.nms_free_coder.NMSFreeCoder`` that decoding reads."""
 
     def __init__(
         self,
         device,
-        pc_range=PC_RANGE,
-        voxel_size=None,
         post_center_range=POST_CENTER_RANGE,
         max_num=MAX_NUM,
         score_threshold=None,
@@ -106,7 +101,7 @@ class TtNMSFreeCoder:
         # Wider than the pivot's bfloat16 rounding step on either side; the floor covers a pivot of 0.
         half_width = ttnn.add(ttnn.multiply(ttnn.abs(pivot), 2.0**-6), 1e-30)
         low, high = ttnn.subtract(pivot, half_width), ttnn.add(pivot, half_width)
-        for _ in range(PIVOT_BISECTION_STEPS):
+        for _ in range(CODER_BISECTION_STEPS):
             middle = ttnn.multiply(ttnn.add(low, high), 0.5)
             count = ttnn.sum(ttnn.ge(logits, middle), dim=-1, keepdim=True, compute_kernel_config=self._count_config)
             enough = ttnn.ge(count, float(k))
@@ -182,9 +177,22 @@ class TtNMSFreeCoder:
         return ttnn.logical_and(valid, passes)
 
     @staticmethod
+    def bottom_center(boxes):
+        """Boxes with z moved from the box's gravity center to its bottom face, as upstream
+        ``BEVFormerHead.get_bboxes`` sets it. On device."""
+        bottom = ttnn.subtract(boxes[..., BOX_Z], ttnn.multiply(boxes[..., BOX_H], 0.5))
+        return ttnn.concat([boxes[..., : BOX_Z.start], bottom, boxes[..., BOX_Z.stop :]], dim=-1)
+
+    def finalize(self, scores, boxes):
+        """:meth:`topk`'s scores and boxes to upstream ``get_bboxes``' boxes and their validity,
+        tested before the move, as upstream's coder does."""
+        return self.bottom_center(boxes), self.valid(scores, boxes)
+
+    @staticmethod
     def compact(scores, labels, boxes, valid):
-        """:meth:`topk`'s scores, labels and boxes and :meth:`valid`'s mask to one dict of host
-        boxes, scores and labels per sample, the valid ones, as
+        """:meth:`topk`'s scores and labels, :meth:`topk`'s or :meth:`finalize`'s boxes and
+        :meth:`valid`'s mask to one dict of host boxes, scores and labels per sample, the valid
+        ones, as
         ``reference.nms_free_coder.NMSFreeCoder.decode`` returns them: the one step whose output
         size depends on the data."""
         scores, labels, boxes, valid = (ttnn.to_torch(t) for t in (scores, labels, boxes, valid))
@@ -192,9 +200,3 @@ class TtNMSFreeCoder:
             {"bboxes": b.float()[v.bool()], "scores": s.float()[v.bool()], "labels": lab.long()[v.bool()]}
             for s, lab, b, v in zip(scores, labels, boxes, valid)
         ]
-
-    def decode(self, all_cls_scores, all_bbox_preds):
-        """The head's ``(L, bs, num_query, *)`` device outputs to :meth:`compact`'s per-sample dicts,
-        from the last decoder layer; all but dropping the invalid boxes on device."""
-        scores, labels, _, boxes = self.topk(all_cls_scores[-1], all_bbox_preds[-1])
-        return self.compact(scores, labels, boxes, self.valid(scores, boxes))

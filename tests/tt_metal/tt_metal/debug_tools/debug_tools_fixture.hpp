@@ -478,7 +478,7 @@ public:
         const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
         const auto& build_state =
-            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(mesh_device.get()))
+            tt::tt_metal::BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
                 .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         return build_state.get_target_out_path(kernel->get_full_kernel_name());
