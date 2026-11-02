@@ -264,11 +264,13 @@ TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, metadata_length, expected_duration_ns)
     ("glm_indexer", 160, 524288, None, 2048, False, 2_311_000),
     ("prefill", 640, 51200, None, 1536, False, 896_000),
-    ("bounded_cache", 2, 102400, 56320, 1536, False, 112_000),
+    # bounded_cache rows are split across a core pair; joining the two halves fused (#63408) takes ~1.1 us
+    # off both bounded_cache cases (p150b, median of 15: 111.5 -> 110.4 us and 112.9 -> 111.7 us).
+    ("bounded_cache", 2, 102400, 56320, 1536, False, 110_400),
     # Same shape and work as bounded_cache, with the length arriving in a tensor. The split point is then
     # derived on device; deriving it from the physical width instead halves 50 chunks at 25 while the device
     # has 28, leaving the halves at 25 and 3 and the duration far outside this band.
-    ("bounded_cache_metadata", 2, 102400, 56320, 1536, True, 113_000),
+    ("bounded_cache_metadata", 2, 102400, 56320, 1536, True, 111_700),
 ]
 
 
