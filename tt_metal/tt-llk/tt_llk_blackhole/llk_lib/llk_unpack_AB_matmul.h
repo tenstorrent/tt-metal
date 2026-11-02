@@ -499,7 +499,7 @@ inline void _llk_unpack_AB_matmul_uninit_()
 template <MathFidelity math_fidelity, DstSync dst_sync>
 constexpr bool unpack_AB_matmul_hoist_rows()
 {
-    return !(math_fidelity == MathFidelity::HiFi4 && dst_sync == DstSync::SyncFull);
+    return false;
 }
 
 /**
