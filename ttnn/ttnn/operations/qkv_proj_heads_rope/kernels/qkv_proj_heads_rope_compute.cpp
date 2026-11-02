@@ -5,7 +5,7 @@
 // (K-blocks 0..n-2 of K' = hidden, L1-accumulating onto the seed from K-block 0), then the
 // last K-block one row at a time, each row's
 // epilogue following it: rotate_block on q/k cores (two DEST-accumulated FPU muls per output tile, raw
-// whole-tile phase-major ELWMUL from tile_src_mul.hpp: 1.95x over mul_tiles, bit-identical),
+// whole-tile phase-major ELWMUL from tile_src_mul.hpp, each partial tile unpacked once for two products),
 // convert_block (copy + pack to bf16) on v cores. Output rows alternate between cb_out_tiles (writer, NoC1)
 // and cb_out_tiles_noc0 (reader, NoC0) when out_write_nocs == 2.
 //
@@ -136,10 +136,11 @@ void kernel_main() {
                 for (uint32_t head = 0; head < heads; ++head) {
                     const uint32_t p0 = row_base + (head0 + head) * tiles_per_head;
                     const uint32_t dst = head * tiles_per_head;
-                    tile_src::tile_src_mul(cb_matmul_partials, cb_rotary_table, p0, table_base + 0, dst);
-                    tile_src::tile_src_mul(cb_matmul_partials, cb_rotary_table, p0 + 1, table_base + 1, dst);
-                    tile_src::tile_src_mul(cb_matmul_partials, cb_rotary_table, p0, table_base + 2, dst + 1);
-                    tile_src::tile_src_mul(cb_matmul_partials, cb_rotary_table, p0 + 1, table_base + 3, dst + 1);
+                    // Per DEST tile the P0 term lands before the P1 term, as in the one-product-per-call order.
+                    tile_src::tile_src_mul_pair(
+                        cb_matmul_partials, cb_rotary_table, p0, table_base + 0, table_base + 2, dst, dst + 1);
+                    tile_src::tile_src_mul_pair(
+                        cb_matmul_partials, cb_rotary_table, p0 + 1, table_base + 1, table_base + 3, dst, dst + 1);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -150,8 +151,11 @@ void kernel_main() {
             }
             cb_push_back(cb_out, n_tiles);
         } else {
+            // One DEST window per dest_tiles tiles (Perf 2: per-tile windows cost 8 handshakes per row).
             eltwise_chain<InitReconfigOwner::Caller>(
-                IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
+                IterationShape::tiles(n_tiles).block_size(dest_tiles),
+                ConvertCopy{partials_dfb, row_base},
+                convert_pack);
         }
     };
 
