@@ -149,13 +149,14 @@ struct Ring {
 };
 
 // The walk, once per walk step, with `on_step(step)` called before a step's batches and
-// `body(batch_in_expert, walk)` for the batches this core owns.
+// `body(batch_in_expert, walk)` for the batches this core owns. `on_step` returns the step whose expert the walk
+// takes there: the step itself, or, released in finish order, the one the collector released at that position.
+// Batches are numbered across the whole walk, so how many fall to this core does not depend on that order.
 template <typename OnStep, typename Body>
 void walk_my_batches(const ::cmbf2d::ControlTables& ctl, OnStep on_step, Body body) {
     uint32_t batch = 0;
     for (uint32_t step = 0; step < ct.experts_per_chip; step++) {
-        on_step(step);
-        const ::cmbf2d::GroupWalk walk = walk_for(ctl, step);
+        const ::cmbf2d::GroupWalk walk = walk_for(ctl, on_step(step));
         for (uint32_t b = 0; b < walk.num_batches(); b++, batch++) {
             if (batch % ct.num_peers == ct.my_index) {
                 body(b, walk);
@@ -171,7 +172,7 @@ void kernel_main() {
     // The compute kernel cannot read the control tensors, so it is told how many batches to expect before
     // the first one arrives. Pushed once and never popped.
     uint32_t mine = 0;
-    walk_my_batches(ctl, [](uint32_t) {}, [&](uint32_t, const ::cmbf2d::GroupWalk&) { mine++; });
+    walk_my_batches(ctl, [](uint32_t step) { return step; }, [&](uint32_t, const ::cmbf2d::GroupWalk&) { mine++; });
     CircularBuffer cb_batches(::cmbf2d::UNT_CB_BATCHES);
     cb_batches.reserve_back(1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
@@ -188,11 +189,20 @@ void kernel_main() {
     uint32_t gate_target = 0;
     uint32_t gate_base_row = 0;
 #endif
-    const auto on_step = [&](uint32_t step) {
+    const auto on_step = [&](uint32_t position) -> uint32_t {
+#ifdef CMBF2D_DYNAMIC_ORDER
+        // `ready` and `progress` count release positions, and the step at this one is published first.
+        const uint32_t step = ::cmbf2d::wait_released_step(position);
+        const uint32_t local =
+            ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
+        const uint32_t target = position + 1;
+#else
+        const uint32_t step = position;
         const uint32_t local =
             ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
         const uint32_t target =
             ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local);
+#endif
 #ifdef CMBF2D_PROGRESS_SEM
         gate_rows = !::cmbf2d::in_fused_pass(ctl, ct.my_dg_index, ct.expert_threshold, local);
         if (gate_rows) {
@@ -201,13 +211,14 @@ void kernel_main() {
             gate_step = target - 1;
             gate_target = target;
             gate_base_row = ctl.region[ctl.expert_id(ct.my_dg_index, local)] / ::cmbf2d::UNT_BATCH_ROWS;
-            return;
+            return step;
         }
 #endif
         ::cmbf2d::wait_for_ready(ct.ready_sem, target);
+        return step;
     };
 #else
-    const auto on_step = [](uint32_t) {};
+    const auto on_step = [](uint32_t step) { return step; };
 #endif
 
     Ring ring;

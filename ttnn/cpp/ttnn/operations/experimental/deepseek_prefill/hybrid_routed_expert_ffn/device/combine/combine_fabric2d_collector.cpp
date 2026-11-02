@@ -20,7 +20,8 @@ void add_collector(
     uint32_t counts_addr,
     uint32_t ready_sem,
     uint32_t progress_sem,
-    bool gate_untilizers) {
+    bool gate_untilizers,
+    uint32_t order_sem) {
     cmbf2d::op::CollectorPlan plan{.counts_addr = counts_addr, .ready_sem = ready_sem};
     if (gate_untilizers) {
         // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can
@@ -32,6 +33,11 @@ void add_collector(
         }
         // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
         TT_FATAL(!plan.waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
+        if (order_sem != kNoOrderSem) {
+            for (const auto& [stream, self] : placement.streams) {
+                plan.waiting.push_back(self.worker_virtual);
+            }
+        }
     }
 
     tt::tt_metal::KernelDescriptor kernel;
@@ -40,6 +46,9 @@ void add_collector(
         "collector_combine_fabric2d.cpp";
     kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(progress_sem));
+    if (order_sem != kNoOrderSem) {
+        kernel.defines.emplace_back("CMBF2D_DYNAMIC_ORDER", std::to_string(order_sem));
+    }
     kernel.core_ranges = CoreRangeSet(CoreRange(placement.collector.value()));
     kernel.compile_time_args = cmbf2d::CollectorCtArgs(args, plan).to_ct_word_arr();
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{

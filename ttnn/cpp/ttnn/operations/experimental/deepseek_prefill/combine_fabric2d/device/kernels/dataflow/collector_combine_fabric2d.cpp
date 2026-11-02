@@ -13,6 +13,12 @@
 // The array is plain L1, zeroed here at launch before the writers are told `go`: every bump of the previous
 // launch was counted before that launch's collector exited, so nothing stale can land after the zeroing.
 //
+// With CMBF2D_DYNAMIC_ORDER the steps are released in the order the routed expert actually finishes them: each
+// release position takes the lowest unreleased step that is complete, or failing that one with a chunk out (a
+// whole-grid expert, which runs alone, so nothing else can finish before it). Which step went out at each position
+// is published on every waiting core BEFORE `progress` or `ready` names that position, and the untilizers and
+// readers walk positions. Without it, position k is step k.
+//
 // Unicast rather than one multicast: the waiting cores are scattered over rows 0-1, and a rectangle over them
 // would also write into cores that are not part of this program. The routed expert's cores ARE a rectangle,
 // which is what lets `go` be one multicast.
@@ -23,6 +29,59 @@
 #include "combine_fabric2d_collector_ct_args.hpp"
 
 constexpr ::cmbf2d::CollectorCtArgs ct{};
+
+#if defined(CMBF2D_DYNAMIC_ORDER) && !defined(CMBF2D_PROGRESS_SEM)
+#error "the release order is picked from the per-chunk reports, which only the progress build zeroes"
+#endif
+
+// Copy this core's semaphore `addr` to the same semaphore on every waiting core.
+void publish_to_targets(uint32_t addr) {
+    for (uint32_t t = 0; t < ct.num_targets; t++) {
+        const uint32_t noc_x = kernel_compile_time_args[ct.target_base + 2 * t];
+        const uint32_t noc_y = kernel_compile_time_args[ct.target_base + 2 * t + 1];
+        noc_semaphore_set_remote(addr, get_noc_addr(noc_x, noc_y, addr));
+    }
+}
+
+#ifdef CMBF2D_DYNAMIC_ORDER
+// The steps already released, one bit each; a step id is the routed expert's predicted position for it.
+uint64_t released_steps = 0;
+
+// The next step to release, blocking until one is complete or has a chunk out. Lowest step first among equals,
+// so a correct prediction releases exactly as before.
+uint32_t pick_next_step(
+    volatile tt_l1_ptr uint32_t* counts, volatile tt_l1_ptr uint32_t* chunk_counts, uint32_t max_chunks) {
+    while (true) {
+        invalidate_l1_cache();
+        for (uint32_t s = 0; s < ct.num_steps; s++) {
+            if (!(released_steps & (1ull << s)) && counts[s] >= ct.num_writers) {
+                return s;
+            }
+        }
+        for (uint32_t s = 0; s < ct.num_steps; s++) {
+            if (released_steps & (1ull << s)) {
+                continue;
+            }
+            for (uint32_t c = 0; c < max_chunks; c++) {
+                if (chunk_counts[s * max_chunks + c] >= ct.num_writers) {
+                    return s;
+                }
+            }
+        }
+    }
+}
+
+// Publish that release position `position` is step `step`. Landed before `progress` or `ready` can name the
+// position, so a waiting core that sees either finds the step already there.
+void publish_release(uint32_t position, uint32_t step) {
+    released_steps |= 1ull << step;
+    const uint32_t word_addr = static_cast<uint32_t>(get_semaphore(CMBF2D_DYNAMIC_ORDER + position / 4));
+    volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word_addr);
+    *word = *word | ((step + 1) << (8 * (position % 4)));
+    publish_to_targets(word_addr);
+    noc_async_write_barrier();
+}
+#endif
 
 void kernel_main() {
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.counts_addr);
@@ -56,7 +115,14 @@ void kernel_main() {
     const uint32_t ready_addr = static_cast<uint32_t>(get_semaphore(ct.ready_sem));
     volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
 
-    for (uint32_t s = 0; s < ct.num_steps; s++) {
+    for (uint32_t k = 0; k < ct.num_steps; k++) {
+#ifdef CMBF2D_DYNAMIC_ORDER
+        static_assert(ct.num_steps <= 64 && ct.num_steps <= MAX_STEPS, "one bit and one chunk row per step");
+        const uint32_t s = pick_next_step(counts, chunk_counts, MAX_CHUNKS);
+        publish_release(k, s);
+#else
+        const uint32_t s = k;
+#endif
         invalidate_l1_cache();
 #ifdef CMBF2D_PROGRESS_SEM
         uint32_t done_mask = 0;
@@ -71,12 +137,9 @@ void kernel_main() {
             }
             if (newly != 0) {
                 done_mask |= newly;
-                *progress = (s << 24) | (rows << 16) | done_mask;
-                for (uint32_t t = 0; t < ct.num_targets; t++) {
-                    const uint32_t noc_x = kernel_compile_time_args[ct.target_base + 2 * t];
-                    const uint32_t noc_y = kernel_compile_time_args[ct.target_base + 2 * t + 1];
-                    noc_semaphore_set_remote(progress_addr, get_noc_addr(noc_x, noc_y, progress_addr));
-                }
+                // Named by release position, which is what the untilizers walk.
+                *progress = (k << 24) | (rows << 16) | done_mask;
+                publish_to_targets(progress_addr);
                 noc_async_write_barrier();
             }
             invalidate_l1_cache();
@@ -86,12 +149,8 @@ void kernel_main() {
             invalidate_l1_cache();
         }
 #endif
-        *ready = s + 1;
-        for (uint32_t t = 0; t < ct.num_targets; t++) {
-            const uint32_t noc_x = kernel_compile_time_args[ct.target_base + 2 * t];
-            const uint32_t noc_y = kernel_compile_time_args[ct.target_base + 2 * t + 1];
-            noc_semaphore_set_remote(ready_addr, get_noc_addr(noc_x, noc_y, ready_addr));
-        }
+        *ready = k + 1;
+        publish_to_targets(ready_addr);
         // Landed before the source word changes, and so a later, larger value can never be overtaken.
         noc_async_write_barrier();
     }

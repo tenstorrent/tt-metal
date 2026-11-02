@@ -174,6 +174,30 @@ inline uint32_t ready_target(
 
 #endif
 
+#ifdef CMBF2D_DYNAMIC_ORDER
+// Released in finish order (collector_combine_fabric2d.cpp): the collector publishes which step it released at
+// each position, one byte per position and four to a semaphore word from id CMBF2D_DYNAMIC_ORDER, as the step plus
+// one (zero until published). Only this chip's untilizers and readers walk positions; what any other chip relays
+// or receives from here is counted in totals, which no order changes.
+inline uint32_t released_byte(uint32_t position) {
+    volatile tt_l1_ptr uint32_t* word =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_DYNAMIC_ORDER + position / 4));
+    return (*word >> (8 * (position % 4))) & 0xFF;
+}
+
+inline bool is_released(uint32_t position) {
+    invalidate_l1_cache();
+    return released_byte(position) != 0;
+}
+
+// The step released at `position`, blocking until it is published.
+inline uint32_t wait_released_step(uint32_t position) {
+    while (!is_released(position)) {
+    }
+    return released_byte(position) - 1;
+}
+#endif
+
 // Blocks until this core's `ready` count reaches `target`.
 inline void wait_for_ready(uint32_t ready_sem, uint32_t target) {
     volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem));

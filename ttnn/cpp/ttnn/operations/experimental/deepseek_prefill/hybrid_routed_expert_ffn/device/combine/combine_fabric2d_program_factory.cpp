@@ -243,6 +243,9 @@ struct RingSemaphores {
     std::vector<tt::tt_metal::GlobalSemaphore> vc_outbox;
     uint32_t untilizers_per_group = 0;
     uint32_t num_links = 0;
+    // Words of the collector's published release order, four steps a word; zero when combine walks the predicted
+    // order as it is.
+    uint32_t order_words = 0;
 
     static constexpr uint32_t FILLED = 0;
     static constexpr uint32_t FREED = 1;
@@ -253,7 +256,9 @@ struct RingSemaphores {
     uint32_t ready() const { return has_untilizers() ? unt_freed(num_links) : 2; }
     // The collector's per-chunk release of a unified-pass expert, set on every untilizer.
     uint32_t progress() const { return ready() + 1; }
-    uint32_t num_program_semaphores() const { return ready() + 2; }
+    // The release order, published on every untilizer and reader.
+    uint32_t order(uint32_t i) const { return progress() + 1 + i; }
+    uint32_t num_program_semaphores() const { return ready() + 2 + order_words; }
 
     uint32_t lowest_address() const {
         uint32_t lowest =
@@ -274,12 +279,24 @@ constexpr uint32_t kSemaphoresPerCore = 16;
 // the public entry point and the allocation below are the same arithmetic.
 constexpr uint32_t channel_semaphore_count_for_vcs(uint32_t vcs) { return 1 + 3 * vcs; }
 
+// Overlapped with the wave-planned routed expert, combine releases each expert as it actually finishes, and the
+// collector publishes that order. TT_CMBF2D_STATIC_ORDER=1 keeps the predicted order, for comparison.
+uint32_t release_order_words(const CombineFabric2dParams& args) {
+    static const bool static_order =
+        std::getenv("TT_CMBF2D_STATIC_ORDER") != nullptr && std::string(std::getenv("TT_CMBF2D_STATIC_ORDER")) == "1";
+    if (!args.predicted_walk || static_order) {
+        return 0;
+    }
+    return (args.experts_per_chip + 3) / 4;
+}
+
 RingSemaphores allocate_ring_semaphores(
     ttnn::MeshDevice* mesh,
     uint32_t num_links,
     uint32_t untilizers_per_group,
     uint32_t vcs,
-    const CombineL1& provided) {
+    const CombineL1& provided,
+    uint32_t order_words) {
     // Allocated on the full worker grid so the address is uniform across the mesh. One semaphore of each kind
     // serves every stream: each stream is drained by a different worker core, so the per-core copy at this
     // uniform L1 offset already separates them, and the sender simply targets the right core.
@@ -315,7 +332,8 @@ RingSemaphores allocate_ring_semaphores(
         {},
         {},
         untilizers_per_group,
-        num_links};
+        num_links,
+        order_words};
     for (uint32_t v = 0; v < vcs; v++) {
         sems.vc_arrived.push_back(channel());
         sems.vc_freed.push_back(channel());
@@ -324,11 +342,12 @@ RingSemaphores allocate_ring_semaphores(
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
-        "group, {} links)",
+        "group, {} links, {} release-order words)",
         sems.num_program_semaphores(),
         kSemaphoresPerCore,
         untilizers_per_group,
-        num_links);
+        num_links,
+        order_words);
     tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
     return sems;
 }
@@ -530,14 +549,19 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             l1.collector_counts,
             sems.ready(),
             sems.progress(),
-            /*gate_untilizers=*/false);
+            /*gate_untilizers=*/false,
+            sems.order_words != 0 ? sems.order(0) : kNoOrderSem);
         return desc;
     }
 
     // combine_fabric2d's own kernels are what get built here; this define is what selects their
     // overlapped form, in place of a second copy of each kernel that only added it.
+    const uint32_t order_sem = sems.order_words != 0 ? sems.order(0) : kNoOrderSem;
     const auto add_combine_defines = [&](tt::tt_metal::KernelDescriptor& kernel) {
         kernel.defines.emplace_back("CMBF2D_OVERLAPPED", "1");
+        if (order_sem != kNoOrderSem) {
+            kernel.defines.emplace_back("CMBF2D_DYNAMIC_ORDER", std::to_string(order_sem));
+        }
         if (args.predicted_walk) {
             kernel.defines.emplace_back("CMBF2D_PREDICTED_ORDER", "1");
             kernel.defines.emplace_back("CMBF2D_RE_PER_CORE_M", std::to_string(args.walk_per_core_M_max));
@@ -695,7 +719,14 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
 
     add_collector(
-        desc, args, placement.at(coord), l1.collector_counts, sems.ready(), sems.progress(), /*gate_untilizers=*/true);
+        desc,
+        args,
+        placement.at(coord),
+        l1.collector_counts,
+        sems.ready(),
+        sems.progress(),
+        /*gate_untilizers=*/true,
+        order_sem);
     return desc;
 }
 }  // namespace
@@ -743,7 +774,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         operation_attributes.num_links,
         per_group,
         num_vcs(ring_extent(operation_attributes)),
-        l1_resources);
+        l1_resources,
+        release_order_words(operation_attributes));
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,

@@ -750,6 +750,20 @@ struct Reader {
         noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
     }
 
+#ifdef CMBF2D_DYNAMIC_ORDER
+    // The step the collector released at `position`, moving channel traffic while it is not out yet: nothing of
+    // ours is claimed between experts, so the wait is free to relay for the chips behind us.
+    uint32_t wait_released(uint32_t position) {
+        while (!::cmbf2d::is_released(position)) {
+            if (!serve_one_channel()) {
+                flush_publish();
+                flush_credits();
+            }
+        }
+        return ::cmbf2d::wait_released_step(position);
+    }
+#endif
+
     // End of stream. The sender cannot know the length up front, so it stops on this.
     void end_stream() {
         slot_metadata(claim_slot())->cmd = ::cmbf2d::CMD_END;
@@ -765,8 +779,14 @@ void kernel_main() {
     reader.size_channels();
 
     // One pass per local expert, fabric then local, so every token of expert e is placed before expert
-    // e + 1 is touched.
-    for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+    // e + 1 is touched. Released in finish order, the walk takes the step the collector released at each
+    // position; the channel and final-write totals above are sums over every step, so they hold either way.
+    for (uint32_t position = 0; position < ct.experts_per_chip; position++) {
+#ifdef CMBF2D_DYNAMIC_ORDER
+        const uint32_t local_expert = reader.wait_released(position);
+#else
+        const uint32_t local_expert = position;
+#endif
 #if TILE
         reader.walk = ::cmbf2d::group_walk(
             reader.ctl,
