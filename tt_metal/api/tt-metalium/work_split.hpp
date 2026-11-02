@@ -35,6 +35,20 @@ CoreRangeSet num_cores_to_corerangeset(uint32_t target_num_cores, CoreCoord grid
 
 CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     CoreCoord start_core, uint32_t target_num_cores, const CoreRangeSet& sub_core_grids, bool row_wise = false);
+
+// The numbers split_work_to_cores returns, without building its CoreRangeSets: the first num_cores_group_1 cores of
+// its walk get units_per_core_group_1 units each, and the remaining num_cores - num_cores_group_1 cores get
+// units_per_core_group_2, which is 0 when the units divide evenly.
+struct WorkSplitCounts {
+    uint32_t num_cores = 0;
+    uint32_t num_cores_group_1 = 0;
+    uint32_t units_per_core_group_1 = 0;
+    uint32_t units_per_core_group_2 = 0;
+};
+
+// max_num_cores is the number of cores to split over: grid_size.x * grid_size.y, or core_grid.num_cores().
+WorkSplitCounts split_work_to_cores_counts(uint32_t max_num_cores, uint32_t units_to_divide);
+
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores.
 // This function returns the number of cores, the CoreRangeSet of all cores, and then the CoreRangeSet that does
 // the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided
