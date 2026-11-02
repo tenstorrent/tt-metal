@@ -8,6 +8,11 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 
 def _decode_ref(q, k, v, cur_pos, scale):
     # q: [1, b, nh, d]; k/v: [b, nkv, S, d]; returns [1, b, nh, d]

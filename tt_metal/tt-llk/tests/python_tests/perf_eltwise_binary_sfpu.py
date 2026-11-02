@@ -6,6 +6,7 @@ import test_eltwise_binary_sfpu as _func
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DEST_ACC_MODES,
     ApproximationMode,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
@@ -31,9 +32,6 @@ _ATAN2_PERF_AXES = {
 }
 
 
-_BOTH_DEST_ACC = [DestAccumulation.No, DestAccumulation.Yes]
-
-
 def _distinct_dest_acc(sweep):
     """Drop dest_acc modes that TestConfig promotes onto the same kernel.
 
@@ -41,12 +39,12 @@ def _distinct_dest_acc(sweep):
     sweep would publish two rows with one measurement. Functional tests still
     ask for both; only the perf copy narrows the axis.
     """
-    if sweep.get("dest_acc") != _BOTH_DEST_ACC:
+    if sweep.get("dest_acc") != DEST_ACC_MODES:
         return sweep
     return {
         **sweep,
         "dest_acc": lambda formats: distinct_dest_accumulation_modes(
-            formats, list(_BOTH_DEST_ACC)
+            formats, list(DEST_ACC_MODES)
         ),
     }
 
@@ -143,7 +141,7 @@ _SHALLOW_SWEEP = dict(
     ),
     bcast_dim=[LlkBroadcastType.None_],
     mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=DEST_ACC_MODES,
     input_dimensions=[[64, 32], [128, 32]],
 )
 
