@@ -2762,8 +2762,10 @@ targets:
       bh_quietbox_2:
         entries:
           - status: active
+            # Re-centred 0.0192 -> 0.0221: scheduled T2 e2e 10-22..10-31 measured
+            # 0.0218-0.0223 on six QB2 hosts, above the old +15% ceiling (0.02208).
             perf:
-              fps: 0.0192
+              fps: 0.0221
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
