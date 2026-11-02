@@ -33,6 +33,10 @@ struct FusedRecurrentGatedDeltaRuleParams {
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // gb_fused (decode, T == 1): `decay` carries the raw a|b row [1,1,2*BH] (a = cols [0,BH), b = [BH,2BH)) and
+    // `beta` the per-head constants [1,1,2*BH] (-exp(A_log) | dt_bias), all fp32. The kernel computes
+    // decay = exp(-exp(A_log) * softplus(a + dt_bias)) and beta = sigmoid(b) itself (QWEN36_1C_GDN_GB).
+    bool gb_fused = false;
 };
 
 // All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).

@@ -14,13 +14,15 @@
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S = 5;
 constexpr uint32_t cb_blkidx = 16;  // ring mode only: scratch for the [BH] block-index vector
+constexpr uint32_t cb_gbscr = 17;   // gb_fused only: one-tile scratch for the a|b / constants rows
 
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t use_blk_idx = get_compile_time_arg_val(2);
+    constexpr uint32_t gb_fused = get_compile_time_arg_val(3);
 
-    constexpr auto q_a = TensorAccessorArgs<3>();
+    constexpr auto q_a = TensorAccessorArgs<4>();
     constexpr auto k_a = TensorAccessorArgs<q_a.next_compile_time_args_offset()>();
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto d_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
@@ -59,6 +61,43 @@ void kernel_main() {
         cb.push_back(n);
     };
 
+    // gb_fused (T == 1): `decay` is the raw a|b row [1,1,2BH] and `beta` the constants row [1,1,2BH]
+    // (-exp(A_log) | dt_bias). Pick this head's four scalars out of row 0 (column c of a tile lives in face c/16
+    // at index c%16) and hand them to compute as zero tiles with the value at [0,0]: a, dt_bias, -exp(A_log) in
+    // cb_decay and b in cb_beta. Every other element must be finite (zero): the compute kernel scales row-0 data
+    // by beta's column 0 and runs the padding rows through the rank-1 matmul, so garbage there would reach S.
+    // Done first, since the compute kernel's first step needs decay.
+    if constexpr (gb_fused) {
+        const uint32_t BH = get_arg_val<uint32_t>(10);
+        CircularBuffer scr(cb_gbscr);
+        const CoreLocalMem<volatile uint32_t> sp(scr.get_write_ptr());
+        auto elem = [&](const auto& acc, uint32_t col) -> uint32_t {
+            const uint32_t c = col % 32;
+            noc.async_read(acc, scr, tb, {.page_id = col / 32}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            return sp[(c / 16) * 256 + (c % 16)];
+        };
+        const uint32_t a = elem(d_acc, h), b = elem(d_acc, BH + h);
+        const uint32_t neg_a = elem(b_acc, h), dt = elem(b_acc, BH + h);
+        constexpr uint32_t words = 1024;  // fp32 32x32 tile
+        auto put = [&](uint32_t cb_id, std::initializer_list<uint32_t> vals) {
+            CircularBuffer cb(cb_id);
+            const uint32_t n = static_cast<uint32_t>(vals.size());
+            cb.reserve_back(n);
+            const CoreLocalMem<volatile uint32_t> w(cb.get_write_ptr());
+            for (uint32_t i = 0; i < n * words; i++) {
+                w[i] = 0;
+            }
+            uint32_t j = 0;
+            for (uint32_t v : vals) {
+                w[j++ * words] = v;
+            }
+            cb.push_back(n);
+        };
+        put(cb_decay, {a, dt, neg_a});
+        put(cb_beta, {b});
+    }
+
     // initial state S (once) — host always provides it (zeros if absent). In ring mode the block
     // is idx[h] instead of h (caller contract: see the Python binding).
     uint32_t s0_block = h;
@@ -90,7 +129,9 @@ void kernel_main() {
         read_into(q_acc, cb_q, qk_block * Kt, Kt);
         read_into(k_acc, cb_k, qk_block * Kt, Kt);
         read_into(v_acc, cb_v, block * Vt, Vt);
-        read_into(d_acc, cb_decay, block, 1);
-        read_into(b_acc, cb_beta, block, 1);
+        if constexpr (!gb_fused) {
+            read_into(d_acc, cb_decay, block, 1);
+            read_into(b_acc, cb_beta, block, 1);
+        }
     }
 }

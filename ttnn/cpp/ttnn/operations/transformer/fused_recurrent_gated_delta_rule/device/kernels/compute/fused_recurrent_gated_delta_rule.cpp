@@ -24,6 +24,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
@@ -31,6 +35,7 @@ namespace {
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S = 5;
 constexpr uint32_t cb_out = 6, cb_state = 7, cb_s2 = 8, cb_s3 = 9, cb_sd = 10;
 constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13;
+constexpr uint32_t cb_gdec = 14, cb_gbeta = 15;  // gb_fused: decay/beta computed here
 
 // fp32 DST tiles available per tile_regs_acquire (half-sync).
 constexpr uint32_t DST_TILES = 4;
@@ -166,7 +171,11 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
+    constexpr uint32_t gb_fused = get_compile_time_arg_val(3);
     const uint32_t T = get_arg_val<uint32_t>(0);
+    // gb_fused reads the decay/beta it computes below; otherwise the host-computed ones.
+    constexpr uint32_t dec_id = gb_fused ? cb_gdec : cb_decay;
+    constexpr uint32_t bet_id = gb_fused ? cb_gbeta : cb_beta;
 
     constexpr uint32_t kv = Kt * Vt;
 
@@ -174,8 +183,49 @@ void kernel_main() {
     // for every op below; no per-op data-format reconfig is needed.
     compute_kernel_hw_startup(cb_q, cb_v, cb_out);
 
-    CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(cb_decay), beta(cb_beta);
+    CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(dec_id), beta(bet_id);
     CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u), kcol(cb_kcol);
+
+    if constexpr (gb_fused) {
+        // decay = exp(-exp(A_log) * softplus(a + dt_bias)), beta = sigmoid(b): elementwise on four zero tiles that
+        // carry the value at [0,0] (a, dt_bias, -exp(A_log) in cb_decay; b in cb_beta). fp32 throughout.
+        CircularBuffer raw(cb_decay), rawb(cb_beta), dec(cb_gdec), bet(cb_gbeta);
+        raw.wait_front(3);
+        rawb.wait_front(1);
+        dec.reserve_back(1);
+        tile_regs_acquire();
+        copy_init(cb_decay);
+        copy_tile(cb_decay, 0, 0);
+        copy_tile(cb_decay, 1, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        softplus_tile_init();
+        softplus_tile(0, 0x3f800000u, 0x3f800000u, 0x41a00000u);  // beta 1, 1/beta 1, threshold 20 (= torch)
+        copy_init(cb_decay);
+        copy_tile(cb_decay, 2, 1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+        exp_tile_init();
+        exp_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_gdec);
+        tile_regs_release();
+        dec.push_back(1);
+        bet.reserve_back(1);
+        tile_regs_acquire();
+        copy_init(cb_beta);
+        copy_tile(cb_beta, 0, 0);
+        sigmoid_tile_init();
+        sigmoid_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_gbeta);
+        tile_regs_release();
+        bet.push_back(1);
+        raw.pop_front(3);
+        rawb.pop_front(1);
+    }
 
     for (uint32_t t = 0; t < T; t++) {
         const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
@@ -186,7 +236,7 @@ void kernel_main() {
         // sd = cur_S * decay  (decay before read)
         decay.wait_front(1);
         cur_S.wait_front(kv);
-        bcast_scalar_mul(cur_S_id, cb_decay, cb_sd, kv);
+        bcast_scalar_mul(cur_S_id, dec_id, cb_sd, kv);
         decay.pop_front(1);
         cur_S.pop_front(kv);
         sd.wait_front(kv);
@@ -199,7 +249,7 @@ void kernel_main() {
         // u = beta * (v - vread)
         v.wait_front(Vt);
         beta.wait_front(1);
-        delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
+        delta_rule_residual(cb_v, cb_vread, bet_id, cb_u, Vt);
         v.pop_front(Vt);
         vread.pop_front(Vt);
         beta.pop_front(1);
