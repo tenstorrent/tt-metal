@@ -185,7 +185,7 @@ def _core_assignment(device, blocking):
         for m_group in range(grid_m):
             logical = n_group * grid_m + m_group
             core = ttnn.CoreCoord(logical % grid_x, logical // grid_x)
-            assignment.append((core, n_group, *row_ranges[m_group]))
+            assignment.append((core, n_group, m_group, *row_ranges[m_group]))
     return assignment
 
 
@@ -257,12 +257,21 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
     cos_addr, sin_addr = cos.buffer_address(), sin.buffer_address()
     w_addr, b_addr = weight.buffer_address(), bias.buffer_address()
     out_addrs = [o.buffer_address() for o in outputs]
-    for core, n_group, row_start, core_rows in assignment:
+    for core, n_group, m_group, row_start, core_rows in assignment:
         third = n_group // groups_per_third
         first_head = (n_group % groups_per_third) * blocking.heads_per_core
         first_col_tile = third * HIDDEN_TILES + TILES_PER_HEAD * first_head
         is_rotary = int(third < 2)
-        reader_rt[core.x][core.y] = [x_addr, cos_addr, sin_addr, row_start, core_rows, is_rotary]
+        reader_rt[core.x][core.y] = [
+            x_addr,
+            cos_addr,
+            sin_addr,
+            row_start,
+            core_rows,
+            is_rotary,
+            n_group,
+            blocking.grid_n,
+        ]
         writer_rt[core.x][core.y] = [
             w_addr,
             b_addr,
@@ -272,6 +281,8 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
             first_head,
             row_start,
             core_rows,
+            m_group,
+            blocking.grid_m,
         ]
         compute_rt[core.x][core.y] = [core_rows, is_rotary]
 

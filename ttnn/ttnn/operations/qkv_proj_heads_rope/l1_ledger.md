@@ -62,3 +62,20 @@ Chosen split: 2D (token_rows x head_cols), regime R1 (unicast). Counted at 8x512
 Totals per tier at 8x512: DRAM reads 44.3 MB (W + bias); NoC L1<->L1 82.0 MB (x 56.6 + tables 6.5 + outputs 18.9); core-local L1 1.8 MB/core of L1-acc traffic.
 
 > Cheapest-traffic split considered: 2D + W multicast + x multicast (R1+R2+R3) - DRAM 3.7 MB instead of 44.3 MB (-40.6 MB), x NoC 6.3 MB delivered by multicast instead of 56.6 MB unicast (-50.3 MB), adding two multicast channels (one W K-block of `k_block*N_c` tiles per N-group per round, one x K-block of `block_m*k_block` tiles per M-group per round). Implemented: R1, 2D unicast. Deferred because R1 is the stepping stone both multicasts layer onto without changing the compute kernel, the CB contracts (the multicast payload is exactly one cb_weight_block / cb_activation_block K-block) or the selection function; logical core order already makes each N-group's receivers consecutive for `ttnn.Mcast` (`op_design.md`, Dataflow Strategy).
+
+### Measured (R1 built, Blackhole p100a, default config, x/tables/outputs in L1)
+
+| (B,S) | 8x512 | 16x256 | 32x128 | 8x384 | 4x512 | 8x256 | 2x512 | 4x256 |
+|-------|-------|--------|--------|-------|-------|-------|-------|-------|
+| device us | 278.6 | 278.1 | 275.2 | 252.4 | 215.4 | 212.8 | 206.0 | 204.7 |
+| stock us | 226.3 | 228.5 | 246.4 | 178.8 | 123.5 | 124.1 | 75.0 | 79.8 |
+
+Ablation at 2x512 (h_c=1, grid 3x36): stubbing all K-loop reads drops the matmul phase 185 -> 21 us (the
+compute floor); stubbing only W leaves it at ~170 us; stubbing only x drops it to ~45 us. TensorAccessor
+address math is not the cost (address-only run: 16.7 us). The x unicast re-read (`grid_n` x 57 MB
+all-to-all over NoC0 from L1 banks) is the binding resource, ~15x slower than an uncontended read of
+the same 540 KB per core. Sweeping `heads_per_core` trades x re-reads for W re-reads and never beats
+stock (best: 2x512 123 us at h_c=2, 8x512 278 us at h_c=4). R1 is data-movement bound by design;
+the next refinements are R3 (x multicast within each M-group) and R2 (W multicast within each N-group),
+which cut x/W crossings to 1x. Per-core read stagger (both halves) is in place and cut 2x512 table-read
+stalls in the epilogue (68 -> 40 us).

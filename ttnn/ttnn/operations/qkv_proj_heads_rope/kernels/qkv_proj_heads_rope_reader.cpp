@@ -27,12 +27,22 @@ FORCE_INLINE void write_ones_column(uint32_t tile_addr) {
 
 template <uint32_t tile_bytes>
 FORCE_INLINE void negate_bf16_tile(uint32_t tile_addr) {
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
-    for (uint32_t idx = 0; idx < tile_bytes / sizeof(uint32_t); idx += 4) {
-        words[idx] ^= 0x80008000u;
-        words[idx + 1] ^= 0x80008000u;
-        words[idx + 2] ^= 0x80008000u;
-        words[idx + 3] ^= 0x80008000u;
+    // Plain (non-volatile) pointer: the page is owned by this RISC between the read barrier and the push,
+    // so the compiler may batch the loads.
+    uint32_t* words = reinterpret_cast<uint32_t*>(tile_addr);
+    constexpr uint32_t num_words = tile_bytes / sizeof(uint32_t);
+    constexpr uint32_t unroll = 8;
+    static_assert(num_words % unroll == 0);
+    for (uint32_t idx = 0; idx < num_words; idx += unroll) {
+        uint32_t vals[unroll];
+#pragma GCC unroll 8
+        for (uint32_t u = 0; u < unroll; ++u) {
+            vals[u] = words[idx + u];
+        }
+#pragma GCC unroll 8
+        for (uint32_t u = 0; u < unroll; ++u) {
+            words[idx + u] = vals[u] ^ 0x80008000u;
+        }
     }
 }
 
@@ -57,6 +67,9 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(3);
     const uint32_t core_rows = get_arg_val<uint32_t>(4);
     const bool is_rotary = get_arg_val<uint32_t>(5) != 0;
+    // Cores sharing x rows (one M-group) start each K-block at different tiles so they don't hit one bank in lockstep.
+    const uint32_t stagger_idx = get_arg_val<uint32_t>(6);
+    const uint32_t stagger_count = get_arg_val<uint32_t>(7);
 
     // K' = hidden tiles + the bias K tile.
     static_assert(num_k_blocks * k_block == hidden_tiles + 1);
@@ -89,12 +102,20 @@ void kernel_main() {
                         activation, tile_bytes, {.offset_bytes = (row * k_block + ones_col) * tile_bytes});
                 }
             }
-            for (uint32_t row = 0; row < rows; ++row) {
-                const uint32_t page_base = (first_row + row) * hidden_tiles + k_first;
-                uint32_t l1_addr = block_addr + row * k_block * tile_bytes;
-                for (uint32_t col = 0; col < x_cols; ++col) {
-                    noc_async_read_page(page_base + col, x_accessor, l1_addr);
-                    l1_addr += tile_bytes;
+            const uint32_t x_tiles = rows * x_cols;
+            const uint32_t start = stagger_idx * x_tiles / stagger_count;
+            uint32_t row = start / x_cols;
+            uint32_t col = start % x_cols;
+            for (uint32_t tile = 0; tile < x_tiles; ++tile) {
+                noc_async_read_page(
+                    (first_row + row) * hidden_tiles + k_first + col,
+                    x_accessor,
+                    block_addr + (row * k_block + col) * tile_bytes);
+                if (++col == x_cols) {
+                    col = 0;
+                    if (++row == rows) {
+                        row = 0;
+                    }
                 }
             }
             noc_async_read_barrier();

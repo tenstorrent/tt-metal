@@ -39,6 +39,9 @@ void kernel_main() {
     const uint32_t first_head = get_arg_val<uint32_t>(7);
     const uint32_t row_start = get_arg_val<uint32_t>(8);
     const uint32_t core_rows = get_arg_val<uint32_t>(9);
+    // Cores sharing a W slice (one N-group) start each K-block at different tiles so they don't read in lockstep.
+    const uint32_t stagger_idx = get_arg_val<uint32_t>(10);
+    const uint32_t stagger_count = get_arg_val<uint32_t>(11);
 
     static_assert(num_k_blocks * k_block == hidden_tiles + 1);
     constexpr uint32_t weight_block_tiles = k_block * n_tiles;
@@ -62,24 +65,25 @@ void kernel_main() {
         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk) {
             cb_reserve_back(cb_weight_block, weight_block_tiles);
             const uint32_t block_addr = get_write_ptr(cb_weight_block);
-            uint32_t l1_addr = block_addr;
-            uint32_t bias_k = k_block;
-            for (uint32_t k = 0; k < k_block; ++k) {
+            const uint32_t start = stagger_idx * weight_block_tiles / stagger_count;
+            uint32_t k = start / n_tiles;
+            uint32_t n = start % n_tiles;
+            for (uint32_t tile = 0; tile < weight_block_tiles; ++tile) {
                 const uint32_t kt = k_blk * k_block + k;
+                const uint32_t l1_addr = block_addr + (k * n_tiles + n) * tile_bytes;
                 if (kt < hidden_tiles) {
-                    const uint32_t page_base = kt * weight_width_tiles + first_col_tile;
-                    for (uint32_t n = 0; n < n_tiles; ++n) {
-                        noc_async_read_page(page_base + n, weight_accessor, l1_addr);
-                        l1_addr += tile_bytes;
-                    }
+                    noc_async_read_page(kt * weight_width_tiles + first_col_tile + n, weight_accessor, l1_addr);
                 } else {
-                    bias_k = k;
-                    for (uint32_t n = 0; n < n_tiles; ++n) {
-                        noc_async_read_page(first_col_tile + n, bias_accessor, l1_addr);
-                        l1_addr += tile_bytes;
+                    noc_async_read_page(first_col_tile + n, bias_accessor, l1_addr);
+                }
+                if (++n == n_tiles) {
+                    n = 0;
+                    if (++k == k_block) {
+                        k = 0;
                     }
                 }
             }
+            const uint32_t bias_k = hidden_tiles >= k_blk * k_block ? hidden_tiles - k_blk * k_block : k_block;
             noc_async_read_barrier();
             if (bias_k < k_block) {
                 for (uint32_t n = 0; n < n_tiles; ++n) {
