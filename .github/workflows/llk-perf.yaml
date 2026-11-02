@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       changed: "true"
-      thresholds: '{"threshold": "0.02", "min_cycles": "30", "module_thresholds": ""}'
+      thresholds: '{"threshold": "0.002", "min_cycles": "1", "module_thresholds": ""}'
     steps:
       - run: echo "trial"
 
