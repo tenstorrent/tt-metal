@@ -76,10 +76,20 @@
   category: reduction
 
 - name: ttnn nightly experimental tests (wormhole)
+  # This row and the two blackhole experimental rows below run the whole experimental/ tree - 81
+  # test files from 27 authors - as a single pytest invocation. Under -x that makes them one
+  # failure domain: the first failure in collection order silences every file after it, whoever
+  # owns it. They use --maxfail instead, which still bails out of a cascade (a wedged device
+  # trips the cap in seconds) without letting one stale assertion hide the rest of the suite.
+  # --maxfail does not cover import errors: pytest aborts collection on the first one whatever
+  # the cap, so a single unimportable file silences the tree just as -x did. Two green PRs that
+  # land within hours of each other are enough to produce one. --continue-on-collection-errors
+  # collects the rest; the run still exits non-zero, so nothing is masked.
+  # Single-file rows elsewhere in this file keep -x - they have no one else's tests to abort.
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
   # Ignore experimental/fft: WH-B0 only, needs a dedicated per-file job; registering that
   # job requires a time_budget.yaml bump that fork PRs cannot land.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft --maxfail=10 --continue-on-collection-errors -v -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
@@ -92,7 +102,7 @@
 
 - name: ttnn nightly experimental tests (blackhole)
   # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft --maxfail=10 --continue-on-collection-errors -v -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
       timeout: 60
@@ -128,7 +138,7 @@
       tests/ttnn/nightly/unit_tests/operations/experimental \
       --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
       tests/ttnn/nightly/unit_tests/operations/sdpa \
-      -m requires_host_iommu -xv --timeout=600
+      -m requires_host_iommu --maxfail=10 --continue-on-collection-errors -v --timeout=600
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
