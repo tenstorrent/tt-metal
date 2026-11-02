@@ -24,11 +24,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
-from models.demos.deepseek_v3_d_p.tt.kda.kda import (
-    _HistoryExchange,
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
     convolution_tail_from_device_layout,
     convolution_tail_to_device_layout,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,

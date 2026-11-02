@@ -15,13 +15,12 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_small_kda_test_config,
     random_weights,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.kda import (
-    KdaState,
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDAProgramConfig,
     convolution_tail_from_device_layout,
     convolution_tail_shape,
-    ttKDA,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,

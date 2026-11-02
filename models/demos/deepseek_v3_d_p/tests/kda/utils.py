@@ -23,16 +23,13 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     load_kda_layer_state_dict,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_CONVOLUTION_SEGMENT_CHANNELS,
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
+    convolution_tail_from_device_layout,
     kimi_k3_program_config,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.kda import (
-    KDA_CONVOLUTION_SEGMENT_CHANNELS,
-    KdaState,
-    convolution_tail_from_device_layout,
-    ttKDA,
-)
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
