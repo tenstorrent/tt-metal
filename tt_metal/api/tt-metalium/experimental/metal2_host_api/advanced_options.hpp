@@ -411,8 +411,8 @@ struct ScratchpadAdvancedOptions {
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
 
-    // Replace placement inferred from the binding kernels. Must be non-empty and within
-    // the logical worker grid; may omit binding nodes and include nodes with no binder.
+    // Select backing-memory placement from the union of all binding kernels' nodes.
+    // Invariant: When set, the override is a non-empty subset of that union; equality is allowed.
     // Placement is fixed for the Program lifetime; size_per_node is unchanged.
     // All bindings use one allocation over this set, with a uniform local L1 address.
     // This does not enable sharing on overlapping nodes: allow_instance_multi_binding

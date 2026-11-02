@@ -2385,8 +2385,8 @@ std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl:
 }
 
 void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
-    // Register precisely the ranges that allocation will request, including override-only
-    // nodes, before preparing bases/seals and allocating DFBs.
+    // Register the ranges used by scratchpad allocation groups before preparing bases/seals
+    // and allocating DFBs.
     for (const auto& group : scratchpad_allocation_groups()) {
         // Register each binding range and the union used by its allocation group.
         for (const auto& [kernel, handle] : group.bindings) {

@@ -46,8 +46,9 @@ namespace tt::tt_metal {
 // PLACEMENT: Derived from its bound kernel(s)'s WorkUnitSpec membership, like DFB.
 //   Node-local resources (scratchpad, DFB) derive their node set from their
 //   kernel bindings; semaphores must specify their node set explicitly.
-//   advanced_options.override_placement replaces this node set. Binding and sharing
-//   rules apply within the effective placement; access outside it is undefined behavior.
+//   advanced_options.override_placement selects a non-empty subset of the union of all
+//   binding kernels' node sets; equality is allowed. Binding and sharing rules apply
+//   within the effective placement; access outside it is undefined behavior.
 //
 // CAUTION: Scratchpad is a raw memory with no synchronization semantics.
 //   Be cautious when using it in compute kernels, as the Unpack/Math/Pack pipeline
