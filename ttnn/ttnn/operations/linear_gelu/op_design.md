@@ -251,7 +251,7 @@ for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks_this_core; ++row
 | Remainder | last active row: `tensor_m_tiles - (active_rows-1) * core_m_tiles` rows (>= 1); last active column: `96 - (active_cols-1) * core_n_tiles` tiles (a multiple of `block_w`); tail row-block `last_block_h = rows_this_core - (num_row_blocks_this_core-1) * block_h` |
 | Tile geometry | per-image `ceil` (see Tensors); `tensor_m_tiles = B * ceil(S/32)` |
 
-Concrete values (p100a, block_w = 3, block_h = 4 from the budget solve):
+Concrete values at Phase 0 (p100a, block_w = 3, block_h = 4 from the budget solve):
 
 | (B, S) | tensor_m_tiles | core_m_tiles x active_rows | core_n_tiles x active_cols | cores | busiest core tiles | row-blocks (busiest) |
 |--------|---------------|----------------------------|----------------------------|-------|--------------------|----------------------|
@@ -260,6 +260,16 @@ Concrete values (p100a, block_w = 3, block_h = 4 from the budget solve):
 | 4x512, 8x256 | 64 | 7 x 10 (last 1) | 9 x 11 | 110 | 63 | 4,3 |
 | 2x512, 4x256 | 32 | 4 x 8 | 9 x 11 | 88 | 36 | 4 |
 | 1x32 / 1x8 | 1 | 1 x 1 | 9 x 11 | 11 | 9 | 1 (degenerate column multicast) |
+
+Refinement 3 update (built): `block_w = 1`, and `select_blocking` also scores the transposed orientation (logical rows m on grid columns x, logical columns n on grid rows y) and keeps whichever gives fewer output tiles on the busiest core (ties keep m on y). The W channel is a rotating sender inside each logical column (chunk j owned by row `(j + col + 1) mod active_rows`; the `+ 1` keeps it off the row's x round-0 sender), and chunk-0 owners issue their DRAM read at kernel start, before x row-block 0. Concrete values now:
+
+| (B, S) | orientation | core_m_tiles x active_rows | core_n_tiles x active_cols | cores | busiest core tiles | row-blocks (busiest) |
+|--------|-------------|----------------------------|----------------------------|-------|--------------------|----------------------|
+| 8x512, 16x256, 32x128 | m on y | 13 x 10 (last 11) | 9 x 11 (last 6) | 110 | 117 | 4,4,4,1 |
+| 8x384 | m on y (tie) | 10 x 10 | 9 x 11 | 110 | 90 | 4,4,2 |
+| 4x512, 8x256 | m on x | 6 x 11 (last 4) | 10 x 10 (last 6) | 110 | 60 | 3,3 |
+| 2x512, 4x256 | m on x | 3 x 11 (last 2) | 10 x 10 (last 6) | 110 | 30 | 3 |
+| 1x32 / 1x8 | m on y | 1 x 1 | 9 x 11 | 11 | 9 | 1 |
 
 Single regime. Every derived quantity comes from `(grid, tensor_m_tiles, BLOCK_W, K_EXT_TILES, CB_BUDGET_BYTES, ACT_DEPTH, OUT_DEPTH)` in one host function. The tests must still pin the degenerate shapes: `active_rows = 1` (1x32), `tensor_m_tiles < grid_y` (2x37, 16x8) and a tail row-block of 1 (8x512).
 

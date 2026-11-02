@@ -73,7 +73,7 @@ No SUPPORTED change.
 
 **Outcome**: 8x512 L1/L1 195.4 -> 143.8 us (GELU_FAST = 1, x / (1 + exp(-2u)), same tanh GELU; PCC 0.99997 and rel RMS 1.1748e-2 identical to the accurate path). Ablation at 8x512: no activation 90.6 us, RELU6 on the packer 97.0 us, fast GELU 143.5 us, accurate GELU 195.4 us, so the packer-thread SFPU GELU still binds (about 1.1 us of SFPU per output tile against about 0.77 us of matmul). Splitting the GELU between the MATH and PACK threads was tried and reverted: the SFPU and its LREGs are one shared unit, so the two threads' streams race (NaN at 1 tile on MATH; 157 us at 2). Subblock / block_w / block_h levers only shorten the matmul, which is not on the critical path, so they were not turned. Next lever: fewer dependent SFPU ops per GELU iteration (one Newton step on the reciprocal, degree-3 exp2 polynomial). Not done here because both lower the activation's internal precision, which the contract forbids unless shown to be measurably identical.
 
-### [ ] Refinement 3 - Speed up the flagged small-token rows (1024 / 2048 tokens)
+### [x] Refinement 3 - Speed up the flagged small-token rows (1024 / 2048 tokens)
 
 **Type**: perf
 
@@ -87,6 +87,8 @@ No SUPPORTED change.
 **Verifier notes**: runs after Refinement 2 because the per-tile compute cost Refinement 2 attacks is also most of the small-M time (36 tiles x about 2050 cycles is about 55 us of the 73). Re-measure the intercept after Refinement 2 before choosing the lever. All candidates are knob-turns on the existing R1/R2 topology (sender choice, grid split). R6 (K-split + cross-core combine) is a scheme change and is not in scope: it only pays below `tensor_m_tiles < grid_y` (< 320 tokens), which no flagged row reaches. If a lever is specific to small M, gate it by the predicate in `select_blocking` and keep the 4096-token path unchanged.
 
 **Done when**: measured device-ns improves on 2x512 / 4x256 and 4x512 / 8x256 (exact flagged config) toward their targets, golden suite green, precision gate holds, and no regression on 8x512 or on the guard set named in Refinement 2.
+
+**Outcome**: 2x512 / 4x256 56.8 -> 42.4 us, 4x512 / 8x256 85.8 -> 74.8 us, and no row regressed (8x512 143.5 -> 137.1, guards improved too). Levers: `BLOCK_W` 1 (shorter first W chunk), transposed grid at short m (30 / 60 tiles per core on all 110 cores), W rotating sender with a diagonal round offset, and chunk 0 read at kernel start in parallel with x row-block 0. `OUT_DEPTH` 6 keeps the output ring at 24 pages. Deeper W prefetch is slower at every depth: W reads are DRAM-bandwidth-bound. Now at 2x512, the packer GELU (about 1.1 us/tile x 30) co-binds with data movement (32.4 us with compute stubbed), and about 6 us of fill is the serial x round-0 read (4.6 us, one core reads 72 tiles) plus the W chunk-0 multicast. Next: split the x round-0 read across a row's cores (several senders per x round), and fewer SFPU ops per GELU tile. Not done here: the first needs a multi-sender gather on the x channel, a scheme change beyond this knob-turn refinement. The second is the precision-gated lever recorded under Refinement 2.
 
 ### [ ] Refinement 4 - Speed up the flagged 4096-token profile: fill, drain and data-movement residue
 
