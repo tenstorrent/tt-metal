@@ -20,7 +20,7 @@ namespace tt::tt_metal::test_helpers {
 
 inline bool SupportsScratchpadOverrideTest(const distributed::MeshDevice& device) {
     return (device.arch() == tt::ARCH::WORMHOLE_B0 || device.arch() == tt::ARCH::BLACKHOLE) &&
-           device.compute_with_storage_grid_size().x >= 4;
+           device.compute_with_storage_grid_size().x >= 3;
 }
 
 template <typename DispatchFixture>
@@ -34,7 +34,7 @@ protected:
             return;
         }
         if (!SupportsScratchpadOverrideTest(fixture_device())) {
-            GTEST_SKIP() << "Requires Gen1 hardware and four columns";
+            GTEST_SKIP() << "Requires Gen1 hardware and three columns";
         }
     }
 };
@@ -70,8 +70,7 @@ void kernel_main() {
             .unique_id = ScratchpadSpecName{"pad"},
             .size_per_node = 64,
             .advanced_options =
-                {.override_placement =
-                     CoreRangeSet(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({2, 0}, {3, 0})})}}},
+                {.override_placement = CoreRangeSet(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({2, 0})})}}},
         .work_units = {
             MakeMinimalWorkUnit("a", NodeRange({0, 0}, {1, 0}), {"a"}),
             MakeMinimalWorkUnit("b", NodeCoord{2, 0}, {"b"})}};
@@ -104,9 +103,9 @@ inline void InitializeScratchpadReportsForTest(distributed::MeshDevice& device, 
     for (uint32_t x = 0; x < 3; ++x) {
         slow_dispatch::WriteToL1(device, {x, 0}, scratchpad_report_address, zero_report);
     }
-    // The extra reserved node has no kernel and must remain untouched.
+    // The excluded node runs a kernel that must leave the scratchpad address untouched.
     std::vector<uint32_t> sentinel(16, 0xDEADBEEFu);
-    slow_dispatch::WriteToL1(device, {3, 0}, ScratchpadAddressForTest(program), sentinel);
+    slow_dispatch::WriteToL1(device, {1, 0}, ScratchpadAddressForTest(program), sentinel);
 }
 
 inline std::vector<std::vector<uint32_t>> ReadScratchpadResultsForTest(
@@ -118,7 +117,7 @@ inline std::vector<std::vector<uint32_t>> ReadScratchpadResultsForTest(
     const auto address = ScratchpadAddressForTest(program);
     slow_dispatch::ReadFromL1(device, {0, 0}, address, 64, results[3]);
     slow_dispatch::ReadFromL1(device, {2, 0}, address, 64, results[4]);
-    slow_dispatch::ReadFromL1(device, {3, 0}, address, 64, results[5]);
+    slow_dispatch::ReadFromL1(device, {1, 0}, address, 64, results[5]);
     return results;
 }
 
