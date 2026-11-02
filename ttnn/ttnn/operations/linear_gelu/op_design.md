@@ -312,7 +312,7 @@ Helpers considered and rejected:
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
 | Erf GELU instead of tanh GELU | `GeluActivation` / `KernelActivation::GELU` routes to `gelu_tile_pack` (erf form), and the name looks right | use only `KernelActivation::GELU_TANH` -> `gelu_tanh_tile_pack` via the extension; acceptance test compares to `gelu(approximate="tanh")` on model-distributed inputs |
-| `GELU_FAST = true` silently adopted | it is faster and reads as an approximation; the contract forbids lowering precision | Phase 0 is `GELU_FAST = false`. Lamp L1 states the adoption gate (no worse PCC / rel RMS vs fp64 on golden inputs). |
+| `GELU_FAST = true` silently adopted | it is faster and reads as an approximation; the contract forbids lowering precision | Phase 0 was `GELU_FAST = false`. Refinement 2 adopted `GELU_FAST = true` after the lamp L1 gate held: same function by exact identity, PCC / rel RMS vs fp64 identical to 4 significant digits on golden inputs. |
 | Bias tile padding rows are not trusted | the ones tile's zeros multiply bias tile rows 1..31; `0 * NaN = NaN` would poison every row | the W sender zero-fills bias tile rows 1..31 before the multicast |
 | Padded output rows (h_non_aligned) | the contract says exactly 0 whatever x's padding holds; GELU(bias) != 0 and garbage x rows give garbage z | the writer overwrites rows `valid_rows..31` of tail-row tiles with +0.0 (W3). Matmul rows are independent, so no NaN leaks into valid rows. Do not "fix" it by masking x alone: z = b in a padded row. |
 | Matmul source order | matmul maps in0 -> SrcB, in1 -> SrcA | boot with `compute_kernel_hw_startup<SrcOrder::Reverse>` exactly once |

@@ -30,8 +30,9 @@ BLOCK_W = 3
 ACT_DEPTH = 2
 OUT_DEPTH = 2
 CB_BUDGET_BYTES = 900 * 1024
-# 0 = accurate tanh GELU (lamp L1 gate: adopt fast only on measured no-worse accuracy).
-GELU_FAST = 0
+# Same tanh GELU either way: 0 = 0.5x(1 + tanh(u)) with the FP32 accurate tanh, 1 = x / (1 + exp(-2u)) (exact
+# identity, ~22 vs ~38 SFPU ops). 1 measured PCC / rel RMS identical to 0 on golden inputs; the SFPU GELU binds the op.
+GELU_FAST = 1
 
 CB_ACTIVATION_BLOCK = 0
 CB_WEIGHT_RESIDENT = 1

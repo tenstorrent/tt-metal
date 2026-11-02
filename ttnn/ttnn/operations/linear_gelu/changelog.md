@@ -18,3 +18,12 @@
 - Perf (device us, 8x512): L1/L1 195.4 (no regression vs 195.6), DRAM x 199.4, DRAM out 196.2, 8x500 non-aligned 195.5.
 - Issues encountered: None.
 - Tests added: `test_linear_gelu_perf.py::test_linear_gelu_perf_guard` (8x512 DRAM x, 8x512 DRAM out, 8x500 non-aligned).
+
+## Refinement 2 - Speed up the flagged 8x512 profile: per-tile compute cost
+- Date: 2026-11-02
+- What was done: ablated the per-tile compute at 8x512: no activation 90.6 us, RELU6 on the packer 97.0 us, accurate tanh GELU 195.4 us, so the packer-thread SFPU GELU binds. Adopted `GELU_FAST = 1` (x / (1 + exp(-2u)), the same tanh GELU by exact identity, about 22 vs 38 SFPU ops) after the lamp L1 precision gate held. Tried splitting the GELU between the MATH thread (PostCompute hook) and the packer: reverted. The SFPU is a single shared unit, so concurrent streams race (NaN), and the split cannot add SFPU throughput anyway (157 us at 2 tiles on MATH). Subblock / block_w / block_h not turned: they only shorten the matmul, which is off the critical path.
+- Perf (device us, before -> after): 8x512 195.4 -> 143.8, 16x256 195.7 -> 143.6, 32x128 195.7 -> 143.5, 8x384 155.0 -> 114.7, 4x512 114.1 -> 85.9, 8x256 114.2 -> 85.9, 2x512 73.1 -> 57.0, 4x256 73.0 -> 56.9; guards 8x512 DRAM x 199.4 -> 147.7, 8x512 DRAM out 196.2 -> 144.3, 8x500 non-aligned 195.5 -> 143.4.
+- Accuracy achieved: PCC=0.99997, rel RMS 1.1748e-2..1.1839e-2, max abs 3.5e-2..5.5e-2 on shapes [1x32, 2x512, 8x384, 8x512], identical to the accurate path to 4 significant digits.
+- Golden test progress: slice 8x512 / 1x32 / 8x500 13/13, regression 6/6; unit tests 35/35.
+- Issues encountered: the MATH/PACK GELU split races on the shared SFPU (see above). Remaining headroom to the 90.8 us target is SFPU GELU time: the next lever is fewer dependent SFPU ops per iteration, which lowers internal precision and needs a measured-identical gate first.
+- Tests added: None (existing perf + precision tests cover the change).

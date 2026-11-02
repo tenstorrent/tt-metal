@@ -55,7 +55,7 @@
 
 **Outcome**: shipped. Golden target cells 73/73 pass, regression file 6/6. Device us at 8x512: L1/L1 195.4 (baseline 195.6), DRAM x 199.4, DRAM out 196.2; 8x500 non-aligned L1/L1 195.5. Guard rows pinned in `test_linear_gelu_perf.py::test_linear_gelu_perf_guard`.
 
-### [ ] Refinement 2 - Speed up the flagged 8x512 profile: per-tile compute cost
+### [x] Refinement 2 - Speed up the flagged 8x512 profile: per-tile compute cost
 
 **Type**: perf
 
@@ -70,6 +70,8 @@ No SUPPORTED change.
 **Verifier notes**: prompt rule (MUST): "the accurate tanh GELU... A faster but different activation does not count", and "A speedup obtained by lowering precision does not count". `GELU_FAST` may be adopted only if it computes the same tanh GELU (not a piecewise / LUT form) and, on the golden model-distributed inputs, PCC and relative RMS against fp64 are no worse than the accurate path (today 0.99997 / 1.175e-2; the bar in the prompt is stock's 1.21e-2..1.30e-2). Keep `GELU_FAST` a single host constant. Precision knobs (fidelity below HiFi2, fp32_dest_acc_en off) are off the table. Knob-turn class: every lever here is a parameter the design already exposed, except the bias seed (needs a `matmul_block` mode that accumulates onto a pre-loaded DEST, which the helper does not expose today; extending the helper is allowed). Any L1 headroom freed by a smaller `block_h` should go to `ACT_DEPTH` / `OUT_DEPTH`, recorded in `l1_ledger.md`.
 
 **Done when**: measured device-ns at 8x512 (exact flagged config) improves and moves toward 90.8 us; precision gate holds (PCC >= 0.9999, rel RMS <= 1.4e-2, and no worse than the Phase 0 baseline in `verification_report.md`); golden suite green; no regression across the config-spanning guard set: one representative per distinct path x placement x alignment (e.g. 2x512 L1/L1, 8x512 DRAM x, 8x512 DRAM out, 8x500 h_non_aligned, 1x32 single-row column group).
+
+**Outcome**: 8x512 L1/L1 195.4 -> 143.8 us (GELU_FAST = 1, x / (1 + exp(-2u)), same tanh GELU; PCC 0.99997 and rel RMS 1.1748e-2 identical to the accurate path). Ablation at 8x512: no activation 90.6 us, RELU6 on the packer 97.0 us, fast GELU 143.5 us, accurate GELU 195.4 us, so the packer-thread SFPU GELU still binds (about 1.1 us of SFPU per output tile against about 0.77 us of matmul). Splitting the GELU between the MATH and PACK threads was tried and reverted: the SFPU and its LREGs are one shared unit, so the two threads' streams race (NaN at 1 tile on MATH; 157 us at 2). Subblock / block_w / block_h levers only shorten the matmul, which is not on the critical path, so they were not turned. Next lever: fewer dependent SFPU ops per GELU iteration (one Newton step on the reciprocal, degree-3 exp2 polynomial). Not done here because both lower the activation's internal precision, which the contract forbids unless shown to be measurably identical.
 
 ### [ ] Refinement 3 - Speed up the flagged small-token rows (1024 / 2048 tokens)
 

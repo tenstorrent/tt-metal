@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","tests":"unit 35/35, regression 6/6, golden non_aligned|DRAM 73/73, perf 8x512 L1/L1 195.4us DRAM-x 199.4 DRAM-out 196.2 8x500 195.5","ts":"2026-11-02T21:45:01+00:00"}
+{"event":"test_run","status":"fail","detail":"GELU split math/pack (GELU_MATH_TILES=1) -> pcc nan; =2 passes but 157us. SFPU shared between threads, concurrent streams race on LREGs. Reverted.","ts":"2026-11-02T21:53:40+00:00"}
