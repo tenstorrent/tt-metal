@@ -16,6 +16,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.media import StubEmbeddingSource, build_injection, media_rows_for_chunk
+from models.demos.common.prefill.media_metadata import chunk_metadata_size, unpack_media_items
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -126,7 +128,10 @@ assert MTP_DECODE_LEVELS == MTP_LEVELS or (
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# Max images per chunk in the H2D chunk metadata (media_metadata.py). 0 = text only: today's 12-byte header.
+# The engine must use the same value, since it sets the size of every chunk's metadata.
+MEDIA_K = int(os.environ.get("PREFILL_MEDIA_K", 0))
+CHUNK_METADATA_SIZE_BYTES = chunk_metadata_size(MEDIA_K)
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
@@ -177,8 +182,8 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
-    # One D2H read; the 4th word is MTP provided_levels.
+def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False, with_media: bool = False) -> dict:
+    # One D2H read; on D2D the 4th word is MTP provided_levels, on H2D with images it is the media count.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     meta = {
         "slot_id": int(m[0]),
@@ -188,6 +193,9 @@ def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = Fal
     # Mirror _metadata_record_words: the fourth word exists only when MTP is on.
     if with_provided_levels and m.numel() > 3:
         meta["provided_levels"] = max(0, int(m[3]))
+    # The images this chunk overlaps, as MediaItems read from the bytes after the header.
+    if with_media:
+        meta["media"] = unpack_media_items(m.numpy().tobytes(), MEDIA_K)
     return meta
 
 
@@ -254,11 +262,11 @@ def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
 def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
-        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata)
+        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata, with_media=bool(MEDIA_K))
     outs = _h2d_drain_op(h2d_service, sockets, n_mtp)
     tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
     sockets.metadata = outs[-1]
-    return tokens, overhang, _decode_metadata(sockets.metadata)
+    return tokens, overhang, _decode_metadata(sockets.metadata, with_media=bool(MEDIA_K))
 
 
 def build_d2d_pipeline_endpoints(
@@ -402,6 +410,41 @@ def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
             backing.device(),
             ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
         ),
+    )
+
+
+def _media_source_from_env(hidden: int):
+    # Until the embedding-store reader exists, image rows come from the stub, and only when asked for explicitly.
+    if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS", "0") == "1":
+        return StubEmbeddingSource(hidden)
+    raise NotImplementedError(
+        "PREFILL_MEDIA_K > 0 needs an embedding source; until the store reader exists, set PREFILL_MEDIA_STUB_EMBEDDINGS=1"
+    )
+
+
+def _media_rows(meta: dict, source) -> Optional[tuple]:
+    """(rows, mask) that overwrite the chunk's image positions after the token embedding; None for a text-only chunk."""
+    items = meta.get("media")
+    if not items:
+        return None
+    start, end = meta["actual_start"], meta["actual_end"]
+    slices = media_rows_for_chunk(items, start, end, source)  # only the rows of each image that fall in this chunk
+    return build_injection(slices, start, end, _sp, CHUNK_SIZE // _sp)
+
+
+def _ack_record(mesh_device, meta: dict) -> ttnn.Tensor:
+    """The 12-byte {slot_id, actual_start, actual_end} record for the D2H layer acks.
+
+    Without images the received H2D metadata is this record and is sent back as is. With images it also
+    carries the media items, so the acks get a fresh copy of just the header instead."""
+    words = torch.tensor([meta["slot_id"], meta["actual_start"], meta["actual_end"]], dtype=torch.int32)
+    return ttnn.from_torch(
+        words.reshape(1, 1, 1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
 
@@ -629,6 +672,7 @@ def _compute_and_send(
     mtp_tokens=None,
     indices=None,
     idx_out=None,
+    media_source=None,
 ) -> float:
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
@@ -641,6 +685,10 @@ def _compute_and_send(
     )
 
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
+    media_rows = _media_rows(meta, media_source) if media_source is not None else None
+    ack_md = sockets.metadata
+    if MEDIA_K and d2h_service is not None and runtime.config.is_first_rank:
+        ack_md = _ack_record(runtime.mesh_device, meta)
     with _with_hang_timeout():
         out = runtime.prefill_chunk(
             inp,
@@ -650,9 +698,10 @@ def _compute_and_send(
             actual_end=meta["actual_end"],
             request_id=c,
             d2h_service=d2h_service,
-            metadata_msg=sockets.metadata,
+            metadata_msg=ack_md,
             **mtp_kwargs,
             **({"indexer_indices": indices} if indices is not None else {}),
+            **({"media_rows": media_rows} if media_rows is not None else {}),
         )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
@@ -713,6 +762,7 @@ def run_request_loop(
     idx_in=None,
     idx_out=None,
     sockets=None,
+    media_source=None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -783,6 +833,7 @@ def run_request_loop(
             mtp_tokens=mtp_tokens,
             indices=indices,
             idx_out=idx_out,
+            media_source=media_source,
         )
         if first is None:
             first = t
@@ -1071,7 +1122,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             global_spec=None,
             fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            # Rank 0 acks with the 12-byte chunk header, also when its H2D metadata carries media items.
+            metadata_size_bytes=(METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
             metadata_ring=True,
         )
         # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it
@@ -1165,6 +1217,18 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
+    media_source = None
+    if MEDIA_K and is_first_rank:
+        assert getattr(
+            runtime, "supports_media", False
+        ), f"PREFILL_MEDIA_K={MEDIA_K}: model {ADAPTER.name!r} does not take media"
+        # The traced D2D send forwards the received metadata as is, which is too large once it carries media items.
+        assert not traced, f"PREFILL_MEDIA_K={MEDIA_K} does not support traced socket ops yet"
+        media_source = _media_source_from_env(hf_config.hidden_size)
+        logger.info(
+            f"[pp rank {rank}] [media] up to {MEDIA_K} images per chunk, {CHUNK_METADATA_SIZE_BYTES} B metadata"
+        )
+
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
@@ -1185,6 +1249,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             idx_in=idx_in,
             idx_out=idx_out,
             sockets=sockets,
+            media_source=media_source,
         )
     finally:
         import gc

@@ -105,6 +105,8 @@ class TtPrefillRuntime:
     prefill_chunk(chunk, kv_cache). Owns the SP=8 × TP=4 ``Model``; the KV cache is engine-owned and
     passed into every call."""
 
+    supports_media = True  # prefill_chunk takes media_rows: the runner's PREFILL_MEDIA_K > 0
+
     def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig):
         self.mesh_device = mesh_device
         self.hf_config = hf_config

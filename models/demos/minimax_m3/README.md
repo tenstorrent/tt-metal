@@ -126,6 +126,13 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 | `PREFILL_COMPILE` | `1` | `0` = skip `compile()`'s warm-up (three forward variants: first / cache-read / ragged; per-chunk offsets are runtime args, so no per-ISL JIT exists). |
 | `PREFILL_RESULTS_JSONL` | unset | Append one JSON line per run (perf, min PCC, status). |
 
+**Image (media) prefill** (`common/prefill/runners/prefill_runner.py`, layout in `common/prefill/media_metadata.py`):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PREFILL_MEDIA_K` | `0` | Max images per chunk in the H2D chunk metadata, `16 + 40 × K` bytes: header, media count, then per image its start position, token count and 32-byte key. `0` keeps the 12-byte text-only header. Runner, producer and engine must agree. |
+| `PREFILL_MEDIA_STUB_EMBEDDINGS` | `0` | `1` = image rows are deterministic stubs seeded from the media key. Required with `PREFILL_MEDIA_K > 0` until the embedding-store reader exists. |
+
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
 `PROFILE_CACHE`, `PROFILE_NUM_LAYERS`, `PROFILE_LAYER_IDS`, `PROFILE_READ_EVERY`, `PROFILE_READ_IN_CHUNK`,
 `PROFILE_SKIP_PREFIX`, `PROFILE_STAGES`, `PROFILE_STAGE`, `PROFILE_FABRIC`, `PROFILE_DRY_RUN` and the script's

@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.media_metadata import chunk_metadata_size, pack_chunk_metadata
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     connect_layer_completion_channel,
     start_layer_completion_drain,
@@ -95,12 +96,11 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 
 METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 
 def _load_env_config() -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS
+    global MTP_DECODE_LEVELS, MEDIA_K, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
@@ -115,13 +115,17 @@ def _load_env_config() -> None:
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
     NUM_ACK_LAYERS = NUM_LAYERS
+    # Must match the runner's PREFILL_MEDIA_K: it sets the size of every chunk's metadata. Read here, after the
+    # manifest is applied. This producer sends no images, so every chunk lists zero media items.
+    MEDIA_K = int(os.environ.get("PREFILL_MEDIA_K", 0))
+    CHUNK_METADATA_SIZE_BYTES = chunk_metadata_size(MEDIA_K)
 
 
 _load_env_config()
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
-    return struct.pack("<3I", slot_id, actual_start, actual_end)
+    return pack_chunk_metadata(slot_id, actual_start, actual_end, [], MEDIA_K)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
