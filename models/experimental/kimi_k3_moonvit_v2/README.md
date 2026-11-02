@@ -88,6 +88,7 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests/test_linear.py \
 # Device, 4 Blackhole chips: attention needs the ring
 pytest models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_block.py \
+       models/experimental/kimi_k3_moonvit_v2/tests/test_vision_encoder.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_model.py
 ```
 
@@ -99,8 +100,8 @@ Image sizes (`tests/common.py`): the row-wise tests (`ROW_GRIDS`) compare agains
 the full padded length, which takes seconds since nothing there scales with the square of the
 length. Each size has one grid per mesh: `full` (256x256 on the ring, 128x128 on one chip) and
 `max_side` (512x128, 512x32) fill the padded length exactly, `partial` (250x250, 122x130) ends
-inside a tile, and `small` (40x100) is almost all padding. Attention, the block and the full model
-(`ATTENTION_GRIDS`, 64x64 and 40x100) stay small: their CPU golden builds L x L scores per head.
+inside a tile, and `small` (40x100) is almost all padding. Attention, the block, the encoder and the
+full model (`ATTENTION_GRIDS`, 64x64 and 40x100) stay small: their CPU golden builds L x L scores per head.
 
 Device tests that need a forward are marked `xfail(raises=NotImplementedError, strict=True)`, so
 each starts failing as a reminder once its forward runs.
