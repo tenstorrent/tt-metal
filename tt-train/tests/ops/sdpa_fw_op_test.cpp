@@ -3422,8 +3422,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_MaskedRowsInPieces)
         .num_key_heads = 1U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "SplitEdge_MaskedRowsInPieces"};
-    run_split_vs_unsplit(base, {256, 32, 1, 4, 0});
-    run_split_vs_unsplit(base, {256, 32, 1, 8, 0});
+    // Four items: on 16 and 32 cores the model cuts them four and eight ways (on the full grid it rates the
+    // merges' DRAM share at 120 cores and keeps them whole).
+    run_split_vs_unsplit(base, {256, 32, 1, 4, 16});
+    run_split_vs_unsplit(base, {256, 32, 1, 8, 32});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_NonPow2) {
