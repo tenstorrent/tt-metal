@@ -531,6 +531,7 @@ TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
     // program.
     const auto to_host = [](const std::vector<std::optional<ttnn::Tensor>>& grads) {
         std::vector<xt::xarray<float>> host;
+        host.reserve(grads.size());
         for (const auto& grad : grads) {
             host.push_back(core::to_xtensor(grad.value()));
         }
