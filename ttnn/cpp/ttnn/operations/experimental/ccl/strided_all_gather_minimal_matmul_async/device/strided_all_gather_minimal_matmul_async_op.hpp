@@ -44,6 +44,8 @@ struct StridedAllGatherMinimalMatmulAsync {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 
     // Leaves out strided_all_gather_async_struct.semaphore;
     // StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments re-applies every semaphore address

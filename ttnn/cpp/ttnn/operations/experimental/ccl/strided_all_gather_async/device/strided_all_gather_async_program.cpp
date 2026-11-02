@@ -532,7 +532,7 @@ void strided_all_gather_async_minimal_default_helper(
     }
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     // scatter-write packs this many tiles (distinct dest noc addresses) per fabric packet
@@ -644,26 +644,32 @@ void strided_all_gather_async_minimal_default_helper(
             desc, mesh_device, sender_forward_core_range_set, sender_forward_cores);
     }
 
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
-    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
-    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
-    // V2 places one logical channel per worker
-    const tt::tt_fabric::FabricMuxV2Config mux_v2_config(
-        *mesh_device,
-        static_cast<uint8_t>(num_workers_per_direction),
-        static_cast<uint8_t>(num_buffers_full_size_channels),
-        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
-        mux_base_l1_address,
-        mux_l1_small_floor_address);
-
     const auto mux_core_offset_of = [&](uint32_t link, uint32_t dir) {
         return (link * num_cores_per_link) + (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
     };
     const auto mux_connection_valid_of = [&](uint32_t dir) {
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
+
+    // V2 places one logical channel per worker. Its map goes in program-local L1 (a circular buffer on the mux
+    // cores), so it stays clear of persistent L1 there. It must be placed before any client connection args are built.
+    tt::tt_fabric::FabricMuxV2Config mux_v2_config(
+        *mesh_device,
+        static_cast<uint8_t>(num_workers_per_direction),
+        static_cast<uint8_t>(num_buffers_full_size_channels),
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
+        /*base_l1_address=*/0);
+    std::vector<CoreRange> active_mux_core_ranges;
+    for (uint32_t link = 0; link < num_links; link++) {
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            if (mux_connection_valid_of(dir)) {
+                active_mux_core_ranges.emplace_back(all_cores[mux_core_offset_of(link, dir)]);
+            }
+        }
+    }
+    if (!active_mux_core_ranges.empty()) {
+        mux_v2_config.place_in_program_local_l1(desc, CoreRangeSet(active_mux_core_ranges));
+    }
 
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -835,7 +841,7 @@ void strided_all_gather_async_minimal_default_helper(
                         writer_rt_args_tail.push_back(width);
                     }
                 }
-                // Layout: [mux_connection_valid][11 client-connection args]
+                // Layout: [mux_connection_valid][12 client-connection args]
                 writer_rt_args_tail.push_back(static_cast<uint32_t>(mux_connection_valid ? 1 : 0));
                 const CoreRangeSet worker_core_set{CoreRange(core)};
                 const uint32_t flow_control_sem_id =

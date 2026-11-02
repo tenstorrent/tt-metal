@@ -1686,8 +1686,13 @@ class BroadcastGolden:
 
     Broadcasts operand values according to the specified broadcast type:
     - Scalar: Takes first element of each tile and broadcasts it across entire output tile
-    - Column: Broadcasts column values across rows (Faces 0-1 use Face 0's column, Faces 2-3 use Face 2's column)
-    - Row: Broadcasts row values down columns (first row of Face 0/1)
+    - Column: Broadcasts column values across rows (every face in a face row uses the column of
+      the left face of that row; for 32x32, faces 0-1 use face 0 and faces 2-3 use face 2)
+    - Row: Broadcasts row values down columns (every face in a face column uses row 0 of the top
+      face of that column; for 32x32, faces 0/2 use face 0 and faces 1/3 use face 1)
+
+    The face grid comes from num_faces_r_dim / num_faces_c_dim. When they are not given, it is
+    derived from num_faces the legacy way (2 faces = 1x2), so 32x16 tiles must pass the grid.
 
     Output size = tile_cnt * num_faces * (face_r_dim * 16) elements.
     """
@@ -1708,9 +1713,26 @@ class BroadcastGolden:
         tile_cnt: int = 1,
         face_r_dim: int = 16,
         input_format: DataFormat = None,
+        num_faces_r_dim: int = None,
+        num_faces_c_dim: int = None,
     ):
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
+
+        if (num_faces_r_dim is None) != (num_faces_c_dim is None):
+            raise ValueError(
+                "Pass both num_faces_r_dim and num_faces_c_dim, or neither "
+                f"(got num_faces_r_dim={num_faces_r_dim}, num_faces_c_dim={num_faces_c_dim})"
+            )
+        if num_faces_r_dim is None:
+            if num_faces not in (1, 2, 4):
+                raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
+            num_faces_r_dim = 2 if num_faces == 4 else 1
+            num_faces_c_dim = 1 if num_faces == 1 else 2
+        if num_faces_r_dim * num_faces_c_dim != num_faces:
+            raise ValueError(
+                f"Face grid {num_faces_r_dim}x{num_faces_c_dim} does not match num_faces={num_faces}"
+            )
 
         # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
         # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
@@ -1747,7 +1769,10 @@ class BroadcastGolden:
             tile_data = input_flat[tile_start:tile_end]
 
             tile_result = self.broadcast_handlers[broadcast_type](
-                tile_data, num_faces=num_faces, face_r_dim=face_r_dim
+                tile_data,
+                face_r_dim=face_r_dim,
+                num_faces_r_dim=num_faces_r_dim,
+                num_faces_c_dim=num_faces_c_dim,
             )
             results.append(tile_result)
 
@@ -1762,70 +1787,45 @@ class BroadcastGolden:
     def _broadcast_column(
         self,
         tile_data,
-        num_faces: int,
         face_r_dim: int,
+        num_faces_r_dim: int,
+        num_faces_c_dim: int,
     ):
         """
         Process a single tile for column broadcast.
 
-        For a face_r_dim x 16 face: input has face_r_dim unique values (one per row),
-        each value is replicated 16 times across its row.
-        Output pattern: [row0_val]*16, [row1_val]*16, ..., [row(face_r_dim-1)_val]*16
+        Every face in face row r takes column 0 of the left face of that row (face r * num_faces_c_dim):
+        each of its face_r_dim values is replicated 16 times across its row.
         """
         face_size = face_r_dim * FACE_DIM
-
-        # Process face 0 (used by faces 0-1)
-        source_face_0 = tile_data[:face_size]
-        col_values_0 = source_face_0[::FACE_DIM]
-        face_0_broadcast = col_values_0.repeat_interleave(FACE_DIM)
-
-        # Handle different face counts: 1, 2, 4
-        if num_faces == 1:
-            return face_0_broadcast
-        elif num_faces == 2:
-            # Both faces use face 0 - use repeat instead of cat
-            return face_0_broadcast.repeat(2)
-        else:  # num_faces == 4
-            # Process face 2 (used by faces 2-3)
-            source_face_2 = tile_data[2 * face_size : 3 * face_size]
-            col_values_2 = source_face_2[::FACE_DIM]
-            face_2_broadcast = col_values_2.repeat_interleave(FACE_DIM)
-
-            return torch.cat(
-                [face_0_broadcast, face_0_broadcast, face_2_broadcast, face_2_broadcast]
-            )
+        faces = []
+        for r in range(num_faces_r_dim):
+            source_face = tile_data[
+                r * num_faces_c_dim * face_size : (r * num_faces_c_dim + 1) * face_size
+            ]
+            face_broadcast = source_face[::FACE_DIM].repeat_interleave(FACE_DIM)
+            faces.extend([face_broadcast] * num_faces_c_dim)
+        return torch.cat(faces)
 
     def _broadcast_row(
         self,
         tile_data,
-        num_faces: int,
         face_r_dim: int,
+        num_faces_r_dim: int,
+        num_faces_c_dim: int,
     ):
-        """Process a single tile for row broadcast."""
+        """
+        Process a single tile for row broadcast.
+
+        Every face in face column c takes row 0 of the top face of that column (face c),
+        repeated face_r_dim times.
+        """
         face_size = face_r_dim * FACE_DIM
-
-        # Process face 0: take first row and repeat to fill face
-        face_0_row = tile_data[:FACE_DIM]
-        face_0_broadcast = face_0_row.repeat(face_r_dim)
-
-        if num_faces == 1:
-            return face_0_broadcast
-        elif num_faces in (2, 4):
-            # Extract and repeat face 1 row
-            face_1_row = tile_data[face_size : face_size + FACE_DIM]
-            face_1_broadcast = face_1_row.repeat(face_r_dim)
-
-            if num_faces == 2:
-                return torch.cat([face_0_broadcast, face_1_broadcast])
-            else:  # num_faces == 4
-                return torch.cat(
-                    [
-                        face_0_broadcast,
-                        face_1_broadcast,
-                        face_0_broadcast,
-                        face_1_broadcast,
-                    ]
-                )
+        row_faces = [
+            tile_data[c * face_size : c * face_size + FACE_DIM].repeat(face_r_dim)
+            for c in range(num_faces_c_dim)
+        ]
+        return torch.cat(row_faces * num_faces_r_dim)
 
 
 @register_golden
@@ -3271,11 +3271,10 @@ class UnarySFPUGolden:
         return cast_to_dest_dtype(out, tile.dtype)
 
     def _tiled_prod(self, tile):
-        # calculate_tiled_prod under VectorMode RC: every SFPU lane (row r of each 4-row group,
-        # column 2c + parity) keeps a running fp32 product over its 8 values per face, storing
-        # each partial product. A face's ninth step multiplies into the next face's first row,
-        # so the next face starts from that stored product and the chain runs through faces
-        # 0-3. (The last face's ninth step lands in the next Dest tile, which is not modelled.)
+        # calculate_tiled_prod under VectorMode RC_custom: one call per tile. Every SFPU lane
+        # (row r of each 4-row group, column 2c + parity) keeps one running fp32 product over
+        # its 8 values per face through faces 0-3, storing each partial product; the product is
+        # carried in a register across faces, so nothing is stored outside the tile.
         # The SFPU flushes denormals, and a NaN product carries no sign (the canonical NaN, see
         # BinarySFPUGolden._canonicalise_emitted_nan); stores round to the Dest format.
         dest_dtype = format_dict[self.dst_format]
@@ -3302,15 +3301,10 @@ class UnarySFPUGolden:
 
         for lane_row in range(4):
             for lane_col in range(8):
+                product = 1.0
                 for face in range(4):
-                    # A face call starts from what Dest holds: its first value may already be the
-                    # product the previous face's ninth step stored there.
-                    product = 1.0
-                    for step in range(9):
-                        target_face = face + 1 if step == 8 else face
-                        if target_face == 4:
-                            break
-                        row, col = position(target_face, step % 8, lane_row, lane_col)
+                    for step in range(8):
+                        row, col = position(face, step, lane_row, lane_col)
                         product = fp32(product * ftz(float(out[row, col])))
                         out[row, col] = store(product)
         return cast_to_dest_dtype(out, tile.dtype)
@@ -3581,7 +3575,7 @@ class UnarySFPUGolden:
 
     # Fixed scalar dispatch constants mirrored from sfpu_operations.h. The ones an edge
     # probe has to land on exactly come from sfpu_dispatch_constants, which both this
-    # golden and sfpu_domains._OP_EDGE_POINTS read — see that module for why they are not
+    # golden and sfpu_domains._OP_EDGES read — see that module for why they are not
     # written twice. The rest are local because nothing probes at them.
     _PRELU_SLOPE = PRELU_SLOPE
     _RPOW_BASE = 2.0
@@ -4204,6 +4198,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
+                MathOperation.SfpuIscloseEqualNan: self._isclose_equal_nan,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,
                 # Integer / format-typed binary SFPU ops.
                 MathOperation.SfpuEqInt: self._eq_int,
@@ -4537,9 +4532,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
-        # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. Non-finite
-        # edge cases are not consistently modelled across formats, so xlogy is exercised with
-        # strictly-positive stimuli where the result is always finite.
+        # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. The random
+        # sweeps drive strictly-positive y, where the result is always finite; the y = +0 and
+        # y = denormal lanes, where ln is -inf, are driven by test_eltwise_binary_sfpu_edges
+        # and test_eltwise_binary_sfpu_xlogy_denormal.
         xf = (
             x.to(torch.float32)
             if isinstance(x, torch.Tensor)
@@ -4550,6 +4546,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             if isinstance(y, torch.Tensor)
             else torch.tensor(float(y))
         )
+        # The kernel's log operand is flushed to zero when it is a positive denormal
+        # (Blackhole: by the SFPSTORE of the Dest round trip, or by the biased-exponent == 0
+        # test of _calculate_log_body_on_reg_), so log(denormal) = -inf. A negative denormal
+        # is not flushed here: the kernel's NaN guard (`in1 < 0.0f`) reads the sign bit of the
+        # unflushed register, so that lane is NaN, which is also log of a negative.
+        denormal = yf.abs() < torch.finfo(torch.float32).tiny
+        yf = torch.where(denormal & ~torch.signbit(yf), 0.0, yf)
         res = xf * torch.log(yf)
         return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
 
@@ -4774,18 +4777,28 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # Widen to int64 for the multiply so the intermediate can't overflow.
         return (t1.to(torch.int64) * t2.to(torch.int64)).to(torch.int32)
 
-    def _isclose(self, t1, t2):
-        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0. Uses torch's
-        # default tolerances, which match the fp32 bit patterns hard-coded in the ISCLOSE
-        # dispatch, and is evaluated in fp32.
+    # torch.isclose defaults; the same two values the ISCLOSE / ISCLOSE_EQNAN dispatch in
+    # sfpu_operations.h hard-codes as fp32 bit patterns (ISCLOSE_RTOL_BITS / ISCLOSE_ATOL_BITS).
+    _ISCLOSE_RTOL = 1e-5
+    _ISCLOSE_ATOL = 1e-8
+
+    def _isclose_impl(self, t1, t2, equal_nan):
+        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0 and evaluated in
+        # fp32. equal_nan=True makes two NaN operands compare close.
         close = torch.isclose(
             t1.to(torch.float32),
             t2.to(torch.float32),
-            rtol=1e-5,
-            atol=1e-8,
-            equal_nan=False,
+            rtol=self._ISCLOSE_RTOL,
+            atol=self._ISCLOSE_ATOL,
+            equal_nan=equal_nan,
         )
         return 1.0 if bool(close) else 0.0
+
+    def _isclose(self, t1, t2):
+        return self._isclose_impl(t1, t2, equal_nan=False)
+
+    def _isclose_equal_nan(self, t1, t2):
+        return self._isclose_impl(t1, t2, equal_nan=True)
 
     def _logsigmoid(self, t1, t2):
         # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
