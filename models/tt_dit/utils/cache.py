@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -413,7 +414,7 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
         tt_model.save(staging)
         # Verify the staged files before publishing either their bytes or their completion marker.
         if _verify_env_enabled() and not verify_saved_model(tt_model, staging):
-            logger.error(f"cache at {cache_dir} did not verify; discarding the staged files.")
+            logger.error(f"cache at '{cache_dir}' did not verify; discarding the staged files.")
             return
 
         manifest = {"format": CACHE_FORMAT}
@@ -424,23 +425,18 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
             manifest |= {"content_key": key, "parameters": parameters}
         (staging / CACHE_DICT_FILE).write_text(json.dumps(manifest, indent=2, sort_keys=True))
 
-        # A concurrent process may have finished publishing this key while we prepared weights (a
-        # long, on-device window since load_model's completeness check). Its artifact is already
-        # complete — for a content key its bytes are ours by construction — so adopt it rather than
-        # delete a valid cache out from under a concurrent reader mid-load.
-        if _cache_is_complete(cache_dir, tt_model, key):
-            logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
-            return
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir)
-        os.replace(staging, cache_dir)
-    except OSError:
-        # A racing process may have published this exact key first. Its content key matches ours,
-        # so its bytes are ours; adopt them rather than fight over the directory.
-        if _cache_is_complete(cache_dir, tt_model, key):
-            logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
-        else:
-            raise
+        # Serialize the completeness check and replacement. Without the lock, a writer can
+        # publish between another writer's check and rmtree, losing a complete cache mid-read.
+        # Keep the lock inode outside the replaced directory and never unlink it: existing waiters
+        # must not lock a different inode from a new publisher. Weight preparation stays parallel.
+        with (cache_dir.parent / f".{cache_dir.name}.publish.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if _cache_is_complete(cache_dir, tt_model, key):
+                logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
+                return
+            if cache_dir.exists():
+                shutil.rmtree(cache_dir)
+            os.replace(staging, cache_dir)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

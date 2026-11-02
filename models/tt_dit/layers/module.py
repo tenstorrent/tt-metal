@@ -482,6 +482,7 @@ class Parameter:
         self.on_host = on_host
         self._data = None
         self._host_data = None  # host copy retained across evictions when _HOST_WEIGHT_CACHE is on
+        self._host_data_key = None
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
@@ -510,11 +511,18 @@ class Parameter:
             # deserializing the tensorbin each gen. deallocate() frees only the device copy, so the
             # host copy survives the eviction. memory_config is passed so the pushed tensor matches
             # the parameter's declared config (to_device's default would fail the _check_data guard).
-            if self._host_data is None:
-                try:
-                    self._host_data = ttnn.load_tensor(path, device=None)
-                except RuntimeError as err:
-                    raise LoadingError(f"TT-NN error «{err}»") from err
+            try:
+                resolved = Path(path).resolve()
+                stat = resolved.stat()
+                key = (resolved, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                if self._host_data is None or self._host_data_key != key:
+                    # A new cache directory or an overwritten tensorbin must never reuse old weights.
+                    self._host_data = None
+                    self._host_data_key = None
+                    self._host_data = ttnn.load_tensor(resolved, device=None)
+                    self._host_data_key = key
+            except (OSError, RuntimeError) as err:
+                raise LoadingError(f"TT-NN error «{err}»") from err
             self.data = ttnn.to_device(self._host_data, self.device, memory_config=self.memory_config)
             return
         try:

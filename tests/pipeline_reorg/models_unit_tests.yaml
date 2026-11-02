@@ -1707,6 +1707,9 @@
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || exit $?; }
     # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
     run models/tt_dit/tests/models/ltx/test_ltx_adapter_loader.py
+    run models/tt_dit/tests/unit/test_cache_key.py models/tt_dit/tests/unit/test_parameter_host_cache.py models/tt_dit/tests/unit/test_ltx_quality.py models/tt_dit/tests/unit/test_observability.py
+    run models/tt_dit/tests/models/ltx/test_connector_cache.py
+    run models/tt_dit/tests/models/ltx/test_prompt_encode_ltx.py
     run models/tt_dit/tests/models/ltx/test_embeddings_ltx.py
     run models/tt_dit/tests/models/ltx/test_rope_ltx.py
     run models/tt_dit/tests/models/ltx/test_attention_ltx.py     -k "4x8sp1tp0nl2_line_is_fsdp0"

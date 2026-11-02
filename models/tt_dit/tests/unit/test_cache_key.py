@@ -16,7 +16,9 @@ never open a device.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -132,6 +134,32 @@ def test_published_cache_hits(checkpoint, monkeypatch, tmp_path):
     assert cache._cache_is_complete(cache_dir, module, key)
 
 
+@pytest.mark.parametrize("verified", [True, False])
+def test_publish_verifies_staged_files_before_making_them_visible(verified, monkeypatch, tmp_path):
+    monkeypatch.setenv("TT_DIT_CACHE_VERIFY", "1")
+    module = _module()
+    key = cache.content_key(module)
+    destination = tmp_path / "published"
+    checked = []
+
+    def verify(model, directory):
+        assert model is module
+        assert directory != destination
+        assert (directory / "weight.tensorbin").is_file()
+        assert not (directory / cache.CACHE_DICT_FILE).exists()
+        assert not destination.exists()
+        checked.append(directory)
+        return verified
+
+    monkeypatch.setattr(cache, "verify_saved_model", verify)
+    cache._publish_cache(module, destination, key)
+
+    assert len(checked) == 1
+    assert cache._cache_is_complete(destination, module, key) is verified
+    assert destination.exists() is verified
+    assert not list(tmp_path.glob(".*.staging-*"))
+
+
 def test_publish_is_all_or_nothing(checkpoint, monkeypatch, tmp_path, expect_error):
     """A build that dies partway must leave nothing behind that a later run reads as complete."""
     monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
@@ -232,3 +260,47 @@ def test_the_poisoned_cache_is_not_servable(subfolder, checkpoint, monkeypatch, 
     assert cache._cache_is_complete(poisoned, module, None)
 
     assert not cache._cache_is_complete(poisoned, module, key)
+
+
+def test_concurrent_publishers_cannot_remove_the_winners_cache(monkeypatch, tmp_path):
+    first, second = _module(), _module()
+    destination = tmp_path / "published"
+    key = cache.content_key(first)
+    first_check, second_staged, second_check, release = (Event() for _ in range(4))
+    original_check = cache._cache_is_complete
+    original_save = second.save
+    publications = []
+    original_replace = cache.os.replace
+
+    def check(directory, model, content):
+        if model is first:
+            first_check.set()
+            assert release.wait(5), "publisher was not released"
+        else:
+            second_check.set()
+        return original_check(directory, model, content)
+
+    def save(directory):
+        original_save(directory)
+        second_staged.set()
+
+    def replace(source, target):
+        publications.append(target)
+        original_replace(source, target)
+
+    monkeypatch.setattr(cache, "_cache_is_complete", check)
+    monkeypatch.setattr(second, "save", save)
+    monkeypatch.setattr(cache.os, "replace", replace)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(cache._publish_cache, first, destination, key)
+        try:
+            assert first_check.wait(5)
+            two = pool.submit(cache._publish_cache, second, destination, key)
+            assert second_staged.wait(5)
+            assert not second_check.wait(0.1), "a competing publisher entered the check/replace window"
+        finally:
+            release.set()
+        one.result()
+        two.result()
+    assert original_check(destination, first, key)
+    assert publications == [destination], "the completed winner must be adopted, never replaced"

@@ -163,7 +163,10 @@ def _atexit() -> None:
     with _LOCK:
         nonempty = bool(_session.cats)
     if nonempty:
-        print(render("end of run", _session))  # noqa: T201
+        try:
+            print(render("end of run", _session))  # noqa: T201
+        except (ValueError, OSError):
+            pass  # stdout may already be closed during interpreter shutdown
 
 
 atexit.register(_atexit)
