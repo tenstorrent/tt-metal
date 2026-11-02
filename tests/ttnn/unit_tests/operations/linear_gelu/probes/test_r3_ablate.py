@@ -1,6 +1,7 @@
 # Refinement 3 ablation harness (perf only, no correctness). Variants are text edits of the production kernels
 # copied into a scratch dir; the descriptor's KERNEL_DIR is pointed at it.
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ import ttnn
 import ttnn.operations.linear_gelu.linear_gelu_program_descriptor as pd
 from ttnn.operations.linear_gelu import linear_gelu
 
+# Perf-only probes (run under run_safe_pytest.sh --profile); off in the regular suite.
+pytestmark = pytest.mark.skipif(not os.environ.get("LINEAR_GELU_PERF_PROBES"), reason="set LINEAR_GELU_PERF_PROBES=1")
+
 SRC = Path(pd.__file__).parent / "kernels"
 SCRATCH = Path(__file__).parent / "ablate_kernels"
 
@@ -17,11 +21,7 @@ EDITS = {
     "nogelu": [("compute", "using Gelu = GeluTanhActivation<gelu_fast>;", "using Gelu = NoneActivation;")],
     "skipmm": [("compute", "#include <cstdint>", "#define SKIP_COMPUTE\n#include <cstdint>")],
     "now": [
-        (
-            "reader",
-            "noc_async_read_page(\n                        k * n_tiles",
-            "if (false) noc_async_read_page(\n                        k * n_tiles",
-        ),
+        ("reader", "noc_async_read_page(k * n_tiles", "if (false) noc_async_read_page(k * n_tiles"),
         ("reader", "noc_async_read_page(n_first + w", "if (false) noc_async_read_page(n_first + w"),
     ],
     "nox": [("reader", "noc_async_read_page(x_page + k", "if (false) noc_async_read_page(x_page + k")],

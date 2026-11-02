@@ -1,5 +1,6 @@
 # Refinement 3: W_PREFETCH_ROUNDS sweep (perf; PCC checked loosely).
 import math
+import os
 
 import pytest
 import torch
@@ -7,6 +8,9 @@ import ttnn
 
 import ttnn.operations.linear_gelu.linear_gelu_program_descriptor as pd
 from ttnn.operations.linear_gelu import linear_gelu
+
+# Perf-only probes (run under run_safe_pytest.sh --profile); off in the regular suite.
+pytestmark = pytest.mark.skipif(not os.environ.get("LINEAR_GELU_PERF_PROBES"), reason="set LINEAR_GELU_PERF_PROBES=1")
 
 
 @pytest.mark.parametrize("shift", [1])
