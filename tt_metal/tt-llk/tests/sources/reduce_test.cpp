@@ -20,8 +20,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) && (POOL_TYPE != ckernel::PoolType::MAX);
 
-// Swapped 4-face REDUCE_ROW unpacks a whole tile with one UNPACR per operand; every other path posts one per face.
-// Must match full_tile in _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
+// Swapped 4-face REDUCE_ROW posts one SrcA/SrcB handoff per tile; every other path posts one per data face.
+// Must match _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
 inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
@@ -47,25 +47,49 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int in0_face_c_dim               = params.in0_face_c_dim;
     const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
+    const int in1_face_r_dim               = params.in1_face_r_dim;
+    const int in1_face_c_dim               = params.in1_face_c_dim;
+    const int num_faces_r_dim_B            = params.num_faces_r_dim_B;
+    const int num_faces_c_dim_B            = params.num_faces_c_dim_B;
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
     TEST_TENSOR_SHAPE(tensor_shape, in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(scaler_shape, in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            tensor_shape.face_r_dim,
-            tensor_shape.face_r_dim,
-            tensor_shape.total_num_faces(),
-            tensor_shape.total_num_faces(),
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
+        if constexpr (IS_SWAPPED_REDUCE_ROW)
+        {
+            // Scaler -> SrcA through unpacker 0, data -> SrcB through unpacker 1: each unpacker gets the
+            // geometry and format of the operand it reads.
+            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+                formats.unpack_B_src,
+                formats.unpack_A_src,
+                formats.unpack_B_dst,
+                formats.unpack_A_dst,
+                scaler_shape.face_r_dim,
+                tensor_shape.face_r_dim,
+                scaler_shape.total_num_faces(),
+                tensor_shape.total_num_faces(),
+                TILE_SIZE_UNPACK_B,
+                TILE_SIZE_UNPACK_A);
+        }
+        else
+        {
+            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                formats.unpack_A_dst,
+                formats.unpack_B_dst,
+                tensor_shape.face_r_dim,
+                scaler_shape.face_r_dim,
+                tensor_shape.total_num_faces(),
+                scaler_shape.total_num_faces(),
+                TILE_SIZE_UNPACK_A,
+                TILE_SIZE_UNPACK_B);
+        }
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape, scaler_shape);
         PROFILER_SYNC();
     }
     {

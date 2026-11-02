@@ -43,8 +43,6 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
-    NUM_FACES_C_DIM,
-    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     PERF_RUN_TYPE,
     REUSE_DEST_TYPE,
@@ -62,6 +60,7 @@ from helpers.tile_constants import (
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test, result_tensor
+from test_eltwise_binary import eltwise_binary_operand_shapes
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +133,7 @@ def _canonical_bcast_col_config(
             NUM_BLOCKS(
                 num_blocks, input_num_blocks=num_blocks, output_num_blocks=num_blocks
             ),
-            NUM_FACES_R_DIM(num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim),
+            *eltwise_binary_operand_shapes(tile_dims),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             LOOP_FACTOR(1),
         ],
