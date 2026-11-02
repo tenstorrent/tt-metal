@@ -191,6 +191,39 @@ def test_l1_source(device, expect_error):
         create(num_dram_senders=1, l1_source=L1Source.PersistentArena)
 
 
+@pytest.mark.requires_grid_size((4, 1))
+def test_spaces_created_together_share_addresses(device, expect_error):
+    L1Source = ttnn.experimental.PrefetcherPipeL1Source
+
+    def config(sender, receiver, l1_source=L1Source.Allocator):
+        return ttnn.experimental.PrefetcherPipeSpaceConfig(
+            sender_cores=_cores(sender),
+            receiver_domain=_cores(receiver),
+            ring_size=RING_SIZE,
+            max_receivers_per_pipe=1,
+            l1_source=l1_source,
+        )
+
+    configs = [config((0, 0), (1, 0)), config((2, 0), (3, 0))]
+    # Spaces that share L1 addresses need disjoint cores and one source.
+    with expect_error(RuntimeError, "that an earlier config also reserves"):
+        ttnn.experimental.create_prefetcher_pipe_spaces(device, [configs[0], configs[0]])
+    with expect_error(RuntimeError, "resolves to a different PrefetcherPipeL1Source"):
+        ttnn.experimental.create_prefetcher_pipe_spaces(
+            device, [configs[0], config((2, 0), (3, 0), L1Source.PersistentArena)]
+        )
+
+    spaces = ttnn.experimental.create_prefetcher_pipe_spaces(device, configs)
+    assert len(spaces) == 2
+    assert [space.l1_source() for space in spaces] == [L1Source.Allocator, L1Source.Allocator]
+    assert spaces[0].buffer_address() == spaces[1].buffer_address()
+    assert spaces[0].config_address() == spaces[1].config_address()
+    pipes = [spaces[0].create_pipe(_core(0, 0), _cores((1, 0))), spaces[1].create_pipe(_core(2, 0), _cores((3, 0)))]
+    shared_addresses = (spaces[0].buffer_address(), spaces[0].config_address())
+    for pipe in pipes:
+        assert (pipe.buffer_address(), pipe.config_address()) == shared_addresses
+
+
 @pytest.mark.requires_grid_size((3, 1))
 def test_carve_rejects(device, expect_error):
     # Space over (0,0) sender and (1,0)-(2,0) receivers, one receiver per pipe.
