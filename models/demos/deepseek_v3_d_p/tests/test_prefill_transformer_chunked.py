@@ -115,17 +115,21 @@ def _glm_payload():
     return payload
 
 
+# K3's fabric: the XY torus when the MoE block is K3's MoE (the default; on the 2D mesh fabric the block's first call
+# hangs) or with K3_FABRIC=torus_xy; Fabric2D on TtMoe (K3_MOE_IMPL=ttmoe).
+K3_TORUS = moe_block_enabled(KimiK3Config) or os.environ.get("K3_FABRIC") == "torus_xy"
+
+
 def _k3_device_params():
-    """K3's fabric (K3_FABRIC=torus_xy: the XY torus), and what the MoE block needs when it is K3's MoE (the default;
-    K3_MOE_IMPL=ttmoe for TtMoe): the XY torus, its combine's fabric payload and L1_SMALL (tt/moe_impl.py; K3_L1_SMALL
-    overrides the L1_SMALL)."""
-    extra = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY} if os.environ.get("K3_FABRIC") == "torus_xy" else {}
+    """K3's fabric (K3_TORUS) plus what the MoE block needs when it is K3's MoE: its combine's fabric payload and
+    L1_SMALL (tt/moe_impl.py; K3_L1_SMALL overrides the L1_SMALL)."""
+    fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if K3_TORUS else ttnn.FabricConfig.FABRIC_2D
     params = k3_moe_block_device_params(
         fabric2d_device_params(
             fabric_payload_size=moe_fabric_payload(KimiK3Config),
             l1_small_size=KimiK3Config.L1_SMALL_SIZE,
             trace_region_size=256 * 1024 * 1024,
-            **extra,
+            fabric_config=fabric,
         )
     )
     if os.environ.get("K3_L1_SMALL"):
@@ -2948,7 +2952,7 @@ def test_kimi_prefill_transformer_chunked(
             _k3_device_params(),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-8x4",
+            id="torus-xy-8x4" if K3_TORUS else "fabric2d-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

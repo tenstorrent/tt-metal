@@ -30,7 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params
+from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params, moe_block_enabled
 from models.common.utility_functions import comp_pcc
 
 # Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
@@ -97,6 +97,10 @@ DEEP_TRACE_FROM = 12
 # exists for full-depth bf8_b drift), so hold the tighter one and let a real regression show.
 KV_CACHE_PCC = 0.96
 
+# The MoE block (K3's default MoE) runs on the XY torus: on the 2D mesh fabric its first call hangs (tt/moe_impl.py).
+# TtMoe (K3_MOE_IMPL=ttmoe) keeps Fabric2D.
+K3_TORUS = moe_block_enabled(KimiK3Config)
+
 PLACEMENTS = [
     pytest.param(
         (8, 4),
@@ -107,12 +111,15 @@ PLACEMENTS = [
         # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
         # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
         # clears AttnRes with margin while leaving MLA its working space.
-        # (the MoE block, K3's default MoE: the XY torus, its fabric payload and L1_SMALL - tt/moe_impl.py)
+        # (the MoE block also raises the fabric payload and L1_SMALL - tt/moe_impl.py)
         k3_moe_block_device_params(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE}
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY if K3_TORUS else ttnn.FabricConfig.FABRIC_2D,
+                "l1_small_size": KimiK3Config.L1_SMALL_SIZE,
+            }
         ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-8x4",
+        id="torus-xy-8x4" if K3_TORUS else "fabric2d-8x4",
     )
 ]
 
