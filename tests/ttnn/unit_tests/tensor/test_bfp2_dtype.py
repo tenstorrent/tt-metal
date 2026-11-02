@@ -156,6 +156,39 @@ def test_bfp2_full():
     assert torch.equal(ttnn.to_torch(tt_tensor), torch.full((64, 64), 0.5))
 
 
+@pytest.mark.parametrize("other", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat4_b])
+def test_bfp2_device_typecast_float(device, other):
+    # Float targets are converted by the unpacker and packer, so these casts are exact for ternary data.
+    x = _ternary((64, 64))
+    bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+    other_tensor = ttnn.from_torch(x, dtype=other, layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert torch.equal(ttnn.to_torch(ttnn.typecast(bfp2_tensor, other)).float(), x)
+    assert torch.equal(ttnn.to_torch(ttnn.typecast(other_tensor, ttnn.bfloat2_b)), x)
+
+
+@pytest.mark.parametrize("integer", [ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
+def test_bfp2_device_typecast_integer(device, integer):
+    # BFLOAT2_B takes the BFLOAT4_B arms of the typecast kernel, so {0, 1} converts exactly in both directions.
+    x = _ternary((64, 64)).abs()
+    bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+    integer_tensor = ttnn.from_torch(x.to(torch.int32), dtype=integer, layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert torch.equal(ttnn.to_torch(ttnn.typecast(bfp2_tensor, integer)).float(), x)
+    assert torch.equal(ttnn.to_torch(ttnn.typecast(integer_tensor, ttnn.bfloat2_b)), x)
+
+
+def test_bfp2_add_integer_to_bfp2(device):
+    # Binary ops convert their result to the requested dtype through the same typecast kernel.
+    x = _ternary((64, 64)).abs().to(torch.int32)
+    a = ttnn.from_torch(x, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.add(a, a, dtype=ttnn.bfloat2_b)
+
+    assert result.dtype == ttnn.bfloat2_b
+    assert torch.equal(ttnn.to_torch(result), 2 * x.float())
+
+
 def test_bfp2_device_round_trip(device):
     x = _ternary((64, 128))
 
