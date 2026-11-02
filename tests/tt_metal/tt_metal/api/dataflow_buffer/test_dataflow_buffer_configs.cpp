@@ -336,7 +336,8 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
 
     // Header is at offset 0; the DM1 blob starts on the next cache line, its slot array two lines later
     // (after the header line and DM1's ready-flag line, which the host writes as zeros).
-    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, 128u);
+    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, DFB_DM1_REMAPPER_BLOB_OFFSET);
+    EXPECT_EQ(DFB_DM1_REMAPPER_BLOB_OFFSET, 128u);
     EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, 256u);
     {
         // The ready flags must be written as zeros, not left as whatever the buffer held.
@@ -2551,8 +2552,11 @@ static uint32_t expect_dm_cached_lines_disjoint(const std::vector<uint8_t>& buf,
 
     const uint32_t signal_bytes = static_cast<uint32_t>(::dfb::NUM_DFBS) *
                                   (static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) + sizeof(uint32_t));
+    // DM1's ready flags are written and polled through the uncached alias, so no DM may read their line cached.
     const std::pair<uint32_t, uint32_t> uncached[] = {
-        {0u, static_cast<uint32_t>(sizeof(dfb_global_header_t))}, {ghdr->dfb_signal_region_off, signal_bytes}};
+        {0u, static_cast<uint32_t>(sizeof(dfb_global_header_t))},
+        {DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET, DFB_DM1_READY_FLAGS_BYTES},
+        {ghdr->dfb_signal_region_off, signal_bytes}};
     for (const auto& [off, len] : uncached) {
         for (uint32_t l = off / kLineBytes; l <= (off + len - 1) / kLineBytes; ++l) {
             if (const auto it = owner.find(l); it != owner.end()) {

@@ -179,8 +179,13 @@ struct dfb_global_header_t {
 // mask fits in 24 bits; the host TT_FATALs on any bit below DFB_TXN_ID_BASE.
 static_assert(HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= 24, "DFB txn-id masks no longer fit dm0_packed");
 constexpr uint32_t DFB_DM0_PACKED_MASK_BITS = 24u;
-inline uint64_t dfb_dm0_packed_make(uint32_t blob_offset, uint32_t producer_mask, uint32_t consumer_mask) {
-    return static_cast<uint64_t>(blob_offset & 0xFFFFu) |
+// dm0_packed bits [1:0]: 0 = 32 B, 1 = 16 B, 2 = 8 B.
+inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) { return stride == 8u ? 2u : (stride == 16u ? 1u : 0u); }
+inline uint32_t dfb_dm0_packed_desc_stride(uint64_t w) { return 32u >> (static_cast<uint32_t>(w) & 3u); }
+// blob_offset must be 64B aligned: its low bits are dropped to carry the stride code.
+inline uint64_t dfb_dm0_packed_make(
+    uint32_t blob_offset, uint32_t desc_stride, uint32_t producer_mask, uint32_t consumer_mask) {
+    return static_cast<uint64_t>((blob_offset & 0xFFC0u) | dfb_dm0_desc_stride_code(desc_stride)) |
            (static_cast<uint64_t>(producer_mask >> DFB_TXN_ID_BASE) << 16) |
            (static_cast<uint64_t>(consumer_mask >> DFB_TXN_ID_BASE) << (16 + DFB_DM0_PACKED_MASK_BITS));
 }
@@ -529,9 +534,6 @@ inline uint32_t dfb_dm0_desc_stride_for(uint32_t max_counters) {
 inline uint32_t dfb_dm0_desc_threshold_offset(uint32_t stride) {
     return stride == 32u ? static_cast<uint32_t>(offsetof(dfb_dm0_txn_descriptor_image_t, threshold)) : stride - 1u;
 }
-// dm0_packed bits [1:0]: 0 = 32 B, 1 = 16 B, 2 = 8 B.
-inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) { return stride == 8u ? 2u : (stride == 16u ? 1u : 0u); }
-inline uint32_t dfb_dm0_packed_desc_stride(uint64_t w) { return 32u >> (static_cast<uint32_t>(w) & 3u); }
 
 // The descriptor pool holds one slot per txn id actually in use, in ascending id order, so their size
 // depends on how many ids a core uses and not on where those ids sit in [0, HW_TXN_ID_MAX].
@@ -558,6 +560,10 @@ static_assert(sizeof(dfb_global_header_t) == 120, "dfb_global_header_t size chan
 static_assert(offsetof(dfb_global_header_t, hart_desc) == 0, "hart_desc[] must be at offset 0");
 static_assert(offsetof(dfb_global_header_t, dm1_slots) == 108, "dm1_slots must be 4B aligned at 108");
 static_assert(offsetof(dfb_global_header_t, dm0_packed) == 112, "dm0_packed must be 8B aligned at 112");
+// The DM1 remapper blob always starts on the first cache line after the header, so a producer finds
+// DM1's ready flags from this constant instead of an uncached load of dm1_remapper_blob_offset.
+constexpr uint32_t DFB_DM1_REMAPPER_BLOB_OFFSET = (static_cast<uint32_t>(sizeof(dfb_global_header_t)) + 63u) & ~63u;
+static_assert(DFB_DM1_REMAPPER_BLOB_OFFSET % 64u == 0u, "DM1 remapper blob must start on a cache line");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");

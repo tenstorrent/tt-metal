@@ -334,7 +334,7 @@ uint32_t compute_dfb_config_serialized_size(const std::vector<std::shared_ptr<Da
 
     // Must mirror the emitter step for step: the DM1, DM0 and hart-blob region bases are cache-line
     // aligned, and every hart blob is a whole number of lines (hart_blob_byte_size).
-    uint32_t payload = dfb_align_cl(dfb_config_header_size());  // DM1 remapper blob base
+    uint32_t payload = DFB_DM1_REMAPPER_BLOB_OFFSET;  // DM1 remapper blob base
     payload += dm1_remapper_blob_core_size(dfbs_on_core);
     payload = dfb_align_cl(payload);  // DM0 ISR blob base
     payload += dm0_isr_blob_region_size(dfbs_on_core);
@@ -445,10 +445,13 @@ void verify_dfb_hart_blobs(
             continue;
         }
 
-        TT_FATAL(blob_off % 4u == 0u, "hart {} blob offset {} is not 4B-aligned", hartid, blob_off);
+        const bool is_dm = hartid < ::dfb::TENSIX_RISC_OFFSET;
+        // A DM copies its interface image with 64-bit loads/stores, so its blob must be 8B aligned.
+        const uint32_t blob_align = is_dm ? 8u : 4u;
+        TT_FATAL(
+            blob_off % blob_align == 0u, "hart {} blob offset {} is not {}B-aligned", hartid, blob_off, blob_align);
 
         const uint8_t* blob = config_bytes.data() + blob_off;
-        const bool is_dm = hartid < ::dfb::TENSIX_RISC_OFFSET;
 
         uint32_t participating_slots = 0u;
         for (const auto& dfb : dfbs_on_core) {
@@ -739,16 +742,24 @@ size_t serialize_dfb_config_for_core(
     populate_dfb_global_header_participation(ghdr, participation_mask, dfbs_on_core);
     verify_dfb_global_header_participation(ghdr, dfbs_on_core);
 
-    // has_dm0_isr: any DFB with implicit-sync txns?
-    ghdr.has_dm0_isr = (dm0_isr_blob_region_size(dfbs_on_core) > 0) ? 1u : 0u;
-    ghdr.dm0_isr_ready = 0;
-
     const uint32_t header_size = dfb_config_header_size();  // 120B
     const uint32_t total_dm1_blob_size = dm1_remapper_blob_core_size(dfbs_on_core);
     const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
 
+    // has_dm0_isr: any DFB with implicit-sync txns?
+    ghdr.has_dm0_isr = (total_dm0_isr_blob_size > 0) ? 1u : 0u;
+    ghdr.dm0_isr_ready = 0;
+
+    // DM0 txn-id masks and descriptor images: built once, used for dm0_packed and emitted in step 5.
+    const auto [dm0_producer_mask, dm0_consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
+    const std::vector<uint8_t> dm0_desc_pool =
+        ghdr.has_dm0_isr != 0
+            ? serialize_dm0_isr_txn_desc_pool_for_core(core, dfbs_on_core, dm0_producer_mask, dm0_consumer_mask)
+            : std::vector<uint8_t>{};
+
     // The region offsets are uint16_t: TT_FATAL rather than let a static_cast truncate silently.
-    const uint32_t dm1_off = dfb_align_cl(header_size);
+    // The device locates the DM1 blob (ready flags) by the constant, not by this header field.
+    const uint32_t dm1_off = DFB_DM1_REMAPPER_BLOB_OFFSET;
     const uint32_t dm0_off = dfb_align_cl(dm1_off + total_dm1_blob_size);
     TT_FATAL(dm0_off <= 0xFFFFu, "DFB config: dm0_isr_blob_offset {} does not fit uint16", dm0_off);
     ghdr.dm1_remapper_blob_offset = static_cast<uint16_t>(dm1_off);
@@ -769,33 +780,30 @@ size_t serialize_dfb_config_for_core(
     uint32_t dm0_desc_stride = static_cast<uint32_t>(sizeof(dfb_dm0_txn_descriptor_image_t));
     // DM0 reads only dm0_packed in its prologue, so it must agree with the fields it replaces.
     if (ghdr.has_dm0_isr != 0) {
-        const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
         constexpr uint32_t kBelowDfbIds = (1u << DFB_TXN_ID_BASE) - 1u;
         TT_FATAL(
-            ((producer_mask | consumer_mask) & kBelowDfbIds) == 0u,
+            ((dm0_producer_mask | dm0_consumer_mask) & kBelowDfbIds) == 0u,
             "DFB config: DM0 txn-id masks {:#x}/{:#x} use ids below DFB_TXN_ID_BASE; dm0_packed cannot hold them",
-            producer_mask,
-            consumer_mask);
-        const auto images = serialize_dm0_isr_txn_desc_pool_for_core(core, dfbs_on_core, producer_mask, consumer_mask);
+            dm0_producer_mask,
+            dm0_consumer_mask);
         uint32_t max_counters = 0;
-        for (size_t o = 0; o < images.size(); o += sizeof(dfb_dm0_txn_descriptor_image_t)) {
-            max_counters = std::max<uint32_t>(max_counters, images[o]);  // byte 0 = num_counters
+        for (size_t o = 0; o < dm0_desc_pool.size(); o += sizeof(dfb_dm0_txn_descriptor_image_t)) {
+            max_counters = std::max<uint32_t>(max_counters, dm0_desc_pool[o]);  // byte 0 = num_counters
         }
         dm0_desc_stride = dfb_dm0_desc_stride_for(max_counters);
         TT_FATAL(dm0_off % 64u == 0u, "DFB config: dm0_packed needs a 64 B aligned DM0 blob (offset {})", dm0_off);
-        ghdr.dm0_packed =
-            dfb_dm0_packed_make(dm0_off | dfb_dm0_desc_stride_code(dm0_desc_stride), producer_mask, consumer_mask);
+        ghdr.dm0_packed = dfb_dm0_packed_make(dm0_off, dm0_desc_stride, dm0_producer_mask, dm0_consumer_mask);
         TT_FATAL(
             dfb_dm0_packed_desc_stride(ghdr.dm0_packed) == dm0_desc_stride &&
                 dfb_dm0_packed_blob_offset(ghdr.dm0_packed) == dm0_off &&
-                dfb_dm0_packed_producer_mask(ghdr.dm0_packed) == producer_mask &&
-                dfb_dm0_packed_consumer_mask(ghdr.dm0_packed) == consumer_mask && ghdr.dm0_packed != 0u,
+                dfb_dm0_packed_producer_mask(ghdr.dm0_packed) == dm0_producer_mask &&
+                dfb_dm0_packed_consumer_mask(ghdr.dm0_packed) == dm0_consumer_mask && ghdr.dm0_packed != 0u,
             "DFB config: dm0_packed {:#x} does not round-trip (offset {}, stride {}, masks {:#x}/{:#x})",
             ghdr.dm0_packed,
             dm0_off,
             dm0_desc_stride,
-            producer_mask,
-            consumer_mask);
+            dm0_producer_mask,
+            dm0_consumer_mask);
     } else {
         ghdr.dm0_packed = 0u;
     }
@@ -863,10 +871,9 @@ size_t serialize_dfb_config_for_core(
     // 5. Emit DM0 ISR blob.
     // ---------------------------------------------------------------------------
     if (total_dm0_isr_blob_size > 0) {
-        const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
         dfb_dm0_isr_blob_core_header_t core_hdr = {
-            .producer_txn_id_mask = producer_mask,
-            .consumer_txn_id_mask = consumer_mask,
+            .producer_txn_id_mask = dm0_producer_mask,
+            .consumer_txn_id_mask = dm0_consumer_mask,
         };
         TT_FATAL(offset + sizeof(core_hdr) <= out.size(), "DFB config overflow (DM0 ISR core hdr)");
         std::memcpy(out.data() + offset, &core_hdr, sizeof(core_hdr));
@@ -874,7 +881,7 @@ size_t serialize_dfb_config_for_core(
         offset += sizeof(core_hdr);
         pad_to(dm0_off + DFB_DM0_CACHED_PAYLOAD_OFFSET, "DM0 descriptor pool");
 
-        auto desc_pool = serialize_dm0_isr_txn_desc_pool_for_core(core, dfbs_on_core, producer_mask, consumer_mask);
+        const std::vector<uint8_t>& desc_pool = dm0_desc_pool;
         // DM0 copies descriptors with 64-bit loads; finalize_dfbs puts the region base on a line.
         TT_FATAL(offset % 8u == 0u, "DFB config: DM0 descriptor pool must be 8 B aligned (offset {})", offset);
         if (!desc_pool.empty()) {

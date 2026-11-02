@@ -451,8 +451,8 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     const dfb_dm1_remapper_slot_t* slots =
         reinterpret_cast<const dfb_dm1_remapper_slot_t*>(config_cached + (dm1_slots_word & 0xFFFFu));
     const uint16_t num_slots = static_cast<uint16_t>(dm1_slots_word >> 16);
-    volatile uint8_t* const ready_flags = dfb_l1_uncached_byte_ptr(
-        reinterpret_cast<uintptr_t>(slots) - (DFB_DM1_CACHED_PAYLOAD_OFFSET - DFB_DM1_READY_FLAGS_OFFSET));
+    volatile uint8_t* const ready_flags =
+        dfb_l1_uncached_byte_ptr(config_cached + DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET);
 
     WAYPOINT("RS");
 
@@ -583,8 +583,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     uint8_t trisc_tc_slot_count = 0;
 #endif
 #if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
-    // Uncached alias of DM1's ready-flag line, loaded on this hart's first remapper wait.
-    const volatile uint8_t* dm1_ready_flags = nullptr;
+    // Uncached alias of DM1's ready-flag line.
+    const volatile uint8_t* const dm1_ready_flags =
+        dfb_l1_uncached_byte_ptr(config_cached + DFB_DM1_REMAPPER_BLOB_OFFSET + DFB_DM1_READY_FLAGS_OFFSET);
 #endif
 
     // Inner timers and counters (0 unless kDfbInitInnerTiming).
@@ -779,12 +780,6 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             if (flags & DFB_HART_FLAG_REMAPPER_WAIT_DM1) {
                 const uint32_t t_spin = rdcycle();
                 WAYPOINT("RMSW");
-                if (dm1_ready_flags == nullptr) {
-                    const uint32_t dm1_blob_off = *dfb_l1_uncached_u16_ptr(
-                        config_cached + offsetof(dfb_global_header_t, dm1_remapper_blob_offset));
-                    dm1_ready_flags =
-                        dfb_l1_uncached_byte_ptr(config_cached + dm1_blob_off + DFB_DM1_READY_FLAGS_OFFSET);
-                }
                 while (dm1_ready_flags[remapper_pair_index] == 0u) {
                 }
                 WAYPOINT("RMSD");
