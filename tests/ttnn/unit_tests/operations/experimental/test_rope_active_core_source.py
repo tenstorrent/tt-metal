@@ -41,6 +41,7 @@ def test_active_targets_match_runtime_args_and_cover_every_sequence_tile(tmp_pat
 #include <vector>
 #define TT_FATAL(condition, ...) assert(condition)
 using NodeCoord = uint32_t;
+using ArgValue = uint32_t;  // the factory's runtime-arg value type wraps a uint32_t
 struct CoreRange {
     uint32_t lo, hi;
     CoreRange(uint32_t a, uint32_t b) : lo(a), hi(b) {}
