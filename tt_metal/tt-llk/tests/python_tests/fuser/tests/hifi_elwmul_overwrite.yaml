@@ -1,4 +1,4 @@
-# Quasar keeps its own copy on Float16 (quasar/hifi_elwmul_overwrite.yaml): Quasar allows HiFi4
+# Quasar keeps its own copy on Float32 (quasar/hifi_elwmul_overwrite.yaml): Quasar allows HiFi4
 # only when SrcA and SrcB are both wide (Float16, Tf32 or Float32), and Float16_b is not.
 supported_archs: [wormhole]
 

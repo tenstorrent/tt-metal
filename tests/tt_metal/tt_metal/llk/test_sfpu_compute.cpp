@@ -2988,7 +2988,7 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
             output_dram_buffer);
     } else {
         auto& cq = mesh_device.mesh_command_queue();
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
 
         // reader_binary.cpp with LOAD_BUF2_DATA:
         //   {src0_addr, src0_bank, src1_addr, src1_bank, num_tiles, src2_addr, src2_bank}
