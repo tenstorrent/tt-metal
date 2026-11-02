@@ -1,0 +1,280 @@
+2026-11-02 20:17:43.509 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-02 20:17:44.092 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 20:17:44.092 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 20:17:44.093 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 20:17:44.093 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 20:17:44.104 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 20:17:44.104 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 20:17:44.185 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 20:17:44.185 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 20:17:44.185 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 20:17:44.185 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 20:17:44.187 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 20:17:44.409 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 20:17:44.443 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-02 20:17:44.443 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-02 20:17:44.443 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 20:17:44.484 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+[1024,5120]x[5120,1536] (transpose_b) default: 286 us (56 TFLOP/s)
+  grid 11x8 pcM 4 pcN 5 in0_block_w  1 sub 4x1: 284 us (57 TFLOP/s) max|diff| 0
+  grid 11x8 pcM 4 pcN 5 in0_block_w  1 sub 2x1: 284 us (57 TFLOP/s) max|diff| 0
+  grid 11x8 pcM 4 pcN 5 in0_block_w  2 sub 4x1: 215 us (75 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  2 sub 2x1: 214 us (75 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  4 sub 4x1: 196 us (82 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  4 sub 2x1: 199 us (81 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  5 sub 4x1: 193 us (83 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  5 sub 2x1: 195 us (83 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  8 sub 4x1: 189 us (85 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w  8 sub 2x1: 196 us (82 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w 10 sub 4x1: 187 us (86 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w 10 sub 2x1: 189 us (85 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w 16 sub 4x1: 185 us (87 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w 16 sub 2x1: 188 us (86 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w 20 sub 4x1: 188 us (86 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 5 in0_block_w 20 sub 2x1: 188 us (86 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  1 sub 4x1: 286 us (56 TFLOP/s) max|diff| 0
+  grid 10x8 pcM 4 pcN 5 in0_block_w  1 sub 2x1: 283 us (57 TFLOP/s) max|diff| 0
+  grid 10x8 pcM 4 pcN 5 in0_block_w  2 sub 4x1: 213 us (76 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  2 sub 2x1: 215 us (75 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  4 sub 4x1: 199 us (81 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  4 sub 2x1: 203 us (79 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  5 sub 4x1: 196 us (82 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  5 sub 2x1: 198 us (81 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  8 sub 4x1: 194 us (83 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w  8 sub 2x1: 192 us (84 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w 10 sub 4x1: 192 us (84 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w 10 sub 2x1: 191 us (85 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w 16 sub 4x1: 189 us (85 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w 16 sub 2x1: 190 us (85 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w 20 sub 4x1: 190 us (85 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 5 in0_block_w 20 sub 2x1: 191 us (85 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  1 sub 4x1: 288 us (56 TFLOP/s) max|diff| 0
+  grid 11x10 pcM 4 pcN 5 in0_block_w  1 sub 2x1: 290 us (56 TFLOP/s) max|diff| 0
+  grid 11x10 pcM 4 pcN 5 in0_block_w  2 sub 4x1: 219 us (74 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  2 sub 2x1: 219 us (73 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  4 sub 4x1: 204 us (79 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  4 sub 2x1: 205 us (79 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  5 sub 4x1: 202 us (80 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  5 sub 2x1: 200 us (81 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  8 sub 4x1: 194 us (83 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w  8 sub 2x1: 193 us (83 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w 10 sub 4x1: 195 us (83 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w 10 sub 2x1: 195 us (83 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w 16 sub 4x1: 193 us (84 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w 16 sub 2x1: 191 us (84 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w 20 sub 4x1: 193 us (83 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 5 in0_block_w 20 sub 2x1: 193 us (84 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  1 sub 4x1: 289 us (56 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 4 pcN 5 in0_block_w  1 sub 2x1: 287 us (56 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 4 pcN 5 in0_block_w  2 sub 4x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  2 sub 2x1: 217 us (74 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  4 sub 4x1: 200 us (81 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  4 sub 2x1: 202 us (80 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  5 sub 4x1: 197 us (82 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  5 sub 2x1: 200 us (81 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  8 sub 4x1: 192 us (84 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w  8 sub 2x1: 192 us (84 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w 10 sub 4x1: 192 us (84 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w 10 sub 2x1: 190 us (85 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w 16 sub 4x1: 189 us (85 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w 16 sub 2x1: 190 us (85 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w 20 sub 4x1: 193 us (84 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 5 in0_block_w 20 sub 2x1: 191 us (84 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  1 sub 4x1: 301 us (54 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 4 pcN 6 in0_block_w  1 sub 2x2: 301 us (54 TFLOP/s) max|diff| 0
+2026-11-02 20:17:52.553 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w  1 sub 2x1: 305 us (53 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 4 pcN 6 in0_block_w  1 sub 1x2: 307 us (53 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 4 pcN 6 in0_block_w  2 sub 4x1: 259 us (62 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  2 sub 2x2: 258 us (62 TFLOP/s) max|diff| 1
+2026-11-02 20:17:54.024 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w  2 sub 2x1: 257 us (63 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  2 sub 1x2: 258 us (62 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  4 sub 4x1: 230 us (70 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  4 sub 2x2: 231 us (70 TFLOP/s) max|diff| 1
+2026-11-02 20:17:55.487 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w  4 sub 2x1: 230 us (70 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  4 sub 1x2: 228 us (71 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  5 sub 4x1: 228 us (71 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  5 sub 2x2: 226 us (71 TFLOP/s) max|diff| 1
+2026-11-02 20:17:56.959 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w  5 sub 2x1: 228 us (71 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  5 sub 1x2: 225 us (71 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  8 sub 4x1: 219 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  8 sub 2x2: 220 us (73 TFLOP/s) max|diff| 1
+2026-11-02 20:17:58.418 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w  8 sub 2x1: 219 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w  8 sub 1x2: 218 us (74 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 10 sub 4x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 10 sub 2x2: 220 us (73 TFLOP/s) max|diff| 1
+2026-11-02 20:17:59.871 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w 10 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w 10 sub 2x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 10 sub 1x2: 220 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 16 sub 4x1: 219 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 16 sub 2x2: 219 us (74 TFLOP/s) max|diff| 1
+2026-11-02 20:18:01.347 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w 16 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w 16 sub 2x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 16 sub 1x2: 219 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 20 sub 4x1: 218 us (74 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 20 sub 2x2: 220 us (73 TFLOP/s) max|diff| 1
+2026-11-02 20:18:02.825 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 8x10 pcM 4 pcN 6 in0_block_w 20 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 8x10 pcM 4 pcN 6 in0_block_w 20 sub 2x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 4 pcN 6 in0_block_w 20 sub 1x2: 219 us (74 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  1 sub 4x1: 301 us (54 TFLOP/s) max|diff| 0
+  grid 9x10 pcM 4 pcN 6 in0_block_w  1 sub 2x2: 303 us (53 TFLOP/s) max|diff| 0
+2026-11-02 20:18:03.561 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w  1 sub 2x1: 300 us (54 TFLOP/s) max|diff| 0
+  grid 9x10 pcM 4 pcN 6 in0_block_w  1 sub 1x2: 299 us (54 TFLOP/s) max|diff| 0
+  grid 9x10 pcM 4 pcN 6 in0_block_w  2 sub 4x1: 260 us (62 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  2 sub 2x2: 259 us (62 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.587 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w  2 sub 2x1: 258 us (62 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  2 sub 1x2: 256 us (63 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  4 sub 4x1: 228 us (71 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  4 sub 2x2: 230 us (70 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.611 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w  4 sub 2x1: 230 us (70 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  4 sub 1x2: 228 us (71 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  5 sub 4x1: 228 us (71 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  5 sub 2x2: 229 us (70 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.633 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w  5 sub 2x1: 228 us (71 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  5 sub 1x2: 226 us (71 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  8 sub 4x1: 222 us (72 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  8 sub 2x2: 223 us (72 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.655 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w  8 sub 2x1: 222 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w  8 sub 1x2: 221 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 10 sub 4x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 10 sub 2x2: 222 us (73 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.677 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w 10 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w 10 sub 2x1: 220 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 10 sub 1x2: 220 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 16 sub 4x1: 222 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 16 sub 2x2: 220 us (73 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.699 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w 16 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w 16 sub 2x1: 221 us (73 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 16 sub 1x2: 223 us (72 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 20 sub 4x1: 224 us (72 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 20 sub 2x2: 225 us (72 TFLOP/s) max|diff| 1
+2026-11-02 20:18:03.721 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 9x10 pcM 4 pcN 6 in0_block_w 20 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 9x10 pcM 4 pcN 6 in0_block_w 20 sub 2x1: 223 us (72 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 4 pcN 6 in0_block_w 20 sub 1x2: 221 us (73 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 4x1: 350 us (46 TFLOP/s) max|diff| 0
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 2x2: 352 us (46 TFLOP/s) max|diff| 0
+2026-11-02 20:18:04.467 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:04.468 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 1x4: 349 us (46 TFLOP/s) max|diff| 0
+2026-11-02 20:18:04.829 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 2x1: 351 us (46 TFLOP/s) max|diff| 0
+  grid 6x10 pcM 4 pcN 8 in0_block_w  1 sub 1x2: 346 us (47 TFLOP/s) max|diff| 0
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 4x1: 311 us (52 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 2x2: 312 us (52 TFLOP/s) max|diff| 1
+2026-11-02 20:18:06.301 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:06.301 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 1x4: 308 us (52 TFLOP/s) max|diff| 1
+2026-11-02 20:18:06.668 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 2x1: 312 us (52 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  2 sub 1x2: 309 us (52 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 4x1: 297 us (54 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 2x2: 297 us (54 TFLOP/s) max|diff| 1
+2026-11-02 20:18:08.139 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:08.140 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 1x4: 293 us (55 TFLOP/s) max|diff| 1
+2026-11-02 20:18:08.506 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 2x1: 299 us (54 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  4 sub 1x2: 296 us (54 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 4x1: 296 us (54 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 2x2: 292 us (55 TFLOP/s) max|diff| 1
+2026-11-02 20:18:09.975 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:09.976 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 1x4: 292 us (55 TFLOP/s) max|diff| 1
+2026-11-02 20:18:10.344 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 2x1: 300 us (54 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  5 sub 1x2: 291 us (55 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 4x1: 291 us (55 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 2x2: 289 us (56 TFLOP/s) max|diff| 1
+2026-11-02 20:18:11.835 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:11.836 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 1x4: 285 us (56 TFLOP/s) max|diff| 1
+2026-11-02 20:18:12.203 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 2x1: 288 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w  8 sub 1x2: 286 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 4x1: 290 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 2x2: 286 us (56 TFLOP/s) max|diff| 1
+2026-11-02 20:18:13.689 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:13.690 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 1x4: 284 us (57 TFLOP/s) max|diff| 1
+2026-11-02 20:18:14.057 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 2x1: 288 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 10 sub 1x2: 286 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 4x1: 291 us (55 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 2x2: 287 us (56 TFLOP/s) max|diff| 1
+2026-11-02 20:18:15.533 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:15.534 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 1x4: 283 us (57 TFLOP/s) max|diff| 1
+2026-11-02 20:18:15.907 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 2x1: 287 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 16 sub 1x2: 286 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 4x1: 291 us (55 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 2x2: 293 us (55 TFLOP/s) max|diff| 1
+2026-11-02 20:18:17.384 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-11-02 20:18:17.385 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 4 times out_subblock_h 2 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 2x4: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 1x4: 286 us (56 TFLOP/s) max|diff| 1
+2026-11-02 20:18:17.762 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 8 times out_subblock_h 1 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 1x8: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 2x1: 288 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 4 pcN 8 in0_block_w 20 sub 1x2: 286 us (56 TFLOP/s) max|diff| 1
+[1024,5120]x[5120,1536] default 286 us; best 5 (us, gx, gy, pcM, pcN, in0_block_w, sub_h, sub_w, max|diff|):
+    (184.86008048057556, 11, 8, 4, 5, 16, 4, 1, 1.0)
+    (186.69958226382732, 11, 8, 4, 5, 10, 4, 1, 1.0)
+    (187.52822652459145, 11, 8, 4, 5, 20, 2, 1, 1.0)
+    (187.92087212204933, 11, 8, 4, 5, 16, 2, 1, 1.0)
+    (188.17652016878128, 11, 8, 4, 5, 20, 4, 1, 1.0)
+2026-11-02 20:18:18.743 | info     |    BuildKernels | JIT cache stats: 40/596 hits (6.7%) [40 cached, 792 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 20:18:18.743 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 20:18:18.758 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 20:18:18.758 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 20:18:18.958 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 20:18:18.958 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 20:18:18.958 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

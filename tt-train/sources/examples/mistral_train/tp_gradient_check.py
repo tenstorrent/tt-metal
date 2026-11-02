@@ -158,7 +158,16 @@ def main():
     from ttml.models.mistral.fused_residual_norm import use_fused_residual_norm
 
     print(f"residual adds fused into the norms: {use_fused_residual_norm(model)}")
-    print(f"tp {args.tp}: transposed {len(converted)}, fused {len(fused)}")
+    from ttml.modules.frozen_linear import configured_base_shape
+
+    configured = [
+        name
+        for name, m in model.named_modules()
+        if hasattr(m, "lora_A")
+        and not getattr(m, "weight_transposed", False)
+        and configured_base_shape(m.weight.tensor, SEQ) is not None
+    ]
+    print(f"tp {args.tp}: transposed {len(converted)}, fused {len(fused)}, configured {len(configured)}")
     model.train()
 
     rng = np.random.default_rng(args.seed)

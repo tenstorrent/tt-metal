@@ -1,0 +1,12 @@
+=== iter46c TP=4 gradient check 2026-11-02T21:08:30Z
+tp4 rc=0
+tp 4: transposed 3, fused 2, configured 2
+PASS
+=== iter46c_tp TP=4 MFU after 600s cool-down 2026-11-02T21:09:12Z
+rc=0
+40 of 40 layers, tp 4: 440.5 ms/step over 6 steps (best 434.3), 218.8 TFLOP/s, MFU 36.83%
+=== iter46c_tp TP=4 Tracy 4 layers 2026-11-02T21:22:36Z
+rc=0
+4 of 40 layers, tp 4: 55.7 ms/step over 2 steps (best 55.3), 217.4 TFLOP/s, MFU 36.59%
+=== done 2026-11-02T21:24:09Z
+=== iter46c finished 2026-11-02T21:24:10Z

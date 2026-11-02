@@ -23,6 +23,9 @@ from ttml.autograd import Function
 __all__ = [
     "FrozenLinearT",
     "frozen_linear_t",
+    "ConfiguredFrozenLinear",
+    "configured_linear",
+    "configured_base_shape",
     "forward_core_grid",
     "transpose_frozen_weights",
     "FORWARD_CORE_GRID",
@@ -81,6 +84,15 @@ def local_in_out(weight) -> tuple[int, int] | None:
     the reported shape and the reported shape divided along the dim sharded over ``tp`` are tried; the local
     candidate wins when both are listed (the single-chip and TP-local tables do not collide on a shape).
     """
+    for shape in shard_candidates(weight):
+        if shape in TRANSPOSED_SHAPES:
+            return shape
+    return None
+
+
+def shard_candidates(weight) -> list[tuple[int, int]]:
+    """The (in, out) shapes the weight ``[.., out, in]`` may hold on one chip: the reported shape divided along the
+    dim sharded over ``tp`` first (when a mesh with that axis is open), then the reported shape itself."""
     value = weight.get_value()
     out_features, in_features = int(value.shape[-2]), int(value.shape[-1])
     candidates = [(in_features, out_features)]
@@ -94,10 +106,7 @@ def local_in_out(weight) -> tuple[int, int] | None:
             candidates.insert(0, (in_features, out_features // tp))
         elif isinstance(placement, ttnn.PlacementShard) and placement.dim == 3 and in_features % tp == 0:
             candidates.insert(0, (in_features // tp, out_features))
-    for shape in candidates:
-        if shape in TRANSPOSED_SHAPES:
-            return shape
-    return None
+    return candidates
 
 
 def forward_core_grid(in_features: int, out_features: int):
@@ -138,6 +147,24 @@ PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
     # 39): 1.531 -> 1.499 ms standalone against ttnn's choice (K blocks of 4), `O/iter39_scoping.log`.
     (5184, 16384, 1024, False): dict(
         grid=(11, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=3, per_core_M=17, per_core_N=3
+    ),
+    # The attention projections' base matmuls at the TP=4 per-chip shapes on the composite LoRA path (iteration 46,
+    # `O/iter46_sweep2d_*.log`, confirmed in alternating rounds against ttnn's default choice in
+    # `O/iter46_attn_configs_abab.log`): qkv forward [1024, 5120] x [1536, 5120]^T 207 -> 192 us (-7 %), out forward
+    # [1024, 1024] x [5120, 1024]^T 158 -> 143 (-9 %), qkv dX [1024, 1536] x [1536, 5120] 210 -> 188 (-11 %), out dX
+    # [1024, 5120] x [5120, 1024] 128 -> 118 (-8 %); every output within one bf16 ulp of the default's (the deeper
+    # K blocks change the fp32 accumulation order). Served by :class:`ConfiguredFrozenLinear`.
+    (1024, 5120, 1536, True): dict(
+        grid=(11, 8), in0_block_w=16, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=5
+    ),
+    (1024, 1024, 5120, True): dict(
+        grid=(11, 8), in0_block_w=8, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=15
+    ),
+    (1024, 1536, 5120, False): dict(
+        grid=(11, 10), in0_block_w=12, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=15
+    ),
+    (1024, 5120, 1024, False): dict(
+        grid=(11, 8), in0_block_w=16, out_subblock_h=2, out_subblock_w=1, per_core_M=4, per_core_N=3
     ),
 }
 
@@ -299,6 +326,64 @@ class FrozenLinearT(Function):
 
 def frozen_linear_t(x, weight_t, bias, shape):
     return FrozenLinearT.apply(x, weight_t, bias, shape)
+
+
+def configured_base_shape(weight, rows: int) -> tuple[int, int] | None:
+    """(in, out) of the frozen weight shard ``[.., out, in]`` whose forward ``[rows, in] x [out, in]^T`` has a swept
+    2D config in :data:`PROGRAM_CONFIG_2D` (iteration 46: the attention projections at the TP=4 shapes), else None."""
+    for in_features, out_features in shard_candidates(weight):
+        if matmul_kwargs_2d(rows, in_features, out_features, True) is not None:
+            return in_features, out_features
+    return None
+
+
+class ConfiguredFrozenLinear(Function):
+    """``y = x @ W^T`` for a frozen ``W = [1, 1, out, in]`` kept in its natural layout, through the swept 2D
+    program configs (iteration 46): the composite LoRA path's base projection where ttnn's default choice loses
+    7-11 % at the small TP attention shapes. No weight gradient; ``dx = g @ W`` on the swept config of that shape
+    (or the full grid)."""
+
+    @staticmethod
+    def forward(ctx, x, weight, bias, shape):
+        """``shape`` is the (in, out) of the local shard from :func:`configured_base_shape`."""
+        w = weight.get_value()
+        in_features, out_features = shape
+        ctx.save_for_backward(w)
+        ctx.has_bias = bias is not None
+        ctx.shape = shape
+        # The first block's qkv input (the gathered norm of the frozen embedding) needs no gradient: the ttml linear
+        # skips that dx, so does this (the first profile computed it: 3 -> 4 dX matmuls per 4 layers).
+        ctx.x_needs_grad = x.get_requires_grad()
+        y = ttnn.matmul(
+            x.get_value(),
+            w,
+            transpose_b=True,
+            compute_kernel_config=_compute_config(),
+            **matmul_kwargs_2d(int(x.get_value().shape[-2]), in_features, out_features, True),
+        )
+        if bias is not None:
+            y = ttnn.add(y, bias.get_value())
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (w,) = ctx.saved_tensors
+        ctx.save_for_backward()
+        if not ctx.x_needs_grad:
+            return (None, None, None) if ctx.has_bias else (None, None)
+        in_features, out_features = ctx.shape
+        rows = int(grad_output.shape[-2])
+        dx = ttnn.matmul(
+            grad_output,
+            w,
+            compute_kernel_config=_compute_config(),
+            **(matmul_kwargs_2d(rows, out_features, in_features, False) or {"core_grid": full_core_grid()}),
+        )
+        return (dx, None, None) if ctx.has_bias else (dx, None)
+
+
+def configured_linear(x, weight, bias, shape):
+    return ConfiguredFrozenLinear.apply(x, weight, bias, shape)
 
 
 def transpose_frozen_weights(model) -> list[str]:

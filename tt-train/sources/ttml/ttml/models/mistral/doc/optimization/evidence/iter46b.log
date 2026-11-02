@@ -1,0 +1,8 @@
+=== iter46b_tp TP=4 MFU after 300s cool-down 2026-11-02T20:56:52Z
+rc=0
+40 of 40 layers, tp 4: 451.8 ms/step over 6 steps (best 444.0), 213.3 TFLOP/s, MFU 35.91%
+=== iter46b_tp TP=4 Tracy 4 layers 2026-11-02T21:05:19Z
+rc=0
+4 of 40 layers, tp 4: 52.8 ms/step over 2 steps (best 50.9), 229.4 TFLOP/s, MFU 38.61%
+=== done 2026-11-02T21:06:49Z
+=== iter46b diff done

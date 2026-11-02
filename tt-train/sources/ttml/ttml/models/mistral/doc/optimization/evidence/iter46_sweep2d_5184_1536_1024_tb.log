@@ -1,0 +1,86 @@
+2026-11-02 20:20:55.547 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-11-02 20:20:56.164 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 20:20:56.164 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 20:20:56.164 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 20:20:56.164 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 20:20:56.175 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 20:20:56.175 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 20:20:56.254 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 20:20:56.254 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 20:20:56.254 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 20:20:56.254 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 20:20:56.256 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 20:20:56.432 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 20:20:56.465 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-02 20:20:56.465 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-02 20:20:56.465 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 20:20:56.506 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+[5184,1536]x[1536,1024] (transpose_b) default: 233 us (70 TFLOP/s)
+  grid 10x8 pcM 21 pcN 4 in0_block_w  1 sub 1x4: 285 us (57 TFLOP/s) max|diff| 0
+  grid 10x8 pcM 21 pcN 4 in0_block_w  1 sub 1x2: 307 us (53 TFLOP/s) max|diff| 0
+  grid 10x8 pcM 21 pcN 4 in0_block_w  2 sub 1x4: 271 us (60 TFLOP/s) max|diff| 0.5
+  grid 10x8 pcM 21 pcN 4 in0_block_w  2 sub 1x2: 280 us (58 TFLOP/s) max|diff| 0.5
+  grid 10x8 pcM 21 pcN 4 in0_block_w  3 sub 1x4: 267 us (61 TFLOP/s) max|diff| 0.5
+  grid 10x8 pcM 21 pcN 4 in0_block_w  3 sub 1x2: 273 us (60 TFLOP/s) max|diff| 0.5
+  grid 10x8 pcM 21 pcN 4 in0_block_w  4 sub 1x4: 264 us (62 TFLOP/s) max|diff| 0.5
+  grid 10x8 pcM 21 pcN 4 in0_block_w  4 sub 1x2: 265 us (62 TFLOP/s) max|diff| 0.5
+  grid 10x8 pcM 21 pcN 4 in0_block_w  6 sub 1x4: 253 us (64 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 21 pcN 4 in0_block_w  6 sub 1x2: 256 us (64 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 21 pcN 4 in0_block_w  8 sub 1x4: 246 us (66 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 21 pcN 4 in0_block_w  8 sub 1x2: 245 us (67 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 17 pcN 4 in0_block_w  1 sub 1x4: 259 us (63 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 17 pcN 4 in0_block_w  1 sub 1x2: 258 us (63 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 17 pcN 4 in0_block_w  2 sub 1x4: 230 us (71 TFLOP/s) max|diff| 0.5
+  grid 10x10 pcM 17 pcN 4 in0_block_w  2 sub 1x2: 238 us (68 TFLOP/s) max|diff| 0.5
+  grid 10x10 pcM 17 pcN 4 in0_block_w  3 sub 1x4: 227 us (72 TFLOP/s) max|diff| 0.5
+  grid 10x10 pcM 17 pcN 4 in0_block_w  3 sub 1x2: 233 us (70 TFLOP/s) max|diff| 0.5
+  grid 10x10 pcM 17 pcN 4 in0_block_w  4 sub 1x4: 225 us (72 TFLOP/s) max|diff| 0.5
+  grid 10x10 pcM 17 pcN 4 in0_block_w  4 sub 1x2: 230 us (71 TFLOP/s) max|diff| 0.5
+  grid 10x10 pcM 17 pcN 4 in0_block_w  6 sub 1x4: 220 us (74 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 17 pcN 4 in0_block_w  6 sub 1x2: 218 us (75 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 17 pcN 4 in0_block_w  8 sub 1x4: 208 us (78 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 17 pcN 4 in0_block_w  8 sub 1x2: 215 us (76 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 17 pcN 4 in0_block_w  1 sub 1x4: 255 us (64 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 17 pcN 4 in0_block_w  1 sub 1x2: 262 us (62 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 17 pcN 4 in0_block_w  2 sub 1x4: 229 us (71 TFLOP/s) max|diff| 0.5
+  grid 8x10 pcM 17 pcN 4 in0_block_w  2 sub 1x2: 237 us (69 TFLOP/s) max|diff| 0.5
+  grid 8x10 pcM 17 pcN 4 in0_block_w  3 sub 1x4: 226 us (72 TFLOP/s) max|diff| 0.5
+  grid 8x10 pcM 17 pcN 4 in0_block_w  3 sub 1x2: 229 us (71 TFLOP/s) max|diff| 0.5
+  grid 8x10 pcM 17 pcN 4 in0_block_w  4 sub 1x4: 223 us (73 TFLOP/s) max|diff| 0.5
+  grid 8x10 pcM 17 pcN 4 in0_block_w  4 sub 1x2: 228 us (72 TFLOP/s) max|diff| 0.5
+  grid 8x10 pcM 17 pcN 4 in0_block_w  6 sub 1x4: 218 us (75 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 17 pcN 4 in0_block_w  6 sub 1x2: 218 us (75 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 17 pcN 4 in0_block_w  8 sub 1x4: 209 us (78 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 17 pcN 4 in0_block_w  8 sub 1x2: 211 us (77 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 17 pcN 4 in0_block_w  1 sub 1x4: 253 us (65 TFLOP/s) max|diff| 0
+  grid 9x10 pcM 17 pcN 4 in0_block_w  1 sub 1x2: 258 us (63 TFLOP/s) max|diff| 0
+  grid 9x10 pcM 17 pcN 4 in0_block_w  2 sub 1x4: 230 us (71 TFLOP/s) max|diff| 0.5
+  grid 9x10 pcM 17 pcN 4 in0_block_w  2 sub 1x2: 238 us (68 TFLOP/s) max|diff| 0.5
+  grid 9x10 pcM 17 pcN 4 in0_block_w  3 sub 1x4: 225 us (72 TFLOP/s) max|diff| 0.5
+  grid 9x10 pcM 17 pcN 4 in0_block_w  3 sub 1x2: 231 us (71 TFLOP/s) max|diff| 0.5
+  grid 9x10 pcM 17 pcN 4 in0_block_w  4 sub 1x4: 223 us (73 TFLOP/s) max|diff| 0.5
+  grid 9x10 pcM 17 pcN 4 in0_block_w  4 sub 1x2: 226 us (72 TFLOP/s) max|diff| 0.5
+  grid 9x10 pcM 17 pcN 4 in0_block_w  6 sub 1x4: 216 us (76 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 17 pcN 4 in0_block_w  6 sub 1x2: 218 us (75 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 17 pcN 4 in0_block_w  8 sub 1x4: 210 us (78 TFLOP/s) max|diff| 1
+  grid 9x10 pcM 17 pcN 4 in0_block_w  8 sub 1x2: 209 us (78 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 17 pcN 6 in0_block_w  1 sub 1x2: 361 us (45 TFLOP/s) max|diff| 0
+  grid 6x10 pcM 17 pcN 6 in0_block_w  2 sub 1x2: 334 us (49 TFLOP/s) max|diff| 0.5
+  grid 6x10 pcM 17 pcN 6 in0_block_w  3 sub 1x2: 318 us (51 TFLOP/s) max|diff| 0.5
+  grid 6x10 pcM 17 pcN 6 in0_block_w  4 sub 1x2: 309 us (53 TFLOP/s) max|diff| 0.5
+  grid 6x10 pcM 17 pcN 6 in0_block_w  6 sub 1x2: 293 us (56 TFLOP/s) max|diff| 1
+  grid 6x10 pcM 17 pcN 6 in0_block_w  8 sub 1x2: 292 us (56 TFLOP/s) max|diff| 1
+[5184,1536]x[1536,1024] default 233 us; best 5 (us, gx, gy, pcM, pcN, in0_block_w, sub_h, sub_w, max|diff|):
+    (208.14170129597187, 10, 10, 17, 4, 8, 1, 4, 1.0)
+    (209.0193796902895, 8, 10, 17, 4, 8, 1, 4, 1.0)
+    (209.27079021930695, 9, 10, 17, 4, 8, 1, 2, 1.0)
+    (210.00616252422333, 9, 10, 17, 4, 8, 1, 4, 1.0)
+    (210.99010482430458, 8, 10, 17, 4, 8, 1, 2, 1.0)
+2026-11-02 20:21:10.621 | info     |    BuildKernels | JIT cache stats: 22/251 hits (8.8%) [22 cached, 219 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 20:21:10.621 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 20:21:10.634 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 20:21:10.634 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 20:21:10.878 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 20:21:10.879 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 20:21:10.879 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

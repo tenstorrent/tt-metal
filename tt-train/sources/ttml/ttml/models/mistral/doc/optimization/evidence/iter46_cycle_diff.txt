@@ -1,0 +1,22 @@
+kernel ms per profiled 4-layer step, 44 -> 46 (iter44_tp_ranked_ops_full.txt vs iter46_tp_ranked_ops_full.txt)
+chip 0: total 44.509 -> 42.318 (-2.191); collectives 9.335 -> 7.293 (-2.042); kernels without collectives 35.174 -> 35.025 (-0.149)
+    4.570 ->   3.218 (-1.352)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.462 ->   0.220 (-0.242)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    1.317 ->   1.124 (-0.193)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    1.742 ->   1.621 (-0.121)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.583 ->   0.684 (+0.101)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+    0.756 ->   0.692 (-0.064)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+    0.585 ->   0.525 (-0.060)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+    0.476 ->   0.431 (-0.045)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+    0.564 ->   0.520 (-0.044)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.185 ->   0.149 (-0.036)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.085 ->   0.060 (-0.025)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+chip 2: total 39.017 -> 39.950 (+0.933); collectives 4.192 -> 5.168 (+0.976); kernels without collectives 34.825 -> 34.782 (-0.043)
+    0.440 ->   1.103 (+0.663)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    1.533 ->   1.672 (+0.139)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    1.409 ->   1.518 (+0.109)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.585 ->   0.683 (+0.098)  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+    0.756 ->   0.690 (-0.066)  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+    0.583 ->   0.524 (-0.059)  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+    0.016 ->   0.073 (+0.057)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    0.476 ->   0.431 (-0.045)  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88

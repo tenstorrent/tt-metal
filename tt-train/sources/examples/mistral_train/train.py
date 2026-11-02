@@ -150,6 +150,20 @@ class Batcher:
         return window[:, :-1].astype(np.uint32), window[:, 1:].astype(np.uint32)
 
 
+def configured_bases(model, rows: int) -> list[str]:
+    """The frozen bases on the composite LoRA path that run the swept 2D configs (iteration 46)."""
+    from ttml.modules.frozen_linear import configured_base_shape
+    from ttml.modules.lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear
+
+    return [
+        name
+        for name, m in model.named_modules()
+        if isinstance(m, (LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear))
+        and not getattr(m, "weight_transposed", False)
+        and configured_base_shape(m.weight.tensor, rows) is not None
+    ]
+
+
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
@@ -191,6 +205,7 @@ def main() -> None:
         print(f"RMSNorm layers on the all-core backward: {len(norms)}")
     if not args.no_fused_residual_norm:
         print(f"residual adds fused into the norms: {use_fused_residual_norm(model)}")
+    print(f"composite bases on the swept 2D configs: {len(configured_bases(model, args.seq_len))} linears")
     model.train()
     params = model.parameters()
     trainable = sum(int(np.prod(t.shape())) for t in params.values() if t.get_requires_grad())

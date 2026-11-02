@@ -1,0 +1,6 @@
+rc=0
+qkv fwd [1024,5120]x[1536,5120]^T: default 207 us (78 TFLOP/s) -> swept grid (11, 8) in0_block_w 16 sub 4x1 pc 4x5: 192 us (84 TFLOP/s), -7 %, rounds [201, 207, 211] vs [187, 192, 196], max|diff| 1
+out fwd [1024,1024]x[5120,1024]^T: default 158 us (68 TFLOP/s) -> swept grid (11, 8) in0_block_w 8 sub 4x1 pc 4x15: 143 us (75 TFLOP/s), -9 %, rounds [156, 158, 160] vs [141, 143, 144], max|diff| 0.5
+qkv dX [1024,1536]x[1536,5120]: default 210 us (77 TFLOP/s) -> swept grid (11, 10) in0_block_w 12 sub 4x1 pc 4x15: 188 us (86 TFLOP/s), -11 %, rounds [204, 210, 214] vs [185, 188, 192], max|diff| 0.5
+out dX [1024,5120]x[5120,1024]: default 128 us (84 TFLOP/s) -> swept grid (11, 8) in0_block_w 16 sub 2x1 pc 4x3: 118 us (91 TFLOP/s), -8 %, rounds [126, 128, 130] vs [116, 118, 120], max|diff| 1
+=== abab finished

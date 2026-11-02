@@ -1,0 +1,117 @@
+{
+ "args": {
+  "model_path": "mistralai/Mistral-Small-24B-Base-2501",
+  "revision": "b0a2e4ed093c26997495ae625528f81ea04b749f",
+  "data": null,
+  "layers": 8,
+  "trace": false,
+  "trace_alternate": false,
+  "tp": 1,
+  "seq_len": 1024,
+  "batch": 1,
+  "steps": 10,
+  "warmup_steps": 2,
+  "lr": 0.0001,
+  "weight_decay": 0.0,
+  "rank": 16,
+  "alpha": 32.0,
+  "random_init": false,
+  "random_data": false,
+  "seed": 42,
+  "track_memory": false,
+  "mem_probe": false,
+  "no_fused_lora": false,
+  "no_allcore_rmsnorm": false,
+  "no_fused_residual_norm": false,
+  "no_transposed_weights": false,
+  "host_loss": true,
+  "loss_log": "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter46_loss_8layers_hostloss.json",
+  "data_log": null,
+  "dump_lora_init": null
+ },
+ "layers": 8,
+ "flops_per_step": 21473225867264,
+ "peak_tflops": 148.5,
+ "steps": [
+  {
+   "step": 1,
+   "loss": 12.125,
+   "ms": 2485.782845877111,
+   "trace": false,
+   "capture": false,
+   "host_loss": 12.107163429260254
+  },
+  {
+   "step": 2,
+   "loss": 11.875,
+   "ms": 759.7120949067175,
+   "trace": false,
+   "capture": false,
+   "host_loss": 11.852027893066406
+  },
+  {
+   "step": 3,
+   "loss": 11.3125,
+   "ms": 773.5969643108547,
+   "trace": false,
+   "capture": false,
+   "host_loss": 11.312376022338867
+  },
+  {
+   "step": 4,
+   "loss": 10.4375,
+   "ms": 768.3505029417574,
+   "trace": false,
+   "capture": false,
+   "host_loss": 10.41162109375
+  },
+  {
+   "step": 5,
+   "loss": 9.6875,
+   "ms": 773.4899590723217,
+   "trace": false,
+   "capture": false,
+   "host_loss": 9.713204383850098
+  },
+  {
+   "step": 6,
+   "loss": 9.875,
+   "ms": 766.6563270613551,
+   "trace": false,
+   "capture": false,
+   "host_loss": 9.893339157104492
+  },
+  {
+   "step": 7,
+   "loss": 9.25,
+   "ms": 765.6167149543762,
+   "trace": false,
+   "capture": false,
+   "host_loss": 9.225616455078125
+  },
+  {
+   "step": 8,
+   "loss": 8.6875,
+   "ms": 774.5267050340772,
+   "trace": false,
+   "capture": false,
+   "host_loss": 8.677801132202148
+  },
+  {
+   "step": 9,
+   "loss": 9.0,
+   "ms": 764.5942959934473,
+   "trace": false,
+   "capture": false,
+   "host_loss": 8.968894004821777
+  },
+  {
+   "step": 10,
+   "loss": 8.625,
+   "ms": 762.2767062857747,
+   "trace": false,
+   "capture": false,
+   "host_loss": 8.59210205078125
+  }
+ ]
+}

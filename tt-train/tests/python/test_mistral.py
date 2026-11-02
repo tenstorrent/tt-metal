@@ -744,6 +744,50 @@ def test_lora_linear_forward_and_gradients_frozen_base():
     assert not layer.weight.tensor.is_grad_initialized(), "frozen base weight received a gradient"
 
 
+@pytest.mark.parametrize(
+    "in_f,out_f", [(HIDDEN, (HEADS + 2 * KV_HEADS) * HEAD_DIM // 4), (HEADS * HEAD_DIM // 4, HIDDEN)]
+)
+def test_lora_linear_configured_base_at_the_tp_shard_shapes(in_f, out_f):
+    """Iteration 46: the composite LoRA path's frozen base at the TP=4 per-chip attention shapes (qkv 5120 -> 1536,
+    out 1024 -> 5120, not transposed shapes) runs the swept 2D program configs through ConfiguredFrozenLinear:
+    the routing must pick it, and output, dx and the adapter gradients match torch."""
+    from ttml.modules.frozen_linear import configured_base_shape
+
+    rng = seeded(46)
+    x_np, w_np = rand_x(rng, width=in_f), rand_weight(rng, out_f, in_f)
+    a_np = bf16(rng.uniform(-1 / math.sqrt(in_f), 1 / math.sqrt(in_f), (1, 1, RANK, in_f)))
+    b_np = bf16(rng.normal(0.0, 0.02, (1, 1, out_f, RANK)))
+    dout_np = bf16(rng.normal(0.0, 0.01, (BATCH, 1, SEQ, out_f)))
+
+    base = LinearLayer(in_f, out_f, False)
+    assign(base.weight.tensor, w_np)
+    layer = LoraLinear(base, LoraConfig(rank=RANK, alpha=ALPHA))
+    assign(layer.lora_A.tensor, a_np)
+    assign(layer.lora_B.tensor, b_np)
+    assert configured_base_shape(layer.weight.tensor, SEQ) == (in_f, out_f), "the swept config must be found"
+    x = to_device(x_np, requires_grad=True)
+    out = layer(x)
+    out_val = to_host(out)
+    _backward(out, dout_np)
+
+    xr, wr, ar, br = t(x_np, True), t(w_np[0, 0]), t(a_np[0, 0], True), t(b_np[0, 0], True)
+    ref = ref_lora(xr, wr, ar, br, ALPHA / RANK)
+    ref.backward(t(dout_np))
+
+    rep = Report(f"lora linear, configured base ({in_f} -> {out_f})")
+    rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("dx", grad_of(x), xr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.check("d lora_A", grad_of(layer.lora_A.tensor)[0, 0], ar.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.check("d lora_B", grad_of(layer.lora_B.tensor)[0, 0], br.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+    assert not layer.weight.tensor.is_grad_initialized(), "frozen base weight received a gradient"
+    # an input without a gradient (the first block's qkv input) gets no dx matmul and no gradient
+    x2 = to_device(x_np, requires_grad=False)
+    out2 = layer(x2)
+    _backward(out2, dout_np)
+    assert not x2.is_grad_initialized()
+
+
 def test_mlp_fused_lora_wide_w2():
     """The fused-LoRA wide input path (iteration 24): an MLP at the TP=4 shard width (w2: 8192 -> 5120, a
     transposed shape) with LoRA on both linears, fused. SwiGLU writes the [T, 8192 + 64] buffer, h goes into

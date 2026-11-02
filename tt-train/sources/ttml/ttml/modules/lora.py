@@ -245,7 +245,15 @@ def _base_linear(module, x, bias):
         from .frozen_linear import frozen_linear_t
 
         return frozen_linear_t(x, module.weight.tensor, bias, module.frozen_shape)
-    return ttml.ops.linear.linear(x, module.weight.tensor, bias)
+    # Iteration 46: a frozen base at a shape with a swept 2D config (the attention projections' TP shards) runs the
+    # configured matmul instead of the ttml linear's default choice.
+    from .frozen_linear import configured_base_shape, configured_linear
+
+    weight = module.weight.tensor
+    shape = None if weight.get_requires_grad() else configured_base_shape(weight, int(x.get_value().shape[-2]))
+    if shape is not None:
+        return configured_linear(x, weight, bias, shape)
+    return ttml.ops.linear.linear(x, weight, bias)
 
 
 class LoraLinear(AbstractModuleBase):
