@@ -314,7 +314,8 @@ ALWI void matmul_block(
                             : shape.out_subblock_w;
 
                     if (enable_reload) {
-                        copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
+                        reconfig_data_format_srca(in1_cb_id, interm_cb_id);
+                        copy_init(interm_cb_id);
                         if constexpr (spill_row_grouped) {
                             // Spills landed row-strided, pushed per M-row-group. Front the whole row
                             // group on the first in1 sub-block, gather this sub-block's row-strided

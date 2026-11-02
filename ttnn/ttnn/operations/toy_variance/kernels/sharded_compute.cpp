@@ -56,7 +56,7 @@ ALWI void combine_blocks(uint32_t num_blocks, uint32_t num_tiles, PostOp post_op
     // copy; an even one seeds with the first PAIR at acc_to_dest=false, which keeps the pairing.
     uint32_t first_pair;
     if (num_blocks & 1) {
-        copy_tile_to_dst_init_short(in_dfb);
+        copy_init(in_dfb);
         for (uint32_t tile = 0; tile < num_tiles; ++tile) {
             copy_tile(in_dfb, tile, tile);
         }

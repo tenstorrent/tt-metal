@@ -177,7 +177,7 @@ void kernel_main() {
 
             uint32_t first_pair = 0;
             if (num_blocks & 1) {
-                copy_tile_to_dst_init_short(cb_gather);
+                copy_init(cb_gather);
                 for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
                     copy_tile(cb_gather, tile_base + tile, tile);
                 }
@@ -651,7 +651,7 @@ inline void reduce_blocks(uint32_t in_cb, uint32_t out_cb, uint32_t num_blocks, 
 
         uint32_t first_pair = 0;
         if (num_blocks & 1) {
-            copy_tile_to_dst_init_short(in_cb);
+            copy_init(in_cb);
             for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
                 copy_tile(in_cb, tile_base + tile, tile);
             }

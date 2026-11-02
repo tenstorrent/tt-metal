@@ -43,10 +43,10 @@ void kernel_main() {
             output.reserve_back(1);
             tile_regs_acquire();
 
-            copy_tile_to_dst_init_short(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, tile, 0);
             for (uint32_t block = 1; block < num_blocks; ++block) {
-                copy_tile_to_dst_init_short(cb_input);
+                copy_init(cb_input);
                 copy_tile(cb_input, block * num_tiles + tile, 1);
                 add_binary_tile_init();
                 add_binary_tile(0, 1, 0);
@@ -101,7 +101,7 @@ void kernel_main() {
 
             uint32_t first_pair = 0;
             if (num_blocks & 1) {
-                copy_tile_to_dst_init_short(cb_input);
+                copy_init(cb_input);
                 for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
                     copy_tile(cb_input, tile_base + tile, tile);
                 }
