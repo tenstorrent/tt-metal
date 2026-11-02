@@ -141,6 +141,7 @@ int main() {
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
         .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
         .hw_config = writer_dm_config,
+        .advanced_options = {.num_runtime_varargs = 1},
     };
 
     // This kernel performs the actual addition of the two input tiles
@@ -182,6 +183,8 @@ int main() {
 
     // Bind the tensors the kernels operate on. The reader and writer get their buffer addresses from these tensor
     // arguments and the compute kernel needs none; the writer's one runtime arg is the GlobalSemaphore it bumps.
+    // The writer also gets one unnamed runtime arg the kernel never reads, which test_dump_callstacks_kernel_args
+    // checks.
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
@@ -189,6 +192,7 @@ int main() {
             .kernel = WRITER,
             .common_runtime_arg_values =
                 {{"incremented_semaphore", static_cast<uint32_t>(incremented_semaphore.address())}},
+            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {0x1234}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

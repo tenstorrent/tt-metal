@@ -51,6 +51,7 @@ public:
         const std::string& binary_root) noexcept;
     static void program_compile_finished(
         const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
+    static void program_offsets_finalized(const detail::ProgramImpl* program) noexcept;
 
     static void mesh_device_created(
         const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept;

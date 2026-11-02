@@ -122,16 +122,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
         auto kernels_list = program.initKernels(program_data.kernels.size());
         j = 0;
         for (const auto& [kernel_id, kernel_data] : program_data.kernels) {
-            auto kernel = kernels_list[j++];
-            kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
-            kernel.setName(kernel_data.name);
-            kernel.setPath(kernel_data.path);
-            kernel.setSource(kernel_data.source);
-            kernel.setProgramId(program_id);
-            auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
-            for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
-                elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
-            }
+            populate_kernel(kernels_list[j++], kernel_data, program_id);
         }
 
         auto semaphores_list = program.initSemaphores(program_data.semaphores.size());
@@ -293,17 +284,7 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     if (kernel_data_it == program_data->second.kernels.end()) {
         throw std::runtime_error("Kernel not found inside the program");
     }
-    auto& kernel_data = kernel_data_it->second;
-    auto kernel = results.initKernel();
-    kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
-    kernel.setName(kernel_data.name);
-    kernel.setPath(kernel_data.path);
-    kernel.setSource(kernel_data.source);
-    kernel.setProgramId(program_id);
-    auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
-    for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
-        elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
-    }
+    populate_kernel(results.initKernel(), kernel_data_it->second, program_id);
 }
 
 // Get build environment information for all devices
@@ -472,6 +453,39 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
         default:
             return rpc::BinaryStatus::NOT_SENT;
     }
+}
+
+void Data::populate_kernel(rpc::KernelData::Builder kernel, const KernelData& kernel_data, uint64_t program_id) {
+    auto fill = [](auto list, const auto& values) {
+        for (size_t i = 0; i < values.size(); ++i) {
+            list.set(i, values[i]);
+        }
+    };
+    kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
+    kernel.setName(kernel_data.name);
+    kernel.setPath(kernel_data.path);
+    kernel.setSource(kernel_data.source);
+    kernel.setProgramId(program_id);
+    fill(kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size()), kernel_data.processor_elf_paths);
+    fill(kernel.initCompileTimeArgs(kernel_data.compile_time_args.size()), kernel_data.compile_time_args);
+    fill(kernel.initCompileTimeArgNames(kernel_data.compile_time_arg_names.size()), kernel_data.compile_time_arg_names);
+    auto named_compile_time_args = kernel.initNamedCompileTimeArgs(kernel_data.named_compile_time_args.size());
+    uint32_t i = 0;
+    for (const auto& [name, value] : kernel_data.named_compile_time_args) {
+        named_compile_time_args[i].setName(name);
+        named_compile_time_args[i++].setValue(value);
+    }
+    auto runtime_arg_counts = kernel.initRuntimeArgCounts(kernel_data.runtime_arg_count_cores.size());
+    i = 0;
+    for (const auto& [count, cores] : kernel_data.runtime_arg_count_cores) {
+        runtime_arg_counts[i].setCount(count);
+        populate_core_ranges(runtime_arg_counts[i++].initCoreRanges(cores.ranges().size()), cores);
+    }
+    fill(kernel.initRuntimeArgNames(kernel_data.runtime_arg_names.size()), kernel_data.runtime_arg_names);
+    kernel.setCommonRuntimeArgCount(kernel_data.common_runtime_arg_count);
+    fill(
+        kernel.initCommonRuntimeArgNames(kernel_data.common_runtime_arg_names.size()),
+        kernel_data.common_runtime_arg_names);
 }
 
 // Helper function to populate the core info

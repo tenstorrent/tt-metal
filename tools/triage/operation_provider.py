@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
+from inspector_capnp import KernelData
 from inspector_data import run as get_inspector_data, InspectorData
 from run_checks import (
     run as get_run_checks,
@@ -128,10 +129,14 @@ class RunningOperationAggregation:
         self.previous_operation_parameters = previous_operation_parameters
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
+        # Inspector records of the kernels the op runs, by watcher kernel id.
+        self.kernels: dict[int, KernelData] = {}
 
-    def add_core(self, device_label: str, location: OnChipCoordinate) -> None:
+    def add_core(self, device_label: str, location: OnChipCoordinate, core: DispatcherCoreData) -> None:
         self.core_locations.add(_format_core_location(device_label, location))
         self.device_labels.add(device_label)
+        if core.kernel is not None:
+            self.kernels[core.watcher_kernel_id] = core.kernel
 
 
 @dataclass
@@ -259,6 +264,7 @@ def run(args, context: Context) -> RunningOpsAggregation:
             aggregation.add_core(
                 device_description_serializer(check_result.device_description),
                 check_result.location,
+                dispatcher_core_data,
             )
         except Exception as e:
             log_check(False, f"Failed to aggregate one core's running-op data: {e}")

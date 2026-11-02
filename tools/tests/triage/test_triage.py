@@ -714,6 +714,9 @@ class TestTriage:
                 f"No running op with name containing '{expected_name}'. "
                 f"Got: {[op.operation_name for op in live_ops]}"
             )
+            assert any(
+                "writer_1_tile: tensor::out[0]=0x2, tensor::out[1]=0x800" in op.compile_time_args for op in matching
+            ), f"Writer compile-time args missing. Got: {[op.compile_time_args for op in matching]}"
 
     def test_dump_semaphores(self):
         result = self.run_triage_script("dump_semaphores.py")
@@ -858,6 +861,38 @@ class TestTriage:
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
+
+    def test_dump_callstacks_kernel_args(self):
+        # The hang app's writer gets the address of the GlobalSemaphore that starts at 5 as a named common arg, and
+        # 0x1234 as its one unnamed runtime arg. A tensor's compile-time args are its accessor flags (2: in DRAM) and
+        # its page size (2048 B), and its address is a common arg.
+        semaphores = self.run_triage_script("dump_semaphores.py")
+        incremented_semaphore = next(
+            row.result.address for row in semaphores if row.result.kind == "global" and row.result.initial == 5
+        )
+        result = self.run_triage_script("dump_callstacks.py")
+        location = OnChipCoordinate.create("0,0", result[0].device_description.device)
+        args = {row.risc_name: row.result.kernel_args for row in result if row.location == location}
+
+        def named(kernel_args):
+            return [(arg.name, arg.value) for arg in kernel_args]
+
+        writer, reader = args["brisc"], args["ncrisc"]
+        assert named(writer.compile_time_args) == [("tensor::out[0]", 2), ("tensor::out[1]", 2048)]
+        assert named(writer.runtime_args) == [(None, 0x1234)]
+        assert [arg.name for arg in writer.common_runtime_args] == ["incremented_semaphore", "tensor::out"]
+        assert writer.common_runtime_args[0].value == incremented_semaphore
+        assert named(reader.compile_time_args) == [
+            ("tensor::in0[0]", 2),
+            ("tensor::in0[1]", 2048),
+            ("tensor::in1[0]", 2),
+            ("tensor::in1[1]", 2048),
+        ]
+        assert reader.runtime_args == []
+        assert [arg.name for arg in reader.common_runtime_args] == ["tensor::in0", "tensor::in1"]
+        for risc_name in ("trisc0", "trisc1", "trisc2"):
+            compute = args[risc_name]
+            assert (compute.compile_time_args, compute.runtime_args, compute.common_runtime_args) == ([], [], [])
 
     def skip_unless_circular_buffers(self, result) -> None:
         """Skip where dump_circular_buffers has nothing to read: it covers Gen1 circular buffers only.

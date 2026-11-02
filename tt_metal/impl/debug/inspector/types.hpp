@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +42,16 @@ struct KernelData {
     // kernel are left empty. Served to tt-triage over RPC so it doesn't have to reconstruct paths from per-processor
     // naming conventions.
     std::vector<std::string> processor_elf_paths;
+    std::vector<uint32_t> compile_time_args;
+    // One name per compile_time_args word, empty when the word has no name.
+    std::vector<std::string> compile_time_arg_names;
+    std::map<std::string, uint32_t> named_compile_time_args;
+    // Runtime arg names by word index, empty when the word has no name. Words past the end have no name.
+    std::vector<std::string> runtime_arg_names;
+    std::vector<std::string> common_runtime_arg_names;
+    // Runtime arg count -> cores with that many args. Values are read from L1, since host copies go stale.
+    std::map<uint32_t, CoreRangeSet> runtime_arg_count_cores;
+    uint32_t common_runtime_arg_count{};
 };
 
 struct ProgramData {

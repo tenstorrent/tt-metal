@@ -15,6 +15,8 @@ Owner:
     jbaumanTT
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from functools import cached_property
 import os
@@ -23,7 +25,7 @@ from typing import Callable
 
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
-from inspector_capnp import BuildEnvData
+from inspector_capnp import BuildEnvData, KernelData
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -75,10 +77,14 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
+    rta_offset: int = triage_field("RTA Offset", hex_serializer, verbose=2)
+    crta_offset: int = triage_field("CRTA Offset", hex_serializer, verbose=2)
     kernel_xip_path: str | None = triage_field("Kernel XIP Path", verbose=2)
 
     # Non-triage fields
     mailboxes: ElfVariable | None = None
+    # Inspector's record of the kernel on this RISC, None if Inspector doesn't know it.
+    kernel: KernelData | None = None
     # Host-assigned id from the previous launch message entry (best-effort).
     # Not serialized by default; used by scripts that need accurate previous-op tracking.
     previous_host_assigned_id: int | None = None
@@ -398,6 +404,8 @@ class DispatcherData:
 
         kernel_config_base = -1
         kernel_text_offset = -1
+        rta_offset = -1
+        crta_offset = -1
         watcher_kernel_id = -1
         watcher_previous_kernel_id = -1
         kernel = None
@@ -420,6 +428,14 @@ class DispatcherData:
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             kernel_text_offset = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type])
+        except TimeoutDeviceRegisterError:
+            raise
+        except Exception:
+            pass
+        try:
+            rta_offsets = mailboxes.launch[launch_msg_rd_ptr].kernel_config.rta_offset[proc_type]
+            rta_offset = int(rta_offsets.rta_offset)
+            crta_offset = int(rta_offsets.crta_offset)
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
@@ -609,6 +625,8 @@ class DispatcherData:
             launch_msg_rd_ptr=launch_msg_rd_ptr,
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
+            rta_offset=rta_offset,
+            crta_offset=crta_offset,
             watcher_kernel_id=watcher_kernel_id,
             watcher_previous_kernel_id=watcher_previous_kernel_id,
             subdevice=go_message_index,
@@ -616,6 +634,7 @@ class DispatcherData:
             preload=preload,
             waypoint=waypoint,
             mailboxes=mailboxes,
+            kernel=kernel,
             previous_host_assigned_id=previous_host_assigned_id,
             dispatch_mode=dispatch_mode,
             brisc_noc_id=brisc_noc_id,

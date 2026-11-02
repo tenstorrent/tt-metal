@@ -20,6 +20,8 @@ Description:
       - Includes current Op Id/Name/Params, previous Op (Prev Op Id/Name/Params), and device/core coverage:
           - Device Cnt / Core Cnt: total unique devices/cores running this Op Id
           - Devices / Cores: enumerated lists (may be truncated with "..." for readability)
+          - CT Args (with -v): one line per kernel the op runs, with its compile-time args
+            (see kernel_args_provider)
 
     Companion scripts:
       - `dump_op_window` - context table of ops with id near the currently-running set.
@@ -36,6 +38,7 @@ Owner:
 
 from dataclasses import dataclass
 
+from kernel_args_provider import get_compile_time_args, serialize_kernel_args
 from operation_param_parser import ParameterParser
 from operation_provider import (
     run as get_operation_provider,
@@ -74,6 +77,7 @@ class RunningOperationSummary:
     core_count: int = triage_field("Core Cnt")
     devices: list[str] = triage_field("Devices", collection_serializer(", "))
     cores: list[str] = triage_field("Cores", collection_serializer("\n"))
+    compile_time_args: list[str] = triage_field("CT Args", collection_serializer("\n"), verbose=1)
 
 
 def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOperationSummary:
@@ -112,6 +116,10 @@ def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOp
         core_count=len(agg.core_locations),
         devices=devices,
         cores=cores_to_display,
+        compile_time_args=[
+            f"{kernel.name}: {serialize_kernel_args(get_compile_time_args(kernel))}"
+            for _, kernel in sorted(agg.kernels.items())
+        ],
     )
 
 

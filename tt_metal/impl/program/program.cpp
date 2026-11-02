@@ -3793,6 +3793,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     // The sem offsets cross programmable_core_types so must be set after the loop above
     for (auto& program : programs) {
         program->set_program_attrs_across_core_types(device);
+        Inspector::program_offsets_finalized(program);
     }
 
     // Determine the DRAM kernel binary size per program and the max across all programs.
