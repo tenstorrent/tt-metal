@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "device/unary_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
@@ -288,7 +289,6 @@ DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
             parameter);                                                     \
     }
 
-DEFINE_UNARY_OP_SCALAR_VARIANT(fill, FILL)
 DEFINE_UNARY_OP_SCALAR_VARIANT(unary_remainder, REMAINDER)
 DEFINE_UNARY_OP_SCALAR_VARIANT(relu_max, RELU_MAX)
 DEFINE_UNARY_OP_SCALAR_VARIANT(relu_min, RELU_MIN)
@@ -301,6 +301,31 @@ DEFINE_UNARY_OP_SCALAR_VARIANT(ge_unary, UNARY_GE)
 DEFINE_UNARY_OP_SCALAR_VARIANT(le_unary, UNARY_LE)
 
 #undef DEFINE_UNARY_OP_SCALAR_VARIANT
+
+Tensor fill(
+    const Tensor& input_tensor,
+    operations::unary::ScalarVariant parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto output_dtype =
+        optional_output_tensor.has_value() ? optional_output_tensor->dtype() : input_tensor.dtype();
+    if (output_dtype == DataType::BFLOAT16) {
+        // The SFPU fill store truncates in 16-bit Dest. Round to the output dtype on the host, as full does.
+        parameter = std::visit([](auto value) { return static_cast<float>(::bfloat16(value)); }, parameter);
+    }
+    return std::visit(
+        [&](auto value) {
+            using namespace operations::unary;
+            return operations::unary::detail::unary_impl(
+                input_tensor,
+                {EltwiseUnaryWithParam{UnaryOpType::FILL, value}},
+                memory_config,
+                optional_output_tensor,
+                sub_core_grids);
+        },
+        parameter);
+}
 
 // -----------------------------------------------------------------------------
 // Ops with unique parameter signatures
