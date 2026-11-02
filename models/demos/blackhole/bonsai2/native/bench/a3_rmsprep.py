@@ -65,6 +65,11 @@ def main():
                 a3.rmsprep(xt, g, m, x8, workers, eps, debug=1)
             ttnn.synchronize_device(device)
             dev_nosync = float(np.median(all_kernel_us(ttnn, device)))
+            device_kernel_us(ttnn, device)
+            for _ in range(9):
+                a3.rmsprep(xt, g, m, x8, workers, eps, debug=2)
+            ttnn.synchronize_device(device)
+            print(f"   no re-layout (wrong values): {np.median(all_kernel_us(ttnn, device)):.1f} us", flush=True)
             for td in (2, 4, 6):
                 device_kernel_us(ttnn, device)
                 for _ in range(9):

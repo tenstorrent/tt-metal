@@ -703,8 +703,7 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
     cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
            cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
            cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
-           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1),
-           cb(15, ttnn.bfloat16, t32, 1)]
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1)]
     emit = y_out is not None
     if emit:
         assert y_out.memory_config().buffer_type == ttnn.BufferType.L1 and not y_out.is_sharded()
@@ -723,7 +722,7 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
     brisc = []
     for i, (c, (b, r)) in enumerate(zip(cores, units)):
         a = [x8.buffer_address(), b, r, rb.buffer_address(), cxy[0], int(i == 0), len(cores), nb, fbits(1.0 / k), fbits(eps), len(wxy)] + wxy
-        brisc.append((c, a + (cxy if i == 0 else []) + ([y_out.buffer_address()] if emit else [])))
+        brisc.append((c, a + (cxy if i == 0 else [])))
     uk = UnifiedKernelDescriptor(
         kernel_source=KERNEL_RMSPREP,
         core_ranges=grid,
@@ -734,7 +733,8 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
         # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
         trisc_compute_config=cfg,
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-            ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r])
+            ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r]
+                          + ([y_out.buffer_address()] if emit else []))
                          for c, (b, r) in zip(cores, units)],
             brisc_args=brisc,
             trisc_args=[(c, [rb.buffer_address()]) for c in cores],
