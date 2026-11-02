@@ -845,12 +845,9 @@ def populate_kv_chunk_address_table_dflash(
 
         for row in range(sp):
             # One device, not one row: this head lives on exactly (row, col), and the worker would read a
-            # multi-member group as replicas. Written axis-generically so sp_axis/tp_axis can swap.
-            coord = [0, 0]
-            coord[sp_axis] = row
-            coord[tp_axis] = col
-            # fnids are indexed by raw mesh coordinate, so reuse the coord built above rather than
-            # assuming sp_axis == 0.
+            # multi-member group as replicas. The same coordinates as the MLA table's SP row (tp_axis is
+            # 1 - sp_axis); fnids are indexed by raw mesh coordinate.
+            coord = _sp_row_coords(mesh_shape, sp_axis, row)[col]
             fabric_node_id = stage_fnids[coord[0]][coord[1]]
             group_idx = lookup_table.add_device_group([fabric_node_id])
             lookup_table.set_fabric_node_host(fabric_node_id, host_name=host_name)
@@ -1025,12 +1022,9 @@ def populate_kv_chunk_address_table_kda(
         first = int(stage["first_layer"])
         fnids = stage["fnids"]
         for tp_col in range(tp):
-            members = []
-            for sp_row in range(sp):
-                coord = [0, 0]
-                coord[sp_axis] = sp_row
-                coord[tp_axis] = tp_col
-                members.append(fnids[coord[0]][coord[1]])
+            # TP column tp_col across every SP row, in the MLA table's coordinates (tp_axis is 1 - sp_axis).
+            coords = [_sp_row_coords(mesh_shape, sp_axis, sp_row)[tp_col] for sp_row in range(sp)]
+            members = [fnids[r][c] for r, c in coords]
             group_idx = lookup_table.add_device_group(members)
             for fid in members:
                 lookup_table.set_fabric_node_host(fid, host_name=host_name)
