@@ -77,6 +77,7 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
     create_circular_buffer(program, all_cores, cb::acc, f32, f32_tile, 1U);
     create_circular_buffer(program, all_cores, cb::t, f32, f32_tile, 1U);
     create_circular_buffer(program, all_cores, cb::dx, bf16, bf16_tile, 2U * block);
+    create_circular_buffer(program, all_cores, cb::acc1, f32, f32_tile, 1U);
     if (add_residual_grad) {
         create_circular_buffer(program, all_cores, cb::dres, bf16, bf16_tile, 2U * block);
     }

@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// rmsnorm_bw_rows reader (one item (row r, slice s)): constants, the resident input / gamma / dL_dout slices and
-// the rms tile; then the row's S partial tiles once the row's cores have written them (semaphore == S); then the
-// residual gradient streamed in blocks.
+// rmsnorm_bw_rows reader (one item (row r, slice s)): constants, the rms tile, the resident input / gamma / dL_dout
+// slices pushed in groups of `block` tiles as they arrive (iteration 41: pass 1 runs under the reads); then the
+// row's S partial tiles once the row's cores have written them (semaphore == S); then the residual gradient
+// streamed in blocks.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
@@ -38,17 +39,6 @@ FORCE_INLINE void generate_ones_row0_tile(uint32_t cb_id) {
     cb_push_back(cb_id, 1);
 }
 
-template <typename Accessor>
-FORCE_INLINE void read_resident(
-    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t tile_bytes) {
-    cb_reserve_back(cb_id, St);
-    uint32_t l1 = get_write_ptr(cb_id);
-    for (uint32_t j = 0; j < n; ++j) {
-        noc_async_read_page(first_page + j, acc, l1);
-        l1 += tile_bytes;
-    }
-}
-
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
@@ -76,17 +66,34 @@ void kernel_main() {
     const uint32_t ncols = (col0 + St <= Wt) ? St : (Wt - col0);
     const uint32_t page = r * Wt + col0;
 
-    // Resident slices (a full St reservation each; a shorter last slice leaves the tail unused).
-    read_resident(cb::a, a_acc, page, ncols, tile_bytes);
-    read_resident(cb::gamma, gamma_acc, col0, ncols, tile_bytes);
-    read_resident(cb::dy, dy_acc, page, ncols, tile_bytes);
+    // Resident slices (a full St reservation each, ncols tiles pushed in groups of `block`: the CBs never wrap, the
+    // compute waits cumulatively and pops ncols at the end); the rms tile with the first group.
+    cb_reserve_back(cb::a, St);
+    cb_reserve_back(cb::gamma, St);
+    cb_reserve_back(cb::dy, St);
     cb_reserve_back(cb::rms, 1);
     noc_async_read_page(r, rms_acc, get_write_ptr(cb::rms));
-    noc_async_read_barrier();
-    cb_push_back(cb::a, St);
-    cb_push_back(cb::gamma, St);
-    cb_push_back(cb::dy, St);
-    cb_push_back(cb::rms, 1);
+    uint32_t l1_a = get_write_ptr(cb::a);
+    uint32_t l1_g = get_write_ptr(cb::gamma);
+    uint32_t l1_d = get_write_ptr(cb::dy);
+    for (uint32_t c = 0; c < ncols; c += block) {
+        const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
+        for (uint32_t j = 0; j < n; ++j) {
+            noc_async_read_page(page + c + j, a_acc, l1_a);
+            noc_async_read_page(col0 + c + j, gamma_acc, l1_g);
+            noc_async_read_page(page + c + j, dy_acc, l1_d);
+            l1_a += tile_bytes;
+            l1_g += tile_bytes;
+            l1_d += tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb::a, n);
+        cb_push_back(cb::gamma, n);
+        cb_push_back(cb::dy, n);
+        if (c == 0) {
+            cb_push_back(cb::rms, 1);
+        }
+    }
 
     // The row's partial tiles: the row's S writers deposit slot j of cb::partials on every core of the row and
     // bump the semaphore; publish them to the compute once all S have arrived.

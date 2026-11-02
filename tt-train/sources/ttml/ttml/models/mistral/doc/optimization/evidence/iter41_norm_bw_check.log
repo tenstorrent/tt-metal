@@ -1,0 +1,10 @@
+=== norm backward before (iteration 41 part-1 build) 2026-11-02T15:39:35Z
+before  reference matmul [1024, 5184] x [5184, 8192]         median   1071 us  min    981
+before  rmsnorm_bw_allcore + residual grad                   median    166 us  min    152  dx rel 7.2e-03  PCC 0.9999934
+before  rmsnorm_bw_allcore + residual grad, transposed out   median    188 us  min    178  dx rel 7.2e-03  PCC 0.9999934  dx^T == dx^T: True
+=== done 2026-11-02T15:39:40Z
+=== norm backward after (pass 1 on the FPU under the reads) 2026-11-02T15:40:59Z
+after   reference matmul [1024, 5184] x [5184, 8192]         median   1053 us  min    972
+after   rmsnorm_bw_allcore + residual grad                   median    151 us  min    137  dx rel 7.2e-03  PCC 0.9999934
+after   rmsnorm_bw_allcore + residual grad, transposed out   median    181 us  min    176  dx rel 7.2e-03  PCC 0.9999934  dx^T == dx^T: True
+=== done 2026-11-02T15:41:04Z

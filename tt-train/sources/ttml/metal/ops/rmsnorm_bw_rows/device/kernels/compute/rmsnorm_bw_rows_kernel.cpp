@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // rmsnorm_bw_rows compute (one item (row r, slice s) with the slices resident in L1):
-//   pass 1: partial = sum over the slice of a * gamma * dy  (FPU products, fp32 DEST)  -> exchanged between the
-//           row's cores
+//   pass 1: partial = sum over the slice of a * gamma * dy  (FPU products: the gamma row broadcast onto dy, a
+//           through reuse_dest, three tiles per acquire summed onto fp32 DEST register 0 on the SFPU; streamed
+//           under the reads, iteration 41)  -> exchanged between the row's cores
 //   inv = 1 / rms, t = -rowsum(sum_s partial_s) * inv^2 / C
 //   pass 2: dL_da = inv * (gamma * dy + a * t) [+ residual_grad]   (all on the FPU, 4 tiles per DEST acquire)
 // Iteration 29 (iteration 20's variant A, landed once the exact-fp32 rule was relaxed to "the PCC holds"): the
@@ -42,13 +43,6 @@ FORCE_INLINE void load_tile(uint32_t cb_id, uint32_t idx, uint32_t reg) {
     copy_tile(cb_id, idx, reg);
 }
 
-FORCE_INLINE void gamma_times_dy(uint32_t idx, uint32_t reg) {
-    load_tile(cb::zero, 0, reg);
-    reconfig_data_format(cb::dy, cb::gamma);
-    mul_bcast_rows_init(cb::dy, cb::gamma);
-    mul_tiles_bcast_rows(cb::dy, cb::gamma, idx, idx, reg);
-}
-
 FORCE_INLINE void matmul_with_constant(uint32_t cb_x, uint32_t cb_k, uint32_t reg) {
     reconfig_data_format(cb_k, cb_x);
     matmul_init(cb_x, cb_k, 0);
@@ -65,23 +59,42 @@ void kernel_main() {
     cb_wait_front(cb::zero, 1);
     cb_wait_front(cb::ones, 1);
     cb_wait_front(cb::ones_row0, 1);
-    cb_wait_front(cb::a, St);
-    cb_wait_front(cb::gamma, St);
-    cb_wait_front(cb::dy, St);
 
-    // pass 1: the slice's row dot product
-    tile_regs_acquire();
-    load_tile(cb::zero, 0, 0);
-    for (uint32_t i = 0; i < ncols; ++i) {
-        gamma_times_dy(i, 1);
-        load_tile(cb::a, i, 2);
-        mul_binary_tile_init();
-        mul_binary_tile(1, 2, 1);
+    // pass 1: the slice's row dot product, three products per DEST acquire (registers 1-3; the running sum in
+    // register 0, round-tripped through cb::acc1 between groups), consuming the slices as the reader pushes them.
+    // The FPU products are exact for bf16 inputs (gamma * dy has 16 significant bits, times a 24: fp32).
+    constexpr uint32_t pgroup = 3U;
+    for (uint32_t c = 0; c < ncols; c += pgroup) {
+        const uint32_t n = (c + pgroup <= ncols) ? pgroup : (ncols - c);
+        const bool last = c + n >= ncols;
+        cb_wait_front(cb::a, c + n);
+        cb_wait_front(cb::gamma, c + n);
+        cb_wait_front(cb::dy, c + n);
+        tile_regs_acquire();
+        if (c == 0) {
+            load_tile(cb::zero, 0, 0);
+        } else {
+            cb_wait_front(cb::acc1, 1);
+            load_tile(cb::acc1, 0, 0);
+            cb_pop_front(cb::acc1, 1);
+        }
+        reconfig_data_format(cb::dy, cb::gamma);
+        mul_bcast_rows_init(cb::dy, cb::gamma);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_tiles_bcast_rows(cb::dy, cb::gamma, c + i, c + i, 1U + i);
+        }
+        reconfig_data_format_srcb(cb::a);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::a);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::a, c + i, 1U + i);
+        }
         add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_binary_tile(0, 1U + i, 0);
+        }
+        tile_regs_commit();
+        pack_and_push(0, last ? cb::partial_out : cb::acc1);
     }
-    tile_regs_commit();
-    pack_and_push(0, cb::partial_out);
 
     // inv = 1 / rms (column 0 of the rms tile broadcast along columns)
     cb_wait_front(cb::rms, 1);
@@ -199,7 +212,7 @@ void kernel_main() {
     cb_pop_front(cb::partials, S);
     cb_pop_front(cb::inv, 1);
     cb_pop_front(cb::t, 1);
-    cb_pop_front(cb::a, St);
-    cb_pop_front(cb::gamma, St);
-    cb_pop_front(cb::dy, St);
+    cb_pop_front(cb::a, ncols);
+    cb_pop_front(cb::gamma, ncols);
+    cb_pop_front(cb::dy, ncols);
 }
