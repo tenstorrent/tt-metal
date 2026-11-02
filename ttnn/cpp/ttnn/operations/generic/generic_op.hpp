@@ -61,10 +61,10 @@ struct MeshProgramRunArgs {
     std::vector<std::pair<ttnn::MeshCoordinateRange, ProgramRunArgs>> programs;
 };
 
-// Runs the same program on every device that holds the tensors. The output is the last tensor in io_tensors, which
-// the caller preallocates, and each tensor parameter binds its own io_tensors entry. The program cache keys on a hash
-// of the spec, or on custom_program_hash combined with the names the run args refer to, each kernel's cores and
-// its vararg counts.
+// Runs the same program on the devices of the tensor in io_tensors that is on the fewest devices; every other tensor
+// must be on those devices too. The output is the last tensor in io_tensors, which the caller preallocates, and each
+// tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec, or on
+// custom_program_hash combined with the names the run args refer to, each kernel's cores and its vararg counts.
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const ProgramSpec& spec,
@@ -89,7 +89,7 @@ void prepare_generic_op(
     const MeshProgramRunArgs& mesh_run_args);
 
 // The hash generic_op keys its program cache on when no custom_program_hash is given (combined with each program's
-// mesh range). Argument values, ProgramSpec::name and WorkUnitSpec::name are not part of it.
+// mesh range). Runtime argument values, ProgramSpec::name and WorkUnitSpec::name are not part of it.
 uint64_t compute_program_spec_hash(const ProgramSpec& spec);
 
 }  // namespace experimental
