@@ -9,6 +9,7 @@
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 #include <vector>
 
@@ -71,6 +72,22 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     for (uint32_t h = 0; h < BH; h++) {
         head_cores[h] = CoreCoord{h / grid_y, h % grid_y};
         core_set.insert(CoreRange{head_cores[h], head_cores[h]});
+    }
+    // QWEN36_1C_GDN_RECT=1: the same cores (head h on column h / grid_y, row h % grid_y) given to the dispatcher
+    // as at most two rectangles -- the full columns, then the partial one -- instead of BH single-core ranges.
+    // Inside a trace each range is dispatched separately (binaries, CB config), which showed up as a ~15 us gap
+    // before every call (48 ranges at BH = 48).
+    const char* rect_env = std::getenv("QWEN36_1C_GDN_RECT");
+    if (rect_env != nullptr && std::string(rect_env) == "1") {
+        core_set.clear();
+        const uint32_t full_cols = BH / grid_y;
+        const uint32_t rem = BH % grid_y;
+        if (full_cols > 0) {
+            core_set.insert(CoreRange{CoreCoord{0, 0}, CoreCoord{full_cols - 1, grid_y - 1}});
+        }
+        if (rem > 0) {
+            core_set.insert(CoreRange{CoreCoord{full_cols, 0}, CoreCoord{full_cols, rem - 1}});
+        }
     }
     CoreRangeSet cores{core_set};
 

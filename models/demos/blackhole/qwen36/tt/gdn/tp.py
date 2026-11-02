@@ -58,16 +58,20 @@ def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
     """
     K = q.shape[-1]
     f32 = ttnn.float32
+
+    def as_f32(x):  # QWEN36_1C_GDN_HMI hands q/k/v over in fp32 already
+        return x if x.dtype == f32 else ttnn.typecast(x, f32)
+
     ckc = _gdn_norm_ckc()
-    qn = ttnn.rms_norm(ttnn.typecast(q, f32), epsilon=1e-6 / K, compute_kernel_config=ckc)
+    qn = ttnn.rms_norm(as_f32(q), epsilon=1e-6 / K, compute_kernel_config=ckc)
     if ckc is None:
-        kn = l2_norm_ttnn(ttnn.typecast(k, f32), dim=-1)
+        kn = l2_norm_ttnn(as_f32(k), dim=-1)
     else:
-        kn = ttnn.multiply(ttnn.rms_norm(ttnn.typecast(k, f32), epsilon=1e-6 / K, compute_kernel_config=ckc), K**-0.5)
+        kn = ttnn.multiply(ttnn.rms_norm(as_f32(k), epsilon=1e-6 / K, compute_kernel_config=ckc), K**-0.5)
     return ttnn.transformer.fused_recurrent_gated_delta_rule(
         qn,
         kn,
-        ttnn.typecast(v, f32),
+        as_f32(v),
         g,
         ttnn.typecast(beta, f32),
         scale=scale * K**-0.5,
@@ -457,6 +461,10 @@ class TPGatedDeltaNet:
         # gated norm runs on that, and a view flattens it to [1, 1, Nv*Dv] (same tile sequence), replacing
         # the op's untilize/permute/tilize and the reshape copy after the norm.
         self._gdn_hmo = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_HMO") == "1"
+        # QWEN36_1C_GDN_HMI (with HMO and CONV_HM): the conv output [1, 80, 128] is typecast to fp32 and permuted to
+        # [80, 1, 128] (one head per tile-row) once; q/k/v are slices of that, and the recurrence takes them as is
+        # (head_major_input). Replaces three typecasts and the op's three head-split permutes with one of each.
+        self._gdn_hmi = self._gdn_hmo and self._conv_hm and os.environ.get("QWEN36_1C_GDN_HMI") == "1"
         self._conv_state_shape = (
             (1, self.qkv_dim_tp // 128, 128) if self._conv_hm else (1, self.B, self.qkv_dim_tp)
         )
@@ -1610,7 +1618,13 @@ class TPGatedDeltaNet:
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
-        if self._conv_hm:  # rows are heads: q = [0, Nk), k = [Nk, 2Nk), v = [2Nk, 2Nk + Nv)
+        if self._gdn_hmi:  # one fp32 typecast and one permute for all 80 heads, then [heads, 1, D] slices
+            conv_h = ttnn.permute(ttnn.typecast(conv, ttnn.float32), (1, 0, 2), memory_config=_L1)  # [80, 1, 128]
+            q = ttnn.slice(conv_h, (0, 0, 0), (Nk, 1, Dk), memory_config=_L1)
+            k = ttnn.slice(conv_h, (Nk, 0, 0), (2 * Nk, 1, Dk), memory_config=_L1)
+            v = ttnn.slice(conv_h, (2 * Nk, 0, 0), (2 * Nk + Nv, 1, Dv), memory_config=_L1)
+            ttnn.deallocate(conv_h)
+        elif self._conv_hm:  # rows are heads: q = [0, Nk), k = [Nk, 2Nk), v = [2Nk, 2Nk + Nv)
             q = ttnn.slice(conv, (0, 0, 0), (1, Nk, Dk), memory_config=_L1)
             k = ttnn.slice(conv, (0, Nk, 0), (1, 2 * Nk, Dk), memory_config=_L1)
             v = ttnn.slice(conv, (0, 2 * Nk, 0), (1, 2 * Nk + Nv, Dv), memory_config=_L1)
@@ -1634,9 +1648,10 @@ class TPGatedDeltaNet:
         # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
         # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
         # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
-        q = ttnn.reshape(q, (B, 1, n_qk, Dk), memory_config=_L1)
-        k = ttnn.reshape(k, (B, 1, n_qk, Dk), memory_config=_L1)
-        v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
+        if not self._gdn_hmi:
+            q = ttnn.reshape(q, (B, 1, n_qk, Dk), memory_config=_L1)
+            k = ttnn.reshape(k, (B, 1, n_qk, Dk), memory_config=_L1)
+            v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
@@ -1679,6 +1694,7 @@ class TPGatedDeltaNet:
                     initial_state_block_idx=self._ensure_rec_ring_idx(B * Nv),
                     output_per_token_state=True,
                     **({"head_major_output": True} if self._gdn_hmo else {}),
+                    **({"head_major_input": True} if self._gdn_hmi else {}),
                 )
             elif rec_in_place:
                 o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
