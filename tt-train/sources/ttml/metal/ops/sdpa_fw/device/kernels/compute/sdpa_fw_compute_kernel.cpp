@@ -368,7 +368,7 @@ FORCE_INLINE void process_q_chunk(
             cb_reserve_back(cb_exp_max_diff, rows);
             for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass) {
                 update_exp_max_diffs<scaler_bits, scaler_bf16_bits>(
-                    alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, r0, rows_in_pass(r0, kRowsPerPass));
+                    alias_cb_prev_max, r0, alias_cb_cur_max, r0, cb_exp_max_diff, r0, rows_in_pass(r0, kRowsPerPass));
             }
             cb_push_back(cb_exp_max_diff, rows);
             cb_pop_front(alias_cb_prev_max, rows);
@@ -408,10 +408,14 @@ FORCE_INLINE void process_q_chunk(
             cb_pop_front(alias_cb_cur_sum_exp, rows);
             cb_reserve_back(alias_cb_cur_sum_exp, rows);
             for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass / 2U) {
-                update_cur_exp_sums_inplace(
+                update_cur_exp_sums</* scale_b */ false>(
                     alias_cb_prev_sum_exp,
-                    alias_cb_cur_sum_exp,
                     cb_exp_max_diff,
+                    r0,
+                    alias_cb_cur_sum_exp,
+                    /* cb_alpha_b */ 0U,
+                    r0,
+                    alias_cb_cur_sum_exp,
                     r0,
                     rows_in_pass(r0, kRowsPerPass / 2U));
             }
