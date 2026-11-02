@@ -210,3 +210,19 @@ Other deltas (no new CB):
 - input (R0, native groups): `g_n · ρ` as before, but each core reads only its group's `C_in/g` channels of each stick (`1/g` of the bytes). Unaligned C_in: same crossings; each stick also costs one L1→L1 copy.
 - input (R0, dilated, block inside one output row): `kH` input rows per output row instead of `d(kH−1)+1`.
 - weight: unchanged. Native groups read `[K_g, C_out]` (`1/g` of a block-diagonal weight). Block-diagonal reads `g`× the per-group bytes.
+
+## Refinement 9 — ResNet50 BLOCK perf (R4) deltas
+
+No CB was added, removed or resized at the default knob values; the footprint is unchanged. Rows that change meaning:
+
+| CB | Capacity | Change | Shares with / why not |
+|---|---|---|---|
+| `cb_act_tiles` (4) | `(ACT_RECV_DEPTH + act_channels − 1)·bm·bk`; `act_channels = 1` (default) → 2 blocks, as before | `ACT_CHANNELS = 2` (parked) adds a third landing slot: two rounds in flight while compute holds a third. Measured slower (concurrent multicasts in one row), so it stays at 1. | unchanged |
+| `cb_weight_tiles` (2) | `SHARDED_WEIGHT_DEPTH·bk·bn` (= 6) | Now a ring the writer addresses ahead of its write pointer: DRAM reads run up to `depth − 3` blocks ahead of the landing (one read transaction id per block), receivers land one block ahead of the matmul. BLOCK prepared weights are slice-major (`weight_slice_tiles`): a column's K-block is one contiguous page run over all DRAM banks. | unchanged |
+| `cb_act_rm` (1) | unchanged (one own K-block) | BLOCK / WIDTH stride-1 convs whose taps are one tile (`tap_tiles = 1`, or when it does not shrink bk) gather tap-major: same bytes, ~3× fewer local reads. | Shrinking it below one own K-block would put the gather (1.3–1.5k cycles per tile-row) inside compute's tilize. |
+
+`device_l1_peak_bytes` (graph capture) vs `achievable_l1_peak_bytes`: layer3 downsample 413,696 / 370,416; layer3 3×3 352,384 / 238,640; layer4 3×3 392,064 / 161,296 B — unchanged by this refinement, above target. The act CBs (`cb_act_rm` + `cb_act_send` + 2 landing slots = 4 own-K-block copies, 245 KB at bm = 10, bk = 3 for layer3) are the excess; a smaller block multiplies exchange rounds (bm = 5 / bk = 3: 100k vs 77k cycles on layer3 3×3).
+
+### Data-movement budget (R4, Refinement 9)
+
+DRAM crossings per tensor are unchanged: input 0 (resident shard; halo L1→L1), weights 1× per grid column (now spread over every bank), output 0 (resident shard). NoC traffic per core is unchanged: one act K-block per round from its owner, one weight K-block per K-block down the column. The weight multicast source rotates down the column (block w from row w mod g_m) when a weight K-block is ≤ `WEIGHT_ROTATE_MAX_RATIO` (0.25) of the act K-block's bytes, else stays on row 0.

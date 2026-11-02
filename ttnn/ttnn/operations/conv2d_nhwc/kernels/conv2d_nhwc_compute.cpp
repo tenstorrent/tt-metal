@@ -28,12 +28,6 @@
 #include <type_traits>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
-#ifdef ABLATE_ZONES
-#include "api/debug/kernel_profiler.hpp"
-#define CZONE(n) DeviceZoneScopedN(n)
-#else
-#define CZONE(n)
-#endif
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -128,12 +122,10 @@ struct TilizeKBlock {
     uint32_t my_slice;
     uint32_t m_block = 0;
     ALWI void tilize_own() const {
-        CZONE("C_TIL");
         PACK((llk_pack_reconfig_l1_acc(0)));
         tilize<tilize_w, cb_act_rm, cb_act_send>(block_m_tiles * tilize_blocks_per_row);
     }
     ALWI void operator()(uint32_t block, uint32_t, bool) const {
-        CZONE("C_PRE");
         tilize_kblock(block);
         if constexpr (weights_resident) {
             // in1 is NoWaitNoPop: K-blocks 0..block of the resident weights must have landed (the
@@ -361,48 +353,35 @@ void kernel_main() {
             for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
                 // conv_matmul_block: caller owns the accumulator's single reserve / push.
                 partials.reserve_back(block_out_tiles);
-#ifdef ABLATE_MATMUL
-                {
-                    TilizeKBlock tk{my_slice, m_block};
-                    for (uint32_t b = 0; b < num_k_blocks; ++b) {
-                        tk(b, 0, false);
-                        act_tiles.wait_front(block_m_tiles * block_k_tiles);
-                        act_tiles.pop_front(block_m_tiles * block_k_tiles);
-                        weight_tiles.wait_front(block_k_tiles * block_n_tiles);
-                        weight_tiles.pop_front(block_k_tiles * block_n_tiles);
-                    }
-                }
-                if (false)
-#endif
-                    matmul_block<
-                        false,
-                        true,
-                        LastBlockTarget::Interm,
-                        OutputCBLayout::TileRowMajor,
-                        matmul_config::InitMode::ShortAfterPreKBlock,
-                        InputPolicy::WaitAndPopPerKBlock,
-                        in1_policy,
-                        NoPostCompute,
-                        TilizeKBlock,
-                        NoPostKBlock,
-                        0,
-                        NoKBlockInnerDimFn,
-                        NoIn0Source,
-                        In1Offset,
-                        true>(
-                        act_tiles,
-                        weight_tiles,
-                        partials,
-                        partials,
-                        shape,
-                        {},
-                        TilizeKBlock{my_slice, m_block},
-                        block_n_tiles,
-                        block_n_tiles,
-                        {},
-                        {},
-                        {},
-                        In1Offset{});
+                matmul_block<
+                    false,
+                    true,
+                    LastBlockTarget::Interm,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::ShortAfterPreKBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    in1_policy,
+                    NoPostCompute,
+                    TilizeKBlock,
+                    NoPostKBlock,
+                    0,
+                    NoKBlockInnerDimFn,
+                    NoIn0Source,
+                    In1Offset,
+                    true>(
+                    act_tiles,
+                    weight_tiles,
+                    partials,
+                    partials,
+                    shape,
+                    {},
+                    TilizeKBlock{my_slice, m_block},
+                    block_n_tiles,
+                    block_n_tiles,
+                    {},
+                    {},
+                    {},
+                    In1Offset{});
                 partials.push_back(block_out_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 

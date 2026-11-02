@@ -220,7 +220,7 @@ No SUPPORTED change.
 - SDXL conv_out BLOCK (1.51 ms) walks to bk = 1.
 - ResNet conv1 interleaved (382 µs, vs 83 µs HEIGHT) is DRAM-request bound.
 
-### [ ] Refinement 9 — Speed up the perf-flagged ResNet50 BLOCK convs
+### [x] Refinement 9 — Speed up the perf-flagged ResNet50 BLOCK convs
 
 **Type**: perf
 
@@ -244,3 +244,5 @@ No SUPPORTED change.
 - Measured device-ns improves on each flagged case, with `device_l1_peak_bytes` at or under (or reported against) its target.
 - Precision gates hold and the golden suite is green.
 - No regression across the config-spanning guard set (one representative per kernel path × layout × placement).
+
+**Outcome**: per-core max kernel cycles on BH @1350 MHz, 3-run medians, before → after (achievable): layer3 downsample 95.2k → 82.7k, 70.5 → 61.3 µs (49.2 µs); layer3 3×3 115.4k → 77.1k, 85.5 → 57.1 µs (47.9 µs); layer4 3×3 90.4k → 84.0k, 67.0 → 62.2 µs (35.7 µs). `device_l1_peak_bytes` is unchanged at 413,696 / 352,384 / 392,064 B, against targets of 370,416 / 238,640 / 161,296. The excess is the four own-K-block act copies (rm, send, 2 landing slots). Levers kept: tap-major gather on BLOCK / WIDTH (only where it keeps bk), just-in-time own-block tilize (`ACT_TILIZE_LEAD = 2`), receivers ack the next round as soon as the current one lands, a pipelined weight stream (trid read-ahead, landing one block ahead), slice-major BLOCK weights (all DRAM banks), and a rotating column weight sender gated on a light weight stream. `ACT_CHANNELS = 2` is parked at 1: two act channels let the next owner send early, but concurrent multicasts in one row measured 116–131k. Bottleneck now: the act exchange's 24 rounds of ~2.6k cycles each (~1.5k payload at ~40 B/cycle plus a ~1.1k ack/flag floor); the reader's local-read-bound gather (32 reads per tile-row at stride 2; ~15k before the first round); and on layer4 the weight DRAM stream. Next lever: split the exchange rounds across both NoCs (the reader RISC multicasting odd rounds on NOC_0). That would also give room to shrink the act blocks toward the L1 target. Not tried here: it moves the multicast and landing into the reader next to the gather.

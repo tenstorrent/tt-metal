@@ -305,3 +305,48 @@
 - Tests added:
   - `test_conv2d_nhwc_r8.py`: 22 cases, one per kernel path × axis value.
   - `test_conv2d_nhwc.py::test_conv2d_nhwc_rejects_unsupported_dilation` became `test_conv2d_nhwc_rejects_excluded_cell` (TILE × depthwise), since dilation is now supported.
+
+## Refinement 9 — Speed up the perf-flagged ResNet50 BLOCK convs
+- Date: 2026-11-02
+- What was done (R4 BLOCK path; no SUPPORTED change):
+  - **Baseline breakdown** (layer3 3×3, 115k cycles): the per-pixel band gather of a one-channel-tile slice (~1.3k cycles per tile-row, RISC-issue bound at ~46 cycles per local read), compute's eager tilize of the next own block (it waited ~11k on the reader's gather and stalled the row), and per round a full ack → data round trip on both the act and the weight channels.
+  - **Tap-major gather on BLOCK / WIDTH** (`TAP_MAJOR_LAYOUTS`): stride-1 convs reuse the HEIGHT tap-major gather. It is kept only where it does not shrink the K-block: 2-tile taps force an even bk, so the band walk wins on SDXL (bk 3) and layer4 (bk 9).
+  - **Just-in-time own-block tilize** (`ACT_TILIZE_LEAD = 2`, compute CT 37): own K-block kb is tilized 2 rounds before its multicast, not as soon as the send slot frees.
+  - **Early act acks**: the receiver acks round r + 1 right after round r lands, before weight work.
+    - kernel_lib: `ReceiverPipe::acknowledge()` / `wait_delivery()`, the two halves of `receive()`, additive.
+  - **Pipelined weight stream** (writer):
+    - The weight CB is a ring addressed ahead of its write pointer.
+    - DRAM reads run up to depth − 3 blocks ahead of the landing, one read transaction id per block.
+    - Receivers ack on slot free and land one block ahead of the matmul. The sender multicasts two blocks ahead, after its act round.
+  - **Slice-major BLOCK weights** (`weight_slice_tiles`, prepare + writer): column slice c's [K_t, nt_s] tiles are a contiguous page run, so a K-block read spreads over every DRAM bank. Row-major put each column's tiles in 1–2 banks, and layer4's weight stream was bank-bound. The tensor shape is unchanged.
+  - **Rotating column weight sender** (`WEIGHT_ROTATING_SENDER`): block w is read and multicast by row w mod g_m. It is gated on weight K-block bytes ≤ 0.25 × act K-block bytes (`WEIGHT_ROTATE_MAX_RATIO`). Layer4's heavier stream swung 81–95k rotating vs a steady 84k fixed.
+  - Parked at a byte-identical default: `ACT_CHANNELS = 1`. At 2, rounds alternate between two act Mcast channels with a third landing slot, and the next round's owner sends before waiting. Concurrent multicasts in one row measured 116–131k cycles.
+  - Removed after measuring: per-column stateful weight reads (R0 interleaved 101k → 107k).
+  - Reused: the HEIGHT tap-major gather, every CB, the Mcast channels / helpers, matmul / tilize helpers. Added: the receiver ack/wait split (kernel_lib), the weight ring pipeline, a rotating weight channel, the optional second act channel, compute JIT tilize, and prepare's slice-major page order.
+- Perf (BH p150b, AICLK 1350 MHz, per-core max kernel cycles, bf16 × bf8b, bias, 3-run medians). Before → after (achievable):
+  - layer3 downsample: 95.2k → 82.7k (66.5k)
+  - layer3 3×3: 115.4k → 77.1k (64.6k)
+  - layer4 3×3: 90.4k → 84.0k (48.2k)
+  - `device_l1_peak_bytes` unchanged: 413,696 / 352,384 / 392,064 B vs targets 370,416 / 238,640 / 161,296. The excess is the four own-K-block act copies. Halving bm to fit costs 77k → 100k on layer3 3×3 (twice the exchange rounds).
+- Guard set (one run each, before → after, cycles):
+  - interleaved bf16 relu: 101.7k → 102.1k
+  - BLOCK 28×28×256 no bias: 40.7k → 31.1k
+  - WIDTH strided: 97.2k → 94.6k
+  - SDXL L1 BLOCK: 260.5k → 237–241k
+  - HEIGHT layer1 / layer2: 38.8k / 35.7k → 38.9k / 35.7k
+  - depthwise interleaved / WIDTH / BLOCK: 46.3k / 14.2k / 20.0k → 46.1k / 14.3k / 19.9k
+- Bottleneck now:
+  - Act exchange: 24 rounds × ~2.6k. About 1.5k is payload at ~40 B/cycle into each core; about 1.1k is the ack/flag floor (all payloads stubbed: 30k).
+  - Reader gather: about 46 cycles per local read, 32 reads per tile-row at stride 2. About 15k passes before the first round can go out.
+  - layer4: the weight DRAM stream (reads stubbed: −20k) and the act payload.
+- Next lever: split exchange rounds across both NoCs (the reader RISC multicasting odd rounds on NOC_0), so two rounds are in flight on disjoint links. That would also let the act blocks shrink toward the L1 target. Not done here: it moves the multicast landing into the reader alongside the gather.
+- Accuracy achieved: the three ResNet BLOCK cases have PCC ≥ 0.99988 and rel-RMS ≤ 0.0203 (bf16 × bf8b, gate 0.995 / 0.05). Every unit test passes at its prior tolerance.
+- Golden test progress:
+  - `test_golden.py -k "WIDTH or BLOCK or loose"`: 242 passed, 72 skipped, 0 failed. This includes the three ResNet BLOCK perf cases and the SDXL BLOCK case.
+  - `test_translated.py -k BLOCK`: 147 passed.
+  - `test_golden.py -k "INTERLEAVED and BFLOAT8_B and with_bias and ROW_MAJOR and tile_aligned"`: 228 passed, 342 skipped.
+  - Unit directory: 165 passed.
+- Issues encountered:
+  - Passing absolute rounds to the act receiver hung WIDTH with receive-only sinks: the rotation length is the group size, not the slice count. Fixed by passing the owner phase.
+  - The Counter data-ready signal cannot carry out-of-order deliveries, and its sender barriers made it slower (113k).
+- Tests added: `test_conv2d_nhwc_perf_probe.py::test_perf_probe_resnet_block` (three cases; `R9_CASE` env filter) and `test_l1_peak_resnet_block`.

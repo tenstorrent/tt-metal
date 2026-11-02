@@ -66,7 +66,6 @@ ACT_TILIZE_LEAD = 2
 # behind the payload. Costs one more landing slot (cb_act_tiles is ACT_RECV_DEPTH + channels - 1 deep).
 # 1 = one round in flight (ack the next round when the current one lands).
 ACT_CHANNELS = 1
-FORCE_BM_BK = ()  # TEMP
 # R4/R5 cb_act_rm depth in whole own K-blocks (bm tile-rows x bk): the reader gathers the next own
 # K-block while the row multicasts the other S-1 slices' blocks (K order interleaves the slices),
 # so the gather leaves the compute critical path. Never below ACT_RM_DEPTH tile-rows.
@@ -81,6 +80,11 @@ WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and mul
 # instead of always grid row 0, so the DRAM read issue / barrier / multicast of every block is not
 # serialized into one row's act-exchange loop.
 WEIGHT_ROTATING_SENDER = True
+# ... only while a weight K-block is small next to the act K-block it rides with (weight bytes / act
+# bytes per K-block <= this): the moving multicast source then costs nothing. Heavier weight streams
+# (ResNet layer4: 18 bf8b tiles per 27 act tiles) measured 81-95k cycles run to run rotating vs a
+# steady 84k with the fixed row-0 sender.
+WEIGHT_ROTATE_MAX_RATIO = 0.25
 # R4 (BLOCK): store the prepared weight slice-major (weight_slice_tiles), so each grid column's weight
 # K-blocks are contiguous pages over all DRAM banks.
 WEIGHT_SLICE_MAJOR = True
@@ -827,15 +831,17 @@ def select_blocking_sharded(
         and tap_width % TILE == 0
         and src_bytes == tap_width * elem_bytes
     )
-    k_divs_desc = (
-        [taps * nt_s]
-        if dw
-        else sorted((d for d in _divisors(slice_k_tiles) if not tap_major or d % tap_tiles == 0), reverse=True)
-    )
+
+    def k_divs(tm):
+        return (
+            [taps * nt_s]
+            if dw
+            else sorted((d for d in _divisors(slice_k_tiles) if not tm or d % tap_tiles == 0), reverse=True)
+        )
+
+    k_divs_desc = k_divs(tap_major)
 
     def walk(budget):
-        if FORCE_BM_BK:  # TEMP (R9 experiments)
-            return FORCE_BM_BK[0], FORCE_BM_BK[1], halo_max(FORCE_BM_BK[0])
         # Whole-shard bm first (shrinking bm re-streams the weights per m-block), then the
         # largest bk: every K-block is one multicast handshake + one partials pass (technique 8).
         for bm in sorted(_divisors(core_m_tiles), reverse=True):
@@ -886,7 +892,22 @@ def select_blocking_sharded(
         # g_m cores (the streamed column multicast needs the compute cores as its group).
         weights_resident = False
         out_shards = list(range(g_m))
-        choice = walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
+
+        def walk_all():
+            return walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
+
+        choice = walk_all()
+        if tap_major and act_mcast and tap_tiles > 1:
+            # K exchange: a K-block of whole taps can be smaller than the band walk's (a 2-tile tap
+            # rules out odd bk), and every extra K-block is one more exchange round — more than the
+            # tap-major gather saves (SDXL 3x3 64-channel slices: bk 3 -> 2, +10%). Keep tap-major
+            # only when its K-block is as large.
+            k_divs_desc = k_divs(False)
+            band = walk_all()
+            if band is not None and (choice is None or band[0] * band[1] > choice[0] * choice[1]):
+                tap_major, choice = False, band
+            else:
+                k_divs_desc = k_divs(True)
     if not choice:
         raise UnsupportedAxisValue("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
     bm, bk, halo = choice
@@ -1140,7 +1161,12 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     weight_mcast = weight_mcast and len(weight_group.ranges()) <= MCAST_MAX_RECTANGLES
     # BLOCK streamed weights: rotate the column's DRAM reader / multicast sender over its rows.
     weight_rotating = (
-        WEIGHT_ROTATING_SENDER and weight_mcast and p["memory_layout"] == _ML.BLOCK_SHARDED if kx else False
+        WEIGHT_ROTATING_SENDER
+        and weight_mcast
+        and p["memory_layout"] == _ML.BLOCK_SHARDED
+        and weight_block_tiles * p["T_w"] <= WEIGHT_ROTATE_MAX_RATIO * act_tile_pages * p["T"]
+        if kx
+        else False
     )
     if is_height and not weight_mcast:  # no multicast: every compute core reads its own weights
         sink_cores, mcast_cores = [], cores
@@ -1296,12 +1322,6 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if tile_in else 0,
         p["C_out"],
         p.get("act_channels", 1),
-        1
-        if (
-            weight_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
-            and not weight_tensor.memory_config().is_sharded()
-        )
-        else 0,
         p["g_m"] if weight_rotating else 0,
         weight_slice_tiles(input_tensor.memory_config() if kx else None, p["C_in"], p["C_out"], p.get("groups", 1)),
     ]
@@ -1494,19 +1514,5 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
     else:
         ttnn.attach_absent_mcast(writer, "w_mcast")
-    import os as _os  # TEMP ablation hook (R9): CONV_ABLATE=A,B -> -DABLATE_A -DABLATE_B
-
-    _abl = [x for x in _os.environ.get("CONV_ABLATE", "").split(",") if x]
-    if _abl:
-        for _k in (reader, writer, compute):
-            _k.defines = [("ABLATE_" + x, "1") for x in _abl]
     descriptor.kernels = [reader, writer, compute]
     return descriptor
-
-
-# TEMP (R9 experiments): CONV_KNOBS="NAME=value,..." overrides module knobs.
-import os as _os_knobs
-
-for _kv in [x for x in _os_knobs.environ.get("CONV_KNOBS", "").split(";") if x]:
-    _k, _v = _kv.split("=")
-    globals()[_k] = type(globals()[_k])(eval(_v))

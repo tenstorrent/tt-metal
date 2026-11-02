@@ -23,12 +23,6 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#ifdef ABLATE_ZONES
-#include "api/debug/kernel_profiler.hpp"
-#define ZONE(n) DeviceZoneScopedN(n)
-#else
-#define ZONE(n)
-#endif
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
@@ -82,25 +76,15 @@ constexpr uint32_t C_out = get_compile_time_arg_val(25);
 // ack round trip and the next sender's start overlap the current transfer. 1 = one round at a time.
 constexpr uint32_t act_channels = get_compile_time_arg_val(26);
 constexpr uint32_t act_ack_lead = act_channels;
-#ifdef ABLATE_NOAHEAD
-constexpr bool ABLATE_NOAHEAD_V = true;
-#else
-constexpr bool ABLATE_NOAHEAD_V = false;
-#endif
-// The weight is DRAM-interleaved and every K row is a whole number of bank rotations (N_t a multiple
-// of the DRAM bank count): one weight column's tiles then all live in one bank at a constant stride,
-// so a block is read per column with stateful reads (one address computation per column, not per
-// tile — the per-tile TensorAccessor lookup was the weight stream's cost).
-constexpr bool weight_column_strided = get_compile_time_arg_val(27) != 0 && N_t % NUM_DRAM_BANKS == 0;
 // BLOCK weight multicast with a rotating sender: block w of a column is read from DRAM and multicast
 // by its row w % weight_senders (writer RT arg 9 = this core's row), spreading the DRAM reads over the
 // column. 0 = a fixed sender (RT arg 9 != 0 on the column's reader).
-constexpr uint32_t weight_senders = get_compile_time_arg_val(28);
+constexpr uint32_t weight_senders = get_compile_time_arg_val(27);
 // BLOCK slice-major prepared weight (host weight_slice_tiles): slice c's [K_t, nt_s] tiles are pages
 // [c*K_t*nt_s, ...) row-major, so a K-block of this column is one contiguous page run over every DRAM
 // bank. 0 = the row-major [K_t, N_t] grid.
-constexpr uint32_t weight_slice_tiles = get_compile_time_arg_val(29);
-constexpr auto weight_args = TensorAccessorArgs<30>();
+constexpr uint32_t weight_slice_tiles = get_compile_time_arg_val(28);
+constexpr auto weight_args = TensorAccessorArgs<29>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 // Split gather (R3): the reader's gather compile-time args follow (this instance's own window / rm
@@ -196,22 +180,14 @@ void kernel_main() {
             act_sender->send(src, dst, bytes);
         }
     };
-#ifdef ABLATE_ACTPAYLOAD
-    [[maybe_unused]] const uint32_t act_block_bytes = 32;
-#else
     [[maybe_unused]] const uint32_t act_block_bytes = act_block_tiles * get_tile_size(cb_act_tiles);
-#endif
     auto weight_sender = weight_channel.optional_sender(noc);
     auto weight_receiver = weight_channel.optional_receiver(noc);
     // Streamed weight ring: one block per slot, the CB is weight_depth slots.
     const uint32_t weight_slot_bytes = weight_k_rows * block_n_tiles * weight_tile_bytes;
     const uint32_t weight_cb_limit = get_local_cb_interface(cb_weight_tiles).fifo_limit;
     const uint32_t weight_cb_bytes = get_local_cb_interface(cb_weight_tiles).fifo_size;
-#ifdef ABLATE_WEIGHTS
-    const uint32_t weight_block_bytes = 32;
-#else
-    const uint32_t weight_block_bytes = weight_k_rows * block_n_tiles * weight_tile_bytes;
-#endif
+    const uint32_t weight_block_bytes = weight_slot_bytes;
 
     // ---- sink: keep the group's landing-slot cadence and acks, nothing else ----
     if constexpr (act_mcast) {
@@ -280,38 +256,6 @@ void kernel_main() {
             return;
         }
         uint32_t row_page = kblock_first_row(k_block) * N_t + n0;
-#ifdef ABLATE_SPREAD
-        {
-            uint32_t pg = (n0 * 151 + kblock_first_row(k_block) * block_n_tiles) % (N_t * 144);
-            for (uint32_t kk = 0; kk < weight_k_rows * block_n_tiles; ++kk) {
-                noc_async_read(weights.get_noc_addr(pg + kk), dst, weight_tile_bytes);
-                dst += weight_tile_bytes;
-            }
-            return;
-        }
-#endif
-        if constexpr (weight_column_strided) {
-            const uint32_t row_stride = (N_t / NUM_DRAM_BANKS) * weights.get_aligned_page_size();
-            for (uint32_t j = 0; j < block_n_tiles; ++j) {
-                uint32_t d = dst + j * weight_tile_bytes;
-                if (n0 + j < N_t) {
-                    const uint64_t a = weights.get_noc_addr(row_page + j);
-                    noc_async_read_set_state(a);
-                    uint32_t src = static_cast<uint32_t>(a);
-                    for (uint32_t kk = 0; kk < weight_k_rows; ++kk) {
-                        noc_async_read_with_state(src, d, weight_tile_bytes);
-                        src += row_stride;
-                        d += block_n_tiles * weight_tile_bytes;
-                    }
-                } else {
-                    for (uint32_t kk = 0; kk < weight_k_rows; ++kk) {
-                        zero_fill(zeros_noc, d, weight_tile_bytes);
-                        d += block_n_tiles * weight_tile_bytes;
-                    }
-                }
-            }
-            return;
-        }
         for (uint32_t kk = 0; kk < weight_k_rows; ++kk) {
             for (uint32_t j = 0; j < block_n_tiles; ++j) {
                 if (n0 + j < N_t) {
@@ -454,12 +398,9 @@ void kernel_main() {
                         return;
                     }
                     cb_reserve_back(cb_weight_tiles, need);
-                    ZONE("W_ISS");
-#if !defined(ABLATE_WEIGHTS) && !defined(ABLATE_WREAD)
                     dataflow_kernel_lib::set_read_trid(noc, 1 + w_read % weight_read_ahead);
                     read_weight_block(w_read, n0, slot_of(w_read));
                     dataflow_kernel_lib::set_read_trid(noc, 0);
-#endif
                     blocking = false;
                 }
             };
@@ -479,12 +420,8 @@ void kernel_main() {
                         w_read = w_push;
                         issue_reads(true);
                     }
-                    ZONE("W_RBAR");
-#if !defined(ABLATE_WEIGHTS) && !defined(ABLATE_WREAD)
                     dataflow_kernel_lib::async_read_barrier_with_trid(noc, 1 + w_push % weight_read_ahead);
-#endif
                     if constexpr (weight_mcast) {
-                        ZONE("W_WSEND");
                         const uint32_t a = slot_of(w_push);
                         weight_sender->send(a, a, weight_block_bytes);  // self-excluded
                     }
@@ -512,10 +449,7 @@ void kernel_main() {
                 }
             }
             for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
-                {
-                    ZONE("W_LAND");
-                    land_until(k_block + weight_land_lead + 1);
-                }
+                land_until(k_block + weight_land_lead + 1);
                 // ---- act_exchange: K-block k_block's in0, from its slice owner ----
                 if constexpr (act_mcast) {
                     const uint32_t owner = kblock_owner(k_block);
@@ -525,14 +459,8 @@ void kernel_main() {
                     constexpr uint32_t cb_src = conv_gather::direct_in0 ? conv_gather::cb_in_shard : cb_act_send;
                     if (owner == my_slice) {
                         if (!act_sent_ahead) {
-                            {
-                                ZONE("W_SRCWAIT");
-                                cb_wait_front(cb_src, act_block_tiles);
-                            }
-                            {
-                                ZONE("W_SEND");
-                                act_send(act_round, get_read_ptr(cb_src), landing, act_block_bytes);
-                            }
+                            cb_wait_front(cb_src, act_block_tiles);
+                            act_send(act_round, get_read_ptr(cb_src), landing, act_block_bytes);
                             cb_pop_front(cb_src, act_block_tiles);
                         }
                         act_sent_ahead = false;
@@ -540,10 +468,8 @@ void kernel_main() {
                         // Send ahead: own the next round (same m-block) and its block is tilized —
                         // multicast it into the next slot (its receivers acked it when this round's
                         // predecessor landed) before waiting for this round.
-                        if (act_channels > 1 && !ABLATE_NOAHEAD_V && k_block + 1 < num_k_blocks &&
-                            kblock_owner(k_block + 1) == my_slice &&
+                        if (act_channels > 1 && k_block + 1 < num_k_blocks && kblock_owner(k_block + 1) == my_slice &&
                             cb_pages_available_at_front(cb_src, act_block_tiles)) {
-                            ZONE("W_SENDAHEAD");
                             cb_reserve_back(cb_act_tiles, 2 * act_block_tiles);
                             uint32_t next_landing = landing + act_block_bytes_full;
                             if (next_landing >= act_cb_limit) {
@@ -553,19 +479,14 @@ void kernel_main() {
                             cb_pop_front(cb_src, act_block_tiles);
                             act_sent_ahead = true;
                         }
-                        ZONE("W_WAIT");
                         act_wait(act_round);  // acked ahead
                     }
                     cb_push_back(cb_act_tiles, act_block_tiles);
-                    {
-                        ZONE("W_ACK");
-                        ack_rounds(++act_round);
-                    }
+                    ack_rounds(++act_round);
                 }
                 // The owner of the next block multicasts it one iteration early (its receivers acked it
                 // when they landed the block before).
                 if (w_push < num_k_blocks && w_push < k_block + weight_land_lead + 2 && owns_weights(w_push)) {
-                    ZONE("W_LAND2");
                     land_one();
                 }
             }
