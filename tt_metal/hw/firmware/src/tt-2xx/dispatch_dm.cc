@@ -197,8 +197,7 @@ extern "C" uint32_t _start1() {
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
-                                          launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
@@ -252,8 +251,8 @@ extern "C" uint32_t _start1() {
 
         uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
-                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t tt_l1_ptr* dfb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
