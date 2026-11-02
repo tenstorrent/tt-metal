@@ -280,6 +280,8 @@ jobs:
       build-type: Release
       build-inplace-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
+      # Replay measures device time, which needs the device profiler (tracy build).
+      tracy: ${{ inputs.replay }}
 
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
@@ -799,6 +801,7 @@ jobs:
             --vector-source vectors_export \
             --result-dest results_export \
             --tag "$VECTOR_TAG" \
+            --device-perf \
             --main-proc-verbose
 
       - name: Summarize replay results
@@ -838,6 +841,40 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write(text)
           PY
+
+      - name: Build timed model op report
+        id: timed
+        if: always() && steps.vectors.outcome == 'success'
+        env:
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+          HF_MODEL: ${{ matrix.hf_model }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          TT_METAL_SHA: ${{ github.sha }}
+          TT_METAL_REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 model_tracer/model_op_report.py "$REPORT_JSON" \
+            --output-dir /work/model-op-report-timed \
+            --replay-results tests/sweep_framework/results_export \
+            --title "$SLUG (timed)" \
+            --test-path "$TEST_PATH" \
+            --hf-model "$HF_MODEL" \
+            --runner-label "$RUNNER_LABEL" \
+            --arch "$ARCH" \
+            --commit "$TT_METAL_SHA" \
+            --ref "$TT_METAL_REF" \
+            --run-url "$RUN_URL" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload timed model op report
+        if: always() && steps.timed.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-op-report-timed-${{ matrix.slug }}
+          path: /work/model-op-report-timed/
+          retention-days: 14
 
       - name: Upload replay vectors and results
         if: always() && steps.vectors.outcome == 'success'

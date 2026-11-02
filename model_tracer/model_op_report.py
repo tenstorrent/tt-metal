@@ -12,8 +12,12 @@ Writes three files into ``--output-dir``:
 - ``model_op_report.csv``: one row per traced configuration.
 - ``model_op_report.md``: markdown summary (also appended to ``--summary``).
 
-No timing is recorded; counts are tracer call counts (Python-level calls,
-including warmup/compile, blind to metal-trace replays).
+With ``--replay-results`` (the sweep runner's ``results_export`` dir from a
+``--device-perf`` replay of this report), each config gains its isolated
+replay status and device time, joined on result ``input_hash`` == ``config_hash``.
+
+Counts are tracer call counts (Python-level calls, including warmup/compile,
+blind to metal-trace replays), so count x device time is an estimate.
 """
 
 import argparse
@@ -39,6 +43,9 @@ CSV_COLUMNS = [
     "hardware",
     "sources",
 ]
+TIMING_COLUMNS = ["replay_status", "device_kernel_ns", "device_fw_ns", "est_total_kernel_ns"]
+KERNEL_METRIC = "device_DEVICE KERNEL DURATION [ns]"
+FW_METRIC = "device_DEVICE FW DURATION [ns]"
 
 
 def _tensor_summary(value):
@@ -122,6 +129,39 @@ def build_rows(master):
     return rows
 
 
+def load_replay_results(results_dir):
+    """Map input_hash -> {status, metric_name: value} from sweep runner result files."""
+    by_hash = {}
+    for f in sorted(Path(results_dir).glob("*.json")):
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        for rec in data if isinstance(data, list) else []:
+            if not isinstance(rec, dict) or not rec.get("input_hash"):
+                continue
+            entry = {"status": str(rec.get("status", ""))}
+            for m in rec.get("metrics") or []:
+                if isinstance(m, dict) and "metric_name" in m:
+                    entry[m["metric_name"]] = m.get("metric_value")
+            raw_perf = rec.get("device_perf")
+            if isinstance(raw_perf, dict):
+                for k, v in raw_perf.items():
+                    entry.setdefault(k if k.startswith("device_") else f"device_{k}", v)
+            by_hash[rec["input_hash"]] = entry
+    return by_hash
+
+
+def attach_timing(rows, results):
+    for r in rows:
+        res = results.get(r["config_hash"])
+        kernel = res.get(KERNEL_METRIC) if res else None
+        r["replay_status"] = res["status"] if res else "not_replayed"
+        r["device_kernel_ns"] = int(kernel) if kernel is not None else ""
+        r["device_fw_ns"] = int(res[FW_METRIC]) if res and res.get(FW_METRIC) is not None else ""
+        r["est_total_kernel_ns"] = int(kernel) * r["count"] if kernel is not None else ""
+
+
 def build_report_metadata(master, rows, args):
     mi = {}
     for op_data in master.get("operations", {}).values():
@@ -132,7 +172,7 @@ def build_report_metadata(master, rows, args):
                 break
         if mi:
             break
-    return {
+    meta = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "model": {
@@ -152,6 +192,14 @@ def build_report_metadata(master, rows, args):
             "calls": sum(r["count"] for r in rows),
         },
     }
+    if rows and "replay_status" in rows[0]:
+        meta["replay"] = {
+            "replayed": sum(r["replay_status"] != "not_replayed" for r in rows),
+            "passed": sum(r["replay_status"] == "pass" for r in rows),
+            "timed": sum(r["device_kernel_ns"] != "" for r in rows),
+            "est_total_kernel_ns": sum(r["est_total_kernel_ns"] or 0 for r in rows),
+        }
+    return meta
 
 
 def render_markdown(meta, rows, title, top_n):
@@ -194,6 +242,27 @@ def render_markdown(meta, rows, title, top_n):
             f"| `{r['operation']}` | {r['count']} | {r['input_shapes'] or '-'} | {r['input_dtypes'] or '-'} "
             f"| {r['input_memory'] or '-'} | `{str(r['config_hash'])[:12]}` |"
         )
+    replay = meta.get("replay")
+    if replay:
+        timed = [r for r in rows if r["est_total_kernel_ns"] != ""]
+        total = replay["est_total_kernel_ns"] or 1
+        lines += [
+            "",
+            "### Device time (isolated replay)",
+            "",
+            f"Replayed {replay['replayed']} / {len(rows)} configs, {replay['passed']} passed, "
+            f"{replay['timed']} with device time. Estimated total kernel time "
+            f"{replay['est_total_kernel_ns'] / 1e6:.3f} ms (calls x isolated kernel time).",
+            "",
+            "| Operation | Calls | Kernel ns | Est. total ms | Share | Input shapes | config_hash |",
+            "|---|---:|---:|---:|---:|---|---|",
+        ]
+        for r in sorted(timed, key=lambda r: -r["est_total_kernel_ns"])[:top_n]:
+            lines.append(
+                f"| `{r['operation']}` | {r['count']} | {r['device_kernel_ns']} | {r['est_total_kernel_ns'] / 1e6:.3f} "
+                f"| {100 * r['est_total_kernel_ns'] / total:.1f}% | {r['input_shapes'] or '-'} "
+                f"| `{str(r['config_hash'])[:12]}` |"
+            )
     lines += ["", "Counts are tracer call counts (include warmup/compile; metal-trace replays are not counted).", ""]
     return "\n".join(lines)
 
@@ -214,6 +283,9 @@ def main():
     parser.add_argument(
         "--summary", type=Path, help="Append the markdown summary to this file (e.g. $GITHUB_STEP_SUMMARY)"
     )
+    parser.add_argument(
+        "--replay-results", type=Path, help="Sweep runner results_export dir from a --device-perf replay of this report"
+    )
     args = parser.parse_args()
 
     with open(args.master_json) as f:
@@ -223,6 +295,10 @@ def main():
         return 1
 
     rows = build_rows(master)
+    columns = list(CSV_COLUMNS)
+    if args.replay_results:
+        attach_timing(rows, load_replay_results(args.replay_results))
+        columns += TIMING_COLUMNS
     meta = build_report_metadata(master, rows, args)
     master.setdefault("metadata", {})["report"] = meta
 
@@ -230,7 +306,7 @@ def main():
     with open(args.output_dir / "model_op_report.json", "w") as f:
         json.dump(master, f, indent=2)
     with open(args.output_dir / "model_op_report.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        writer = csv.DictWriter(f, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
 
