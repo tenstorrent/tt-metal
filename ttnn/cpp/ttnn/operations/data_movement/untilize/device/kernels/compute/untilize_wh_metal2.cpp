@@ -20,6 +20,7 @@ void kernel_main() {
 
     // Each region binds the buffer set matching its block width: `src` / `out` are that set's input
     // and output buffers -- see BlockBufferSet in data_movement/common.
+    DataflowBuffer src(dfb::src), out(dfb::out);
     compute_kernel_hw_startup(dfb::src, dfb::out);
     compute_kernel_lib::untilize<
         block_size_row,
@@ -28,5 +29,5 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-        block_size_col * third_dim);
+        src, out, block_size_col * third_dim);
 }

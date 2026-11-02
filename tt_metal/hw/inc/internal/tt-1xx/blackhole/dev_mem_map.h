@@ -64,7 +64,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 3072)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 2560
 #define MEM_TRISC0_FIRMWARE_SIZE 2560
@@ -110,13 +110,18 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 13440
+#define MEM_MAILBOX_SIZE 13696
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
 #define MEM_LLK_DEBUG_BASE (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 
-#define MEM_BRISC_FIRMWARE_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
+// L1 ECC halt record and BRISC release code (l1_ecc_halt_slot_t). Nothing else may write it: the next device open
+// reads the record, and a latched BRISC runs the code before firmware starts.
+#define MEM_L1_ECC_HALT_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
+#define MEM_L1_ECC_HALT_SIZE 32
+
+#define MEM_BRISC_FIRMWARE_BASE (MEM_L1_ECC_HALT_BASE + MEM_L1_ECC_HALT_SIZE)
 #define MEM_NCRISC_FIRMWARE_BASE (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
 #define MEM_TRISC0_FIRMWARE_BASE (MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE)
 #define MEM_TRISC1_FIRMWARE_BASE (MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE)
@@ -339,7 +344,12 @@
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
 #define MEM_DRISC_FIRMWARE_BASE MEM_DRISC_L1_INLINE_END
-#define MEM_DRISC_FIRMWARE_SIZE (24 * 1024)
+// DRAM-core kernel text loads into this window after the firmware (see the kernel config note
+// below), so the window must hold the watcher build of the DRISC firmware (~13.2 KB) plus the
+// largest DRAM-core kernel text, the Tensor prefetcher under TT_METAL_WATCHER=1 (11920 B). 25 KB
+// leaves that kernel a 12064 B budget, ~150 B spare. Every KB added here comes out of the DRISC
+// kernel working region (the prefetcher's stage ring).
+#define MEM_DRISC_FIRMWARE_SIZE (25 * 1024)
 #define MEM_DRISC_MAP_END (MEM_DRISC_FIRMWARE_BASE + MEM_DRISC_FIRMWARE_SIZE)
 #define MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_DRISC_MAP_END
 // L1 staging area for the firmware's initialized local .data image, copied into the

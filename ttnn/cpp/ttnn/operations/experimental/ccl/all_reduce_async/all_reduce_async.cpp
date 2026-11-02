@@ -205,7 +205,7 @@ ttnn::Tensor all_reduce_async(
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
-        input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
+        input_tensor, input_tensor.device_storage().get_coords().size());
 
     const auto& initial_shape = input_tensor.logical_shape();
     auto composite_dim = (dim == initial_shape.rank()) ? 0 : dim;

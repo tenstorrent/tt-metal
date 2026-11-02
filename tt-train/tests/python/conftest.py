@@ -267,3 +267,21 @@ def fsdp_mesh(fresh_device_mesh):
     """
     with fresh_device_mesh((FSDP_MESH_SHAPE), ("dp", "fsdp"), what="fsdp") as mesh:
         yield mesh
+
+
+# ---------------------------------------------------------------------------
+# Strict CCL topology
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def strict_ccl_topology():
+    """Promote the CCL topology helper's refusals from warnings to errors (what CI runs), so a refusal surfaces as the
+    helper's reason rather than as a label mismatch. Modules apply it to every test through
+    ``pytestmark = [..., pytest.mark.usefixtures("strict_ccl_topology")]``."""
+    previous = ttnn.CONFIG.strict_ccl_topology
+    ttnn.CONFIG.strict_ccl_topology = True
+    try:
+        yield
+    finally:
+        ttnn.CONFIG.strict_ccl_topology = previous

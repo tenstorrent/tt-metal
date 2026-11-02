@@ -61,6 +61,8 @@ _REGRESSION_CASE = _PerformanceCase(
     value_dim=64,
     expected_duration_ns=13_299,
 )
+# TODO: Switch to Galaxy SP8xTP4's per-device shape (24 heads, 20 chunks) once the scan's time at that shape is
+# deterministic; on an 11x10 grid each head gets 2 value blocks and single calls vary by tens of percent.
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-k128-v128",
     batch_heads=96,
@@ -175,6 +177,8 @@ def test_recurrent_chunk_scan_work_golden() -> None:
             id="production-four-chunk",
         ),
         pytest.param(6, 2, 64, 32, frozenset(), ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="grouped-batch-heads"),
+        # Five key tiles: the state update's row groups must divide them.
+        pytest.param(2, 2, 160, 32, frozenset(), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="wide-key"),
         pytest.param(
             9,
             2,

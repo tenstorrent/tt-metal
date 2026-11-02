@@ -98,12 +98,12 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input tensor dtype must be FLOAT32, BFLOAT16, or BFLOAT8_B but got {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to frmsnorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated(), "Operands to frmsnorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
         TT_FATAL(b.value().layout() == Layout::TILE, "layout is not tile!");
         TT_FATAL(a.padded_shape() == b.value().padded_shape(), "shape is not same!");
-        TT_FATAL(b.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
+        TT_FATAL(b.value().is_allocated(), "Operands to frmsnorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
     TT_FATAL(
@@ -117,8 +117,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "{} != {}",
                 a.padded_shape()[-1],
                 gamma.value().padded_shape()[-1]);
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to frmsnorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input tensor device must match gamma tensor device");
             TT_FATAL(
                 gamma.value().padded_shape()[-2] == input_height,
@@ -136,8 +135,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor width ({}) must equal input width ({}) and physical volume / width must match",
                 gamma.value().padded_shape()[-1],
                 input_width);
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to frmsnorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input tensor device must match gamma tensor device");
             TT_FATAL(
                 gamma.value().dtype() == DataType::FLOAT32 or gamma.value().dtype() == DataType::BFLOAT16,
@@ -191,7 +189,11 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     // block
     const auto shard_spec = a.shard_spec().value();
     // check dims
+    // Cache hits also reach these checks only because this op has no validate_on_program_cache_hit; one added
+    // later must keep the two zero-divisor checks below.
+    TT_FATAL(args.subblock_wt > 0, "subblock_w must be greater than 0.");
     TT_FATAL(args.block_wt % args.subblock_wt == 0, "block_w must be divisible by subblock_w.");
+    TT_FATAL(args.num_links > 0, "num_links must be greater than 0.");
     TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
     TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
     const auto bbox = shard_spec.grid.bounding_box();
