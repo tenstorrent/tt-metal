@@ -86,8 +86,7 @@ std::unique_ptr<ControlPlane> make_control_plane(
         metal.hal(),
         metal.full_world_distributed_context(),
         fixture_path(fixture),
-        fabric_config,
-        reliability_mode);
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(fabric_config, reliability_mode));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     return control_plane;
 }
