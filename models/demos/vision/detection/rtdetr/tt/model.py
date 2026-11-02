@@ -5,7 +5,7 @@
 import torch
 
 import ttnn
-from models.demos.vision.detection.rtdetr.tt.backbone import TtRTDetrConvEncoder, TtRTDetrResNetConvLayer
+from models.demos.vision.detection.rtdetr.tt.backbone import DRAM_TILE, TtRTDetrConvEncoder, TtRTDetrResNetConvLayer
 from models.demos.vision.detection.rtdetr.tt.decoder import TtRTDetrDecoder
 from models.demos.vision.detection.rtdetr.tt.encoder import TtRTDetrHybridEncoder
 
@@ -19,11 +19,24 @@ class TtRTDetrModel:
         dtype,
         input_height=640,
         input_width=640,
+        batch_size=1,
     ):
         self.device = device
         self.dtype = dtype
 
-        self.backbone = TtRTDetrConvEncoder(config, parameters=parameters.backbone, device=device, dtype=dtype)
+        self.spatial_shapes_list = tuple(
+            (input_height // stride, input_width // stride) for stride in config.feat_strides
+        )
+
+        self.backbone = TtRTDetrConvEncoder(
+            config,
+            parameters=parameters.backbone,
+            device=device,
+            dtype=dtype,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+        )
 
         self.encoder_in_channels = config.encoder_in_channels
         self.encoder_hidden_dim = config.encoder_hidden_dim
@@ -45,11 +58,22 @@ class TtRTDetrModel:
                 stride=(1, 1),
                 padding=(0, 0),
                 activation="identity",
+                batch_size=batch_size,
+                input_height=self.spatial_shapes_list[level][0],
+                input_width=self.spatial_shapes_list[level][1],
+                input_spec=DRAM_TILE,
             )
             for level, in_channels in enumerate(self.encoder_in_channels)
         ]
 
-        self.encoder = TtRTDetrHybridEncoder(config, parameters=parameters.encoder, device=device, dtype=dtype)
+        self.encoder = TtRTDetrHybridEncoder(
+            config,
+            parameters=parameters.encoder,
+            device=device,
+            dtype=dtype,
+            batch_size=batch_size,
+            spatial_shapes=self.spatial_shapes_list,
+        )
 
         self.decoder_input_proj = [
             TtRTDetrResNetConvLayer(
@@ -63,15 +87,15 @@ class TtRTDetrModel:
                 stride=(1, 1),
                 padding=(0, 0),
                 activation="identity",
+                batch_size=batch_size,
+                input_height=self.spatial_shapes_list[level][0],
+                input_width=self.spatial_shapes_list[level][1],
+                input_spec=DRAM_TILE,
             )
             for level, in_channels in enumerate(self.decoder_in_channels)
         ]
 
         self.decoder = TtRTDetrDecoder(config, parameters=parameters.decoder, device=device, dtype=dtype)
-
-        self.spatial_shapes_list = tuple(
-            (input_height // stride, input_width // stride) for stride in config.feat_strides
-        )
 
         self.spatial_shapes_tensor = ttnn.from_torch(
             torch.tensor(self.spatial_shapes_list, dtype=torch.int32),

@@ -34,6 +34,7 @@ from models.demos.vision.detection.rtdetr.common.preprocessing import (
     preprocess_rtdetr_self_attention,
 )
 from models.demos.vision.detection.rtdetr.tt.backbone import (
+    DRAM_ROW_MAJOR,
     TtRTDetrConvEncoder,
     TtRTDetrResNetBackBone,
     TtRTDetrResNetBottleNeckLayer,
@@ -807,6 +808,8 @@ def test_rtdetr_aifi_layer(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        height=ENCODER_HEIGHT,
+        width=ENCODER_WIDTH,
     )
     tt_output, output_height, output_width = tt_module(
         tt_input,
@@ -847,6 +850,10 @@ def test_rtdetr_conv_norm_layer(device):
         stride=(1, 1),
         padding=(0, 0),
         activation=torch_rtdetr.config.activation_function,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
     tt_output, output_height, output_width = tt_module(
         tt_input,
@@ -892,6 +899,10 @@ def test_rtdetr_rep_vgg_block(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
     tt_output, output_height, output_width = tt_module(
         tt_input,
@@ -935,6 +946,10 @@ def test_rtdetr_csp_rep_layer(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
     tt_output, output_height, output_width = tt_module(
         tt_input,
@@ -980,6 +995,9 @@ def test_rtdetr_hybrid_encoder(device):
         parameters=parameters,
         device=device,
         dtype=dtype,
+        batch_size=batch_size,
+        spatial_shapes=[(height, width) for _, height, width in tt_inputs],
+        input_spec=DRAM_ROW_MAJOR,
     )
     tt_outputs = tt_module(tt_inputs, batch_size=batch_size)
 
@@ -1035,6 +1053,10 @@ def test_rtdetr_resnet_conv_layer(device):
         stride=(2, 2),
         padding=(1, 1),
         activation="relu",
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
 
     tt_output, output_height, output_width = tt_module(
@@ -1085,6 +1107,9 @@ def test_rtdetr_resnet_embeddings(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
     )
 
     tt_output, output_height, output_width = tt_module(
@@ -1143,6 +1168,10 @@ def test_rtdetr_resnet_shortcut(device):
         in_channels=in_channels,
         out_channels=out_channels,
         downsample=True,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
 
     tt_output, output_height, output_width = tt_module(
@@ -1199,6 +1228,10 @@ def test_rtdetr_resnet_bottleneck(device):
         in_channels=in_channels,
         out_channels=out_channels,
         stride=(1, 1),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
 
     tt_output, output_height, output_width = tt_module(
@@ -1256,6 +1289,10 @@ def test_rtdetr_resnet_stage(device):
         out_channels=out_channels,
         depth=3,
         stride=(1, 1),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
 
     tt_output, output_height, output_width = tt_module(
@@ -1307,6 +1344,10 @@ def test_rtdetr_resnet_encoder(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        input_spec=DRAM_ROW_MAJOR,
     )
 
     tt_outputs = tt_module(
@@ -1362,6 +1403,9 @@ def test_rtdetr_resnet_backbone(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
     )
 
     tt_outputs = tt_module(
@@ -1418,6 +1462,9 @@ def test_rtdetr_conv_encoder(device):
         parameters=parameters,
         device=device,
         dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
     )
     tt_outputs = tt_module(tt_input)
 
