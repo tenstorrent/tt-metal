@@ -52,12 +52,15 @@ def main() -> int:
         else:
             lin = TernaryLinear(sh, args.name, args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG)
             w = read_ternary(sh.gguf, args.name).dequant().astype(np.float64)
+        torch.manual_seed(0)
         x = torch.randn(1, lin.k).bfloat16().float().numpy()
         ref = (sh.had.rotate(x) @ w.T).flatten()  # = cpu_ref.project_ternary
         xt = ttnn.from_torch(torch.from_numpy(x).reshape(1, 1, 1, lin.k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                              device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         y = ttnn.to_torch(lin.forward(xt)).float().numpy().reshape(-1)[: lin.n]
         p = cpu_ref.pcc(y, ref)
+        np.save(os.path.expanduser(f"~/avan/native2bit/agentA/tmp/a3_{args.name.replace(':', '_')}_"
+                                   f"s16{os.environ.get('BONSAI_SCALE16', '0')}.npy"), y)
         top = int(np.argmax(y)) == int(np.argmax(ref))
         device_kernel_us(ttnn, device)
         for _ in range(args.calls):

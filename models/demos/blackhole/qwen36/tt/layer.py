@@ -88,7 +88,11 @@ class Qwen36DecoderLayer:
         if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
             # The ternary decode stack's defaults (counted 2026-11-01 19:13 with these, see agentA/runs/e2e_c3_*);
             # an explicit =0 still turns each off.
-            for _f in ("QWEN36_1C_GDN_RECT", "QWEN36_1C_GDN_HMI", "QWEN36_1C_CONV_HM", "QWEN36_1C_GDN_TRIM", "QWEN36_1C_GDN_HMO"):
+            for _f in ("QWEN36_1C_GDN_RECT", "QWEN36_1C_GDN_HMI", "QWEN36_1C_CONV_HM", "QWEN36_1C_GDN_TRIM", "QWEN36_1C_GDN_HMO",
+                       "QWEN36_1C_ATTN_LEAN", "QWEN36_1C_ATTN_QGVIEW", "QWEN36_1C_ATTN_TAIL",  # B's attention flags: counted 22:04
+                       "QWEN36_1C_GDN_GB", "QWEN36_1C_GDN_FCONV",  # B's fused gating + conv: counted 23:31, orch 00:33
+                       "QWEN36_1C_GDN_L2",  # B's q/k l2norm in the recurrence: counted 01:44
+                       "BONSAI_SCALE16", "QWEN36_1C_GDN_VSPLIT"):  # C's fp16-scale prefill fix + B's V-split: counted 02:20
                 os.environ.setdefault(_f, "1")
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
@@ -196,6 +200,7 @@ class Qwen36DecoderLayer:
                 sites,
             )
             from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
+            from models.demos.blackhole.bonsai2.native.a3.prefill import drop_dense
 
             _sh = shared_for(mesh_device)
             _cache = os.path.join(os.environ.get("TT_CACHE_PATH", "/tmp"), "a3_linear")
@@ -204,8 +209,11 @@ class Qwen36DecoderLayer:
                 if "attn_qkv" in sites() and self.attention.weights.fused_qkv is not None:
                     import dataclasses
 
+                    _w = self.attention.weights
+                    # C: decode and prefill both take the ternary fused qkv, so the dense q/k/v and fused qkv go.
+                    drop_dense(mesh_device, _w.q_proj, _w.k_proj, _w.v_proj, _w.fused_qkv)
                     self.attention.weights = dataclasses.replace(
-                        self.attention.weights,
+                        _w, q_proj=None, k_proj=None, v_proj=None,
                         fused_qkv=TernaryLinear(
                             _sh,
                             f"blk.{layer_num}.attn_qkv_fused",
@@ -217,15 +225,22 @@ class Qwen36DecoderLayer:
                 if "attn_o" in sites():
                     import dataclasses
 
+                    _old_o = self.attention.weights.o_proj
                     self.attention.weights = dataclasses.replace(
                         self.attention.weights,
                         o_proj=TernaryLinear(_sh, f"blk.{layer_num}.attn_output.weight", _cache),
                     )
+                    drop_dense(mesh_device, _old_o)  # C: the dense o_proj is unused once the site is ternary
             elif self._tp1_gdn:
                 if "gdn_out" in sites():
                     self.attention._native_out = TernaryLinear(
-                        _sh, f"blk.{layer_num}.ssm_out.weight", _cache, out_mem=ttnn.DRAM_MEMORY_CONFIG
+                        _sh, f"blk.{layer_num}.ssm_out.weight", _cache,
+                        # BONSAI_RES_ADD: rmsprep reads the residual delta 5.6 us faster from L1
+                        out_mem=ttnn.L1_MEMORY_CONFIG if os.environ.get("BONSAI_RES_ADD", "0") != "0" else ttnn.DRAM_MEMORY_CONFIG,
                     )
+                    _tw = self.attention.tw  # C: dense out-projection copies are unused once the site is ternary
+                    drop_dense(mesh_device, _tw.pop("out", None), _tw.pop("out_colpar", None))
+                    self.attention._out_colpar_prefill = False  # prefill then takes _row_proj -> the ternary site
                 if "gdn_in" in sites():
                     import torch
 
@@ -236,6 +251,8 @@ class Qwen36DecoderLayer:
                         rows=lambda: gdn_in_rows(_sh, layer_num),
                         shape=gdn_in_shape(_sh, layer_num),
                     )
+                    _tw = self.attention.tw  # C: the dense qkvz(ab) and ab are unused once the site is ternary
+                    drop_dense(mesh_device, _tw.pop("qkvz", None), _tw.pop("ab", None))
                     _g = substate(state_dict, f"layers.{layer_num}.linear_attn")
                     _ab = torch.cat([_g["in_proj_a.weight"], _g["in_proj_b.weight"]], 0)  # [2*Nv, dim], bf16 in the GGUF
                     self.attention._native_ab = ttnn.as_tensor(
@@ -410,7 +427,21 @@ class Qwen36DecoderLayer:
             )
         sharded_norm = self._sharded_norm_1c and mode == "decode"
         fuse_attn = self._attn_native is not None and mode == "decode"
-        if fuse_attn:  # rmsprep; full attention passes x itself (its qkv picks up the fused prep)
+        # BONSAI_RES_ADD=2: the previous layer handed over its MLP output unadded (x) and kept its residual
+        # h; the add runs fused in this layer's norm, which writes the real residual
+        _stash = getattr(getattr(self, "_res_prev", None), "_res_stash", None)
+        if _stash is not None:
+            self._res_prev._res_stash = None
+            assert fuse_attn and mode == "decode" and _stash[0] == x.buffer_address(), "deferred residual add lost"
+            x_ff, x = x, ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(),
+                                                       ttnn.L1_MEMORY_CONFIG)
+            attn_input = self._attn_native.norm(_stash[1], self._attn_gamma, self._norm_eps,
+                                                emit=not self.is_full_attention, add=x_ff, h_out=x)
+            ttnn.deallocate(_stash[1])
+            ttnn.deallocate(x_ff)
+            if attn_input is None:
+                attn_input = x
+        elif fuse_attn:  # rmsprep; full attention passes x itself (its qkv picks up the fused prep)
             attn_input = self._attn_native.norm(x, self._attn_gamma, self._norm_eps, emit=not self.is_full_attention)
             if attn_input is None:
                 attn_input = x
@@ -527,6 +558,18 @@ class Qwen36DecoderLayer:
             ttnn.deallocate(attn_input)
 
         fuse_ff = self._ff_gamma is not None and mode == "decode"
+        res_add = int(os.environ.get("BONSAI_RES_ADD", "0")) if fuse_ff else 0
+        if res_add:  # BONSAI_RES_ADD>=1: the attention residual add runs fused in the ff norm (rmsprep add mode)
+            h = ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(), ttnn.L1_MEMORY_CONFIG)
+            ff_output = self.feed_forward.native.forward_residual(x, self._ff_gamma, self._norm_eps, add=attn_output, h_out=h)
+            ttnn.deallocate(attn_output)
+            if res_add >= 2 and getattr(self, "_res_next", False):  # hand ff_output over unadded; the next layer adds
+                self._res_stash = (ff_output.buffer_address(), h)
+                return ff_output
+            output = ttnn.add(h, ff_output)
+            ttnn.deallocate(h)
+            ttnn.deallocate(ff_output)
+            return output
         h = ttnn.add(x, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG) if fuse_ff else ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 

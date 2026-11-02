@@ -308,13 +308,25 @@ class Qwen36MLP:
             self._w1_dpc = self._w3_dpc = dpc(None)
 
     def forward(self, x, mode=None):
+        from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+        return pftime.timed("mlp", x.shape[-2], self._forward, x, mode)
+
+    def _forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
         if self.num_devices > 1:
             return self._forward_tp(x)
         if self.native is not None:
-            T = x.shape[1] if len(x.shape) >= 3 else 1
-            assert T <= 1, "BONSAI_NATIVE=pq2_0 MLP is decode-only"
+            if x.shape[-2] > ttnn.TILE_SIZE:  # prefill: dequant + stock matmul (bonsai2/native/a3/prefill.py)
+                from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_mlp
+
+                T = x.shape[1] if len(x.shape) >= 3 else 1  # as the dense path below
+                down_pc = None
+                if T > 1 and getattr(self.args, "prefill_progcfg", None) is not None:
+                    down_pc = self.args.prefill_progcfg(T, self.native.w_d.shape[-2], x.shape[-1])
+                return prefill_mlp(self.native, x, ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG,
+                                   down_pc)
             if x.is_sharded() or x.memory_config().buffer_type != ttnn.BufferType.L1:
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             return self.native.forward(x)
