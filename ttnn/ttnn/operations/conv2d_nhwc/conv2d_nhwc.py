@@ -31,6 +31,7 @@ from .conv2d_nhwc_program_descriptor import (
     select_blocking_sharded,
     sharded_slices,
     tile_bytes,
+    weight_slice_tiles,
 )
 
 # ---------------------------------------------------------------------------
@@ -343,6 +344,12 @@ def prepare_conv2d_weights(
     if band_rows != kW * tap_width:
         w = torch.nn.functional.pad(w, (0, 0, 0, band_rows - kW * tap_width))
     w = w.reshape(1, 1, S * kH * band_rows, C_out).contiguous()
+    nt_s = weight_slice_tiles(input_memory_config, C_in, C_out, groups)
+    if nt_s:
+        # Slice-major pages: tile (k, c*nt_s + j) goes to page c*K_t*nt_s + k*nt_s + j.
+        K_t, N_t = w.shape[2] // 32, C_out // 32
+        tiles = w.reshape(K_t, 32, N_t // nt_s, nt_s, 32).permute(2, 0, 3, 1, 4)  # [c, k, j, 32, 32]
+        w = tiles.reshape(K_t, N_t, 32, 32).permute(0, 2, 1, 3).reshape(1, 1, K_t * 32, C_out).contiguous()
     return ttnn.from_torch(
         w,
         dtype=weight_dtype,

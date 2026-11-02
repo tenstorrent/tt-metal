@@ -60,11 +60,13 @@ ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (
 # gather of a block that is not needed yet (that wait stalled the whole row's exchange). Clamped to
 # [1, slices - 1]; slices - 1 = as soon as the send slot frees.
 ACT_TILIZE_LEAD = 2
-# R4/R5 act exchange: a receiver acks round r + ACT_ACK_LEAD - 1 as soon as round r has landed (and the
-# landing slot is free), so the ack's NoC round trip overlaps the round in flight. 1 = ack only the
-# next round (Flag data-ready signal); > 1 switches the channel to the Counter signal (several rounds
-# acked before delivery) and is clamped to the landing depth and the slice count.
-ACT_ACK_LEAD = 1
+# R4/R5 (BLOCK) act exchange multicast channels. 2: rounds alternate between two channels (each with
+# its own data-ready flag), so a receiver acks two rounds ahead and the owner of the next round sends
+# it while the current one is still landing — two transfers in flight, the per-round handshake hidden
+# behind the payload. Costs one more landing slot (cb_act_tiles is ACT_RECV_DEPTH + channels - 1 deep).
+# 1 = one round in flight (ack the next round when the current one lands).
+ACT_CHANNELS = 1
+FORCE_BM_BK = ()  # TEMP
 # R4/R5 cb_act_rm depth in whole own K-blocks (bm tile-rows x bk): the reader gathers the next own
 # K-block while the row multicasts the other S-1 slices' blocks (K order interleaves the slices),
 # so the gather leaves the compute critical path. Never below ACT_RM_DEPTH tile-rows.
@@ -79,6 +81,9 @@ WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and mul
 # instead of always grid row 0, so the DRAM read issue / barrier / multicast of every block is not
 # serialized into one row's act-exchange loop.
 WEIGHT_ROTATING_SENDER = True
+# R4 (BLOCK): store the prepared weight slice-major (weight_slice_tiles), so each grid column's weight
+# K-blocks are contiguous pages over all DRAM banks.
+WEIGHT_SLICE_MAJOR = True
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # R11 depthwise: cb_act_tiles depth in tilized tile-rows (taps x bn tiles each). Compute tilizes a
 # tile-row and consumes it before tilizing the next, so one is enough; cb_act_rm (ACT_RM_DEPTH
@@ -236,6 +241,26 @@ def channel_slices(memory_config):
     else:
         S = spec.grid.num_cores()
     return S, int(spec.shape[1])
+
+
+def weight_slice_tiles(memory_config, C_in, C_out, groups):
+    """BLOCK: the prepared weight's pages are stored slice-major — output-channel slice c's
+    [K_t, nt_s] tile block is the contiguous page range [c*K_t*nt_s, (c+1)*K_t*nt_s), row-major —
+    instead of the [K_t, N_t] row-major grid. A grid column's K-block is then one contiguous run of
+    pages spread over every DRAM bank (row-major, N_t a multiple of the bank count puts a column's
+    tiles in one or two banks: its weight stream was bank-bound). Returns nt_s, or 0 (row-major).
+    The single source prepare_conv2d_weights and the writer agree on (the tensor shape is unchanged)."""
+    if (
+        not WEIGHT_SLICE_MAJOR
+        or memory_config is None
+        or memory_config.memory_layout != _ML.BLOCK_SHARDED
+        or is_depthwise(C_in, groups)
+        or C_out % TILE != 0
+    ):
+        return 0
+    S, _ = channel_slices(memory_config)
+    N_t = C_out // TILE
+    return N_t // S if S > 1 and N_t % S == 0 else 0
 
 
 def sharded_slices(memory_config, C_in):
@@ -719,6 +744,11 @@ def select_blocking_sharded(
     # Depthwise: every channel slice is self-contained — no exchange at any S.
     act_mcast = S > 1 and not dw
 
+    # Two act channels (BLOCK only: a WIDTH group may hold sinks, which run one channel) need one more
+    # landing slot: two rounds in flight while compute works on a third.
+    act_channels = ACT_CHANNELS if (act_mcast and memory_layout == _ML.BLOCK_SHARDED and S > 1) else 1
+    recv_depth = ACT_RECV_DEPTH + act_channels - 1
+
     def send_depth(bk):
         return min(ACT_SEND_DEPTH, slice_k_tiles // bk)
 
@@ -780,7 +810,7 @@ def select_blocking_sharded(
             roles * (max(halo, 1) if not tile_in else 0) * src_bytes
             + roles * rm_rows(bm, deep) * bk * T
             + (send_depth(bk) * bm * bk * T if act_mcast else 0)
-            + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
+            + (recv_depth if act_mcast else 1) * bm * bk * T
             + (slice_k_tiles if weights_resident else SHARDED_WEIGHT_DEPTH * bk) * nt_s * T_w
             + bm * nt_s * T_acc
             + (nt_s * T_w if has_bias else 0)
@@ -804,6 +834,8 @@ def select_blocking_sharded(
     )
 
     def walk(budget):
+        if FORCE_BM_BK:  # TEMP (R9 experiments)
+            return FORCE_BM_BK[0], FORCE_BM_BK[1], halo_max(FORCE_BM_BK[0])
         # Whole-shard bm first (shrinking bm re-streams the weights per m-block), then the
         # largest bk: every K-block is one multicast handshake + one partials pass (technique 8).
         for bm in sorted(_divisors(core_m_tiles), reverse=True):
@@ -883,6 +915,7 @@ def select_blocking_sharded(
         **geo,
         **_dw_plan_keys(dw, taps, bk, bn, tap_width, elem_bytes, C_in),
         "k_exchange": True,
+        "groups": groups,
         "act_mcast": act_mcast,
         "src_bytes": src_bytes,
         "stage_stride": 0,
@@ -893,10 +926,8 @@ def select_blocking_sharded(
         "tilize_w": tap_tiles if tap_major else bk,
         "act_send_depth": send_depth(bk),
         "act_tilize_lead": max(1, min(ACT_TILIZE_LEAD, S - 1)) if act_mcast else 0,
-        # > 1 (Counter signal, absolute rounds) needs a group of exactly the slices: no WIDTH sinks.
-        "act_ack_lead": max(1, min(ACT_ACK_LEAD, ACT_RECV_DEPTH, S))
-        if act_mcast and memory_layout == _ML.BLOCK_SHARDED
-        else 1,
+        "act_channels": act_channels,
+        "act_recv_depth": recv_depth,
         "act_rm_rows": rm_rows(bm, deep_rm),
         # Resident: the CB holds every K-block (depth = the K-block count).
         "weight_depth": DW_WEIGHT_DEPTH if dw else (slice_k_tiles // bk if weights_resident else SHARDED_WEIGHT_DEPTH),
@@ -1142,7 +1173,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             CB_ACT_TILES,
             in0_dtype,
             T_in0,
-            (ACT_RECV_DEPTH if act_mcast else 1) * act_tile_pages if (act_mcast or not direct_in0) else 1,
+            (p["act_recv_depth"] if act_mcast else 1) * act_tile_pages if (act_mcast or not direct_in0) else 1,
             mcast_cores if act_mcast else cores,
         ),
     ]
@@ -1264,7 +1295,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p.get("weight_chunk_rows", 1),
         1 if tile_in else 0,
         p["C_out"],
-        p.get("act_ack_lead", 1),
+        p.get("act_channels", 1),
         1
         if (
             weight_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
@@ -1272,6 +1303,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         )
         else 0,
         p["g_m"] if weight_rotating else 0,
+        weight_slice_tiles(input_tensor.memory_config() if kx else None, p["C_in"], p["C_out"], p.get("groups", 1)),
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -1421,11 +1453,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         mcast = ttnn.Mcast(
             device,
             # The writer (WriterConfigDescriptor) issues on NOC_1 (preferred DRAM-write NoC).
-            ttnn.McastConfig(
-                noc=ttnn.NOC.NOC_1,
-                handshake=True,
-                data_ready=ttnn.McastDataReady.Counter if p["act_ack_lead"] > 1 else ttnn.McastDataReady.Flag,
-            ),
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
             mcast_cores,
             mcast_cores.num_cores() if sink_cores else p["g_n"],
             ttnn.McastRotatingSenderConfig(),
@@ -1436,6 +1464,20 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     else:
         ttnn.attach_absent_mcast(writer, "act_mcast")
         next_sem = 0
+    if act_mcast and p["act_channels"] > 1:
+        # The odd rounds' channel: same groups and rotation, its own semaphores.
+        mcast2 = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
+            mcast_cores,
+            p["g_n"],
+            ttnn.McastRotatingSenderConfig(),
+            act_order,
+        )
+        mcast2.attach(descriptor, "act_mcast2", [writer], next_sem)
+        next_sem = mcast2.next_semaphore_id()
+    else:
+        ttnn.attach_absent_mcast(writer, "act_mcast2")
     if weight_mcast:
         # Weights: groups = grid columns (BLOCK, column-major) / all cores (HEIGHT, row-major),
         # fixed sender = the group's first core (writer RT `mi == 0`).
@@ -1465,6 +1507,6 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
 # TEMP (R9 experiments): CONV_KNOBS="NAME=value,..." overrides module knobs.
 import os as _os_knobs
 
-for _kv in [x for x in _os_knobs.environ.get("CONV_KNOBS", "").split(",") if x]:
+for _kv in [x for x in _os_knobs.environ.get("CONV_KNOBS", "").split(";") if x]:
     _k, _v = _kv.split("=")
     globals()[_k] = type(globals()[_k])(eval(_v))

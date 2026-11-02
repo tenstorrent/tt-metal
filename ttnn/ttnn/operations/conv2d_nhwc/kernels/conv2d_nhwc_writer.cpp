@@ -76,10 +76,17 @@ constexpr bool tile_out = get_compile_time_arg_val(24) != 0;
 // Refinement 8: output channels — the RM output stick is C_out wide, so the last n-slice writes only
 // its valid columns (C_out tile padding is zero in the prepared weight / bias).
 constexpr uint32_t C_out = get_compile_time_arg_val(25);
-// R4/R5 act exchange: rounds acknowledged ahead of their delivery (1 = the next round is acked as
-// soon as the current one has landed; > 1 needs the Counter data-ready signal and that many landing
-// slots). The ack round trip then overlaps the current round instead of preceding the next one.
-constexpr uint32_t act_ack_lead = get_compile_time_arg_val(26);
+// R4/R5 act exchange channels (1 or 2, Flag data-ready signal each). Round r rides channel r % 2, so
+// two consecutive rounds can be in flight: a receiver acks round r + act_channels - 1 as soon as
+// round r has landed, and the owner of round r + 1 multicasts it before waiting for round r — the
+// ack round trip and the next sender's start overlap the current transfer. 1 = one round at a time.
+constexpr uint32_t act_channels = get_compile_time_arg_val(26);
+constexpr uint32_t act_ack_lead = act_channels;
+#ifdef ABLATE_NOAHEAD
+constexpr bool ABLATE_NOAHEAD_V = true;
+#else
+constexpr bool ABLATE_NOAHEAD_V = false;
+#endif
 // The weight is DRAM-interleaved and every K row is a whole number of bank rotations (N_t a multiple
 // of the DRAM bank count): one weight column's tiles then all live in one bank at a constant stride,
 // so a block is read per column with stateful reads (one address computation per column, not per
@@ -89,7 +96,11 @@ constexpr bool weight_column_strided = get_compile_time_arg_val(27) != 0 && N_t 
 // by its row w % weight_senders (writer RT arg 9 = this core's row), spreading the DRAM reads over the
 // column. 0 = a fixed sender (RT arg 9 != 0 on the column's reader).
 constexpr uint32_t weight_senders = get_compile_time_arg_val(28);
-constexpr auto weight_args = TensorAccessorArgs<29>();
+// BLOCK slice-major prepared weight (host weight_slice_tiles): slice c's [K_t, nt_s] tiles are pages
+// [c*K_t*nt_s, ...) row-major, so a K-block of this column is one contiguous page run over every DRAM
+// bank. 0 = the row-major [K_t, N_t] grid.
+constexpr uint32_t weight_slice_tiles = get_compile_time_arg_val(29);
+constexpr auto weight_args = TensorAccessorArgs<30>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 // Split gather (R3): the reader's gather compile-time args follow (this instance's own window / rm
@@ -100,6 +111,9 @@ constexpr uint32_t WRITER_RT_ARGS = 10;  // the writer's own runtime args; the r
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
     get_named_compile_time_arg_val("act_mcast_ct_offset"),
     get_named_compile_time_arg_val("act_mcast_rt_offset")>();
+constexpr auto act_channel2 = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("act_mcast2_ct_offset"),
+    get_named_compile_time_arg_val("act_mcast2_rt_offset")>();
 constexpr auto weight_channel = dataflow_kernel_lib::McastArgs<
     get_named_compile_time_arg_val("w_mcast_ct_offset"),
     get_named_compile_time_arg_val("w_mcast_rt_offset")>();
@@ -113,10 +127,9 @@ constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
 constexpr uint32_t num_slices = act_mcast ? num_k_blocks / kblocks_per_slice : 1;
 constexpr uint32_t slice_k_tiles = kblocks_per_slice * block_k_tiles;
 FORCE_INLINE uint32_t kblock_owner(uint32_t k_block) { return k_block % num_slices; }
-// The mcast round argument of absolute act round r: it selects the sender (round % group size, and a
-// WIDTH group may hold receive-only sinks past the slices), so with the Flag signal it is the owner's
-// phase; the Counter signal (act_ack_lead > 1, no sinks: group size == slices) needs the absolute round.
-FORCE_INLINE uint32_t act_round_arg(uint32_t r) { return act_ack_lead > 1 ? r : r % num_slices; }
+// The mcast round argument of absolute act round r: it only selects the sender (round % group size,
+// and a WIDTH group may hold receive-only sinks past the slices), so it is the owner's phase.
+FORCE_INLINE uint32_t act_round_arg(uint32_t r) { return r % num_slices; }
 FORCE_INLINE uint32_t kblock_first_row(uint32_t k_block) {
     return act_mcast ? kblock_owner(k_block) * slice_k_tiles + (k_block / num_slices) * block_k_tiles
                      : k_block * block_k_tiles;
@@ -159,6 +172,30 @@ void kernel_main() {
     Noc noc;
     auto act_sender = act_channel.optional_sender(noc);
     auto act_receiver = act_channel.optional_receiver(noc);
+    auto act_sender2 = act_channel2.optional_sender(noc);
+    auto act_receiver2 = act_channel2.optional_receiver(noc);
+    // Round r's channel: r % act_channels.
+    [[maybe_unused]] auto act_ack = [&](uint32_t r) {
+        if (act_channels > 1 && (r & 1)) {
+            act_receiver2->acknowledge(act_round_arg(r));
+        } else {
+            act_receiver->acknowledge(act_round_arg(r));
+        }
+    };
+    [[maybe_unused]] auto act_wait = [&](uint32_t r) {
+        if (act_channels > 1 && (r & 1)) {
+            act_receiver2->wait_delivery(act_round_arg(r));
+        } else {
+            act_receiver->wait_delivery(act_round_arg(r));
+        }
+    };
+    [[maybe_unused]] auto act_send = [&](uint32_t r, uint32_t src, uint32_t dst, uint32_t bytes) {
+        if (act_channels > 1 && (r & 1)) {
+            act_sender2->send(src, dst, bytes);
+        } else {
+            act_sender->send(src, dst, bytes);
+        }
+    };
 #ifdef ABLATE_ACTPAYLOAD
     [[maybe_unused]] const uint32_t act_block_bytes = 32;
 #else
@@ -220,6 +257,28 @@ void kernel_main() {
     // read_weight_block: K-block k_block's bk x bn weight tiles (columns from n0) into dst, no
     // barrier. Column tiles >= N_t (slice padding) are zero-filled.
     auto read_weight_block = [&](uint32_t k_block, uint32_t n0, uint32_t dst) {
+        if constexpr (weight_slice_tiles > 0) {
+            static_assert(weight_slice_tiles == 0 || block_n_tiles == weight_slice_tiles, "bn = the slice");
+            // Pages [p0, p0 + np) — page p in bank p % NUM_DRAM_BANKS at a per-bank stride of one
+            // aligned page: one stateful address computation per bank.
+            constexpr uint32_t k_rows_total = num_slices * slice_k_tiles;
+            const uint32_t p0 = (n0 / weight_slice_tiles) * k_rows_total * weight_slice_tiles +
+                                kblock_first_row(k_block) * weight_slice_tiles;
+            constexpr uint32_t np = weight_k_rows * block_n_tiles;
+            const uint32_t bank_stride = weights.get_aligned_page_size();
+            for (uint32_t b = 0; b < NUM_DRAM_BANKS && b < np; ++b) {
+                const uint64_t a = weights.get_noc_addr(p0 + b);
+                noc_async_read_set_state(a);
+                uint32_t src = static_cast<uint32_t>(a);
+                uint32_t d = dst + b * weight_tile_bytes;
+                for (uint32_t q = b; q < np; q += NUM_DRAM_BANKS) {
+                    noc_async_read_with_state(src, d, weight_tile_bytes);
+                    src += bank_stride;
+                    d += NUM_DRAM_BANKS * weight_tile_bytes;
+                }
+            }
+            return;
+        }
         uint32_t row_page = kblock_first_row(k_block) * N_t + n0;
 #ifdef ABLATE_SPREAD
         {
@@ -346,12 +405,16 @@ void kernel_main() {
     const uint32_t act_rounds = num_m_blocks * num_n_blocks * num_k_blocks;
     uint32_t act_round = 0;  // next round to land
     uint32_t act_acked = 0;  // rounds [0, act_acked) handled
+    bool act_sent_ahead = false;  // the next (own) round was multicast during the previous one
+    const uint32_t act_block_bytes_full = act_block_tiles * get_tile_size(cb_act_tiles);
+    const uint32_t act_cb_limit = get_local_cb_interface(cb_act_tiles).fifo_limit;
+    const uint32_t act_cb_bytes = get_local_cb_interface(cb_act_tiles).fifo_size;
     [[maybe_unused]] auto ack_rounds = [&](uint32_t next) {
         const uint32_t end = next + act_ack_lead < act_rounds ? next + act_ack_lead : act_rounds;
         for (; act_acked < end; ++act_acked) {
             if (act_acked % num_slices != my_slice) {
                 cb_reserve_back(cb_act_tiles, (act_acked - next + 1) * act_block_tiles);
-                act_receiver->acknowledge(act_round_arg(act_acked));
+                act_ack(act_acked);
             }
         }
     };
@@ -458,21 +521,40 @@ void kernel_main() {
                     const uint32_t owner = kblock_owner(k_block);
                     cb_reserve_back(cb_act_tiles, act_block_tiles);
                     const uint32_t landing = get_write_ptr(cb_act_tiles);  // identical on every group core
+                    // R9: the own K-block is the resident shard's tiles (published by the reader).
+                    constexpr uint32_t cb_src = conv_gather::direct_in0 ? conv_gather::cb_in_shard : cb_act_send;
                     if (owner == my_slice) {
-                        // R9: the own K-block is the resident shard's tiles (published by the reader).
-                        constexpr uint32_t cb_src = conv_gather::direct_in0 ? conv_gather::cb_in_shard : cb_act_send;
-                        {
-                            ZONE("W_SRCWAIT");
-                            cb_wait_front(cb_src, act_block_tiles);
+                        if (!act_sent_ahead) {
+                            {
+                                ZONE("W_SRCWAIT");
+                                cb_wait_front(cb_src, act_block_tiles);
+                            }
+                            {
+                                ZONE("W_SEND");
+                                act_send(act_round, get_read_ptr(cb_src), landing, act_block_bytes);
+                            }
+                            cb_pop_front(cb_src, act_block_tiles);
                         }
-                        {
-                            ZONE("W_SEND");
-                            act_sender->send(get_read_ptr(cb_src), landing, act_block_bytes);
-                        }
-                        cb_pop_front(cb_src, act_block_tiles);
+                        act_sent_ahead = false;
                     } else {
+                        // Send ahead: own the next round (same m-block) and its block is tilized —
+                        // multicast it into the next slot (its receivers acked it when this round's
+                        // predecessor landed) before waiting for this round.
+                        if (act_channels > 1 && !ABLATE_NOAHEAD_V && k_block + 1 < num_k_blocks &&
+                            kblock_owner(k_block + 1) == my_slice &&
+                            cb_pages_available_at_front(cb_src, act_block_tiles)) {
+                            ZONE("W_SENDAHEAD");
+                            cb_reserve_back(cb_act_tiles, 2 * act_block_tiles);
+                            uint32_t next_landing = landing + act_block_bytes_full;
+                            if (next_landing >= act_cb_limit) {
+                                next_landing -= act_cb_bytes;
+                            }
+                            act_send(act_round + 1, get_read_ptr(cb_src), next_landing, act_block_bytes);
+                            cb_pop_front(cb_src, act_block_tiles);
+                            act_sent_ahead = true;
+                        }
                         ZONE("W_WAIT");
-                        act_receiver->wait_delivery(act_round_arg(act_round));  // acked ahead
+                        act_wait(act_round);  // acked ahead
                     }
                     cb_push_back(cb_act_tiles, act_block_tiles);
                     {
