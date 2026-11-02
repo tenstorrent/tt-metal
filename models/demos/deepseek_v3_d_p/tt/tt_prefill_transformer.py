@@ -486,7 +486,32 @@ class TtPrefillTransformer(LightweightModule):
         )
 
     def indexer_indices_shape(self) -> tuple:
-        return self.layers[0].mla.indexer_indices_shape()
+        """Per-chip shape of the top-k indices one pipeline boundary carries: one chunk's, or for a packed
+        forward its ``forward_chunks`` chunks' stacked chunk-major along rows (chunk k at rows
+        [k * r, (k + 1) * r), r the one-chunk row count), in pack order."""
+        _, _, rows, k = self.layers[0].mla.indexer_indices_shape()
+        return (1, 1, rows * self.forward_chunks, k)
+
+    def _pack_chunk_indices(self, per_chunk: list) -> ttnn.Tensor:
+        """Stack per-chunk top-k indices chunk-major along rows (indexer_indices_shape()). An empty chunk of an
+        eager packed forward has none; its rows are zeros, which the next rank never reads (it skips that
+        chunk's attention, or runs it in the scratch slot when traced)."""
+        real = next(t for t in per_chunk if t is not None)
+        parts = [t if t is not None else ttnn.zeros_like(real) for t in per_chunk]
+        packed = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+        for t, part in zip(per_chunk, parts):
+            if t is None:
+                ttnn.deallocate(part)
+        return packed
+
+    @staticmethod
+    def _split_chunk_indices(packed: ttnn.Tensor, n: int) -> list:
+        """Inverse of _pack_chunk_indices: chunk k's rows of a packed indices tensor."""
+        rows = packed.shape[2] // n
+        assert rows * n == packed.shape[2], f"{packed.shape[2]} index rows do not split into {n} chunks"
+        if n == 1:
+            return [packed]
+        return [ttnn.slice(packed, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, packed.shape[-1])) for k in range(n)]
 
     def forward(
         self,
@@ -564,8 +589,8 @@ class TtPrefillTransformer(LightweightModule):
             chunks: a packed forward's PrefillChunk list (forward_chunks of them, see forward_packed).
                         token_ids then holds every chunk's rows back to back on each SP chip, and the chunk
                         list replaces actual_isl / actual_start / actual_end / cache_user_id, and
-                        on_layer_complete is called as (layer_idx, chunk), once per non-empty chunk. Eager,
-                        single-rank only for now.
+                        on_layer_complete is called as (layer_idx, chunk), once per non-empty chunk. A
+                        pipeline rank takes and leaves its indexer indices packed (indexer_indices_shape()).
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -579,11 +604,12 @@ class TtPrefillTransformer(LightweightModule):
         if chunks is not None:
             assert (
                 d2h_service is None and metadata is None and mtp_union is None
-            ), "a packed forward is eager and host-acked only (no d2h_service / metadata / MTP yet)"
+            ), "a packed forward acks through TtPrefillRuntime.prefill_forward, and has no MTP"
             return self.forward_packed(
                 token_ids,
                 kvpe_cache,
                 chunks,
+                seed_indexer_indices=seed_indexer_indices,
                 index_kv_cache=index_kv_cache,
                 return_intermediates=return_intermediates,
                 read_profiler=read_profiler,
@@ -775,6 +801,8 @@ class TtPrefillTransformer(LightweightModule):
         input_is_embedded: bool = False,
         metadata: Optional[list] = None,
         padding_config: Optional[ttnn.Tensor] = None,
+        seed_indexer_indices: Optional[ttnn.Tensor] = None,
+        zero_pad: bool = False,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
         attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
@@ -782,8 +810,13 @@ class TtPrefillTransformer(LightweightModule):
 
         on_layer_complete fires as (global layer index, chunk) once per non-empty chunk per layer.
         GLM-5.3 indexer reuse is tracked per chunk: each "full" layer's top-k indices go to the following
-        "shared" layers of the same chunk. A pipeline boundary that would have to carry them is not
-        supported yet.
+        "shared" layers of the same chunk. Across a pipeline boundary they travel packed
+        (indexer_indices_shape(), chunk-major): ``seed_indexer_indices`` seeds a rank that starts on a
+        "shared" layer, and a rank whose successor starts on one leaves its last "full" layer's indices in
+        last_indexer_indices.
+
+        ``zero_pad``: zero each chunk's KV pad window after its write without acking it, for a caller that
+        sends the D2H acks itself once the forward is done (TtPrefillRuntime.prefill_forward).
 
         Traced form: ``metadata`` (one ChunkMetadata per chunk position, read on device) and
         ``padding_config`` (the persistent MoE padding config) replace ``chunks``, which is then None.
@@ -791,9 +824,6 @@ class TtPrefillTransformer(LightweightModule):
         assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
         n = len(metadata) if metadata is not None else len(chunks)
         assert n == self.forward_chunks, f"{n} chunks for a model built for {self.forward_chunks}"
-        assert (
-            not self.receives_indexer_indices and not self.forwards_indexer_indices
-        ), "a packed forward cannot carry per-chunk indexer indices across a pipeline boundary yet"
         assert self.mtp_predictor is None, "MTP does not support packed forwards"
         rope_tensors = self.indexed_rope
         intermediates = {} if return_intermediates else None
@@ -807,7 +837,16 @@ class TtPrefillTransformer(LightweightModule):
             h = token_ids
 
         reuse = self.indexer_types is not None
-        indexer_indices = None  # per chunk, from the most recent "full" layer
+        if reuse:
+            assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
+                f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
+                "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
+            )
+        # Per chunk, from the most recent "full" layer (or the upstream rank's, unpacked).
+        indexer_indices = (
+            self._split_chunk_indices(seed_indexer_indices, n) if (reuse and seed_indexer_indices is not None) else None
+        )
+        self.last_indexer_indices = None
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
@@ -825,6 +864,7 @@ class TtPrefillTransformer(LightweightModule):
                 index_kv_cache=index_kv_cache,
                 metadata=metadata,
                 padding_config=padding_config,
+                zero_pad=zero_pad,
             )
             if reuse:
                 h, _, new_indices = ret
@@ -840,6 +880,8 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
+        if self.forwards_indexer_indices:
+            self.last_indexer_indices = self._pack_chunk_indices(indexer_indices)
         indexer_indices = None
 
         if not self.is_last_rank:

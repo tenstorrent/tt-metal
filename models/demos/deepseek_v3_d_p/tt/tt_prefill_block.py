@@ -755,6 +755,7 @@ class TtPrefillBlock(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[list] = None,
         padding_config: Optional[ttnn.Tensor] = None,
+        zero_pad: bool = False,
     ):
         """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
 
@@ -770,6 +771,7 @@ class TtPrefillBlock(LightweightModule):
         metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
             unused (None). Every position runs its attention half, so the caller points an empty chunk at
             a scratch slot. Requires ``padding_config``, the persistent MoE padding config, and no ack.
+        zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
 
         Returns:
             (x, kv_cache=None) or, with return_indexer_indices, (x, None, per-chunk indices list). x is None
@@ -813,6 +815,7 @@ class TtPrefillBlock(LightweightModule):
                 index_kv_cache=index_kv_cache,
                 metadata=metadata[k] if traced else None,
                 kv_only=self.kv_only,
+                zero_pad_only=zero_pad,
             )
             ttnn.deallocate(x_k)
             outs.append(out_k)
@@ -864,6 +867,7 @@ class TtPrefillBlock(LightweightModule):
         metadata: Optional[ttnn.Tensor] = None,
         ack_layer_idx: Optional[int] = None,
         ack_alias_layer_ids: tuple = (),
+        zero_pad_only: bool = False,
     ):
         """attn_norm -> MLA (KV write) -> pad-zero / ack -> residual. Returns (x + mla_out, this layer's
         top-k indices or None, kv_intermediates or None); x is None for a kv_only block."""
@@ -919,6 +923,7 @@ class TtPrefillBlock(LightweightModule):
             trace_controller=getattr(self, "_trace_controller", None),
             tp_axis=self.mla.tp_shard_kv_axis,
             alias_layer_ids=ack_alias_layer_ids,
+            zero_only=zero_pad_only,
         )
 
         if kv_only:
