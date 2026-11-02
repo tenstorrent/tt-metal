@@ -25,6 +25,7 @@ void kernel_main() {
 
     const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
+    [[maybe_unused]] const uint32_t step_scalars_addr = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Tile size in bytes for parameters and moving averages (can be bf16 or fp32)
     const uint32_t tile_size_bytes = get_tile_size(cb_param_idx);
@@ -42,6 +43,20 @@ void kernel_main() {
     const auto exp_avg_addr_gen = TensorAccessor(exp_avg_args, exp_avg_addr);
     const auto exp_avg_sq_addr_gen = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr);
     const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
+#if DEVICE_STEP_SCALARS
+    // the two step-scalar tiles once per core (iteration 45)
+    {
+        constexpr auto step_args = TensorAccessorArgs<max_exp_avg_sq_args.next_compile_time_args_offset()>();
+        const auto step_gen = TensorAccessor(step_args, step_scalars_addr);
+        constexpr auto cb_step_idx = tt::CBIndex::c_5;
+        cb_reserve_back(cb_step_idx, 2);
+        const uint32_t step_tile_bytes = get_tile_size(cb_step_idx);
+        noc_async_read_page(0, step_gen, get_write_ptr(cb_step_idx));
+        noc_async_read_page(1, step_gen, get_write_ptr(cb_step_idx) + step_tile_bytes);
+        noc_async_read_barrier();
+        cb_push_back(cb_step_idx, 2);
+    }
+#endif
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {

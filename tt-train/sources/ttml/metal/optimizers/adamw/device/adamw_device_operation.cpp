@@ -104,7 +104,12 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        tensor_args.step_scalars.has_value(),
+        param_tensor.dtype(),
+        param_logical_shape);
 
     return hash;
 }
@@ -128,8 +133,17 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float weight_decay,
     bool amsgrad,
     ttml::metal::StochasticRounding stochastic_rounding,
-    std::optional<uint32_t> stochastic_rounding_seed) {
+    std::optional<uint32_t> stochastic_rounding_seed,
+    const std::optional<ttnn::Tensor>& step_scalars) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
+    if (step_scalars.has_value()) {
+        const auto& s = step_scalars->logical_shape();
+        TT_FATAL(
+            step_scalars->dtype() == ttnn::DataType::FLOAT32 && step_scalars->layout() == ttnn::Layout::TILE &&
+                s.rank() == 4 && s[0] == 1 && s[1] == 1 && s[2] == 32 && s[3] == 64,
+            "AdamW: step_scalars must be a [1, 1, 32, 64] fp32 TILE tensor, got {}",
+            s);
+    }
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .lr = lr,
@@ -149,6 +163,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .exp_avg = exp_avg,
         .exp_avg_sq = exp_avg_sq,
         .max_exp_avg_sq = max_exp_avg_sq,
+        .step_scalars = step_scalars,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

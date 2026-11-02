@@ -1,0 +1,23 @@
+=== 4 layers eager 2026-11-02T17:36:12Z
+Mistral: 4 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+step    1/8  loss 12.3125    5391.1 ms
+step    2/8  loss 12.0000      48.1 ms
+step    3/8  loss 11.5625      50.9 ms
+step    4/8  loss 11.0000      54.2 ms
+step    5/8  loss 10.1875      52.7 ms
+step    6/8  loss 9.5000      53.2 ms
+step    7/8  loss 9.6875      53.4 ms
+step    8/8  loss 9.0000      53.0 ms
+4 of 40 layers, tp 4: 52.9 ms/step over 6 steps (best 50.9), 228.9 TFLOP/s, MFU 38.54%
+=== 4 layers trace 2026-11-02T17:36:56Z
+Mistral: 4 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+step    1/8  loss 12.3125     304.1 ms
+step    2/8  loss 12.0000      48.6 ms
+step    3/8  loss 11.5625      86.5 ms
+step    4/8  loss 11.0000      53.4 ms  (trace replay)
+step    5/8  loss 10.1250      53.0 ms  (trace replay)
+step    6/8  loss 9.7500      50.4 ms  (trace replay)
+step    7/8  loss 9.3750      50.6 ms  (trace replay)
+step    8/8  loss 8.8125      50.0 ms  (trace replay)
+4 of 40 layers, tp 4: 57.3 ms/step over 6 steps (best 50.0), 211.4 TFLOP/s, MFU 35.58%
+=== done 2026-11-02T17:37:36Z

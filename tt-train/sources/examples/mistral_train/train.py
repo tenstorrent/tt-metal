@@ -46,6 +46,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--revision", default=DEFAULT_REVISION)
     p.add_argument("--data", default=None, help="plain-text corpus; default tt-train/data/shakespeare.txt")
     p.add_argument("--layers", type=int, default=0, help="truncate the stack (0 = all 40; needs --tp 4 on this box)")
+    p.add_argument(
+        "--trace",
+        action="store_true",
+        help="metal trace: after the warm-up steps capture one step's device commands and replay them for the rest "
+        "(needs TTML_TRACE_REGION_SIZE in the environment, e.g. 268435456; iteration 44)",
+    )
+    p.add_argument(
+        "--trace-alternate",
+        action="store_true",
+        help="with --trace: after the capture, alternate eager steps (odd) and trace replays (even) so the two are "
+        "timed under the same clock",
+    )
     p.add_argument("--tp", type=int, default=1, help="tensor-parallel size: 1 = one chip; 4 = a 1x4 mesh over the box")
     p.add_argument("--seq-len", type=int, default=1024)
     p.add_argument("--batch", type=int, default=1)
@@ -219,13 +231,58 @@ def main() -> None:
     ctx = ttml.autograd.AutoContext.get_instance()
     log: list[dict] = []
     steps_ms: list[float] = []
+    device = ctx.get_device()
+    # Metal trace (iteration 44): the input tensors are allocated once and refilled in place; the step after the
+    # warm-up is captured (every op must already be compiled and nothing may read back from the device inside it),
+    # and the following steps replay the captured commands with no host work between the ops.
+    trace_id = None
+    x_persistent = y_persistent = loss_persistent = None
+    capture_step = args.warmup_steps + 1 if args.trace else None
+    if args.trace:
+        assert not args.host_loss and not args.mem_probe, "--trace: no host loss / memory probe inside the step"
+        assert args.steps > capture_step, "--trace needs steps beyond the warm-up and the capture step"
+
+    def host_input(arr):
+        return ttnn.from_torch(
+            __import__("torch").from_numpy(arr.astype(np.int32)).to(__import__("torch").int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if use_tp else None,
+        )
+
     for step in range(1, args.steps + 1):
         x_np, y_np = batcher.next(args.batch)
         t0 = time.perf_counter()
-        x = ttml.autograd.Tensor.from_numpy(
-            x_np.reshape(args.batch, 1, 1, args.seq_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        )
-        y = ttml.autograd.Tensor.from_numpy(y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        if trace_id is not None and (not args.trace_alternate or step % 2 == 0):
+            # replay: refill the inputs in place, run the captured step, read the loss
+            ttnn.copy_host_to_device_tensor(host_input(x_np.reshape(args.batch, 1, 1, args.seq_len)), x_persistent)
+            ttnn.copy_host_to_device_tensor(host_input(y_np), y_persistent)
+            ttnn.execute_trace(device, trace_id, blocking=False)
+            loss_val = (
+                float(get_loss_over_devices(loss_persistent))
+                if use_tp
+                else float(loss_persistent.to_numpy(ttnn.DataType.FLOAT32).item())
+            )
+            host_loss = None
+            ms = (time.perf_counter() - t0) * 1e3
+            if step > args.warmup_steps:
+                steps_ms.append(ms)
+            log.append({"step": step, "loss": loss_val, "ms": ms, "trace": True})
+            print(f"step {step:4d}/{args.steps}  loss {loss_val:.4f}  {ms:8.1f} ms  (trace replay)")
+            continue
+        if step == capture_step:
+            x = ttml.autograd.Tensor.from_numpy(
+                x_np.reshape(args.batch, 1, 1, args.seq_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+            )
+            y = ttml.autograd.Tensor.from_numpy(y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+            x_persistent, y_persistent = x.get_value(), y.get_value()
+            ttnn.synchronize_device(device)
+            trace_id = ttnn.begin_trace_capture(device)
+        else:
+            x = ttml.autograd.Tensor.from_numpy(
+                x_np.reshape(args.batch, 1, 1, args.seq_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+            )
+            y = ttml.autograd.Tensor.from_numpy(y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
         optimizer.zero_grad()
         logits = model(x, None)
         host_loss = host_cross_entropy(logits, y_np) if args.host_loss else None
@@ -243,6 +300,14 @@ def main() -> None:
             print(f"step {step}: DRAM allocated after backward {dram_allocated_gib():.2f} GiB")
         ctx.reset_graph()
         optimizer.step()
+        if step == capture_step:
+            ttnn.end_trace_capture(device, trace_id)
+            loss_persistent = loss
+            ttnn.execute_trace(device, trace_id, blocking=False)  # the captured step's own execution
+        elif trace_id is not None:
+            # an eager step between replays (--trace-alternate): the captured step's inputs are refilled for the
+            # next replay by the replay branch; this step used fresh tensors
+            pass
         # The read-back is the step's host sync; under TP every chip holds the same value.
         loss_val = float(get_loss_over_devices(loss)) if use_tp else float(loss.to_numpy(ttnn.DataType.FLOAT32).item())
         if args.mem_probe and step <= 2:
@@ -250,9 +315,9 @@ def main() -> None:
                 f"step {step}: DRAM allocated after the optimizer step {dram_allocated_gib():.2f} GiB (weights + state)"
             )
         ms = (time.perf_counter() - t0) * 1e3
-        if step > args.warmup_steps:
+        if step > args.warmup_steps and step != capture_step:  # the capture step carries the capture itself
             steps_ms.append(ms)
-        entry = {"step": step, "loss": loss_val, "ms": ms}
+        entry = {"step": step, "loss": loss_val, "ms": ms, "trace": False, "capture": step == capture_step}
         if host_loss is not None:
             entry["host_loss"] = host_loss
         if args.data_log:
@@ -295,6 +360,8 @@ def main() -> None:
         Path(args.data_log).write_text(
             json.dumps([{"step": e["step"], "inputs": e["inputs"], "targets": e["targets"]} for e in log])
         )
+    if trace_id is not None:
+        ttnn.release_trace(device, trace_id)
     if use_tp:
         ttml.close_device_mesh()
     else:

@@ -6,10 +6,16 @@
 
 #include <fmt/format.h>
 
+#include <cmath>
+#include <cstdlib>
+#include <string>
+#include <ttnn/operations/data_movement/copy/copy.hpp>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "core/ttnn_all_includes.hpp"
 #include "metal/operations.hpp"
 #include "serialization/serializable.hpp"
 
@@ -42,6 +48,50 @@ AdamW::AdamW(
 
     init_param_groups(param_group_defaults(config), std::move(param_groups));
     m_beta_pows.reset(m_param_groups, m_steps);
+    const char* device_step = std::getenv("TTML_ADAMW_DEVICE_STEP");
+    m_device_step = device_step != nullptr && std::string(device_step) == "1";
+    if (m_device_step) {
+        reset_beta_pow_tensors();
+    }
+}
+
+void AdamW::reset_beta_pow_tensors() {
+    auto* device = &autograd::ctx().get_device();
+    m_beta_pow_tensors.clear();
+    m_beta_tensors.clear();
+    m_tile0_masks.clear();
+    m_tile1_masks.clear();
+    for (const auto& group : m_param_groups) {
+        const float beta1 = group.options.at("beta1");
+        const float beta2 = group.options.at("beta2");
+        const auto pow1 = static_cast<float>(std::pow(beta1, m_steps));
+        const auto pow2 = static_cast<float>(std::pow(beta2, m_steps));
+        const ttnn::Shape tile_shape({1, 1, 32, 32});
+        auto two_tiles = [&](float a, float b) {
+            return ttnn::concat(
+                std::vector<ttnn::Tensor>{
+                    core::full(tile_shape, a, device, ttnn::DataType::FLOAT32),
+                    core::full(tile_shape, b, device, ttnn::DataType::FLOAT32)},
+                3);
+        };
+        m_beta_pow_tensors.push_back(two_tiles(pow1, pow2));
+        m_beta_tensors.push_back(two_tiles(beta1, beta2));
+        m_tile0_masks.push_back(two_tiles(1.0F, 0.0F));
+        m_tile1_masks.push_back(two_tiles(0.0F, 1.0F));
+    }
+}
+
+ttnn::Tensor AdamW::advance_step_scalars_on_device(size_t group_idx, float lr) {
+    // pows *= betas in place (the buffer is the cross-step state a trace replays on), then the scalars:
+    // tile 0 = (1 - beta1^t) / lr, tile 1 = 1 / sqrt(1 - beta2^t).
+    auto& pows = m_beta_pow_tensors[group_idx];
+    auto next = ttnn::multiply(pows, m_beta_tensors[group_idx]);
+    ttnn::copy(next, pows);
+    auto bc = ttnn::multiply(ttnn::add(pows, -1.0F), -1.0F);  // 1 - pow, both tiles
+    // tile 0 keeps (1 - beta1^t) / lr, tile 1 1 / sqrt(1 - beta2^t): the two formulas over both tiles, masked
+    auto inv_step = ttnn::multiply(ttnn::multiply(bc, 1.0F / lr), m_tile0_masks[group_idx]);
+    auto inv_sqrt = ttnn::multiply(ttnn::rsqrt(bc), m_tile1_masks[group_idx]);
+    return ttnn::add(inv_step, inv_sqrt);
 }
 
 void AdamW::zero_grad() {
@@ -67,6 +117,10 @@ void AdamW::step() {
         const float epsilon = group.options.at("epsilon");
         const float weight_decay = group.options.at("weight_decay");
         const auto [beta1_pow, beta2_pow] = m_beta_pows.advance(group_idx, beta1, beta2);
+        std::optional<ttnn::Tensor> step_scalars;
+        if (m_device_step) {
+            step_scalars = advance_step_scalars_on_device(group_idx, lr);
+        }
 
         for (const auto& name : group.params) {
             const auto& theta_ptr = m_parameters.at(name);
@@ -105,7 +159,8 @@ void AdamW::step() {
                 weight_decay,
                 static_cast<ttml::metal::StochasticRounding>(stochastic_rounding),
                 stochastic_rounding ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
-                                    : std::nullopt);
+                                    : std::nullopt,
+                step_scalars);
         }
     }
 }
@@ -147,6 +202,9 @@ size_t AdamW::get_steps() const {
 void AdamW::set_steps(size_t steps) {
     m_steps = steps;
     m_beta_pows.reset(m_param_groups, m_steps);
+    if (m_device_step) {
+        reset_beta_pow_tensors();
+    }
 }
 
 void AdamW::set_param_group_option(size_t group_idx, const std::string& key, float value) {

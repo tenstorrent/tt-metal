@@ -33,6 +33,10 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
+    // Trace replay (iteration 45): a [1, 1, 32, 64] fp32 TILE tensor, tile 0 filled with (1 - beta1^t) / lr (the
+    // inverse of the bias-corrected step size, applied to the denominator) and tile 1 with 1 / sqrt(1 - beta2^t),
+    // computed on the device every step so a captured step replays with advancing powers; absent: the host scalars.
+    std::optional<ttnn::Tensor> step_scalars = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;

@@ -54,6 +54,7 @@ constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kExpAvgCbIndex = tt::CBIndex::c_2;
 constexpr auto kExpAvgSqCbIndex = tt::CBIndex::c_3;
 constexpr auto kMaxExpAvgSqInCbIndex = tt::CBIndex::c_4;
+constexpr auto kStepScalarsCbIndex = tt::CBIndex::c_5;  // [2] fp32: the device-side step scalars (iteration 45)
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 constexpr auto kExpAvgOutCbIndex = tt::CBIndex::c_17;
@@ -259,6 +260,17 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
     defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding == StochasticRounding::Enabled ? "1" : "0";
+    const bool device_step = tensor_args.step_scalars.has_value();
+    defines["DEVICE_STEP_SCALARS"] = device_step ? "1" : "0";
+    if (device_step) {
+        create_circular_buffer(
+            program,
+            all_cores,
+            kStepScalarsCbIndex,
+            tt::DataFormat::Float32,
+            tt::tile_size(tt::DataFormat::Float32),
+            2U);
+    }
 
     AdamWKernels kernels{};
 
@@ -268,6 +280,9 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(max_exp_avg_sq_buffer).append_to(reader_compile_time_args);
+    if (device_step) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.step_scalars->buffer()).append_to(reader_compile_time_args);
+    }
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
@@ -349,7 +364,8 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
                  exp_avg_sq_buffer->address(),
                  max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
                  num_tiles,
-                 start_tile});
+                 start_tile,
+                 device_step ? tensor_args.step_scalars->buffer()->address() : 0U});
             compute_args[kComputeSeedIdx] = seeds[core_index];
             SetRuntimeArgs(program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, compute_args);
             SetRuntimeArgs(
@@ -449,6 +465,9 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kExpAvgSqAddrIdx] = exp_avg_sq_buffer->address();
             runtime_args[kMaxExpAvgSqAddrIdx] =
                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U;
+            if (tensor_args.step_scalars.has_value()) {
+                runtime_args[kMaxExpAvgSqAddrIdx + 3U] = tensor_args.step_scalars->buffer()->address();
+            }
         }
         // Update compute kernel args
         {

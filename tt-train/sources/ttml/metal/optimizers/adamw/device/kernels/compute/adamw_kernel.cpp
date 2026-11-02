@@ -57,6 +57,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_param_idx, cb_output_idx);
     copy_init(cb_param_idx);
+#if DEVICE_STEP_SCALARS
+    // Iteration 45: tile 0 holds (1 - beta1^t) / lr, tile 1 holds 1 / sqrt(1 - beta2^t), both filled; the step size
+    // is applied as a division of the denominator (m / (denom * inv_step) = step_size * m / denom).
+    constexpr auto cb_step_idx = tt::CBIndex::c_5;
+    cb_wait_front(cb_step_idx, 2);
+#endif
 #if STOCH_ROUND
     MATH(init_prng_seed(seed));
 #endif
@@ -151,11 +157,35 @@ void kernel_main() {
         sqrt_tile_init();  // sets extra constants
         // binop_with_scalar_tile_init();
         // sqrt(v_hat_t) + epsilon = sqrt(v_t) * inv_sqrt_bc2 + epsilon)
+#if DEVICE_STEP_SCALARS
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            sqrt_tile(block_idx);
+        }
+        // registers [block_size, 2 block_size) are free here: the scalar tiles go through them
+        reconfig_data_format_srca(cb_v_t, cb_step_idx);
+        copy_init(cb_step_idx);
+        copy_tile(cb_step_idx, 1, block_size);
+        mul_binary_tile_init();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_binary_tile(block_idx, block_size, block_idx);  // sqrt(v_t) * inv_sqrt_bc2
+        }
+        binop_with_scalar_tile_init();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            add_unary_tile(block_idx, epsilon);
+        }
+        copy_init(cb_step_idx);
+        copy_tile(cb_step_idx, 0, block_size);
+        mul_binary_tile_init();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_binary_tile(block_idx, block_size, block_idx);  // denominator * (1 - beta1^t) / lr
+        }
+#else
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sqrt_tile(block_idx);
             mul_unary_tile(block_idx, inv_sqrt_bc2);
             add_unary_tile(block_idx, epsilon);
         }
+#endif
         cb_wait_front(cb_m_t, block_size);
         copy_init(cb_m_t);
         div_binary_tile_init();
@@ -181,7 +211,9 @@ void kernel_main() {
         }
         // theta_t = theta_t - step_size * update, where step_size = learning_rate / bias_correction1
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+#if !DEVICE_STEP_SCALARS
             mul_unary_tile(block_idx, step_size);
+#endif
             sub_binary_tile(block_size + block_idx, block_idx, block_idx);
         }
 #if STOCH_ROUND

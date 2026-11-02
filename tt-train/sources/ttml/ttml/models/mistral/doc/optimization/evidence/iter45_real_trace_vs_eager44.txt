@@ -1,0 +1,12 @@
+step  1  eager(44, host scalars) 0.4414   772.9 ms  trace(45) 0.4414   762.7 ms  eager   diff +0.0000
+step  2  eager(44, host scalars) 0.3242   468.5 ms  trace(45) 0.3242   451.7 ms  eager   diff +0.0000
+step  3  eager(44, host scalars) 0.2480   464.4 ms  trace(45) 0.2480   805.7 ms  eager   diff +0.0000
+step  4  eager(44, host scalars) 0.2031   468.6 ms  trace(45) 0.2012   448.3 ms  replay  diff -0.0020
+step  5  eager(44, host scalars) 0.1406   467.6 ms  trace(45) 0.1406   454.0 ms  replay  diff +0.0000
+step  6  eager(44, host scalars) 0.2734   472.6 ms  trace(45) 0.2734   457.2 ms  replay  diff +0.0000
+step  7  eager(44, host scalars) 0.3418   469.1 ms  trace(45) 0.3418   462.7 ms  replay  diff +0.0000
+step  8  eager(44, host scalars) 0.2656   477.0 ms  trace(45) 0.2656   457.8 ms  replay  diff +0.0000
+step  9  eager(44, host scalars) 0.3086   464.9 ms  trace(45) 0.3066   459.6 ms  replay  diff -0.0020
+step 10  eager(44, host scalars) 0.4512   467.2 ms  trace(45) 0.4492   460.8 ms  replay  diff -0.0020
+max |diff| 0.0020 (tol 0.0625: one bf16 ulp at these losses)
+PASS

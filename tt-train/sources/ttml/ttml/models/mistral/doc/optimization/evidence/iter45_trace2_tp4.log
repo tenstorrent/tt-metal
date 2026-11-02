@@ -1,0 +1,49 @@
+2026-11-02 19:52:40.020 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files: 100%|██████████| 18/18 [00:00<00:00, 49998.33it/s]
+[tt-train] Inferred fabric config 7 from MGD dim_types
+2026-11-02 19:52:40.902 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 19:52:40.902 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 19:52:40.902 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 19:52:40.902 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 19:52:40.913 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 19:52:40.913 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 19:52:40.993 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 19:52:40.993 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 19:52:40.994 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 19:52:40.994 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 19:52:40.996 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 19:52:41.229 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 19:52:41.263 | info     |     Distributed | Using custom mesh graph descriptor: /home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto (metal_env.cpp:533)
+2026-11-02 19:52:41.263 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 19:52:41.264 | warning  |          Fabric | Physical groupings: Mesh graph descriptor 'M0': no PGD grouping could be placed on the PSD (4 topology match(es)); continuing without pinning hints for this mesh (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-02 19:52:41.309 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-11-02 19:52:41.309 | info     |          Fabric | mesh 0 shape 1x4: axis topologies derived as Y=LINE X=RING (control_plane.cpp:2606)
+2026-11-02 19:52:41.347 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-11-02 19:52:41.347 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+MGD validated: dims=[1, 4], file=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto
+frozen weights stored transposed: 81 linears
+LoRA update fused into the base matmul: 80 linears
+RMSNorm layers on the all-core backward: 81
+residual adds fused into the norms: 80
+LoRA rank 16 alpha 32.0: 30.5M trainable parameters
+useful FLOPs/step 96.371 T (40 layers), peak 594.0 TFLOP/s (4 chips)
+step    1/10  loss 11.9375     759.8 ms
+step    2/10  loss 11.9375     455.4 ms
+step    3/10  loss 11.9375     775.1 ms
+step    4/10  loss 11.9375     439.4 ms  (trace replay)
+step    5/10  loss 11.9375     443.1 ms  (trace replay)
+step    6/10  loss 11.9375     450.4 ms  (trace replay)
+step    7/10  loss 11.9375     446.5 ms  (trace replay)
+step    8/10  loss 11.8750     443.7 ms  (trace replay)
+step    9/10  loss 11.9375     442.9 ms  (trace replay)
+step   10/10  loss 11.9375     450.3 ms  (trace replay)
+40 of 40 layers, tp 4: 445.2 ms/step over 7 steps (best 439.4), 216.5 TFLOP/s, MFU 36.44%
+2026-11-02 19:56:00.549 | info     |    BuildKernels | JIT cache stats: 833/833 hits (100.0%) [833 cached, 770 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 19:56:00.549 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 19:56:00.570 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 19:56:00.570 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 19:56:00.797 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 19:56:00.797 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 19:56:00.797 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

@@ -1,0 +1,52 @@
+=== iter45 eager_tp4 after 0s cool-down 2026-11-02T18:58:56Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+40 of 40 layers, tp 4: 466.8 ms/step over 6 steps (best 462.6), 206.5 TFLOP/s, MFU 34.76%
+=== iter45 trace_tp4 after 600s cool-down 2026-11-02T19:02:31Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+40 of 40 layers, tp 4: 450.0 ms/step over 7 steps (best 445.5), 214.2 TFLOP/s, MFU 36.05%
+=== iter45 alternate_tp4 after 600s cool-down 2026-11-02T19:15:56Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+40 of 40 layers, tp 4: 445.8 ms/step over 9 steps (best 438.5), 216.2 TFLOP/s, MFU 36.39%
+=== iter45 eager2_tp4 after 600s cool-down 2026-11-02T19:29:19Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+40 of 40 layers, tp 4: 444.9 ms/step over 6 steps (best 441.2), 216.6 TFLOP/s, MFU 36.47%
+=== iter45 trace2_tp4 after 600s cool-down 2026-11-02T19:42:39Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+40 of 40 layers, tp 4: 445.2 ms/step over 7 steps (best 439.4), 216.5 TFLOP/s, MFU 36.44%
+=== iter45 measurements finished 2026-11-02T19:56:01Z
+PASS (every run's losses identical to the eager run step for step)
+=== iter45 harness (device step scalars) 2026-11-02T19:56:01Z
+harness rc=0
+================== 66 passed, 2 warnings in 255.01s (0:04:15) ==================
+swiglu op tests rc=0
+============================== 35 passed in 3.54s ==============================
+=== iter45 8 layers real weights, host loss, device step scalars 2026-11-02T20:00:26Z
+rc=0
+compare rc=0
+max |diff| 0.0229 (tol 0.1), mean +0.0048, signs +8/-2
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+PASS
+=== iter45 TP=4 gradient check 2026-11-02T20:01:38Z
+tp4 rc=0
+tp 4: transposed 3, fused 2
+PASS
+=== iter45 TP=4 40 layers real weights, trace 2026-11-02T20:02:24Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+step    1/10  loss 0.4414     762.7 ms
+step    2/10  loss 0.3242     451.7 ms
+step    3/10  loss 0.2480     805.7 ms
+step    4/10  loss 0.2012     448.3 ms  (trace replay)
+step    5/10  loss 0.1406     454.0 ms  (trace replay)
+step    6/10  loss 0.2734     457.2 ms  (trace replay)
+step    7/10  loss 0.3418     462.7 ms  (trace replay)
+step    8/10  loss 0.2656     457.8 ms  (trace replay)
+step    9/10  loss 0.3066     459.6 ms  (trace replay)
+step   10/10  loss 0.4492     460.8 ms  (trace replay)
+40 of 40 layers, tp 4: 457.2 ms/step over 7 steps (best 448.3), 210.8 TFLOP/s, MFU 35.49%
+=== iter45 chain finished 2026-11-02T20:16:36Z
