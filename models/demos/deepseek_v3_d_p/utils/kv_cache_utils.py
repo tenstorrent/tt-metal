@@ -405,6 +405,21 @@ def striped_cache_to_host(tensor, mesh_device, sp_axis: int) -> torch.Tensor:
     return torch.cat([host[:, t, s * rows : (s + 1) * rows] for s in range(sp) for t in range(tp)], dim=1)
 
 
+def assert_full_mesh_stripe_order(tensor, sp_axis: int, what: str) -> None:
+    """Refuse a full-mesh gather (``cluster_axis=None``) of a cache striped over every mesh coordinate at
+    ``sp_axis != 0``. Such a gather orders its ranks by the cache's declared topology, which lists the coordinates
+    row-major: the stripe order (chip (s, t) holds stripe s*tp + t) only with SP on mesh axis 0. With SP on axis 1
+    it would pass validation and return the rows out of order (see init_kvpe_cache). A cache sharded on one axis
+    (rank-1 topology) has no such gather and passes."""
+    if sp_axis == 0 or len(list(tensor.tensor_topology().distribution_shape())) != 2:
+        return
+    raise RuntimeError(
+        f"{what}: a full-mesh gather of a cache striped over every mesh coordinate needs sp_axis=0, got "
+        f"sp_axis={sp_axis}. Its row-major topology label is not the stripe order there: gather along each "
+        f"mesh axis, or read the cache back with striped_cache_to_host."
+    )
+
+
 def _sp_row_coords(mesh_shape, sp_axis, sp_row):
     """Mesh coordinates of the chips at SP position ``sp_row``, in TP order, for SP on ``sp_axis``."""
     coords = []
@@ -1176,9 +1191,19 @@ def init_kvpe_cache(
         # declared distribution rank and rejects an axis gather on a rank-1 topology, which is what broke
         # the indexer's TP leg. Declaring the real distribution also leaves placements[sp_axis] sharded
         # after that gather replicates placements[tp_axis], which is exactly the post-gather layout.
-        # With SP on mesh axis 1 the stripes really run down the columns (chip (t, s) holds stripe
-        # s*tp + t); ring_mla takes that order from Q's sequence placement, and the readers in
-        # prefill_kv_validation / test_utils reorder by sp_axis, so nothing reads this declaration's order.
+        # With SP on mesh axis 1 this label does NOT describe the stripe order: the stripes run down the
+        # columns (chip (t, s) holds stripe s*tp + t), while the label lists the coordinates row-major.
+        # Its rank and its dim-2 placements are true, so is_tp_deduped_kv_cache and mla.kv_cache_to_host,
+        # which key on those, are right. Safe consumers take the order from physical coordinates instead:
+        # update_padded_kv_cache with cluster_axis set, ring_mla (from Q's sequence placement),
+        # ring_indexer_score_dsa (transport_to_tensor_rank), and the host readers through
+        # striped_cache_to_host. Unsafe: anything that orders by this label -- a full-mesh
+        # high_bw_all_gather (cluster_axis=None) or update_padded_kv_cache in full-mesh mode would pass
+        # validation and return rows out of order, and an axis gather of dim 2 is flagged as interleaving.
+        # assert_full_mesh_stripe_order refuses such a gather at sp_axis=1: mla's full-mesh KVPE gather calls
+        # it, and MiniMax's index_k read calls it behind its two-leg (TP then SP) route, which it takes at
+        # sp_axis=1. The GLM index cache needs no guard: its only full-mesh consumer is ring_indexer_score_dsa,
+        # which orders by physical coordinates. Relabeling the cache to match is a follow-up.
         kvpe_cache.update_tensor_topology(row_major_seq_topology)
         return kvpe_cache
 
