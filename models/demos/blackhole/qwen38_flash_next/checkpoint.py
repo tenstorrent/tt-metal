@@ -323,8 +323,11 @@ class Qwen38Checkpoint:
         # A component-gate guard returns /proc/self/fd/N intentionally: that
         # kernel-owned link duplicates the already admitted descriptor.  For
         # ordinary paths, retain O_NOFOLLOW so the standalone loader cannot
-        # traverse a mutable symlink.
+        # traverse a mutable symlink.  A Hugging Face cache snapshot links each
+        # shard to ../../blobs/<sha>: resolve the link once, then open the real
+        # file with O_NOFOLLOW so the open itself cannot traverse a link.
         if stable_path.parent != Path("/proc/self/fd"):
+            stable_path = Path(os.path.realpath(stable_path))
             flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor: int | None = None
         try:
@@ -428,7 +431,10 @@ class Qwen38CheckpointRowReader:
         path = checkpoint.root / metadata.shard
         stable_path = checkpoint._guard(path, f"before-tensor-rows-open:{name}")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        # A Hugging Face cache snapshot links each shard to ../../blobs/<sha>: resolve the link once, then open the
+        # real file with O_NOFOLLOW so the open itself cannot traverse a link.
         if stable_path.parent != Path("/proc/self/fd"):
+            stable_path = Path(os.path.realpath(stable_path))
             flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor: int | None = None
         try:

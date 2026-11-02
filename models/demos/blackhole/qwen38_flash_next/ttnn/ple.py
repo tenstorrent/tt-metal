@@ -1024,7 +1024,7 @@ class Qwen38ResidentPLELookup:
         self, tokens: Sequence[int], contexts: Sequence[tuple[int, int] | None]
     ) -> tuple[bytearray, tuple[tuple[int, int], ...]]:
         """One batched step: lane u's sixteen rows hashed from ``(tokens[u], contexts[u])``, every lane's rows
-        advised and read in one pass (one payload of ``lanes x 5,120`` B, lane-major), and the next contexts."""
+        read in one pass (one payload of ``lanes x 5,120`` B, lane-major), and the next contexts."""
 
         if len(tokens) != len(contexts) or not tokens:
             raise ValueError(
@@ -1048,7 +1048,7 @@ class Qwen38ResidentPLELookup:
             )
             ids.extend(lane_ids)
             next_contexts.append(next_context)
-        return self._read_rows(ids), tuple(next_contexts)
+        return self._read_token_rows(ids), tuple(next_contexts)
 
     def close(self) -> None:
         for reader in self.readers:
@@ -1987,7 +1987,9 @@ class Qwen38TTNNPLE:
         payload, next_contexts = self.resident_lookup.lookup_lanes(
             [int(token) for token in tokens], _validate_lane_contexts(contexts, lanes, label="PLE lanes contexts")
         )
-        host = torch.frombuffer(bytearray(payload), dtype=torch.bfloat16).reshape(1, 1, lanes, EMBEDDING_WIDTH)
+        if not isinstance(payload, bytearray):  # the lookup's own bytearray is writable: no second copy
+            payload = bytearray(payload)
+        host = torch.frombuffer(payload, dtype=torch.bfloat16).reshape(1, 1, lanes, EMBEDDING_WIDTH)
         return host, next_contexts
 
     def prepare_lanes_input(

@@ -2449,6 +2449,12 @@ class Qwen38TracedChain:
     def pending_value(pending: Any) -> int:
         return resident_decode.token_row_host_value(ttnn.to_torch(pending))
 
+    def note_token_row_value(self, value: int) -> None:
+        """The persistent token row holds ``value``: a waited non-blocking read of it with no HEAD or host write since
+        (the async decode's quiesce); the next ``feed_token_row`` of that token skips the write."""
+
+        self._token_row_value = value
+
     def read_token_row(self) -> int:
         if os.environ.get("QWEN38_HOST_FAST") == "1":  # the same blocking read of device 0's replica, one call less
             value = resident_decode.token_row_host_value(

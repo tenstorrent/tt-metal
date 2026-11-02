@@ -1483,10 +1483,10 @@ def test_class_surface_matches_the_plugin_contract(expect_error) -> None:
         "is_hybrid",
         "get_kv_cache_spec",
         "tt_supported_decode_batch_sizes",
-        "read_decode_output",
-        "process_decode_output_host",
     ):
         assert not hasattr(cls, name)
+    # the async decode's output hooks (QWEN38_ASYNC_DECODE): present always, only a handle or a host tensor passes through
+    assert callable(cls.read_decode_output) and callable(cls.process_decode_output_host)
     parameters = inspect.signature(cls.__init__).parameters
     assert any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
     assert list(inspect.signature(cls.forward).parameters)[:3] == ["self", "input_ids", "positions"]
