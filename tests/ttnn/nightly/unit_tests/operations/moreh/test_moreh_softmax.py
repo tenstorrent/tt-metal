@@ -559,3 +559,19 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
     passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0, atol=16 * rounding_floor)
     logger.debug(out)
     assert passing, out
+
+
+@pytest.mark.parametrize(
+    "op", [ttnn.operations.moreh.softmax, ttnn.operations.moreh.softmin, ttnn.operations.moreh.logsoftmax]
+)
+@pytest.mark.parametrize(
+    "out_dtype, out_shape",
+    [(ttnn.float32, (1, 1, 64, 64)), (ttnn.bfloat8_b, (1, 1, 64, 64)), (ttnn.bfloat16, (1, 1, 32, 32))],
+    ids=["fp32_output", "bfp8_output", "small_output"],
+)
+def test_moreh_softmax_rejects_mismatched_output(op, out_dtype, out_shape, device, expect_error):
+    # The output buffer is written in the input's format, one input-sized page per output page.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(out_shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input"):
+        op(x, 3, output_tensor=out)

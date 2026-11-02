@@ -113,6 +113,22 @@ void MorehSoftmaxOperation::validate_inputs(
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
     TT_FATAL(input.logical_volume() > 0, "Input to softmax must be non-empty, got shape {}", input.logical_shape());
+    if (tensor_args.output.has_value()) {
+        // The factories build the output buffer in the input's format and write one input-sized page per output
+        // page, so the output must have the input's dtype, layout and shape.
+        const auto& output = tensor_args.output.value();
+        TT_FATAL(
+            output.dtype() == input.dtype(),
+            "moreh_softmax: output dtype {} must match the input dtype {}",
+            output.dtype(),
+            input.dtype());
+        TT_FATAL(output.layout() == Layout::TILE, "moreh_softmax: output must be tilized");
+        TT_FATAL(
+            output.logical_shape() == input.logical_shape(),
+            "moreh_softmax: output shape {} must match the input shape {}",
+            output.logical_shape(),
+            input.logical_shape());
+    }
 }
 
 void MorehSoftmaxOperation::validate_on_program_cache_miss(
