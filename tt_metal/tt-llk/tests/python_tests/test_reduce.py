@@ -7,6 +7,7 @@ import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -15,7 +16,6 @@ from helpers.llk_params import (
     PerfRunType,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import (
     passed_test,
+    result_tensor,
     skip_ttsim_partial_face_bfp_zero_write,
     tolerances,
 )
@@ -53,12 +54,6 @@ mathop_mapping = {
 
 REDUCE_DIMS = [ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar]
 POOL_TYPES = [ReducePool.Max, ReducePool.Average, ReducePool.Sum]
-ALL_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 REDUCE_TILE_DIMENSIONS = [
     [1, 32],
     [2, 32],
@@ -75,7 +70,7 @@ def _fidelities_for_format(formats):
     """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
     if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
-    return ALL_FIDELITIES
+    return ALL_MATH_FIDELITIES
 
 
 def _reduce_to_one_for_format(formats):
@@ -263,11 +258,7 @@ def _run_reduce_test(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if is_reduce_to_one:
         # Lower the threshold for reduce to one cases as they are more prone to numerical errors, especially in lower precision formats
@@ -332,7 +323,7 @@ def test_reduce(
     dest_acc=_required_dest_acc_mode,
     reduce_dim=REDUCE_DIMS,
     pool_type=POOL_TYPES,
-    math_fidelity=ALL_FIDELITIES,
+    math_fidelity=ALL_MATH_FIDELITIES,
     is_reduce_to_one=[False, True],
     tile_dimensions=[[32, 32]],
 )
