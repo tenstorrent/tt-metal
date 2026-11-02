@@ -16,14 +16,17 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
 /**
  * @brief Validate the public block-max API, row packing, and neighboring DST slots.
  *
  * Keep the golden and device cases in one host-owned table. Compile arguments
- * describe the tile/packing geometry; runtime arguments contain a DST index and
- * valid-score count per acquisition. Dispatch twice to exercise program reuse.
+ * describe the tile/packing geometry and the SFPU or FPU variant; runtime arguments
+ * contain a DST index and valid-score count per acquisition. Dispatch twice to
+ * exercise program reuse.
  */
-TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservation) {
+void run_block_max8(distributed::MeshDevice& mesh, bool fpu) {
     constexpr uint32_t slots = 8;
     constexpr uint32_t block_size = 8;
     constexpr uint32_t result_rows = 8;
@@ -66,7 +69,6 @@ TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservatio
     }
     const auto packed = pack_bfloat16_vec_into_uint32_vec(input);
     const auto golden = pack_bfloat16_vec_into_uint32_vec(expected);
-    auto& mesh = *devices_.at(0);
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
     Program program = CreateProgram();
@@ -101,7 +103,7 @@ TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservatio
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/block_max8.cpp",
         core,
-        ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {tiles, slots, result_rows}});
+        ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {tiles, slots, result_rows, fpu}});
     std::vector<uint32_t> cases;
     for (uint32_t batch = 0; batch < batches; ++batch) {
         cases.push_back(dst_indices[batch % dst_index_count]);
@@ -132,4 +134,15 @@ TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservatio
         }
     }
 }
+
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservation) {
+    run_block_max8(*devices_.at(0), false /*fpu*/);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, BlockMax8FpuCompactRowsAndNeighborPreservation) {
+    run_block_max8(*devices_.at(0), true /*fpu*/);
+}
+
 }  // namespace tt::tt_metal

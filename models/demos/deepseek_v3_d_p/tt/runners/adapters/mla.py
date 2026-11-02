@@ -111,6 +111,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 num_layers=params.num_layers,
                 num_users=params.num_users,
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
+                bank_aligned=True,
             )
         )
 
@@ -156,6 +157,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             dflash_enabled=params.dflash_enabled,
             dflash_checkpoint_path=params.dflash_checkpoint_path,
             mtp_levels=params.mtp_levels,
+            mtp_decode_levels=params.mtp_decode_levels,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,

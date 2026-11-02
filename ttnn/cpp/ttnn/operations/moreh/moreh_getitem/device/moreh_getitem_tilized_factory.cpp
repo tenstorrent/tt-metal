@@ -11,7 +11,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace {
@@ -95,6 +95,8 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     const KernelSpecName WRITER{"writer"};
     // in0 stages one input stick: the reader fills it, the writer drains it.
     const DFBSpecName IN0{"in0"};
+    // scratch holds a DRAM read granule span for an input stick that does not start on a granule.
+    const DFBSpecName SCRATCH{"scratch"};
     // One DFB per index dimension the reader stages a tile of, indexed by 5-D-normalized dimension.
     const std::array<DFBSpecName, 5> INDEX_DFB{
         DFBSpecName{"in1"}, DFBSpecName{"in2"}, DFBSpecName{"in3"}, DFBSpecName{"in4"}, DFBSpecName{"in5"}};
@@ -153,7 +155,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
         auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-        auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+        auto rounded_input_page_size = tt::round_up(input_unit_size, 32u);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0,
             .entry_size = rounded_input_page_size,
@@ -161,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
             .data_format_metadata = src_cb_data_format,
         });
 
-        auto rounded_output_page_size = round_up_to_mul32(output_unit_size);
+        auto rounded_output_page_size = tt::round_up(output_unit_size, 32u);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = OUT1,
             .entry_size = rounded_output_page_size,
@@ -517,10 +519,18 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
 
-    auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+    auto rounded_input_page_size = tt::round_up(input_unit_size, 32u);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0,
         .entry_size = rounded_input_page_size,
+        .num_entries = 1,
+        .data_format_metadata = src_cb_data_format,
+    });
+
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SCRATCH,
+        .entry_size = tt::round_up(input_unit_size, dram_alignment) + dram_alignment,
         .num_entries = 1,
         .data_format_metadata = src_cb_data_format,
     });
@@ -531,6 +541,16 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
             .dfb_spec_name = IN0,
             .accessor_name = "in0",
             .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = SCRATCH,
+            .accessor_name = "scratch",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = SCRATCH,
+            .accessor_name = "scratch",
+            .endpoint_type = DFBEndpointType::CONSUMER,
         },
     };
     Group<TensorBinding> reader_tensor_bindings = {

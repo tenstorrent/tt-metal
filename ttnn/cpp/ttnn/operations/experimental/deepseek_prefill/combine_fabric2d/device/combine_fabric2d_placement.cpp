@@ -159,7 +159,7 @@ DevicePlacement decide_device_placement(
             axis,
             coord);
         const auto nbr_node = mesh->get_fabric_node_id(*nbr);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(self_node, nbr_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, self_node, nbr_node);
         TT_FATAL(
             links.size() >= num_links,
             "combine_fabric2d {}: {} forwarding links toward {}, {} requested",

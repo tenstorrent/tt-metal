@@ -6,7 +6,6 @@
 
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <future>
 #include <stdexcept>
@@ -26,6 +25,7 @@
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/program/kernel_compile_utils.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_cache.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -269,7 +269,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDu
     // The kernel uses no CBs, so its build options need nothing beyond the kernel's own.
     Program program(descriptor);
     const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
+        BuildEnvManager::get_instance(device->impl().get_context_id()).get_device_build_env(device->build_id());
     JitBuildOptions build_options(build_env.build_env);
     program.impl().get_kernel(0)->set_build_options(build_options);
     const size_t kernel_hash =
@@ -352,8 +352,9 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, SameProgramDuplicateDoesNotRetryF
 
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, PlacementFailureDoesNotStartBuilds) {
     auto* device = devices_.at(0).get();
-    auto& context = MetalContext::instance(extract_context_id(device));
-    if (!context.rtoptions().get_fast_dispatch() ||
+    auto& env = device->impl().metal_env();
+    auto& context = device->impl().metal_context();
+    if (!env.get_rtoptions().get_fast_dispatch() ||
         context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::WORKER) {
         GTEST_SKIP() << "Requires a fast-dispatch mock with worker dispatch cores";
     }

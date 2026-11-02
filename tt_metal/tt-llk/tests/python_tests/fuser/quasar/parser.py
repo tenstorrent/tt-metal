@@ -154,6 +154,7 @@ _eltwise_checks = [
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
 
 _matmul_checks = [
+    NO_UNPACK_TO_DEST,
     NO_REUSE_DEST,
     NO_BROADCAST,
     MATMUL_OPERAND_DIMS,
@@ -316,6 +317,7 @@ FPU_MAP = {
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
+            NO_UNPACK_TO_DEST,
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_REUSE_DEST,
@@ -538,6 +540,7 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
+    MathOperation.SfpuReshuffleRows,
 }
 
 

@@ -9,11 +9,13 @@ from dataclasses import dataclass, field
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
 from models.demos.gemma4_d_p.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
     init_global_ring_kv_cache,
     init_sliding_ring_kv_cache,
     ring_cache_capacity,
+    ring_cache_seq_len,
 )
 
 
@@ -52,6 +54,7 @@ def allocate_ring_kv_caches(
     prefill_chunk_size: int = 8192,
     num_layers: int | None = None,
     cache_dtype=ttnn.bfloat8_b,
+    bank_aligned: bool = False,
 ) -> Gemma4KvCaches:
     """Allocate the sole compute+migration cache family for a CP prefill model."""
     num_layers = num_layers or hf_config.num_hidden_layers
@@ -60,6 +63,10 @@ def allocate_ring_kv_caches(
     if mesh_config.cp_degree <= 1:
         raise ValueError("migration-ready Gemma 4 caches require context parallel prefill")
     max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
+    if bank_aligned:
+        check_kv_bank_aligned(
+            max_seq_len, ring_cache_seq_len(max_seq_len, mesh_config.cp_degree), mesh_config.device.dram_grid_size().x
+        )
     layer_types = tuple(hf_config.layer_types[:num_layers])
     caches = []
     for layer_idx, layer_type in enumerate(layer_types):

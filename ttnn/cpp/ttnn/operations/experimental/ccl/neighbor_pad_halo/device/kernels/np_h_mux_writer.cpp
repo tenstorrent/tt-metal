@@ -31,7 +31,7 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(3);
 constexpr auto dst_ct_args = TensorAccessorArgs<4>();
 constexpr uint32_t ct_after_dst = dst_ct_args.next_compile_time_args_offset();
 constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_dst);
-constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t NP_NUM_DRAM_BANKS = NP_DRAM_BANKS;
 // Mux connection CT args (lockstep with FabricMuxConfig on the host).
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(ct_after_dst + 1);
 constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(ct_after_dst + 2);

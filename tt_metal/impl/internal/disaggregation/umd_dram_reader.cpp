@@ -29,12 +29,12 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #pragma GCC diagnostic pop
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -107,7 +107,8 @@ const std::vector<UmdKvDramView>& umd_dram_views_for(tt::ChipId chip_id) {
     }
     tt::umd::SocDescriptor soc = umd_read_cluster()->get_soc_descriptor(chip_id);
     soc.device_descriptor_file_path = umd_metal_soc_yaml_path(soc.arch);
-    metal_SocDescriptor metal_soc(soc, tt::BoardType::UNKNOWN);
+    metal_SocDescriptor metal_soc(
+        soc, tt::BoardType::UNKNOWN, read_mrisc_noc2axi_ports(umd_read_cluster()->get_tt_device(chip_id)));
 
     std::vector<UmdKvDramView> views;
     const size_t num_views = metal_soc.get_num_dram_views();

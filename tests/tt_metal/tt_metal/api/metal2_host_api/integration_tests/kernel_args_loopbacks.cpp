@@ -7,12 +7,15 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -422,11 +425,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 // binding is the crux: every downstream section (scratchpad, varargs) must shift by the binding's true
 // WIDTH, not by binding COUNT — the `.size()` trap where an offset bug hides and only bites once a
 // relaxation makes a binding wider than one word. The producer reads one value from each section and
-// stages seven into a DFB entry (w0=named0, w1=named1, w2=tensor base, w3=scratch base, w4=vararg0,
-// w5=vararg1, w6=page size); an NCRISC consumer drains it to DRAM. The named/vararg sentinels and the
-// page size are exact-checked; the tensor base and scratchpad base are real addresses (checked nonzero
-// and mutually distinct from every sentinel and each other — a mis-offset read of an address region
-// surfaces as a known value or the other base).
+// stages seven into a DFB entry (w0=named0, w1=named1, w2=first word of the tensor's page 0, w3=scratch
+// base, w4=vararg0, w5=vararg1, w6=page size); an NCRISC consumer drains it to DRAM. The named/vararg
+// sentinels, the page size and the tensor word are exact-checked: the host writes known data to the
+// tensor and the producer reads page 0 through the binding, so a wrong base word fetches the wrong data.
+// The scratchpad base is a real address (checked nonzero and distinct from every sentinel — a mis-offset
+// read surfaces as a known value).
 //
 // Two phases:
 //   SET    — SetProgramRunArgs installs all four sections; verify every region reads its own value
@@ -464,31 +468,43 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
         mesh_device.get());
     auto& cq = mesh_device->mesh_command_queue();
 
-    // Input tensor for the tensor-binding section (interleaved DRAM; only its base address is read here).
+    // Input tensor for the tensor-binding section (interleaved DRAM). The producer reads its page 0 through
+    // the binding and reports the first word, so the host fills it with known data.
     auto tensor_layout = TensorLayout(
         DataType::BFLOAT16,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     auto tensor_spec = TensorSpec(Shape{1, 512}, tensor_layout);
     MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    std::vector<bfloat16> io_data(io_tensor.logical_volume());
+    for (size_t i = 0; i < io_data.size(); i++) {
+        io_data[i] = bfloat16(static_cast<float>(i + 1));
+    }
+    // The first two bf16 elements, as the kernel's uint32 load sees them.
+    uint32_t io_word0 = 0;
+    std::memcpy(&io_word0, io_data.data(), sizeof(io_word0));
+    cq.enqueue_write_tensor(HostTensor::from_vector(std::move(io_data), tensor_spec), io_tensor);
 
     ProgramSpec spec;
     spec.name = "crta_all_four_sections";
 
     // Producer (BRISC): read one value from each CRTA section, stage seven into the DFB entry:
-    //   w[0]=named0 w[1]=named1 w[2]=tensor base w[3]=scratch base w[4]=vararg0 w[5]=vararg1 w[6]=page size
+    //   w[0]=named0 w[1]=named1 w[2]=tensor page-0 word w[3]=scratch base w[4]=vararg0 w[5]=vararg1
+    //   w[6]=page size
     // The page size is the binding's SECOND CRTA word (dynamic_tensor_shape); reading it exercises the
-    // extra binding word directly, and its presence shifts the scratchpad + vararg offsets.
+    // extra binding word directly, and its presence shifts the scratchpad + vararg offsets. The tensor word
+    // comes from a NoC read of page 0 through the binding, which exercises the binding's base word.
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     const uint32_t named0 = get_arg(args::named0);
     const uint32_t named1 = get_arg(args::named1);
     TensorAccessor acc(tensor::io);
-    const uint32_t tensor_base = acc.get_bank_base_address();
     const uint32_t page_size = acc.get_aligned_page_size();  // binding's 2nd CRTA word (dynamic_tensor_shape)
     Scratchpad<uint32_t> pad(scratch::pad);
     // Raw address: the base is reported to the host for comparison.
@@ -497,8 +513,13 @@ void kernel_main() {
     const uint32_t vararg1 = get_common_vararg(1);
     DataflowBuffer buf(dfb::stage);
     buf.reserve_back(1);
+    // Land page 0 in the entry first (page size == entry size), then keep its first word.
+    Noc noc;
+    noc.async_read(acc, buf, page_size, {.page_id = 0}, {});
+    noc.async_read_barrier();
     volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
-    w[0] = named0; w[1] = named1; w[2] = tensor_base; w[3] = scratch_base; w[4] = vararg0; w[5] = vararg1;
+    const uint32_t tensor_word0 = w[0];
+    w[0] = named0; w[1] = named1; w[2] = tensor_word0; w[3] = scratch_base; w[4] = vararg0; w[5] = vararg1;
     w[6] = page_size;
     buf.push_back(1);
 }
@@ -587,24 +608,22 @@ void kernel_main() {
     SetProgramRunArgs(program, set_params);
 
     std::vector<uint32_t> s = launch_and_read();
-    const uint32_t tensor_base = s[2];
     const uint32_t scratch_base = s[3];
     EXPECT_EQ(s[0], kNamed0Set) << "named CRTA 0 read the wrong offset";
     EXPECT_EQ(s[1], kNamed1Set) << "named CRTA 1 read the wrong offset";
+    // The binding's base word: page 0 read through the binding must return the data the host wrote.
+    EXPECT_EQ(s[2], io_word0) << "tensor binding's base word is wrong — page 0 read through it returned other data";
     // The binding's 2nd word: a wrong value here means the extra binding CRTA word was not delivered.
     EXPECT_EQ(s[6], kExpectedPageSize) << "tensor binding's aligned_page_size (2nd binding word) is wrong";
     EXPECT_EQ(s[4], kVararg0Set)
         << "common vararg 0 read the wrong offset — vararg base must be named + binding(2 words) + scratchpad";
     EXPECT_EQ(s[5], kVararg1Set) << "common vararg 1 read the wrong offset";
-    // The two address regions must be real and distinct from every sentinel and each other — a mis-offset
-    // read of either would surface here as a known sentinel or as the other base.
+    // The scratchpad region must be real and distinct from every sentinel — a mis-offset read would surface
+    // here as a known sentinel.
     for (uint32_t sentinel : {kNamed0Set, kNamed1Set, kVararg0Set, kVararg1Set}) {
-        EXPECT_NE(tensor_base, sentinel) << "tensor-binding slot read a CRTA sentinel — section offset wrong";
         EXPECT_NE(scratch_base, sentinel) << "scratchpad slot read a CRTA sentinel — section offset wrong";
     }
-    EXPECT_NE(tensor_base, 0u);
     EXPECT_NE(scratch_base, 0u);
-    EXPECT_NE(tensor_base, scratch_base) << "tensor-binding and scratchpad slots collided — section offset wrong";
 
     // ---- UPDATE phase: partial-update named CRTAs + varargs; bindings/scratchpad must be untouched. ----
     ProgramRunArgs upd_params;
@@ -626,7 +645,7 @@ void kernel_main() {
            "named + tensor-binding(2 words) + scratchpad section words (the A1 sum with a multi-word binding).";
     EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
     // Not touched by this update — the omitted tensor's binding (both words) and the scratchpad must survive.
-    EXPECT_EQ(u[2], tensor_base) << "tensor-binding base slot was clobbered by the named/vararg partial update";
+    EXPECT_EQ(u[2], io_word0) << "tensor-binding base slot was clobbered by the named/vararg partial update";
     EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
 }

@@ -131,7 +131,7 @@ inline void calculate_exponential_polynomial() {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         }
         sdpa_insert_sfpnop();
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
         if constexpr (USE_SFPARECIP_INSTR) {
@@ -176,7 +176,7 @@ inline void calculate_exponential_polynomial() {
 
         TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);
         sdpa_insert_sfpnop();
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
         TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         sdpa_insert_sfpnop();
@@ -186,7 +186,8 @@ inline void calculate_exponential_polynomial() {
         TTI_SFPENCC(0, 0, 0, 0);
 
         if constexpr (!IS_FP32_DEST_ACC_EN) {
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
         TTI_SFPSTORE(p_sfpu::LREG2, input_type, sdpa_addr_mod_x, 0);
         TTI_INCRWC(0, 4, 0, 0);

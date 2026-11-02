@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -80,7 +80,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     const uint8_t in_cb_id = tt::CBIndex::c_0;
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -97,7 +97,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     // output sharded CB
     const uint8_t out_cb_id = tt::CBIndex::c_2;
     uint32_t aligned_output_tile_nbytes =
-        round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(output_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{

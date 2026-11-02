@@ -26,8 +26,7 @@ x 4 tile-cols (16 tiles); [1,2,1,128] = 2 (N*C) batch/channel slabs x one (padde
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_bcast.py
 """
 import pytest

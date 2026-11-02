@@ -1,7 +1,7 @@
 model:
   variant: deepseek_v3_d_p
   num_layers: 61
-  max_seq_len: 56320
+  max_seq_len: 81920
   chunk_size: 5120
 
 transport:

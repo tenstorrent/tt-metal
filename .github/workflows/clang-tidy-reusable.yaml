@@ -32,6 +32,16 @@ on:
         type: boolean
         default: false
         description: "Export clang-tidy fixes and post inline review suggestions on the PR diff"
+      publish-annotations:
+        required: false
+        type: boolean
+        default: true
+        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
+      clang-tidy-version:
+        required: false
+        type: string
+        default: "20"
+        description: "LLVM major version of clang-tidy. Versions other than 20 are installed from apt.llvm.org at job start."
 
 jobs:
   clang-tidy:
@@ -125,6 +135,22 @@ jobs:
             echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
           fi
 
+      - name: Install clang-tidy ${{ inputs.clang-tidy-version }}
+        # CI image only bakes in clang-tidy-20; others come from apt.llvm.org.
+        if: ${{ inputs.clang-tidy-version != '20' }}
+        env:
+          LLVM_VERSION: ${{ inputs.clang-tidy-version }}
+        run: |
+          . /etc/os-release
+          keyring=/usr/share/keyrings/llvm-snapshot.asc
+          curl -fsSL -o "$keyring" https://apt.llvm.org/llvm-snapshot.gpg.key
+          echo "deb [signed-by=$keyring] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION} main" \
+            > "/etc/apt/sources.list.d/llvm-${LLVM_VERSION}.list"
+          apt-get update
+          apt-get install -y --no-install-recommends "clang-tidy-${LLVM_VERSION}"
+          "clang-tidy-${LLVM_VERSION}" --version
+          echo "CLANG_TIDY_BIN=clang-tidy-${LLVM_VERSION}" >> "$GITHUB_ENV"
+
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
@@ -136,7 +162,7 @@ jobs:
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
-          CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          CT_VERSION=$("${CLANG_TIDY_BIN:-clang-tidy-20}" --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
           {
             echo "CTCACHE_S3_BUCKET=ctcache"
             echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
@@ -269,6 +295,27 @@ jobs:
       - name: Pre-create fixes dir
         run: mkdir -p .build/clang-tidy/fixes
 
+      - name: Merge v23 skip-list into .clang-tidy
+        if: ${{ inputs.clang-tidy-version != '20' }}
+        run: |
+          uv pip install --quiet PyYAML
+          python3 - << 'PYEOF'
+          import yaml
+
+          with open(".clang-tidy") as f:
+              config = yaml.safe_load(f)
+          with open("cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml") as f:
+              skip_list = yaml.safe_load(f)
+
+          config["Checks"] = config["Checks"].rstrip(", \n") + ",\n  " + skip_list["Checks"].strip()
+
+          with open(".clang-tidy", "w") as f:
+              yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+          print("Merged skip-list into .clang-tidy for this run:")
+          print(config["Checks"])
+          PYEOF
+
       - name: 🔧 CMake configure
         run: |
           # --warnings-as-errors=* turns each clang-tidy diagnostic into a failing
@@ -385,7 +432,9 @@ jobs:
             echo ""
             # One ::error annotation per violation, so they show up on the PR diff /
             # checks tab, not just as a "there were N violations" summary line.
-            python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
+            if [ "${{ inputs.publish-annotations }}" = "true" ]; then
+              python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
+            fi
             exit 1
           fi
           # No violations but the build failed: a real compile/link error, not a diagnostic.

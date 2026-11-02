@@ -107,20 +107,20 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t dfbid, uint32_t trans
 // Pops a constant the writer pushed once and compute read by index without popping. Waiting first makes the
 // pop safe on a core that never read it; dummy_unpack orders the pop after the wait on Quasar (a bare
 // wait_front -> pop_front traps the unpacker).
-ALWI void release_writer_constant(uint32_t dfb_id, uint32_t num_tiles) {
-    DataflowBuffer dfb(dfb_id);
+template <typename DFB>
+ALWI void release_writer_constant(DFB& dfb, uint32_t num_tiles) {
     dfb.wait_front(num_tiles);
-    dummy_unpack(dfb_id);
+    dummy_unpack(dfb.get_id());
     dfb.pop_front(num_tiles);
 }
 
 /**
  * in0_dfb = max(in0_dfb, in1_dfb)
  */
-template <uint32_t num_tiles>
-void max_block_inplace(uint32_t in0, uint32_t in1) {
-    DataflowBuffer dfb_in0(in0);
-    DataflowBuffer dfb_in1(in1);
+template <uint32_t num_tiles, typename In0DFB, typename In1DFB>
+void max_block_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1) {
+    const uint32_t in0 = dfb_in0.get_id();
+    const uint32_t in1 = dfb_in1.get_id();
     // inputs come in full, outputs go out full
     copy_init(in0);
     copy_init(in1);
@@ -150,11 +150,11 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 /**
  * out_dfb = eltwise_max(in0, in1)
  */
-template <VectorMode vector_mode = VectorMode::RC>
-void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0);
-    DataflowBuffer dfb_in1(in1);
-    DataflowBuffer dfb_out(out_dfb);
+template <VectorMode vector_mode = VectorMode::RC, typename In0DFB, typename In1DFB, typename OutDFB>
+void max_block(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0 = dfb_in0.get_id();
+    const uint32_t in1 = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // inputs come in full, outputs go out full
     copy_init(in0);
     binary_max_tile_init();
@@ -187,12 +187,16 @@ template <
     uint32_t scale_dfb,
     uint32_t rows,
     uint32_t cols,
-    VectorMode vector_mode = VectorMode::C>
-void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, bool do_eltwise_max = false) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_scale(scale_dfb);
-    DataflowBuffer dfb_out(out_dfb);
-    DataflowBuffer dfb_prev(prev_dfb);
+    VectorMode vector_mode = VectorMode::C,
+    typename In0DFB,
+    typename ScaleDFB,
+    typename OutDFB,
+    typename PrevDFB>
+void reduce_c(In0DFB& dfb_in0, ScaleDFB& dfb_scale, OutDFB& dfb_out, PrevDFB& dfb_prev, bool do_eltwise_max = false) {
+    ASSERT(dfb_in0.get_id() == in0_dfb);
+    ASSERT(dfb_scale.get_id() == scale_dfb);
+    const uint32_t out_dfb = dfb_out.get_id();
+    const uint32_t prev_dfb = dfb_prev.get_id();
     // Precondition: in0_dfb has rows*cols produced. in0_dfb has tiles in row-major order
     // Precondition: scale_dfb has 1 produced
     // Precondition: out_dfb has rows free
@@ -275,11 +279,22 @@ template <
     uint32_t in0_dfb,
     uint32_t scale_dfb,
     uint32_t rows,
-    VectorMode vector_mode = VectorMode::C>
-void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwise_max = false) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_scale(scale_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+    VectorMode vector_mode = VectorMode::C,
+    typename In0DFB,
+    typename ScaleDFB,
+    typename OutDFB,
+    typename PrevDFB>
+void reduce_c(
+    In0DFB& dfb_in0,
+    ScaleDFB& dfb_scale,
+    OutDFB& dfb_out,
+    PrevDFB& dfb_prev,
+    uint32_t cols,
+    bool do_eltwise_max = false) {
+    ASSERT(dfb_in0.get_id() == in0_dfb);
+    ASSERT(dfb_scale.get_id() == scale_dfb);
+    const uint32_t out_dfb = dfb_out.get_id();
+    const uint32_t prev_dfb = dfb_prev.get_id();
     // Precondition: in0_dfb has rows*cols produced. in0_dfb has tiles in row-major order
     // Precondition: scale_dfb has 1 produced
     // Precondition: out_dfb has rows free
@@ -333,8 +348,9 @@ void recip_tile_first_column(uint32_t idst) {
 /**
  * in_dfb = 1 / in_dfb
  */
-void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
+template <typename InDFB>
+void recip_block_inplace(InDFB& dfb_in, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
     // Precondition: in_dfb has num_tiles produced
     // Postcondition: in_dfb has num_tiles produced
     reconfig_data_format_srca(in_dfb);
@@ -377,11 +393,14 @@ template <
     uint32_t scale_fp32,
     bool write_result_inplace = true,
     bool do_reduce = true,
-    VectorMode vector_mode = VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uint32_t cols) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_reduce(reduce_dfb);
+    VectorMode vector_mode = VectorMode::RC,
+    typename In0DFB,
+    typename In1DFB,
+    typename ReduceDFB>
+void sub_exp_block_bcast_cols_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, ReduceDFB& dfb_reduce, uint32_t cols) {
+    ASSERT(dfb_in0.get_id() == in0_dfb);
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t reduce_dfb = dfb_reduce.get_id();
     // Precondition: in0_dfb has rows*cols produced
     // Precondition: in1_dfb has rows produced
     // Postcondition: in0_dfb has rows*cols produced
@@ -503,11 +522,18 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
  * @tparam pack_accumulate - If true, enables L1 accumulation to accumulate results onto existing tiles
  *                           in out_dfb. Only supported when immediate_pop=false.
  */
-template <uint32_t rows, uint32_t cols, bool immediate_pop, bool pack_accumulate>
-void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool immediate_pop,
+    bool pack_accumulate,
+    typename In0DFB,
+    typename In1DFB,
+    typename OutDFB>
+void mul_block_bcast_cols(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in0_dfb has rows*cols produced
     // Precondition: in1_dfb has rows produced
     // Precondition: out_dfb has rows*cols produced
@@ -585,10 +611,10 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
 /**
  * in0_dfb *= in1_dfb
  */
-template <uint32_t rows, uint32_t cols>
-void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <uint32_t rows, uint32_t cols, typename In0DFB, typename In1DFB>
+void mul_block_bcast_cols_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb has rows*cols produced
     // Precondition: in1_dfb has rows produced
     // Postcondition: in0_dfb has rows*cols produced
@@ -630,10 +656,10 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
     reconfig_data_format_srcb(in0_dfb);
 }
 
-template <uint32_t in1_scalar_dfb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace(uint32_t in0_dfb) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1_scalar(in1_scalar_dfb);
+template <uint32_t in1_scalar_dfb, uint32_t num_tiles, typename In0DFB, typename In1ScalarDFB>
+void mul_block_bcast_scalar_inplace(In0DFB& dfb_in0, In1ScalarDFB& dfb_in1_scalar) {
+    ASSERT(dfb_in1_scalar.get_id() == in1_scalar_dfb);
+    const uint32_t in0_dfb = dfb_in0.get_id();
     // Precondition: in0_dfb has num_tiles produced
     // Precondition: in1_scalar_dfb has 1 produced
     // Postcondition: in0_dfb has num_tiles produced
@@ -675,10 +701,10 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_dfb) {
 /**
  * in0_dfb += in1_dfb
  */
-template <bool pop_in1 = true>
-void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <bool pop_in1 = true, typename In0DFB, typename In1DFB>
+void add_block_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: in0_dfb has num_tiles produced
     // Postcondition: in1_dfb has num_tiles consumed
@@ -707,9 +733,10 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     dfb_in0.push_back(num_tiles);
 }
 
-void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <typename In0DFB, typename In1DFB>
+void mul_tiles_bcast_cols_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     /**
      * Given in0_dfb and in1_dfb, multiply each tile of in0_dfb by the corresponding tile of in1_dfb
      * and bcast cols of in1_dfb.
@@ -739,9 +766,10 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t n
 /**
  * in0_dfb *= in1_dfb
  */
-void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <typename In0DFB, typename In1DFB>
+void mul_block_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: in0_dfb has num_tiles produced
     // Postcondition: in1_dfb has num_tiles produced
@@ -780,11 +808,11 @@ void exp_tile_first_column(uint32_t idst) {
 /**
  * out_dfb = exp((in0_dfb - in1_dfb) * scale_fp32)
  */
-template <uint32_t scale_fp32>
-void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <uint32_t scale_fp32, typename In0DFB, typename In1DFB, typename OutDFB>
+void sub_exp_block(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: out_dfb has num_tiles produced
     // Postcondition: in0_dfb and in1_dfb has num_tiles produced
@@ -841,25 +869,35 @@ void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
 }
 #endif
 
-template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
+template <
+    uint32_t scale_fp32,
+    VectorMode vector_mode = VectorMode::C,
+    typename WorkerMaxDFB,
+    typename WorkerSumDFB,
+    typename CurMaxDFB,
+    typename PrevMaxDFB,
+    typename CurSumDFB,
+    typename PrevSumDFB,
+    typename ExpMaxDiffDFB,
+    typename ExpMaxDiff2DFB>
 void correction_block(
-    uint32_t dfb_worker_max,
-    uint32_t dfb_worker_sum,
-    uint32_t dfb_cur_max,
-    uint32_t dfb_prev_max,
-    uint32_t dfb_cur_sum,
-    uint32_t dfb_prev_sum,
-    uint32_t dfb_exp_max_diff,
-    uint32_t dfb_exp_max_diff_2,
+    WorkerMaxDFB& dfb_worker_max_obj,
+    WorkerSumDFB& dfb_worker_sum_obj,
+    CurMaxDFB& dfb_cur_max_obj,
+    PrevMaxDFB& dfb_prev_max_obj,
+    CurSumDFB& dfb_cur_sum_obj,
+    PrevSumDFB& dfb_prev_sum_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    ExpMaxDiff2DFB& dfb_exp_max_diff_2_obj,
     uint32_t num_head_tiles) {
-    DataflowBuffer dfb_worker_max_obj(dfb_worker_max);
-    DataflowBuffer dfb_worker_sum_obj(dfb_worker_sum);
-    DataflowBuffer dfb_cur_max_obj(dfb_cur_max);
-    DataflowBuffer dfb_prev_max_obj(dfb_prev_max);
-    DataflowBuffer dfb_cur_sum_obj(dfb_cur_sum);
-    DataflowBuffer dfb_prev_sum_obj(dfb_prev_sum);
-    DataflowBuffer dfb_exp_max_diff_obj(dfb_exp_max_diff);
-    DataflowBuffer dfb_exp_max_diff_2_obj(dfb_exp_max_diff_2);
+    const uint32_t dfb_worker_max = dfb_worker_max_obj.get_id();
+    const uint32_t dfb_worker_sum = dfb_worker_sum_obj.get_id();
+    const uint32_t dfb_cur_max = dfb_cur_max_obj.get_id();
+    const uint32_t dfb_prev_max = dfb_prev_max_obj.get_id();
+    const uint32_t dfb_cur_sum = dfb_cur_sum_obj.get_id();
+    const uint32_t dfb_prev_sum = dfb_prev_sum_obj.get_id();
+    const uint32_t dfb_exp_max_diff = dfb_exp_max_diff_obj.get_id();
+    const uint32_t dfb_exp_max_diff_2 = dfb_exp_max_diff_2_obj.get_id();
     dfb_worker_max_obj.wait_front(num_head_tiles);
     dfb_worker_sum_obj.wait_front(num_head_tiles);
     dfb_prev_max_obj.wait_front(num_head_tiles);
@@ -944,10 +982,10 @@ void correction_block(
 /**
  * in_dfb -> out_dfb
  */
-template <bool pop_in_dfb>
-void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <bool pop_in_dfb, typename InDFB, typename OutDFB>
+void move_block(InDFB& dfb_in, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in_dfb has num_tiles produced
     // Precondition: out_dfb has num_tiles free
     // Postcondition: in_dfb has num_tiles consumed
@@ -1008,9 +1046,10 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
  * Postcondition: `dfb_sum` holds num_tiles produced (the running sum) at the physical front; prev+cur
  * consumed.
  */
-void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
-    DataflowBuffer d_sum(dfb_sum);
-    DataflowBuffer d_emd(dfb_emd);
+template <typename DSumDFB, typename DEmdDFB>
+void fma_block_merged_sum(DSumDFB& d_sum, DEmdDFB& d_emd, uint32_t cur_offset, uint32_t num_tiles) {
+    const uint32_t dfb_sum = d_sum.get_id();
+    const uint32_t dfb_emd = d_emd.get_id();
     d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
     d_emd.wait_front(num_tiles);
 
@@ -1053,12 +1092,13 @@ void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offse
     // the next chunk's producer appends [prev|cur] contiguously at rd_ptr==0 (no-wrap addressing).
     reconfig_data_format_srca(dfb_sum);
     pack_reconfig_out(dfb_sum);
-    move_block<true>(dfb_sum, dfb_sum, num_tiles);
+    move_block<true>(d_sum, d_sum, num_tiles);
 }
 
-void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename InDFB, typename OutDFB>
+void copy_block(InDFB& dfb_in, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in_dfb has num_tiles produced
     // Precondition: out_dfb has num_tiles free
     // Postcondition: in_dfb has num_tiles consumed
@@ -1079,11 +1119,12 @@ void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     dfb_in.pop_front(num_tiles);
 }
 
-void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
+template <typename InDFB, typename OutDFB>
+void log_block(InDFB& dfb_in, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_out(out_dfb);
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
     copy_init(in_dfb);
     // log_tile SFPU is not wired up on Quasar; log_block is only used on the (untested) attention-sink
     // path, so guard the log ops out there. On Quasar this degrades log_block to a plain copy — revisit
@@ -1108,10 +1149,11 @@ void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     }
 }
 
-void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+void sigmoid_sub(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // out_dfb = sigmoid(in0_dfb - in1_dfb)
     /**
      * sigmoid(x) is accurately implemented as 1 / (1 + exp(-x))
@@ -1183,10 +1225,11 @@ void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, 
 }
 #endif
 
-void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+void logsigmoid_sub(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // out_dfb = logsigmoid(in0_dfb - in1_dfb)
     // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
     dfb_in0.wait_front(num_tiles);
@@ -1229,11 +1272,11 @@ void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32
  * out_dfb = in0_dfb - in1_dfb
  * Compile with size optimization to prevent binary size exceeding the limit.
  */
-__attribute__((optimize("Os"))) void sub_block(
-    uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+__attribute__((optimize("Os"))) void sub_block(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
@@ -1253,10 +1296,16 @@ __attribute__((optimize("Os"))) void sub_block(
 /**
  * out_dfb = in0_dfb @ in1_dfb
  */
+template <
+    typename In0DFB,
+    typename In1DFB,
+    typename OutDFB,
+    typename MaskDFB = DataflowBufferAnyPattern,
+    typename ZeroDFB = DataflowBufferAnyPattern>
 ALWI void matmul_blocks(
-    const uint32_t& in0_dfb,
-    const uint32_t& in1_dfb,
-    const uint32_t& out_dfb,
+    In0DFB& dfb_in0,
+    In1DFB& dfb_in1,
+    OutDFB& dfb_out,
     const uint32_t& M,
     const uint32_t& N,
     const uint32_t& K,
@@ -1268,18 +1317,16 @@ ALWI void matmul_blocks(
     const uint32_t& subblock_w,
     const bool& transpose,
     const bool& add_mask = false,
-    const uint32_t& mask_dfb = 0,
-    const uint32_t& zero_dfb = 0) {
+    MaskDFB* dfb_mask = nullptr,
+    ZeroDFB* dfb_zero = nullptr) {
     // precondition: in0_dfb has M*K produced
     // precondition: in1_dfb has K*N produced
     // postcondition: in0_dfb is full, in1_dfb is empty
     // postcondition: out_dfb has M*N produced
 
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
-    DataflowBuffer dfb_mask(mask_dfb);
-    DataflowBuffer dfb_zero(zero_dfb);
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
 
     matmul_block_init(
         in0_dfb,
@@ -1319,8 +1366,10 @@ ALWI void matmul_blocks(
                 in1_index += N;
             }
             if (add_mask) {
-                dfb_mask.wait_front(out_subblock_num_tiles);
-                dfb_zero.wait_front(1);
+                const uint32_t mask_dfb = dfb_mask->get_id();
+                const uint32_t zero_dfb = dfb_zero->get_id();
+                dfb_mask->wait_front(out_subblock_num_tiles);
+                dfb_zero->wait_front(1);
                 reconfig_data_format(zero_dfb, mask_dfb);
                 add_init(zero_dfb, mask_dfb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -1351,10 +1400,10 @@ ALWI void matmul_blocks(
     dfb_in1.pop_front(K * N);
 }
 
-template <uint32_t M>
-void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <uint32_t M, typename In1DFB, typename OutDFB>
+void matmul_reduce(In1DFB& dfb_in1, OutDFB& dfb_out) {
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // precondition: in0_dfb has M*K produced
     // precondition: in1_dfb has K*N produced
     // postcondition: in0_dfb is full, in1_dfb is empty
@@ -1819,7 +1868,28 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t dfb_windowed_k_range = 0>
+    uint32_t dfb_windowed_k_range = 0,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename LseInDFB,
+    typename LseOutDFB,
+    typename PrevOutDFB,
+    typename OutDFB,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename AttentionSinkDFB,
+    typename ScaleInDFB,
+    typename WindowedKRangeDFB>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1859,38 +1929,39 @@ void sdpa_inner_loop(
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
     const uint32_t joint_n_mask_chunk_id,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_lse_in,
-    const uint32_t dfb_lse_out,
-    const uint32_t dfb_prev_out,
-    const uint32_t dfb_out,
+    QInDFB& dfb_q_in_obj,
+    KInDFB& dfb_k_in_obj,
+    VInDFB& dfb_v_in_obj,
+    MaskInDFB& dfb_mask_in_obj,
+    ColIdentityDFB& dfb_col_identity_obj,
+    OutImADFB& dfb_out_im_A_obj,
+    OutImBDFB& dfb_out_im_B_obj,
+    MaxADFB& dfb_max_A_obj,
+    MaxBDFB& dfb_max_B_obj,
+    SumADFB& dfb_sum_A_obj,
+    SumBDFB& dfb_sum_B_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    LseInDFB& dfb_lse_in_obj,
+    LseOutDFB& dfb_lse_out_obj,
+    PrevOutDFB& dfb_prev_out_obj,
+    OutDFB& dfb_out_obj,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    AttentionSinkDFB& dfb_attention_sink_obj,
+    ScaleInDFB& dfb_scale_in_obj,
+    WindowedKRangeDFB& dfb_windowed_k_range_obj,
     const LightweightMaskContext& lw_mask = {},
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
     const ChunkedContext& chunked = {}) {
-    // Parameter-stable DFB locals. Aliases (dfb_sum_A/B, dfb_max_A/B, dfb_out_im_A/B) are
-    // std::swap-mutated below, so they use inline DataflowBuffer(alias).method() at the call
-    // sites instead. dfb_out is constructed conditionally near its consumer (cur.out target).
-    DataflowBuffer dfb_q_in_obj(dfb_q_in);
-    DataflowBuffer dfb_k_in_obj(dfb_k_in);
-    DataflowBuffer dfb_v_in_obj(dfb_v_in);
-    DataflowBuffer dfb_qk_im_obj(dfb_qk_im);
-    DataflowBuffer dfb_attention_sink_obj(dfb_attention_sink);
-    DataflowBuffer dfb_lse_in_obj(dfb_lse_in);
-    DataflowBuffer dfb_prev_out_obj(dfb_prev_out);
+    // All DFB objects are owned by kernel_main; the ping-pong aliases below are pointers to them.
+    const uint32_t dfb_q_in = dfb_q_in_obj.get_id();
+    const uint32_t dfb_k_in = dfb_k_in_obj.get_id();
+    const uint32_t dfb_v_in = dfb_v_in_obj.get_id();
+    const uint32_t dfb_mask_in = dfb_mask_in_obj.get_id();
+    const uint32_t dfb_exp_max_diff = dfb_exp_max_diff_obj.get_id();
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1946,12 +2017,12 @@ void sdpa_inner_loop(
         // hazard. JOINT/RING, the streaming path, and the attention-sink block keep two separate sum
         // DFBs. Max stays a separate two-DFB ping-pong on every path.
         constexpr bool merged_sum = (sdpa_type == STANDARD) && !use_attention_sink;
-        uint32_t alias_prev_sum = dfb_sum_A;
-        uint32_t alias_cur_sum = merged_sum ? dfb_sum_A : dfb_sum_B;
-        uint32_t alias_prev_max = dfb_max_A;
-        uint32_t alias_cur_max = dfb_max_B;
-        uint32_t alias_mm2_prev_out = dfb_out_im_A;
-        uint32_t alias_mm2_cur_out = dfb_out_im_B;
+        auto* alias_prev_sum = &dfb_sum_A_obj;
+        auto* alias_cur_sum = merged_sum ? &dfb_sum_A_obj : &dfb_sum_B_obj;
+        auto* alias_prev_max = &dfb_max_A_obj;
+        auto* alias_cur_max = &dfb_max_B_obj;
+        auto* alias_mm2_prev_out = &dfb_out_im_A_obj;
+        auto* alias_mm2_cur_out = &dfb_out_im_B_obj;
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
@@ -1967,14 +2038,13 @@ void sdpa_inner_loop(
         // chunks; any disagreement deadlocks the DFBs.
         uint32_t k_chunk_start = iter_k_chunk_start;
         if constexpr (use_windowed_narrowing) {
-            DataflowBuffer dfb_k_range_obj(dfb_windowed_k_range);
-            dfb_k_range_obj.wait_front(1);
+            dfb_windowed_k_range_obj.wait_front(1);
             k_chunk_start = ckernel::read_tile_value(dfb_windowed_k_range, 0, 0);
             k_chunk_end = ckernel::read_tile_value(dfb_windowed_k_range, 0, 1);
             // read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
             // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
             dummy_unpack(dfb_windowed_k_range);
-            dfb_k_range_obj.pop_front(1);
+            dfb_windowed_k_range_obj.pop_front(1);
         }
 
         uint32_t processed_k_chunks = 0;
@@ -2028,9 +2098,9 @@ void sdpa_inner_loop(
             reconfig_data_format(dfb_k_in, dfb_q_in);
             pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
-                dfb_q_in,
-                dfb_k_in,
-                dfb_qk_im,
+                dfb_q_in_obj,
+                dfb_k_in_obj,
+                dfb_qk_im_obj,
                 Sq_chunk_t,
                 Sk_chunk_t,
                 DHt,
@@ -2159,7 +2229,7 @@ void sdpa_inner_loop(
                     dummy_pack(dfb_qk_im);
                     dfb_qk_im_obj.push_back(Sk_chunk_t * Sq_chunk_t);
                 } else {
-                    add_block_inplace(dfb_qk_im, dfb_mask_in, qk_chunk_tiles);
+                    add_block_inplace(dfb_qk_im_obj, dfb_mask_in_obj, qk_chunk_tiles);
                 }
             }
 
@@ -2176,7 +2246,12 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+                dfb_qk_im_obj,
+                dfb_identity_scale_in_obj,
+                *alias_cur_max,
+                *alias_prev_max,
+                Sk_chunk_t,
+                processed_k_chunks > 0);
 
             /**
              * sub_exp fuses a few operations.
@@ -2189,18 +2264,18 @@ void sdpa_inner_loop(
              * outside of the loop over K chunks.
              */
             sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                dfb_qk_im_obj, *alias_cur_max, *alias_cur_sum, Sk_chunk_t);
 
             // Reconfigure unpackers: srcA (context 0) = dfb_v_in, srcB (context 1) = dfb_qk_im (operands are swapped in
             // matmul)
             reconfig_data_format(dfb_v_in, dfb_qk_im);
-            pack_reconfig_out(alias_mm2_cur_out);
+            pack_reconfig_out(alias_mm2_cur_out->get_id());
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
-                dfb_qk_im,
-                dfb_v_in,
-                alias_mm2_cur_out,
+                dfb_qk_im_obj,
+                dfb_v_in_obj,
+                *alias_mm2_cur_out,
                 Sq_chunk_t,
                 vDHt,
                 Sk_chunk_t,
@@ -2213,7 +2288,7 @@ void sdpa_inner_loop(
                 false /*transpose*/);
 
             dfb_qk_im_obj.pop_front(qk_chunk_tiles);
-            reconfig_data_format(alias_prev_max, alias_cur_max);
+            reconfig_data_format(alias_prev_max->get_id(), alias_cur_max->get_id());
 
             /* OUT_ACC += OUT_IM */
             if (processed_k_chunks > 0) {
@@ -2227,8 +2302,8 @@ void sdpa_inner_loop(
                 // and EMD would be written to that ring instead of dfb_exp_max_diff. (The
                 // reconfig_data_format above only sets the UNPACKers.)
                 pack_reconfig_out(dfb_exp_max_diff);
-                sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
-                DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+                sub_exp_block<scale_fp32>(*alias_prev_max, *alias_cur_max, dfb_exp_max_diff_obj, Sq_chunk_t);
+                alias_prev_max->pop_front(Sq_chunk_t);
 
                 /**
                  * dfb_cur_sum = dfb_cur_sum + dfb_prev_sum * dfb_exp_max_diff
@@ -2238,10 +2313,10 @@ void sdpa_inner_loop(
                 if constexpr (merged_sum) {
                     // prev at ring front, cur behind at offset Sq_chunk_t in the single dfb_sum_A;
                     // fused pass reads both and writes the running sum back as the single front block.
-                    fma_block_merged_sum(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                    fma_block_merged_sum(*alias_prev_sum, dfb_exp_max_diff_obj, Sq_chunk_t, Sq_chunk_t);
                 } else {
-                    mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
-                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                    mul_tiles_bcast_cols_inplace(*alias_prev_sum, dfb_exp_max_diff_obj, Sq_chunk_t);
+                    add_block_inplace(*alias_cur_sum, *alias_prev_sum, Sq_chunk_t);
                 }
 
                 /**
@@ -2255,8 +2330,8 @@ void sdpa_inner_loop(
                  * but this two-op form is arch-agnostic and validated on both.
                  */
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, true /*immediate_pop*/, false /*pack_accumulate*/>(
-                    alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_prev_out);
-                add_block_inplace<true>(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
+                    *alias_mm2_prev_out, dfb_exp_max_diff_obj, *alias_mm2_prev_out);
+                add_block_inplace<true>(*alias_mm2_cur_out, *alias_mm2_prev_out, out_chunk_tiles);
             }
 
             // Swap DFB handles to prepare for next iteration.
@@ -2274,7 +2349,7 @@ void sdpa_inner_loop(
         /**
          * Performs final row-reduction on the partial sum.
          */
-        matmul_reduce<Sq_chunk_t>(dfb_col_identity, alias_prev_sum);
+        matmul_reduce<Sq_chunk_t>(dfb_col_identity_obj, *alias_prev_sum);
 
         /**
          * Process attention sink as a virtual K chunk.
@@ -2302,24 +2377,24 @@ void sdpa_inner_loop(
             // Runtime-cols reduce_c (as in the flash loop above): the compile-time-cols overload copies
             // prev_max with a within-face-only transpose, which Quasar's unpack-A init rejects.
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, 1, true);
+                dfb_attention_sink_obj, dfb_identity_scale_in_obj, *alias_cur_max, *alias_prev_max, 1, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             //    sub_exp_block packs via a bare pack_tile; on Quasar the packer is still latched to
             //    alias_cur_max from the reduce above, so point it at dfb_exp_max_diff first.
             pack_reconfig_out(dfb_exp_max_diff);
-            sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
-            DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+            sub_exp_block<scale_fp32>(*alias_prev_max, *alias_cur_max, dfb_exp_max_diff_obj, Sq_chunk_t);
+            alias_prev_max->pop_front(Sq_chunk_t);
 
             // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
-            mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+            mul_tiles_bcast_cols_inplace(*alias_prev_sum, dfb_exp_max_diff_obj, Sq_chunk_t);
             // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
             //    This adds the attention sink's contribution to the softmax denominator
             sub_exp_block_bcast_cols_inplace<dfb_attention_sink, Sq_chunk_t, scale_fp32, false>(
-                alias_cur_max, alias_cur_sum, 1);
+                dfb_attention_sink_obj, *alias_cur_max, *alias_cur_sum, 1);
 
             // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
-            add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+            add_block_inplace(*alias_cur_sum, *alias_prev_sum, Sq_chunk_t);
 
             // 6. Update running statistics for final normalization
             std::swap(alias_prev_sum, alias_cur_sum);
@@ -2329,21 +2404,21 @@ void sdpa_inner_loop(
             //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
             //    But we need to rescale it due to the updated max
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(
-                alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_cur_out);
+                *alias_mm2_prev_out, dfb_exp_max_diff_obj, *alias_mm2_cur_out);
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
         }
 
         if constexpr (sdpa_type == RING) {
-            log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+            log_block(*alias_prev_sum, *alias_cur_max, Sq_chunk_t);
 
             // Scale prev_max by scale_fp32
-            mul_block_bcast_scalar_inplace<dfb_scale_in, Sq_chunk_t>(alias_prev_max);
-            add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
+            mul_block_bcast_scalar_inplace<dfb_scale_in, Sq_chunk_t>(*alias_prev_max, dfb_scale_in_obj);
+            add_block_inplace(*alias_prev_max, *alias_cur_max, Sq_chunk_t);
 
             /* dfb_cur_sum = 1.0 / dfb_cur_sum */
-            recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+            recip_block_inplace(*alias_prev_sum, Sq_chunk_t);
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(*alias_mm2_prev_out, *alias_prev_sum);
 
             if (ring_iter > 0) {
                 // Update output according to previous and current LSE
@@ -2355,55 +2430,57 @@ void sdpa_inner_loop(
                 dfb_lse_in_obj.wait_front(Sq_chunk_t);
                 dfb_prev_out_obj.wait_front(out_chunk_tiles);
 
-                uint32_t alias_cur_lse = alias_prev_max;      // full
-                uint32_t alias_sig = alias_cur_max;           // empty
-                uint32_t alias_cur_out = alias_mm2_prev_out;  // full
-                uint32_t alias_sub = alias_mm2_cur_out;       // empty
+                auto& alias_cur_lse = *alias_prev_max;      // full
+                auto& alias_sig = *alias_cur_max;           // empty
+                auto& alias_cur_out = *alias_mm2_prev_out;  // full
+                auto& alias_sub = *alias_mm2_cur_out;       // empty
+                const uint32_t dfb_lse_in = dfb_lse_in_obj.get_id();
+                const uint32_t dfb_prev_out = dfb_prev_out_obj.get_id();
 
                 // alias_sig = sigmoid(alias_cur_lse - dfb_lse_in)
-                sigmoid_sub(alias_cur_lse, dfb_lse_in, alias_sig, Sq_chunk_t);
+                sigmoid_sub(alias_cur_lse, dfb_lse_in_obj, alias_sig, Sq_chunk_t);
 
                 // alias_sub = dfb_prev_out - alias_cur_out
-                reconfig_data_format(dfb_prev_out, alias_cur_out);
-                sub_block(dfb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
+                reconfig_data_format(dfb_prev_out, alias_cur_out.get_id());
+                sub_block(dfb_prev_out_obj, alias_cur_out, alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
-                reconfig_data_format(alias_sub, alias_sig);
+                reconfig_data_format(alias_sub.get_id(), alias_sig.get_id());
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // dfb_out = dfb_prev_out - alias_sub
-                reconfig_data_format(dfb_prev_out, alias_sub);
-                pack_reconfig_out(dfb_out);
-                sub_block(dfb_prev_out, alias_sub, dfb_out, out_chunk_tiles);
+                reconfig_data_format(dfb_prev_out, alias_sub.get_id());
+                pack_reconfig_out(dfb_out_obj.get_id());
+                sub_block(dfb_prev_out_obj, alias_sub, dfb_out_obj, out_chunk_tiles);
                 dfb_prev_out_obj.pop_front(out_chunk_tiles);
-                DataflowBuffer(alias_cur_out).pop_front(out_chunk_tiles);
-                DataflowBuffer(alias_sub).pop_front(out_chunk_tiles);
+                alias_cur_out.pop_front(out_chunk_tiles);
+                alias_sub.pop_front(out_chunk_tiles);
 
                 // alias_sig = sigmoid(dfb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // dfb_lse_out = dfb_lse_in - alias_cur_lse
-                pack_reconfig_out(alias_sig);
-                reconfig_data_format(dfb_lse_in, alias_cur_lse);
-                logsigmoid_sub(dfb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
-                sub_block(dfb_lse_in, alias_sig, dfb_lse_out, Sq_chunk_t);
-                DataflowBuffer(alias_sig).pop_front(Sq_chunk_t);
-                DataflowBuffer(alias_cur_lse).pop_front(Sq_chunk_t);
+                pack_reconfig_out(alias_sig.get_id());
+                reconfig_data_format(dfb_lse_in, alias_cur_lse.get_id());
+                logsigmoid_sub(dfb_lse_in_obj, alias_cur_lse, alias_sig, Sq_chunk_t);
+                sub_block(dfb_lse_in_obj, alias_sig, dfb_lse_out_obj, Sq_chunk_t);
+                alias_sig.pop_front(Sq_chunk_t);
+                alias_cur_lse.pop_front(Sq_chunk_t);
                 dfb_lse_in_obj.pop_front(Sq_chunk_t);
             } else {
-                pack_reconfig_out(dfb_out);
-                copy_block(alias_mm2_prev_out, dfb_out, out_chunk_tiles);
+                pack_reconfig_out(dfb_out_obj.get_id());
+                copy_block(*alias_mm2_prev_out, dfb_out_obj, out_chunk_tiles);
 
-                pack_reconfig_out(dfb_lse_out);
-                copy_block(alias_prev_max, dfb_lse_out, Sq_chunk_t);
+                pack_reconfig_out(dfb_lse_out_obj.get_id());
+                copy_block(*alias_prev_max, dfb_lse_out_obj, Sq_chunk_t);
             }
         } else {
             /* dfb_cur_sum = 1.0 / dfb_cur_sum */
-            recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+            recip_block_inplace(*alias_prev_sum, Sq_chunk_t);
 
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            pack_reconfig_out(dfb_out);
-            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, dfb_out);
+            pack_reconfig_out(dfb_out_obj.get_id());
+            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(*alias_mm2_prev_out, *alias_prev_sum, dfb_out_obj);
 
             // free up dfb_prev_max after K chunks
-            DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+            alias_prev_max->pop_front(Sq_chunk_t);
         }
 
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
@@ -2458,7 +2535,24 @@ template <
     uint32_t sliding_window_size,
     bool lightweight_mask_enabled = false,
     bool use_windowed_narrowing = false,
-    uint32_t dfb_windowed_k_range = 0>
+    uint32_t dfb_windowed_k_range = 0,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename OutDFB,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename AttentionSinkDFB,
+    typename WindowedKRangeDFB>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2484,19 +2578,23 @@ void sdpa_standard(
     const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_out,
+    QInDFB& dfb_q_in,
+    KInDFB& dfb_k_in,
+    VInDFB& dfb_v_in,
+    MaskInDFB& dfb_mask_in,
+    ColIdentityDFB& dfb_col_identity,
+    OutImADFB& dfb_out_im_A,
+    OutImBDFB& dfb_out_im_B,
+    MaxADFB& dfb_max_A,
+    MaxBDFB& dfb_max_B,
+    SumADFB& dfb_sum_A,
+    SumBDFB& dfb_sum_B,
+    ExpMaxDiffDFB& dfb_exp_max_diff,
+    OutDFB& dfb_out,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    AttentionSinkDFB& dfb_attention_sink_obj,
+    WindowedKRangeDFB& dfb_windowed_k_range_obj,
     const LightweightMaskContext& lw_mask = {},
     const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
@@ -2573,10 +2671,15 @@ void sdpa_standard(
         dfb_sum_A,
         dfb_sum_B,
         dfb_exp_max_diff,
-        0,  // dfb_lse_in (not used)
-        0,  // dfb_lse_out (not used)
-        0,  // dfb_prev_out (not used)
+        dfb_q_in,  // dfb_lse_in (not used)
+        dfb_q_in,  // dfb_lse_out (not used)
+        dfb_q_in,  // dfb_prev_out (not used)
         dfb_out,
+        dfb_qk_im_obj,
+        dfb_identity_scale_in_obj,
+        dfb_attention_sink_obj,
+        dfb_q_in,  // dfb_scale_in (not used)
+        dfb_windowed_k_range_obj,
         lw_mask,
         is_causal,
         false,  // is_balanced (not used)
@@ -2593,7 +2696,22 @@ template <
     uint32_t Sk_chunk_t,
     uint32_t DHt,
     bool use_joint_mask,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename OutDFB,
+    typename QkImDFB,
+    typename IdentityScaleInDFB>
 void sdpa_joint(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2617,19 +2735,23 @@ void sdpa_joint(
     const uint32_t out_chunk_tiles,
     const uint32_t mask_chunk_0,
     const uint32_t mask_chunk_1,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_out) {
+    QInDFB& dfb_q_in,
+    KInDFB& dfb_k_in,
+    VInDFB& dfb_v_in,
+    MaskInDFB& dfb_mask_in,
+    ColIdentityDFB& dfb_col_identity,
+    OutImADFB& dfb_out_im_A,
+    OutImBDFB& dfb_out_im_B,
+    MaxADFB& dfb_max_A,
+    MaxBDFB& dfb_max_B,
+    SumADFB& dfb_sum_A,
+    SumBDFB& dfb_sum_B,
+    ExpMaxDiffDFB& dfb_exp_max_diff,
+    OutDFB& dfb_out,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj) {
+    ASSERT(dfb_qk_im_obj.get_id() == dfb_qk_im);
+    ASSERT(dfb_identity_scale_in_obj.get_id() == dfb_identity_scale_in);
     sdpa_inner_loop<
         JOINT,
         dfb_qk_im,
@@ -2698,10 +2820,15 @@ void sdpa_joint(
         dfb_sum_A,
         dfb_sum_B,
         dfb_exp_max_diff,
-        0,  // dfb_lse_in (not used)
-        0,  // dfb_lse_out (not used)
-        0,  // dfb_prev_out (not used)
-        dfb_out);
+        dfb_q_in,  // dfb_lse_in (not used)
+        dfb_q_in,  // dfb_lse_out (not used)
+        dfb_q_in,  // dfb_prev_out (not used)
+        dfb_out,
+        dfb_qk_im_obj,
+        dfb_identity_scale_in_obj,
+        dfb_q_in,   // dfb_attention_sink (not used)
+        dfb_q_in,   // dfb_scale_in (not used)
+        dfb_q_in);  // dfb_windowed_k_range (not used)
 }
 
 /**
@@ -2720,7 +2847,26 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename LseInDFB,
+    typename LseOutDFB,
+    typename PrevOutDFB,
+    typename OutDFB,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename ScaleInDFB>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2755,22 +2901,25 @@ void sdpa_ring(
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
     const uint32_t joint_n_mask_chunk_id,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_lse_in,
-    const uint32_t dfb_lse_out,
-    const uint32_t dfb_prev_out,
-    const uint32_t dfb_out,
+    QInDFB& dfb_q_in,
+    KInDFB& dfb_k_in,
+    VInDFB& dfb_v_in,
+    MaskInDFB& dfb_mask_in,
+    ColIdentityDFB& dfb_col_identity,
+    OutImADFB& dfb_out_im_A,
+    OutImBDFB& dfb_out_im_B,
+    MaxADFB& dfb_max_A,
+    MaxBDFB& dfb_max_B,
+    SumADFB& dfb_sum_A,
+    SumBDFB& dfb_sum_B,
+    ExpMaxDiffDFB& dfb_exp_max_diff,
+    LseInDFB& dfb_lse_in,
+    LseOutDFB& dfb_lse_out,
+    PrevOutDFB& dfb_prev_out,
+    OutDFB& dfb_out,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    ScaleInDFB& dfb_scale_in_obj,
     const LightweightMaskContext& lw_mask,
     const bool is_causal_ring_iter,
     const bool skip_first_half_q,
@@ -2853,6 +3002,11 @@ void sdpa_ring(
         dfb_lse_out,
         dfb_prev_out,
         dfb_out,
+        dfb_qk_im_obj,
+        dfb_identity_scale_in_obj,
+        dfb_q_in,  // dfb_attention_sink (not used)
+        dfb_scale_in_obj,
+        dfb_q_in,  // dfb_windowed_k_range (not used)
         lw_mask,
         is_causal_ring_iter,
         skip_first_half_q,

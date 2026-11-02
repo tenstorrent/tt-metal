@@ -43,7 +43,7 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         tensor.storage_type());
 
     TT_FATAL(
-        tensor.buffer() != nullptr,
+        tensor.is_allocated(),
         "{} operation requires {} to be allocated in a buffer on the device, but the buffer is null.",
         op_name,
         name);

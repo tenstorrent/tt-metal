@@ -51,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     uint32_t unpadded_row_size_bytes = a.logical_shape()[-1] * a.element_size();    // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // ---------------------------------------------------------------------
     // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)

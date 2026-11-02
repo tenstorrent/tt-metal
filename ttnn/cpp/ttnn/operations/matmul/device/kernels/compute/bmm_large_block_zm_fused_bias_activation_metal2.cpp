@@ -48,13 +48,13 @@
  *
  * @tparam in0_block_num_tiles The number of tiles in the block to be transposed.
  * @tparam block_size The number of tiles in each block to be transposed.
- * @param in0_transpose_dfb_id Dataflow buffer to read the original tiles from.
- * @param in0_dfb_id Dataflow buffer to which the transposed tiles are written.
+ * @param in0_transpose_dfb Dataflow buffer to read the original tiles from.
+ * @param in0_dfb Dataflow buffer to which the transposed tiles are written.
  */
-template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t in0_dfb_id) {
-    DataflowBuffer in0_transpose_dfb(in0_transpose_dfb_id);
-    DataflowBuffer in0_dfb(in0_dfb_id);
+template <uint32_t in0_block_num_tiles, uint32_t block_size = 4, typename In0TransposeDFB, typename In0DFB>
+FORCE_INLINE void transpose_tile_block(In0TransposeDFB& in0_transpose_dfb, In0DFB& in0_dfb) {
+    const uint32_t in0_transpose_dfb_id = in0_transpose_dfb.get_id();
+    const uint32_t in0_dfb_id = in0_dfb.get_id();
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -95,17 +95,19 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
+template <typename MmPartialsDFB, typename MmPartialsReloadDFB>
 FORCE_INLINE void reload_from_dfb_to_dst(
+    MmPartialsDFB& mm_partials_dfb,
+    MmPartialsReloadDFB& mm_partials_reload_dfb,
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
-    uint32_t mm_partials_dfb_id,
-    uint32_t mm_partials_reload_dfb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
+    const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
+    const uint32_t mm_partials_reload_dfb_id = mm_partials_reload_dfb.get_id();
     // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
     // mm_partials_dfb_id unless the partials buffer is also read as an FPU operand elsewhere (the
     // fused bias add reads it via SrcA), in which case UnpackToDestFp32 cannot be set on it
@@ -120,7 +122,6 @@ FORCE_INLINE void reload_from_dfb_to_dst(
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
     if (mm_partials_reload_dfb_id != mm_partials_dfb_id) {
-        DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
         // Only the unpacker owns the FIFO read pointer; keep this off the MATH/PACK threads.
         UNPACK((mm_partials_reload_dfb.evil_set_read_ptr(mm_partials_dfb.get_read_ptr())));
     }
@@ -136,15 +137,15 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>
 inline void reblock_and_untilize(
+    IntermDFB& interm_dfb,
+    OutDFB& out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_dfb_id,
-    uint32_t out_dfb_id) {
-    DataflowBuffer interm_dfb(interm_dfb_id);
-    DataflowBuffer out_dfb(out_dfb_id);
+    uint32_t out_subblock_h) {
+    const uint32_t interm_dfb_id = interm_dfb.get_id();
+    const uint32_t out_dfb_id = out_dfb.get_id();
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_dfb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -242,12 +243,24 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_dfb_id = dfb::in0;
 
     DataflowBuffer in0_dfb(in0_dfb_id);
+#ifdef IN0_TRANSPOSE_TILE
+    DataflowBuffer in0_transpose_dfb(in0_transpose_dfb_id);
+#else
+    // Same id as in0_dfb here; named only so the if constexpr transpose branch below still compiles.
+    auto& in0_transpose_dfb = in0_dfb;
+#endif
     // From the binding token, not the bare id: under PrefetcherPipe delivery the host makes in1 a
     // relay, and only the token constructor re-aligns it to the pipe's durable read cursor (firmware
     // resets the buffer's pointers at every launch). Identical to the id form on every other path.
     DataflowBuffer in1_dfb(dfb::in1);
     DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
-    DataflowBuffer untilize_mode_out_dfb(untilize_mode_out_dfb_id);
+#ifdef MM_PARTIALS_RELOAD_ALIAS
+    DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
+#else
+    auto& mm_partials_reload_dfb = mm_partials_dfb;
+#endif
+    DataflowBuffer out_dfb(out_dfb_id);
+    auto& untilize_mode_out_dfb = untilize_out ? mm_partials_dfb : out_dfb;
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
@@ -261,10 +274,11 @@ void kernel_main() {
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
     DataflowBuffer bias_dfb(bias_dfb_id);
+    auto& mm_out_dfb = mm_partials_dfb;
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
+    auto& mm_out_dfb = untilize_mode_out_dfb;
 #endif
-    DataflowBuffer mm_out_dfb(mm_out_dfb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -368,7 +382,7 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
+                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb, in0_dfb);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
                         matmul_block_init(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -420,10 +434,10 @@ void kernel_main() {
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_dfb_to_dst(
+                                    mm_partials_dfb,
+                                    mm_partials_reload_dfb,
                                     in0_dfb_id,
                                     in1_dfb_id,
-                                    mm_partials_dfb_id,
-                                    mm_partials_reload_dfb_id,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
                                     out_subblock_w,
@@ -703,7 +717,7 @@ void kernel_main() {
                     copy_init(mm_partials_dfb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_dfb_id, out_dfb_id);
+                            mm_partials_dfb, out_dfb, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);
                     }
                     pack_untilize_uninit(mm_partials_dfb_id);
                 }

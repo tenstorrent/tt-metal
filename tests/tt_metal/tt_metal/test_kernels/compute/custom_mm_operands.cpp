@@ -18,11 +18,14 @@ void kernel_main() {
     constexpr std::uint32_t rows = get_compile_time_arg_val(1);
     constexpr bool mixed = get_compile_time_arg_val(2);
     constexpr std::uint32_t mode = get_compile_time_arg_val(3);  // plain, compressed, DEST reuse
-    constexpr std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
+    constexpr std::uint32_t input_block_tiles = mode == 1 ? 3 : 5;
     constexpr std::uint32_t producer_ct = mode == 2 ? 2 : 1;
+    // Plain matmul packs two Dense tiles, so the second tile is found through the W stride set by short init.
+    constexpr std::uint32_t output_block_tiles = mode == 0 ? 2 : 1;
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
     using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}>;
     using Weight = experimental::LLKOperand<weight_format, TensorShape{16, 16, 2, 2}>;
+    using Output = Activation;  // c_16
     CircularBuffer activation(tt::CBIndex::c_0);
     CircularBuffer weight(tt::CBIndex::c_1);
     CircularBuffer output(tt::CBIndex::c_16);
@@ -30,9 +33,11 @@ void kernel_main() {
     // Full init must run once, before tile-register traffic. The input addresses
     // are unused until execution; only their static format/geometry matter here.
     if constexpr (mixed) {
-        custom_mm_block_init<false, false, true>(tt::CBIndex::c_0, Weight(0), tt::CBIndex::c_16, producer_ct);
+        custom_mm_block_init<false, CustomMmDestLayout::Dense>(
+            tt::CBIndex::c_0, Weight(0), tt::CBIndex::c_16, producer_ct);
     } else {
-        custom_mm_block_init<false, false, true>(Activation(0), Weight(0), tt::CBIndex::c_16, producer_ct);
+        custom_mm_block_init<false, CustomMmDestLayout::Dense>(
+            Activation(0), Weight(0), tt::CBIndex::c_16, producer_ct);
     }
     pack_block_contiguous_init(tt::CBIndex::c_16);
 
@@ -43,7 +48,7 @@ void kernel_main() {
     for (std::uint32_t block = 0; block < blocks; ++block) {
         activation.wait_front(input_block_tiles);
         weight.wait_front(input_block_tiles);
-        output.reserve_back(1);
+        output.reserve_back(output_block_tiles);
         tile_regs_acquire();
 
         // Poisoned input tile zero must be skipped. Plain matmul exercises the
@@ -58,21 +63,37 @@ void kernel_main() {
             const Weight b(experimental::cb_read_address(tt::CBIndex::c_1, 1));
             if constexpr (mixed) {
                 activation.pop_front(1);
-                compressed_custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, b);
-                compressed_custom_mm_block<false>(tt::CBIndex::c_0, b, metadata_address, 0, 2);
+                compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                    tt::CBIndex::c_0, b, tt::CBIndex::c_16);
+                compressed_custom_mm_block<CustomMmDestLayout::Dense>(tt::CBIndex::c_0, b, metadata_address, 0, 2);
             } else {
                 const Activation a(
                     a_base + experimental::tile_stride_words(DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}));
-                compressed_custom_mm_block_init_short<false, false, true>(a, b);
-                compressed_custom_mm_block<false>(a, b, metadata_address, 0, 2);
+                compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(a, b, tt::CBIndex::c_16);
+                compressed_custom_mm_block<CustomMmDestLayout::Dense>(a, b, metadata_address, 0, 2);
             }
         } else {
             if constexpr (mixed) {
-                custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, Weight(b_base), producer_ct);
-                custom_mm_block<false>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
+                // Alternate the CB and LLKOperand outputs so both short-init overloads run.
+                if (block % 2 == 0) {
+                    custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                        tt::CBIndex::c_0, Weight(b_base), Output(0), producer_ct);
+                } else {
+                    custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                        tt::CBIndex::c_0, Weight(b_base), tt::CBIndex::c_16, producer_ct);
+                }
+                custom_mm_block<CustomMmDestLayout::Dense>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
+                if constexpr (mode == 0) {
+                    // Weight tiles 3 and 4 hold [2I; I], into Dense tile 1.
+                    custom_mm_block<CustomMmDestLayout::Dense>(tt::CBIndex::c_0, Weight(b_base), 1, 3, 1, 2, 1);
+                }
             } else {
-                custom_mm_block_init_short<false, false, true>(Activation(a_base), Weight(b_base), producer_ct);
-                custom_mm_block<false>(Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
+                custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                    Activation(a_base), Weight(b_base), tt::CBIndex::c_16, producer_ct);
+                custom_mm_block<CustomMmDestLayout::Dense>(Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
+                if constexpr (mode == 0) {
+                    custom_mm_block<CustomMmDestLayout::Dense>(Activation(a_base), Weight(b_base), 1, 3, 1, 2, 1);
+                }
             }
             if constexpr (mode == 2) {
                 // The reuse unpacker processes two K tiles per MOP iteration.
@@ -90,14 +111,18 @@ void kernel_main() {
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_block_contiguous(mode == 2 ? 4 : 0, tt::CBIndex::c_16, 1);
+        pack_block_contiguous(mode == 2 ? 4 : 0, tt::CBIndex::c_16, output_block_tiles);
         tile_regs_release();
-        output.push_back(1);
+        output.push_back(output_block_tiles);
         activation.pop_front(mode == 1 && mixed ? input_block_tiles - 1 : input_block_tiles);
         weight.pop_front(input_block_tiles);
         if constexpr (mode == 2) {
             custom_mm_reuse_dest_srcb_pack_uninit();
         }
     }
-    custom_mm_block_uninit<true>();
+    if constexpr (mixed) {
+        custom_mm_block_uninit<CustomMmDestLayout::Dense>(Output(0));
+    } else {
+        custom_mm_block_uninit<CustomMmDestLayout::Dense>(tt::CBIndex::c_16);
+    }
 }

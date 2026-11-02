@@ -25,6 +25,7 @@ using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DataMovementHardwareConfig;
+using tt::tt_metal::experimental::DedicatedNocSharing;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -128,11 +129,12 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     append_per_tensor_args(writer_varargs, geometry, &TensorGeometry::coalesced_page_size);
     append_per_tensor_args(writer_varargs, geometry, &TensorGeometry::coalesced_num_pages);
 
-    // Both kernels use NOC 0, as on the GlobalCircularBuffer path, in dynamic-NOC mode (a ProgramSpec
-    // rejects two dedicated-NOC kernels pinned to one NOC). In dynamic-NOC mode the two RISCs share one
-    // set of per-core NoC counters, which the reader re-syncs from the hardware at exit because
-    // performance mode skips the per-read counter updates. That re-sync must not race the writer's
-    // outstanding traffic, so the writer releases the reader through the sync DFB once its pipe is quiet.
+    // Both kernels use NOC 0 in dedicated-NOC mode, as on the GlobalCircularBuffer path. They may share it
+    // because their traffic is disjoint: the reader only reads, the writer only issues posted writes and
+    // atomics. Each RISC counts its own transactions against the NOC's shared hardware counters, so both
+    // re-sync their counters from the hardware at exit: the writer once its pipe is quiet, the reader (whose
+    // performance-mode reads skip the counter updates) only after the writer releases it through the sync
+    // DFB, so its re-sync cannot race the writer's traffic.
     // Both kernels manage their DFB credits explicitly, so on Quasar (config_2xx) they opt out of implicit
     // sync, which would add its own credit accounting on top.
     KernelSpec reader{
@@ -168,7 +170,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                     DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                         .noc = tt::tt_metal::NOC::NOC_0,
-                        .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+                        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+                        .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
                     },
                 .config_2xx =
                     DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
@@ -201,7 +204,8 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                     DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = tt::tt_metal::NOC::NOC_0,
-                        .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+                        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+                        .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
                     },
                 .config_2xx =
                     DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},

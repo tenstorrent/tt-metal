@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -83,9 +84,7 @@ def test_semaphore_sync_quasar(
     # result in srcA should be multiplied by 1 for pool_type = sum
     src_B = torch.full((1024,), 1)
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     if unpack_to_dest:
         # Datacopy through DEST: the unpacker writes the tiles, math only forwards the semaphores, pack reads them back.
         generate_golden = get_golden_generator(DataCopyGolden)

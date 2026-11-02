@@ -30,8 +30,8 @@
 #include "binary_metadata.hpp"
 #include "tt_elffile.hpp"
 #include "zone_meta.hpp"
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 // llrt = lower-level runtime

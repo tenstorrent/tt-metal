@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import get_valid_math_fidelities
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -340,9 +341,7 @@ def test_eltwise_binary(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc),
         "dest_acc": dest_acc,
     }
 

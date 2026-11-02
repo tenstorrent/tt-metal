@@ -470,14 +470,19 @@ class TtKimiK3Transformer(LightweightModule):
         AttnRes is the running sum, and is exactly what the vLLM traces record as
         `decoder_output_layer_i` (pinned by `tests/kimi_k3/test_golden_contract.py`). That makes the
         per-layer PCC curve a tap rather than a separate forward.
+
+        `on_layer_hidden(global_idx, hidden)` is the drafter hook. DSpark taps target layer L at layer
+        L+1's AttnRes read before attention (the input of `attn_norm`), so it fires inside each layer
+        with that read, reported as the layer before it: under AttnRes a new read site would need its
+        own query. `hidden` is borrowed from the stream, so use or copy it before returning.
         """
+        attn_input_tap = None
         if on_layer_hidden is not None:
-            # DFlash's per-layer tap. Under AttnRes a tap is a READ SITE, and a site needs its own
-            # folded query in the walk order — so exposing one is a schedule change, not a callback.
-            raise NotImplementedError(
-                "Kimi-K3 does not support on_layer_hidden: under AttnRes every read needs its own "
-                "query and site, so a per-layer tap is a walk-schedule change rather than a hook"
-            )
+            first = self.first_layer_idx
+
+            def attn_input_tap(local_idx, hidden):
+                on_layer_hidden(first + local_idx - 1, hidden)
+
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
@@ -533,6 +538,7 @@ class TtKimiK3Transformer(LightweightModule):
                     actual_end=actual_end,
                     actual_isl=actual_isl,
                     padding_side=padding_side,
+                    attn_input_tap=attn_input_tap,
                 )
                 if layer_tap is not None and not layer.kv_only:
                     layer_tap(local_idx, residual.current())

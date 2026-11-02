@@ -17,8 +17,11 @@ from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
     DestSync,
+    EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
+    PerfRunType,
+    Transpose,
     format_dict,
 )
 from helpers.param_config import (
@@ -30,16 +33,26 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    ACC_TO_DEST,
     BROADCAST_TYPE,
+    DEST_SYNC,
     INPUT_DIMENSIONS,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
+    PERF_RUN_TYPE,
+    REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     TemplateParameter,
+    generate_input_dim,
 )
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -73,6 +86,75 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 # Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
 # 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
 _TILE_ROWS = [32, 16]
+
+
+def _canonical_bcast_col_config(
+    formats,
+    mathop,
+    math_fidelity,
+    dest_acc,
+    src_A_tilized,
+    src_B_tilized,
+    input_dimensions_A,
+    tile_dims,
+    num_blocks,
+    num_tiles_in_block,
+):
+    """Run the canonical ``_llk_math_eltwise_binary_<op, COL>`` kernel on the same tilized operands
+    and return its raw (tilized) result; the canonical unpack reads one srcB tile per srcA tile, so the
+    single srcB tile is repeated ct_dim times."""
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+    ct_dim = input_dimensions_A[1] // tile_dims[1]
+    configuration = TestConfig(
+        "sources/eltwise_binary_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            BROADCAST_TYPE(BroadcastType.Column),
+            MATH_OP(mathop=mathop),
+            DEST_SYNC(DestSync.Half),
+            REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
+            ACC_TO_DEST(False),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+        ],
+        runtimes=[
+            generate_input_dim(
+                input_dimensions_A, input_dimensions_A, tile_dimensions=tile_dims
+            ),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            TILE_COUNT(ct_dim),
+            NUM_TILES_IN_BLOCK(
+                num_tiles_in_block,
+                input_num_tiles_in_block=num_tiles_in_block,
+                output_num_tiles_in_block=num_tiles_in_block,
+            ),
+            NUM_BLOCKS(
+                num_blocks, input_num_blocks=num_blocks, output_num_blocks=num_blocks
+            ),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+            LOOP_FACTOR(1),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A_tilized,
+            formats.input_format,
+            src_B_tilized.repeat(ct_dim),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=ct_dim,
+            tile_count_B=ct_dim,
+            tile_count_res=ct_dim,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=dest_acc,
+    )
+    return configuration
 
 
 @parametrize(
@@ -234,7 +316,25 @@ def test_eltwise_bcast_col_custom(
         ),
         dest_acc=dest_acc,
     )
+    canonical = None
+    if mathop == MathOperation.Elwmul:
+        canonical = _canonical_bcast_col_config(
+            formats,
+            mathop,
+            math_fidelity,
+            dest_acc,
+            src_A_tilized,
+            src_B_tilized,
+            input_dimensions_A,
+            tile_dims,
+            num_blocks,
+            num_tiles_in_block,
+        )
+        # Build both first: under --compile-producer `run()` skips once the first variant is built.
+        configuration.prepare()
+        canonical.prepare()
     res_from_L1 = configuration.run().result
+    res_tilized = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     res_from_L1 = untilize_block(
         res_from_L1,
@@ -269,9 +369,23 @@ def test_eltwise_bcast_col_custom(
             r_sample,
         )
 
+    # Elwmul: atol/rtol 0.05 cannot tell LoFi from HiFi, a 2 step budget can.
+    gate = {"max_ulp": 2} if mathop == MathOperation.Elwmul else {}
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, **gate
     ), "Assert against golden failed"
+
+    # Elwmul: the step budget cannot tell HiFi3/HiFi4 from a 2-phase walk; the canonical bcast-col
+    # MUL kernel on the same operands is bit-identical to this scaffold at every fidelity, so match it.
+    if mathop == MathOperation.Elwmul:
+        ref_tilized = torch.tensor(
+            canonical.run().result,
+            dtype=format_dict[formats.output_format],
+        )
+        mismatched = int((res_tilized != ref_tilized).sum())
+        assert (
+            mismatched == 0
+        ), f"{mismatched} of {res_tilized.numel()} elements differ from the canonical bcast-col MUL at {math_fidelity.name}"
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).

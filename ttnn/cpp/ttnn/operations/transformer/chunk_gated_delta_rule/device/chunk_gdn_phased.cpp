@@ -15,7 +15,7 @@ namespace {
 void check(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
-    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+    TT_FATAL(t.is_allocated(), "chunk_gdn: {} must be on device", name);
 }
 
 // A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV heads and
@@ -25,7 +25,7 @@ void check_gdn_gate(
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(
         t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16, "chunk_gdn: {} must be fp32 or bf16", name);
-    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+    TT_FATAL(t.is_allocated(), "chunk_gdn: {} must be on device", name);
     const auto& s = t.logical_shape();
     TT_FATAL(s.rank() == 3, "chunk_gdn: {} must be [B, T, HV] (got rank {})", name, s.rank());
     TT_FATAL(HV > 0 && s[2] == HV, "chunk_gdn: {} has {} heads per row, expected HV = {}", name, s[2], HV);

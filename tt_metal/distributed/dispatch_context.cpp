@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "impl/context/context_types.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_device_view_impl.hpp"
 #include "mesh_command_queue.hpp"
@@ -169,7 +168,7 @@ DispatchContext& DispatchContext::get() {
 bool DispatchContext::is_fast_dispatch_session_active() const { return num_fd_inits_ > 0; }
 
 DispatchCoreAxis DispatchContext::get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const {
-    return MetalContext::instance(extract_context_id(mesh_device)).get_dispatch_core_config().get_dispatch_core_axis();
+    return mesh_device->impl().metal_context().get_dispatch_core_config().get_dispatch_core_axis();
 }
 
 void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_device) {
@@ -207,9 +206,7 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     collect_views(root);
 
     std::vector<FdL1Conflict> conflicts;
-    // Walk through the IDevice interface: everything this preflight needs (id, allocator_impl) is
-    // public there, while Device keeps allocator_impl private.
-    for (IDevice* device : devices) {
+    for (auto* device : devices) {
         std::vector<distributed::MeshDevice*> views_over_device;
         for (distributed::MeshDevice* view : mesh_views) {
             for (auto* view_device : view->get_view().impl().get_devices()) {
@@ -319,7 +316,7 @@ void DispatchContext::initialize_fast_dispatch(
         "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
 
     const auto& device_manager = metal_context.device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices_impl();
+    const auto& active_devices = device_manager->get_all_active_devices();
 
     // Every active device must be MMIO-attached. Dispatch then uses the single-chip topology, whose roles
     // are all assigned by init_command_queue_host(), before the L1 preflight below. A remote chip's
@@ -421,7 +418,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
     const auto& device_manager = metal_context.device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices_impl();
+    const auto& active_devices = device_manager->get_all_active_devices();
 
     mesh_device_impl.mesh_command_queues_.clear();
 

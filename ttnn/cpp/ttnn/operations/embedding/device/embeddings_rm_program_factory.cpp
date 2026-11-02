@@ -178,13 +178,13 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         });
     }
 
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    uint32_t index_page_size = tt::round_up(input_element_size_bytes, 32u);
     Group<ScratchpadSpec> scratchpads;
     scratchpads.push_back(
         ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});
 
     if (use_local_cache) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
+        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         scratchpads.push_back(

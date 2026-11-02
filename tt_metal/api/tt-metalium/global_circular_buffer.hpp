@@ -32,16 +32,6 @@ namespace experimental {
 
 class GlobalCircularBufferImpl;
 
-// Forward declarations for the experimental DRAM-sender extension defined in
-// tt-metalium/experimental/global_circular_buffer.hpp. The DRAM-sender feature is an
-// opt-in mode that is not part of the public GlobalCircularBuffer API surface; existing
-// callers continue to see the original public interface unchanged.
-class GlobalCircularBuffer;
-enum class SenderCoreType : uint8_t;
-namespace global_circular_buffer_dram_sender {
-struct GlobalCircularBufferDramSenderInternals;
-}  // namespace global_circular_buffer_dram_sender
-
 class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
@@ -77,8 +67,6 @@ public:
 
 private:
     std::unique_ptr<GlobalCircularBufferImpl> impl_;
-
-    friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
 
 /**

@@ -43,6 +43,7 @@ import struct
 import pytest
 import torch
 from conftest import skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -214,8 +215,7 @@ def assert_even_columns(
 def test_sfpu_sampling(formats, dest_acc, op, vector_mode):
     is_binary, rows_per_face = SAMPLING_OPS[op]
 
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if vector_mode == VectorMode.C and rows_per_face != FIRST_COLUMN_ROWS:
         # Production dispatches only the *_first_column helpers with VectorMode::C;
@@ -387,8 +387,7 @@ def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, skip_init):
     happened to leave, which is not a defined value and so not something to assert on
     either way.
     """
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]

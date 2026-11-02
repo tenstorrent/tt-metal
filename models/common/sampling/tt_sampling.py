@@ -322,6 +322,8 @@ class TTSampling(LightweightModule):
         # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
         # other arch's behaviour changes.
         self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
+        # Decode rows past the real batch are padding; force-argmax only needs the live ones.
+        self._decode_live_rows = raw_batch if raw_batch < self.max_batch_size else None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -1007,6 +1009,19 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(boost)
         return adjusted
 
+    def _argmax_live_rows(self, x_untilized, tt_out_tok):
+        """Argmax the live decode rows only and write them into ``tt_out_tok``; padded slots get token 0."""
+        live_rows = self._decode_live_rows
+        live = ttnn.slice(x_untilized, [0, 0, 0, 0], [1, 1, live_rows, x_untilized.shape[-1]])
+        tokens = ttnn.argmax(live, dim=-1, keepdim=False)
+        ttnn.deallocate(live)
+        tokens = ttnn.reshape(tokens, [1, 1, 1, live_rows])
+        padded = ttnn.pad(tokens, [(0, 0), (0, 0), (0, 0), (0, tt_out_tok.shape[-1] - live_rows)], 0)
+        ttnn.deallocate(tokens)
+        ttnn.copy(padded, tt_out_tok)
+        ttnn.deallocate(padded)
+        return tt_out_tok
+
     def _untilize_for_argmax(self, x):
         """Untilize a vocabulary row in bounded chunks while preserving its exact width."""
         num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
@@ -1150,13 +1165,22 @@ class TTSampling(LightweightModule):
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             x_untilized = self._untilize_for_argmax(x)
-            tt_out_tok = ttnn.argmax(
-                x_untilized,
-                dim=-1,
-                output_tensor=tt_out_tok,
-                keepdim=False,
-                sub_core_grids=self._force_argmax_sub_core_grids,
-            )
+            if (
+                tt_out_tok is not None
+                and self._decode_live_rows is not None
+                and num_devices == 1
+                and self._sampling_dp == 1
+                and self._force_argmax_sub_core_grids is None
+            ):
+                tt_out_tok = self._argmax_live_rows(x_untilized, tt_out_tok)
+            else:
+                tt_out_tok = ttnn.argmax(
+                    x_untilized,
+                    dim=-1,
+                    output_tensor=tt_out_tok,
+                    keepdim=False,
+                    sub_core_grids=self._force_argmax_sub_core_grids,
+                )
             if self.log_probs_calculator.enable_log_probs:
                 # argmax drops the final axis; the calculator takes the ordinary
                 # sampler's [1,1,1,B] ROW_MAJOR index layout.

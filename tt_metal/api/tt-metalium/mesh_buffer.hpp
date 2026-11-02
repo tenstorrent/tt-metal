@@ -19,6 +19,10 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
+namespace tt::tt_metal {
+class TensorSpec;
+}
+
 namespace tt::tt_metal::distributed {
 
 // Specifies how a buffer is laid out across Memory Banks within a single device.
@@ -79,6 +83,9 @@ class MeshBuffer;
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
+struct PerNodeMeshDeviceMemorySpan;
+distributed::MeshBuffer create_sram_buffer_view(
+    distributed::MeshDevice&, const TensorSpec&, const PerNodeMeshDeviceMemorySpan&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -196,6 +203,12 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    friend tt::tt_metal::distributed::MeshBuffer
+    tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
+        tt::tt_metal::distributed::MeshDevice&,
+        const tt::tt_metal::TensorSpec&,
+        const tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,

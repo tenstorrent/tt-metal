@@ -29,9 +29,9 @@ tilized golden.
 """
 
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -46,13 +46,7 @@ TINY_NUM_FACES = 2
 @parametrize(
     # Same input/output format for both ops so the second op needs NO data-format
     # reconfig — isolating the uninit restore as the only state reset.
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-        ],
-        same=True,
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     # All sub-16 face row counts. face_r_dim=16 is the Phase 1 baseline and is
     # covered by test_unpack_tilize_uninit_restore.py.

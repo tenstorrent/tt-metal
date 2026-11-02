@@ -97,6 +97,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             sfpi::vFloat x                  = sfpi::dst_reg[0];
             sfpi::l_reg[sfpi::LRegs::LReg0] = x;
             TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG0, 0);
+            // SFPMAD takes 2 cycles, and Wormhole does not wait for it: the next instruction would read the old LREG0.
+            TTI_SFPNOP;
             sfpi::vFloat x_minus_1 = sfpi::l_reg[sfpi::LRegs::LReg0];
             sfpi::dst_reg[0]       = x_minus_1;
             sfpi::dst_reg++;

@@ -107,7 +107,6 @@ def _tiny_matmul_layout(in0_tile_r_dim: int):
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
         ],
         same=False,

@@ -12,6 +12,9 @@
 using namespace tt::data_movement::common;
 using namespace codegen_kernels;
 
+// tt_memmove's guaranteed_16B_aligned path needs source and destination at the same offset within 16 B.
+constexpr uint32_t NOC_SELF_READ_PHASE_MASK = 16 - 1;
+
 // Input pages carry alignment padding, so a slab of the packed output stream is gathered from aligned windows of
 // every input page it crosses, then its logical bytes are copied into one output CB slot.
 struct SourceWindow {
@@ -107,7 +110,7 @@ void kernel_main() {
                 const SourceWindow w = next_window<old_stick_bytes, input_alignment>(flat, left);
                 const uint32_t dst = slot + slot_offset;
                 const uint32_t src = region + region_offset + w.skip;
-                if (((dst ^ src) & 15) == 0) {
+                if (((dst ^ src) & NOC_SELF_READ_PHASE_MASK) == 0) {
                     tt_memmove<true, true, true, noc_max_burst_bytes>(noc, dst, src, w.take);
                 } else {
                     last_store = riscv_copy_elements(dst, src, w.take);

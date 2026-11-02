@@ -4,10 +4,10 @@
 
 """
 Sweep for the generalized Metal 2.0 / DataflowBuffer (DFB) no-broadcast slice of the experimental
-quasar binary ops. The DFB factory (binary_ng_metal_v2_factory.cpp) is a generic port of the
-descriptor factory's SubtileBroadcastType::NONE tiled path; matches_metal_v2_slice routes the whole
-no-broadcast tensor-tensor TILE slice to it — FPU and SFPU, interleaved and sharded, every dtype,
-full lhs/rhs/post activations.
+quasar binary ops. matches_metal_v2_slice routes the whole no-broadcast tensor-tensor TILE slice to the
+DFB factory (binary_ng_metal_v2_factory.cpp) — FPU and SFPU, interleaved and sharded, every dtype but
+int32 with matching a and b dtypes, full lhs/rhs/post activations. On Quasar the native gate goes first and takes the cases it admits,
+unless TTNN_QSR_NATIVE=0, so this sweep runs both factories there.
 
 This sweep exercises the capabilities the ResNet residual-add canary (test_binary_ng_resnet_add.py)
 does not: the interleaved/DRAM path (TensorAccessor NoC reads + split_work_to_cores placement +
@@ -23,23 +23,27 @@ Run on Wormhole:
 
 Run on the Quasar simulator (the full bf16 FPU/SFPU matrix incl. lhs/rhs activations runs, plus fp32
 add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run):
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 """
 
+import itertools
+
 import pytest
+import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _on_quasar,
+    _DIVIDE_NOT_NAN,
+    _SPECIAL,
     _run,
+    _run_special,
     _run_mixed,
-    _act,
     _height_sharded_config,
     _block_sharded_config,
     _width_sharded_config,
 )
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Interleaved tensor: 32x40 tiles (1280 tiles) so split_work_to_cores spreads many tiles per core on
 # both an 8x8 (Wormhole) and an 8x4 (Quasar sim) worker grid -- ~20 tiles/core on 8x8, ~40/core on 8x4,
@@ -259,6 +263,31 @@ def test_no_bcast_activation_supported(device, act, position, layout):
     _run(device, "multiply", mem_config, ttnn.bfloat16, shape, **act_kwarg)
 
 
+# Special values: every pair of 1.5, -2, +0, -0, +inf, -inf and NaN, as production's test_div_fp32 checks them, so inf
+# and NaN must sit where torch puts them. Quasar only: Wormhole's bf16 has no NaN (a NaN operand comes out as inf or a
+# finite number), and its fp32 divide gives NaN for the pairs that Quasar's does not.
+_SPECIAL_SKIP = pytest.mark.skipif(not is_quasar(), reason="Quasar's special values; Wormhole's bf16 has no NaN")
+
+
+@_SPECIAL_SKIP
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide"])
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_special_values(device, op_name, dtype_tt):
+    pairs = [p for p in itertools.product(_SPECIAL, repeat=2) if op_name != "divide" or p not in _DIVIDE_NOT_NAN]
+    _run_special(device, op_name, dtype_tt, pairs)
+
+
+# Quasar's SFPU divide gives a number where IEEE gives NaN for these six pairs. Strict, so that the test fails as soon
+# as the divide gives NaN for them.
+@_SPECIAL_SKIP
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason="Quasar's divide gives a number, not NaN, for these pairs"
+)
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_divide_special_values_known_difference(device, dtype_tt):
+    _run_special(device, "divide", dtype_tt, _DIVIDE_NOT_NAN)
+
+
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("layout", ["interleaved", "height"])
 def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
@@ -280,7 +309,7 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
 #   Metal 2.0 factory borrows ONLY when all three operands are L1-sharded with one memory config (the
 #   is_native case); any interleaved operand, or a different memory config, takes the all-NoC path where
 #   every operand (output included) is read/written via its own sharding-aware TensorAccessor. The native
-#   factory (TTNN_QSR_NATIVE) borrows per operand instead, by its anchor, an L1 shard config or the L1
+#   factory, the default on Quasar, borrows per operand instead, by its anchor, an L1 shard config or the L1
 #   banks; test_binary_ng_quasar_native.py checks where each mix runs.
 _MIXED_CASES = [
     # NOTE: the interleaved-OUTPUT mixed cases (H.I.I, I.H.I, H.H.I, W.I.I) live in _MIXED_INTERLEAVED_OUT_CASES
@@ -371,9 +400,8 @@ _GENERALITY_CASES = [
 def test_no_bcast_mixed_strategy_and_grid(device, op_name, a_mem, b_mem, out_mem):
     # Prove the factory has NO restriction on the non-borrowed operands: different shard STRATEGIES per
     # operand (Height/Width/Block) and DIFFERENT core grids per operand both route through the NoC
-    # (TensorAccessor) path. bf16 add => FPU compute kernel; bf16 multiply => SFPU kernel. On Quasar this
-    # passing is itself proof of v2 routing (the descriptor path cannot run on Quasar); on Wormhole the
-    # descriptor path would also pass, so there it checks numerical correctness rather than v2 selection.
+    # (TensorAccessor) path. bf16 add => FPU compute kernel; bf16 multiply => SFPU kernel. Passing is itself
+    # proof of DFB routing, because an op outside the factories' slices throws.
     pcc = 0.99 if op_name == "multiply" else None
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, pcc=pcc)
 
@@ -410,3 +438,11 @@ def test_no_bcast_mixed_interleaved_out(device, op_name, a_mem, b_mem, out_mem, 
     # count grows. bf16 add => FPU compute kernel; bf16 multiply => SFPU kernel. Grids fit the Quasar 8x4.
     pcc = 0.99 if op_name == "multiply" else None
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, shape=shape, pcc=pcc)
+
+
+def test_no_bcast_op_outside_the_slices_is_refused(device, expect_error):
+    # Mixed a and b dtypes are outside the Quasar-native and the Metal 2.0 slice on every arch, so the op throws.
+    a = ttnn.from_torch(torch.randn(32, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "is not supported for"):
+        ttnn.experimental.quasar.add(a, b)

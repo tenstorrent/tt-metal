@@ -39,7 +39,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
@@ -354,7 +354,7 @@ bool initialize_program(
         }
 
         // Arg values don't affect dispatch cost, so every arg is zero on every node.
-        m2::Table<m2::NodeCoord, uint32_t> zero_per_node;
+        m2::Table<m2::NodeCoord, m2::ArgValue> zero_per_node;
         for (const auto& node : m2::node_range_to_nodes(kg)) {
             zero_per_node.emplace(node, 0);
         }

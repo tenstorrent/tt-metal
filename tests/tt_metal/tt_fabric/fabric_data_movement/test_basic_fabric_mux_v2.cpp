@@ -164,7 +164,9 @@ ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
-bool is_2d_fabric() { return tt::tt_fabric::get_fabric_topology() == tt::tt_fabric::Topology::Mesh; }
+bool is_2d_fabric(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return tt::tt_fabric::get_fabric_topology(mesh_device) == tt::tt_fabric::Topology::Mesh;
+}
 
 uint32_t get_receiver_slot_count() { return kDefaultReturnCreditsPerPacket; }
 
@@ -205,12 +207,13 @@ uint32_t resolve_packet_payload_size_bytes(const TestCaseConfig& test_case) {
     return static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
 }
 
-TestRuntimeConfig build_test_runtime_config(const TestCaseConfig& test_case) {
+TestRuntimeConfig build_test_runtime_config(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const TestCaseConfig& test_case) {
     const auto packet_payload_size_bytes = resolve_packet_payload_size_bytes(test_case);
     return TestRuntimeConfig{
         .packet_payload_size_bytes = packet_payload_size_bytes,
         .sender_channel_buffer_size_bytes = get_sender_channel_buffer_size_bytes(test_case, packet_payload_size_bytes),
-        .use_mesh_api = is_2d_fabric(),
+        .use_mesh_api = is_2d_fabric(mesh_device),
     };
 }
 
@@ -363,7 +366,7 @@ std::vector<RemoteReceiverDevice> collect_remote_devices_in_direction(
     const MeshDevicePtr& sender_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     tt::tt_fabric::RoutingDirection direction) {
-    if (is_2d_fabric()) {
+    if (is_2d_fabric(*sender_device)) {
         return collect_2d_remote_devices_in_direction(fixture, sender_device, src_fabric_node_id, direction);
     }
     return collect_1d_remote_devices_in_direction(fixture, src_fabric_node_id, direction);
@@ -478,9 +481,10 @@ tt::tt_metal::KernelHandle create_worker_kernel(
     tt::tt_metal::Program& program,
     const char* kernel_src,
     const tt::tt_metal::CoreCoord& logical_core,
-    std::vector<uint32_t> compile_args) {
+    std::vector<uint32_t> compile_args,
+    bool use_mesh_api) {
     std::map<std::string, std::string> defines = {};
-    if (is_2d_fabric()) {
+    if (use_mesh_api) {
         defines["FABRIC_2D"] = "";
     }
 
@@ -505,7 +509,8 @@ std::optional<MuxDeployment> create_mux_deployment(
     uint8_t num_buffers_per_channel,
     uint32_t channel_buffer_size_bytes,
     const TestCaseConfig& test_case) {
-    const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, anchor_dst_fabric_node_id);
+    const auto link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*device, src_fabric_node_id, anchor_dst_fabric_node_id);
     if (link_indices.empty()) {
         return std::nullopt;
     }
@@ -697,15 +702,17 @@ std::vector<uint32_t> read_worker_status(
 void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) {
     ASSERT_GT(get_receiver_slot_count(), 0u);
 
-    const auto test_runtime_config = build_test_runtime_config(test_case);
+    const auto& mesh_device = *fixture.get_devices().front();
+    const auto test_runtime_config = build_test_runtime_config(mesh_device, test_case);
     ASSERT_GT(test_runtime_config.packet_payload_size_bytes, 0u);
     ASSERT_EQ(test_runtime_config.packet_payload_size_bytes % 16u, 0u);
 
     ASSERT_LE(
-        test_runtime_config.sender_channel_buffer_size_bytes, tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes())
+        test_runtime_config.sender_channel_buffer_size_bytes,
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device))
         << "Case " << test_case.name << " requested sender mux channel buffer size "
         << test_runtime_config.sender_channel_buffer_size_bytes << " but fabric limit is "
-        << tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        << tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device);
 
     auto routing_selection = select_routing_selection(fixture, test_case);
     if (!routing_selection.has_value()) {
@@ -768,7 +775,8 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
                 sender_memory.value(),
                 receiver_memory,
                 test_runtime_config,
-                test_case));
+                test_case),
+            test_runtime_config.use_mesh_api);
         auto receiver_runtime_args = make_receiver_runtime_args(
             test_case,
             test_runtime_config,
@@ -788,7 +796,8 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
                 sender_memory.value(),
                 receiver_memory,
                 test_runtime_config,
-                test_case));
+                test_case),
+            test_runtime_config.use_mesh_api);
         auto sender_runtime_args = make_sender_runtime_args(
             test_case, test_runtime_config, assignment, sender_memory.value(), receiver_virtual_core);
         bind_worker_to_mux_channel(

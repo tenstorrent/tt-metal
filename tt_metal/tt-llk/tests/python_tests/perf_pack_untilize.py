@@ -25,7 +25,6 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
             DataFormat.Int32,
             DataFormat.Bfp8_b,

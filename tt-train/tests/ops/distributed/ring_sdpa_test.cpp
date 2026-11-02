@@ -15,7 +15,7 @@
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"

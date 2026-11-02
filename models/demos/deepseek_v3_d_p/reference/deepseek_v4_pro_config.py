@@ -31,6 +31,10 @@ class DeepSeekV4ProConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 6
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 5.9% on hot_expert traffic and
+    # nothing on balanced, for 35 -> 17 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.
     NUM_EXPERT_GROUPS = 1

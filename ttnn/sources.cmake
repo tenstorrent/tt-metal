@@ -39,6 +39,7 @@ set(TTNN_CORE_SRCS
     core/tensor/host_buffer/functions.cpp
     core/tensor/serialization.cpp
     core/tensor/storage.cpp
+    core/tensor/topology_check.cpp
     core/tensor/tensor.cpp
     core/tensor/tensor_attributes.cpp
     core/tensor/tensor_impl.cpp

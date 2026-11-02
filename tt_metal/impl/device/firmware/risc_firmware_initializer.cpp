@@ -37,9 +37,9 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
-#include <umd/device/types/blackhole_eth.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/blackhole_eth.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 

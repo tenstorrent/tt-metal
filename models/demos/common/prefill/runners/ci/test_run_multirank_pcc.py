@@ -45,6 +45,10 @@ if name == "sleep":
     time.sleep(0.02)
 elif name.startswith("mpirun"):
     record("mpi")
+    if "--output-filename" in args:
+        log = Path(args[args.index("--output-filename") + 1]) / "1" / "rank.0" / "stdout"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("stub rank log\n")
     os.environ["TEST_MPI_HOST"] = args[args.index("--host") + 1] if "--host" in args else ""
     os.environ["OMPI_COMM_WORLD_RANK"] = "0"
     if "bash" in args:
@@ -145,7 +149,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
             ("glm52", 1049600, 28),
-            ("mistral4", 56320, 1),
+            ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
@@ -216,7 +220,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "PREFILL_SP": "8",
             "PREFILL_TP": "1",
             "PREFILL_PCC_GOLDEN_LEN": "56320",
-            "PREFILL_MAX_SEQ_LEN": "56320",
+            "PREFILL_MAX_SEQ_LEN": "61440",
             "PREFILL_PRODUCER_CHUNKS": "11",
             "PREFILL_PRODUCER_CHECK_PCC": "1",
         }.items():
@@ -252,7 +256,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 56320), ("kimi27", 256000), ("glm52", 256000)):
+        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model, config="sc1")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -289,9 +293,17 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_perf_gate_fails_outside_margin(self):
-        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"})
+        result, _ = self.run_harness(
+            "mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000", "GITHUB_ACTIONS": "true"}
+        )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        self.assertIn("::error title=Prefill perf gate::TPS GATE FAIL", result.stdout)
+        # Log summaries read the tail: the failed gate must come after the rank-log dump.
+        tail = result.stdout.rsplit("==================== gate verdicts ====================", 1)
+        self.assertEqual(len(tail), 2, result.stdout)
+        self.assertIn("ranklog tails", tail[0])
+        self.assertIn("TPS GATE FAIL", tail[1])
+        self.assertNotIn("ranklog tails", tail[1])
 
     def test_perf_gate_reports_when_no_baseline_is_set(self):
         # The state the CI leg ships in: measure and print, do not compare.

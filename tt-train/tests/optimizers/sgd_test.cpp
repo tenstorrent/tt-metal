@@ -420,6 +420,87 @@ TEST_F(SGDLateMomentumTest, CompositeFirstLateUpdateSeedsRawGradient) {
 }
 
 // ====================================================================
+// Param groups
+// Each group is stepped with its own options: here "b" is in a group with
+// 10x the default lr, so after one plain SGD step (w -= lr * g) the two
+// params must reflect different learning rates.
+// ====================================================================
+
+using SGDParamGroupsTest = SGDLateMomentumTest;
+
+template <typename Optimizer, typename Config>
+static void run_group_lr_case() {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    const float default_lr = 1e-2F;
+    const float group_lr = 1e-1F;
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    xt::xarray<float> w_a = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
+    xt::xarray<float> w_b = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
+    // Bounded away from zero so the two learning rates give clearly different updates everywhere.
+    xt::xarray<float> g = test_utils::make_uniform_xarray<float>(shape, 0.5F, 1.0F, gen());
+
+    auto theta_a = autograd::create_tensor(to_tt(w_a), true);
+    auto theta_b = autograd::create_tensor(to_tt(w_b), true);
+    ttml::serialization::NamedParameters params{{"a", theta_a}, {"b", theta_b}};
+
+    Config cfg;
+    cfg.lr = default_lr;
+    Optimizer opt(params, cfg, {{.params = {"b"}, .options = {{"lr", group_lr}}}});
+    ASSERT_EQ(opt.get_group_lrs(), (std::vector<float>{default_lr, group_lr}));
+
+    const auto w_a_before = core::to_xtensor(theta_a->get_value());
+    const auto w_b_before = core::to_xtensor(theta_b->get_value());
+    theta_a->set_grad(to_tt(g));
+    theta_b->set_grad(to_tt(g));
+    const auto grad = core::to_xtensor(theta_a->get_grad());
+    opt.step();
+
+    const auto w_a_after = core::to_xtensor(theta_a->get_value());
+    const auto w_b_after = core::to_xtensor(theta_b->get_value());
+    const float tolerance = 1e-2F;  // bf16 rounding of the updated weights
+    EXPECT_LE(xt::amax(xt::abs(w_a_after - (w_a_before - default_lr * grad)))(), tolerance)
+        << "param in the default group must use the default lr";
+    EXPECT_LE(xt::amax(xt::abs(w_b_after - (w_b_before - group_lr * grad)))(), tolerance)
+        << "param in the custom group must use the group's lr";
+    // Guard against a vacuous pass: the two learning rates must give clearly different updates.
+    EXPECT_GT(xt::amin(xt::abs((group_lr - default_lr) * grad))(), 2 * tolerance);
+}
+
+TEST_F(SGDParamGroupsTest, FusedStepsEachGroupWithItsOwnLr) {
+    run_group_lr_case<ttml::optimizers::SGD, ttml::optimizers::SGDConfig>();
+}
+
+TEST_F(SGDParamGroupsTest, CompositeStepsEachGroupWithItsOwnLr) {
+    run_group_lr_case<ttml::optimizers::SGDComposite, ttml::optimizers::SGDCompositeConfig>();
+}
+
+TEST_F(SGDParamGroupsTest, ValidatesEveryGroup) {
+    using namespace ttml;
+    auto theta = autograd::create_tensor(to_tt(xt::zeros<float>({1, 1, 32, 32})), true);
+    ttml::serialization::NamedParameters params{{"theta", theta}};
+
+    // The defaults are valid, but a group with dampening and no momentum is not.
+    optimizers::SGDConfig cfg;
+    EXPECT_THROW(
+        optimizers::SGD(params, cfg, {{.params = {"theta"}, .options = {{"dampening", 0.5F}}}}), std::runtime_error);
+
+    // Nesterov applies to the whole optimizer, so every group needs momentum > 0 and no dampening.
+    cfg.nesterov = true;
+    cfg.momentum = 0.9F;
+    EXPECT_THROW(
+        optimizers::SGD(params, cfg, {{.params = {"theta"}, .options = {{"momentum", 0.0F}}}}), std::runtime_error);
+
+    // Options changed after construction are checked before they are used: at the next step.
+    optimizers::SGD valid(params, cfg);
+    valid.set_group_options("momentum", {0.0F});
+    EXPECT_THROW(valid.step(), std::runtime_error);
+}
+
+// ====================================================================
 // Validation tests
 // ====================================================================
 

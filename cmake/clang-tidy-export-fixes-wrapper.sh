@@ -8,6 +8,9 @@ set -euo pipefail
 
 FIXES_DIR="$1"
 shift
+# Set by the "Install clang-tidy <version>" workflow step for non-20 runs
+# (e.g. the PR-gate v23 shadow job); defaults to the CI image's baked-in binary.
+CLANG_TIDY="${CLANG_TIDY_BIN:-clang-tidy-20}"
 
 mkdir -p "$FIXES_DIR"
 
@@ -21,7 +24,7 @@ for arg in "$@"; do
 done
 
 if [[ -z "$SOURCE_FILE" ]]; then
-    exec clang-tidy-20 "$@"
+    exec "$CLANG_TIDY" "$@"
 fi
 
 # Unique, collision-free suffix from the path.
@@ -34,7 +37,7 @@ FIXES_FILE="${FIXES_DIR}/${BASENAME}-${HASH}.yaml"
 # CTCACHE_BIN is pre-resolved once by the workflow step that sets CTCACHE_S3_OK,
 # avoiding a repeated PATH scan across thousands of TU invocations.
 if [ "${CTCACHE_S3_OK:-0}" = "1" ] && [ -n "${CTCACHE_BIN:-}" ]; then
-    exec "$CTCACHE_BIN" clang-tidy-20 --export-fixes="$FIXES_FILE" "$@"
+    exec "$CTCACHE_BIN" "$CLANG_TIDY" --export-fixes="$FIXES_FILE" "$@"
 else
-    exec clang-tidy-20 --export-fixes="$FIXES_FILE" "$@"
+    exec "$CLANG_TIDY" --export-fixes="$FIXES_FILE" "$@"
 fi

@@ -67,7 +67,8 @@ tt::tt_metal::Program create_send_async_program(
     auto input_page_size = input_buffer->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
 
-    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+    auto link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
     uint32_t num_links = 2;
 
@@ -161,7 +162,8 @@ tt::tt_metal::Program create_send_async_program(
             writer_rt_args);
     }
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, upstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, sender_fabric_node_id, upstream_fabric_node_id);
     tt::tt_fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id,
         upstream_fabric_node_id,

@@ -417,6 +417,7 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
       - name: Upload the gate report
+        id: report
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
@@ -448,6 +449,9 @@ jobs:
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The merge gate run has many jobs; the anchor scrolls to this job's summary.
+          REPORT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#summary-${{ job.check_run_id }}
+          ARTIFACT_URL: ${{ steps.report.outputs.artifact-url }}
           COMMIT_SHA: ${{ github.sha }}
           MODE: >-
             ${{ inputs.speed_of_light == 'true'
@@ -459,6 +463,8 @@ jobs:
                 || github.event_name }}
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
+          THRESHOLD: ${{ inputs.threshold }}
+          MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
@@ -510,6 +516,8 @@ jobs:
             --arch "$ARCH" \
             --run-types "$RUN_TYPES" \
             --run-url "$RUN_URL" \
+            --report-url "$REPORT_URL" \
+            --artifact-url "$ARTIFACT_URL" \
             --baseline-sha "$BASELINE_SHA" \
             --commit "$COMMIT_SHA" \
             --mode "$MODE" \
@@ -517,10 +525,22 @@ jobs:
             --trigger "$TRIGGER" \
             --note "$NOTE" \
             --post-pass "$SLACK_ON_PASS" \
+            --threshold "$THRESHOLD" \
+            --module-thresholds "$MODULE_THRESHOLDS" \
+            --part-out slack_part.json \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."
           echo "should_post=false" >> $GITHUB_OUTPUT
+
+      # The caller can post one message for all arches from these (gate_slack_combine.py).
+      - name: Upload the Slack part
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-slack-${{ inputs.arch }}
+          path: slack_part.json
+          if-no-files-found: ignore
 
       - name: Notify Slack
         if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}

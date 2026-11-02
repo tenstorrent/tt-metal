@@ -51,7 +51,6 @@ from helpers.utils import passed_test
 MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
 )

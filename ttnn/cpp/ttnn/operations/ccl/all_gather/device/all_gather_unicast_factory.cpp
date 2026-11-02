@@ -265,7 +265,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/num_buffers_per_channel,
         /*num_buffers_header_only_channel=*/0,
-        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
         /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
 
     tt::tt_metal::KernelHandle mux_kernel_id = 0;

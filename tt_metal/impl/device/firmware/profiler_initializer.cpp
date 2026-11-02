@@ -8,7 +8,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <device.hpp>
-#include "context/context_types.hpp"
 #include "device/device_impl.hpp"
 #include "impl/context/context_descriptor.hpp"
 
