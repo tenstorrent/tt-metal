@@ -512,6 +512,8 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
 {
     static_assert(sizeof...(Words) >= 1, "Template 1 MOP update takes at least one word");
     static_assert(((detail::occurrences<Words, Words...> == 1) && ...), "Template 1 MOP update takes each word at most once");
+    static_assert(
+        ((Words == 0 || Words == 1 || Words == 7 || Words == 8) && ...), "Template 1 MOP update takes outer_count/inner_count/last_outer/last_inner words");
 
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
