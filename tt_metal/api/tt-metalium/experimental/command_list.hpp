@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
