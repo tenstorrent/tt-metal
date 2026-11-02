@@ -118,10 +118,8 @@ def run_transformer_chunked(mesh_device, device_params, num_links, num_users, mo
     for req, chunk in schedule:
         prefill(req, chunk, per_layer[req], outs[req])
         now = mesh_device.num_program_cache_entries()
-        assert programs in (
-            None,
-            now,
-        ), f"request {req} chunk {chunk} compiled {now - programs} new program(s) ({programs} -> {now})"
+        if programs is not None:
+            assert now == programs, f"request {req} chunk {chunk} compiled {now - programs} new program(s)"
         programs = now
 
     isolated = {}

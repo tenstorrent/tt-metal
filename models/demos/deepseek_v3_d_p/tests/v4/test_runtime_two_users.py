@@ -13,7 +13,8 @@ between its chunks. Real weights for the first few layers of the checkpoint, ran
 Graded device to device only, for the reason test_transformer_chunked gives: a chunk that reads another
 slot's state still lands near the CPU reference, while a device rerun of the same chunks is exact. The
 reused slot must reproduce the first request's opening chunk, and the interleaved slot 1 request must
-reproduce its uninterrupted rerun over slot 0's leftover index key rows. Accuracy against a reference is the chunked and depth tests' job.
+reproduce its uninterrupted rerun over slot 0's leftover index key rows. Accuracy against a reference is
+the chunked and depth tests' job.
 
 On one rank ``prefill_chunk`` returns None and discards the model's output, so the test wraps the model's
 ``forward``, which the runtime calls through the instance, to read each layer's streams and the output.
@@ -91,7 +92,6 @@ def _tap_forward(runtime, mesh_device, sink):
         layers = []
         out = forward(*args, layer_tap=lambda i, h: layers.append(streams_to_host(mesh_device, h, hc_mult)), **kwargs)
         sink.append((layers, hidden_to_host(mesh_device, out)))
-        ttnn.deallocate(out)
         return out
 
     runtime.model.forward = tapped
