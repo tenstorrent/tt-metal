@@ -2191,7 +2191,12 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
     binary_init_before_ema: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool EMA_BINARY_INIT_BEFORE_EMA = {str(self.binary_init_before_ema).lower()};"
+        return "\n".join(
+            [
+                "#define EMA_BINARY_INIT_BEFORE_EMA_DEFINED",
+                f"constexpr bool EMA_BINARY_INIT_BEFORE_EMA = {str(self.binary_init_before_ema).lower()};",
+            ]
+        )
 
 
 @dataclass

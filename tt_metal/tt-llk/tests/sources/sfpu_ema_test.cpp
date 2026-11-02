@@ -22,8 +22,8 @@
 #include "perf.h"
 #include "profiler.h"
 
-#ifndef EMA_BINARY_INIT_BEFORE_EMA
-#define EMA_BINARY_INIT_BEFORE_EMA false
+#ifndef EMA_BINARY_INIT_BEFORE_EMA_DEFINED
+constexpr bool EMA_BINARY_INIT_BEFORE_EMA = false;
 #endif
 
 // Globals
@@ -41,11 +41,19 @@ static constexpr std::uint32_t EMA_OUTPUT_DST_INDEX = 1;
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
+template <typename Params>
+std::uint32_t unpack_input_address(const Params& params, std::uint32_t tile)
+{
+#ifdef LLK_PROFILER
+    (void)params;
+    return PERF_ADDRESS(PERF_INPUT_A, tile);
+#else
+    return L1_ADDRESS(params.buffer_A[tile]);
+#endif
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifndef SPEED_OF_LIGHT
-    const Operand& buffer_A = params.buffer_A;
-#endif
     {
         START_PERF_MEASURE("INIT")
 
@@ -65,10 +73,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // The math-side datacopy retires one SrcA valid per face.
+            // Math isolate avoids software sync, but the hardware valid-bit handshake
+            // remains. Its one SrcA valid per face must match math retirements exactly
+            // or either side of the mismatch hangs.
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -77,13 +87,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-#ifdef SPEED_OF_LIGHT
-                    const std::uint32_t address = PERF_ADDRESS(PERF_INPUT_A, tile);
-#else
-                    const std::uint32_t address = L1_ADDRESS(buffer_A[tile]);
-#endif
                     _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        address, formats.unpack_A_src, formats.unpack_A_dst);
+                        unpack_input_address(params, tile), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -146,6 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS)
                     }
                     else
                     {
+                        // unpack_A publishes a SrcB valid with every SrcA valid, so retire both.
                         _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ true>(num_faces);
                     }
                 }
@@ -153,6 +159,8 @@ void run_kernel(RUNTIME_PARAMETERS)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            // The 16-bit datacopy retires the SrcA valids produced by unpack; replacing
+            // it with a bare TTI_CLEARDVALID hangs the math thread.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
@@ -210,11 +218,19 @@ void run_kernel(RUNTIME_PARAMETERS)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
+template <typename Params>
+std::uint32_t pack_output_address(const Params& params, std::uint32_t tile)
+{
+#ifdef LLK_PROFILER
+    (void)params;
+    return PERF_ADDRESS(PERF_OUTPUT, tile);
+#else
+    return L1_ADDRESS(params.buffer_Res[tile]);
+#endif
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifndef SPEED_OF_LIGHT
-    const Operand& buffer_Res = params.buffer_Res;
-#endif
     {
         START_PERF_MEASURE("INIT")
 
@@ -233,12 +249,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-#ifdef SPEED_OF_LIGHT
-                    const std::uint32_t address = PERF_ADDRESS(PERF_OUTPUT, tile);
-#else
-                    const std::uint32_t address = L1_ADDRESS(buffer_Res[tile]);
-#endif
-                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, address);
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, pack_output_address(params, tile));
                 }
             }
         }
@@ -249,12 +260,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_packer_wait_for_math_done_();
-#ifdef SPEED_OF_LIGHT
-                    const std::uint32_t address = PERF_ADDRESS(PERF_OUTPUT, tile);
-#else
-                    const std::uint32_t address = L1_ADDRESS(buffer_Res[tile]);
-#endif
-                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, address);
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, pack_output_address(params, tile));
                     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
                 }
             }

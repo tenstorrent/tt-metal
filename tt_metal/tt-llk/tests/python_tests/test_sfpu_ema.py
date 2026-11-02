@@ -9,6 +9,8 @@ Three tests, all driving `sources/sfpu_ema_test.cpp` through `_run_sfpu_ema`:
 - `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init before each `ema_tile`.
 - `test_sfpu_ema_alpha_sweep` -- nightly, 1000 alphas against an fp64 reference.
 
+`perf_sfpu_ema.py` reuses `_run_sfpu_ema` with `is_perf=True`.
+
 The sweep exists because the value the functional test pins, alpha = 0.25, is the
 least informative one available for this kernel: 0.25 is an exact power of two, so
 `alpha * EMA_old` is a pure exponent shift with no rounding, and any reassociation
@@ -46,6 +48,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
     fp32_bits,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test, result_tensor
 
@@ -128,12 +131,16 @@ def _run_sfpu_ema(
 ):
     """Run the shared functional/perf EMA kernel.
 
-    Functional callers provide ``num_time_tiles`` and receive the untilized result
-    plus its 2D input view. Perf callers provide ``input_dimensions`` and report
-    measurements without generating host stimuli or a golden.
+    Exactly one of ``num_time_tiles`` and ``input_dimensions`` selects the input size.
+    Functional callers receive the untilized result plus its 2D input view.
 
-    With ``binary_init_before_ema`` an eltwise binary init runs between the datacopy and ``ema_tile``.
+    With ``is_perf=True``, ``perf_report`` is required, ``run_types`` selects the
+    measured paths, ``loop_factor`` amortizes their tile loops, and the runner returns
+    ``None`` without generating host stimuli or a golden. ``binary_init_before_ema``
+    is functional-only; it runs an eltwise binary init between datacopy and ``ema_tile``.
     """
+    if is_perf and binary_init_before_ema:
+        raise ValueError("binary_init_before_ema is not supported when is_perf=True")
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
     if run_types is None:
@@ -147,7 +154,10 @@ def _run_sfpu_ema(
         raise ValueError("provide num_time_tiles or input_dimensions, not both")
 
     tile_cnt, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
 
     src_A_tilized = src_B = golden_input = None
