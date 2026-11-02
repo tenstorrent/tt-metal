@@ -547,6 +547,7 @@ def test_div_no_nan_scalar(device, scalar):
     )
     if scalar == 0.0:
         assert_equal(torch.zeros_like(result), result)
+        assert not torch.signbit(result).any(), "div_no_nan(a, 0.0) must be +0"
         return
     assert_with_ulp(
         expected_result=_scalar_quotient(input_a, scalar), actual_result=result, ulp_threshold=1, allow_nonfinite=True
@@ -559,7 +560,7 @@ def test_floor_div(device):
     | b          | float32 behavior                     | Check                       |
     |------------|--------------------------------------|-----------------------------|
     | ±0         | ±inf by the signs, NaN for 0 / 0     | floor of a quotient within  |
-    | ±inf, NaN  | a / ±inf = ±0, floored to ±0; NaN    | 1 ULP, NaN positions match  |
+    | ±inf, NaN  | a / ±inf = 0, floored to 0; NaN      | 1 ULP, NaN positions match  |
     | other      | floor of the 1 ULP SFPU divide       |                             |
 
     bfloat16 returns 0 for a NaN divisor; float32 keeps the NaN.
