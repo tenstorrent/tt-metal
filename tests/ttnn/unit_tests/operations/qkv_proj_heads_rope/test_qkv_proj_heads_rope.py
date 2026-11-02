@@ -182,3 +182,75 @@ def test_x_in_dram(device, batch, seq, seq_tab):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     check_outputs(outputs, expected)
+
+
+def ceil_tile(n):
+    return -(-n // 32) * 32
+
+
+def to_device_padded(tensor, device, memory_config, fill):
+    """TILE tensor whose tile padding (rows beyond the logical extent) holds `fill`."""
+    rows = tensor.shape[-2]
+    storage = torch.full((*tensor.shape[:-2], ceil_tile(rows), tensor.shape[-1]), fill, dtype=tensor.dtype)
+    storage[..., :rows, :] = tensor
+    padded = to_device(storage, device, memory_config)
+    return ttnn.reshape(padded, ttnn.Shape(list(tensor.shape)), ttnn.Shape(list(storage.shape)))
+
+
+def padded_rows(out, seq):
+    shape = ttnn.Shape(list(out.padded_shape))
+    return ttnn.to_torch(ttnn.reshape(out, shape, shape))[..., seq : ceil_tile(seq), :]
+
+
+# Non-aligned S: single tile-row, odd batch, many images per core, and B=4096 S=1 (multi-block per core).
+NON_ALIGNED_SHAPES = [(2, 37, 37), (16, 8, 8), (13, 300, 300), (7, 511, 511), (4096, 1, 1)]
+
+
+@pytest.mark.parametrize("batch, seq, seq_tab", NON_ALIGNED_SHAPES, ids=[f"{b}x{s}" for b, s, _ in NON_ALIGNED_SHAPES])
+def test_non_aligned_padding_zero(device, batch, seq, seq_tab):
+    x, w, b, cos, sin = make_inputs(batch, seq, seq_tab)
+    expected = reference(x, w, b, cos, sin)
+    l1 = ttnn.L1_MEMORY_CONFIG
+    # B=4096, S=1 tile-pads x and each output to ~100-200 MB: DRAM only.
+    big = ttnn.DRAM_MEMORY_CONFIG if batch * ceil_tile(seq) > 8192 else l1
+    inf = float("inf")
+    outputs = qkv_proj_heads_rope(
+        to_device_padded(x, device, big, inf),
+        to_device(w, device, ttnn.DRAM_MEMORY_CONFIG),
+        to_device(b, device, ttnn.DRAM_MEMORY_CONFIG),
+        to_device_padded(cos, device, l1, inf),
+        to_device_padded(sin, device, l1, inf),
+        memory_config=big,
+    )
+    check_outputs(outputs, expected, buffer_type=big.buffer_type)
+    for name, out in zip(("q", "k", "v"), outputs):
+        pad = padded_rows(out, seq)
+        assert (pad == 0).all(), f"{name}: {int((pad != 0).sum())} non-zero padded values"
+
+
+# DRAM outputs and tables, aligned and non-aligned, across x placements.
+PLACEMENT_CASES = [
+    (2, 512, 512, ttnn.DRAM_MEMORY_CONFIG),
+    (8, 512, 512, ttnn.L1_MEMORY_CONFIG),
+    (3, 100, 100, ttnn.DRAM_MEMORY_CONFIG),
+]
+
+
+@pytest.mark.parametrize(
+    "batch, seq, seq_tab, x_memory_config",
+    PLACEMENT_CASES,
+    ids=[f"{b}x{s}_x{'dram' if m.buffer_type == ttnn.BufferType.DRAM else 'l1'}" for b, s, _, m in PLACEMENT_CASES],
+)
+def test_dram_outputs_and_tables(device, batch, seq, seq_tab, x_memory_config):
+    x, w, b, cos, sin = make_inputs(batch, seq, seq_tab)
+    expected = reference(x, w, b, cos, sin)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    outputs = qkv_proj_heads_rope(
+        to_device(x, device, x_memory_config),
+        to_device(w, device, dram),
+        to_device(b, device, dram),
+        to_device(cos, device, dram),
+        to_device(sin, device, dram),
+        memory_config=dram,
+    )
+    check_outputs(outputs, expected, buffer_type=ttnn.BufferType.DRAM)

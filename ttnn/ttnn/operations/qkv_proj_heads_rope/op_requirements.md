@@ -71,7 +71,7 @@ regression on 2x512 / 4x512 / 8x384 (the h_c = 1 / 2 / 4 grid classes); acceptan
 
 **Outcome**: R3 built with a fixed staggered sender per M-group (rotating senders need rectangular groups; consecutive M-groups on the 11-wide grid are not). x in L1: 8x512 279 -> 265 us, 4x512 215 -> 145 us, 2x512 206 -> 93 us, 8x384 252 -> 252 us (flat). x in DRAM: 8x512 272 us (+2.5% vs L1), 2x512 92 us. 17/17 DRAM-x golden cells pass. Ablation at 8x512: stubbing W reads gives 134 us, stubbing the x path gives 277 us, so the W unicast re-read (12 DRAM crossings) now binds. That is Refinement 3 (R2). Core order is now M-group-consecutive; R2 needs per-N-group `Mcast` objects or a rectangular grid constraint (see `op_design.md`, Work distribution).
 
-### [ ] Refinement 2 - Non-aligned S (`h_non_aligned`) + DRAM outputs and tables
+### [x] Refinement 2 - Non-aligned S (`h_non_aligned`) + DRAM outputs and tables
 
 **Goal**: add `"h_non_aligned"` to `SUPPORTED["alignment"]`, and `ttnn.BufferType.DRAM` to
 `SUPPORTED["out_buffer_type"]` and `SUPPORTED["table_buffer_type"]`. For non-aligned S, the writer
@@ -95,6 +95,8 @@ e.g. B=4096, S=1; regime R4 territory) and the golden `test_padded_rows_zero` (x
 **Done when**: every golden cell in TARGET passes (all alignments x all placements); the
 `test_regression.py` padded-row and large-mean cases pass; no device-ns regression on 8x512
 tile-aligned all-L1.
+
+**Outcome**: writer zeroes rows `[S % 32, 32)` of each output tile on `st == St - 1` (NoC zero writes, compiled out when S is aligned). Golden `test_golden.py` + `test_regression.py`: 210/210 pass. 8x512 aligned all-L1: 268 us vs 265 us post-R1 (noise band; aligned path unchanged).
 
 ### [ ] Refinement 3 - W multicast within each N-group (regime R2) on the flagged 8x512 profile
 

@@ -4,3 +4,6 @@
 {"event":"golden_blocker","detail":"golden helpers.py:165 passes packer_l1_acc to ComputeConfigDescriptor -> TypeError (design Key Risk); 8 default-config golden cells pass","ts":"2026-11-02T13:23:59+00:00"}
 {"event":"fix_applied","refinement":1,"what":"R3 x multicast per M-group: M-group-consecutive core order, fixed staggered sender (rotating needs rectangular groups, mcast.cpp:89)","ts":"2026-11-02T13:52:55+00:00"}
 {"event":"test_run","refinement":1,"unit":"17/17","golden_slice":"42/42 (17 x-DRAM)","perf_us_xL1":{"8x512":265.4,"4x512":144.7,"2x512":93.4},"perf_us_xDRAM":{"8x512":272.1,"2x512":91.9},"ablation_8x512":{"W_stubbed":134.1,"x_stubbed":276.7},"ts":"2026-11-02T13:52:55+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-02T13:55:04+00:00"}
+{"event":"hypothesis","text":"R2: only missing piece for h_non_aligned is writer-side zeroing of rows [S%32,32) on st==St-1 output tiles before NoC write; DRAM out/tables need only SUPPORTED widening","ts":"2026-11-02T13:55:04+00:00"}
+{"event":"test_run","status":"pass","tests":"unit 25/25 + golden test_golden+test_regression 210/210","perf_8x512_ns":268150,"ts":"2026-11-02T13:58:46+00:00"}

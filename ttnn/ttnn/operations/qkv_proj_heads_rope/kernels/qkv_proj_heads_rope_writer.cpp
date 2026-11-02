@@ -23,7 +23,9 @@ void kernel_main() {
     constexpr uint32_t num_heads = get_compile_time_arg_val(9);
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(10);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(11);
-    constexpr auto weight_args = TensorAccessorArgs<12>();
+    // S % 32: valid rows of the last tile-row of each image (0 when S is tile-aligned).
+    constexpr uint32_t last_valid_rows = get_compile_time_arg_val(12);
+    constexpr auto weight_args = TensorAccessorArgs<13>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto q_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -107,6 +109,30 @@ void kernel_main() {
             const uint32_t st = r % seq_tiles;
             cb_wait_front(cb_out_tiles, n_tiles);
             uint32_t l1_addr = get_read_ptr(cb_out_tiles);
+            if constexpr (last_valid_rows != 0) {
+                // Output pad rows must be exactly 0 whatever x / table padding held.
+                if (st == seq_tiles - 1) {
+                    CircularBuffer out_tiles(cb_out_tiles);
+                    constexpr uint32_t top_face = last_valid_rows / 16;
+                    constexpr uint32_t first_row = last_valid_rows % 16;
+                    constexpr uint32_t partial_bytes = (16 - first_row) * face_row_bytes;
+                    constexpr uint32_t full_off = (top_face + 1) * 2 * face_bytes;
+                    // async_write_zeros addresses a CB from its write pointer; the tiles sit at the read
+                    // pointer (unsigned wrap keeps the delta exact).
+                    const uint32_t read_off = l1_addr - out_tiles.get_write_ptr();
+                    for (uint32_t n = 0; n < n_tiles; ++n) {
+                        const uint32_t tile_off = read_off + n * tile_bytes;
+                        const uint32_t face_off = tile_off + top_face * 2 * face_bytes + first_row * face_row_bytes;
+                        noc.async_write_zeros(out_tiles, partial_bytes, {.offset_bytes = face_off});
+                        noc.async_write_zeros(out_tiles, partial_bytes, {.offset_bytes = face_off + face_bytes});
+                        if constexpr (full_off < 4 * face_bytes) {
+                            noc.async_write_zeros(
+                                out_tiles, 4 * face_bytes - full_off, {.offset_bytes = tile_off + full_off});
+                        }
+                    }
+                    noc.write_zeros_l1_barrier();
+                }
+            }
             for (uint32_t n = 0; n < n_tiles; ++n) {
                 const uint32_t head = first_head + n / tiles_per_head;
                 const uint32_t page =

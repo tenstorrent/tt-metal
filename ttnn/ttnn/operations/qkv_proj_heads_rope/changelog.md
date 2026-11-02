@@ -20,3 +20,12 @@
 - **Golden test progress**: 42/42 tile_aligned cells with out/table in L1 pass (17 of them with x in DRAM, `test_op` + `test_op_loose`). `test_regression.py`: 6 passed, 4 failed (all `h_non_aligned`, Refinement 2 scope, failing before this change).
 - **Issues encountered**: the `-k` filter in `run_safe_pytest.sh` cannot take parentheses or `=`, so golden slices were run by explicit node id.
 - **Tests added**: `test_qkv_proj_heads_rope.py::test_x_in_dram` (5 shapes, one per grid class), `test_qkv_proj_heads_rope_perf.py::test_qkv_proj_heads_rope_perf_x_dram` (8x512, 4x512, 2x512).
+
+## Refinement 2 - Non-aligned S (`h_non_aligned`) + DRAM outputs and tables
+- Date: 2026-11-02
+- What was done: SUPPORTED widened: alignment += h_non_aligned, out_buffer_type += DRAM, table_buffer_type += DRAM. Writer gets CT arg `last_valid_rows = S % 32`; on the last tile-row of each image it zeroes rows `[S % 32, 32)` of every output tile in cb_out_tiles via `noc.async_write_zeros` (partial rows of faces 2*(r/16)+{0,1}, whole lower faces when r < 16) before the NoC write. `if constexpr` removes it for aligned S. DRAM placements needed no kernel change (TensorAccessor). Reused: existing per-row output path, CB, zeroing primitive used for the bias tile. Added: one CT arg and the pad-zero block.
+- Accuracy achieved: unit + golden tolerance (PCC >= 0.9999, rel RMS <= 4e-3) on [2x37, 16x8, 13x300, 7x511, 4096x1 (multi-block), 2x512, 8x512, 3x100]; pad rows exactly 0 with inf in x and table padding.
+- Golden test progress: 210/210 passing (test_golden.py 200 + test_regression.py 10).
+- Issues encountered: `async_write_zeros` on a CircularBuffer addresses from the write pointer; the pad-zero offsets are taken relative to it from the read pointer. 4096x1 cannot be L1-resident (tile padding makes x ~200 MB), so the unit case places x and outputs in DRAM.
+- Perf: 8x512 aligned all-L1 268 us (post-R1 265 us; noise band).
+- Tests added: `test_non_aligned_padding_zero` (5 shapes, inf padding, pad rows == 0), `test_dram_outputs_and_tables` (3 cases) in test_qkv_proj_heads_rope.py.

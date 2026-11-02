@@ -235,6 +235,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         NUM_HEADS,
         TILES_PER_HEAD,
         BF16_TILE_BYTES,
+        input_tensor.shape[-2] % TILE,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())

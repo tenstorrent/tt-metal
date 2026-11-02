@@ -44,12 +44,12 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "h_non_aligned"],
     "fp32_dest_acc_en": [True],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "buffer_type": [ttnn.BufferType.L1, ttnn.BufferType.DRAM],
-    "out_buffer_type": [ttnn.BufferType.L1],
-    "table_buffer_type": [ttnn.BufferType.L1],
+    "out_buffer_type": [ttnn.BufferType.L1, ttnn.BufferType.DRAM],
+    "table_buffer_type": [ttnn.BufferType.L1, ttnn.BufferType.DRAM],
 }
 
 
