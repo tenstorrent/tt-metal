@@ -59,6 +59,8 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 |-----------|------|---------|-------------|
 | `precision.master_dtype` | str | unset | Dtype trainable parameters (the master weights) are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; forward and backward still run in bf16. Not PyTorch FSDP2's `param_dtype`, which is the compute dtype. See [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
 
+Any other key under `precision`, or a `precision` that isn't a map, stops the run with an error.
+
 ### Example
 ```yaml
 training_config:

@@ -4,7 +4,10 @@
 
 #include "core/parameter_dtype.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <stdexcept>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -15,6 +18,8 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 using namespace ttml;
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 class ParameterDtypeTest : public ::testing::Test {
 public:
@@ -45,17 +50,27 @@ const ttnn::Tensor& native(const autograd::TensorPtr& tensor) {
 
 }  // namespace
 
-// The two names are applied, any other is rejected, and unset or null means "keep the dtype the model builds".
+// The two names are applied, any other is rejected, and unset or null means "keep the dtype the model builds". The
+// block holds known keys only, so a typo stops the run instead of training in the model's dtype.
 TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {
     const auto apply = [](const char* training_config) {
         return core::apply_precision_config(YAML::Load(training_config), serialization::NamedParameters{});
     };
     EXPECT_EQ(apply("precision: {master_dtype: float32}"), ttnn::DataType::FLOAT32);
     EXPECT_EQ(apply("precision: {master_dtype: bfloat16}"), ttnn::DataType::BFLOAT16);
-    EXPECT_ANY_THROW(apply("precision: {master_dtype: float16}"));
+    EXPECT_THAT(
+        [&] { apply("precision: {master_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
     EXPECT_EQ(apply("seed: 5489"), std::nullopt);
+    EXPECT_EQ(apply("precision: ~"), std::nullopt);
     EXPECT_EQ(apply("precision: {master_dtype: }"), std::nullopt);
     EXPECT_EQ(apply("precision: {master_dtype: ~}"), std::nullopt);
+    EXPECT_THAT(
+        [&] { apply("precision: {params_dtype: float32}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Unknown key precision.params_dtype (supported: master_dtype)")));
+    EXPECT_THAT(
+        [&] { apply("precision: float32"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
 }
 
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {

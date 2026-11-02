@@ -415,3 +415,11 @@ def test_create_optimizer_rejects_an_unknown_master_dtype(expect_error):
     config = {"training_config": {"precision": {"master_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
     with expect_error(RuntimeError, "master_dtype"):
         create_optimizer(_ModelWithoutParameters(), config)
+
+
+def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
+    """A typo under precision stops the run instead of training in the model's dtype; checked before any parameter is
+    touched, so this needs no device."""
+    config = {"training_config": {"precision": {"params_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
+    with expect_error(RuntimeError, "Unknown key precision.params_dtype"):
+        create_optimizer(_ModelWithoutParameters(), config)

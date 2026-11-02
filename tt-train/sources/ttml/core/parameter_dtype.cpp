@@ -4,6 +4,10 @@
 
 #include "core/parameter_dtype.hpp"
 
+#include <fmt/ranges.h>
+
+#include <algorithm>
+#include <array>
 #include <enchantum/enchantum.hpp>
 #include <string>
 #include <string_view>
@@ -14,6 +18,25 @@ namespace {
 
 bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::BFLOAT16 || dtype == ttnn::DataType::FLOAT32;
+}
+
+// The keys training_config.precision may hold.
+constexpr std::array<std::string_view, 1> kPrecisionKeys = {"master_dtype"};
+
+// The block is a map of known keys, so a typo or a key this build doesn't know stops the run instead of being ignored.
+void validate_precision_block(const YAML::Node& precision) {
+    TT_FATAL(
+        precision.IsMap() || precision.IsNull(),
+        "training_config.precision must be a map of keys such as master_dtype");
+    const auto supported = fmt::format("{}", fmt::join(kPrecisionKeys, ", "));
+    for (const auto& entry : precision) {
+        const auto key = entry.first.as<std::string>();
+        TT_FATAL(
+            std::ranges::find(kPrecisionKeys, key) != kPrecisionKeys.end(),
+            "Unknown key precision.{} (supported: {})",
+            key,
+            supported);
+    }
 }
 
 ttnn::DataType parse_master_dtype(std::string_view name) {
@@ -28,7 +51,9 @@ std::optional<ttnn::DataType> master_dtype_from_config(const YAML::Node& trainin
     if (!training_config || !training_config["precision"]) {
         return std::nullopt;
     }
-    const auto name = training_config["precision"]["master_dtype"];
+    const auto precision = training_config["precision"];
+    validate_precision_block(precision);
+    const auto name = precision["master_dtype"];
     if (!name || name.IsNull()) {
         return std::nullopt;
     }
