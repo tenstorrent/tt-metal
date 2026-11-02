@@ -393,6 +393,36 @@ def test_skinny_matmul_on_the_transposed_wide_buffer(n_cols):
     assert np.array_equal(buf[0, 0, :k, :], x_t_np[0, 0, :k, :]), "the product's rows were touched"
 
 
+def test_skinny_matmul_rejects_the_transposed_output_of_a_token_major_x(expect_error):
+    """Review round 12: ``transpose_out`` without ``x_transposed`` (the reduce kernel's untested DEST-transpose path)
+    is refused by the op's validation."""
+    x = to_device(bf16(np.zeros((1, 1, SEQ, 8192))))
+    w = to_device(bf16(np.zeros((1, 1, 16, 8192))))
+    with expect_error(RuntimeError, "transposed output is only produced"):
+        ttml.ops.metal.skinny_matmul(x.get_value(), w.get_value(), True, None, 0, 0, False, True)
+
+
+def test_skinny_contract_repeats_on_the_cached_program():
+    """Review round 12: two calls of one shape on one program-cache entry (the multicast handshake re-armed by the
+    override of the runtime arguments) both match torch; the second call's operands live at other addresses."""
+    rng = seeded(41)
+    outs = []
+    alive = []
+    for seed in (1, 2):
+        r = np.random.default_rng(seed)
+        small_np = bf16(r.normal(0, 1, (1, 1, 16, SEQ)))
+        big_np = bf16(r.normal(0, 1, (1, 1, 16384, SEQ)))
+        small, big = to_device(small_np), to_device(big_np)
+        got = ttml.ops.metal.skinny_contract(
+            small.get_value(), big.get_value(), 2.0, True, big_transposed=True, small_transposed=True
+        )
+        alive.append((small, big, got))
+        ref = 2.0 * (t(big_np[0, 0]) @ t(small_np[0, 0]).T)
+        rep = Report(f"skinny_contract on the cached program, call {seed}")
+        rep.check("out", to_host(got)[0, 0], ref.numpy(), 0.9999, 1e-2)
+        rep.done()
+
+
 @pytest.mark.parametrize(
     "n_cols, scale, transpose_b, images",
     [(5120, 1.0, False, 1), (1536, 2.0, True, 1), (1024, 0.5, True, 2)],

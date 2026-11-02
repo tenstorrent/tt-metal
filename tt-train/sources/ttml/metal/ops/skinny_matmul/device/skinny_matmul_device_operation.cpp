@@ -54,6 +54,11 @@ void validate_inputs(const Params& args, const ttnn::Tensor& x, const ttnn::Tens
         TT_FATAL(
             args.transpose_b && args.transpose_out,
             "SkinnyMatmul: a transposed x needs w as [N, K] (transpose_b) and gives the transposed output");
+    } else {
+        TT_FATAL(
+            !args.transpose_out,
+            "SkinnyMatmul: the transposed output is only produced from a transposed x (the token-major reduce path "
+            "has no harness case for it; review round 12)");
     }
     const uint32_t K = args.x_transposed ? xs[2] : xs[3];
     TT_FATAL(K % tt::constants::TILE_WIDTH == 0, "SkinnyMatmul: K must be a multiple of 32, got {}", K);

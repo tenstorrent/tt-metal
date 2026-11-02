@@ -34,7 +34,7 @@ void kernel_main() {
     const uint32_t n_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t n_count = get_arg_val<uint32_t>(arg++);
     const uint32_t tile_bytes = get_tile_size(cb_big);
-    const auto small_acc = TensorAccessor(small_args, small_addr, tile_bytes);
+    [[maybe_unused]] const auto small_acc = TensorAccessor(small_args, small_addr, tile_bytes);  // the sender's
     const auto big_acc = TensorAccessor(big_args, big_addr, tile_bytes);
 
     volatile tt_l1_ptr uint32_t* sender_sem_ptr =

@@ -31,9 +31,10 @@ def lora_matmul_config():
 # the cores instead (iteration 10); below this K the two are equal within dispatch noise.
 SKINNY_MIN_K = 2048
 SKINNY_CONTRACT_MAX_N = (
-    8192  # skinny_contract (its small operand multicast, iteration 40) beats ttnn's [r, N] product + transpose up to
-    # the out-projection's N = 5120 (36 vs 47 us; qkv 17 vs 36, `O/iter40_lora_products.log`); iteration 18's limit
-    # was 4096 (the gate_up dB, N = 16384, now runs on the op's transposed mode anyway)
+    5120  # token-major big operands below this N go to skinny_contract (qkv dB 1536: 0.089 -> 0.065 ms per 4 layers
+    # in the step, iteration 40); at the out-projection's 5120 the op reads 0.138 against ttnn's 0.119 + 0.010
+    # transpose in device time (standalone 36 vs 47 us wall counts a launch, not device time: review round 12), so
+    # that shape keeps ttnn; the transposed operands (iterations 38-40) always take the op
 )
 
 
@@ -55,15 +56,14 @@ def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
 
 
 def skinny_contract(small, big, scale=1.0, transpose_out=False, big_transposed=False, small_transposed=False):
-    """``scale * small^T @ big`` over the token dimension (``small`` ``[T, r <= 16]``, or ``[r, T]`` with
-    ``small_transposed``; with ``big_transposed`` the second operand is stored ``[N, T]``: iteration 38 reads it
-    column-wise in the all-core op, which beat ttnn's transpose_b route at these shapes, `O/iter38_lora_products.log`).
+    """``scale * small^T @ big`` over the token dimension (``small`` ``[T, r <= 32]``, or ``[r, T]`` with
+    ``small_transposed``; with ``big_transposed`` the second operand is stored ``[N, T]``).
 
-    Routing by the iteration-18 standalone table (``O/iter18_orientation_check.log``, ``O/iter18_build_check.log``):
-    ``dA = dh^T x`` (``[r, N]``) stays on ttnn's transposed-a matmul, its fast orientation (312 GB/s at N = 5120);
-    wide ``dB = s g^T h`` (``[N, r]``, ``N >= 4096``: gate_up / out / w2) is that same product plus a transpose of
-    the small ``[r, N]`` output (110 / 41 us vs 156 / 55 for ttnn's ``[N, r]`` orientation and 123 / 53 for the op
-    at N = 16384 / 5120); the narrow dB (qkv, N = 1536) goes to the all-core op (25 vs 28 / 39 us)."""
+    Routing: a transposed operand (iterations 38-40: the transposed MLP interior's dA / dB on ``g^T`` / ``x^T``)
+    always takes the all-core op (its small operand multicast from one core, every core on a contiguous column range,
+    iteration 40: the fastest of the measured routes, `O/iter40_lora_products.log`). Token-major operands: a
+    narrow ``transpose_out`` product (``N < SKINNY_CONTRACT_MAX_N``: the qkv dB) takes the op; the rest (the
+    out-projection dB at N = 5120, any ``[r, N]`` product) ttnn's transposed-a matmul plus a transpose."""
     r, T = (small.shape[-2], small.shape[-1]) if small_transposed else (small.shape[-1], small.shape[-2])
     N = big.shape[-2] if big_transposed else big.shape[-1]
     cfg = lora_matmul_config()
