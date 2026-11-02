@@ -12,13 +12,14 @@
 namespace ttnn::operations::experimental::quasar {
 
 namespace {
-// HiFi4, approx off, fp32 accumulation: the row statistics (max, sum) and the exp intermediates are
-// kept in fp32 when the config asks for it.
+// LoFi, approx off, fp32 accumulation: the row statistics (max, sum) and the exp intermediates are
+// kept in fp32 when the config asks for it. Every multiply has a bf16 operand (the input or the
+// scaler tile), and on Quasar one fidelity phase covers a bf16 mantissa.
 DeviceComputeKernelConfig softmax_default_compute_config(tt::ARCH arch) {
     return init_device_compute_kernel_config(
         arch,
         std::nullopt,
-        tt::tt_metal::MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::LoFi,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
 }
