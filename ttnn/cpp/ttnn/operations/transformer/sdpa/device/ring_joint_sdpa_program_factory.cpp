@@ -126,10 +126,8 @@ uint32_t tensor_rank_from_transport_rank(const ttnn::prim::RingJointSDPAParams& 
     if (!ag.full_mesh) {
         return transport_rank;
     }
-    return ag.column_major_ranks ? ttnn::ccl::snake_ring::column_major_index(
-                                       transport_rank, ag.mesh_rows, ag.mesh_cols, ag.snake_orientation)
-                                 : ttnn::ccl::snake_ring::row_major_index(
-                                       transport_rank, ag.mesh_rows, ag.mesh_cols, ag.snake_orientation);
+    return ttnn::ccl::snake_ring::tensor_index(
+        transport_rank, ag.mesh_rows, ag.mesh_cols, ag.snake_orientation, ag.column_major_ranks);
 }
 
 ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
