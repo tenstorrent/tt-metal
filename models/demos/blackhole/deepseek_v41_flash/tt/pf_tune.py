@@ -115,7 +115,11 @@ def rope_pe(x, c, s, P, ckc, inplace=False):
     lo = D - ROPE_DIM
     xp = ttnn.slice(x, [0, 0, 0, lo], sh)
     cs = [ttnn.slice(t, [0, 0, 0, lo], list(t.shape)) for t in (c, s)]
-    y = ttnn.add(ttnn.multiply(xp, cs[0]), ttnn.multiply(ttnn.matmul(xp, P, compute_kernel_config=ckc), cs[1]))
+    cg = _env(
+        "DSV41_PFA_ROPE_CG"
+    )  # "y,x": core grid of the pair-swap matmul (default OFF: the auto config used 16 cores for the 8-head tensors)
+    mkw = {"core_grid": ttnn.CoreGrid(y=int(cg.split(",")[0]), x=int(cg.split(",")[1]))} if cg else {}
+    y = ttnn.add(ttnn.multiply(xp, cs[0]), ttnn.multiply(ttnn.matmul(xp, P, compute_kernel_config=ckc, **mkw), cs[1]))
     if inplace and _env("DSV41_PFA_ROPE_WRITE", "0") == "1":
         ttnn.experimental.slice_write(y, x, [0, 0, 0, lo], sh, [1, 1, 1, 1])
         for t in (xp, y, *cs):
