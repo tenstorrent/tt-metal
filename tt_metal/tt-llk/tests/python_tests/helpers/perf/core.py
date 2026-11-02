@@ -1017,6 +1017,26 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # RC experiment (warmup-agent): LLK_WARMUP=1 brings back a40b624e1a9 (one unrecorded pass over the run types
+        # of the test before the measured pass), without changing any ELF.
+        if (
+            os.environ.get("LLK_WARMUP", "0") == "1"
+            and not TestConfig.TEST_TARGET.run_simulator
+        ):
+            for templates, runtimes, run_type in self.run_configs:
+                self.current_run_type = run_type
+                if TestConfig.SPEED_OF_LIGHT:
+                    self.templates = templates + runtimes
+                    self.runtimes = []
+                    self.compile_time_formats = True
+                else:
+                    self.templates = templates
+                    self.runtimes = runtimes
+                self.generate_variant_hash()
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
             # We need to manually assign different modified templates here if the speed of light is set,
