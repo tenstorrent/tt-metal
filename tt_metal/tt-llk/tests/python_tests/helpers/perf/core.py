@@ -1106,6 +1106,17 @@ class PerfConfig(TestConfig):
                     profiler_data.raw().to_csv(
                         f"{os.environ['RC_TL_DUMP']}.{run_type.name}.r{run_index}.csv", index=False
                     )
+                if os.environ.get("RC_RES_DUMP") and self.variant_stimuli is not None:  # RC experiment: result tiles hash
+                    import hashlib
+
+                    from ..device_io import read_words_from_device
+
+                    _st = self.variant_stimuli
+                    _n = int(os.environ.get("RC_RES_TILES", "8")) * _st.buf_res_tile_size // 4
+                    _w = read_words_from_device(TestConfig.TENSIX_LOCATION, _st.buf_res_addr, word_count=_n)
+                    _h = hashlib.sha256(b"".join(int(x).to_bytes(4, "little") for x in _w)).hexdigest()[:16]
+                    with open(os.environ["RC_RES_DUMP"], "a") as _f:
+                        _f.write(f"{run_type.name} r{run_index} addr={hex(_st.buf_res_addr)} words={_n} sha={_h}\n")
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:
