@@ -94,7 +94,7 @@ Inputs: `Mt`, `num_cores` (from `device.compute_with_storage_grid_size()`, runti
 | Step | Rule |
 |------|------|
 | 1 | For each `h_c in {1,2,3,4,6,12}`: `grid_n = 36/h_c`, `grid_m = min(floor(num_cores/grid_n), Mt)`; skip if `grid_m == 0`. |
-| 2 | `rows_max = ceil(Mt/grid_m)`; `block_m = min(rows_max, block_m_cap(2*h_c))`; `num_blocks = ceil(rows_max/block_m)`. |
+| 2 | `rows_max = ceil(Mt/grid_m)`; `block_m <= min(rows_max, block_m_cap(2*h_c, St))` chosen by `_block_m` (Refinement 4): equal block counts across M-groups first (R2 needs aligned W rounds), then fewest blocks, then fewest nominal rows; `num_blocks = ceil(rows_max/block_m)`. |
 | 3 | `tiles_max = rows_max * 2*h_c` (critical-path output tiles); `ingress = 25*(rows_max + num_blocks*2*h_c)` tiles per core. |
 | 4 | Keep candidates with `tiles_max <= (1 + occupancy_slack) * min(tiles_max)`, `occupancy_slack = 0.05`; pick min `ingress`; ties -> larger h_c. |
 
@@ -121,8 +121,9 @@ R2 (W multicast) is on when a layout qualifies, `grid_m >= W_MCAST_MIN_GROUP` (4
 | cb_activation_block | `act_depth` | 2 | x K-block j+1 lands while K-block j multiplies |
 | cb_weight_block | `weight_depth` | 2 | W K-block j+1 lands while K-block j multiplies |
 | cb_matmul_partials | (none: accumulator) | 1 block | in-place L1 accumulation across K-blocks requires exactly one resident block |
-| cb_rotary_table | `table_depth` (rows) | 2 | reader fetches row i+1's 4 table tiles during row i's rotary; first 2 rows prefetched during the last K-blocks |
+| cb_rotary_table | `min(block_m, St)` (rows) | one slot per distinct sequence position of a block | Refinement 4: the reader reads a block's slots in chunks after each x K-block push, so table reads and the sign flip sit in the K-loop slack; block row r uses slot r % St |
 | cb_out_tiles | `out_depth` (rows) | 2 | writer drains row i while compute packs row i+1 |
+| cb_out_tiles_noc0 | `out_depth` (rows) | 2 | Refinement 4 (`OUT_WRITE_NOCS = 2`): odd rows go here and the reader stores them on NoC0; even rows via cb_out_tiles / writer / NoC1 |
 
 All five are host constants passed to the program descriptor; every CB page count and every loop bound is derived from them plus `block_m`, `heads_per_core`, `k_block`.
 
@@ -227,6 +228,15 @@ for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {  /
 | L8 NoC/RISC placement | x on NCRISC/NoC0, W + writes on BRISC/NoC1 (catalog `noc_placement`: NoC0 reads 2.5-4.8x) | W reads on NoC0 too; `bank_stagger` start offset per core for W (1.13-1.32x) |
 | L9 Table depth | 2 rows; rotary may wait on table reads | prefetch the whole block (`block_m*4` tiles, +80 KiB) |
 
+Refinement 4 measurements (p100a, 8x512 all-L1, device us; baseline 123.5): matmul with all DM stubbed 87 us
+(HiFi3, ~53 cycles per tile-product, FPU-bound); subblock 1x4 / 2x2 / 4x1 at block_m 12 all 94.4-94.9
+(L6 null); 2 blocks per core 128.4 vs 117.5 one block (L1 worse: nominal-block rows + second W pass); x or W
+stubbed alone moves < 1 us (ingress not binding, L2/L8-for-W not tried). Binding stage was the post-K-loop
+tail: table reads + sign flip at 3.3 us/row (L9, built: table slots read in the K-loop slack) and the output
+stores, NoC1-bandwidth bound with a y-gradient across the grid (built: odd rows stored by the reader on
+NoC0). Epilogue chain init hoisted per block (~1 us). Result 105.6-106.6 us; tail after the K-loop now ~15 us
+of stores.
+
 Catalog entries that informed knobs: `compute_block_size` (one pass per core, keep reconfigs off same-format boundaries -> block_m = whole assignment), `double_buffer` / `trid_double_issue` (depth 2, block >= 4 tiles per transfer -> K-block transfers of 40-55 tiles), `matmul_output_subblock` (4-tile subblocks under fp32 DEST), `eltwise_l1_vs_dest_accumulate` (packer L1 acc 5x over read-modify-write -> L1-acc partials), `mcast_topology` / `shared_input_reuse` (R2/R3 deferred rows; P100a 2.34x / 1.82x), `noc_placement`, `bank_stagger`, `compute_fusion` (L7).
 
 ## Dataflow Strategy
@@ -278,8 +288,9 @@ Single built regime: no runtime regime selection in Phase 0. Tests must still pi
 | cb_activation_block | 0 | 2048 | `act_depth * block_m * k_block` (110) | spans token_rows (block_m) and one K-block; streams over K' | Float16_b | reader | compute | K-loop |
 | cb_weight_block | 1 | 2048 | `weight_depth * k_block * N_c` (80) | spans head_cols (N_c) and one K-block; streams over K' | Float16_b | writer | compute | K-loop |
 | cb_matmul_partials | 2 | 4096 | `block_m * N_c` (88) | spans token_rows x head_cols; accumulator over K' | Float32 | compute | compute | K-loop through epilogue |
-| cb_rotary_table | 3 | 2048 | `table_depth * 4` (8) | 4 tiles per row, streams over token_rows | Float16_b | reader | compute | epilogue (q/k cores; allocated on all) |
+| cb_rotary_table | 3 | 2048 | `min(block_m, St) * 4` (44) | 4 tiles per row, streams over token_rows | Float16_b | reader | compute | epilogue (q/k cores; allocated on all) |
 | cb_out_tiles | 4 | 2048 | `out_depth * N_c` (16) | spans head_cols, streams over token_rows | Float16_b | compute | writer | epilogue |
+| cb_out_tiles_noc0 | 5 | 2048 | `out_depth * N_c` (16) | as cb_out_tiles (odd rows) | Float16_b | compute | reader | epilogue (`OUT_WRITE_NOCS = 2`) |
 
 Values in parentheses: 8x512 Phase 0 (`block_m=11, N_c=8, k_block=5`). Full ledger, sharing decisions and footprint: `l1_ledger.md`.
 
@@ -292,7 +303,7 @@ Values in parentheses: 8x512 Phase 0 (`block_m=11, N_c=8, k_block=5`). Full ledg
 | 2 | project_block | `block_m x N_c`, 5 K-blocks of 5 | yes: `matmul_block` | cb_activation_block (`block_m*k_block`, waited+popped per K-block), cb_weight_block (`k_block*N_c`, waited+popped per K-block) | cb_matmul_partials (`block_m*N_c`, caller reserves before / pushes after) | partials pushed (nominal), L1 acc must be switched off by the caller |
 | 3a | rotate_block (q/k) | per valid row, per head: grid(2 out tiles, 2 terms) | yes: `eltwise_chain` | cb_matmul_partials (waited once for the nominal block, read with Offset base `row*N_c + 2*head`, popped at block end), cb_rotary_table (waited/popped 4 per row, Offset base 0) | cb_out_tiles (1 tile per walk row, `N_c` per row) | partials popped (nominal) |
 | 3b | convert_block (v) | per valid row: `N_c` tiles | yes: `eltwise_chain` (CopyTile -> PackTile) | cb_matmul_partials (as 3a) | cb_out_tiles (`N_c` per row) | partials popped (nominal) |
-| 4 | store_block | per valid row: `N_c` tiles | dataflow | cb_out_tiles (`N_c` per row) | q / k / v DRAM or L1 pages | popped |
+| 4 | store_block | per valid row: `N_c` tiles | dataflow (`qkv_store::store_row`, shared by writer and reader) | cb_out_tiles (even rows, writer/NoC1), cb_out_tiles_noc0 (odd rows, reader/NoC0) | q / k / v DRAM or L1 pages | popped |
 
 Rotary chain contract (per row r, head h; partials tiles `P0 = r*N_c + 2h`, `P1 = P0 + 1`; table row `[C0, -S0, S1, C1]`):
 

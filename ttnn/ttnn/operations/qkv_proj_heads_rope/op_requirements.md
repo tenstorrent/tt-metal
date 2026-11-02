@@ -118,7 +118,7 @@ x in L1 / DRAM x non-aligned S).
 
 **Outcome**: R2 built on the writer (NOC_1), one `Mcast` + writer descriptor per N-group, folded core layout so both channels' groups are <= 2 rectangles on the 12x9 grid. Device us (x in L1): 8x512 268.7 -> 123.7, 16x256 269.8 -> 123.9, 32x128 269.9 -> 124.1, 8x384 253.0 -> 92.4; 8x512 x in DRAM 125.3. 6x18 (4x512 145, 8x256 145) has no <= 3-rectangle layout and stays R1; 3x36 (2x512 95, 4x256 97) measured slower with W multicast (105-129 us) and is gated off (`W_MCAST_MIN_GROUP = 4`). Bottleneck now at 8x512: stubbing the matmul drops 123.7 -> 66.8 us, so the matmul (HiFi3, 1x4 subblocks, 2200 tile-products/core) is the larger share and the rest (DM, epilogue, writes) ~67 us; that is Refinement 4's knobs (subblock shape, rotary init hoist, L1 overlap). Next for 6x18: a layout with 18-core M-groups in <= 3 rectangles and 6-core N-groups (not attempted: the folded scheme needs grid_n <= grid extent).
 
-### [ ] Refinement 4 - Block / compute knob co-tune on the flagged 4096-token rows
+### [x] Refinement 4 - Block / compute knob co-tune on the flagged 4096-token rows
 
 **Type**: perf
 
@@ -141,6 +141,8 @@ Catalog: `master.md` `matmul_output_subblock`, `compute_block_size`, `double_buf
 **Done when**: measured device ns improves on 8x512 (toward 90 us) with the soft precision gate
 holding, golden green, and no regression across the guard set (one representative per grid class x
 placement x alignment).
+
+**Outcome**: 8x512 123.5 -> 106.2 us (16x256 106.6, 32x128 105.8, 8x384 78.2; 4x512 122.6, 8x256 118.8, 2x512 82.9, 4x256 73.9); every guard faster (DRAM out, 7x511, 4096x1 multi-block 4955 -> 4494). Kept: table slots read in the K-loop slack, odd output rows stored by the reader on NoC0, epilogue init hoisted per block, `block_m` keeping M-group block counts equal. Measured null: subblock shape (matmul FPU-bound, 87 us at HiFi3), 2 blocks per core (worse). Not tried: `k_block` (FPU-bound K-loop), q/k vs v split (cores finish within the store tail's spatial spread), W NoC placement (W stubbed moves < 1 us). Bottleneck now: the K-loop ends at ~88 us and the output stores take ~12-18 us after it; next is overlapping the stores with the last K-block, which needs `matmul_block` to start L1 accumulation on an existing target.
 
 ### [ ] Refinement 5 - Small-token flagged rows (2048 / 1024 tokens)
 
