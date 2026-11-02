@@ -19,30 +19,14 @@
 
 namespace ttnn::experimental::prim {
 
-// Kernel indices follow the push order in the per-coordinate descriptor builder; arg slots follow the
-// kernels' runtime-arg layout. override_runtime_arguments() re-applies every address at these slots.
+// Kernel indices follow the push order in the per-coordinate descriptor builder (reader, writer, forwarders,
+// compute); forwarder arg slots follow the forwarder runtime-arg layout. override_runtime_arguments() patches these.
+// The reader and writer common-arg slot order is owned by the factory's address tables.
 namespace dit_fused_distributed_rmsnorm_dynamic {
 inline constexpr uint32_t kReaderKernelIdx = 0;
 inline constexpr uint32_t kWriterKernelIdx = 1;
-inline constexpr uint32_t kComputeKernelIdx = 2;
 // Forwarder f (all-gather path only) sits at kFirstForwarderKernelIdx + f.
-inline constexpr uint32_t kFirstForwarderKernelIdx = 3;
-
-// Reader common runtime args.
-inline constexpr uint32_t kReaderInputAddrArg = 0;
-inline constexpr uint32_t kReaderWeightAddrArg = 1;
-inline constexpr uint32_t kReaderBiasAddrArg = 2;
-inline constexpr uint32_t kReaderRopeCosAddrArg = 3;
-inline constexpr uint32_t kReaderRopeSinAddrArg = 4;
-inline constexpr uint32_t kReaderRecipAddrArg = 5;
-// Present only with an affine_tile_row_map.
-inline constexpr uint32_t kReaderTileRowMapAddrArg = 6;
-
-// Writer common runtime args (drain-only and worker writer share slots 0 and 1).
-inline constexpr uint32_t kWriterOutputAddrArg = 0;
-inline constexpr uint32_t kWriterTransMatAddrArg = 1;
-// Worker writer (all-gather path) only.
-inline constexpr uint32_t kWriterStatsAddrArg = 2;
+inline constexpr uint32_t kFirstForwarderKernelIdx = 2;
 
 // Forwarder per-core runtime args.
 inline constexpr uint32_t kForwarderStatsAddrArg = 0;

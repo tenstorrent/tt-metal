@@ -138,6 +138,7 @@ struct DitFusedDistributedRmsnormInputs {
 struct DitFusedDistributedRmsnormSizing {
     uint32_t num_tile_rows = 0;
     uint32_t num_workers = 0;
+    uint32_t num_forwarders = 0;         // min(num_links, num_workers) on the all-gather path, 0 otherwise
     bool is_tp_1 = false;                // ring_size==1 or per_head_norm: reduce locally, no all-gather
     bool use_mux = false;                // !is_tp_1: uses the fabric-forwarder all-gather + DRAM scratch
     uint32_t window_size = 0;            // tile-rows per packed page
