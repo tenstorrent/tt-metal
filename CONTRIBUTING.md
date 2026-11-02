@@ -238,8 +238,8 @@ which tests `tensor` APIs and `tt_dnn` ops. These are also tested in post
 commit.
 
 ```
-pytest tests/python_api_testing/unit_testing/ -vvv
-pytest tests/python_api_testing/sweep_tests/pytests/ -vvv
+pytest tests/tt_eager/python_api_testing/unit_testing/ -vvv
+pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -vvv
 ```
 
 If you would like to run the post-commit tests on GitHub Actions, please refer
@@ -335,7 +335,7 @@ running such tests.
 ### Debugging host-side code
 
 - GDB can be used to debug Metalium C++ host APIs and C++ Python binding files.
-  - Build with debug symbols: `CONFIG=Debug ./build_metal.sh`
+  - Build with debug symbols: `./build_metal.sh --debug`
   - To debug Metalium C++ host APIs, run `gdb --args <generated binary>`
   - To debug the C++ binding file itself:
     - Ensure the python file you wish to debug is standalone and has a main function.
