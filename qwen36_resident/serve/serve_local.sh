@@ -79,6 +79,8 @@ case $PROFILE in
     # Default 2048 / 0 (lane sched, 2026-10-30): a burst prefills as one wave before its decodes start (c=16 TPOT at
     # the decode step, TTFT ~3x the interleaved policy's); a prompt arriving while others decode stalls them about as
     # the interleave did. PREFILL_GANG_TOKENS=0: the interleaved policy (one long prompt split between decode steps)
+    # A step's whole prompts of one PP chunk stream through one pipelined PP pass (PPPrefill.run_batch, fill / drain
+    # once per step: c=16 TTFT -16..-31 %, output tok/s +14..+20 %, lane sched rb1); RESIDENT_PP_BATCH=0 turns it off
     GANG=''
     [ "$PROFILE" = multi-ttft ] && : "${PREFILL_GANG_TOKENS:=0}"
     [ "${PREFILL_GANG_TOKENS:=2048}" != 0 ] && GANG=", \"prefill_gang_tokens\": $PREFILL_GANG_TOKENS"
