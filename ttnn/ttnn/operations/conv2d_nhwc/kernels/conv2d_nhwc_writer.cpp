@@ -48,7 +48,10 @@ constexpr bool weight_mcast = get_compile_time_arg_val(19) != 0;  // BLOCK: weig
 // cb_weight_tiles depth in K-blocks; the weight stream runs weight_depth - 2 blocks ahead.
 constexpr uint32_t weight_depth = get_compile_time_arg_val(20);
 constexpr uint32_t weight_lead = weight_depth - 2;
-constexpr auto weight_args = TensorAccessorArgs<21>();
+// Weight K-rows per K-block: bk (dense) or the kH*kW taps (R11 depthwise: tile (tap, ct) of the
+// prepared [taps*32, C_out] weight, row 0 = the tap's per-channel weights).
+constexpr uint32_t weight_k_rows = get_compile_time_arg_val(21);
+constexpr auto weight_args = TensorAccessorArgs<22>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
@@ -103,7 +106,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t act_block_bytes = act_block_tiles * get_tile_size(cb_act_tiles);
     auto weight_sender = weight_channel.optional_sender(noc);
     auto weight_receiver = weight_channel.optional_receiver(noc);
-    const uint32_t weight_block_bytes = block_k_tiles * block_n_tiles * weight_tile_bytes;
+    const uint32_t weight_block_bytes = weight_k_rows * block_n_tiles * weight_tile_bytes;
 
     // ---- sink: keep the group's landing-slot cadence and acks, nothing else ----
     if constexpr (act_mcast) {
@@ -151,14 +154,14 @@ void kernel_main() {
             // reads without waiting; land_weights: barrier, column multicast / receive, push.
             // R4/R5 runs the act exchange of a K-block between the two, so the weight DRAM
             // latency overlaps the row handshake instead of serializing ahead of it.
-            constexpr uint32_t weight_block_tiles = block_k_tiles * block_n_tiles;
+            constexpr uint32_t weight_block_tiles = weight_k_rows * block_n_tiles;
             auto issue_weights = [&](uint32_t k_block) {
                 cb_reserve_back(cb_weight_tiles, weight_block_tiles);
                 const uint32_t weight_slot = get_write_ptr(cb_weight_tiles);  // lockstep across the column
                 if (reads_weights) {
                     uint32_t dst = weight_slot;
                     uint32_t row_page = kblock_first_row(k_block) * N_t + n0;
-                    for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
+                    for (uint32_t kk = 0; kk < weight_k_rows; ++kk) {
                         for (uint32_t j = 0; j < block_n_tiles; ++j) {
                             if (n0 + j < N_t) {
                                 noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);

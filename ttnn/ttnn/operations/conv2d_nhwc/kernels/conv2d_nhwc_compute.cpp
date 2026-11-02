@@ -17,6 +17,10 @@
 //                       straight into the output shard (R4/R5, zero-copy); a WIDTH shard's
 //                       partial last tile-row goes to the cb_out_rm tail for the writer.
 //
+// R11 depthwise (no matmul): per (m-block, n-block), per tile-row: tilize taps x bn tiles, then
+//   dw_tap_accumulate (eltwise_chain: Mul with row-broadcast tap weights, WholeShape DEST
+//   accumulation over the taps) into cb_partials; then the same bias_and_untilize.
+//
 // Raw API: PACK((llk_pack_reconfig_l1_acc(0))) before each tilize and after the matmul — the
 // matmul helper leaves packer L1 accumulation on after K-block >= 1 (op_design.md Key Risks).
 
@@ -27,6 +31,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 constexpr uint32_t cb_act_rm = get_compile_time_arg_val(0);
 constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(1);
@@ -57,6 +62,11 @@ constexpr uint32_t act_send_depth = get_compile_time_arg_val(22);
 // untilize pack when there is no bias — and cleared right after, so the next block's tilize
 // and partial (L1-accumulated) packs never see it.
 constexpr bool fuse_relu = get_compile_time_arg_val(23) != 0;
+// R11 depthwise: per tile-row, cb_act_tiles holds taps x bn tilized tiles ([tap][ct], the reader's
+// im2col order) and cb_weight_tiles taps x bn row-0 weight tiles for the n-block; output tile ct is
+// sum_tap act[tap][ct] * row_bcast(w[tap][ct]), accumulated in DEST (no matmul).
+constexpr bool depthwise = get_compile_time_arg_val(24) != 0;
+constexpr uint32_t taps = get_compile_time_arg_val(25);
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -147,11 +157,52 @@ ALWI void bias_and_untilize(
     }
 }
 
+// dw_tap_accumulate: one output tile-row of the n-block — for each of its bn output tiles, one
+// eltwise_chain walking the taps (grid(taps, 1), Col mapping + Strided {ct, bn}: tile tap*bn + ct
+// of both operands) with the products accumulated in one sticky DEST tile (WholeShape), packed
+// once into cb_partials. Inputs are caller-managed: fronted for the whole tile-row / n-block.
+ALWI void dw_tap_accumulate(DataflowBuffer& act, DataflowBuffer& weights, DataflowBuffer& partials) {
+    using TapMul = BinaryFpu<
+        BinaryFpuOp::Mul,
+        input(
+            cb_act_tiles,
+            WaitPolicy::None,
+            PopPolicy::None,
+            InputTileMapping::Col,
+            DataFormatReconfig::Enabled,
+            TileAddressing::Strided),
+        input(
+            cb_weight_tiles,
+            BroadcastDim::Row,
+            WaitPolicy::None,
+            PopPolicy::None,
+            InputTileMapping::Col,
+            DataFormatReconfig::Enabled,
+            TileAddressing::Strided),
+        Dst::D0,
+        DestAccumulation::WholeShape>;
+    using PackAcc = PackTile<output(
+        cb_partials,
+        ReservePolicy::OneUpfront,
+        PushPolicy::OneAtEnd,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Direct,
+        DestAccumulation::WholeShape)>;
+    for (uint32_t ct = 0; ct < block_n_tiles; ++ct) {
+        const StridedTileRange range{ct, block_n_tiles};
+        eltwise_chain(IterationShape::grid(taps, 1), TapMul{act, weights, range, range}, PackAcc{partials});
+    }
+}
+
 void kernel_main() {
     const uint32_t num_m_blocks = get_arg_val<uint32_t>(0);
     const uint32_t my_slice = get_arg_val<uint32_t>(1);  // R4/R5: this core's channel slice
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_partials);
+    if constexpr (depthwise) {
+        compute_kernel_hw_startup(cb_act_tiles, cb_weight_tiles, cb_partials);
+    } else {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_partials);
+    }
 
     CircularBuffer act_tiles(cb_act_tiles);
     CircularBuffer weight_tiles(cb_weight_tiles);
@@ -164,42 +215,63 @@ void kernel_main() {
         bias.wait_front(core_n_tiles);
     }
 
-    const auto shape = MatmulBlockShape::of(
-        in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
+    if constexpr (depthwise) {
+        constexpr uint32_t row_tiles = taps * block_n_tiles;  // = block_k_tiles
+        static_assert(!depthwise || row_tiles == block_k_tiles, "depthwise K-block = taps x bn");
+        DataflowBuffer dw_act(cb_act_tiles);
+        DataflowBuffer dw_weights(cb_weight_tiles);
+        DataflowBuffer dw_partials(cb_partials);
+        for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
+            for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
+                weight_tiles.wait_front(row_tiles);
+                for (uint32_t t = 0; t < block_m_tiles; ++t) {
+                    // tilize one im2col tile-row: taps x bn per-tap tiles.
+                    tilize<row_tiles, cb_act_rm, cb_act_tiles>(1);
+                    act_tiles.wait_front(row_tiles);
+                    dw_tap_accumulate(dw_act, dw_weights, dw_partials);
+                    act_tiles.pop_front(row_tiles);
+                }
+                weight_tiles.pop_front(row_tiles);
+                bias_and_untilize<has_bias>(partials, bias, biased, n_block, m_block + 1 == num_m_blocks);
+            }
+        }
+    } else {
+        const auto shape = MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
+        for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
+            for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
+                // conv_matmul_block: caller owns the accumulator's single reserve / push.
+                partials.reserve_back(block_out_tiles);
+                matmul_block<
+                    false,
+                    true,
+                    LastBlockTarget::Interm,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::ShortAfterPreKBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    NoPostCompute,
+                    TilizeKBlock,
+                    NoPostKBlock,
+                    0,
+                    NoKBlockInnerDimFn,
+                    NoIn0Source,
+                    NoIn1BaseOffset,
+                    true>(
+                    act_tiles,
+                    weight_tiles,
+                    partials,
+                    partials,
+                    shape,
+                    {},
+                    TilizeKBlock{my_slice},
+                    block_n_tiles,
+                    block_n_tiles);
+                partials.push_back(block_out_tiles);
+                PACK((llk_pack_reconfig_l1_acc(0)));
 
-    for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
-        for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
-            // conv_matmul_block: caller owns the accumulator's single reserve / push.
-            partials.reserve_back(block_out_tiles);
-            matmul_block<
-                false,
-                true,
-                LastBlockTarget::Interm,
-                OutputCBLayout::TileRowMajor,
-                matmul_config::InitMode::ShortAfterPreKBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                NoPostCompute,
-                TilizeKBlock,
-                NoPostKBlock,
-                0,
-                NoKBlockInnerDimFn,
-                NoIn0Source,
-                NoIn1BaseOffset,
-                true>(
-                act_tiles,
-                weight_tiles,
-                partials,
-                partials,
-                shape,
-                {},
-                TilizeKBlock{my_slice},
-                block_n_tiles,
-                block_n_tiles);
-            partials.push_back(block_out_tiles);
-            PACK((llk_pack_reconfig_l1_acc(0)));
-
-            bias_and_untilize<has_bias>(partials, bias, biased, n_block, m_block + 1 == num_m_blocks);
+                bias_and_untilize<has_bias>(partials, bias, biased, n_block, m_block + 1 == num_m_blocks);
+            }
         }
     }
 

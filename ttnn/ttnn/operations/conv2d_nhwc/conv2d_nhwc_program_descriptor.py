@@ -61,6 +61,13 @@ ACT_RM_KBLOCKS = 1
 SHARDED_CB_BUDGET_BYTES = 480 * 1024
 WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
+# R11 depthwise: cb_act_tiles depth in tilized tile-rows (taps x bn tiles each). Compute tilizes a
+# tile-row and consumes it before tilizing the next, so one is enough; cb_act_rm (ACT_RM_DEPTH
+# tile-rows) is what overlaps the reader's gather with compute.
+DW_ACT_TILE_ROWS = 1
+# R11 depthwise: cb_weight_tiles depth in (taps x bn) weight blocks — 2 lets the writer fetch the
+# next (m, n)-block's tap weights while compute works on the current one.
+DW_WEIGHT_DEPTH = 2
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
 # descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
 # accumulator (partials) page format. The public signature takes no compute_kernel_config,
@@ -143,6 +150,11 @@ def channel_slices(memory_config):
     return S, int(spec.shape[1])
 
 
+def is_depthwise(C_in, groups):
+    """Regime R11: one input channel per group (C_out = m * C_in)."""
+    return groups > 1 and groups == C_in
+
+
 def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None):
     """Prepared-K geometry shared by prepare_conv2d_weights and the kernels.
 
@@ -150,6 +162,21 @@ def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None):
     Channel-sliced (BLOCK/WIDTH, technique 6): K order [slice][kh][kw x slice_width],
     each (slice, kh) band padded to band_tiles tiles; tap_width = the shard's stick width."""
     granule = L1_NOC_ALIGN // elem_bytes
+    if is_depthwise(C_in, groups):
+        # R11: K = the kH*kW taps; one prepared tile-row per tap (row 0 = per-channel weights).
+        # tap_width = the window / shard stick width in channels (interleaved: refined per core).
+        S, tap_width = (1, C_in) if slices is None else slices
+        if slices is not None and (tap_width % TILE != 0 or _div_up(C_in, tap_width) != S):
+            raise UnsupportedAxisValue(
+                f"conv2d_nhwc: depthwise needs whole-tile channel shards (shard width {tap_width}, C_in {C_in})"
+            )
+        return {
+            "tap_width": tap_width,
+            "band_tiles": _div_up(kW * tap_width, TILE),
+            "K_t": kH * kW,
+            "S": S,
+            "depthwise": True,
+        }
     if slices is None:
         C_in_g = C_in // groups
         tap_width = _div_up(C_in_g, granule) * granule
@@ -240,6 +267,14 @@ def select_blocking(
     T_w = weight_tile_bytes  # weight / bias tile bytes (weight_dtype)
     T_acc = tile_bytes(acc_dtype)  # accumulator page = DEST width
     win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, kW=kW, padding=padding, stride=stride, dilation=dilation)
+    dw = geo.get("depthwise", False)
+    taps = kH * kW
+    if dw:
+        # R11: a core reads only its own channel tiles into the window (stick = core_n_tiles*32
+        # channels at channel offset n_tile_start*32); K = taps x bn per n-block, one K-block.
+        if C_out != C_in:
+            raise UnsupportedAxisValue("conv2d_nhwc: depthwise channel multiplier (C_out != C_in) not built")
+        tap_width = core_n_tiles * TILE
 
     def window_max(bm):
         best = 1
@@ -253,6 +288,16 @@ def select_blocking(
         return best
 
     def footprint(bm, bk, bn, win):
+        if dw:  # bk = taps * bn: one tilized tile-row, DW_WEIGHT_DEPTH tap-weight blocks
+            return (
+                win * tap_width * elem_bytes
+                + ACT_RM_DEPTH * bk * T
+                + DW_ACT_TILE_ROWS * bk * T
+                + DW_WEIGHT_DEPTH * bk * T_w
+                + bm * bn * T_acc
+                + (core_n_tiles * T_w if has_bias else 0)
+                + OUT_RM_DEPTH * bn * T
+            )
         return (
             win * tap_width * elem_bytes
             + ACT_RM_DEPTH * bk * T
@@ -272,6 +317,15 @@ def select_blocking(
         return win_cache[bm]
 
     def walk(budget):
+        if dw:
+            # R11: the whole channel range per pass first (one contiguous read per kernel row),
+            # then the whole m range; bk is pinned to taps x bn.
+            for bn in sorted(_divisors(core_n_tiles), reverse=True):
+                for bm in range(core_m_tiles, 0, -1):
+                    win = win_of(bm)
+                    if footprint(bm, taps * bn, bn, win) <= budget:
+                        return bm, taps * bn, bn, win
+            return None
         for bn in sorted(_divisors(core_n_tiles), reverse=True):
             # Step 2 (bn = core_n_tiles only): bm = core_m_tiles with the bk floor.
             if bn == core_n_tiles:
@@ -300,6 +354,8 @@ def select_blocking(
 
     return {
         **geo,
+        **_dw_plan_keys(dw, taps, bk, bn, tap_width, elem_bytes, C_in),
+        "tap_width": tap_width,  # depthwise: the core's own channel tiles
         "H_out": H_out,
         "W_out": W_out,
         "M": M,
@@ -327,10 +383,10 @@ def select_blocking(
         "block_m_tiles": bm,
         "block_k_tiles": bk,
         "block_n_tiles": bn,
-        "num_k_blocks": K_t // bk,
+        "num_k_blocks": 1 if dw else K_t // bk,
         "num_n_blocks": core_n_tiles // bn,
         "act_rm_rows": ACT_RM_DEPTH,
-        "weight_depth": WEIGHT_DEPTH,
+        "weight_depth": DW_WEIGHT_DEPTH if dw else WEIGHT_DEPTH,
         "window_sticks_max": window_sticks_max,
         "out_subblock_h": sb_h,
         "out_subblock_w": sb_w,
@@ -338,6 +394,22 @@ def select_blocking(
         "T_w": T_w,
         "T_acc": T_acc,
         "footprint": footprint(bm, bk, bn, window_sticks_max),
+    }
+
+
+def _dw_plan_keys(dw, taps, bk, bn, tap_width, elem_bytes, C_in):
+    """Plan keys that differ between the dense matmul and the R11 depthwise compute structure.
+
+    weight block = weight_k_rows x bn tiles (dense: bk K-rows; depthwise: one tile per tap and
+    channel tile). act_tile_rows = tilized tile-rows resident in cb_act_tiles (dense: the m-block,
+    `None` = block_m_tiles). window_stick_bytes = one window stick (dense: the whole C_in stick;
+    depthwise interleaved: the core's own channel tiles)."""
+    return {
+        "depthwise": dw,
+        "taps": taps if dw else 0,
+        "weight_k_rows": taps if dw else bk,
+        "act_tile_rows": DW_ACT_TILE_ROWS if dw else None,
+        "window_stick_bytes": (tap_width if dw else C_in) * elem_bytes,
     }
 
 
@@ -398,7 +470,12 @@ def select_blocking_sharded(
     M_t = _div_up(M, TILE)
     N_t = _div_up(C_out, TILE)
     NHW = N * H * W
-    nt_s = _div_up(N_t, S)
+    dw = geo.get("depthwise", False)
+    taps = kH * kW
+    if dw and C_out != C_in:
+        raise UnsupportedAxisValue("conv2d_nhwc: depthwise channel multiplier (C_out != C_in) not built")
+    # R11: a depthwise core's outputs are exactly its own channel slice (no K exchange).
+    nt_s = cw // TILE if dw else _div_up(N_t, S)
     if memory_layout == _ML.WIDTH_SHARDED:
         core_m_tiles, g_m = M_t, 1
     else:
@@ -429,7 +506,8 @@ def select_blocking_sharded(
         return best
 
     # S == 1: the core owns all of K — no exchange; compute tilizes straight into in0 (as R0).
-    act_mcast = S > 1
+    # Depthwise: every channel slice is self-contained — no exchange at any S.
+    act_mcast = S > 1 and not dw
 
     def send_depth(bk):
         return min(ACT_SEND_DEPTH, slice_k_tiles // bk)
@@ -438,6 +516,16 @@ def select_blocking_sharded(
         return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm) if act_mcast else ACT_RM_DEPTH
 
     def footprint(bm, bk, halo):
+        if dw:  # bk = taps * nt_s (bn = the whole slice: the output shard row)
+            return (
+                max(halo, 1) * tap_width * elem_bytes
+                + ACT_RM_DEPTH * bk * T
+                + DW_ACT_TILE_ROWS * bk * T
+                + DW_WEIGHT_DEPTH * bk * T_w
+                + bm * nt_s * T_acc
+                + (nt_s * T_w if has_bias else 0)
+                + (nt_s * T if out_tail else 0)
+            )
         return (
             max(halo, 1) * tap_width * elem_bytes
             + rm_rows(bm) * bk * T
@@ -449,7 +537,7 @@ def select_blocking_sharded(
             + (nt_s * T if out_tail else 0)
         )
 
-    k_divs_desc = sorted(_divisors(slice_k_tiles), reverse=True)
+    k_divs_desc = [taps * nt_s] if dw else sorted(_divisors(slice_k_tiles), reverse=True)
 
     def walk(budget):
         # Whole-shard bm first (shrinking bm re-streams the weights per m-block), then the
@@ -468,16 +556,19 @@ def select_blocking_sharded(
     bn = nt_s
     sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
     sb_h = max(d for d in _divisors(bm) if d * sb_w <= dst_tiles)
-    kbps = slice_k_tiles // bk
+    kbps = 1 if dw else slice_k_tiles // bk
     return {
         **geo,
+        **_dw_plan_keys(dw, taps, bk, bn, tap_width, elem_bytes, C_in),
         "k_exchange": True,
         "act_mcast": act_mcast,
         "act_send_depth": send_depth(bk),
         "act_rm_rows": rm_rows(bm),
-        "weight_depth": SHARDED_WEIGHT_DEPTH,
+        "weight_depth": DW_WEIGHT_DEPTH if dw else SHARDED_WEIGHT_DEPTH,
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
+        # Depthwise weights are a few tap tiles per slice: each core reads its own.
         "weight_mcast": WEIGHT_MCAST
+        and not dw
         and memory_layout == _ML.BLOCK_SHARDED
         and g_m > 1
         and len({_div_up(min(core_m_tiles, M_t - r * core_m_tiles), bm) for r in range(g_m)}) == 1,
@@ -513,7 +604,7 @@ def select_blocking_sharded(
         "block_k_tiles": bk,
         "block_n_tiles": bn,
         "kblocks_per_slice": kbps,
-        "num_k_blocks": S * kbps,
+        "num_k_blocks": kbps if dw else S * kbps,
         "num_n_blocks": 1,
         "window_sticks_max": max(halo, 1),
         "out_tail": out_tail,
@@ -596,6 +687,10 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     kx = p.get("k_exchange", False)  # sharded R4/R5 placement (shard input, shard output)
     act_mcast = p.get("act_mcast", False)  # K exchange across > 1 channel slice
     weight_mcast = p.get("weight_mcast", False)  # BLOCK: one DRAM weight read per grid column
+    dw = p["depthwise"]  # R11: tap-weighted eltwise accumulation instead of the matmul
+    weight_block_tiles = p["weight_k_rows"] * bn
+    # Tilized in0 resident in cb_act_tiles: the m-block (dense) or DW_ACT_TILE_ROWS tile-rows (R11).
+    act_tile_pages = (p["act_tile_rows"] or bm) * bk
     act_dtype = input_tensor.dtype
     w_dtype = weight_tensor.dtype
     eb = p["elem_bytes"]
@@ -634,9 +729,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
         _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
         _cb(CB_ACT_RM, act_dtype, p["T"], p["act_rm_rows"] * bk, cores),
-        _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * bk * bn, cores),
+        _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * weight_block_tiles, cores),
         # Multicast landing zone: same address on every group core (incl. sinks).
-        _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk, mcast_cores),
+        _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * act_tile_pages, mcast_cores),
     ]
     if act_mcast:
         cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], p["act_send_depth"] * bm * bk, cores))
@@ -681,7 +776,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p["band_tiles"],
         p["tap_width"],
         eb,
-        p["C_in"] * eb,  # bytes of one DRAM input stick (R0)
+        p["window_stick_bytes"],  # bytes read per DRAM input stick (R0; depthwise: own channels)
         p["kH"],
         p["kW"],
         p["H"],
@@ -693,6 +788,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         CB_IN_SHARD,
         p.get("shard_h", 1) if kx else 1,
         max(rows_in, 1),
+        1 if dw else 0,
+        bn,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -719,6 +816,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if act_mcast else 0,
         1 if weight_mcast else 0,
         p["weight_depth"],
+        p["weight_k_rows"],
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -754,6 +852,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if act_mcast else 0,
         p.get("act_send_depth", 1),
         1 if p["activation"] == "relu" else 0,
+        1 if dw else 0,
+        p["taps"],
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -769,7 +869,18 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         m_tiles = min(p["core_m_tiles"], p["M_t"] - m_tile_start)
         num_m_blocks = _div_up(m_tiles, bm)
         n_tile_start = ni * p["core_n_tiles"]
-        reader_args = [in_addr, m_tile_start, m_tiles, num_m_blocks, p["padding"], p["stride"], p["dilation"]]
+        # R0 depthwise: the window holds only this core's channel tiles (byte offset into the stick).
+        win_chan_offset = n_tile_start * TILE * eb if (dw and not kx) else 0
+        reader_args = [
+            in_addr,
+            m_tile_start,
+            m_tiles,
+            num_m_blocks,
+            p["padding"],
+            p["stride"],
+            p["dilation"],
+            win_chan_offset,
+        ]
         if kx:
             # Resident stick range + the NoC coords of this column's input shards (halo sources).
             if p["memory_layout"] == _ML.WIDTH_SHARDED:

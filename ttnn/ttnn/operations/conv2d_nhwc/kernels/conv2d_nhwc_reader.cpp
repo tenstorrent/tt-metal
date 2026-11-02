@@ -22,6 +22,8 @@
 // Phase 0 assumes dilation == 1, so a kernel-row band is one contiguous window run.
 // R4/R5: tap_width / band_tiles are the channel slice's; the gather produces only this core's
 // slice of K (num_k_blocks = the slice's K-blocks), which compute tilizes and the writer multicasts.
+// R11 depthwise: per n-block one K-block of taps x bn*32 channels (per-tap tiles after tilize);
+// R0 windows hold only the core's channel tiles, sharded cores read their own slice (no exchange).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -47,13 +49,21 @@ constexpr bool k_exchange = get_compile_time_arg_val(17) != 0;  // R4/R5: shard-
 constexpr uint32_t cb_in_shard = get_compile_time_arg_val(18);
 constexpr uint32_t shard_h = get_compile_time_arg_val(19);         // sticks per input shard (grid row)
 constexpr uint32_t num_col_shards = get_compile_time_arg_val(20);  // input shards in this core's column
-constexpr auto input_args = TensorAccessorArgs<21>();
+// R11 depthwise: the im2col row of n-block nb is [tap][bn*32 channels at channel nb*bn*32 of the
+// window / shard stick] (one K-block per n-block); dense: [kh][kw x tap_width] K-blocks.
+constexpr bool depthwise = get_compile_time_arg_val(21) != 0;
+constexpr uint32_t block_n_tiles = get_compile_time_arg_val(22);
+constexpr auto input_args = TensorAccessorArgs<23>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t tap_bytes = tap_width * elem_bytes;
 constexpr uint32_t band_elems = band_tiles * TILE_DIM;
 constexpr uint32_t kblock_elems = block_k_tiles * TILE_DIM;
 constexpr uint32_t im2col_row_bytes = kblock_elems * elem_bytes;
+// Depthwise: bytes of one tap's channel run, and whether it spans the whole stick (then the kW
+// taps of a kernel row are one contiguous run of sticks: one read per kernel row).
+constexpr uint32_t dw_tap_bytes = block_n_tiles * TILE_DIM * elem_bytes;
+constexpr bool dw_full_stick = dw_tap_bytes == tap_bytes;
 
 FORCE_INLINE int32_t clamp_i(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -201,7 +211,8 @@ FORCE_INLINE void gather_row(
 // band kh[i], band offset tap[i] taps + chan[i] bytes, `bytes` long, at dst[i] in the im2col row.
 // Built once per K-block; an interior pixel (whole kH x kW window in-image) then issues one read
 // per segment with no padding / clipping arithmetic (gather_row is the general path for edges).
-constexpr uint32_t max_segments = (kblock_elems + band_elems - 1) / band_elems + 1;
+constexpr uint32_t dense_max_segments = (kblock_elems + band_elems - 1) / band_elems + 1;
+constexpr uint32_t max_segments = depthwise && kH * kW > dense_max_segments ? kH* kW : dense_max_segments;
 struct KBlockSegments {
     uint32_t count;
     int32_t kh[max_segments];
@@ -238,7 +249,79 @@ FORCE_INLINE void build_segments(uint32_t k0, KBlockSegments& seg) {
     }
 }
 
+// Depthwise segments of n-block nb: one per kernel row (dw_full_stick: the kW taps' sticks are
+// contiguous) or one per tap (a channel sub-range of each stick).
+FORCE_INLINE void build_segments_dw(uint32_t n_block, KBlockSegments& seg) {
+    const uint32_t chan0 = n_block * dw_tap_bytes;
+    seg.count = 0;
+    for (uint32_t kh = 0; kh < kH; ++kh) {
+        if constexpr (dw_full_stick) {
+            const uint32_t i = seg.count++;
+            seg.kh[i] = static_cast<int32_t>(kh);
+            seg.tap[i] = 0;
+            seg.chan[i] = 0;
+            seg.bytes[i] = kW * tap_bytes;
+            seg.dst[i] = kh * kW * dw_tap_bytes;
+            seg.span[i] = static_cast<int32_t>(kW);
+        } else {
+            for (uint32_t kw = 0; kw < kW; ++kw) {
+                const uint32_t i = seg.count++;
+                seg.kh[i] = static_cast<int32_t>(kh);
+                seg.tap[i] = static_cast<int32_t>(kw);
+                seg.chan[i] = chan0;
+                seg.bytes[i] = dw_tap_bytes;
+                seg.dst[i] = (kh * kW + kw) * dw_tap_bytes;
+                seg.span[i] = 1;
+            }
+        }
+    }
+}
+
+// One depthwise im2col row (one output pixel) of n-block nb: per tap, the n-block's channels of
+// the tap's input stick, or zeros for a padding tap.
+template <typename Source>
+FORCE_INLINE void gather_row_dw(
+    uint64_t zeros_noc, const Source& src, uint32_t n, int32_t h_base, int32_t w_base, uint32_t n_block, uint32_t dst) {
+    const uint32_t chan0 = n_block * dw_tap_bytes;
+    const int32_t kw_lo = w_base < 0 ? -w_base : 0;
+    int32_t kw_hi = static_cast<int32_t>(W) - w_base;
+    if (kw_hi > static_cast<int32_t>(kW)) {
+        kw_hi = kW;
+    }
+    for (uint32_t kh = 0; kh < kH; ++kh) {
+        const uint32_t row_dst = dst + kh * kW * dw_tap_bytes;
+        const int32_t h = h_base + static_cast<int32_t>(kh);
+        if (h < 0 || h >= static_cast<int32_t>(H) || kw_hi <= kw_lo) {
+            zero_run(zeros_noc, row_dst, kW * dw_tap_bytes);
+            continue;
+        }
+        if (kw_lo > 0) {
+            zero_run(zeros_noc, row_dst, static_cast<uint32_t>(kw_lo) * dw_tap_bytes);
+        }
+        const int32_t row = static_cast<int32_t>(n * H) + h;
+        if constexpr (dw_full_stick) {
+            src.read(
+                row,
+                w_base + kw_lo,
+                0,
+                row_dst + static_cast<uint32_t>(kw_lo) * dw_tap_bytes,
+                static_cast<uint32_t>(kw_hi - kw_lo) * tap_bytes);
+        } else {
+            for (int32_t kw = kw_lo; kw < kw_hi; ++kw) {
+                src.read(row, w_base + kw, chan0, row_dst + static_cast<uint32_t>(kw) * dw_tap_bytes, dw_tap_bytes);
+            }
+        }
+        if (kw_hi < static_cast<int32_t>(kW)) {
+            zero_run(
+                zeros_noc,
+                row_dst + static_cast<uint32_t>(kw_hi) * dw_tap_bytes,
+                (kW - static_cast<uint32_t>(kw_hi)) * dw_tap_bytes);
+        }
+    }
+}
+
 // True when K-block columns outside the segments (band K padding) must be zeroed: then the
+
 // fast path is not taken (it writes only the segments).
 FORCE_INLINE bool kblock_has_k_padding(uint32_t k0) {
     uint32_t covered = 0;
@@ -262,7 +345,7 @@ FORCE_INLINE bool kblock_has_k_padding(uint32_t k0) {
 // Interior pixels of one output row form a run: per segment, the source advances by `stride`
 // sticks per pixel, so the run is a tight stateful-read loop with an affine source address
 // (one read per pixel per segment). Edge pixels (padding taps) and K-padded blocks take the
-// general gather_row path.
+// general gather_row path (gather_row_dw for depthwise, where `k0` is the n-block index).
 template <typename Source>
 FORCE_INLINE void gather_tile_row(
     uint64_t zeros_noc,
@@ -318,6 +401,8 @@ FORCE_INLINE void gather_tile_row(
                     }
                 }
             }
+        } else if constexpr (depthwise) {
+            gather_row_dw(zeros_noc, src, n, h_base, w_base, k0, dst);
         } else {
             gather_row(zeros_noc, src, n, h_base, w_base, k0, dst);
         }
@@ -342,9 +427,11 @@ void kernel_main() {
     const int32_t padding = static_cast<int32_t>(get_arg_val<uint32_t>(4));
     const int32_t stride = static_cast<int32_t>(get_arg_val<uint32_t>(5));
     const int32_t dilation = static_cast<int32_t>(get_arg_val<uint32_t>(6));
+    // R0 depthwise: byte offset of this core's channel tiles in a DRAM input stick (else 0).
+    [[maybe_unused]] const uint32_t win_chan_offset = get_arg_val<uint32_t>(7);
     // R4/R5 only: resident stick range, then (noc_x, noc_y) of each input shard in this column.
-    const int32_t own_lo = k_exchange ? static_cast<int32_t>(get_arg_val<uint32_t>(7)) : 0;
-    const int32_t own_hi = k_exchange ? static_cast<int32_t>(get_arg_val<uint32_t>(8)) : 0;
+    const int32_t own_lo = k_exchange ? static_cast<int32_t>(get_arg_val<uint32_t>(8)) : 0;
+    const int32_t own_hi = k_exchange ? static_cast<int32_t>(get_arg_val<uint32_t>(9)) : 0;
     const uint32_t shard_base = k_exchange ? get_read_ptr(cb_in_shard) : 0;
 
     // fetch_sticks: flattened sticks [p, q) of this channel slice from their owning shards
@@ -354,8 +441,8 @@ void kernel_main() {
             const uint32_t r = static_cast<uint32_t>(p) / shard_h;
             int32_t e = static_cast<int32_t>((r + 1) * shard_h);
             e = e < q ? e : q;
-            const uint32_t nx = get_arg_val<uint32_t>(9 + 2 * r);
-            const uint32_t ny = get_arg_val<uint32_t>(10 + 2 * r);
+            const uint32_t nx = get_arg_val<uint32_t>(10 + 2 * r);
+            const uint32_t ny = get_arg_val<uint32_t>(11 + 2 * r);
             const uint32_t src = shard_base + (static_cast<uint32_t>(p) - r * shard_h) * tap_bytes;
             const uint32_t bytes = static_cast<uint32_t>(e - p) * tap_bytes;
             noc_async_read(get_noc_addr(nx, ny, src), dst, bytes);
@@ -421,7 +508,7 @@ void kernel_main() {
                 uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
                 uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
                 for (int32_t c = c0; c <= c1; ++c, ++s) {
-                    noc_async_read(input.get_noc_addr(s), dst, stick_bytes);
+                    noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
                     dst += tap_bytes;
                 }
             }
@@ -444,11 +531,17 @@ void kernel_main() {
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
         for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
             for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
-                const uint32_t k0 = k_block * kblock_elems;
+                // Depthwise: one K-block per n-block; `k0` carries the n-block index.
+                const uint32_t k0 = depthwise ? n_block : k_block * kblock_elems;
                 KBlockSegments seg;
-                build_segments(k0, seg);
-                // K padding inside the block's columns: rows need zero runs -> general path only.
-                const bool fast_ok = !kblock_has_k_padding(k0);
+                bool fast_ok = true;
+                if constexpr (depthwise) {
+                    build_segments_dw(n_block, seg);
+                } else {
+                    build_segments(k0, seg);
+                    // K padding inside the block's columns: rows need zero runs -> general path only.
+                    fast_ok = !kblock_has_k_padding(k0);
+                }
                 for (uint32_t t = 0; t < block_m_tiles; ++t) {
                     const uint32_t tile = t0 + t;
                     cb_reserve_back(cb_act_rm, block_k_tiles);

@@ -21,6 +21,7 @@ from .conv2d_nhwc_program_descriptor import (
     channel_slices,
     conv_geometry,
     create_program_descriptor,
+    is_depthwise,
     l1_cap_bytes,
     output_memory_config,
     select_blocking,
@@ -90,7 +91,8 @@ INPUT_TAGGERS = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + verifier: strided; Refinement 1: BLOCK / WIDTH sharded)
+# 2. SUPPORTED (Phase 0 + verifier: strided; Refinement 1: BLOCK / WIDTH sharded;
+#    Refinement 4: depthwise)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -101,7 +103,7 @@ SUPPORTED = {
     "activation": ["none", "relu"],  # relu: packer ReLU on the final output pack (technique 4)
     "channel_alignment": ["tile_aligned"],
     "stride_mode": ["unit", "strided"],  # gather/window bounds are stride-parametric (verifier probe)
-    "groups_mode": ["dense"],
+    "groups_mode": ["dense", "depthwise"],  # depthwise: R11 tap-weighted DEST accumulation (C_out == C_in)
     "dilation_mode": ["unit"],
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -217,9 +219,10 @@ def _validate_prepare(
     C_in, C_out, *, kernel_size, stride, padding, groups, dilation, input_dtype, weight_dtype, input_memory_config, who
 ):
     """Shared prepare-time gate. C_in may be None (bias prepare does not see it): a
-    tile-aligned C_in placeholder is used, so only C_out drives channel_alignment."""
+    placeholder is used — tile-aligned for dense, `groups` (the depthwise reading) for
+    groups > 1 — and the op's own validate() re-checks the real C_in."""
     if C_in is None:
-        C_in = 32 * groups
+        C_in = 32 if groups == 1 else groups
     inputs = ((1, 1, 1, C_in), C_out, kernel_size, padding, stride, groups, dilation)
     axes = {"dtype": input_dtype, "weight_dtype": weight_dtype}
     for name, tagger in INPUT_TAGGERS.items():
@@ -270,6 +273,19 @@ def prepare_conv2d_weights(
         who="prepare_conv2d_weights",
     )
     kH, kW = int(torch_weight.shape[2]), int(torch_weight.shape[3])
+    if is_depthwise(C_in, groups):
+        # R11: [kH*kW*32, C_out] — tap t's 32-row tile-row holds w[:, 0, kh, kw] in row 0 (the
+        # row-broadcast operand of the per-tap multiply), rows 1..31 zero. Placement-independent:
+        # output channel tile ct of tap t is tile (t, ct) for interleaved and sharded inputs alike.
+        w = torch.zeros(kH * kW, 32, C_out, dtype=torch.float32)
+        w[:, 0, :] = torch_weight.float().reshape(C_out, kH * kW).t()
+        return ttnn.from_torch(
+            w.reshape(1, 1, kH * kW * 32, C_out),
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     slices = channel_slices(input_memory_config)
     geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=_elem_bytes(input_dtype), slices=slices)
     tap_width, band_tiles, S = geo["tap_width"], geo["band_tiles"], geo["S"]
