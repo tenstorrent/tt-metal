@@ -131,6 +131,17 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            preallocated_output_tensor.value().device() == input_tensor.device(),
+            "Typecast operation requires the preallocated output to be on the same device as the input.");
+        // The output takes the input's label, which describes it only if every device of the output is rewritten.
+        TT_FATAL(
+            preallocated_output_tensor.value().tensor_topology().mesh_coords() ==
+                input_tensor.tensor_topology().mesh_coords(),
+            "Typecast operation requires the preallocated output to be distributed over the same mesh coordinates "
+            "as the input ({} vs {} coordinates).",
+            preallocated_output_tensor.value().tensor_topology().mesh_coords().size(),
+            input_tensor.tensor_topology().mesh_coords().size());
     }
 }
 
@@ -152,6 +163,13 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
+    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    // The output, fresh or preallocated, holds a cast of the input's shards (validation requires the same mesh
+    // coordinates), so it takes the input's label.
+    return {tensor_args.input.tensor_topology()};
 }
 
 bool TypecastDeviceOperation::skip_launch(
