@@ -57,10 +57,16 @@ constexpr uint32_t im2col_row_bytes = kblock_elems * elem_bytes;
 
 FORCE_INLINE int32_t clamp_i(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-FORCE_INLINE void zero_run(uint64_t zeros_noc, uint32_t dst, uint32_t bytes) {
+// Every im2col gather source (window / halo scratch, resident shard, MEM_ZEROS) is in this
+// core's own L1, so the gather issues stateful reads against the local NoC xy, set once per
+// m-block after the (remote) window / halo fetch: a per-read cost of a few register writes.
+FORCE_INLINE void set_local_read_state() { noc_async_read_set_state(get_noc_addr(0)); }
+FORCE_INLINE void local_read(uint32_t src, uint32_t dst, uint32_t bytes) { noc_async_read_with_state(src, dst, bytes); }
+
+FORCE_INLINE void zero_run(uint64_t, uint32_t dst, uint32_t bytes) {
     while (bytes > 0) {
         const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
-        noc_async_read(zeros_noc, dst, chunk);
+        local_read(MEM_ZEROS_BASE, dst, chunk);
         dst += chunk;
         bytes -= chunk;
     }
@@ -75,7 +81,13 @@ struct WindowSource {
     // `bytes` starting at channel byte `chan_byte` of stick (row, w); contiguous across sticks.
     FORCE_INLINE void read(int32_t row, int32_t w, uint32_t chan_byte, uint32_t dst, uint32_t bytes) const {
         const int32_t stick = (row - row0) * win_w + (w - col_lo);
-        noc_async_read(get_noc_addr(base + static_cast<uint32_t>(stick) * tap_bytes + chan_byte), dst, bytes);
+        local_read(base + static_cast<uint32_t>(stick) * tap_bytes + chan_byte, dst, bytes);
+    }
+    // Address of stick (row, w_first) + chan_byte; a run of sticks [w_first, w_end) of one input
+    // row is affine in w inside the window copy, so this always succeeds.
+    FORCE_INLINE bool run_addr(int32_t row, int32_t w_first, int32_t, uint32_t chan_byte, uint32_t& a) const {
+        a = base + static_cast<uint32_t>((row - row0) * win_w + (w_first - col_lo)) * tap_bytes + chan_byte;
+        return true;
     }
 };
 
@@ -114,12 +126,23 @@ struct ShardSource {
                 const uint32_t avail = static_cast<uint32_t>(region_end - s) * tap_bytes - chan_byte;
                 chunk = avail < bytes ? avail : bytes;
             }
-            noc_async_read(get_noc_addr(addr(s) + chan_byte), dst, chunk);
+            local_read(addr(s) + chan_byte, dst, chunk);
             dst += chunk;
             bytes -= chunk;
             s = region_end;
             chan_byte = 0;
         }
+    }
+    // Address of stick (row, w_first) + chan_byte when sticks [w_first, w_end) of that input row
+    // lie in one source region (halo-before / shard / halo-after, each affine in the stick).
+    FORCE_INLINE bool run_addr(int32_t row, int32_t w_first, int32_t w_end, uint32_t chan_byte, uint32_t& a) const {
+        const int32_t lo = row * static_cast<int32_t>(W) + w_first;
+        const int32_t hi = row * static_cast<int32_t>(W) + w_end;  // exclusive
+        if ((lo < own_lo && hi > own_lo) || (lo >= own_lo && lo < own_hi && hi > own_hi)) {
+            return false;
+        }
+        a = addr(lo) + chan_byte;
+        return true;
     }
 };
 
@@ -174,6 +197,143 @@ FORCE_INLINE void gather_row(
     }
 }
 
+// A K-block's columns [k0, k0 + kblock_elems) split at kernel-row band boundaries: segment i is
+// band kh[i], band offset tap[i] taps + chan[i] bytes, `bytes` long, at dst[i] in the im2col row.
+// Built once per K-block; an interior pixel (whole kH x kW window in-image) then issues one read
+// per segment with no padding / clipping arithmetic (gather_row is the general path for edges).
+constexpr uint32_t max_segments = (kblock_elems + band_elems - 1) / band_elems + 1;
+struct KBlockSegments {
+    uint32_t count;
+    int32_t kh[max_segments];
+    int32_t tap[max_segments];
+    uint32_t chan[max_segments];
+    uint32_t bytes[max_segments];
+    uint32_t dst[max_segments];
+    int32_t span[max_segments];  // sticks one read touches
+};
+
+FORCE_INLINE void build_segments(uint32_t k0, KBlockSegments& seg) {
+    seg.count = 0;
+    uint32_t c = k0;
+    const uint32_t end = k0 + kblock_elems;
+    while (c < end) {
+        const uint32_t kh = c / band_elems;
+        const uint32_t o = c - kh * band_elems;
+        uint32_t seg_end = band_elems;
+        if (seg_end - o > end - c) {
+            seg_end = o + (end - c);
+        }
+        // Band columns >= kW * tap_width are K padding: zero-filled by the general path.
+        const uint32_t real_end = seg_end < kW * tap_width ? seg_end : kW * tap_width;
+        if (o < real_end) {
+            const uint32_t i = seg.count++;
+            seg.kh[i] = static_cast<int32_t>(kh);
+            seg.tap[i] = static_cast<int32_t>(o / tap_width);
+            seg.chan[i] = (o % tap_width) * elem_bytes;
+            seg.bytes[i] = (real_end - o) * elem_bytes;
+            seg.dst[i] = (c - k0) * elem_bytes;
+            seg.span[i] = static_cast<int32_t>((seg.chan[i] + seg.bytes[i] + tap_bytes - 1) / tap_bytes);
+        }
+        c += seg_end - o;
+    }
+}
+
+// True when K-block columns outside the segments (band K padding) must be zeroed: then the
+// fast path is not taken (it writes only the segments).
+FORCE_INLINE bool kblock_has_k_padding(uint32_t k0) {
+    uint32_t covered = 0;
+    uint32_t c = k0;
+    const uint32_t end = k0 + kblock_elems;
+    while (c < end) {
+        const uint32_t kh = c / band_elems;
+        const uint32_t o = c - kh * band_elems;
+        uint32_t seg_end = band_elems;
+        if (seg_end - o > end - c) {
+            seg_end = o + (end - c);
+        }
+        const uint32_t real_end = seg_end < kW * tap_width ? seg_end : kW * tap_width;
+        covered += o < real_end ? real_end - o : 0;
+        c += seg_end - o;
+    }
+    return covered != kblock_elems;
+}
+
+// gather_tile_row: 32 im2col rows (output pixels from `pix`) x one K-block into dst_base.
+// Interior pixels of one output row form a run: per segment, the source advances by `stride`
+// sticks per pixel, so the run is a tight stateful-read loop with an affine source address
+// (one read per pixel per segment). Edge pixels (padding taps) and K-padded blocks take the
+// general gather_row path.
+template <typename Source>
+FORCE_INLINE void gather_tile_row(
+    uint64_t zeros_noc,
+    const Source& src,
+    const KBlockSegments& seg,
+    bool fast_ok,
+    uint32_t k0,
+    uint32_t pix,
+    uint32_t dst_base,
+    int32_t stride,
+    int32_t padding,
+    int32_t wo_int_lo,
+    int32_t wo_int_hi) {
+    constexpr uint32_t hw_out = H_out * W_out;
+    uint32_t n = pix / hw_out;
+    uint32_t rem = pix - n * hw_out;
+    uint32_t ho = rem / W_out;
+    uint32_t wo = rem - ho * W_out;
+    const uint32_t step = static_cast<uint32_t>(stride) * tap_bytes;
+    uint32_t r = 0;
+    while (r < TILE_DIM) {
+        const uint32_t dst = dst_base + r * im2col_row_bytes;
+        if (pix >= M) {
+            zero_run(zeros_noc, dst, (TILE_DIM - r) * im2col_row_bytes);
+            return;
+        }
+        const int32_t h_base = static_cast<int32_t>(ho) * stride - padding;
+        const int32_t w_base = static_cast<int32_t>(wo) * stride - padding;
+        uint32_t run = 1;
+        if (fast_ok && h_base >= 0 && h_base + static_cast<int32_t>(kH) <= static_cast<int32_t>(H) &&
+            static_cast<int32_t>(wo) >= wo_int_lo && static_cast<int32_t>(wo) <= wo_int_hi) {
+            run = static_cast<uint32_t>(wo_int_hi) + 1 - wo;
+            run = run < TILE_DIM - r ? run : TILE_DIM - r;
+            run = run < M - pix ? run : M - pix;
+            const int32_t row0 = static_cast<int32_t>(n * H) + h_base;
+            for (uint32_t i = 0; i < seg.count; ++i) {
+                const int32_t row = row0 + seg.kh[i];
+                const int32_t w_first = w_base + seg.tap[i];
+                const uint32_t bytes = seg.bytes[i];
+                uint32_t d = dst + seg.dst[i];
+                uint32_t a;
+                if (src.run_addr(
+                        row, w_first, w_first + static_cast<int32_t>(run - 1) * stride + seg.span[i], seg.chan[i], a)) {
+                    for (uint32_t j = 0; j < run; ++j) {
+                        local_read(a, d, bytes);
+                        a += step;
+                        d += im2col_row_bytes;
+                    }
+                } else {
+                    for (uint32_t j = 0; j < run; ++j) {
+                        src.read(row, w_first + static_cast<int32_t>(j) * stride, seg.chan[i], d, bytes);
+                        d += im2col_row_bytes;
+                    }
+                }
+            }
+        } else {
+            gather_row(zeros_noc, src, n, h_base, w_base, k0, dst);
+        }
+        r += run;
+        pix += run;
+        wo += run;
+        if (wo == W_out) {
+            wo = 0;
+            if (++ho == H_out) {
+                ho = 0;
+                ++n;
+            }
+        }
+    }
+}
+
 void kernel_main() {
     [[maybe_unused]] const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -208,6 +368,10 @@ void kernel_main() {
     const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
     constexpr uint32_t hw_out = H_out * W_out;
     const uint32_t m_tile_end = m_tile_start + m_tiles_this_core;
+    // Output columns whose whole kW-tap window is in-image (dilation 1): [wo_int_lo, wo_int_hi].
+    const int32_t wo_int_lo = (padding + stride - 1) / stride;
+    const int32_t wo_int_num = static_cast<int32_t>(W) - static_cast<int32_t>(kW) + padding;
+    const int32_t wo_int_hi = wo_int_num >= 0 ? wo_int_num / stride : -1;
 
     for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
         const uint32_t t0 = m_tile_start + m_block * block_m_tiles;
@@ -275,11 +439,16 @@ void kernel_main() {
             fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * tap_bytes);
         }
         noc_async_read_barrier();
+        set_local_read_state();
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
         for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
             for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
                 const uint32_t k0 = k_block * kblock_elems;
+                KBlockSegments seg;
+                build_segments(k0, seg);
+                // K padding inside the block's columns: rows need zero runs -> general path only.
+                const bool fast_ok = !kblock_has_k_padding(k0);
                 for (uint32_t t = 0; t < block_m_tiles; ++t) {
                     const uint32_t tile = t0 + t;
                     cb_reserve_back(cb_act_rm, block_k_tiles);
@@ -287,33 +456,32 @@ void kernel_main() {
                     if (tile >= t1) {
                         // Ragged block tail: tile-row past the core's range.
                         zero_run(zeros_noc, dst_base, TILE_DIM * im2col_row_bytes);
+                    } else if constexpr (k_exchange) {
+                        gather_tile_row(
+                            zeros_noc,
+                            shard_src,
+                            seg,
+                            fast_ok,
+                            k0,
+                            tile * TILE_DIM,
+                            dst_base,
+                            stride,
+                            padding,
+                            wo_int_lo,
+                            wo_int_hi);
                     } else {
-                        uint32_t pix = tile * TILE_DIM;
-                        uint32_t n = pix / hw_out;
-                        uint32_t rem = pix - n * hw_out;
-                        uint32_t ho = rem / W_out;
-                        uint32_t wo = rem - ho * W_out;
-                        for (uint32_t r = 0; r < TILE_DIM; ++r, ++pix) {
-                            const uint32_t dst = dst_base + r * im2col_row_bytes;
-                            if (pix >= M) {
-                                zero_run(zeros_noc, dst, im2col_row_bytes);
-                                continue;
-                            }
-                            const int32_t h_base = static_cast<int32_t>(ho) * stride - padding;
-                            const int32_t w_base = static_cast<int32_t>(wo) * stride - padding;
-                            if constexpr (k_exchange) {
-                                gather_row(zeros_noc, shard_src, n, h_base, w_base, k0, dst);
-                            } else {
-                                gather_row(zeros_noc, window_src, n, h_base, w_base, k0, dst);
-                            }
-                            if (++wo == W_out) {
-                                wo = 0;
-                                if (++ho == H_out) {
-                                    ho = 0;
-                                    ++n;
-                                }
-                            }
-                        }
+                        gather_tile_row(
+                            zeros_noc,
+                            window_src,
+                            seg,
+                            fast_ok,
+                            k0,
+                            tile * TILE_DIM,
+                            dst_base,
+                            stride,
+                            padding,
+                            wo_int_lo,
+                            wo_int_hi);
                     }
                     noc_async_read_barrier();
                     cb_push_back(cb_act_rm, block_k_tiles);

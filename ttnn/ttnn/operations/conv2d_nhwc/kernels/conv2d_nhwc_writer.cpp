@@ -10,7 +10,7 @@
 //                          >= N_t (the R4/R5 slice padding, technique 5) are zero-filled.
 //                          R4 with weight_mcast: only the grid-row-0 core of each column reads
 //                          DRAM and multicasts the K-block down its column (one read per column).
-//   act_exchange (R4/R5) : per K-block j, the owner of slice j / kblocks_per_slice multicasts its
+//   act_exchange (R4/R5) : per K-block j, the owner of slice j % num_slices multicasts its
 //                          tilized cb_act_send block into cb_act_tiles of every core in its group
 //                          (grid row / all WIDTH cores, itself included); the others receive it.
 //                          One rotating-sender multicast + handshake per K-block (McastArgs).
@@ -58,6 +58,16 @@ constexpr auto weight_channel = dataflow_kernel_lib::McastArgs<
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t out_row_bytes = block_n_tiles * TILE_DIM * elem_bytes;
 constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
+// R4/R5 K order interleaves the slices: K-block j is own K-block j / num_slices of slice
+// j % num_slices; its weight rows start at slice * slice_k_tiles + (j / num_slices) * bk
+// (prepared K order stays [slice][kh][kw x slice_width]). R0 / one slice: rows j * bk.
+constexpr uint32_t num_slices = act_mcast ? num_k_blocks / kblocks_per_slice : 1;
+constexpr uint32_t slice_k_tiles = kblocks_per_slice * block_k_tiles;
+FORCE_INLINE uint32_t kblock_owner(uint32_t k_block) { return k_block % num_slices; }
+FORCE_INLINE uint32_t kblock_first_row(uint32_t k_block) {
+    return act_mcast ? kblock_owner(k_block) * slice_k_tiles + (k_block / num_slices) * block_k_tiles
+                     : k_block * block_k_tiles;
+}
 
 FORCE_INLINE void zero_fill(uint64_t zeros_noc, uint32_t dst, uint32_t bytes) {
     while (bytes > 0) {
@@ -98,7 +108,7 @@ void kernel_main() {
             for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
                 for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
                     cb_reserve_back(cb_act_tiles, act_block_tiles);
-                    act_receiver->receive(k_block / kblocks_per_slice);
+                    act_receiver->receive(kblock_owner(k_block));
                     cb_push_back(cb_act_tiles, act_block_tiles);
                     cb_wait_front(cb_act_tiles, act_block_tiles);
                     cb_pop_front(cb_act_tiles, act_block_tiles);
@@ -139,7 +149,7 @@ void kernel_main() {
                 const uint32_t weight_slot = get_write_ptr(cb_weight_tiles);  // lockstep across the column
                 if (reads_weights) {
                     uint32_t dst = weight_slot;
-                    uint32_t row_page = k_block * block_k_tiles * N_t + n0;
+                    uint32_t row_page = kblock_first_row(k_block) * N_t + n0;
                     for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
                         for (uint32_t j = 0; j < block_n_tiles; ++j) {
                             if (n0 + j < N_t) {
@@ -162,7 +172,7 @@ void kernel_main() {
 
                 // ---- act_exchange: K-block k_block's in0, from its slice owner ----
                 if constexpr (act_mcast) {
-                    const uint32_t owner = k_block / kblocks_per_slice;
+                    const uint32_t owner = kblock_owner(k_block);
                     cb_reserve_back(cb_act_tiles, act_block_tiles);
                     const uint32_t landing = get_write_ptr(cb_act_tiles);  // identical on every group core
                     if (owner == my_slice) {

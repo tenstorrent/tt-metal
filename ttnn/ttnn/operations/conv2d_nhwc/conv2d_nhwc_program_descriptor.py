@@ -44,12 +44,17 @@ def l1_cap_bytes():
 ACT_RM_DEPTH = 2  # cb_act_rm depth, in (1 tile-row x bk) quanta
 WEIGHT_DEPTH = 2  # cb_weight_tiles depth, in (bk x bn) K-blocks
 OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
-ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast)
+ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast);
+# >= kblocks_per_slice tilizes the whole own slice at m-block start (the former own-slice prefetch).
 ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (double-buffered multicast)
-# R4/R5: tilize the whole own slice per m-block up front (send depth = slice K-blocks) so all
-# owners gather concurrently; taken only when it fits at the whole-shard block (28x28x256 BLOCK
-# fp32: 80.1 -> 77.2 us).
-OWN_PREFETCH = True
+# R4/R5 cb_act_rm depth in whole own K-blocks (bm tile-rows x bk): the reader gathers the next own
+# K-block while the row multicasts the other S-1 slices' blocks (K order interleaves the slices),
+# so the gather leaves the compute critical path. Never below ACT_RM_DEPTH tile-rows.
+ACT_RM_KBLOCKS = 1
+# R4/R5 preferred CB footprint target (perf lamp L5). The shard-backed input / output CBs are
+# extra (they are the tensors), so this sits well under CB_BUDGET_BYTES: SDXL L1 3x3 BLOCK must
+# stay under production's 618,992 B per-core L1 peak including both shards and L1_SMALL.
+SHARDED_CB_BUDGET_BYTES = 448 * 1024
 WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
@@ -320,6 +325,7 @@ def select_blocking(
         "block_n_tiles": bn,
         "num_k_blocks": K_t // bk,
         "num_n_blocks": core_n_tiles // bn,
+        "act_rm_rows": ACT_RM_DEPTH,
         "window_sticks_max": window_sticks_max,
         "out_subblock_h": sb_h,
         "out_subblock_w": sb_w,
@@ -420,14 +426,17 @@ def select_blocking_sharded(
     # S == 1: the core owns all of K — no exchange; compute tilizes straight into in0 (as R0).
     act_mcast = S > 1
 
-    def send_depth(bk, prefetch):
-        return slice_k_tiles // bk if prefetch else ACT_SEND_DEPTH
+    def send_depth(bk):
+        return min(ACT_SEND_DEPTH, slice_k_tiles // bk)
 
-    def footprint(bm, bk, halo, prefetch=False):
+    def rm_rows(bm):
+        return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm) if act_mcast else ACT_RM_DEPTH
+
+    def footprint(bm, bk, halo):
         return (
             max(halo, 1) * tap_width * elem_bytes
-            + ACT_RM_DEPTH * bk * T
-            + (send_depth(bk, prefetch) * bm * bk * T if act_mcast else 0)
+            + rm_rows(bm) * bk * T
+            + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
             + WEIGHT_DEPTH * bk * nt_s * T_w
             + bm * nt_s * T_acc
@@ -437,25 +446,20 @@ def select_blocking_sharded(
 
     k_divs_desc = sorted(_divisors(slice_k_tiles), reverse=True)
 
-    def walk(budget, prefetch=False):
-        # Prefetch is taken only at the whole-shard block: shrinking bm to make room for it
-        # re-streams the weights per m-block (measured 3.7x slower on SDXL L1 3x3, fp32).
-        bms = [core_m_tiles] if prefetch else sorted(_divisors(core_m_tiles), reverse=True)
-        for bm in bms:
+    def walk(budget):
+        # Whole-shard bm first (shrinking bm re-streams the weights per m-block), then the
+        # largest bk: every K-block is one multicast handshake + one partials pass (technique 8).
+        for bm in sorted(_divisors(core_m_tiles), reverse=True):
             halo = halo_max(bm)
-            bk = next((d for d in k_divs_desc if footprint(bm, d, halo, prefetch) <= budget), None)
+            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget), None)
             if bk is not None:
-                return bm, bk, halo, prefetch
+                return bm, bk, halo
         return None
 
-    choice = (
-        (OWN_PREFETCH and act_mcast and walk(CB_BUDGET_BYTES, prefetch=True))
-        or walk(CB_BUDGET_BYTES)
-        or walk(l1_cap_bytes)
-    )
+    choice = walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
     if not choice:
         raise UnsupportedAxisValue("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
-    bm, bk, halo, own_prefetch = choice
+    bm, bk, halo = choice
     bn = nt_s
     sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
     sb_h = max(d for d in _divisors(bm) if d * sb_w <= dst_tiles)
@@ -464,8 +468,8 @@ def select_blocking_sharded(
         **geo,
         "k_exchange": True,
         "act_mcast": act_mcast,
-        "own_prefetch": own_prefetch,
-        "act_send_depth": send_depth(bk, own_prefetch),
+        "act_send_depth": send_depth(bk),
+        "act_rm_rows": rm_rows(bm),
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
         "weight_mcast": WEIGHT_MCAST
         and memory_layout == _ML.BLOCK_SHARDED
@@ -512,7 +516,7 @@ def select_blocking_sharded(
         "T": T,
         "T_w": T_w,
         "T_acc": T_acc,
-        "footprint": footprint(bm, bk, halo, own_prefetch),
+        "footprint": footprint(bm, bk, halo),
     }
 
 
@@ -623,7 +627,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     cbs = [
         # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
         _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
-        _cb(CB_ACT_RM, act_dtype, p["T"], ACT_RM_DEPTH * bk, cores),
+        _cb(CB_ACT_RM, act_dtype, p["T"], p["act_rm_rows"] * bk, cores),
         _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], WEIGHT_DEPTH * bk * bn, cores),
         # Multicast landing zone: same address on every group core (incl. sinks).
         _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk, mcast_cores),
@@ -741,7 +745,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         CB_OUT_SHARD,
         1 if p.get("out_tail", False) else 0,
         1 if act_mcast else 0,
-        1 if p.get("own_prefetch", False) else 0,
+        p.get("act_send_depth", 1),
         1 if p["activation"] == "relu" else 0,
     ]
 

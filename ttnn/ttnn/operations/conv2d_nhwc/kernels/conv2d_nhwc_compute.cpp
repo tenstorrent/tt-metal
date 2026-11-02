@@ -50,9 +50,9 @@ constexpr uint32_t kblocks_per_slice = get_compile_time_arg_val(18);
 constexpr uint32_t cb_out_shard = get_compile_time_arg_val(19);
 constexpr bool out_tail = get_compile_time_arg_val(20) != 0;
 constexpr bool act_mcast = get_compile_time_arg_val(21) != 0;  // R4/R5 with > 1 channel slice
-// R4/R5: tilize ALL own-slice K-blocks at the m-block's first K-block (cb_act_send holds the
-// whole own slice), so every core's gather runs concurrently instead of in owner turn order.
-constexpr bool own_prefetch = get_compile_time_arg_val(22) != 0;
+// R4/R5: cb_act_send depth in own K-blocks. The owner tilizes own block kb right after own block
+// kb - act_send_depth was multicast; >= kblocks_per_slice tilizes the whole own slice up front.
+constexpr uint32_t act_send_depth = get_compile_time_arg_val(22);
 // Fused ReLU (technique 4): packer ReLU on the final output pack only — the bias pack, or the
 // untilize pack when there is no bias — and cleared right after, so the next block's tilize
 // and partial (L1-accumulated) packs never see it.
@@ -61,34 +61,38 @@ constexpr bool fuse_relu = get_compile_time_arg_val(23) != 0;
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
 constexpr uint32_t block_out_tiles = block_m_tiles * block_n_tiles;
+// R4/R5 K order interleaves the slices: K-block j belongs to slice j % num_slices and is that
+// slice's own K-block j / num_slices (the writer maps weight rows the same way).
+constexpr uint32_t num_slices = num_k_blocks / kblocks_per_slice;
 
 using namespace compute_kernel_lib;
 
 // tilize_kblock: bm tile-rows x bk tiles of RM im2col -> tiles.
 //   R0:    this K-block's in0 (cb_act_tiles).
-//   R4/R5 (act_mcast): K-block j belongs to slice j / kblocks_per_slice; the owner tilizes it
-//          into cb_act_send during K-block j-1 (block 0 during block 0). One slice: as R0.
+//   R4/R5 (act_mcast): own blocks are j = kb * num_slices + my_slice. Own blocks [0, depth) are
+//          tilized into cb_act_send at block 0; own block kb + depth right after own block kb was
+//          multicast (block kb * num_slices + my_slice + 1), so the owner's tilize (and the
+//          reader's gather feeding it) overlaps the other slices' turns. One slice: as R0.
 struct TilizeKBlock {
     uint32_t my_slice;
-    ALWI void operator()(uint32_t block, uint32_t num_blocks, bool) const {
+    ALWI void tilize_own() const {
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        tilize<block_k_tiles, cb_act_rm, cb_act_send>(block_m_tiles);
+    }
+    ALWI void operator()(uint32_t block, uint32_t, bool) const {
         if constexpr (!act_mcast) {
             PACK((llk_pack_reconfig_l1_acc(0)));
             tilize<block_k_tiles, cb_act_rm, cb_act_tiles>(block_m_tiles);
-        } else if constexpr (own_prefetch) {
-            if (block == 0) {
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                for (uint32_t b = 0; b < kblocks_per_slice; ++b) {
-                    tilize<block_k_tiles, cb_act_rm, cb_act_send>(block_m_tiles);
-                }
-            }
         } else {
-            if (block == 0 && my_slice == 0) {
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                tilize<block_k_tiles, cb_act_rm, cb_act_send>(block_m_tiles);
-            }
-            if (block + 1 < num_blocks && (block + 1) / kblocks_per_slice == my_slice) {
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                tilize<block_k_tiles, cb_act_rm, cb_act_send>(block_m_tiles);
+            constexpr uint32_t first = act_send_depth < kblocks_per_slice ? act_send_depth : kblocks_per_slice;
+            if (block == 0) {
+                for (uint32_t kb = 0; kb < first; ++kb) {
+                    tilize_own();
+                }
+            } else if (block > my_slice && (block - my_slice - 1) % num_slices == 0) {
+                if ((block - my_slice - 1) / num_slices + act_send_depth < kblocks_per_slice) {
+                    tilize_own();
+                }
             }
         }
     }
