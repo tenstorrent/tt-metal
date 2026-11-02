@@ -25,13 +25,16 @@ TTMOE = "ttmoe"
 _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
 
 # L1_SMALL a mesh needs for the block's persistent words + packed semaphores (4608 B measured on GLM-5.3, 5376 B on
-# Kimi-K3) on top of the model's own L1_SMALL users.
+# Kimi-K3 before the words were packed) on top of the model's own L1_SMALL users.
 MOE_BLOCK_L1_SMALL = 5888
-# Kimi-K3: exactly what the block needs on top of the model (5376 B measured in its L24 tests) + 32 B. Not more: L1_SMALL
-# is carved from the top of L1, and MLA's chunked attention (ring_mla) puts its static CBs up to a fixed L1 ceiling -
-# at 5888 they reached the model's top-most L1 buffer (a clash 448 B deep: the ceiling is L1_SMALL 5440). TODO: pack
-# the block's words of disjoint core sets into one range (its footprint is lockstep: every words tensor on every core).
-_MOE_BLOCK_L1_SMALL_BY_MODEL = {"KimiK3Config": 5408}
+# Kimi-K3: the block's persistent words are packed into one L1_SMALL slab (MoEBlockConfig.words_slab_bytes, 2048 B a
+# core; the 18 word sets of a 5120-token chunk use 1904 B of it - their per-core maximum - where one tensor a set took
+# their 4256 B sum on every core). Measured in the K3 L24 chunked test (torus XY, CI env): the model's own L1_SMALL 832 B
+# before the block, 2880 B with it -> 2880 + 64 B margin. L1_SMALL is carved from the top of L1, and MLA's chunked
+# attention (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the
+# SC4 DSpark runner, 5888 by 448 B). KimiK3Config.L1_SMALL_SIZE (4096, inherited, not measured) still floors the mesh
+# open (moe_block_mesh_params takes the max).
+_MOE_BLOCK_L1_SMALL_BY_MODEL = {"KimiK3Config": 2944}
 
 
 def moe_block_l1_small(model_cfg) -> int:
