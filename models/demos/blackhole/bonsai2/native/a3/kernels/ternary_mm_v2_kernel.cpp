@@ -124,10 +124,15 @@ template <uint32_t G0, uint32_t N, uint32_t ACC, uint32_t SBASE, uint32_t TI>
 struct Groups {
     static inline void run() {
         Groups<G0, N - 1, ACC, SBASE, TI>::run();
+        constexpr uint32_t dbg = get_named_compile_time_arg_val("tm_dbg");  // timing only: 1 no SFPU, 2 no matmul
         cb_wait_front(cb_in1, 32);
-        custom_mm_block<CustomMmDestLayout::Default, false>(cb_in0, cb_in1, (G0 + N - 1) * 32, 0, 0, 32);
+        if constexpr (!(dbg & 2)) {
+            custom_mm_block<CustomMmDestLayout::Default, false>(cb_in0, cb_in1, (G0 + N - 1) * 32, 0, 0, 32);
+        }
         cb_pop_front(cb_in1, 32);
-        MATH((sfpu_section([] { scale_acc<G0 + N - 1, ACC, SBASE, TI>(); })));
+        if constexpr (!(dbg & 1)) {
+            MATH((sfpu_section([] { scale_acc<G0 + N - 1, ACC, SBASE, TI>(); })));
+        }
     }
 };
 template <uint32_t G0, uint32_t ACC, uint32_t SBASE, uint32_t TI>

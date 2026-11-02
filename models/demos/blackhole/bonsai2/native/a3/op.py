@@ -424,6 +424,8 @@ def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: 
 
 def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0, out2=None, n_split=0):
     """n_real: output tiles past this index are padding columns of w and are not written."""
+    import os
+
     device = x8.device()
     k = k or x8.memory_config().shard_spec.shape[1]  # x8 may be wider (one buffer serves every K)
     kt = k // 32
@@ -470,7 +472,8 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0, out2=None, n_split=0):
         seen.append((core, bank))
         vcs.append((core, vc))
     common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu)), ("tm_is_active_core", 1),
-              ("tm_shared_exp", int(packed)), ("tm_tail_t", tail_t), ("tm_s16", int(s16))]
+              ("tm_shared_exp", int(packed)), ("tm_tail_t", tail_t), ("tm_s16", int(s16)),
+              ("tm_dbg", int(os.environ.get("BONSAI_A3_DBG", "0")))]  # timing only, see the kernel
     modes = [ttnn.UnpackToDestMode.Default] * 64
     if not s16:  # fp16 scales go through srcA (unpack-to-dest takes 32-bit inputs only); fp32 DST either way
         modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
