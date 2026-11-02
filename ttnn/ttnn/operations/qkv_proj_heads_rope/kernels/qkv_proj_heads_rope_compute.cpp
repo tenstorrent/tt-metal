@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// qkv_proj_heads_rope compute: per block, project_block (matmul_block over K-blocks 0..n-2 of K' = hidden +
-// bias tile into Float32 L1-accumulated partials), then the last K-block one row at a time, each row's
+// qkv_proj_heads_rope compute: per block, seed the Float32 partials with the row-broadcast bias, project_block
+// (matmul_block over K-blocks 0..n-2 of K' = hidden, L1-accumulating onto the seed from K-block 0), then the
+// last K-block one row at a time, each row's
 // epilogue following it: rotate_block on q/k cores (two DEST-accumulated FPU muls per output tile, raw
 // whole-tile phase-major ELWMUL from tile_src_mul.hpp: 1.95x over mul_tiles, bit-identical),
 // convert_block (copy + pack to bf16) on v cores. Output rows alternate between cb_out_tiles (writer, NoC1)
@@ -15,6 +16,11 @@
 // between subblock packs. The matmul of row r + LAST_K_LEAD runs before the epilogue of row r, so the
 // epilogue's unpack does not wait on that row's final pack (lead 0: 102.1, 1: 100.5, 2: 100.3 us).
 //
+// Perf 1 (measured, 8x512 with K' = 24 / k_block 4 vs the 25th bias K tile: -2.3%): the bias seed is
+// unary_bcast<ROW> + pack_tile, each DEST tile packed to all block_m rows - one unpack per bias tile,
+// block_m packs; no eltwise_chain element packs one DEST tile to several CB tiles. It runs while math waits
+// for the first x / W K-block.
+//
 // Raw calls: pack_reconfig_l1_acc(0/1) around the per-row last K-block - no helper exposes the L1-acc
 // toggle; the epilogue setup (reconfig + mul_init + tile_src_mul_init / copy_init) once per row (the last-K
 // matmul init between rows reprograms unpack and math), which the convert chain's InitReconfigOwner::Caller
@@ -25,6 +31,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
@@ -51,6 +58,7 @@ void kernel_main() {
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(14);
     // DEST tiles per acquire (fp32 / sync mode), as the host sized the matmul subblock.
     constexpr uint32_t dest_tiles = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_bias = get_compile_time_arg_val(16);
 
     const uint32_t core_rows = get_arg_val<uint32_t>(0);
     const bool is_rotary = get_arg_val<uint32_t>(1) != 0;
@@ -77,6 +85,14 @@ void kernel_main() {
     // Last K-block runs one row at a time: widest divisor of n_tiles that fits the host's DEST subblock.
     constexpr uint32_t row_sb_w = [] {
         uint32_t w = sb_h * sb_w < n_tiles ? sb_h * sb_w : n_tiles;
+        while (n_tiles % w) {
+            --w;
+        }
+        return w;
+    }();
+    // Bias seed: widest divisor of n_tiles that fits one DEST acquire.
+    constexpr uint32_t seed_w = [] {
+        uint32_t w = dest_tiles < n_tiles ? dest_tiles : n_tiles;
         while (n_tiles % w) {
             --w;
         }
@@ -131,6 +147,28 @@ void kernel_main() {
         } else {
             eltwise_chain<InitReconfigOwner::Caller>(
                 IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
+        }
+    };
+
+    // Every tile of the reserved partials block = the row-broadcast bias of its column (bf16 -> fp32 exact).
+    auto seed_partials = [&]() {
+        reconfig_data_format_srca(cb_bias);
+        unary_bcast_init<BroadcastType::ROW>(cb_bias);
+        pack_reconfig_data_format(cb_matmul_partials);
+        pack_reconfig_l1_acc(0);
+        for (uint32_t col = 0; col < n_tiles; col += seed_w) {
+            tile_regs_acquire();
+            for (uint32_t c = 0; c < seed_w; ++c) {
+                unary_bcast<BroadcastType::ROW>(cb_bias, col + c, c);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t row = 0; row < block_m; ++row) {
+                for (uint32_t c = 0; c < seed_w; ++c) {
+                    pack_tile<true>(c, cb_matmul_partials, row * n_tiles + col + c);
+                }
+            }
+            tile_regs_release();
         }
     };
 
@@ -193,12 +231,20 @@ void kernel_main() {
         epilogue_row(row, cb_out_tiles, ConvertPack{out_dfb});
     };
 
+    {
+        MaybeDeviceZoneScope("compute_bias_wait");
+        cb_wait_front(cb_bias, n_tiles);
+    }
     for (uint32_t block_row = 0; block_row < core_rows; block_row += block_m) {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
 
         {
             MaybeDeviceZoneScope("compute_partials_reserve");
             partials.reserve_back(partials_tiles);
+        }
+        {
+            MaybeDeviceZoneScope("compute_bias_seed");
+            seed_partials();
         }
         {
             // Occupancy: matmul_block waits per K-block on x / W inside the helper.
@@ -218,6 +264,7 @@ void kernel_main() {
                 NoKBlockInnerDimFn,
                 NoIn0Source,
                 NoIn1BaseOffset,
+                true,
                 true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
         }
 
@@ -254,4 +301,5 @@ void kernel_main() {
             cb_pop_front(cb_rotary_table, table_tiles);
         }
     }
+    cb_pop_front(cb_bias, n_tiles);
 }

@@ -293,6 +293,9 @@ struct NoIn1BaseOffset {
  *   caller_owns_pack_target  caller does one reserve before + one push after; the helper
  *                            skips its own reserve/push/drain. Pairs with TileRowMajor +
  *                            packer_l1_acc + Interm.
+ *   seeded_pack_target  K-block 0 packs with L1 accumulation ON, adding onto what the caller
+ *                       already wrote into the reserved pack target (e.g. a bias seed); default
+ *                       off = K-block 0 overwrites. Requires caller_owns_pack_target.
  *   Activation         fuse an SFPU activation on the PACKER thread at the last-block pack
  *                      (default none); independent of PostComputeFn (MATH thread) and
  *                      allowed with Interm. Build from the sfpu_activation_helpers.hpp
@@ -352,6 +355,7 @@ template <
     typename In0SourceFn = NoIn0Source,
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     bool caller_owns_pack_target = false,
+    bool seeded_pack_target = false,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
     typename Buf = ::CircularBuffer>

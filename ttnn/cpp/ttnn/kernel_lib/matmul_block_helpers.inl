@@ -84,6 +84,7 @@ template <
     typename In0SourceFn,
     typename In1BaseOffsetFn,
     bool caller_owns_pack_target,
+    bool seeded_pack_target,
     typename Activation,
     matmul_config::DataFormatReconfig reconfig,
     typename Buf>
@@ -137,6 +138,11 @@ ALWI void matmul_block(
         caller_owns_pack_target_supported(
             caller_owns_pack_target, tile_order == OutputCBLayout::TileRowMajor, packer_l1_acc, pack_last_to_interm),
         "caller_owns_pack_target requires TileRowMajor + packer_l1_acc + last_block_target == Interm");
+    static_assert(
+        !seeded_pack_target || caller_owns_pack_target,
+        "seeded_pack_target accumulates onto a caller-written target: requires caller_owns_pack_target");
+    // L1-acc for K-block 0: off overwrites the target, on adds onto the caller's seed.
+    constexpr uint32_t first_block_l1_acc = seeded_pack_target ? 1 : 0;
 
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
@@ -410,7 +416,7 @@ ALWI void matmul_block(
                         if constexpr (packer_l1_acc) {
                             if constexpr (pack_last_to_interm) {
                                 // Interm target: L1 accumulates across all blocks in the same region.
-                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? first_block_l1_acc : 1)));
                             } else {
                                 // Out target: the last block's partial was reloaded into DST, so the
                                 // pack must NOT re-accumulate.
@@ -463,7 +469,7 @@ ALWI void matmul_block(
                             PACK((pack_reconfig_data_format(interm_cb_id)));
                         }
                         if constexpr (packer_l1_acc) {
-                            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                            PACK((llk_pack_reconfig_l1_acc(block == 0 ? first_block_l1_acc : 1)));
                         }
 
                         if constexpr (spill_row_grouped) {

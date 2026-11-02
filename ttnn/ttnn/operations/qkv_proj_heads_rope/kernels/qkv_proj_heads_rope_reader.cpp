@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// qkv_proj_heads_rope reader (NCRISC): x K-blocks (+ the synthesized ones-column bias tile) into
-// cb_activation_block, then per valid row the rotary table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
+// qkv_proj_heads_rope reader (NCRISC): tile row 0 of the core's bias tiles into cb_bias once, x K-blocks
+// into cb_activation_block, then per valid row the rotary table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
 // R3: one core of the M-group reads each x K-block and multicasts it into the same cb_activation_block
 // slot on the rest of the group (sender choice is host-side; should_send() covers fixed and rotating).
 // Table rows are read in chunks between x rounds (cb_rotary_table holds one row per distinct sequence
@@ -10,7 +10,7 @@
 // K-loop.
 // After the K-loop the reader stores every out_write_nocs-th output row from cb_out_tiles_noc0 on NoC0
 // (rows 1, 1 + out_write_nocs, ...); the writer stores the rest on NoC1.
-// The ones tile and the sin sign flip are tile-content transforms no dataflow helper provides.
+// The sin sign flip is a tile-content transform no dataflow helper provides.
 
 #include <cstdint>
 
@@ -22,18 +22,6 @@
 #include "qkv_proj_heads_rope_store.hpp"
 
 namespace {
-
-constexpr uint32_t FACE_ELEMS = 16 * 16;
-constexpr uint16_t BF16_ONE = 0x3F80;
-
-// Column 0 = 1.0 in all 32 rows (faces 0 and 2); the rest of the tile is pre-zeroed.
-FORCE_INLINE void write_ones_column(uint32_t tile_addr) {
-    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr);
-    for (uint32_t row = 0; row < 16; ++row) {
-        tile[row * 16] = BF16_ONE;
-        tile[2 * FACE_ELEMS + row * 16] = BF16_ONE;
-    }
-}
 
 template <uint32_t tile_bytes>
 FORCE_INLINE void negate_bf16_tile(uint32_t tile_addr) {
@@ -73,12 +61,14 @@ void kernel_main() {
     constexpr uint32_t n_tiles = get_compile_time_arg_val(11);
     constexpr uint32_t num_heads = get_compile_time_arg_val(12);
     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(13);
-    constexpr auto x_args = TensorAccessorArgs<14>();
+    constexpr uint32_t cb_bias = get_compile_time_arg_val(14);
+    constexpr auto x_args = TensorAccessorArgs<15>();
     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto q_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto bias_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t cos_addr = get_arg_val<uint32_t>(1);
@@ -91,11 +81,13 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(8);
     const uint32_t third = get_arg_val<uint32_t>(9);
     const uint32_t first_head = get_arg_val<uint32_t>(10);
+    const uint32_t bias_addr = get_arg_val<uint32_t>(11);
+    const uint32_t first_col_tile = get_arg_val<uint32_t>(12);
     constexpr auto x_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("xmc_ct_offset"), get_named_compile_time_arg_val("xmc_rt_offset")>();
 
-    // K' = hidden tiles + the bias K tile.
-    static_assert(num_k_blocks * k_block == hidden_tiles + 1);
+    // K' = hidden tiles (the bias is seeded into the partials, not a K tile).
+    static_assert(num_k_blocks * k_block == hidden_tiles);
     constexpr uint32_t act_block_tiles = block_m * k_block;
     // Table row = [cos_lo, -sin_lo, sin_hi, cos_hi]: the rotate_half tile swap needs D/2 == one tile.
     static_assert(tiles_per_head == 2);
@@ -108,27 +100,39 @@ void kernel_main() {
     const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
 
+    {
+        // Once per core; compute keeps the tiles fronted for every block. The seed is a ROW broadcast, so
+        // only tile row 0 is consumed: one 64 B DRAM-aligned span from face 0 and one from face 1 per tile
+        // (rows 2..15 of the faces stay stale and are never read). Full tiles from all 108 cores at t = 0
+        // burst DRAM ahead of W round 0 (measured: W round 0's multicast moved 4.0 -> 11.6 us). On NoC0,
+        // so the writer's W reads never wait on it.
+        MaybeDeviceZoneScope("reader_bias");
+        const auto bias_accessor = TensorAccessor(bias_args, bias_addr, tile_bytes);
+        constexpr uint32_t face_bytes = 16 * 16 * 2;
+        constexpr uint32_t span_bytes = 64;
+        cb_reserve_back(cb_bias, n_tiles);
+        const uint32_t bias_l1 = get_write_ptr(cb_bias);
+        for (uint32_t n = 0; n < n_tiles; ++n) {
+            const uint64_t src = bias_accessor.get_noc_addr(first_col_tile + n);
+            const uint32_t dst = bias_l1 + n * tile_bytes;
+            noc_async_read(src, dst, span_bytes);
+            noc_async_read(src + face_bytes, dst + face_bytes, span_bytes);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_bias, n_tiles);
+    }
+
     Noc noc;
-    CircularBuffer activation(cb_activation_block);
     auto x_sender = x_mcast.sender(noc);
     auto x_receiver = x_mcast.receiver(noc);
 
-    // Sender side of one round: fill this core's slot (x tiles + ones column), then multicast it.
+    // Sender side of one round: fill this core's slot, then multicast it.
     auto read_x_block = [&](uint32_t k_first, uint32_t rows, uint32_t first_row) {
-        const bool has_ones = k_first + k_block > hidden_tiles;
-        const uint32_t ones_col = hidden_tiles - k_first;
-        const uint32_t x_cols = has_ones ? ones_col : k_block;
         const uint32_t block_addr = get_write_ptr(cb_activation_block);
-        if (has_ones) {
-            for (uint32_t row = 0; row < rows; ++row) {
-                noc.async_write_zeros(
-                    activation, tile_bytes, {.offset_bytes = (row * k_block + ones_col) * tile_bytes});
-            }
-        }
         {
             MaybeDeviceZoneScope("reader_x_read_issue");
             for (uint32_t row = 0; row < rows; ++row) {
-                for (uint32_t col = 0; col < x_cols; ++col) {
+                for (uint32_t col = 0; col < k_block; ++col) {
                     noc_async_read_page(
                         (first_row + row) * hidden_tiles + k_first + col,
                         x_accessor,
@@ -139,12 +143,6 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("reader_x_read_barrier");
             noc_async_read_barrier();
-        }
-        if (has_ones) {
-            noc.write_zeros_l1_barrier();
-            for (uint32_t row = 0; row < rows; ++row) {
-                write_ones_column(block_addr + (row * k_block + ones_col) * tile_bytes);
-            }
         }
         // Valid rows are the leading `rows * k_block` tiles of the slot.
         MaybeDeviceZoneScope("reader_x_mcast_send");
