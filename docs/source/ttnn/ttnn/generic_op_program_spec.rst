@@ -70,8 +70,8 @@ spec only ties the binding to it. In the example, the reader reads tensor parame
 A list of values whose length varies, such as a list of core coordinates, has no named form yet. Pass it as varargs:
 ``KernelAdvancedOptions(num_runtime_varargs=n)`` on the kernel, ``AdvancedKernelRunArgs(runtime_varargs={core: [...]})``
 in its run args, and ``get_vararg(i)`` in the kernel code. Python binds only the advanced options that TT-NN's
-callers use so far: the vararg counts and values, and ``DFBAdvancedOptions.alias_with``, which lets two buffers share
-memory. The others are C++ only.
+callers use so far: the runtime vararg counts and values, and ``DFBAdvancedOptions.alias_with``, which lets two buffers
+share memory. The others, compile-time varargs among them, are C++ only.
 
 Tensors
 *******
@@ -90,23 +90,26 @@ running it.
 
 The cache key is a hash of everything in the ``ProgramSpec`` that changes the compiled program, combined with the
 devices it runs on. ``generic_op`` computes that hash on every call. To skip it, compute it once with
-``ttnn.experimental.compute_program_spec_hash(spec)`` and pass it as ``custom_program_hash`` (a ``MeshProgramSpec``
-takes it as a field). A custom key replaces the spec hash, so give each different program its own; the key still
-includes each kernel's argument names, cores and vararg counts, and the names of the spec's tensor parameters and
-buffers.
+``ttnn.experimental.compute_program_spec_hash(spec)`` and pass it as ``custom_program_hash``. A custom key replaces
+the spec hash, so give each different program its own; the key still includes each kernel's runtime argument names,
+cores and vararg counts, and the names of the spec's tensor parameters and buffers. A ``MeshProgramSpec`` takes it as
+a field, and its one value replaces the hash of every range's spec, so it must stand for all of them.
 
 Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and varargs it declares, each tensor parameter gets a tensor from ``io_tensors`` that matches it, and each DFB size
 override names a buffer of the spec. Whether every core got its values is checked on later calls only when
 ``ttnn.CONFIG.validate_program_args`` is on; with it off, a core that a later call leaves out keeps its previous
 values. A DFB size override in ``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the
-cached program, including calls with an equal spec from other code, until a call changes it.
+cached program, including calls with an equal spec from other code, until a call changes it. ``prepare_generic_op``
+with a program that is already cached applies its run args to it the same way, even if the preparation then fails.
 
 Running on a mesh
 *****************
 
-With a ``ProgramSpec``, ``generic_op`` runs the program on every device that holds the tensors. To run different
-programs on different devices, give a program for each mesh coordinate range. On a 1x2 mesh, for example:
+With a ``ProgramSpec``, ``generic_op`` runs the program on the devices of the tensor in ``io_tensors`` that is on the
+fewest devices, and every other tensor must be on those devices too; usually all the tensors are on the same devices.
+To run different programs on different devices, give a program for each mesh coordinate range. On a 1x2 mesh, for
+example:
 
 .. code-block:: python
 
