@@ -1,40 +1,47 @@
-# DeepSeek-V4.1-Flash on Blackhole Galaxy: getting started
+# DeepSeek-V4.1-Flash on Blackhole Galaxy: getting started (rc4c)
 
 OpenAI-compatible vLLM server on one Blackhole Galaxy (32 chips, 4x8 mesh). Release notes: `RELEASE_NOTES.md`.
 
 ## Docker image
 
+Local build (nothing is pushed yet; the registry name below is a placeholder until the image is published):
+
 ```
-ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
+dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901
+ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:<tag>      # placeholder
 ```
 
-- 22.4 GB on disk (5.7 GB compressed). No weights or caches inside.
-- Offline copy (6.06 GB tar): `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_0655530.tar` (`docker load -i <tar>`).
-- Already loaded in the default docker of hosts .45 and .46.
+- 21.7 GB on disk. No weights or caches inside.
+- Offline copy (5.4 GB tar): `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_rc4c_785f0df9b28.tar` (`docker load -i <tar>`).
+- The image contains the model catalog (`/home/container_app_user/model_specs/model_spec.json`, baked at build time). **No runtime spec file is needed**: the server picks the catalog entry from `--model`, `--tt-device` and `--impl`. (The `assets/runtime_spec_*.json` files are for the previous release and are not used by rc4c.)
 
 ## Configurations
 
-| | Users | Context | Runtime spec (`assets/`) |
+| | Users | Context | Select |
 |---|---|---|---|
-| **B=16** | 16 | 262,144 | `runtime_spec_b16_k5_262144_vision.json` |
-| **B=4** | 4 | 1,048,576 | `runtime_spec_b4_k5_1048576_vision.json` |
+| **B=8** (default entry) | 8 | 1,048,576 | `--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy` (no `--impl`) |
+| **B=16** | 16 | 262,144 | add `--impl deepseek-v41-flash` |
 
-Both: speculative decoding k = 5, image input, prefix caching on, paged prefill on (bf16 KV pool, which APC needs), token budget `max_num_batched_tokens` 16,384 with `long-prefill-token-threshold` 4,096 (B=4). To run without prefix caching pass `--no-enable-prefix-caching` (or `DSV41_APC=0`); `DSV41_PF_PAGED=0` selects the previous prefill. The `assets/` folder has more specs (no images, 131,072 tokens with APC and paged prefill off, `*_apc.json` variants, same settings as the default B=4 specs).
+Both: speculative decoding, image input (up to 250 images per prompt), tool calling / reasoning parser / non-thinking default (`tokenizer-mode deepseek_v41`), structured outputs, prefix caching on a 512-token grid (device block-paged at B=8), paged prefill. The catalog also has vision entries (`deepseek-v41-flash-vlm-b8-1m`, `deepseek-v41-flash-vlm`) that differ only in the model type used by the evaluation workflows. B=4 entries exist in the catalog but were not validated for rc4c. All settings of an entry are in the catalog (`workflows/model_specs/dev/llm.yaml` and `vlm.yaml` of tt-inference-server `2406dcb15`); read them with:
+
+```bash
+docker run --rm --entrypoint cat dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901 /home/container_app_user/model_specs/model_spec.json > model_spec.json
+```
 
 ## Start
 
-Once per host (the host needs the driver, 32 chips in `/dev/tenstorrent`, 1 GiB hugepages at `/dev/hugepages-1G`, Docker; disk: 476 GB checkpoint, 610 GB weight cache, 43 GB kernel cache, caches on a local disk):
+Once per host (driver, 32 chips in `/dev/tenstorrent`, 1 GiB hugepages at `/dev/hugepages-1G`, Docker; the caches on a local disk; the rc4c validation started a server only when `MemAvailable` was at least 300 GB, a limit set by the validation script, not a measured requirement). Disk figures of the previous release (checkpoint 476 GB, weight cache about 610 GB, kernel cache about 43 GB) were not re-measured for rc4c.
 
-The weight cache is keyed by directory only, so each checkpoint needs its own empty `$CACHE` (the server stamps `$CACHE/weights/ckpt_id.json` with the checkpoint id on first use and refuses to start if the stamp names a different checkpoint). The default checkpoint is `DeepSeek-V4.1-Flash-1017`; never point it at a cache built from the earlier `DeepSeek-V4.1-Flash` checkpoint.
+The weight cache is keyed by directory only, so each checkpoint needs its own empty `$CACHE` (the server stamps `$CACHE/weights/ckpt_id.json` with the checkpoint id on first use and refuses to start if the stamp names a different one).
 
 ```bash
 export CKPT=/path/to/deepseek-v41-flash-1017   # checkpoint, read-only
 export CACHE=/path/to/dsv41_cache_1017         # weights/ unified/ kernels/, reused across starts
-export STATE=/path/to/dsv41_state         # scratch dirs the server writes
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
+export STATE=/path/to/dsv41_state              # scratch dirs the server writes
+export IMAGE=dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901   # or the registry name once published
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
-hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT        # 476 GB; a token may be needed
+hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT        # a token may be needed
 
 # vLLM looks the model up in the Hugging Face cache, even offline: give it three small files
 R=$STATE/hf/hub/models--deepseek-ai--DeepSeek-V4.1-Flash
@@ -42,24 +49,7 @@ mkdir -p $R/refs $R/snapshots/local && echo -n local > $R/refs/main
 cp $CKPT/config.json $CKPT/tokenizer.json $CKPT/tokenizer_config.json $R/snapshots/local/
 ```
 
-Get the runtime specs (JSON files). They are inside the image (no checkout needed):
-
-```bash
-C=$(docker create $IMAGE)
-docker cp $C:/home/container_app_user/tt-metal/models/demos/blackhole/deepseek_v41_flash/assets ./assets
-docker rm $C
-```
-
-or from the tt-metal repo, branch `ssinghal/dsv4p1`: `models/demos/blackhole/deepseek_v41_flash/assets/`. The specs use in-container paths (`/ckpt`, `/cache/...`), so they need no editing.
-
-Pick the configuration:
-
-```bash
-export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json     # B=16
-# export SPEC=$PWD/assets/runtime_spec_b4_k5_1048576_vision.json   # B=4
-```
-
-Start the server (the same command for both):
+Start the server. B=8 (default entry):
 
 ```bash
 docker run -d --rm --name dsv41 \
@@ -74,14 +64,16 @@ docker run -d --rm --name dsv41 \
   -v $STATE/cache_root:/home/container_app_user/cache_root \
   -v $STATE/logs:/home/container_app_user/logs \
   -v $STATE/traces:/home/container_app_user/tt-metal/build/profiler/build_wasm/traces \
-  -v $SPEC:/home/container_app_user/model_specs/rtspec.json:ro \
-  -e RUNTIME_MODEL_SPEC_JSON_PATH=/home/container_app_user/model_specs/rtspec.json \
   -e MODEL_WEIGHTS_DIR=/ckpt \
   -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
   -e HOME=/tmp -e USER=$(id -un) -e LOGNAME=$(id -un) \
   $IMAGE \
   --model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy --no-auth
 ```
+
+B=16: the same command with `--impl deepseek-v41-flash` added after `--no-auth`. This is the command the rc4c validation used (`dsv4-logs/rc4c_val/hold_acc.sh`: no runtime spec, no tree or plugin mounts, no environment overrides); the B=16 runs added `--impl deepseek-v41-flash` (`seq34.sh`).
+
+Note: `docker -e DSV41_...` does not override the settings baked into the catalog entry; to change a setting, mount a modified `model_spec.json` over `/home/container_app_user/model_specs/model_spec.json`.
 
 Wait for ready, then test and stop:
 
@@ -98,13 +90,21 @@ docker stop dsv41          # after a crash or kill, reset the board first: tt-sm
 
 Progress: `docker logs -f dsv41` (`built layer N` for the 40 layers, then trace capture, then `/health` returns 200).
 
+## Request features
+
+- `cache_salt` in the request body isolates the prefix cache between tenants (a request with another salt never hits).
+- `usage.prompt_tokens_details.cached_tokens` reports how many prompt tokens came from the prefix cache.
+- Structured outputs: `response_format` (`json_schema`, `json_object`), `tool_choice` required / named with `strict: true`, guided `regex` / `choice` / `grammar`. Streaming requests with `logprobs`, `min_tokens` or `bad_words` are refused with HTTP 400 before the first event.
+- Images: `image_url` content parts, up to 250 per prompt.
+- Thinking is off by default (`default-chat-template-kwargs` in the catalog); a request can override it (`chat_template_kwargs`; not exercised in the rc4c validation files I read).
+
 ## Start-up time
 
-From `docker run` to `/health` 200, with the weight and kernel caches populated:
+From `docker run` to `/health` 200, with the weight and kernel caches populated (rc4c validation, `dsv4-logs/rc4c_val/srv/*/info`):
 
 | Configuration | Time |
 |---|---|
-| B=16 (262,144 tokens) | about 25 minutes |
-| B=4 (1,048,576 tokens) | about 31 minutes |
+| B=8 (1,048,576 tokens) | 1,274-1,635 s (21-27 min) |
+| B=16 (262,144 tokens) | 803-934 s (13-16 min) |
 
-The first start with empty caches takes much longer (60-90 minutes on earlier images, not re-measured); it writes the weight cache (about 610 GB) and the kernel cache (about 43 GB).
+The first start with empty caches takes much longer (not measured for rc4c); it writes the weight cache and the kernel cache.
