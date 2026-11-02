@@ -32,5 +32,6 @@ std::vector<ttnn::Tensor> ttml_add_rmsnorm_fw_rows(
     const ttnn::Tensor& gamma,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    float epsilon);
+    float epsilon,
+    bool delta_transposed);
 }  // namespace ttnn::prim

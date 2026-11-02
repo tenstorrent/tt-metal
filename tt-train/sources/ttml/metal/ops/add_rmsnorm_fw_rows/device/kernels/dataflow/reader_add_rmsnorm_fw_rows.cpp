@@ -18,7 +18,8 @@ constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
 constexpr uint32_t group = 2U;  // tiles per pass-1 group (CBs hold two groups)
 constexpr uint32_t exchange_sem_id = get_compile_time_arg_val(4);
-constexpr auto residual_args = TensorAccessorArgs<5>();
+constexpr uint32_t Ht = get_compile_time_arg_val(5);  // tile rows of the residual: delta^T's tile-row stride
+constexpr auto residual_args = TensorAccessorArgs<6>();
 constexpr auto delta_args = TensorAccessorArgs<residual_args.next_compile_time_args_offset()>();
 constexpr auto gamma_args = TensorAccessorArgs<delta_args.next_compile_time_args_offset()>();
 
@@ -67,7 +68,12 @@ void kernel_main() {
         uint32_t l1_d = get_write_ptr(cb::delta);
         for (uint32_t j = 0; j < n; ++j) {
             noc_async_read_page(page + c + j, residual_acc, l1_r);
+#ifdef DELTA_TRANSPOSED
+            // delta is [C, S]: the residual's tile (r, col) is delta's tile (col, r) (iteration 37)
+            noc_async_read_page((col0 + c + j) * Ht + r, delta_acc, l1_d);
+#else
             noc_async_read_page(page + c + j, delta_acc, l1_d);
+#endif
             l1_r += tile_bytes;
             l1_d += tile_bytes;
         }

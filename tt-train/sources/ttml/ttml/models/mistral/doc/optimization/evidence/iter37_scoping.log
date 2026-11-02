@@ -1,0 +1,8 @@
+=== ccl shape 2026-11-02T11:23:46Z
+token-major (1, 1, 1024, 5120): reduce_scatter 125 us, all_gather 117 us
+transposed  (1, 1, 5120, 1024): reduce_scatter 121 us, all_gather 115 us
+=== matmul double transpose
+current  h^T @ g       : 37 us, max|diff| vs torch 4.029e-03 (rel 2.71e-03)
+proposed h^T @ (g^T)^T : 42 us, max|diff| vs torch 4.029e-03 (rel 2.71e-03)
+both outputs identical: True
+=== done 2026-11-02T11:23:54Z

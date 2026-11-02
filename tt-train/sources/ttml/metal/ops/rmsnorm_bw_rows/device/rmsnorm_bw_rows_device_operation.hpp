@@ -29,13 +29,14 @@ struct RMSNormBackwardRowsDeviceOperation {
 
 namespace ttnn::prim {
 
-ttnn::Tensor ttml_rmsnorm_bw_rows(
+std::vector<ttnn::Tensor> ttml_rmsnorm_bw_rows(
     const ttnn::Tensor& input,
     const ttnn::Tensor& gamma,
     const ttnn::Tensor& rms,
     const ttnn::Tensor& dL_dout,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    const std::optional<ttnn::Tensor>& residual_grad);
+    const std::optional<ttnn::Tensor>& residual_grad,
+    bool transposed_grad);
 
 }  // namespace ttnn::prim

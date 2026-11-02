@@ -17,11 +17,20 @@ void AddRMSNormForwardRowsDeviceOperation::validate_on_program_cache_miss(
     check_device_tensor(tensor_args.gamma, "AddRMSNormForwardRows", "gamma", dram_bf16);
     const auto& xs = tensor_args.residual.logical_shape();
     TT_FATAL(xs.rank() == 4, "AddRMSNormForwardRows: residual must be 4D, got {}", xs);
-    TT_FATAL(
-        tensor_args.delta.logical_shape() == xs,
-        "AddRMSNormForwardRows: delta {} must match residual {}",
-        tensor_args.delta.logical_shape(),
-        xs);
+    if (args.delta_transposed) {
+        const ttnn::Shape delta_t_shape({xs[0], xs[1], xs[3], xs[2]});
+        TT_FATAL(
+            xs[0] * xs[1] == 1 && tensor_args.delta.logical_shape() == delta_t_shape,
+            "AddRMSNormForwardRows: transposed delta {} must be the [1, 1, C, S] transpose of residual {}",
+            tensor_args.delta.logical_shape(),
+            xs);
+    } else {
+        TT_FATAL(
+            tensor_args.delta.logical_shape() == xs,
+            "AddRMSNormForwardRows: delta {} must match residual {}",
+            tensor_args.delta.logical_shape(),
+            xs);
+    }
     TT_FATAL(
         tensor_args.gamma.logical_shape()[-1] == xs[-1] && tensor_args.gamma.logical_shape().volume() == xs[-1],
         "AddRMSNormForwardRows: gamma {} must be [1, 1, 1, C] for residual {}",
@@ -68,6 +77,7 @@ ttsl::hash::hash_t AddRMSNormForwardRowsDeviceOperation::compute_program_hash(
         args.num_slices,
         args.slice_tiles,
         args.epsilon,
+        args.delta_transposed,
         tensor_args.residual.dtype(),
         tensor_args.residual.logical_shape());
 }
@@ -82,10 +92,11 @@ std::vector<ttnn::Tensor> ttml_add_rmsnorm_fw_rows(
     const ttnn::Tensor& gamma,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    float epsilon) {
+    float epsilon,
+    bool delta_transposed) {
     using OperationType = ttml::metal::ops::add_rmsnorm_fw_rows::device::AddRMSNormForwardRowsDeviceOperation;
-    auto attributes =
-        OperationType::operation_attributes_t{.num_slices = num_slices, .slice_tiles = slice_tiles, .epsilon = epsilon};
+    auto attributes = OperationType::operation_attributes_t{
+        .num_slices = num_slices, .slice_tiles = slice_tiles, .epsilon = epsilon, .delta_transposed = delta_transposed};
     auto tensor_args = OperationType::tensor_args_t{.residual = residual, .delta = delta, .gamma = gamma};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }

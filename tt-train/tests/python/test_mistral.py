@@ -723,6 +723,75 @@ def test_mlp_fused_lora_wide_w2():
     rep.done()
 
 
+def test_fused_residual_norm_reads_the_transposed_w2_output():
+    """Iteration 37: the fused w2 (shard width, transposed-orientation forward copy) hands its output transposed
+    (``[out, T]``, ``transposed_output``) to the fused residual norm, which reads it transposed in its kernel and
+    returns that input's gradient transposed; the w2 backward takes the transposed gradient. Sum, normalized
+    output, dx, the residual gradient and every adapter gradient vs torch; the same chain the model runs under
+    ``use_fused_residual_norm`` at TP."""
+    from ttml.models.mistral.fused_residual_norm import AddRMSNormFrozenGamma
+
+    rng = seeded(11)
+    inter = 8192
+    x_np = rand_x(rng)
+    res_np = rand_x(rng)
+    gamma_np = bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
+    w_gu = rand_weight(rng, 2 * inter, HIDDEN)
+    w2 = rand_weight(rng, HIDDEN, inter, std=0.004)
+    dout_np = rand_x(rng, std=0.01)
+    dsum_np = rand_x(rng, std=0.01)
+    shapes = {"w_gate_up": (HIDDEN, 2 * inter), "w2": (inter, HIDDEN)}
+    adapters = {
+        name: (
+            bf16(rng.uniform(-1 / math.sqrt(i), 1 / math.sqrt(i), (1, 1, RANK, i))),
+            bf16(rng.normal(0.0, 0.02, (1, 1, o, RANK))),
+        )
+        for name, (i, o) in shapes.items()
+    }
+    mlp = LlamaMLP(HIDDEN, inter)
+    assign(mlp.w_gate_up.weight.tensor, w_gu)
+    assign(mlp.w2.weight.tensor, w2)
+    lora = LoraModel(mlp, LoraConfig(rank=RANK, alpha=ALPHA, target_modules=[r"w_gate_up$", r"w2$"]))
+    layers = {"w_gate_up": mlp.w_gate_up, "w2": mlp.w2}
+    for name, layer in layers.items():
+        assign(layer.lora_A.tensor, adapters[name][0])
+        assign(layer.lora_B.tensor, adapters[name][1])
+    transpose_frozen_weights(lora)
+    fuse_lora_into_frozen_weights(lora)
+    assert getattr(mlp.w2, "weight_cat_fwd", None) is not None
+    mlp.w2.transposed_output = True  # what use_fused_residual_norm sets on the model
+    x = to_device(x_np, requires_grad=True)
+    residual = to_device(res_np, requires_grad=True)
+    gamma = to_device(gamma_np)
+    y_t = lora(x)
+    assert tuple(int(v) for v in y_t.get_value().shape)[-2:] == (HIDDEN, SEQ), "the w2 output is not transposed"
+    s_dev, out = AddRMSNormFrozenGamma.apply(residual, y_t, gamma, EPS, True)
+    s_dev.set_grad(to_device(dsum_np).get_value())
+    out.set_grad(to_device(dout_np).get_value())
+    out.backward(False)
+
+    s = ALPHA / RANK
+    A = {k: t(v[0][0, 0], True) for k, v in adapters.items()}
+    Bm = {k: t(v[1][0, 0], True) for k, v in adapters.items()}
+    xr, rr = t(x_np, True), t(res_np, True)
+    gu = ref_lora(xr, t(w_gu[0, 0]), A["w_gate_up"], Bm["w_gate_up"], s)
+    gate, up = gu[..., :inter], gu[..., inter:]
+    y = ref_lora(torch.nn.functional.silu(gate) * up, t(w2[0, 0]), A["w2"], Bm["w2"], s)
+    sum_ref = rr + y
+    out_ref = ref_rmsnorm(sum_ref, t(gamma_np))
+    ((out_ref * t(dout_np)).sum() + (sum_ref * t(dsum_np)).sum()).backward()
+
+    rep = Report("fused w2 (transposed output) -> fused residual norm")
+    rep.check("sum", to_host(s_dev), sum_ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("out", to_host(out), out_ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("dx", grad_of(x), xr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.check("dresidual", grad_of(residual), rr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    for name, layer in layers.items():
+        rep.check(f"dA {name}", grad_of(layer.lora_A.tensor)[0, 0], A[name].grad.numpy(), GRAD_PCC, GRAD_REL)
+        rep.check(f"dB {name}", grad_of(layer.lora_B.tensor)[0, 0], Bm[name].grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+
+
 @pytest.mark.parametrize(
     "transposed",
     ["plain", "transposed", "fused"],

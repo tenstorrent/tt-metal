@@ -782,9 +782,11 @@ void py_module(nb::module_& m) {
             nb::arg("dL_dout"),
             nb::arg("compute_dgamma") = true,
             nb::arg("residual_grad") = nb::none(),
+            nb::arg("transposed_grad") = false,
             "RMSNorm backward (ungated) -> [dL_dinput, dL_dgamma or None], every tile-row split over several cores "
             "(two phases: per-slice partial sums, then the row scale and the gradients) instead of one core per "
-            "tile-row. `residual_grad` (input shape) is added to dL_dinput in the kernel.");
+            "tile-row. `residual_grad` (input shape) is added to dL_dinput in the kernel. `transposed_grad` appends "
+            "dL_dinput^T [1, 1, C, S] as a third element (single-phase path only).");
         py_metal.def(
             "add_rmsnorm_fw_allcore",
             &ttml::metal::add_rmsnorm_fw_allcore,
@@ -792,8 +794,10 @@ void py_module(nb::module_& m) {
             nb::arg("delta"),
             nb::arg("gamma"),
             nb::arg("epsilon") = 1e-6F,
+            nb::arg("delta_transposed") = false,
             "Residual add fused with RMSNorm, every tile-row split over several cores: sum = residual + delta, "
-            "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms].");
+            "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms]. `delta_transposed`: delta is the "
+            "[1, 1, C, S] transpose of the residual (single-phase path only).");
         py_metal.def(
             "add_rmsnorm_fw_rows",
             &ttml::metal::add_rmsnorm_fw_rows,
@@ -803,6 +807,7 @@ void py_module(nb::module_& m) {
             nb::arg("num_slices"),
             nb::arg("slice_tiles"),
             nb::arg("epsilon") = 1e-6F,
+            nb::arg("delta_transposed") = false,
             "Single-phase add_rmsnorm_fw_allcore: one (tile-row, slice) item per core, slices resident, the row's "
             "sums of squares exchanged over the NoC -> [sum, out, rms]. Needs rows * num_slices <= cores.");
         py_metal.def(

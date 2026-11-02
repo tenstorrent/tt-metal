@@ -24,6 +24,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/rmsnorm_bw_rows/device/kernels/rmsnorm_bw_rows_cbs.hpp"
 
@@ -153,13 +154,42 @@ void kernel_main() {
 #endif
         tile_regs_commit();
         cb_reserve_back(cb::dx, block);
+#ifdef DX_TRANSPOSED
+        cb_reserve_back(cb::dx_copy, block);
+#endif
         tile_regs_wait();
         pack_reconfig_data_format(cb::dx);
         for (uint32_t i = 0; i < block; ++i) {  // a shorter tail pads the block with unused tiles
             pack_tile(i < n ? i : 0U, cb::dx);
         }
+#ifdef DX_TRANSPOSED
+        for (uint32_t i = 0; i < block; ++i) {  // the same tiles once more: the transpose's source
+            pack_tile(i < n ? i : 0U, cb::dx_copy);
+        }
+#endif
         tile_regs_release();
         cb_push_back(cb::dx, block);
+#ifdef DX_TRANSPOSED
+        // dL_da^T (iteration 37): each bf16 tile back through DEST transposed (exact), packed for the writer's scatter
+        cb_push_back(cb::dx_copy, block);
+        cb_wait_front(cb::dx_copy, block);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb::dx_copy);
+        transpose_init(cb::dx_copy);
+        for (uint32_t i = 0; i < n; ++i) {
+            transpose_tile(cb::dx_copy, i, i);
+        }
+        tile_regs_commit();
+        cb_reserve_back(cb::dx_t, block);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb::dx_t);
+        for (uint32_t i = 0; i < block; ++i) {
+            pack_tile(i < n ? i : 0U, cb::dx_t);
+        }
+        tile_regs_release();
+        cb_push_back(cb::dx_t, block);
+        cb_pop_front(cb::dx_copy, block);
+#endif
 #ifdef ADD_RESIDUAL_GRAD
         cb_pop_front(cb::dres, block);
 #endif

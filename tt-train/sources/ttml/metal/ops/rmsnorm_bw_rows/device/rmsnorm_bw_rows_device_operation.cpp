@@ -40,6 +40,10 @@ void RMSNormBackwardRowsDeviceOperation::validate_on_program_cache_miss(
         xs[-1] % tt::constants::TILE_WIDTH == 0,
         "RMSNormBackwardRows: C must be a multiple of 32 (no column mask), got {}",
         xs[-1]);
+    TT_FATAL(
+        !args.transposed_grad || xs[0] * xs[1] == 1,
+        "RMSNormBackwardRows: the transposed gradient needs a [1, 1, S, C] input, got {}",
+        xs);
     const uint32_t Wt = xs[-1] / tt::constants::TILE_WIDTH;
     TT_FATAL(
         args.num_slices >= 1 && args.slice_tiles >= 1 && (args.num_slices - 1U) * args.slice_tiles < Wt &&
@@ -51,17 +55,25 @@ void RMSNormBackwardRowsDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t RMSNormBackwardRowsDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& in = tensor_args.input;
-    return tt::tt_metal::TensorSpec(
-        in.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            in.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), in.memory_config()));
+    const auto& shape = in.logical_shape();
+    const tt::tt_metal::TensorLayout layout(
+        in.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), in.memory_config());
+    spec_return_value_t specs{tt::tt_metal::TensorSpec(shape, layout)};
+    if (args.transposed_grad) {
+        specs.emplace_back(ttnn::Shape{shape[0], shape[1], shape[3], shape[2]}, layout);
+    }
+    return specs;
 }
 
 tensor_return_value_t RMSNormBackwardRowsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    tensor_return_value_t out;
+    for (const auto& spec : compute_output_specs(args, tensor_args)) {
+        out.push_back(ttnn::create_device_tensor(spec, tensor_args.input.device()));
+    }
+    return out;
 }
 
 ttsl::hash::hash_t RMSNormBackwardRowsDeviceOperation::compute_program_hash(
@@ -69,6 +81,7 @@ ttsl::hash::hash_t RMSNormBackwardRowsDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<RMSNormBackwardRowsDeviceOperation>(
         args.num_slices,
         args.slice_tiles,
+        args.transposed_grad,
         tensor_args.residual_grad.has_value(),
         tensor_args.input.dtype(),
         tensor_args.input.logical_shape());
@@ -78,16 +91,18 @@ ttsl::hash::hash_t RMSNormBackwardRowsDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-ttnn::Tensor ttml_rmsnorm_bw_rows(
+std::vector<ttnn::Tensor> ttml_rmsnorm_bw_rows(
     const ttnn::Tensor& input,
     const ttnn::Tensor& gamma,
     const ttnn::Tensor& rms,
     const ttnn::Tensor& dL_dout,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    const std::optional<ttnn::Tensor>& residual_grad) {
+    const std::optional<ttnn::Tensor>& residual_grad,
+    bool transposed_grad) {
     using OperationType = ttml::metal::ops::rmsnorm_bw_rows::device::RMSNormBackwardRowsDeviceOperation;
-    auto attributes = OperationType::operation_attributes_t{.num_slices = num_slices, .slice_tiles = slice_tiles};
+    auto attributes = OperationType::operation_attributes_t{
+        .num_slices = num_slices, .slice_tiles = slice_tiles, .transposed_grad = transposed_grad};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input, .gamma = gamma, .rms = rms, .dL_dout = dL_dout, .residual_grad = residual_grad};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);

@@ -18,6 +18,7 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
     const ttnn::Tensor& rms_tensor,  // intermediate from fw
     const ttnn::Tensor& dL_dout_tensor,
     bool compute_dgamma = true,
-    const std::optional<ttnn::Tensor>& residual_grad = std::nullopt);
+    const std::optional<ttnn::Tensor>& residual_grad = std::nullopt,
+    bool transposed_grad = false);
 
 }  // namespace ttml::metal

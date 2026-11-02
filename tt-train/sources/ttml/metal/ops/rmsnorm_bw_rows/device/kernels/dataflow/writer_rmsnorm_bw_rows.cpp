@@ -15,11 +15,16 @@ constexpr uint32_t S = get_compile_time_arg_val(1);
 constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
 constexpr uint32_t exchange_sem_id = get_compile_time_arg_val(4);
-constexpr auto out_args = TensorAccessorArgs<5>();
+constexpr uint32_t Ht = get_compile_time_arg_val(5);  // tile rows of the input: dL_da^T's tile-row stride
+constexpr auto out_args = TensorAccessorArgs<6>();
+#ifdef DX_TRANSPOSED
+constexpr auto out_t_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
 
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
+    [[maybe_unused]] const uint32_t out_t_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t r = get_arg_val<uint32_t>(arg++);
     const uint32_t s = get_arg_val<uint32_t>(arg++);
     const uint32_t coords_base = arg;  // S pairs (noc x, noc y) of the row's cores
@@ -27,6 +32,9 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb::dx);
     const uint32_t f32_tile_bytes = get_tile_size(cb::partial_out);
     const auto out_acc = TensorAccessor(out_args, out_addr);
+#ifdef DX_TRANSPOSED
+    const auto out_t_acc = TensorAccessor(out_t_args, out_t_addr);
+#endif
 
     // Partial exchange. cb::partials is never reserved by this RISC, so its write pointer is the buffer start.
     cb_wait_front(cb::partial_out, 1);
@@ -58,6 +66,17 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb::dx, block);
+#ifdef DX_TRANSPOSED
+        // dL_da^T: this block's tiles go to (col0 + c + j, r) of the [C, S] output (iteration 37)
+        cb_wait_front(cb::dx_t, block);
+        uint32_t l1_t = get_read_ptr(cb::dx_t);
+        for (uint32_t j = 0; j < n; ++j) {
+            noc_async_write_page((col0 + c + j) * Ht + r, out_t_acc, l1_t);
+            l1_t += tile_bytes;
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb::dx_t, block);
+#endif
     }
     noc_async_atomic_barrier();
 }

@@ -22,5 +22,7 @@ constexpr uint32_t acc = 10;         // [1] fp32 sum of the partial tiles
 constexpr uint32_t t = 11;           // [1] fp32 P / (C * rms^2) broadcast along columns
 constexpr uint32_t dx = 12;          // [2*block] bf16 dL_da
 constexpr uint32_t dres = 13;        // [2*block] bf16 residual_grad (ADD_RESIDUAL_GRAD), streamed
+constexpr uint32_t dx_copy = 14;  // [2*block] bf16 dL_da packed a second time, the transpose's source (DX_TRANSPOSED)
+constexpr uint32_t dx_t = 15;     // [2*block] bf16 dL_da^T tiles (DX_TRANSPOSED)
 
 }  // namespace rmsnorm_bw_rows_cb

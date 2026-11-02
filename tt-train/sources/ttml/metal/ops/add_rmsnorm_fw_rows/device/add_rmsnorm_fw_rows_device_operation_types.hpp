@@ -14,6 +14,7 @@ struct Params {
     uint32_t num_slices = 1;   // S: cores per tile-row
     uint32_t slice_tiles = 1;  // column tiles per core (the last slice may be shorter)
     float epsilon = 1e-6F;
+    bool delta_transposed = false;  // iteration 37: delta arrives as [B, N, C, S] (the transposed w2 output)
 };
 
 struct Inputs {

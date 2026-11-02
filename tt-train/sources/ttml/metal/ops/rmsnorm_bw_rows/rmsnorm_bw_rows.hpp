@@ -15,13 +15,16 @@ namespace ttml::metal {
 // and the gradient), the row's per-slice dot products are exchanged between the row's cores over the NoC. Reads
 // every operand once (the two-phase rmsnorm_bw_allcore reads input and dL_dout twice and round-trips partials
 // through DRAM). Requires rows * slices <= cores; the caller falls back to the two-phase op otherwise.
-ttnn::Tensor rmsnorm_bw_rows(
+// With transposed_grad the result also holds dL_dinput^T [1, 1, C, S] (iteration 37: the gradient of a transposed
+// delta), written tile by tile as the row's blocks are produced.
+std::vector<ttnn::Tensor> rmsnorm_bw_rows(
     const ttnn::Tensor& input,
     const ttnn::Tensor& gamma,
     const ttnn::Tensor& rms,
     const ttnn::Tensor& dL_dout,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    const std::optional<ttnn::Tensor>& residual_grad = std::nullopt);
+    const std::optional<ttnn::Tensor>& residual_grad = std::nullopt,
+    bool transposed_grad = false);
 
 }  // namespace ttml::metal

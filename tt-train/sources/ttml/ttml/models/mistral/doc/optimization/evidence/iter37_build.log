@@ -1,0 +1,6 @@
+[0/2] Re-checking globbed directories...
+[1/5] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/3] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[3/3] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so
+build rc=0

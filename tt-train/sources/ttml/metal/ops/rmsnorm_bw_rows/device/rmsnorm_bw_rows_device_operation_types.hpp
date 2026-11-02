@@ -14,6 +14,7 @@ namespace ttml::metal::ops::rmsnorm_bw_rows::device {
 struct Params {
     uint32_t num_slices = 1;   // S: cores per tile-row
     uint32_t slice_tiles = 1;  // column tiles per core (the last slice may be shorter)
+    bool transposed_grad = false;  // iteration 37: also emit dL_da^T [B, N, C, S] (the transposed w2 output's gradient)
 };
 
 struct Inputs {
@@ -26,7 +27,8 @@ struct Inputs {
 
 using operation_attributes_t = Params;
 using tensor_args_t = Inputs;
-using spec_return_value_t = tt::tt_metal::TensorSpec;
-using tensor_return_value_t = ttnn::Tensor;
+// {dL_da [B, N, S, C]} or {dL_da, dL_da^T [B, N, C, S]} with transposed_grad
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
 }  // namespace ttml::metal::ops::rmsnorm_bw_rows::device

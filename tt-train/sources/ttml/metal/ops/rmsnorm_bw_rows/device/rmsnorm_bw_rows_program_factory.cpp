@@ -30,6 +30,7 @@ constexpr uint32_t kReaderDyIdx = 2U;
 constexpr uint32_t kReaderRmsIdx = 3U;
 constexpr uint32_t kReaderDresIdx = 4U;
 constexpr uint32_t kWriterOutIdx = 0U;
+constexpr uint32_t kWriterOutTIdx = 1U;
 
 }  // namespace
 
@@ -38,7 +39,8 @@ namespace ttml::metal::ops::rmsnorm_bw_rows::device {
 // One item (tile-row r, slice s) per core, core index r * S + s; the row's S cores exchange their partial dot
 // products by writing them into each other's cb::partials slot s and incrementing a semaphore.
 RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, ttnn::Tensor& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& outputs) {
+    auto& output = outputs[0];
     namespace cb = rmsnorm_bw_rows_cb;
     const auto& input = tensor_args.input;
     auto* device = input.device();
@@ -78,12 +80,20 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
     if (add_residual_grad) {
         create_circular_buffer(program, all_cores, cb::dres, bf16, bf16_tile, 2U * block);
     }
+    if (args.transposed_grad) {
+        create_circular_buffer(program, all_cores, cb::dx_copy, bf16, bf16_tile, 2U * block);
+        create_circular_buffer(program, all_cores, cb::dx_t, bf16, bf16_tile, 2U * block);
+    }
     const uint32_t exchange_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     std::map<std::string, std::string> defines;
     if (add_residual_grad) {
         defines["ADD_RESIDUAL_GRAD"] = "1";
     }
+    if (args.transposed_grad) {
+        defines["DX_TRANSPOSED"] = "1";  // the compute transposes each dL_da block through DEST, the writer scatters it
+    }
+    const uint32_t Ht = padded[2] / tt::constants::TILE_HEIGHT;  // tile rows: dL_da^T's tile-row stride
 
     std::vector<uint32_t> reader_ct_args{Wt, S, St, block, exchange_sem};
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
@@ -95,8 +105,11 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
     }
     auto reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{Wt, S, St, block, exchange_sem};
+    std::vector<uint32_t> writer_ct_args{Wt, S, St, block, exchange_sem, Ht};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+    if (args.transposed_grad) {
+        tt::tt_metal::TensorAccessorArgs(outputs[1].buffer()).append_to(writer_ct_args);
+    }
     auto writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
     // -1/C: pass 2 accumulates a * (-t) onto gamma * dy on the FPU (iteration 29).
@@ -123,7 +136,8 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
              r,
              s});
         // Writer: output address, (r, s), then the row's S cores' NoC coordinates (x, y) in slice order.
-        std::vector<uint32_t> w_args{output.buffer()->address(), r, s};
+        std::vector<uint32_t> w_args{
+            output.buffer()->address(), args.transposed_grad ? outputs[1].buffer()->address() : 0U, r, s};
         for (uint32_t j = 0; j < S; ++j) {
             const uint32_t k = r * S + j;
             const auto phys = device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{k / grid.y, k % grid.y});
@@ -138,9 +152,10 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
 
 void RMSNormBackwardRowsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
+    const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
-    ttnn::Tensor& output) {
+    tensor_return_value_t& outputs) {
+    auto& output = outputs[0];
     auto& program = cached_program.program;
     const auto& shared = cached_program.shared_variables;
     auto& reader_args = GetRuntimeArgs(program, shared.reader_kernel_id);
@@ -155,6 +170,9 @@ void RMSNormBackwardRowsProgramFactory::override_runtime_arguments(
             r[kReaderDresIdx] = tensor_args.residual_grad->buffer()->address();
         }
         writer_args[core.x][core.y][kWriterOutIdx] = output.buffer()->address();
+        if (args.transposed_grad) {
+            writer_args[core.x][core.y][kWriterOutTIdx] = outputs[1].buffer()->address();
+        }
     }
 }
 

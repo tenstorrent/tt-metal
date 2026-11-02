@@ -91,6 +91,7 @@ class FusedLoraLinearT(Function):
         reduce_axis,
         h_reduce_axis,
         weight_cat_fwd=None,
+        transposed_output=False,
     ):
         cfg = _compute_config()
         x_val, a_val, b_val, w_val = x.get_value(), lora_A.get_value(), lora_B.get_value(), weight_cat.get_value()
@@ -135,10 +136,14 @@ class FusedLoraLinearT(Function):
             h_pad = ttnn.pad(h, padding=[(0, 0), (0, 0), (0, 0), (0, TAIL_ROWS - rank)], value=0.0)
             x_cat = ttnn.concat([x_val, h_pad], dim=3)  # [T, in + TAIL_ROWS]
             ttnn.deallocate(h_pad)
+        transposed_out = transposed_kwargs is not None and transposed_output
         if transposed_kwargs is not None:
             y_t = ttnn.matmul(weight_cat_fwd, x_cat, transpose_b=True, compute_kernel_config=cfg, **transposed_kwargs)
-            y = ttnn.transpose(y_t, -2, -1)
-            ttnn.deallocate(y_t)
+            if transposed_out:
+                y = y_t  # iteration 37: the consumer (the fused residual norm) reads [out, T]; its gradient is [out, T]
+            else:
+                y = ttnn.transpose(y_t, -2, -1)
+                ttnn.deallocate(y_t)
         else:
             y = ttnn.matmul(
                 x_cat,
@@ -147,23 +152,28 @@ class FusedLoraLinearT(Function):
                 **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2], k=x_cat.shape[-1]),
             )
         ctx.save_for_backward(x_val, a_val, h, w_val)
-        ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide)
+        ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide, transposed_out)
         return y
 
     @staticmethod
     def backward(ctx, grad_output):
         x_val, a_val, h, w_val = ctx.saved_tensors
         ctx.save_for_backward()
-        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide = ctx.meta
+        scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide, transposed_out = ctx.meta
         cfg = _compute_config()
         # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
-        dcat_t = ttnn.matmul(
-            w_val,
-            grad_output,
-            transpose_b=True,
-            compute_kernel_config=cfg,
-            **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
-        )
+        # With the transposed output (iteration 37) the gradient arrives as [out, T]: the same product without the
+        # free in1 transpose, and dB from it with transpose_b instead (both exact).
+        if transposed_out:
+            dcat_t = ttnn.matmul(w_val, grad_output, compute_kernel_config=cfg, core_grid=full_core_grid())
+        else:
+            dcat_t = ttnn.matmul(
+                w_val,
+                grad_output,
+                transpose_b=True,
+                compute_kernel_config=cfg,
+                **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
+            )
         # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
         # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
         # With the wide input dx is [T, in + TAIL] (its tail columns are the unscaled tail rows, which the
@@ -175,7 +185,9 @@ class FusedLoraLinearT(Function):
             dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0, a_val
         )
         ttnn.deallocate(dcat_t)
-        grad_b = skinny_contract(h, grad_output, scaling, transpose_out=True)  # s * g^T h -> [out, r]
+        grad_b = skinny_contract(
+            h, grad_output, scaling, transpose_out=True, big_transposed=transposed_out
+        )  # s * g^T h -> [out, r]
         if reduce_axis is not None:
             s_dh = ttml.core.distributed.all_reduce(s_dh, reduce_axis)
         grad_a = skinny_contract(s_dh, x_val)  # (s dh)^T x -> [r, in] (+ the tail columns when x is wide)
@@ -232,6 +244,7 @@ def fused_lora_linear_t(
     reduce_axis=None,
     h_reduce_axis=None,
     weight_cat_fwd=None,
+    transposed_output=False,
 ):
     in_features, out_features = shape
     return FusedLoraLinearT.apply(
@@ -247,6 +260,7 @@ def fused_lora_linear_t(
         reduce_axis,
         h_reduce_axis,
         weight_cat_fwd,
+        transposed_output,
     )
 
 

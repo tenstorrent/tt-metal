@@ -87,7 +87,11 @@ AddRMSNormForwardRowsProgramFactory::cached_program_t AddRMSNormForwardRowsProgr
 
     std::map<std::string, std::string> defines;
 
-    std::vector<uint32_t> reader_ct_args{Wt, S, St, block, exchange_sem};
+    if (args.delta_transposed) {
+        defines["DELTA_TRANSPOSED"] = "1";  // the reader fetches delta's tile (c, r), the compute transposes it in DEST
+    }
+    const uint32_t Ht = padded[2] / tt::constants::TILE_HEIGHT;  // delta^T's tile-row stride
+    std::vector<uint32_t> reader_ct_args{Wt, S, St, block, exchange_sem, Ht};
     tt::tt_metal::TensorAccessorArgs(residual.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.delta.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.gamma.buffer()).append_to(reader_ct_args);

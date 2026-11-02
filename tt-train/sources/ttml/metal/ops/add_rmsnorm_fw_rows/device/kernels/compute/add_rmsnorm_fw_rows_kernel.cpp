@@ -24,6 +24,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/add_rmsnorm_fw_rows/device/kernels/add_rmsnorm_fw_rows_cbs.hpp"
 
@@ -83,7 +84,14 @@ void kernel_main() {
             // SFPU add in fp32 DEST (bit-exact with the two-phase op; the FPU add_tiles path is ~5 % faster but its
             // fp32 sums differ at ~2^-11 relative, iter19_build_check3.log), then the square from the fp32 sum.
             load_tile(cb::residual, i, 1U + i);
+#ifdef DELTA_TRANSPOSED
+            // delta's tile is the transpose of the residual's: transposed on the way into DEST (exact)
+            reconfig_data_format_srca(cb::delta);
+            transpose_init(cb::delta);
+            transpose_tile(cb::delta, i, scratch);
+#else
             load_tile(cb::delta, i, scratch);
+#endif
             add_binary_tile_init();
             add_binary_tile(1U + i, scratch, 1U + i);
             mul_binary_tile_init();

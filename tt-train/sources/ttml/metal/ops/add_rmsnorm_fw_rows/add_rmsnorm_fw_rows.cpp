@@ -14,8 +14,10 @@ std::vector<ttnn::Tensor> add_rmsnorm_fw_rows(
     const ttnn::Tensor& gamma,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    float epsilon) {
-    return ttnn::prim::ttml_add_rmsnorm_fw_rows(residual, delta, gamma, num_slices, slice_tiles, epsilon);
+    float epsilon,
+    bool delta_transposed) {
+    return ttnn::prim::ttml_add_rmsnorm_fw_rows(
+        residual, delta, gamma, num_slices, slice_tiles, epsilon, delta_transposed);
 }
 
 }  // namespace ttml::metal

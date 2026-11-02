@@ -16,7 +16,8 @@ std::vector<ttnn::Tensor> add_rmsnorm_fw_allcore(
     const ttnn::Tensor& residual_tensor,
     const ttnn::Tensor& delta_tensor,
     const ttnn::Tensor& gamma_tensor,
-    float epsilon) {
+    float epsilon,
+    bool delta_transposed) {
     // Same (tile-row, slice) work split as the all-core backward: phase A adds the two inputs, writes the sum and a
     // partial sum of squares per slice; phase B folds the partials into the row's rms and scales the sum by
     // gamma / rms.
@@ -37,9 +38,11 @@ std::vector<ttnn::Tensor> add_rmsnorm_fw_allcore(
         // gamma and the sum resident in L1 (2 slices); at least 2 slices per row (one 160-tile slice per core is slower
         // than the two-phase op and its 80 fp32 accumulator round trips cost accuracy, iter19_norm_check.log).
         if (slices_eff >= 2U && slice_tiles * 2U * tt::tile_size(tt::DataFormat::Float16_b) <= 512U * 1024U) {
-            return add_rmsnorm_fw_rows(residual_tensor, delta_tensor, gamma_tensor, slices_eff, slice_tiles, epsilon);
+            return add_rmsnorm_fw_rows(
+                residual_tensor, delta_tensor, gamma_tensor, slices_eff, slice_tiles, epsilon, delta_transposed);
         }
     }
+    TT_FATAL(!delta_transposed, "add_rmsnorm_fw_allcore: a transposed delta needs the single-phase (rows) path");
     const auto split = ops::rmsnorm_bw_allcore::device::choose_work_split(rows, Wt, num_cores);
 
     auto partial = ttnn::prim::ttml_add_rmsnorm_fw_allcore_partial(residual_tensor, delta_tensor, split);

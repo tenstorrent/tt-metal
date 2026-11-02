@@ -20,6 +20,7 @@ std::vector<ttnn::Tensor> add_rmsnorm_fw_rows(
     const ttnn::Tensor& gamma,
     uint32_t num_slices,
     uint32_t slice_tiles,
-    float epsilon = 1e-6F);
+    float epsilon = 1e-6F,
+    bool delta_transposed = false);
 
 }  // namespace ttml::metal

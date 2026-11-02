@@ -16,7 +16,8 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
     const ttnn::Tensor& rms_tensor,
     const ttnn::Tensor& dL_dout_tensor,
     bool compute_dgamma,
-    const std::optional<ttnn::Tensor>& residual_grad) {
+    const std::optional<ttnn::Tensor>& residual_grad,
+    bool transposed_grad) {
     // Spread each row over several cores: phase A produces per-slice partial sums of a * gamma * dL_dout,
     // phase B folds them into the row's scale and emits the gradients. Both phases are parallel over
     // (tile-row, slice) items, so a [1, 1, T, C] input is not limited to T/32 cores.
@@ -33,12 +34,23 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
         const uint32_t slice_tiles = (Wt + slices - 1U) / slices;
         const uint32_t slices_eff = (Wt + slice_tiles - 1U) / slice_tiles;
         if (slice_tiles * 3U * tt::tile_size(tt::DataFormat::Float16_b) <= 512U * 1024U) {  // resident slices in L1
-            return {
-                ttml::metal::rmsnorm_bw_rows(
-                    input_tensor, gamma_tensor, rms_tensor, dL_dout_tensor, slices_eff, slice_tiles, residual_grad),
-                std::nullopt};
+            auto rows_out = ttml::metal::rmsnorm_bw_rows(
+                input_tensor,
+                gamma_tensor,
+                rms_tensor,
+                dL_dout_tensor,
+                slices_eff,
+                slice_tiles,
+                residual_grad,
+                transposed_grad);
+            std::vector<std::optional<ttnn::Tensor>> out{rows_out[0], std::nullopt};
+            if (transposed_grad) {
+                out.emplace_back(rows_out[1]);  // [dL_dinput, None, dL_dinput^T] (iteration 37)
+            }
+            return out;
         }
     }
+    TT_FATAL(!transposed_grad, "rmsnorm_bw_allcore: the transposed gradient needs the single-phase (rows) path");
     const auto split = ops::rmsnorm_bw_allcore::device::choose_work_split(rows, Wt, num_cores);
 
     auto partials = ttnn::prim::ttml_rmsnorm_bw_allcore_partial(input_tensor, gamma_tensor, dL_dout_tensor, split);

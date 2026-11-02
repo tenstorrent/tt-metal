@@ -70,6 +70,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 36 | fused w2 forward in the transposed orientation (110 cores, `W_cat^T` copy, one transpose) | 468.2 (465.3) | 34.65 % | `O/iter36_tp_mfu_tp4.log` (clock mix 1.02-1.15 GHz; cycle-time -0.34 ms per 4 layers) |
 | 36 | repeat after a 600 s cool-down | 463.8 (460.0) | 34.98 % | `O/iter36b_tp_mfu_tp4.log` (clocks 1.06-1.12 GHz) |
 | 36 | real weights, warm | 477.3 (471.1) | - | `O/iter36_full_tp4_real.log` |
+| 37 | the w2 output transpose fused into the residual norm (transposed delta read, transposed gradient out) | **460.5 (453.7)** | **35.23 %** | `O/iter37_tp_mfu_tp4.log` (clocks 1.10-1.17 GHz) |
+| 37 | real weights, warm | 475.3 (469.4) | - | `O/iter37_full_tp4_real.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -374,6 +376,14 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Attribution** (chip 0, per profiled step, cycle-time): the CE forward rows `Reduce` [1024, 32768] x2 (0.69) and `BinaryNg` [1024, 32768] (0.63) replaced by `VpCeRowStats` 0.539 (the sum: the accurate exp) + 0.188 (the max): 1.29 -> 0.73 ms per step, ~-0.56 ms/step; standalone at the shard shape (`O/iter32e_ce_stats_check.log`): max 51 us + sum 152 (chain 215) against 500 for ttnn's max + sub / exp / sum; precision identical (row max exact, row sums 5.3e-6 max relative vs fp64, the old path 5.3e-6).
 - **Verification**: standalone vs numpy (`O/iter32e_ce_stats_check.log`); CE / loss / embedding harness subset 5; harness 48; TP gradient check PASS; 8-layer loss match PASS (0.0301, identical to 30); real weights warm 483.5 (478.0) ms.
 - **Evidence**: `O/iter32_patch.py` (the op's files), `O/iter32_ce_stats_check.{py,log}` + `O/iter32{b,c,d,e}_ce_stats_check.log` (the sum's four variants: FPU matmul-with-ones 2e-4 relative, FPU reduce NaN columns, SFPU accumulation + FPU reduce, SFPU reduce with the SDPA's bf16-grade exp 5.6e-4, then the accurate exp), `O/iter32_ce_tests.log`, `O/iter32.{sh,log}`, `O/iter32_harness.log`, `O/iter32_tp_grad_check_tp4.log`, `O/iter32_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter32_loss_comparison.txt`, `O/iter32_full_tp4_real.log`.
+
+## Iteration 37 (2026-11-02): the w2 output transpose fused into the residual norm (kernel boost)
+
+- **Change**: layout -> owned kernels: the fused w2 hands its transposed output `y^T [5120, 1024]` straight to the TP all-reduce and the fused residual norm; `add_rmsnorm_fw_rows` reads a transposed delta (tile (c, r) fetched, `transpose_tile` into DEST), `rmsnorm_bw_rows` emits the gradient a second time transposed (`[C, T]`, one extra DEST pass and 10 MB of writes per call) because the autograd boundary needs the gradient in the output's layout; the w2 backward consumes `g^T` through free in1 transposes. `metal/ops/add_rmsnorm_fw_rows`, `metal/ops/rmsnorm_bw_rows`, the all-core dispatchers, `fused_residual_norm.py`, `fused_lora.py`, `lora.py`. Checklist: `optimization/work_log.md`, "Iteration 37".
+- **Result**: TP=4 463.8 -> **460.5 ms** (best 460.0 -> 453.7), **35.23 % MFU** (clocks 1.10-1.17 GHz effective, a mix comparable to iteration 35's 462.9); real weights warm 475.3 (469.4).
+- **Attribution** (chip 0, cycle-time per 4 layers, iteration 36b -> 37): the `Transpose [5120, 1024]` row 0.257 -> gone; `AddRMSNormForwardRows` 1.033 -> 1.034 (the four transposed-delta calls 0.516, the four plain ones 0.518: the transposed read is free); `RMSNormBackwardRows` 1.118 -> 1.194 (+0.076 for the second, transposed gradient: 10 MB more written per call); the w2 forward row 2.656 unchanged: -0.18 ms per 4 layers (~-1.8 ms/step), above the ~-1.5 expected.
+- **Verification**: harness test `test_fused_residual_norm_reads_the_transposed_w2_output` (shard-width MLP into the fused norm: sum, out, dx, dresidual, dA / dB vs torch); harness 49; TP gradient check; 8-layer loss match; real weights (`O/iter37.log`).
+- **Evidence**: `O/iter37_scoping.log` (`O/iter37_ccl_shape.py`, `O/iter37_matmul_tt_check.py`), `O/iter37_build.log`, `O/iter37_harness_subset.log`, `O/iter37.{sh,log}` and the chain's files.
 
 ## Iteration 36 (2026-11-02): the fused w2 forward in the transposed orientation (kernel boost)
 

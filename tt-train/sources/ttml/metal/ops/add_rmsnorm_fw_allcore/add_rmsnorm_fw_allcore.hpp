@@ -18,6 +18,7 @@ std::vector<ttnn::Tensor> add_rmsnorm_fw_allcore(
     const ttnn::Tensor& residual_tensor,
     const ttnn::Tensor& delta_tensor,
     const ttnn::Tensor& gamma_tensor,
-    float epsilon = 1e-6F);
+    float epsilon = 1e-6F,
+    bool delta_transposed = false);
 
 }  // namespace ttml::metal

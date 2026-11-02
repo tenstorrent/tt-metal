@@ -38,9 +38,14 @@ class AddRMSNormFrozenGamma(Function):
     @staticmethod
     def forward(ctx, residual, delta, gamma, epsilon, return_sum):
         r, d, g = residual.get_value(), delta.get_value(), gamma.get_value()
-        s, out, rms = ttml.ops.metal.add_rmsnorm_fw_allcore(r, d, g, epsilon)
+        # Iteration 37: a delta that is the [C, T] transpose of the residual (the fused w2's transposed-orientation
+        # output) is read transposed by the kernel; its gradient comes back transposed too.
+        rs, ds = tuple(int(v) for v in r.shape), tuple(int(v) for v in d.shape)
+        transposed = ds != rs and ds[:2] == rs[:2] and ds[2] == rs[3] and ds[3] == rs[2]
+        s, out, rms = ttml.ops.metal.add_rmsnorm_fw_allcore(r, d, g, epsilon, delta_transposed=transposed)
         ctx.save_for_backward(s, g, rms)
         ctx.return_sum = return_sum
+        ctx.delta_transposed = transposed
         return (s, out) if return_sum else out
 
     @staticmethod
@@ -52,8 +57,11 @@ class AddRMSNormFrozenGamma(Function):
         else:
             (grad_out,) = grads
             grad_sum = None
-        dsum = ttml.ops.metal.rmsnorm_bw_allcore(s, g, rms, grad_out, False, grad_sum)[0]
-        return dsum, dsum, None
+        res = ttml.ops.metal.rmsnorm_bw_allcore(
+            s, g, rms, grad_out, False, grad_sum, transposed_grad=ctx.delta_transposed
+        )
+        dsum = res[0]
+        return dsum, (res[2] if ctx.delta_transposed else dsum), None
 
 
 def add_rmsnorm(residual, delta, norm: RMSNormLayer, return_sum: bool = True):
@@ -112,4 +120,9 @@ def use_fused_residual_norm(model) -> int:
     frozen = [m for m in norms if not m.gamma.tensor.get_requires_grad()]
     assert len(frozen) == len(norms), "the fused residual norm needs every RMSNorm gamma frozen (LoRA)"
     llama.fused_residual_norm = True
+    # Iteration 37: fused linears with a transposed-orientation forward copy hand their output transposed to the
+    # residual norm (no transpose op); only valid under this forward, whose norms read it transposed.
+    for _, m in llama.named_modules():
+        if getattr(m, "weight_cat_fwd", None) is not None:
+            m.transposed_output = True
     return len(norms) - 1  # the first norm stays the plain op
