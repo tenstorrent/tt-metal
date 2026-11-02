@@ -136,6 +136,14 @@ FORCE_INLINE float bf16_to_f32(uint16_t v) {
     return out;
 }
 
+// Map bf16 bits to an unsigned key with the same order as the values: flipping the sign bit of a
+// positive value and every bit of a negative one turns sign-magnitude into a plain unsigned order.
+// It agrees with the float compare except that -0 ranks just below +0, and a NaN ranks above +inf
+// (positive NaN) or below -inf (negative NaN) instead of comparing false with everything.
+FORCE_INLINE uint32_t bf16_order_key(uint16_t v) {
+    return (v & 0x8000u) ? (~static_cast<uint32_t>(v) & 0xFFFFu) : (static_cast<uint32_t>(v) | 0x8000u);
+}
+
 // Round fp32 to nearest-even bf16, returned widened back to fp32 bits. cb_bcast weight slots are
 // consumed by build_routing_scalars as a `>> 16` truncation, so rounding here is what makes the
 // delivered weight the correctly-rounded bf16 that a dense caller would have supplied.
@@ -226,6 +234,9 @@ void kernel_main() {
     constexpr uint32_t kSharedCtBase = kDownAddrBase + num_weights;
     constexpr auto shared_gate_up_args = TensorAccessorArgs<kSharedCtBase + kSharedExpertCtArgs>();
     constexpr auto shared_down_args = TensorAccessorArgs<shared_gate_up_args.next_compile_time_args_offset()>();
+    constexpr uint32_t gate_up_k_shards = get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset());
+    constexpr uint32_t gate_up_col_shards =
+        get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset() + 1);
     const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(19), get_arg_val<uint32_t>(20));
 
     const uint32_t routing_addr = get_arg_val<uint32_t>(0);
@@ -264,36 +275,39 @@ void kernel_main() {
     // Pages are placed at the buffer's aligned page stride so each read's L1 destination shares the
     // alignment of the DRAM page it comes from.
     cb_routing.reserve_back(1);
-    // One TILE page of ids (B <= 32 rows and top_k <= 16 columns both fit a single 32x32 tile) when
-    // the router's ids are the selection source, then the score row (TILE pages or a ROW_MAJOR
-    // stick) after it, then, when ranking is a separate tensor, the ranking row.
-    if constexpr (!rank_from_scores) {
-        noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
-    }
-    const auto scores = TensorAccessor(score_args, score_addr);
-    for (uint32_t p = 0; p < score_pages; ++p) {
-        noc.async_read(
-            scores,
-            cb_routing,
-            score_page_bytes,
-            {.page_id = p},
-            {.offset_bytes = score_l1_offset + p * score_page_stride});
-    }
-    // The ranking row is only fetched when it is not the score row itself: ranking and weighting on
-    // one buffer (the no-correction-bias case) reads that buffer once, through `scores`, and
-    // `rank_l1_offset == score_l1_offset`.
-    if constexpr (rank_from_scores && !ranking_is_scores) {
-        const auto rankings = TensorAccessor(rank_args, rank_addr);
-        for (uint32_t p = 0; p < rank_pages; ++p) {
-            noc.async_read(
-                rankings,
-                cb_routing,
-                rank_page_bytes,
-                {.page_id = p},
-                {.offset_bytes = rank_l1_offset + p * rank_page_stride});
+    {
+        DeviceZoneScopedN("FE_ROUTE_READ");
+        // One TILE page of ids (B <= 32 rows and top_k <= 16 columns both fit a single 32x32 tile) when
+        // the router's ids are the selection source, then the score row (TILE pages or a ROW_MAJOR
+        // stick) after it, then, when ranking is a separate tensor, the ranking row.
+        if constexpr (!rank_from_scores) {
+            noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
         }
+        const auto scores = TensorAccessor(score_args, score_addr);
+        for (uint32_t p = 0; p < score_pages; ++p) {
+            noc.async_read(
+                scores,
+                cb_routing,
+                score_page_bytes,
+                {.page_id = p},
+                {.offset_bytes = score_l1_offset + p * score_page_stride});
+        }
+        // The ranking row is only fetched when it is not the score row itself: ranking and weighting on
+        // one buffer (the no-correction-bias case) reads that buffer once, through `scores`, and
+        // `rank_l1_offset == score_l1_offset`.
+        if constexpr (rank_from_scores && !ranking_is_scores) {
+            const auto rankings = TensorAccessor(rank_args, rank_addr);
+            for (uint32_t p = 0; p < rank_pages; ++p) {
+                noc.async_read(
+                    rankings,
+                    cb_routing,
+                    rank_page_bytes,
+                    {.page_id = p},
+                    {.offset_bytes = rank_l1_offset + p * rank_page_stride});
+            }
+        }
+        noc.async_read_barrier();
     }
-    noc.async_read_barrier();
 
     cb_bcast.reserve_back(1);
     const uint32_t bcast_l1 = cb_bcast.get_write_ptr();
@@ -325,117 +339,122 @@ void kernel_main() {
     CoreLocalMem<volatile uint16_t> sel_ids(routing_l1 + scratch_l1_offset + bitmap_bytes + rank_bytes);
     constexpr uint16_t kDropped = 0xFFFFu;
 
-    for (uint32_t w = 0; w < bitmap_words; ++w) {
-        bitmap[w] = 0;
-    }
-    if constexpr (rank_from_scores) {
-        // On-device top-k over the ranking row: one ascending scan per token keeping a sorted
-        // k-entry running list of (score, id). The row is already resident in cb_routing -- the
-        // weighting gathers read it anyway -- so this adds no DRAM traffic, no extra program and no
-        // extra synchronization; it runs on the core that has to broadcast the ids regardless, and
-        // in place of the id tile's decode. Selecting here is what saves the router a separate
-        // `ttnn.topk` launch and the DRAM round-trip of its id output.
-        //
-        // A score enters only if it beats the current k-th best (strict >), and an equal score goes
-        // after the ones already held, so the winner set is deterministic: of equal scores the lower
-        // expert id is kept. (topk's own tie-break is unspecified, so a caller that depends on which
-        // of several equal winners is kept should use the ids form.)
-        constexpr uint32_t sel_slots = top_k > 0u ? top_k : 1u;
-        constexpr float kNegInf = __builtin_bit_cast(float, 0xFF800000u);
-        float best_score[sel_slots];
-        uint16_t best_id[sel_slots];
-        for (uint32_t b = 0; b < batch; ++b) {
-            for (uint32_t j = 0; j < top_k; ++j) {
-                best_score[j] = kNegInf;
-                best_id[j] = 0;
-            }
-            for (uint32_t e = 0; e < num_weights; ++e) {
-                // TILE: expert e sits in tile e/32 of the ranking row, column e%32 of token row b
-                // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
-                uint32_t off;
-                if constexpr (ranking_is_rm) {
-                    off = rank_l1_offset + (b * rank_page_stride) + (e * 2u);
-                } else {
-                    off = rank_l1_offset + ((e >> 5) * rank_page_stride) + tile_elem_offset(b, e & 31u);
-                }
-                const float s = bf16_to_f32(rw[off >> 1]);
-                // The first top_k experts always fill their slots (so an all-equal or all -inf row
-                // still yields k distinct ids instead of none); after that the k-th best is the bar.
-                if (e < top_k || s > best_score[top_k - 1u]) {
-                    uint32_t p = 0;
-                    while (p + 1u < top_k && best_score[p] >= s) {
-                        ++p;
-                    }
-                    for (uint32_t j = top_k - 1u; j > p; --j) {
-                        best_score[j] = best_score[j - 1u];
-                        best_id[j] = best_id[j - 1u];
-                    }
-                    best_score[p] = s;
-                    best_id[p] = static_cast<uint16_t>(e);
-                }
-            }
-            // The winners land in the same sel_ids/bitmap the ids form fills, so the compaction,
-            // dedup and weight passes below are shared: a top-k over one row cannot repeat an id,
-            // and duplicates ACROSS rows collapse in the bitmap sweep exactly as they do for
-            // router-supplied ids.
-            for (uint32_t j = 0; j < top_k; ++j) {
-                const uint16_t e = best_id[j];
-                sel_ids[b * top_k + j] = e;
-                bitmap[e >> 5] |= 1u << (e & 31u);
-            }
+    {
+        DeviceZoneScopedN("FE_ROUTE_SELECT");
+        for (uint32_t w = 0; w < bitmap_words; ++w) {
+            bitmap[w] = 0;
         }
-    } else {
-        for (uint32_t b = 0; b < batch; ++b) {
-            for (uint32_t j = 0; j < top_k; ++j) {
-                const uint16_t raw = rw[tile_elem_offset(b, j) >> 1];
-                // topk hands over the id as a plain integer; an embedding gather hands over the
-                // same id as the bf16 value it had to be stored as (exact for E <= 256).
-                uint32_t e;
-                if constexpr (index_is_bf16) {
-                    e = static_cast<uint32_t>(bf16_to_f32(raw));
-                } else {
-                    e = raw;
+        if constexpr (rank_from_scores) {
+            // On-device top-k over the ranking row: one ascending scan per token keeping a sorted
+            // k-entry running list of (score, id). The row is already resident in cb_routing -- the
+            // weighting gathers read it anyway -- so this adds no DRAM traffic, no extra program and no
+            // extra synchronization; it runs on the core that has to broadcast the ids regardless, and
+            // in place of the id tile's decode. Selecting here is what saves the router a separate
+            // `ttnn.topk` launch and the DRAM round-trip of its id output.
+            //
+            // A score enters only if it beats the current k-th best (strict >), and an equal score goes
+            // after the ones already held, so the winner set is deterministic: of equal scores the lower
+            // expert id is kept. (topk's own tie-break is unspecified, so a caller that depends on which
+            // of several equal winners is kept should use the ids form.)
+            //
+            // Scores are ranked by bf16_order_key rather than as floats: the scan touches every expert
+            // of every token, and float compares are soft-float calls on this core.
+            constexpr uint32_t sel_slots = top_k > 0u ? top_k : 1u;
+            uint32_t best_score[sel_slots];
+            uint16_t best_id[sel_slots];
+            for (uint32_t b = 0; b < batch; ++b) {
+                for (uint32_t j = 0; j < top_k; ++j) {
+                    best_score[j] = 0;
+                    best_id[j] = 0;
                 }
-                // An id past the expert count would index off the end of the bitmap and corrupt
-                // L1, so bound it here rather than trusting the producer. A repeat of an id this
-                // same token already picked is dropped too: a table-driven router can hand over
-                // one, and the reference collapses it (it scatters the selection into a one-hot
-                // mask), so counting it twice in the token's sum would not match. Both cases are
-                // parked on the sentinel, which the weight pass then skips.
-                bool drop = e >= num_weights;
-                for (uint32_t p = 0; p < j && !drop; ++p) {
-                    drop = sel_ids[b * top_k + p] == e;
+                for (uint32_t e = 0; e < num_weights; ++e) {
+                    // TILE: expert e sits in tile e/32 of the ranking row, column e%32 of token row b
+                    // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
+                    uint32_t off;
+                    if constexpr (ranking_is_rm) {
+                        off = rank_l1_offset + (b * rank_page_stride) + (e * 2u);
+                    } else {
+                        off = rank_l1_offset + ((e >> 5) * rank_page_stride) + tile_elem_offset(b, e & 31u);
+                    }
+                    const uint32_t s = bf16_order_key(rw[off >> 1]);
+                    // The first top_k experts always fill their slots (so an all-equal or all -inf row
+                    // still yields k distinct ids instead of none); after that the k-th best is the bar.
+                    if (e < top_k || s > best_score[top_k - 1u]) {
+                        uint32_t p = 0;
+                        while (p + 1u < top_k && best_score[p] >= s) {
+                            ++p;
+                        }
+                        for (uint32_t j = top_k - 1u; j > p; --j) {
+                            best_score[j] = best_score[j - 1u];
+                            best_id[j] = best_id[j - 1u];
+                        }
+                        best_score[p] = s;
+                        best_id[p] = static_cast<uint16_t>(e);
+                    }
                 }
-                if (!drop) {
+                // The winners land in the same sel_ids/bitmap the ids form fills, so the compaction,
+                // dedup and weight passes below are shared: a top-k over one row cannot repeat an id,
+                // and duplicates ACROSS rows collapse in the bitmap sweep exactly as they do for
+                // router-supplied ids.
+                for (uint32_t j = 0; j < top_k; ++j) {
+                    const uint16_t e = best_id[j];
+                    sel_ids[b * top_k + j] = e;
                     bitmap[e >> 5] |= 1u << (e & 31u);
-                } else {
-                    e = num_weights;
                 }
-                sel_ids[b * top_k + j] = static_cast<uint16_t>(e);
+            }
+        } else {
+            for (uint32_t b = 0; b < batch; ++b) {
+                for (uint32_t j = 0; j < top_k; ++j) {
+                    const uint16_t raw = rw[tile_elem_offset(b, j) >> 1];
+                    // topk hands over the id as a plain integer; an embedding gather hands over the
+                    // same id as the bf16 value it had to be stored as (exact for E <= 256).
+                    uint32_t e;
+                    if constexpr (index_is_bf16) {
+                        e = static_cast<uint32_t>(bf16_to_f32(raw));
+                    } else {
+                        e = raw;
+                    }
+                    // An id past the expert count would index off the end of the bitmap and corrupt
+                    // L1, so bound it here rather than trusting the producer. A repeat of an id this
+                    // same token already picked is dropped too: a table-driven router can hand over
+                    // one, and the reference collapses it (it scatters the selection into a one-hot
+                    // mask), so counting it twice in the token's sum would not match. Both cases are
+                    // parked on the sentinel, which the weight pass then skips.
+                    bool drop = e >= num_weights;
+                    for (uint32_t p = 0; p < j && !drop; ++p) {
+                        drop = sel_ids[b * top_k + p] == e;
+                    }
+                    if (!drop) {
+                        bitmap[e >> 5] |= 1u << (e & 31u);
+                    } else {
+                        e = num_weights;
+                    }
+                    sel_ids[b * top_k + j] = static_cast<uint16_t>(e);
+                }
             }
         }
-    }
-    // Zero the whole weight region up front: a token contributes to only its own k experts, and
-    // every other (hit, token) slot must read as zero.
-    for (uint32_t i = 0; i < num_active * batch; ++i) {
-        ids[num_weights + i] = 0;
-    }
-    for (uint32_t w = 0; w < bitmap_words; ++w) {
-        uint32_t word = bitmap[w];
-        while (word != 0u) {
-            const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(word));
-            word &= word - 1u;
-            const uint32_t e = (w << 5) + bit;
-            // A union larger than the caller's bound overflows the fetch loop, which only runs
-            // [0, num_active). Drop the surplus rather than writing past it; an under-sized
-            // num_experts is the caller's error, and it costs those experts' contributions.
-            if (n < num_active) {
-                ids[n] = e;
-                rank[e] = static_cast<uint16_t>(n);
-            } else {
-                rank[e] = kDropped;
+        // Zero the whole weight region up front: a token contributes to only its own k experts, and
+        // every other (hit, token) slot must read as zero.
+        for (uint32_t i = 0; i < num_active * batch; ++i) {
+            ids[num_weights + i] = 0;
+        }
+        for (uint32_t w = 0; w < bitmap_words; ++w) {
+            uint32_t word = bitmap[w];
+            while (word != 0u) {
+                const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(word));
+                word &= word - 1u;
+                const uint32_t e = (w << 5) + bit;
+                // A union larger than the caller's bound overflows the fetch loop, which only runs
+                // [0, num_active). Drop the surplus rather than writing past it; an under-sized
+                // num_experts is the caller's error, and it costs those experts' contributions.
+                if (n < num_active) {
+                    ids[n] = e;
+                    rank[e] = static_cast<uint16_t>(n);
+                } else {
+                    rank[e] = kDropped;
+                }
+                ++n;
             }
-            ++n;
         }
     }
 
@@ -445,71 +464,74 @@ void kernel_main() {
     constexpr float scaling = __builtin_bit_cast(float, scaling_bits);
     constexpr float eps = __builtin_bit_cast(float, eps_bits);
     constexpr uint32_t sel_slots = top_k > 0u ? top_k : 1u;
-    for (uint32_t b = 0; b < batch; ++b) {
-        float sel[sel_slots];
-        float sum = 0.0f;
-        for (uint32_t j = 0; j < top_k; ++j) {
-            const uint32_t e = sel_ids[b * top_k + j];
-            if (e >= num_weights) {
-                sel[j] = 0.0f;
-                continue;
+    {
+        DeviceZoneScopedN("FE_ROUTE_WEIGHTS_MCAST");
+        for (uint32_t b = 0; b < batch; ++b) {
+            float sel[sel_slots];
+            float sum = 0.0f;
+            for (uint32_t j = 0; j < top_k; ++j) {
+                const uint32_t e = sel_ids[b * top_k + j];
+                if (e >= num_weights) {
+                    sel[j] = 0.0f;
+                    continue;
+                }
+                // TILE: expert e sits in tile e/32 of the score row, column e%32 of token row b
+                // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
+                uint32_t off;
+                if constexpr (scores_is_rm) {
+                    off = score_l1_offset + (b * score_page_stride) + (e * 2u);
+                } else {
+                    off = score_l1_offset + ((e >> 5) * score_page_stride) + tile_elem_offset(b, e & 31u);
+                }
+                sel[j] = bf16_to_f32(rw[off >> 1]);
+                sum += sel[j];
             }
-            // TILE: expert e sits in tile e/32 of the score row, column e%32 of token row b
-            // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
-            uint32_t off;
-            if constexpr (scores_is_rm) {
-                off = score_l1_offset + (b * score_page_stride) + (e * 2u);
-            } else {
-                off = score_l1_offset + ((e >> 5) * score_page_stride) + tile_elem_offset(b, e & 31u);
+            const float inv = scaling / (sum + eps);
+            for (uint32_t j = 0; j < top_k; ++j) {
+                const uint32_t e = sel_ids[b * top_k + j];
+                if (e >= num_weights) {
+                    continue;
+                }
+                const uint32_t pos = rank[e];
+                if (pos < num_active) {
+                    ids[num_weights + pos * batch + b] = f32_to_bf16_bits(sel[j] * inv);
+                }
             }
-            sel[j] = bf16_to_f32(rw[off >> 1]);
-            sum += sel[j];
         }
-        const float inv = scaling / (sum + eps);
-        for (uint32_t j = 0; j < top_k; ++j) {
-            const uint32_t e = sel_ids[b * top_k + j];
-            if (e >= num_weights) {
-                continue;
-            }
-            const uint32_t pos = rank[e];
-            if (pos < num_active) {
-                ids[num_weights + pos * batch + b] = f32_to_bf16_bits(sel[j] * inv);
-            }
+
+        // `num_active` may over-provision the union (its exact size is data dependent once B > 1, while
+        // the program -- and any trace containing it -- is compiled for a fixed expert count). Unused
+        // slots inside the loop bound therefore have to be *harmless* rather than merely unread: they
+        // name expert 0 (a valid weight address, so the fetch cannot run off the compile-time address
+        // table) with an all-zero weight column, contributing nothing to any token. They do cost one
+        // redundant weight fetch each, so passing the exact union size is still the fast path.
+        for (uint32_t i = n; i < num_active; ++i) {
+            ids[i] = 0;  // the weight region for these slots was zeroed above
         }
-    }
+        for (uint32_t i = (n > num_active ? n : num_active); i < num_weights; ++i) {
+            ids[i] = sentinel;  // never read by the fetch loop; keeps the broadcast buffer well defined
+        }
 
-    // `num_active` may over-provision the union (its exact size is data dependent once B > 1, while
-    // the program -- and any trace containing it -- is compiled for a fixed expert count). Unused
-    // slots inside the loop bound therefore have to be *harmless* rather than merely unread: they
-    // name expert 0 (a valid weight address, so the fetch cannot run off the compile-time address
-    // table) with an all-zero weight column, contributing nothing to any token. They do cost one
-    // redundant weight fetch each, so passing the exact union size is still the fast path.
-    for (uint32_t i = n; i < num_active; ++i) {
-        ids[i] = 0;  // the weight region for these slots was zeroed above
-    }
-    for (uint32_t i = (n > num_active ? n : num_active); i < num_weights; ++i) {
-        ids[i] = sentinel;  // never read by the fetch loop; keeps the broadcast buffer well defined
-    }
+        // ---- 2. Broadcast the ids to all other cores' L1 (same cb_bcast address). ----
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(bcast_l1),
+            MulticastEndpoint{},
+            bcast_page_bytes,
+            num_dests,
+            {.offset_bytes = 0},
+            {.noc_x_start = mcast_start_x,
+             .noc_y_start = mcast_start_y,
+             .noc_x_end = mcast_end_x,
+             .noc_y_end = mcast_end_y,
+             .addr = bcast_l1},
+            /*linked=*/false);
+        noc.async_write_barrier();
 
-    // ---- 2. Broadcast the ids to all other cores' L1 (same cb_bcast address). ----
-    noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(bcast_l1),
-        MulticastEndpoint{},
-        bcast_page_bytes,
-        num_dests,
-        {.offset_bytes = 0},
-        {.noc_x_start = mcast_start_x,
-         .noc_y_start = mcast_start_y,
-         .noc_x_end = mcast_end_x,
-         .noc_y_end = mcast_end_y,
-         .addr = bcast_l1},
-        /*linked=*/false);
-    noc.async_write_barrier();
-
-    // ---- 3. Signal the other cores via the expert-ids-ready semaphore. ----
-    Semaphore<> sem(sem_id);
-    sem.set(1);
-    sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
+        // ---- 3. Signal the other cores via the expert-ids-ready semaphore. ----
+        Semaphore<> sem(sem_id);
+        sem.set(1);
+        sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
+    }
 
     // ---- 4. Publish the activation to this core's compute kernel. ----
 #if defined(INPUT_RM_ROWS)
@@ -524,7 +546,10 @@ void kernel_main() {
     (void)sem_input_id;
 #else
     // Wait for the {1,0} input sender's multicast of the DRAM-resident activation row.
-    Semaphore<>(sem_input_id).wait(1);
+    {
+        DeviceZoneScopedN("FE_WAIT_INPUT");
+        Semaphore<>(sem_input_id).wait(1);
+    }
     publish_input(cb_input_id, k_tiles);
 #endif
 
@@ -576,5 +601,8 @@ void kernel_main() {
         get_arg_val<uint32_t>(18),
         shared,
         shared_gate_up_args,
-        shared_down_args);
+        shared_down_args,
+        gate_up_k_shards,
+        gate_up_col_shards,
+        sem_id);
 }

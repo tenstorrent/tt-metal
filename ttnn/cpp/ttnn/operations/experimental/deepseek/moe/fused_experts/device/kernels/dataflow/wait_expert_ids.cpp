@@ -110,6 +110,9 @@ void kernel_main() {
     constexpr uint32_t kSharedCtBase = kDownAddrBase + num_weights;
     constexpr auto shared_gate_up_args = TensorAccessorArgs<kSharedCtBase + kSharedExpertCtArgs>();
     constexpr auto shared_down_args = TensorAccessorArgs<shared_gate_up_args.next_compile_time_args_offset()>();
+    constexpr uint32_t gate_up_k_shards = get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset());
+    constexpr uint32_t gate_up_col_shards =
+        get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset() + 1);
     const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13));
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
@@ -138,12 +141,14 @@ void kernel_main() {
     (void)sem_input_id;
 #else
     // Arrived via the {1,0} input sender's multicast.
-    Semaphore<>(sem_input_id).wait(1);
+    {
+        DeviceZoneScopedN("FE_WAIT_INPUT");
+        Semaphore<>(sem_input_id).wait(1);
+    }
     publish_input(cb_input_id, k_tiles);
 #endif
 
-    // Expert ids arrived, then run the per-expert reader loop.
-    Semaphore<>(sem_id).wait(1);
+    // The reader loop waits for the expert ids itself, after any shared-expert gate_up.
     Noc noc;
     run_reader_loop(
         noc,
@@ -192,5 +197,8 @@ void kernel_main() {
         get_arg_val<uint32_t>(11),
         shared,
         shared_gate_up_args,
-        shared_down_args);
+        shared_down_args,
+        gate_up_k_shards,
+        gate_up_col_shards,
+        sem_id);
 }

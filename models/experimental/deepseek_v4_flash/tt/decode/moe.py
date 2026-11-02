@@ -12,6 +12,7 @@ HEIGHT_SHARDED shard height, 1 on the single-token decode path, and *not* the re
 moe_intermediate_size; ``k`` num_experts_per_tok; ``K`` / ``N`` matmul in/out features.
 """
 
+import math
 import os
 from typing import NamedTuple, Optional
 
@@ -607,9 +608,11 @@ FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not i
 
 
 def _fused_parallel_grid_y(intermediate: int) -> int:
-    """Rows of the 6-expert grid for a per-rank ``intermediate``: 8, or 9 when its tiles do not
-    split evenly over 16 cores. Mirrors ``parallel_grid_y`` in the program factory."""
-    return _FUSED_GRID_Y if (intermediate // _FUSED_TILE) % _FUSED_DOWN_CORES_PER_EXPERT == 0 else _FUSED_GRID_Y + 1
+    """Rows of the 6-expert grid for a per-rank ``intermediate``: 9 when its tiles split evenly over
+    18 cores but not 16, else 8. Mirrors ``parallel_grid_y`` in the program factory."""
+    i_tiles = intermediate // _FUSED_TILE
+    tall = i_tiles % _FUSED_DOWN_CORES_PER_EXPERT != 0 and i_tiles % (_FUSED_DOWN_CORES_PER_EXPERT + 2) == 0
+    return _FUSED_GRID_Y + 1 if tall else _FUSED_GRID_Y
 
 
 def _fused_parallel(top_k: int, device, intermediate: int) -> bool:
@@ -668,6 +671,15 @@ def _tp_cluster_axis(device: ttnn.MeshDevice) -> int:
     if len(shape) == 2 and shape[1] > 1:
         return 1
     return 0
+
+
+def _tp_cluster_axes(device: ttnn.MeshDevice, tp_size: int) -> tuple[int, ...]:
+    """Mesh axes the TP group's all-reduce runs over, one after the other: both axes when TP spans a
+    whole 2D submesh (TP12 on 3x4), else the single :func:`_tp_cluster_axis`."""
+    shape = tuple(device.shape)
+    if tp_size == device.get_num_devices() and len(shape) == 2 and min(shape) > 1:
+        return (1, 0)
+    return (_tp_cluster_axis(device),)
 
 
 def _pack_gate_up_for_tp(gate_up: torch.Tensor, tp_size: int) -> torch.Tensor:
@@ -754,6 +766,19 @@ def _fused_nd_dram_config(rows: int, cols: int, shard_width: int, dram_banks: in
             shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
         ),
     )
+
+
+def _gate_up_k_shards(col_shards: int, k_tiles: int, dram_banks: int) -> int:
+    """K-row pieces per gate_up column shard that spread an expert evenly over the DRAM banks.
+
+    Shard ``p`` sits on bank ``p % dram_banks``, so ``col_shards`` column shards alone cover banks
+    ``0 .. col_shards - 1`` only (6 of 8 at TP12's ``I/32 == 6``), on every expert. Cutting each
+    column into ``dram_banks / gcd(col_shards, dram_banks)`` K-pieces makes the shard count a
+    multiple of the bank count, so every bank holds the same number. Falls back to whole-K shards
+    when ``k_tiles`` does not divide.
+    """
+    pieces = dram_banks // math.gcd(col_shards, dram_banks)
+    return pieces if k_tiles % pieces == 0 else 1
 
 
 def _load_fused_weight(
@@ -883,6 +908,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         cache: Optional[WeightCache] = None,
         system_config=None,
         tp_size: int = 1,
+        balance_dram_banks: bool = False,
     ):
         """Upload every expert once, as the op's DRAM ND-sharded weights.
 
@@ -890,7 +916,10 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         entirely. Gate_up lands as ``[D, 2*swiglu_cols]``-per-core interleaved shards, down as
         ``[I, D/num_cores]`` per core. Under TP the gate_up shards N (so the op runs the rank's
         ``I/TP`` slice) and down shards K, whose partials
-        :class:`DeepSeekV4SparseMoeBlock` all-reduces. ``system_config`` supplies the op geometry
+        :class:`DeepSeekV4SparseMoeBlock` all-reduces. ``balance_dram_banks`` cuts each gate_up
+        shard into K-row pieces (see :func:`_gate_up_k_shards`) so an expert with fewer column
+        shards than a multiple of the bank count still reads from every bank; the decode op reads
+        that layout, the prefill op does not yet. ``system_config`` supplies the op geometry
         (``moe.fused_num_cores`` / ``fused_dram_banks``), the L1 expert block size and
         ``routing_eps``; ``dtype`` defaults to the profile's weight dtype, and an explicit one
         wins. Raises if the config is not the fused layout this op is hard-wired to.
@@ -950,7 +979,12 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 f"(H == {fused_hidden} for moe.fused_num_cores={num_cores}, I % {swiglu_cols} == 0); "
                 f"got H={self.hidden}, I={self.intermediate}"
             )
-        gate_up_nd = _fused_nd_dram_config(self.hidden, 2 * self.intermediate, 2 * swiglu_cols, dram_banks)
+        k_shards = (
+            _gate_up_k_shards(self.intermediate // swiglu_cols, self.hidden // _FUSED_TILE, dram_banks)
+            if balance_dram_banks
+            else 1
+        )
+        gate_up_nd = _fused_nd_dram_config(self.hidden // k_shards, 2 * self.intermediate, 2 * swiglu_cols, dram_banks)
         down_nd = _fused_nd_dram_config(self.intermediate, self.hidden, self.hidden // num_cores, dram_banks)
 
         # Upload every expert once as the op's DRAM ND-sharded weights (gate_up interleaved
@@ -961,11 +995,14 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if self.tp_size > 1 else None
         down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if self.tp_size > 1 else None
         tp_tag = f".tp{self.tp_size}" if self.tp_size > 1 else ""
+        # A cache hit restores the serialized ND-shard spec, not ``gate_up_nd``, so each K-split
+        # needs its own entry.
+        k_tag = f".k{k_shards}" if k_shards > 1 else ""
 
         self._gate_up_fused: list[ttnn.Tensor] = []
         self._down_fused: list[ttnn.Tensor] = []
         for e in range(self.num_experts):
-            gu_f_name, dn_f_name = f"experts.{e}.gate_up_fused{tp_tag}", f"experts.{e}.down_fused{tp_tag}"
+            gu_f_name, dn_f_name = f"experts.{e}.gate_up_fused{tp_tag}{k_tag}", f"experts.{e}.down_fused{tp_tag}"
             need_torch = not (cache.hit(gu_f_name, dtype) and cache.hit(dn_f_name, dtype))
             if cache.require_cache and need_torch:
                 raise RuntimeError(f"weight cache miss for routed expert {e} (gate_up/down) with require_cache=True")
@@ -1357,13 +1394,15 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             shared = self.shared_rows(x_flat)  # [1, 1, T, D]
             combined = ttnn.add(routed, shared)
         if t == 1 and self.experts.output_memory_config is not None:
-            partial = combined
-            combined = ttnn.experimental.deepseek.width_sharded_all_reduce(
-                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
-            )
-            ttnn.deallocate(partial)
+            for axis in _tp_cluster_axes(self.device, self.tp_size):
+                partial = combined
+                combined = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                    partial, cluster_axis=axis, num_links=2, topology=CCL_TOPOLOGY
+                )
+                ttnn.deallocate(partial)
         else:
             combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
             if self.tp_size > 1:
-                combined = _tp_all_reduce(combined, self.device)
+                for axis in _tp_cluster_axes(self.device, self.tp_size):
+                    combined = ttnn.all_reduce(combined, cluster_axis=axis, num_links=2, topology=CCL_TOPOLOGY)
         return ttnn.reshape(combined, [b, s, 1, h])

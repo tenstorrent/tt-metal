@@ -133,6 +133,9 @@ void kernel_main() {
     constexpr uint32_t kSharedCtBase = kDownAddrBase + num_weights;
     constexpr auto shared_gate_up_args = TensorAccessorArgs<kSharedCtBase + kSharedExpertCtArgs>();
     constexpr auto shared_down_args = TensorAccessorArgs<shared_gate_up_args.next_compile_time_args_offset()>();
+    constexpr uint32_t gate_up_k_shards = get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset());
+    constexpr uint32_t gate_up_col_shards =
+        get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset() + 1);
     const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13));
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -181,47 +184,49 @@ void kernel_main() {
     const auto input = TensorAccessor(input_args, input_addr);
 
     // ---- 1. Read all activation tiles into cb_input. ----
-    cb_input.reserve_back(input_num_pages);
-    const uint32_t input_l1 = cb_input.get_write_ptr();
-    for (uint32_t p = 0; p < input_num_pages; ++p) {
-        const uint32_t src_page = p / src_tiles_per_page;
-        const uint32_t src_off = (p % src_tiles_per_page) * input_page_size;
-        noc.async_read(
-            input,
-            cb_input,
-            input_page_size,
-            {.page_id = src_page, .offset_bytes = src_off},
-            {.offset_bytes = p * input_page_size});
+    {
+        DeviceZoneScopedN("FE_INPUT_BCAST");
+        cb_input.reserve_back(input_num_pages);
+        const uint32_t input_l1 = cb_input.get_write_ptr();
+        for (uint32_t p = 0; p < input_num_pages; ++p) {
+            const uint32_t src_page = p / src_tiles_per_page;
+            const uint32_t src_off = (p % src_tiles_per_page) * input_page_size;
+            noc.async_read(
+                input,
+                cb_input,
+                input_page_size,
+                {.page_id = src_page, .offset_bytes = src_off},
+                {.offset_bytes = p * input_page_size});
+        }
+        noc.async_read_barrier();
+
+        // ---- 2. Broadcast the activation to all other cores' L1 (same cb_input address). ----
+        const uint32_t total_bytes = input_page_size * input_num_pages;
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(input_l1),
+            MulticastEndpoint{},
+            total_bytes,
+            num_dests,
+            {.offset_bytes = 0},
+            {.noc_x_start = mcast_start_x,
+             .noc_y_start = mcast_start_y,
+             .noc_x_end = mcast_end_x,
+             .noc_y_end = mcast_end_y,
+             .addr = input_l1},
+            /*linked=*/false);
+        noc.async_write_barrier();
+
+        // ---- 3. Signal the other cores via the input-ready semaphore. ----
+        Semaphore<> sem(sem_input_id);
+        sem.set(1);
+        sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
+
+        // ---- 4. Publish the activation to this core's compute kernel. ----
+        cb_input.push_back(input_num_pages);
     }
-    noc.async_read_barrier();
-
-    // ---- 2. Broadcast the activation to all other cores' L1 (same cb_input address). ----
-    const uint32_t total_bytes = input_page_size * input_num_pages;
-    noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(input_l1),
-        MulticastEndpoint{},
-        total_bytes,
-        num_dests,
-        {.offset_bytes = 0},
-        {.noc_x_start = mcast_start_x,
-         .noc_y_start = mcast_start_y,
-         .noc_x_end = mcast_end_x,
-         .noc_y_end = mcast_end_y,
-         .addr = input_l1},
-        /*linked=*/false);
-    noc.async_write_barrier();
-
-    // ---- 3. Signal the other cores via the input-ready semaphore. ----
-    Semaphore<> sem(sem_input_id);
-    sem.set(1);
-    sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
-
-    // ---- 4. Publish the activation to this core's compute kernel. ----
-    cb_input.push_back(input_num_pages);
 #endif
 
-    // ---- 5. Wait for the expert-id broadcast, then run the per-expert reader loop. ----
-    Semaphore<>(sem_id).wait(1);
+    // ---- 5. Run the per-expert reader loop (it waits for the expert-id broadcast). ----
     run_reader_loop(
         noc,
         num_active,
@@ -269,5 +274,8 @@ void kernel_main() {
         get_arg_val<uint32_t>(11),
         shared,
         shared_gate_up_args,
-        shared_down_args);
+        shared_down_args,
+        gate_up_k_shards,
+        gate_up_col_shards,
+        sem_id);
 }
