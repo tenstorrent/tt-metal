@@ -12,6 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from itertools import product
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -482,23 +483,19 @@ def test_batch_norm_output_Default(input_shapes, device):
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([3, 17, 47, 32]),
-        torch.Size([1, 8, 24, 42]),
-    ],
-)
-@pytest.mark.parametrize(
-    "training, weight, bias",
-    [
-        (True, True, True),
-        (True, False, False),
-        (False, True, True),
-        (False, False, False),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
+    "input_shapes, training, weight, bias, input_dtype, param_dtype",
+    merge_gate_subset(
+        [
+            (input_shapes, *affine, *dtypes)
+            for input_shapes, affine, dtypes in product(
+                [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
+                [(True, True, True), (True, False, False), (False, True, True), (False, False, False)],
+                [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
+            )
+        ],
+        keep=lambda case: case[:4] == (torch.Size([1, 8, 24, 42]), True, True, True)
+        and case[4:] in [("bfloat16", "bfloat16"), ("float32", "float32")],
+    ),
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
@@ -819,6 +816,7 @@ def test_batch_norm_aliased_running_and_affine_tensors(device):
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=1.0, rtol=0.0, atol=0.0, frobenius_threshold=0.0)
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_program_cache_shape_collision(device):
     """Covers #46018: program cache collision in BatchNormOperation.
 
@@ -886,6 +884,7 @@ def test_batch_norm_program_cache_shape_collision(device):
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_training_avoids_variance_cancellation(device):
     """Regression test for #45968: avoid bf16 E[x^2] - E[x]^2 cancellation in training mode."""
 
@@ -1136,7 +1135,7 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
     "check_mean, check_var",
     [
         (True, False),  # mean-only: batch_var must still be drained
-        (False, True),  # var-only: batch_mean must still be drained (FPU)
+        pytest.param(False, True, marks=pytest.mark.merge_gate),  # var-only: batch_mean must still be drained (FPU)
     ],
 )
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
@@ -1244,6 +1243,7 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
         )
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_running_var_bessel_correction(device):
     """
     Test that ttnn.batch_norm training mode applies Bessel's correction factor m / (m - 1)

@@ -195,3 +195,14 @@ def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
 
 def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan")):
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
+
+
+def merge_gate_subset(cases, keep):
+    """
+    Parametrize values that put only some cases of a test in the Merge Gate.
+    Marks on stacked parametrize decorators combine as a union, so the axes are collapsed into one
+    list of tuples and only the kept tuples get the mark.
+    cases: iterable of argument tuples
+    keep: predicate on a case tuple
+    """
+    return [pytest.param(*case, marks=pytest.mark.merge_gate if keep(case) else ()) for case in cases]

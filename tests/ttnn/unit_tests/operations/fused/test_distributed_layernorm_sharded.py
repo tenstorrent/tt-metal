@@ -15,6 +15,7 @@ import ttnn
 import torch
 import pytest
 import math
+from itertools import product
 from loguru import logger
 
 from tt_py_test_utils_common.utility_functions import (
@@ -25,6 +26,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     make_sharded_norm_mem_config,
     to_poisoned_sharded,
 )
+from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 
 from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
@@ -316,10 +318,14 @@ def run_pre_allgather_layernorm(
 
 
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("input_width", [2048])
-@pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "seed, num_devices, input_df",
+    merge_gate_subset(
+        product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16]),
+        keep=lambda case: case == (0, 4, ttnn.bfloat16),
+    ),
+)
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 4),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
