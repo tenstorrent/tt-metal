@@ -796,7 +796,8 @@ def test_tilize_int32_lossless(device, shape, use_multicore):
     assert torch.equal(input_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [(48, 80), (33, 65)])
+# (48, 1264) pads to 40 tiles per row, which takes the block-interleaved factory when multicore.
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65), (48, 1264)])
 @pytest.mark.parametrize("use_multicore", [False, True])
 def test_tilize_with_val_padding_int32_lossless(device, shape, use_multicore):
     """tilize_with_val_padding must preserve the int32 data region exactly."""
@@ -867,6 +868,19 @@ def test_tilize_with_val_padding_width_sharded_int32_lossless(device):
     output_tensor = ttnn.to_torch(tt_output)
 
     assert torch.equal(input_tensor, output_tensor[:, :height_in, :])
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32])
+def test_tilize_32bit_tiny_tile_rejected_on_quasar(device, dtype, expect_error):
+    """Quasar tilizes FLOAT32 and INT32 through DEST, which handles 32x32 tiles only."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only validation")
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.int32
+    tt_input = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch_dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "tilize into tiny tiles"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile([16, 32]))
 
 
 @pytest.mark.parametrize(
