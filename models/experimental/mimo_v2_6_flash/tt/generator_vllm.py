@@ -221,6 +221,11 @@ SPEC_DEFER = os.environ.get("MIMO_SPEC_DEFER", "1") == "1"
 # blocking), its accept page, and which TP chips' copies of either differ from chip 0's; per prefill its rows, per
 # plain decode its positions, and per propose the plugin's commits. Records carry ``seq``, the host's enqueue order.
 AUDIT_DIR = os.environ.get("MIMO_VERIFY_AUDIT", "")
+# MIMO_MASK_PREFILLING=1 (experiment): a verify or reloading decode row whose column 0 lies more than
+# MASK_PREFILLING_MARGIN positions past what its request has written (a request still in chunked prefill, which the
+# plugin offers at prompt_len - 1 while most of its prompt is unwritten) runs as a gap: no K / V write, no attention.
+MASK_PREFILLING = os.environ.get("MIMO_MASK_PREFILLING") == "1"
+MASK_PREFILLING_MARGIN = 64
 _audit_lock = threading.Lock()
 _audit_file = None
 
@@ -548,6 +553,9 @@ class MiMoV2ForCausalLM:
         self.chain_stats["dflash_resets"] = 0
         # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
         self.prefill_ends = [{} for _ in range(self.dp)]
+        # MIMO_MASK_PREFILLING: per lane slot, one past the furthest position its request wrote; rows masked so far.
+        self._extent = [{} for _ in range(self.dp)]
+        self.masked_rows = 0
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -817,6 +825,32 @@ class MiMoV2ForCausalLM:
                 out[g] = torch.as_tensor(tables[i][row])
         return out
 
+    def _mask_prefilling(self, positions):
+        """MIMO_MASK_PREFILLING: ``positions`` ([B] or [B, 1 + K]) with every row whose column 0 lies more than the
+        margin past its request's written extent set to -1 (a gap); then the extents the other rows reach."""
+        p0 = positions if positions.dim() == 1 else positions[:, 0]
+        masked = []
+        for r in range(p0.numel()):
+            lane, slot = divmod(r, self.per_lane)
+            p, extent = int(p0[r]), self._extent[lane].get(slot)
+            if p >= 0 and extent is not None and p > extent + MASK_PREFILLING_MARGIN:
+                masked.append([r, p, extent])
+        if masked:
+            positions = positions.clone()
+            for r, _, _ in masked:
+                positions[r] = -1
+            if self.masked_rows // 256 != (self.masked_rows + len(masked)) // 256:
+                logger.info(f"MiMo MIMO_MASK_PREFILLING: {self.masked_rows + len(masked)} rows masked, last {masked}")
+            self.masked_rows += len(masked)
+            if AUDIT_DIR:
+                _audit("masked", rows=masked)
+        for r in range(p0.numel()):
+            lane, slot = divmod(r, self.per_lane)
+            top = int(positions[r].max())
+            if top >= 0:
+                self._extent[lane][slot] = max(self._extent[lane].get(slot, 0), top + 1)
+        return positions
+
     def _next_audit_seq(self):
         self._audit_seq += 1
         return self._audit_seq
@@ -895,6 +929,8 @@ class MiMoV2ForCausalLM:
             # The MTP history: a chunk starting where the slot's last one ended continues its request.
             continues[i] = start > 0 and self.prefill_ends[lane].get(slot) == start
             self.prefill_ends[lane][slot] = int(ends[i])
+            extent = self._extent[lane].get(slot, 0) if start > 0 else 0
+            self._extent[lane][slot] = max(extent, int(ends[i]))
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
                 self.models[lane].set_vllm_page_tables(rows_of_lane)
@@ -1098,6 +1134,8 @@ class MiMoV2ForCausalLM:
         if reload_inputs:
             tokens = torch.as_tensor(tokens).reshape(-1)
             positions = torch.as_tensor(start_pos).reshape(-1)
+            if MASK_PREFILLING:
+                positions = self._mask_prefilling(positions)
             rows = positions.numel()
             if rows > self.dp * self.per_lane:
                 raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
@@ -1151,6 +1189,10 @@ class MiMoV2ForCausalLM:
             if rng is not None:
                 self._check_sampling(lane, model, handle, rng, active)
             self.decode_positions[lane] = torch.where(active, pos + 1, pos)
+            if MASK_PREFILLING:
+                for s in range(last - first):
+                    if active[s]:
+                        self._extent[lane][s] = max(self._extent[lane].get(s, 0), int(pos[s]) + 1)
             handles.append((lane, last - first, handle))
             live = [s for s in range(last - first) if active[s]]
             self._seen(lane, live)
@@ -1258,6 +1300,8 @@ class MiMoV2ForCausalLM:
             raise ValueError(f"{rows} verify rows > {self.dp} lanes x {self.per_lane} slots")
         pending = self._tip
         relayed = self._check_chain(chain_rows, chain_tip, defer, tokens, positions, counts, accepted_counts)
+        if MASK_PREFILLING:
+            positions = self._mask_prefilling(positions)
         if relayed:
             # The block the host lays out for a chain row: placeholder tokens at the provisional positions (the page
             # tables are the row's whole table, indexed by absolute position: any real p0 below the bound reads them).
@@ -1478,6 +1522,18 @@ class MiMoV2ForCausalLM:
             for lane, p in enumerate(lanes):
                 if k < len(p):
                     pending.append((lane, p[k], self._enqueue_verify_pass(lane, p[k], tables)))
+                    if AUDIT_DIR:
+                        vp = p[k]
+                        _audit(
+                            "lpass",
+                            seq=self._next_audit_seq(),
+                            k=k,
+                            lane=lane,
+                            answers=[[int(s), int(r), int(c)] for s, r, c in vp.answers],
+                            table_rows=[None if r is None else int(r) for r in vp.table_rows],
+                            host_tokens=[int(x) for x in vp.tokens],
+                            host_positions=[int(x) for x in vp.positions],
+                        )
             for lane, vp, handle in pending:
                 model = self.models[lane]
                 t = time.perf_counter()
