@@ -1111,23 +1111,22 @@ def get_tp_mesh_composer(mesh_device, sp_axis: int = 0):
     )
 
 
-def get_sp_mesh_composer(mesh_device, sp_axis: int = 0):
+def get_sp_mesh_composer(mesh_device, sp_axis: int = 0, concat_dim: int = 0):
     """
     Create mesh composer for tensors replicated across the TP axis.
 
-    Composes along the SP axis only, taking TP index 0.
+    Composes along the SP axis only, concatenating the SP shards on tensor dim ``concat_dim`` and taking
+    TP index 0 (the override shape spans the SP axis, so only one TP replica is read back).
     Use for gate outputs that are replicated across TP after all_reduce_async
-    (e.g., logits, topk_indices, topk_weights).
+    (e.g., logits, topk_indices, topk_weights), or with concat_dim=2 for a TP-replicated KV cache.
     """
-    if sp_axis == 0:
-        return ttnn.create_mesh_composer(
-            mesh_device,
-            ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(mesh_device.shape[0], 1)),
-        )
-    return ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig([1, 0], ttnn.MeshShape(1, mesh_device.shape[1])),
-    )
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    # The size-1 TP axis concatenates nothing; it only needs a dim distinct from concat_dim.
+    dims = [1 if concat_dim == 0 else 0] * 2
+    dims[sp_axis] = concat_dim
+    override = [1, 1]
+    override[sp_axis] = mesh_device.shape[sp_axis]
+    return ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims, ttnn.MeshShape(*override)))
 
 
 def get_ep_mesh_composer(mesh_device, sp_axis: int = 0):
