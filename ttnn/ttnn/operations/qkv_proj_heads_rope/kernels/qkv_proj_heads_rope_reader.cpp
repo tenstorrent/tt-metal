@@ -8,8 +8,8 @@
 // Table rows are read in chunks between x rounds (cb_rotary_table holds one row per distinct sequence
 // position of a block), so the reads and the sign flip run in the slack while compute works through the
 // K-loop.
-// After the K-loop the reader stores every out_write_nocs-th output row from cb_out_tiles_noc0 on NoC0
-// (rows 1, 1 + out_write_nocs, ...); the writer stores the rest on NoC1.
+// After the K-loop the reader stores the second half of every output unit (tail_units.hpp) from
+// cb_out_tiles_noc0 on NoC0 when out_write_nocs == 2; the writer stores the rest on NoC1.
 // The sin sign flip is a tile-content transform no dataflow helper provides.
 
 #include <cstdint>
@@ -62,7 +62,8 @@ void kernel_main() {
     constexpr uint32_t num_heads = get_compile_time_arg_val(12);
     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(13);
     constexpr uint32_t cb_bias = get_compile_time_arg_val(14);
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    constexpr bool split_units = get_compile_time_arg_val(15) != 0;
+    constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto q_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
@@ -225,21 +226,46 @@ void kernel_main() {
         }
 
         if constexpr (out_write_nocs > 1) {
-            if (rows > 1) {
-                // Waiting for the block's first odd row = waiting for the K-loop + first epilogue rows.
+            // Units of >= 2 heads: the second half; one-head units: the odd ones (tail_units.hpp).
+            const uint32_t first_split = qkv_store::first_split_row<tiles_per_head, n_tiles, split_units>(rows);
+            const uint32_t units = qkv_store::num_units(rows, first_split);
+            {
+                // Waiting for the block's first NoC0 unit = waiting for the K-loop + the first epilogues.
                 MaybeDeviceZoneScope("reader_store_wait_first");
-                cb_wait_front(cb_out_tiles_noc0, n_tiles);
+                const auto first = qkv_store::unit_of<tiles_per_head, n_tiles>(0, first_split);
+                const uint32_t mid = qkv_store::half_mid<tiles_per_head, split_units>(first);
+                if (mid < first.t1) {
+                    cb_wait_front(cb_out_tiles_noc0, first.t1 - mid);
+                } else if (units > 1) {
+                    cb_wait_front(cb_out_tiles_noc0, first.t1 - first.t0);
+                }
             }
             MaybeDeviceZoneScope("reader_store");
-            for (uint32_t row = 1; row < rows; row += out_write_nocs) {
-                qkv_store::store_row<
+            for (uint32_t u = 0; u < units; ++u) {
+                auto unit = qkv_store::unit_of<tiles_per_head, n_tiles>(u, first_split);
+                const uint32_t mid = qkv_store::half_mid<tiles_per_head, split_units>(unit);
+                if (mid < unit.t1) {
+                    unit.t0 = mid;
+                } else if (!(u & 1)) {
+                    continue;
+                }
+                qkv_store::store_tiles<
                     cb_out_tiles_noc0,
                     n_tiles,
                     tiles_per_head,
                     num_heads,
                     seq_tiles,
                     tile_bytes,
-                    last_valid_rows>(noc, first_row + row, third, first_head, q_accessor, k_accessor, v_accessor);
+                    last_valid_rows>(
+                    noc,
+                    first_row + unit.row,
+                    third,
+                    first_head,
+                    q_accessor,
+                    k_accessor,
+                    v_accessor,
+                    unit.t0,
+                    unit.t1 - unit.t0);
             }
         }
     }

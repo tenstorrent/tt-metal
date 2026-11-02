@@ -440,6 +440,9 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
     ]
 
     last_valid_rows = input_tensor.shape[-2] % TILE
+    # kernels/tail_units.hpp: each output unit split across both NoCs, except with outputs in DRAM (measured
+    # slower there: 8x512 / 4x512 / 2x512 +2.5 / +3.5 / +5.4%).
+    split_units = int(outputs[0].memory_config().buffer_type != ttnn.BufferType.DRAM)
     reader_ct_args = [
         CB_ACTIVATION_BLOCK,
         CB_ROTARY_TABLE,
@@ -456,6 +459,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         NUM_HEADS,
         last_valid_rows,
         CB_BIAS,
+        split_units,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
@@ -480,6 +484,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         last_valid_rows,
         OUT_WRITE_NOCS,
         blocking.weight_depth,
+        split_units,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
     for output in outputs:
@@ -503,6 +508,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         blocking.seq_tiles,
         _dest_tiles(compute_kernel_config),
         CB_BIAS,
+        split_units,
     ]
 
     reader_rt = {}
