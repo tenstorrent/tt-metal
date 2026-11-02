@@ -37,6 +37,7 @@ void ValidateDFBSlotsPerNode(const ValidationContext& ctx, uint32_t max_slots_pe
 void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch);
 
 // scratchpad.cpp
-void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arch);
+// Validate scratchpad sharing on its selected nodes.
+void ValidateScratchpadPlacement(const ValidationContext& ctx, tt::ARCH arch);
 
 }  // namespace tt::tt_metal
