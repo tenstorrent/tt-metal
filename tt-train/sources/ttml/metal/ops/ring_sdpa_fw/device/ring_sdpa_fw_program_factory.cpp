@@ -15,15 +15,14 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-namespace {
-
-// Ring SDPA runs the chunking main ran, so nothing changes for it in this PR: one query tile-row per item
-// and, as main's pick_sk_chunk_t, the largest of four, two or one K/V tiles per step that divides the
-// per-device sequence (a ring shard can be a tile or two long). With that, the causal pairs land on the
-// cores exactly as on main. Its only test is the Galaxy ring test, which the single-chip and QB2 legs do
-// not run; the chunk knobs for ring come with the cost-based scheduler (PR 2) and its own ring CI run.
-SDPAForwardProgramConfig ring_chunking(const ttnn::Tensor& query) {
-    const uint32_t St = query.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+// Ring SDPA keeps the chunking main ran: one query tile-row per item and, as main's pick_sk_chunk_t, the
+// largest of four, two or one K/V tiles per step that divides the per-device sequence (a ring shard can be
+// a tile or two long). With that, the causal pairs land on the cores exactly as on main. The kernels it
+// runs are the shared sdpa_fw ones, so sdpa_fw_op_test drives this config through the ring steps on one
+// device (the Galaxy ring test is the only multi-device coverage). The chunk knobs for ring come with the
+// cost-based scheduler (PR 2) and its own ring CI run.
+SDPAForwardProgramConfig ring_chunking(uint32_t seq_len) {
+    const uint32_t St = seq_len / tt::constants::TILE_HEIGHT;
     uint32_t Sk_chunk_t = 4U;
     while (Sk_chunk_t > 1U && St % Sk_chunk_t != 0U) {
         Sk_chunk_t /= 2U;
@@ -33,8 +32,6 @@ SDPAForwardProgramConfig ring_chunking(const ttnn::Tensor& query) {
         .k_chunk_size = Sk_chunk_t * tt::constants::TILE_HEIGHT,
         .heads_per_item = 1U};
 }
-
-}  // namespace
 
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -82,7 +79,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .program_config = ring_chunking(query)};
+            .program_config = ring_chunking(query.padded_shape()[-2])};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -149,7 +146,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .program_config = ring_chunking(query)};
+            .program_config = ring_chunking(query.padded_shape()[-2])};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,

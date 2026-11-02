@@ -26,6 +26,8 @@
 #include "metal/common/const_utils.hpp"
 #include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "test_utils/random_data.hpp"
@@ -2104,4 +2106,49 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
     EXPECT_NE(
         ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_RingChunking_SingleDevice) {
+    // Ring SDPA runs this op once per ring step with ring_chunking's config and the mask the step calls for
+    // (causal on the diagonal shard, none on the earlier shards), on per-device shards as short as a tile
+    // or two. Only the Galaxy ring test runs that path end to end, so this walks the same steps on one
+    // device: every (shard length, mask) the ring sends, each twice, so the second shard of a shape is a
+    // program-cache hit that must read the new buffers.
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    constexpr uint32_t kRingSize = 4U, kDeviceRingId = 2U;  // steps 0..2 run: causal, none, none; step 3 skips
+    constexpr uint32_t kQHeads = 4U, kKvHeads = 2U, kHeadDim = 64U;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    for (const uint32_t shard_len : {32U, 64U, 96U, 256U}) {  // 1, 2, 3 (no pairs) and 8 tiles
+        const metal::SDPAForwardProgramConfig config = metal::ops::ring_sdpa_fw::ring_chunking(shard_len);
+        ASSERT_EQ(config.q_chunk_size, 32U) << "ring runs one query tile-row per item";
+        ASSERT_EQ(shard_len % config.k_chunk_size, 0U) << "the K/V step must divide the shard";
+        for (uint32_t step = 0; step < kRingSize; ++step) {
+            const auto [runs, mask_type] = metal::ops::get_device_execution_info(
+                kDeviceRingId,
+                step,
+                kRingSize,
+                metal::AttentionMaskType::Causal,
+                ttnn_fixed::distributed::RingShiftDirection::Forward);
+            if (!runs) {
+                continue;
+            }
+            const std::string name = "RingChunking_S" + std::to_string(shard_len) + "_step" + std::to_string(step);
+            const SDPATestConfig shard{
+                .batch_size = 1U,
+                .sequence_length = shard_len,
+                .query_dim = kQHeads * kHeadDim,
+                .key_value_dim = kKvHeads * kHeadDim,
+                .num_query_heads = kQHeads,
+                .num_key_heads = kKvHeads,
+                .mask_type = mask_type,
+                .program_config = config,
+                .test_name = name};
+            run_sdpa_test(shard);
+            const auto entries = device->num_program_cache_entries();
+            run_sdpa_test(shard);  // fresh inputs at other addresses
+            EXPECT_EQ(device->num_program_cache_entries(), entries) << name << ": the second shard must hit";
+        }
+    }
 }
