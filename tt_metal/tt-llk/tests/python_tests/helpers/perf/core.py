@@ -1017,6 +1017,27 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # The first measured kernel must not inherit the previous test's state: on Wormhole the PACK_ISOLATE
+        # kernel leaves tile state (not L1, not the config registers; only a tile reset clears it) that the
+        # measured kernels of the next test carry until their own PACK_ISOLATE. Run this test's PACK_ISOLATE
+        # kernel once unrecorded, so every measured pass starts from the state its own pack kernel leaves.
+        if not TestConfig.TEST_TARGET.run_simulator:
+            for templates, runtimes, run_type in self.run_configs:
+                if run_type != PerfRunType.PACK_ISOLATE:
+                    continue
+                self.current_run_type = run_type
+                if TestConfig.SPEED_OF_LIGHT:
+                    self.templates = templates + runtimes
+                    self.runtimes = []
+                    self.compile_time_formats = True
+                else:
+                    self.templates = templates
+                    self.runtimes = runtimes
+                self.generate_variant_hash()
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
             # We need to manually assign different modified templates here if the speed of light is set,
