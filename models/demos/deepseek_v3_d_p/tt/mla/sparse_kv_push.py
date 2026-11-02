@@ -106,7 +106,8 @@ class SparseKvPushPlanner:
         self._plan_key = None
         self._tables = None
         self._buffers = {}
-        self._starts = {}
+        self._start = None  # the host chunk start, written in place: one tensor whatever the starts
+        self._start_value = None
         self._managers = {}  # query rows -> sub-device manager of grids(query rows)
         # layer index -> plan whose prefix rows the previous layer already pushed into its buffer, beside its attention
         self.prefetched = {}
@@ -199,18 +200,29 @@ class SparseKvPushPlanner:
         device, so with chunk_start_tensor one cached plan serves any chunk of a traced replay."""
         start = chunk_start_tensor if chunk_start_tensor is not None else self._chunk_start(chunk_start)
         # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), as
-        # does a pipeline stage's first layer, so an unchanged address means the same indices.
-        key = (indices.buffer_address(), stripe_chunk, page_bytes, max_rows, start.buffer_address())
+        # does a pipeline stage's first layer, so an unchanged address means the same indices. A host chunk start
+        # always lands in the same tensor, so it keys by value.
+        start_key = start.buffer_address() if chunk_start_tensor is not None else chunk_start
+        key = (indices.buffer_address(), stripe_chunk, page_bytes, max_rows, start_key)
         if self._plan is None or self._plan_key != key:
             self._plan_key, self._plan = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start)
         return self._plan
 
     def _chunk_start(self, start: int) -> ttnn.Tensor:
-        if start not in self._starts:
-            self._starts[start] = _replicated(
-                self.mesh_device, torch.full((1, 1, 1, 1), start, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+        """The chunk start as a device tensor. Overwritten in place, ordered after the plans that read the old value."""
+        host = torch.full((1, 1, 1, 1), start, dtype=torch.int32)
+        if self._start is None:
+            self._start = _replicated(self.mesh_device, host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        elif self._start_value != start:
+            host = ttnn.from_torch(
+                host,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        return self._starts[start]
+            ttnn.copy_host_to_device_tensor(host, self._start)
+        self._start_value = start
+        return self._start
 
     def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start):
         n = self.mesh_device.get_num_devices()
