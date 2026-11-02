@@ -54,3 +54,11 @@ def test_moreh_fold_l1_short_row(device):
 
     passing, output_pcc = comp_allclose_and_pcc(expected, ttnn.to_torch(tt_output), rtol=0.05, atol=0.05)
     assert passing, output_pcc
+
+
+def test_moreh_fold_rejects_other_output_dtype(device, expect_error):
+    # Element size and format come from the input, so an fp32 output would be written as bf16 data.
+    x = ttnn.from_torch(torch.randn(1, 9, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(1, 1, 6, 10), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.operations.moreh.fold(x, out, (6, 10), (3, 3), (1, 1), (0, 0), (1, 1))
