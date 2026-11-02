@@ -58,8 +58,9 @@ def test_prefill_profile(mesh_device):
         ttnn.to_torch(logits)
         return time.time() - t0
 
-    print(f"PFPROF warm prefill {run():.3f} s", flush=True)
-    ttnn.synchronize_device(mesh_device)
+    # ONE traced prefill, as text_demo does (one per process). A second prefill_traced_chunked call without
+    # reset_state hangs once an eager tail follows the chunk replay (chip 3 at 20:37, chip 1 at 05:37; 640 = replay
+    # only repeats fine), so the profiled run is the first and only one. Its eager tail compiled in the warmup.
     if profiling:
         ttnn.ReadDeviceProfiler(mesh_device)
     signpost("prefill_start")
