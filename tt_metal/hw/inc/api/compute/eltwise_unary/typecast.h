@@ -62,6 +62,7 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  *  Bfp4_b <-> Bfp8_b
  *  Bfp4_b <-> Float16_b
  *  Bfp4_b <-> Float32
+ *  Bfp2_b: same pairs as Bfp4_b
  *  UInt16 <-> UInt32
  *  UInt16 <-> Int32
  *  UInt16 <-> UInt8
@@ -123,7 +124,13 @@ ALWI void typecast_tile(uint32_t idst) {
         is_fp32_dest_acc_en || (in_format != DataFormat::Int8 && out_format != DataFormat::Int8),
         "Int8 typecast requires Dest in 32 bit mode");
 
-    if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::UInt16) {
+    // Bfp2_b is unpacked to / packed from Dest like Bfp4_b, so at the SFPU level it takes the Bfp4_b arms.
+    if constexpr (in_format == DataFormat::Bfp2_b || out_format == DataFormat::Bfp2_b) {
+        typecast_tile<
+            in_format == DataFormat::Bfp2_b ? static_cast<uint32_t>(DataFormat::Bfp4_b) : IN_DTYPE,
+            out_format == DataFormat::Bfp2_b ? static_cast<uint32_t>(DataFormat::Bfp4_b) : OUT_DTYPE,
+            is_fp32_dest_acc_en>(idst);
+    } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::UInt16) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
@@ -477,7 +484,12 @@ ALWI void typecast_tile_init() {
         MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else
-    if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
+    // Mirror typecast_tile: Bfp2_b takes the Bfp4_b arms.
+    if constexpr (in_format == DataFormat::Bfp2_b || out_format == DataFormat::Bfp2_b) {
+        typecast_tile_init<
+            in_format == DataFormat::Bfp2_b ? static_cast<uint32_t>(DataFormat::Bfp4_b) : IN_DTYPE,
+            out_format == DataFormat::Bfp2_b ? static_cast<uint32_t>(DataFormat::Bfp4_b) : OUT_DTYPE>();
+    } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_fp16b, (APPROX)));
     } else if constexpr (
         in_format == DataFormat::UInt16 && (out_format == DataFormat::UInt32 || out_format == DataFormat::Int32)) {
