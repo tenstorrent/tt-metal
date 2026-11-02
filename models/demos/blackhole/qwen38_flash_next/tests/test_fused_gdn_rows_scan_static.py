@@ -135,7 +135,11 @@ def test_the_builder_passes_the_rows_and_the_split_as_compile_time_args():
     assert module.MAX_ROWS == 8 and module.PROGRAMS_PER_LAYER == 7 and module.COMMIT_PROGRAMS_PER_LAYER == 3
     # the wrap's six become one (+ the landing slice)
     pick = inspect.getsource(module.run_pick)
-    assert 'fp.program_meta(\n        NAME,\n        "commit_pick",' in pick and "fp.reader_kernel(PICK" in pick
+    assert (
+        'fp.program_meta(\n        NAME,\n        "commit_pick",' in pick
+        and "fp.reader_kernel(\n        PICK," in pick
+        and "defines=dims_defines()" in pick
+    )
 
 
 # --------------------------------------------------------------------------------------- the registry entry
@@ -386,7 +390,8 @@ def test_lanes_form_shares_the_compute_kernel_and_leaves_the_single_form_untouch
     pick = inspect.getsource(module.run_pick_lanes)
     assert (
         'fp.program_meta(\n        NAME,\n        "commit_pick_lanes",' in pick
-        and "fp.reader_kernel(PICK_LANES" in pick
+        and "fp.reader_kernel(\n        PICK_LANES," in pick
+        and "defines=dims_defines()" in pick
     )
     assert "outputs=((recurrent, 1),)," in pick
 
