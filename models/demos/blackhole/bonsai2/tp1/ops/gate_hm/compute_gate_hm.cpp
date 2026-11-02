@@ -5,6 +5,9 @@
 // it replaces: rms_norm(o, weight=w, eps) on [heads, 1, D], then silu(z) and a multiply, three ops).
 // sum(o^2) is o . o^T (a matmul against the transposed tile: [0,0] is the row-0 dot product); the per-row scale
 // is applied by sfpu_mul_bcast_col from column 0 of the rinv tile (row 0 carries it).
+// The copies alternate between fp32 (o, ss) and bf16 (w, z) CBs: copy_init sets up the copy but NOT srcA's data
+// format, so each copy is preceded by reconfig_data_format_srca (without it, bf16 w was read as fp32: A's 03:39
+// stage run, o right, o*w at ~0.25 magnitude with rel err 1).
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -51,6 +54,7 @@ void kernel_main() {
     cout.reserve_back(Dt);
     for (uint32_t t = 0; t < Dt; t++) {
         tile_regs_acquire();
+        reconfig_data_format_srca(cb_ss);  // fp32 (o, ss) and bf16 (w, z) CBs alternate
         copy_init(cb_ss);
         copy_tile(cb_ss, 0, 2);
         binop_with_scalar_tile_init();
@@ -58,9 +62,11 @@ void kernel_main() {
         add_unary_tile(2, eps_bits);
         rsqrt_tile_init();
         rsqrt_tile(2);  // DST[2] = rinv (row 0, column 0 is what the broadcast reads)
+        reconfig_data_format_srca(cb_o);  // fp32 (o, ss) and bf16 (w, z) CBs alternate
         copy_init(cb_o);
         copy_tile(cb_o, t, 0);
         if constexpr (stage >= 1) {
+            reconfig_data_format_srca(cb_w);  // fp32 (o, ss) and bf16 (w, z) CBs alternate
             copy_init(cb_w);
             copy_tile(cb_w, t, 1);
             mul_binary_tile_init();
@@ -71,6 +77,7 @@ void kernel_main() {
             sfpu_mul_bcast_col(0, 2);  // * rinv, per row from column 0
         }
         if constexpr (stage >= 3) {
+            reconfig_data_format_srca(cb_z);  // fp32 (o, ss) and bf16 (w, z) CBs alternate
             copy_init(cb_z);
             copy_tile(cb_z, t, 1);
             silu_tile_init();
