@@ -95,6 +95,22 @@ SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation
         tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
 }
 
+SparsePushPlanDeviceOperation::topology_return_value_t SparsePushPlanDeviceOperation::compute_output_topologies(
+    const operation_attributes_t&, const tensor_args_t& args) {
+    // Each chip plans its own top-k, so the tables differ: sharded on their rows over every chip in row-major order,
+    // the order high_bw_all_gather's full-mesh ring gathers them in. The compact indices are per chip, like the
+    // indices they rewrite.
+    using tt::tt_metal::distributed::MeshCoordinate;
+    using tt::tt_metal::distributed::MeshMapperConfig;
+    const auto& mesh_shape = args.indices.device()->shape();
+    const tt::tt_metal::distributed::MeshCoordinateRange chips(mesh_shape);
+    ttsl::SmallVector<MeshMapperConfig::Placement> rows_over_every_chip(mesh_shape.dims(), MeshMapperConfig::Shard{2});
+    return {
+        tt::tt_metal::TensorTopology(
+            mesh_shape, std::move(rows_over_every_chip), std::vector<MeshCoordinate>(chips.begin(), chips.end())),
+        args.indices.tensor_topology()};
+}
+
 SparsePushPlanDeviceOperation::tensor_return_value_t SparsePushPlanDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto specs = compute_output_specs(attrs, args);

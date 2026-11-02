@@ -145,7 +145,8 @@ class Push:
             page_bytes=self.page_bytes,
             chunk_start=self.start,
         )
-        _shard_over_mesh(table, self.mesh_device)
+        # The plan op labels each chip's table as its share of the rows, for the full-mesh gather.
+        assert all(isinstance(p, ttnn.PlacementShard) and p.dim == 2 for p in table.tensor_topology().placements())
         if self.tables is None:
             self.tables = _replicated(self.mesh_device, np.zeros((1, 1, table.shape[2] * N_DEV, table.shape[3])))
         ttnn.experimental.high_bw_all_gather(
@@ -165,13 +166,6 @@ class Push:
             data_valid_semaphore=self.sems[1],
             **slot,
         )
-
-
-def _shard_over_mesh(tensor, mesh_device):
-    """Mark `tensor` as sharded on dim 2 over every chip in row-major order, as the full-mesh gather expects."""
-    dist = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-    coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
-    tensor.update_tensor_topology(ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords))
 
 
 def _check(push, out, *, slot, part, chunk_start, tag):

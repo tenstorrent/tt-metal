@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from ttnn.core import divup, roundup
 
 # Which of a requester's needed rows a push sends: ALL, PREFIX (rows earlier chunks wrote) or REST.
 SparseKvPushPart = ttnn.experimental.SparseKvPushPart
@@ -52,11 +53,6 @@ def sparse_kv_push_fits(stripe_chunk: int, max_rows: int) -> bool:
     )
 
 
-def ceil_div(a: int, b: int) -> int:
-    """a / b rounded up."""
-    return -(-a // b)
-
-
 def packet_shape(mesh_device, page_bytes: int) -> tuple[int, int]:
     """(pages_per_packet, banks) of the push's compact layout for cache rows of `page_bytes` bytes: the push sends
     packets of as many rows as fit one fabric payload, dealt round robin over the DRAM banks, so every owner's run in
@@ -65,13 +61,6 @@ def packet_shape(mesh_device, page_bytes: int) -> tuple[int, int]:
     pages_per_packet = ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes
     banks = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).num_banks
     return pages_per_packet, banks
-
-
-def _shard_over_mesh(tensor, mesh_device):
-    """Mark `tensor` as sharded on dim 2 over every chip in row-major order, as the full-mesh gather expects."""
-    dist = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-    coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
-    tensor.update_tensor_topology(ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords))
 
 
 def _replicated(mesh_device, host, dtype, layout):
@@ -122,15 +111,15 @@ class SparseKvPushPlanner:
         grid = self.mesh_device.compute_with_storage_grid_size()
         push_cores = self.links * PUSH_CORES_PER_LINK
         # Attention's busiest core if it took every core the push leaves free...
-        tokens_per_core = ceil_div(query_rows, grid.x * grid.y - push_cores)
+        tokens_per_core = divup(query_rows, grid.x * grid.y - push_cores)
         # ...and the fewest whole columns that keep that load (GLM: 160 rows, 2 per core, 80 cores = 8 columns).
-        attention_cols = ceil_div(ceil_div(query_rows, tokens_per_core), grid.y)
+        attention_cols = divup(divup(query_rows, tokens_per_core), grid.y)
         # The push takes the bottom rows of the remaining columns.
         push_cols = grid.x - attention_cols
         assert (
-            push_cols > 0 and ceil_div(push_cores, push_cols) <= grid.y
+            push_cols > 0 and divup(push_cores, push_cols) <= grid.y
         ), f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid"
-        push_rows = ceil_div(push_cores, push_cols)
+        push_rows = divup(push_cores, push_cols)
         attention = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]
         )
@@ -167,8 +156,8 @@ class SparseKvPushPlanner:
         # Two upper bounds: every distinct row plus at most one unit of padding per owner, or every owner's run full
         # (an owner holds at most its share of the cache's blocks).
         padded_distinct = min(distinct_rows, max_rows) + num_devices * unit
-        owner_rows = ceil_div(ceil_div(max_rows, stripe_chunk), num_devices) * stripe_chunk
-        all_full = num_devices * ceil_div(owner_rows, unit) * unit
+        owner_rows = divup(divup(max_rows, stripe_chunk), num_devices) * stripe_chunk
+        all_full = num_devices * roundup(owner_rows, unit)
         return min(padded_distinct, all_full)
 
     def push_buffer(self, parity: int, rows: int, like: ttnn.Tensor) -> ttnn.Tensor:
@@ -210,7 +199,7 @@ class SparseKvPushPlanner:
     def _chunk_start(self, start: int) -> ttnn.Tensor:
         if start not in self._starts:
             self._starts[start] = _replicated(
-                self.mesh_device, torch.tensor([[[[start]]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                self.mesh_device, torch.full((1, 1, 1, 1), start, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
             )
         return self._starts[start]
 
@@ -224,7 +213,6 @@ class SparseKvPushPlanner:
             page_bytes=page_bytes,
             chunk_start=chunk_start,
         )
-        _shard_over_mesh(table, self.mesh_device)
         gathered_rows = table.shape[2] * n
         if self._tables is None or self._tables.shape[2] != gathered_rows:
             self._tables = _replicated(

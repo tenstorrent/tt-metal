@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
     SparseKvPushPart,
-    ceil_div,
     sparse_kv_push_fits,
     sparse_kv_push_supported,
 )
@@ -36,8 +35,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 )
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
-
-DRAM_ROW_ALIGN_BYTES = 64  # a row-major DRAM page is padded to this
 
 
 class ttMLA:
@@ -702,10 +699,8 @@ class ttMLA:
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
-            # The cache's row page as the push reads it: the row, rounded up to the 64 B DRAM page alignment.
-            element_bytes = 1 if dense.dtype == ttnn.fp8_e4m3 else 2
-            row_bytes = dense.shape[-1] * element_bytes
-            self._push_page_bytes = ceil_div(row_bytes, DRAM_ROW_ALIGN_BYTES) * DRAM_ROW_ALIGN_BYTES
+            # The cache's row page as the push reads it: the row, padded to the DRAM alignment.
+            self._push_page_bytes = dense.buffer_aligned_page_size()
             self._push_stripe_chunk = push_stripe_chunk
             _, _, query_rows, topk = self.indexer_indices_shape()
             self._push_rows = self._push.buffer_rows(
@@ -730,14 +725,12 @@ class ttMLA:
 
         self._sparse_mla_overlap = None
         # A layer whose successor reuses its top-k pushes the successor's prefix rows on a sub-device beside its own
-        # sparse_sdpa, leaving the successor only its own chunk's rows.
+        # sparse_sdpa, leaving the successor only its own chunk's rows. Prefetch when the next layer runs in this
+        # pipeline stage (layer_num counts the stage's layers) and reuses this layer's top-k, so its rows are known now.
+        next_layer = layer_idx + 1
+        next_in_stage = next_layer - self._first_layer_idx < self.layer_num
         self._push_prefetch_grids = None
-        if (
-            self._push is not None
-            # layer_num counts this stage's cache slots, so a stage starting past layer 0 compares local indices.
-            and layer_idx - (first_layer_idx or 0) + 1 < self.layer_num
-            and indexer_layer_is_reused(config, layer_idx + 1)
-        ):
+        if self._push is not None and next_in_stage and indexer_layer_is_reused(config, next_layer):
             query_rows = self.indexer_indices_shape()[2]
             self._push_prefetch_grids = self._push.grids(query_rows)
             self._push_prefetch_manager = self._push.prefetch_manager(query_rows)
