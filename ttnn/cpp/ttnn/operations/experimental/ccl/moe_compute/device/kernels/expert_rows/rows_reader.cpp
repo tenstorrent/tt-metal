@@ -2,27 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows, reader (RISCV_0) of one core of one expert group.
-// 1. Routing, built once per call over the program_cores cores of the program: core i resolves the tokens
-//    [i tokens / program_cores, (i + 1) tokens / program_cores) with moe_compute's mapping rules (local experts = ids
-//    the device's own mapping row maps to itself, ascending; a (token, k) is local when the token's source row maps the
-//    id to this device; a token that names one expert at several k gives one entry per k, as moe_compute lists them)
-//    and sends its local entries (local expert, token, score, k) to the root core (core 0). The root counting-sorts
-//    them by local expert in core order (= token order) into the routing table: per local expert the routed rows in
-//    token order with their tokens and k, at most `tokens` (the expert's e_t page; later entries are dropped), and jobs
-//    of at most job_rows rows of one expert, dealt to the expert groups: with one row tile per job every job has the
-//    same predicted time and job j of the expert order runs on group j % expert_groups (the table stays in expert
-//    order); with several each job goes to the group with the earliest predicted finish and the jobs are listed group
-//    by group. Every other core reads the table back. The root also writes the table block to DRAM for the placement
-//    program.
-// 2. Streams this core's share of each job's expert weights in compute order gate/up(0), gate/up(1), down(0),
-//    gate/up(2), down(1), ...: gate/up = this core's W0/W1 column groups, down = its W2 output groups, both in
-//    moe_compute's prepared layout (the K padding rows at each group's end are not read): a W0/W1 group is read from
-//    the bank pieces of the (layer, expert) stream it lies in (a ring position's slice can go on in the next bank), a
-//    W2 group from this ring position's own bank; a half block-column and a two-tile last output group hold 2 tiles per
-//    K row. A unit is what the compute holds at once: one group's run for a job of one row tile; for a job of several
-//    (row_tiles > 1) one chunk of one group, gate/up chunk-major (chunk 0 of every column group, then chunk 1, ...),
-//    down group-major, each unit padded to the same number of CB blocks.
+// Reader (RISCV_0) of one expert group core.
+// 1. Routing: each core turns its share of the tokens into local (expert, token, score, k) entries with moe_compute's
+//    mapping rules, one per (token, k), and sends them to the root core (core 0). The root sorts them by local expert
+//    into the routing table, splits each expert's rows into jobs dealt to the expert groups, writes the table block to
+//    DRAM for the placement program, and signals the other cores to read the table back.
+// 2. Streams this core's W0/W1 column groups and W2 output groups of each job into cb_w in compute order, from
+//    moe_compute's prepared weight layout. Weight-stationary units are gate/up chunk-major, down group-major, each
+//    padded to the same number of CB blocks.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -69,9 +56,7 @@ constexpr uint32_t routing_expert_first_rows = get_named_compile_time_arg_val("r
 constexpr uint32_t routing_table = get_named_compile_time_arg_val("routing_table");  // the table block
 constexpr uint32_t routing_jobs = get_named_compile_time_arg_val("routing_jobs");
 constexpr uint32_t routing_entry_areas = get_named_compile_time_arg_val("routing_entry_areas");
-// weights in moe_compute's prepared layout (tiles, PreparedLayout in moe_expert_rows_plan.hpp): the stride of a ring
-// position's W0/W1 column groups and a bank piece of W0/W1 per (layer, expert); the stride of its W2 output groups
-// and its W2 per (layer, expert)
+// prepared weight layout, in tiles (PreparedLayout, moe_expert_rows_plan.hpp)
 constexpr uint32_t w0_w1_group_tiles = get_named_compile_time_arg_val("w0_w1_group_tiles");
 constexpr uint32_t w0_w1_piece_tiles = get_named_compile_time_arg_val("w0_w1_piece_tiles");
 constexpr uint32_t w2_group_tiles = get_named_compile_time_arg_val("w2_group_tiles");
@@ -84,9 +69,8 @@ constexpr uint32_t hidden_tiles = get_named_compile_time_arg_val("hidden_tiles")
 constexpr uint32_t intermediate_tiles = get_named_compile_time_arg_val("intermediate_tiles");
 constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
 constexpr uint32_t ctl_words = get_named_compile_time_arg_val("ctl_words");
-// row_tiles > 1: the planner's predicted time of a job (host-scaled cycles): its weight stream while the expert
-// groups share DRAM, the busiest core's matmuls and partial reloads per row tile of a held job, and those of a job of
-// one row tile
+// Weight-stationary job cost in host-scaled cycles (JobCycles): weight stream, compute per row tile of a held job, and
+// compute of a one-row-tile job.
 constexpr uint32_t deal_stream = get_named_compile_time_arg_val("deal_stream");
 constexpr uint32_t deal_row_tile = get_named_compile_time_arg_val("deal_row_tile");
 constexpr uint32_t deal_single = get_named_compile_time_arg_val("deal_single");
@@ -113,7 +97,7 @@ constexpr uint32_t gate_up_chunks = expert_rows::div_up(hidden_tiles, chunk_tile
 constexpr uint32_t single_chunks = expert_rows::div_up(hidden_tiles, single_chunk_tiles);
 constexpr uint32_t down_chunks = expert_rows::div_up(intermediate_tiles, w2_chunk_rows);
 constexpr uint32_t unit_blocks = weight_stationary ? chunk_blocks : 1;
-// one transaction id per block in flight (ids 1..NOC_MAX_TRANSACTION_ID; blocks_in_flight blocks are in flight at most)
+// one transaction id per block in flight, ids 1..NOC_MAX_TRANSACTION_ID
 constexpr uint32_t transaction_ids = block_slots < NOC_MAX_TRANSACTION_ID ? block_slots : NOC_MAX_TRANSACTION_ID;
 static_assert(blocks_in_flight < transaction_ids, "blocks_in_flight < transaction_ids: one id per block in flight");
 
@@ -303,9 +287,8 @@ FORCE_INLINE void lay_out_experts(RoutingTable& table) {
     }
 }
 
-// Areas in core order = tokens ascending within an expert: each expert's rows in token order, and the same entries in
-// token order for the table (routing_entry_*). Entries past an expert's `tokens` rows are dropped, as in
-// count_expert_rows.
+// Walks the areas in core (= token) order into each expert's rows and the table's token-ordered entries. Entries past
+// an expert's `tokens` rows are dropped, as in count_expert_rows.
 FORCE_INLINE void fill_rows_and_entries(
     RoutingTable& table, uint32_t routing, uint32_t program_cores, uint32_t area_bytes, uint32_t capacity) {
     tt_l1_ptr uint16_t* entry_experts =
@@ -353,7 +336,7 @@ FORCE_INLINE uint32_t list_jobs_in_expert_order(const RoutingTable& table) {
     return count;
 }
 
-// A job's deal, recorded in the entry areas (read by then) until the jobs are listed group by group.
+// A job's group, kept in the (already consumed) entry areas until the jobs are listed group by group.
 struct Deal {
     uint16_t first_row;
     uint16_t expert;
@@ -361,9 +344,8 @@ struct Deal {
     uint16_t group;
 };
 
-// Deals jobs to the expert groups (weight_stationary): each to the group with the earliest predicted finish, on a tie
-// the one with the least matmul work (stream-bound jobs tie), then the lower group; at most ctl_words - 1 per group
-// (cb_ctl's list; expert_groups (ctl_words - 1) is at least the most jobs of a call).
+// Deals each job to the group with the earliest predicted finish, then the least matmul work, then the lowest index; at
+// most ctl_words - 1 jobs per group (cb_ctl's list).
 struct JobDealer {
     tt_l1_ptr Deal* deals;
     uint32_t finish[expert_groups], work[expert_groups], group_job_counts[expert_groups];
@@ -403,11 +385,8 @@ struct JobDealer {
     }
 };
 
-// Several row tiles per job (weight_stationary): jobs of more row tiles are dealt first (every expert's full jobs of
-// row_tiles row tiles as the experts are walked, then the experts' last partial jobs by row tiles, from bucket lists).
-// Each group then runs its jobs in expert order, so that jobs of many and of few row tiles run at the same time on
-// different groups. The deal is recorded per job (expert order) in the entry areas (read by now), then the jobs are
-// written group by group (group g's from group_first_job[g]). Returns the job count.
+// Weight-stationary: deals every expert's full jobs, then the partial jobs by row tiles descending, and lists the jobs
+// group by group in expert order (group g's from group_first_job[g]). Returns the job count.
 FORCE_INLINE uint32_t deal_jobs(const RoutingTable& table, uint32_t routing, tt_l1_ptr uint16_t* group_first_job) {
     static_assert(
         expert_groups <= 32, "expert_groups <= 32: the dealer's group loops are unrolled, its state on the stack");
@@ -762,9 +741,8 @@ struct StreamCursor {
     }
 };
 
-// The bank and packet size the read command buffer is set to (one-packet read state), changed only when a packet
-// needs others. The weight stream keeps dataflow_api's stateful reads: Noc sets the transaction id only with the read
-// state (set_async_read_state), and this stream changes the id every block while it keeps the bank and packet size.
+// The one-packet read state (bank, packet size), reset only when a packet needs another. Uses dataflow_api's stateful
+// reads because Noc sets the transaction id only together with the read state.
 struct ReadState {
     uint32_t bank = 0, tiles = 0, bank_lo = 0;
     FORCE_INLINE void set(uint32_t new_bank, uint32_t new_tiles) {

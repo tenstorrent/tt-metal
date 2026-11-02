@@ -2,13 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The expert rows path of moe_compute, two programs. The expert rows program computes one unweighted bf16 row per
-// routed (token, local expert) into a DRAM row buffer and writes the routing table; the placement program
-// (MoEComputePlaceFactory, a program factory of MoEComputeDeviceOperation) turns them into moe_compute's outputs. Each
-// expert's weights are streamed once per job of at most 32 * row_tiles of its rows, split over expert groups of
-// readers_per_bank reader cores per DRAM bank, read from moe_compute's prepared weight layout as it is. With one row
-// tile per job, x is one whole-hidden slot per job; with several (weight-stationary jobs), x moves in K-chunks and FP32
-// partials stay in L1, so the rows stay bitwise equal to one row tile per job.
+// moe_compute's expert rows path, two programs: the expert rows program computes one unweighted bf16 row per routed
+// (token, local expert) into a DRAM row buffer and writes the routing table; the placement program
+// (MoEComputePlaceFactory) turns them into moe_compute's outputs. Each job streams one expert's weights once for up to
+// 32 * row_tiles of its rows.
 #pragma once
 
 #include <cstdint>
@@ -193,11 +190,8 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
 
 namespace ttnn::prim {
 
-// The expert rows program: [rows, routing table]. rows: bf16 ROW_MAJOR DRAM
-// [min(tokens * top_k, local_experts * tokens), hidden], row r = the r-th routed (token, k) of a local expert in
-// (expert ascending, token ascending) order, at most `tokens` per expert (its e_t page; a token that names the expert
-// at several k is listed once per k, and listings past the page are dropped); rows past the routed count are not
-// written.
+// The expert rows program: [rows, routing table]. rows: bf16 ROW_MAJOR DRAM, one row per routed (token, k) of a local
+// expert in (expert, token) order, at most `tokens` per expert; rows past the routed count are not written.
 std::vector<ttnn::Tensor> moe_expert_rows(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,

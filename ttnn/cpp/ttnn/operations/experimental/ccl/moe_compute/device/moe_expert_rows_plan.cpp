@@ -33,10 +33,7 @@ constexpr double kAssignSmallerYCost = 0.05;
 constexpr double kAssignSmallerXOffColumnZeroCost = 6.0;
 // (x slots, intermediate slots) tried in order; without credits at least three intermediate slots (rows_writer.cpp)
 constexpr std::array<std::pair<uint32_t, uint32_t>, 3> kBuffering = {{{2, 4}, {2, 3}, {1, 3}}};
-// Several row tiles per job: two x chunk slots (a chunk moves while the previous one computes) and one intermediate
-// slot, both handed back by credits (rows_writer.cpp). The x chunks keep the group cores within a few chunks of each
-// other, so the intermediate slot is free again by the time it is needed; its L1 goes to larger x chunks (fewer partial
-// reloads).
+// Weight-stationary jobs: two x chunk slots and one intermediate slot, both handed back by credits (rows_writer.cpp).
 constexpr uint32_t kChunkXSlots = 2;
 constexpr uint32_t kChunkIntermediateSlots = 1;
 constexpr uint32_t kActivatedSlots = 2;  // cb_activated: the activated tiles of two jobs
@@ -195,11 +192,9 @@ std::vector<std::vector<CoreCoord>> assign_cores(
     return out;
 }
 
-// W2 output groups per member: contiguous runs in member order on top of its gate/up tiles, the busiest member least
-// loaded, then the least sum of squared loads; earlier members take more on a tie (with equal runs, the
-// least-loaded-member greedy deal). best[member_end][group_end]: (busiest, sum of squares) of members [0, member_end)
-// taking groups [0, group_end), the last of them groups [run_begin, group_end); first[member_end][group_end]: that
-// run_begin.
+// W2 output groups per member as contiguous runs on top of its gate/up tiles, minimizing the busiest member's load,
+// then the sum of squared loads; earlier members take more on a tie. best[m][g] is the (busiest, sum of squares) cost
+// of members [0, m) taking groups [0, g); first[m][g] is where the last member's run begins.
 std::vector<uint32_t> split_output_groups(
     const std::vector<uint64_t>& gate_up_tiles, const std::vector<uint64_t>& output_prefix) {
     const uint32_t members = gate_up_tiles.size(), groups = output_prefix.size() - 1;
@@ -360,8 +355,8 @@ struct Planner {
         return plan;
     }
 
-    // One row tile per job: x in one chunk (one slot per job), W2 in whole runs, nothing spilled; the intermediate
-    // exchange orders slot reuse (rows_writer.cpp), so x / intermediate slots come before expert groups.
+    // One row tile per job: x in one chunk, W2 in whole runs, nothing spilled. Slot counts are tried before expert
+    // group counts.
     std::optional<ExpertRowsPlan> plan_one_row_tile(const CoreSplit& split) const {
         const uint32_t group_cores = split.members.size();
         const uint32_t hidden_tiles = shape.hidden_tiles();
@@ -393,9 +388,8 @@ struct Planner {
         return std::nullopt;
     }
 
-    // Several row tiles per job: x moves in chunks of chunk_tiles hidden tiles (whole K rows of a column group per
-    // weight block where possible; the largest chunk that fits, at most all of them), W2 in chunks that fill the same
-    // number of weight blocks.
+    // Several row tiles per job: the largest x chunk that fits, in whole weight blocks where possible; W2 chunks fill
+    // the same number of weight blocks.
     std::optional<ExpertRowsPlan> plan_row_tiles(const CoreSplit& split, uint32_t row_tiles) const {
         const uint32_t group_cores = split.members.size();
         const uint32_t hidden_tiles = shape.hidden_tiles();
@@ -547,10 +541,8 @@ PlanOrRefusal plan_expert_rows(
         }
         most_groups = std::max(most_groups, shard.column_groups().count);
     }
-    // reader cores per bank: 1 while the grid has fewer than kTwoReadersCoresPerBank worker cores per DRAM bank, else
-    // 2; a larger split (up to the busiest bank's column groups) only when fewer block slots do not fit. Jobs of
-    // several row tiles keep the first split: larger groups halve the groups that stream at once and double the
-    // all-to-all.
+    // Reader cores per bank, tried in order: 1 or 2 by grid size, then up to the busiest bank's column groups. Jobs of
+    // several row tiles use only the first.
     std::vector<uint32_t> readers_options;
     for (const uint32_t readers : {grid_cores / num_shards < kTwoReadersCoresPerBank ? 1u : 2u, 2u, most_groups}) {
         if (readers <= most_groups &&

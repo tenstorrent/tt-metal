@@ -2,12 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows, the placement program's combine (data movement only, SingleDevice and FullCcl). Sender `sender` of
-// num_senders takes the routed rows [sender R / num_senders, (sender + 1) R / num_senders) of the routing table and
-// sends each whole row from the row buffer to page k * tokens_per_device + t % tokens_per_device of the combine output
-// on token t's device: a NoC write when that is this device, else (COMBINE_FABRIC) the fabric. Rows go in batches of
-// batch_rows through two staging buffers, the next batch read while the current one is sent. With the fabric, a
-// sender visits the devices in its own order, so that the senders start on different devices.
+// Placement program's combine: each sender takes an equal share of the routed rows and writes the row of (t, k) to page
+// k * tokens_per_device + t % tokens_per_device of the combine output on token t's device, over the fabric when that
+// device is remote (COMBINE_FABRIC). Rows are staged in double-buffered batches of batch_rows.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"

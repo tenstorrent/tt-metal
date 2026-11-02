@@ -150,8 +150,6 @@ void kernel_main() {
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
 #ifndef LOCAL_COMBINE
-    // Fabric Mux V2 clients, opened blocking: eager staging would only hide the mux setup, and the first send waits on
-    // compute, which takes longer.
     combine_fabric::Connections fabric(rt_arg_count);
     fabric.open();
     if (is_init_sync_core && use_init_semaphore) {
@@ -184,7 +182,7 @@ void kernel_main() {
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
 #ifndef LOCAL_COMBINE
-    // Local combine needs no cross-device start: the compute sync semaphore and the CB waits order it.
+    // Local combine needs no init barrier: the compute sync semaphore and the CB waits order it.
     if constexpr (use_init_semaphore) {
         fabric.wait_init(
             noc1_obj, init_semaphore_addr, is_init_sync_core, num_token_parallel_cores * num_data_parallel_cores);
@@ -256,7 +254,7 @@ void kernel_main() {
 
     noc1_obj.async_write_barrier();
 #ifdef LOCAL_COMBINE
-    // Blackhole atomics are non-posted: without their acks the next kernel's atomic barrier on this NoC never completes
+    // Atomics are non-posted on Blackhole: the next kernel's atomic barrier on this NoC waits for their acks.
     noc1_obj.async_atomic_barrier();
 #else
     fabric.finish(noc1_obj, global_semaphore_addr);

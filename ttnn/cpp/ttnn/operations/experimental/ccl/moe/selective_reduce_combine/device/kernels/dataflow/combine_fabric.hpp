@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The combine's fabric side on the CCL path, shared by this op's writer and moe_compute's expert rows combine: one
-// Fabric Mux V2 connection per open direction, the init barrier, unicast sends, and the teardown (mux drain, link sync,
-// final barrier, close). The host's append_combine_fabric sets the named compile-time args read here, the defines
-// DEST_CHIP_ID, DEST_MESH_ID, DIRECTIONS and REPLICATE_GROUP_AXIS, and each worker's runtime-arg block.
+// Fabric side of the CCL combine, shared by this op's writer and moe_compute's expert rows combine. The host's
+// plan_combine_fabric provides the named compile-time args, defines and runtime args read here.
 #pragma once
 
 #include "api/compile_time_args.h"
@@ -44,8 +42,7 @@ constexpr uint32_t replicate_factor = replicate_axis == ReplicateGroup::COLS ? m
 constexpr uint8_t replicate_group_devices = num_devices / replicate_factor;
 constexpr uint8_t num_directions = 4;
 
-// Linearized mesh coordinate of the device that owns global token t: token t is on device t / tokens_per_device of
-// this device's replicate group.
+// Linearized mesh coordinate of the device in this replicate group that owns global token t.
 template <uint32_t tokens_per_device>
 FORCE_INLINE uint32_t device_of_token(uint32_t t) {
     const uint32_t device_in_group = t / tokens_per_device;
@@ -74,8 +71,7 @@ public:
         }
     }
 
-    // Packet headers, then a blocking open of every connection (waits for each mux to be READY). Records each
-    // channel's free-slot count right after the open, all slots free, for drain().
+    // Blocks until every mux is ready. Records each channel's free-slot count (all free) for finish().
     void open() {
         CircularBuffer cb_packet_header(packet_header_cb_id);
         for (uint8_t i = 0; i < 3; ++i) {
@@ -137,9 +133,8 @@ public:
             output, mux_, headers_[0], dest_device, payload_addr, page, size_bytes, alignment, offset_bytes);
     }
 
-    // After the worker's last send and its NoC barriers: waits until the mux forwarded every packet of this worker,
-    // then the link's barrier. The link sync core waits for the link's other workers, increments every device's
-    // final semaphore, closes, and waits for the other devices' increments; the others close and report to it.
+    // Call after the worker's last send and NoC barriers. Waits until the mux has forwarded this worker's packets; the
+    // link sync core then waits for its link's other workers and runs the final cross-device barrier.
     void finish(const Noc& noc, uint32_t final_semaphore_addr) {
         for (uint8_t d = 0; d < num_directions; ++d) {
             if (directions_[d]) {
@@ -183,7 +178,7 @@ public:
     }
 
 private:
-    // close request and the manager's teardown ack per connection; the mux terminates after its last client closes
+    // Each mux terminates after its last client closes.
     void close() {
         for (uint8_t d = 0; d < num_directions; ++d) {
             if (directions_[d]) {

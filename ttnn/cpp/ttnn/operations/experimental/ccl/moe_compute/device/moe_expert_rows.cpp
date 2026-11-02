@@ -28,8 +28,6 @@ using ttnn::experimental::ccl::add_semaphore_descriptor;
 // The reader adds the deal times of a group's jobs (at most its ctl entries) in u32: one deal unit is the smallest
 // power of two of cycles that keeps the sum below this.
 constexpr double kDealLoadLimit = 4.0e9;
-// Blackhole and Wormhole run the same kernels: their plans differ only in numbers (readers per bank, packets per read
-// block) that plan_expert_rows derives from the device.
 constexpr const char* kReaderKernel = "rows_reader.cpp";
 constexpr const char* kWriterKernel = "rows_writer.cpp";
 constexpr const char* kComputeKernel = "rows_compute.cpp";
@@ -291,9 +289,7 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         plan.row_tiles > 1 ? create_semaphores(desc, all_set, plan.intermediate_slots) : 0;
     const uint32_t sem_x_free = plan.row_tiles > 1 ? create_semaphores(desc, all_set, plan.x_slots) : 0;
 
-    // several row tiles per job: the root deals the jobs to the groups by the cost model's predicted job time
-    // (rows_reader.cpp), in cycles scaled down by a power of two while a group's most jobs (its ctl list) could
-    // overflow its 32-bit load
+    // job times for the deal in rows_reader.cpp, in deal units so that a group's u32 load cannot overflow
     const JobCycles cycles = job_cycles(shape, plan, num_shards, mesh_device->arch(), args.math_fidelity);
     const double job_most = std::max({cycles.stream, plan.row_tiles * cycles.row_tile, cycles.single});
     const uint32_t ctl_words = plan.ctl_bytes / kWordBytes;
@@ -414,8 +410,6 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"cb_partials", cb_partials},
     };
 
-    // readers on NOC 0, writers on NOC 1: one kernel each over the whole core set, one binary per program written to
-    // the cores' rectangles
     desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
         .kernel_source = std::string(kKernelDir) + kReaderKernel,
         .core_ranges = all_set,
