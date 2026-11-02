@@ -2313,6 +2313,30 @@ def test_matmul_with_core_grid(device, batch_size):
     )
 
 
+@pytest.mark.parametrize("transpose_b", [False, True])
+@pytest.mark.parametrize(
+    "batch_size, m_size, k_size, n_size",
+    [
+        (130, 32, 64, 32),  # more batches than cores
+        (16, 64, 4096, 64),  # long K, 2-tile K block
+        (32, 64, 96, 32),  # odd K tile count, 1-tile K block
+    ],
+)
+def test_matmul_split_by_batch(device, batch_size, m_size, k_size, n_size, transpose_b):
+    """Default-config batched matmuls whose per-batch output has fewer tiles than cores are split by batch."""
+    torch.manual_seed(0)
+    torch_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
+    torch_b = torch.randn((batch_size, k_size, n_size), dtype=torch.bfloat16)
+    torch_output = torch_a.float() @ torch_b.float()
+
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b_input = torch_b.transpose(-1, -2).contiguous() if transpose_b else torch_b
+    b = ttnn.from_torch(b_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.matmul(a, b, transpose_b=transpose_b))
+    assert_with_pcc(torch_output, output.float(), 0.999)
+
+
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [30, 61])
 @pytest.mark.parametrize("k_size", [1023, 2048])

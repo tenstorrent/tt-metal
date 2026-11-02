@@ -436,7 +436,8 @@ MatmulProgramConfig create_matmul_program_config(
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const MemoryConfig& mem_config,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const bool split_by_batch = false) {
     using namespace tt;
     const auto a_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_a, transpose_a);
     const auto b_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_b, transpose_b);
@@ -483,6 +484,11 @@ MatmulProgramConfig create_matmul_program_config(
             n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
             k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without
                                    // running out of memory?
+            // Default matmuls split by batch use the simple config's K block: a 1-tile block doubles the bf16
+            // partial-sum roundings. If the CBs do not fit in L1, the check below falls back to the simple config.
+            if (split_by_batch && (k_size / ttnn::TILE_SIZE) % 2 == 0) {
+                k_tiles_per_core = 2;
+            }
             if (!can_cbs_fit_in_l1(
                     input_tensor_a,
                     input_tensor_b,
@@ -1015,7 +1021,8 @@ inline MatmulProgramConfig generate_matmul_program_config(
             /*fused_activation=*/std::nullopt,
             compute_kernel_config,
             mem_config,
-            output_dtype);
+            output_dtype,
+            /*split_by_batch=*/true);
     }
     return create_simple_matmul_program_config(
         input_tensor_a,
