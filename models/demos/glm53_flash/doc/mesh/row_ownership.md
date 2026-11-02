@@ -345,8 +345,17 @@ Tests, in order:
    (random 8 KB reads) and the region gather; a fused pick-gather + weighted-sum op would drop the 1 GB `comb`
    round trip (~7 ms). Measured 1 M chunk (16 K tokens, 45 layers + head, 17:38) with the plan kernel and
    rt4096: 6.39 s (2564 tok/s) against 7.66 s today and 7.18 s with rt4096 alone (-16.6 %), the first token
-   identical; KDA+MoE layers 156 -> 126 ms, DSA+MoE 244 -> 212 ms. The served 1 M TTFT confirmation decides
-   the defaults; the 3-4x structural lever stays the EP-style prefill (section 2.5.1.1 options).
+   identical; KDA+MoE layers 156 -> 126 ms, DSA+MoE 244 -> 212 ms. Served (2026-11-02): the plan kernel is the
+   default, the 1 M profile runs 4096 sub-chunks, the paged sparse keys gathered on both NoCs and the KDA
+   snapshot ring on device: c1 1 M TTFT 494.8 -> 427.6 s. (e) The next expert-glue item, scoped from the regions
+   path's tail: at rt4096 the `comb` round trip (`ttnn.embedding` of every pick's 12 KB bf16 row into a
+   [T*k, H] table, 403 MB written and read back by `post_combine_reduce`) plus the combine itself cost ~4-5 ms
+   of the 25 ms sub-chunk, i.e. ~0.7 s of the 6.5 s chunk across the 42 MoE layers (~50 s per 1 M prefill). A
+   fused gather-weighted-sum generic op removes the table: per 32-token block and 1024-column slice the reader
+   gathers the block's 32 x k rows (2 KB contiguous pieces) into L1, the compute multiplies by the block-diagonal
+   [32, 32k] routing weights (zero at the non-local picks) and writes the [32, 1024] result; the RM relayout of
+   the expert table stays (a TILE-row gather would be 32 B reads). Golden: the chain's `comb5` x `w_rm` sum.
+   The 3-4x structural lever stays the EP-style prefill (section 2.5.1.1 options).
 
 Risks:
 
