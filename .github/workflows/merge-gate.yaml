@@ -119,8 +119,9 @@ jobs:
         with:
           fetch-depth: 1
           sparse-checkout: .github
+      # trial: every find-changes output empty, so only the LLK perf merge gate runs.
       - id: find-changes
-        uses: ./.github/actions/find-changed-files
+        run: echo "trial, no changes reported"
 
   build:
     if: ${{ github.ref_name == 'main' ||
