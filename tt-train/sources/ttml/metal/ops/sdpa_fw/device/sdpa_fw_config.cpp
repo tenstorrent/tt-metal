@@ -558,7 +558,11 @@ SDPAForwardSchedule schedule_for(
     // two-row one on 32, giving the two-row items twice the DRAM share, and the pick took them: 21 to 33%
     // slower on device for a single head at S <= 1024.
     return make_schedule(
-        shape, chunks, effective_num_cores(config, grid_cores), effective_max_pieces(config), config.causal_pairs);
+        shape,
+        chunks,
+        effective_num_cores(config, grid_cores),
+        chunks.allow_split ? effective_max_pieces(config) : 1U,
+        config.causal_pairs);
 }
 
 namespace {
@@ -576,6 +580,14 @@ SDPAForwardChunks user_chunks(const SDPAForwardProgramConfig& config, const SDPA
         user.heads_per_item,
         heads_per_group);
     return user;
+}
+
+// The smallest chunking the pick can reach from the user's knobs: every unset chunk size at one tile.
+SDPAForwardChunks floor_chunks(const SDPAForwardChunks& user) {
+    return SDPAForwardChunks{
+        .Sq_chunk_t = std::max(user.Sq_chunk_t, 1U),
+        .Sk_chunk_t = std::max(user.Sk_chunk_t, 1U),
+        .heads_per_item = std::max(user.heads_per_item, 1U)};
 }
 
 void check_l1(
@@ -620,14 +632,10 @@ void check_chunks(
         max_items <= sdpa_items::unit_field_max(sdpa_items::kUnitItemBits) + 1ULL,
         "batch * heads * sequence tile-rows ({}) exceeds the work list's item range",
         max_items);
-    const SDPAForwardChunks user = user_chunks(config, shape);
-    // The pick only shrinks the unset knobs, down to one tile / one head, so the config fits at all iff it
-    // fits with every unset knob at one. With all three pinned this is the final check.
-    const SDPAForwardChunks floor{
-        .Sq_chunk_t = std::max(user.Sq_chunk_t, 1U),
-        .Sk_chunk_t = std::max(user.Sk_chunk_t, 1U),
-        .heads_per_item = std::max(user.heads_per_item, 1U)};
-    check_l1(shape, floor, l1_budget_bytes, may_split(config, shape));
+    // The pick only shrinks the unset chunk sizes, down to one tile, so the config fits at all iff it fits
+    // with every unset chunk size at one tile (heads_per_item 0 = 1). The split units' CBs are not reserved
+    // here: resolve_chunks gives up the cuts when they do not fit beside the floor chunks (allow_split).
+    check_l1(shape, floor_chunks(user_chunks(config, shape)), l1_budget_bytes, /* with_partials */ false);
 }
 
 SDPAForwardChunks resolve_chunks(
@@ -637,16 +645,20 @@ SDPAForwardChunks resolve_chunks(
     uint32_t grid_cores) {
     check_chunks(config, shape, l1_budget_bytes, grid_cores);
     const uint32_t num_available_cores = effective_num_cores(config, grid_cores);
-    const SDPAForwardChunks user = user_chunks(config, shape);
+    SDPAForwardChunks user = user_chunks(config, shape);
+    // The partials' CBs are created only when the schedule cuts, so they count against the budget only
+    // then: a pinned-free causal run that cuts nothing keeps the full L1 for its chunks (at D=256 with the
+    // gate, and from D=384, reserving them would halve a chunk). When they do not fit even beside the floor
+    // chunks (D >= 704 at d_v = d_qk with nothing pinned), the schedule never cuts instead of the shape
+    // being refused; validate checks the floor without them for the same reason.
+    const bool may_cut = may_split(config, shape);
+    user.allow_split =
+        l1_bytes(cb_tiles(shape, floor_chunks(user), /* with_partials */ true)) <= l1_budget_bytes;
     if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U && user.heads_per_item != 0U) {
         return user;
     }
-    // The partials' CBs are created only when the schedule cuts, so they count against the budget only
-    // then: a pinned-free causal run that cuts nothing keeps the full L1 for its chunks (at D=256 with the
-    // gate, and from D=384, reserving them would halve a chunk).
-    const bool may_cut = may_split(config, shape);
     const auto cuts = [&](const SDPAForwardChunks& candidate) {
-        return may_cut && schedule_for(config, shape, candidate, grid_cores).num_slots > 0U;
+        return may_cut && candidate.allow_split && schedule_for(config, shape, candidate, grid_cores).num_slots > 0U;
     };
 
     // Shape rule for the unset knobs, from the chunk sweep on Blackhole (S=2048/4096, D=64/128, every mask
@@ -663,7 +675,8 @@ SDPAForwardChunks resolve_chunks(
     SDPAForwardChunks chunks{
         .Sq_chunk_t = user.Sq_chunk_t,
         .Sk_chunk_t = user.Sk_chunk_t,
-        .heads_per_item = std::max(user.heads_per_item, 1U)};
+        .heads_per_item = std::max(user.heads_per_item, 1U),
+        .allow_split = user.allow_split};
     if (chunks.Sk_chunk_t == 0U) {
         const bool single_head_with_mask = has_mask_tensor && chunks.heads_per_item == 1U;
         chunks.Sk_chunk_t = (shape.qWt >= 4U || single_head_with_mask) ? 4U : 8U;

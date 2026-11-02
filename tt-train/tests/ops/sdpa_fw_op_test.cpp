@@ -2689,6 +2689,27 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultFitsLargeHeadDim) {
         .num_key_heads = 2U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "ChunkKnobs_DefaultFitsLargeHeadDim"});
+    // At D=1024 the split units' CBs do not fit beside even one-tile chunks: the default config must still
+    // run, uncut, instead of being refused by validate for knobs that are not pinned.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    const SDPATestConfig wide{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 2048U,  // 2 heads * 1024
+        .key_value_dim = 2048U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_DefaultWideHeadsRunUncut"};
+    const auto [shape, chunks] = host_shape_and_chunks(wide);
+    EXPECT_FALSE(chunks.allow_split) << "the partials' CBs can not fit beside D=1024 chunks";
+    EXPECT_EQ(host_schedule(wide).num_slots, 0U) << "a chunking without room for the partials must not cut";
+    SDPATestConfig pinned = wide;
+    pinned.program_config = {.q_chunk_size = 32U, .k_chunk_size = 32U, .heads_per_item = 1U};
+    pinned.test_name = "ChunkKnobs_PinnedWideHeadsRunUncut";
+    EXPECT_EQ(host_schedule(pinned).num_slots, 0U);
+    run_sdpa_test(wide);
+    run_sdpa_test(pinned);
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
