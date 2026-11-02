@@ -12,6 +12,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_dit.pipelines.events import profiler_event_callback
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from .device_params import line_params_8k_flux2_perf, line_params_flux2_perf, ring_params_8k_flux2_perf
@@ -152,8 +153,7 @@ def test_flux2_performance(
                     num_inference_steps=NUM_INFERENCE_STEPS,
                     seed=42,
                     traced=True,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                 )
                 results.append(images)
                 ttnn.synchronize_device(mesh_device)

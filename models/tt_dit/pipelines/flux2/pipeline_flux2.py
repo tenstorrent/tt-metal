@@ -5,8 +5,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import nullcontext
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import diffusers
 import numpy as np
@@ -19,6 +18,13 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
+from models.tt_dit.pipelines.events import (
+    PipelineEventCallback,
+    SectionEnd,
+    SectionStart,
+    event_section,
+    null_callback,
+)
 
 from ...models.transformers.transformer_flux2 import Flux2Transformer
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
@@ -34,6 +40,62 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from PIL import Image
+
+
+_T = TypeVar("_T")
+
+# The parallel layout per mesh shape: the DiT's SP and TP axes, the text encoder's TP axis, the VAE's
+# channel (TP) and row (H) axes, and the CCL links and topology.
+_PRESETS_WH: dict[tuple[int, ...], dict] = {
+    (1, 8): {
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "encoder_tp_axis": 1,
+        "vae_tp_axis": 1,
+        "vae_h_axis": 0,
+        "num_links": 1,
+        "topology": ttnn.Topology.Linear,
+    },
+    (2, 4): {
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "encoder_tp_axis": 1,
+        "vae_tp_axis": 0,
+        "vae_h_axis": 1,
+        "num_links": 1,
+        "topology": ttnn.Topology.Linear,
+    },
+}
+
+_PRESETS_BH: dict[tuple[int, ...], dict] = {
+    (2, 2): {
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "encoder_tp_axis": 1,
+        "vae_tp_axis": 1,
+        "vae_h_axis": 0,
+        "num_links": 2,
+        "topology": ttnn.Topology.Linear,
+    },
+    (2, 4): {
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "encoder_tp_axis": 1,
+        "vae_tp_axis": 1,
+        "vae_h_axis": 0,
+        "num_links": 2,
+        "topology": ttnn.Topology.Linear,
+    },
+    (4, 8): {
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "encoder_tp_axis": 1,
+        "vae_tp_axis": 0,
+        "vae_h_axis": 1,
+        "num_links": 2,
+        "topology": ttnn.Topology.Linear,
+    },
+}
 
 
 def _release_module_trace(module: object | None) -> None:
@@ -304,14 +366,14 @@ class Flux2Pipeline:
     def create_pipeline(
         *,
         mesh_device: ttnn.MeshDevice,
-        sp_axis: int,
-        tp_axis: int,
-        encoder_tp_axis: int,
+        sp_axis: int | None = None,
+        tp_axis: int | None = None,
+        encoder_tp_axis: int | None = None,
         vae_tp_axis: int | None = None,
         vae_h_axis: int | None = None,
         vae_w_axis: int | None = None,
-        num_links: int,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
         width: int = 1024,
         height: int = 1024,
         is_fsdp: bool = False,
@@ -321,6 +383,31 @@ class Flux2Pipeline:
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
     ) -> Flux2Pipeline:
+        """Build a pipeline; the parallel layout arguments left as ``None`` come from the mesh's preset.
+
+        The VAE axes come from the preset only when none of them is given. The presets do not set
+        ``is_fsdp`` or ``dynamic_load``: FLUX.2-dev needs both on 2x2, Klein neither.
+        """
+        mesh_shape = tuple(mesh_device.shape)
+        preset = (_PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH).get(mesh_shape)
+
+        def from_preset(name: str, value: _T | None) -> _T:
+            if value is not None:
+                return value
+            if preset is None:
+                msg = f"{name} is required: there is no FLUX.2 preset for mesh shape {mesh_shape}"
+                raise ValueError(msg)
+            return preset[name]
+
+        sp_axis = from_preset("sp_axis", sp_axis)
+        tp_axis = from_preset("tp_axis", tp_axis)
+        encoder_tp_axis = from_preset("encoder_tp_axis", encoder_tp_axis)
+        num_links = from_preset("num_links", num_links)
+        topology = from_preset("topology", topology)
+        if vae_tp_axis is None and vae_h_axis is None and vae_w_axis is None:
+            vae_tp_axis = from_preset("vae_tp_axis", vae_tp_axis)
+            vae_h_axis = from_preset("vae_h_axis", vae_h_axis)
+
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
             sequence_parallel=ParallelFactor(factor=int(mesh_device.shape[sp_axis]), mesh_axis=sp_axis),
@@ -359,9 +446,11 @@ class Flux2Pipeline:
         prompt_upsample_temperature: float | None = None,  # prompt upsampling is currently very slow
         seed: int | None = None,
         traced: bool = False,
-        profiler=None,
-        profiler_iteration: int = 0,
+        on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
+        on_event = on_event if on_event is not None else null_callback
+        on_event(SectionStart("total"))
+
         prompt_count = len(prompts)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -376,7 +465,7 @@ class Flux2Pipeline:
 
         logger.info("encoding prompts...")
 
-        with profiler("encoder", profiler_iteration) if profiler else nullcontext():
+        with event_section(on_event, "encoder"):
             self._prepare_prompt_encoder()
             if prompt_upsample_temperature is not None:
                 prompts = self._prompt_encoder.upsample(
@@ -425,9 +514,9 @@ class Flux2Pipeline:
         self.ts._tt_embedded_prompt.update(self.transformer.context_embedder(tt_prompt_embeds), traced)
         ttnn.deallocate(tt_prompt_embeds)
 
-        with profiler("denoising", profiler_iteration) if profiler else nullcontext():
+        with event_section(on_event, "denoising"):
             for i, t in enumerate(tqdm.tqdm(timesteps)):
-                with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
+                with event_section(on_event, f"denoising_step_{i}"):
                     sigma_difference = (sigmas[i + 1] - sigmas[i]).item()
 
                     self.ts._tt_timestep.update(
@@ -459,8 +548,7 @@ class Flux2Pipeline:
                     )
 
         logger.info("decoding image...")
-        pcv = profiler("vae", profiler_iteration) if profiler else nullcontext()
-        with pcv:
+        with event_section(on_event, "vae"):
             self._prepare_vae()
 
             # Latents arrive SP-sharded on dim=1 (patchified token dim). Redistribute to
@@ -510,6 +598,7 @@ class Flux2Pipeline:
             )
             output = [Image.fromarray(image.numpy()) for image in decoded_output]
 
+        on_event(SectionEnd("total"))
         return output
 
     @traced_function(device=lambda self: self._mesh_device, clone_prep_inputs=False)
