@@ -1653,19 +1653,9 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         ((1, 320, 32), (1, 32, 64), (320, 64), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((16, 32, 32), (32, 512), (512, 512), False),
-        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). It cannot run until the
-        # Quasar 2D factory sets unpack_modes for the fp32 partials DFB (#61018); strict so it flags when fixed.
-        pytest.param(
-            (1, 128, 32),
-            (1, 32, 128),
-            (128, 128),
-            True,
-            marks=pytest.mark.xfail(
-                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). Off Quasar it takes the 2D
+        # factory, which cannot run it until that sets unpack_modes for the fp32 partials DFB (#61018).
+        ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
     ids=[
         "400x400",
@@ -1680,13 +1670,21 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
     ],
 )
 def test_auto_config_block_sharded_caps_per_core_to_output(
-    device, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en
+    device, request, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en
 ):
     """BLOCK_SHARDED output, no program_config: the shard shape must follow the output size, not the L1 ladder.
 
     The auto-config used to start per_core_M/N at 16 tiles and never cap them to the output, so a 13x13 tile output
     came back with a 512x512 shard.
     """
+    if fp32_dest_acc_en and not _on_quasar(device):
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
+                raises=RuntimeError,
+                strict=True,
+            )
+        )
     torch.manual_seed(0)
     a, b = _randn(*a_shape), _randn(*b_shape)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
