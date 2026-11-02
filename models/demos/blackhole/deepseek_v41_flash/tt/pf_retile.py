@@ -86,3 +86,60 @@ def o_from_pad(o, out, user):
     U, H, C, W = (int(v) for v in out.shape)
     assert W == 512 and o.dtype == bf16 and o.layout == ttnn.ROW_MAJOR_LAYOUT and out.layout == ttnn.TILE_LAYOUT
     return _run(1, o, out, user, H, C)
+
+
+_CAT = {}
+
+
+def cat_heads(o, max_cores=120):
+    """o [U, H, C, 512] bf16 TILE -> [1, 1, U * C, (H + 1) * 512]: a zero head group first, then the H heads (what nlp_concat_heads + concat([zero, c], dim=3) + reshape produced).
+    One persistent buffer per (device, U * C): its zero columns are never written, the head columns are overwritten on every call (valid while the consumer of the previous call is done:
+    the layers run one after the other on one queue)."""
+    U, H, C, W = (int(v) for v in o.shape)
+    assert W == 512 and o.dtype == bf16 and o.layout == ttnn.TILE_LAYOUT
+    mesh = o.device()
+    key = (id(mesh), U, H, C)
+    if key not in _CAT:
+        _CAT[key] = ttnn.zeros(
+            [1, 1, U * C, (H + 1) * 512],
+            dtype=bf16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    out = _CAT[key]
+    ROWT = C // 32
+    units = U * H * ROWT
+    g = mesh.compute_with_storage_grid_size()
+    n_cores = min(max_cores, units, int(g.x) * int(g.y))
+    cores = [(cx, cy) for cy in range(int(g.y)) for cx in range(int(g.x))][:n_cores]
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
+    base, extra = divmod(units, n_cores)
+    rt, wrt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    u0 = 0
+    for i, (cx, cy) in enumerate(cores):
+        nu = base + (1 if i < extra else 0)
+        rt[cx][cy] = [u0, nu]
+        wrt[cx][cy] = [u0, nu]
+        u0 += nu
+    cbs = [_cb(core_set, 0, 32, 2048, bf16)]
+    reader = _kernel(
+        "cat_reader.cpp",
+        core_set,
+        [0, ROWT, H] + _acc(o),
+        rt,
+        ttnn.ReaderConfigDescriptor(),
+        common=[o.buffer_address()],
+    )
+    writer = _kernel(
+        "cat_writer.cpp",
+        core_set,
+        [0, ROWT, H] + _acc(out),
+        wrt,
+        ttnn.WriterConfigDescriptor(),
+        common=[out.buffer_address()],
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=cbs)
+    prog.custom_program_hash = _hash(0x6D9, U, H, C, tuple(_acc(o)), tuple(_acc(out)))
+    ttnn.generic_op([o, out], prog)
+    return out

@@ -528,10 +528,17 @@ class DSV41PrefillAttention:
                 ttnn.deallocate(t)
         else:
             o = self._rope_inv(o, tabs, inplace=True)
-            c = ttnn.experimental.nlp_concat_heads(o)
-            ttnn.deallocate(o)
-            zero = zeros(self.md, [U, 1, C, HEAD_DIM])
-            c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
+            if os.environ.get("DSV41_PF_CATHEADS", "0") == "1" and o.dtype == ttnn.bfloat16:
+                # one generic_op (tt/pf_retile.py cat_heads) writes the heads behind a persistent zero group instead of nlp_concat_heads + concat
+                from models.demos.blackhole.deepseek_v41_flash.tt import pf_retile
+
+                c = pf_retile.cat_heads(o)
+                ttnn.deallocate(o)
+            else:
+                c = ttnn.experimental.nlp_concat_heads(o)
+                ttnn.deallocate(o)
+                zero = zeros(self.md, [U, 1, C, HEAD_DIM])
+                c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
         part = self._lin(self._lin(c, a.wo_a), a.wo_b)
         return self._allreduce(part)
 
