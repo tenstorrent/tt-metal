@@ -58,7 +58,7 @@ def test_decode_e2e(mesh_device):
     gen = Generator([model], [args], mesh_device)
     prime_decode_trace(gen, model, tokens[:1].view(1, 1), torch.tensor([0]), page_table)
 
-    preds, step_s = [], []
+    preds, step_s, margins = [], [], []
     for pos in range(n):
         t = time.perf_counter()
         out = gen.decode_forward(
@@ -75,6 +75,9 @@ def test_decode_e2e(mesh_device):
         )
         logits = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         preds.append(int(logits.argmax()))
+        if os.environ.get("BONSAI_E2E_DUMP"):
+            top2 = torch.topk(logits, 2).values
+            margins.append(float(top2[0] - top2[1]))
         step_s.append(time.perf_counter() - t)
         assert not torch.isnan(logits).any(), f"NaN in decode at position {pos}"
 
@@ -100,6 +103,11 @@ def test_decode_e2e(mesh_device):
         f"{results['top1_top5_second_half'][1]:.2f}%, all positions {results['top1_top5_all'][0]:.2f}/"
         f"{results['top1_top5_all'][1]:.2f}%; decode {results['ms_per_token_median']:.1f} ms/token median"
     )
+    if os.environ.get("BONSAI_E2E_DUMP"):
+        # Per-position argmax and top-1/top-2 logit margin, to tell near-tie flips from confident ones when two
+        # configs' agreement differs by a few positions.
+        torch.save({"preds": preds, "margins": margins, "flags": results["flags"], "reference": results["reference"]},
+                   os.environ["BONSAI_E2E_DUMP"])
     if os.environ.get("DECODE_E2E_RESULTS"):
         with open(os.environ["DECODE_E2E_RESULTS"], "w") as f:
             json.dump(results, f, indent=2)

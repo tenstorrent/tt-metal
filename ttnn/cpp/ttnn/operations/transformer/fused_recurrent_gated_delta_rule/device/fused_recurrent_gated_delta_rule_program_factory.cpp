@@ -9,8 +9,10 @@
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <set>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -46,6 +48,10 @@ constexpr uint32_t gdec = tt::CBIndex::c_14;      // [1,1]  gb_fused: decay comp
 constexpr uint32_t gbeta = tt::CBIndex::c_15;     // [1,1]  gb_fused: beta computed in-kernel
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 constexpr uint32_t gbscr = tt::CBIndex::c_17;     // 1 tile gb_fused reader scratch (a|b / constants tile)
+constexpr uint32_t l2ss = tt::CBIndex::c_18;      // [1,1]  fused_l2norm: sum of squares
+constexpr uint32_t l2s = tt::CBIndex::c_19;       // [1,1]  fused_l2norm: rsqrt(ss + eps) * multiplier
+constexpr uint32_t qn = tt::CBIndex::c_21;        // [1,K]  fused_l2norm: normalized, scaled q
+constexpr uint32_t kn = tt::CBIndex::c_22;        // [1,K]  fused_l2norm: normalized k
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::create_descriptor(
@@ -55,7 +61,15 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t BH = attrs.BH;
     const uint32_t T = attrs.T;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
-    const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
+    const uint32_t Vt_full = attrs.val_dim / TILE_WIDTH;
+    // QWEN36_1C_GDN_VSPLIT=1 (decode, T == 1): each head on 2 cores, one per half of V. Every step of the recurrence
+    // separates by V column (S*decay, k.S, beta*(v - vread), S += k (x) u, q.S), so each core runs the same kernel on
+    // its Vt/2 columns of S, v and o with identical per-element math. q/k, decay/beta (and the GB/L2 prologues) are
+    // read and computed on both cores. Everything below sized by Vt is the per-core width.
+    const char* vsplit_env = std::getenv("QWEN36_1C_GDN_VSPLIT");
+    const uint32_t vparts =
+        (vsplit_env != nullptr && std::string(vsplit_env) == "1" && attrs.T == 1 && Vt_full % 2 == 0) ? 2u : 1u;
+    const uint32_t Vt = Vt_full / vparts;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
     const bool ring = in.initial_state_block_idx.has_value();
     const uint32_t use_blk_idx = ring ? 1u : 0u;
@@ -68,13 +82,15 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t grid_y = grid.y;
-    TT_FATAL(BH <= grid.x * grid_y, "num_heads {} exceeds compute cores {}", BH, grid.x * grid_y);
+    const uint32_t ncores = BH * vparts;
+    TT_FATAL(ncores <= grid.x * grid_y, "num_heads x V parts {} exceeds compute cores {}", ncores, grid.x * grid_y);
 
-    std::vector<CoreCoord> head_cores(BH);
+    // Core c runs head c / vparts on V part c % vparts, placed column-major as before.
+    std::vector<CoreCoord> head_cores(ncores);
     std::set<CoreRange> core_set;
-    for (uint32_t h = 0; h < BH; h++) {
-        head_cores[h] = CoreCoord{h / grid_y, h % grid_y};
-        core_set.insert(CoreRange{head_cores[h], head_cores[h]});
+    for (uint32_t c = 0; c < ncores; c++) {
+        head_cores[c] = CoreCoord{c / grid_y, c % grid_y};
+        core_set.insert(CoreRange{head_cores[c], head_cores[c]});
     }
     // QWEN36_1C_GDN_RECT=1: the same cores (head h on column h / grid_y, row h % grid_y) given to the dispatcher
     // as at most two rectangles -- the full columns, then the partial one -- instead of BH single-core ranges.
@@ -83,8 +99,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const char* rect_env = std::getenv("QWEN36_1C_GDN_RECT");
     if (rect_env != nullptr && std::string(rect_env) == "1") {
         core_set.clear();
-        const uint32_t full_cols = BH / grid_y;
-        const uint32_t rem = BH % grid_y;
+        const uint32_t full_cols = ncores / grid_y;
+        const uint32_t rem = ncores % grid_y;
         if (full_cols > 0) {
             core_set.insert(CoreRange{CoreCoord{0, 0}, CoreCoord{full_cols - 1, grid_y - 1}});
         }
@@ -114,10 +130,17 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         add_cb(cb::beta, 1);   // raw b, same form
         add_cb(cb::gdec, 1);
         add_cb(cb::gbeta, 1);
-        add_cb(cb::gbscr, 1);
+        add_cb(cb::gbscr, 4);
     } else {
         add_cb(cb::decay, 1, T > 1 ? 2 : 1);
         add_cb(cb::beta, 1, T > 1 ? 2 : 1);
+    }
+    const uint32_t l2 = attrs.fused_l2norm ? 1u : 0u;
+    if (l2) {
+        add_cb(cb::l2ss, 1);
+        add_cb(cb::l2s, 1);
+        add_cb(cb::qn, Kt);
+        add_cb(cb::kn, Kt);
     }
     add_cb(cb::S, kv);
     add_cb(cb::out, Vt, 2);
@@ -140,9 +163,9 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, gb};
+    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, gb, l2};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx, gb};
+    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx, gb, Vt_full};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
@@ -151,7 +174,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
     TensorAccessorArgs(blk_buf).append_to(reader_ct);
 
-    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
+    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token, Vt_full};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 
@@ -195,14 +218,16 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* o_buf = outputs[0].buffer();
     auto* st_buf = outputs[1].buffer();
 
-    for (uint32_t h = 0; h < BH; h++) {
-        const auto& core = head_cores[h];
+    for (uint32_t c = 0; c < ncores; c++) {
+        const auto& core = head_cores[c];
+        const uint32_t h = c / vparts;
+        const uint32_t v0 = (c % vparts) * Vt;  // first V tile of this core's part
         reader.emplace_runtime_args(
             core,
-            {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH, attrs.gqa});
+            {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH, attrs.gqa, v0});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
-        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
-        compute.emplace_runtime_args(core, {T});
+        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH, v0});
+        compute.emplace_runtime_args(core, {T, std::bit_cast<uint32_t>(attrs.l2_scale)});
     }
 
     desc.kernels.push_back(std::move(reader));

@@ -28,6 +28,8 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
@@ -36,6 +38,7 @@ constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S
 constexpr uint32_t cb_out = 6, cb_state = 7, cb_s2 = 8, cb_s3 = 9, cb_sd = 10;
 constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13;
 constexpr uint32_t cb_gdec = 14, cb_gbeta = 15;  // gb_fused: decay/beta computed here
+constexpr uint32_t cb_l2ss = 18, cb_l2s = 19, cb_qn = 21, cb_kn = 22;  // fused_l2norm
 
 // fp32 DST tiles available per tile_regs_acquire (half-sync).
 constexpr uint32_t DST_TILES = 4;
@@ -167,12 +170,45 @@ void transpose_block(uint32_t in, uint32_t o, uint32_t n) {
 
 }  // namespace
 
+// fused_l2norm: out = in * mult / sqrt(sum(in[0,:]^2) + 1e-6) over n tiles whose row 0 carries the vector (the
+// sum of squares as in . in^T, whose [0,0] is the row-0 dot product; rows 1-31 are zero, so is the rest). eps is
+// 1e-6, which is what rms_norm(x, epsilon=1e-6/K) * K^-0.5 amounts to.
+void l2_normalize(uint32_t in, uint32_t out, uint32_t n, uint32_t mult_bits) {
+    mm(in, in, cb_l2ss, 1, n, 1, true);
+    CircularBuffer ss(cb_l2ss), sc(cb_l2s);
+    ss.wait_front(1);
+    sc.reserve_back(1);
+    tile_regs_acquire();
+    copy_init(cb_l2ss);
+    copy_tile(cb_l2ss, 0, 0);
+    binop_with_scalar_tile_init();
+    add_unary_tile(0, 0x358637bdu);  // 1e-6f
+    rsqrt_tile_init();
+    rsqrt_tile(0);
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, mult_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_l2s);
+    tile_regs_release();
+    sc.push_back(1);
+    ss.pop_front(1);
+    sc.wait_front(1);
+    bcast_scalar_mul(in, cb_l2s, out, n);
+    sc.pop_front(1);
+}
+
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
     constexpr uint32_t gb_fused = get_compile_time_arg_val(3);
+    constexpr uint32_t l2 = get_compile_time_arg_val(4);
     const uint32_t T = get_arg_val<uint32_t>(0);
+    const uint32_t l2_scale_bits = get_arg_val<uint32_t>(1);
+    // fused_l2norm reads the q/k it normalizes below; otherwise the host-normalized ones.
+    constexpr uint32_t q_id = l2 ? cb_qn : cb_q;
+    constexpr uint32_t k_id = l2 ? cb_kn : cb_k;
     // gb_fused reads the decay/beta it computes below; otherwise the host-computed ones.
     constexpr uint32_t dec_id = gb_fused ? cb_gdec : cb_decay;
     constexpr uint32_t bet_id = gb_fused ? cb_gbeta : cb_beta;
@@ -183,7 +219,7 @@ void kernel_main() {
     // for every op below; no per-op data-format reconfig is needed.
     compute_kernel_hw_startup(cb_q, cb_v, cb_out);
 
-    CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(dec_id), beta(bet_id);
+    CircularBuffer q(q_id), k(k_id), v(cb_v), decay(dec_id), beta(bet_id);
     CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u), kcol(cb_kcol);
 
     if constexpr (gb_fused) {
@@ -233,6 +269,16 @@ void kernel_main() {
         CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
         const bool last = (t == T - 1);
 
+        if constexpr (l2) {
+            CircularBuffer kraw(cb_k), qraw(cb_q);
+            kraw.wait_front(Kt);
+            l2_normalize(cb_k, cb_kn, Kt, 0x3f800000u);  // k / ||k||
+            kraw.pop_front(Kt);
+            qraw.wait_front(Kt);
+            l2_normalize(cb_q, cb_qn, Kt, l2_scale_bits);  // q * scale / ||q||
+            qraw.pop_front(Kt);
+        }
+
         // sd = cur_S * decay  (decay before read)
         decay.wait_front(1);
         cur_S.wait_front(kv);
@@ -243,7 +289,7 @@ void kernel_main() {
 
         // vread = k . sd  ([1,V])
         k.wait_front(Kt);
-        mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
+        mm(k_id, cb_sd, cb_vread, 1, Kt, Vt, false);
         vread.wait_front(Vt);
 
         // u = beta * (v - vread)
@@ -256,7 +302,7 @@ void kernel_main() {
         u.wait_front(Vt);
 
         // kcol = transpose(k) ([K,1])
-        transpose_block(cb_k, cb_kcol, Kt);
+        transpose_block(k_id, cb_kcol, Kt);
         k.pop_front(Kt);
         kcol.wait_front(Kt);
 
@@ -269,7 +315,7 @@ void kernel_main() {
 
         // o = q . S_new  (read from POST-update state)
         q.wait_front(Kt);
-        mm(cb_q, nxt_S_id, cb_out, 1, Kt, Vt, false);
+        mm(q_id, nxt_S_id, cb_out, 1, Kt, Vt, false);
         q.pop_front(Kt);
 
         // nxt_S is intentionally NOT popped: the next iteration reads it as cur_S.

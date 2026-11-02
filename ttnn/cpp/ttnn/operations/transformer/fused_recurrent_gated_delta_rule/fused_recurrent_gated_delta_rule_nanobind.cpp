@@ -73,7 +73,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("head_major_output") = false,
         nb::arg("head_major_input") = false,
-        nb::arg("fused_gating") = false);
+        nb::arg("fused_gating") = false,
+        nb::arg("fused_l2norm") = false);
 }
 
 }  // namespace ttnn::operations::transformer
