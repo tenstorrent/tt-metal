@@ -74,9 +74,55 @@ if [[ "$PHASE" != run ]]; then
 fi
 [[ "$PHASE" == compile ]] && exit 0
 
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
-  --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
-  --junitxml="$RUN_XML" .
+# EXPERIMENT (perf-trial/reset-recheck-*, not for merge): does `tt-smi -r all` between
+# perf suites still move any config on post-#59447/#59486 main?
+#
+# The compile pass and the shard composition are unchanged: the measure pass first collects
+# this shard's node ids with the same --perf-splits cut as stock, then runs them one test
+# file (suite) per pytest invocation, in collection order, with the same --dist loadgroup
+# -n 15 -x. PERF_RESET=1 issues `tt-smi -r all` before each suite; PERF_RESET=0 is the same
+# per-suite split without the reset (the fair control for the reset).
+PERF_RESET="${PERF_RESET:-1}"
+echo "[reset-recheck] PERF_RESET=$PERF_RESET"
+tt-smi -ls 2>&1 | sed 's/^/[reset-recheck]   /' || echo "[reset-recheck] WARNING: tt-smi -ls failed"
+
+maybe_reset() {
+  [[ "$PERF_RESET" == 1 ]] || return 0
+  echo "[reset-recheck] $(date -u +%T) tt-smi -r all before $1"
+  if ! tt-smi -r all; then
+    echo "[reset-recheck] tt-smi -r all failed; trying tt-smi -r"
+    tt-smi -r || { echo "[reset-recheck] ERROR: chip reset failed before $1" >&2; exit 3; }
+  fi
+}
+
+NODE_DIR="$(mktemp -d)"
+pytest -q --override-ini=log_cli=false --collect-only "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer \
+  -m "perf and not accuracy" --perf-splits "$N_GROUPS" --perf-group "$GROUP" . \
+  | grep -E '^[^ ]+\.py::' > "$NODE_DIR/all.txt" || true
+N_ALL=$(wc -l < "$NODE_DIR/all.txt" | tr -d ' ')
+[[ "$N_ALL" -gt 0 ]] || { echo "[reset-recheck] ERROR: collected no node ids" >&2; exit 1; }
+SUITES=$(sed 's/::.*//' "$NODE_DIR/all.txt" | awk '!seen[$0]++')
+echo "[reset-recheck] $N_ALL tests in $(echo "$SUITES" | wc -l | tr -d ' ') suites:"
+for pf in $SUITES; do
+  echo "[reset-recheck]   $pf $(grep -c "^$pf::" "$NODE_DIR/all.txt")"
+done
+
+RUN_XMLS=()
+for pf in $SUITES; do
+  tag=$(basename "$pf" .py)
+  grep "^$pf::" "$NODE_DIR/all.txt" > "$NODE_DIR/$tag.args"
+  maybe_reset "$tag"
+  xml="${REPORT}-${tag}-suite.xml"
+  rc=0
+  pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
+    --junitxml="$xml" "@$NODE_DIR/$tag.args" || rc=$?
+  [[ "$rc" -eq 5 ]] && rc=0
+  [[ -f "$xml" ]] && RUN_XMLS+=("$xml")
+  [[ "$rc" -eq 0 ]] || { echo "[reset-recheck] $tag exited $rc" >&2; exit "$rc"; }
+done
+junitparser merge "${RUN_XMLS[@]}" "$RUN_XML"
+N_RAN=$(grep -o '<testcase ' "$RUN_XML" | wc -l | tr -d ' ')
+echo "[reset-recheck] junit testcases $N_RAN of $N_ALL collected"
 if [[ -f "$COMPILE_XML" ]]; then
   junitparser merge "$COMPILE_XML" "$RUN_XML" "${REPORT}.xml"
 else
