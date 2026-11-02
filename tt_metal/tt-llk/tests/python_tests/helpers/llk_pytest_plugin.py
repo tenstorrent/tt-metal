@@ -248,6 +248,13 @@ def pytest_addoption(parser):
         "is not written fails.",
     )
     parser.addoption(
+        "--ulp-variants",
+        default=None,
+        metavar="PATH",
+        help="Write one JSON record per SFPU ULP sweep cell built (its node, op, key and "
+        "build directory) to PATH, truncated at session start; for helpers.ulp_affected.",
+    )
+    parser.addoption(
         "--ulp-emit",
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep writes what it "
@@ -538,6 +545,11 @@ def pytest_configure(config):
     if config.getoption("--ulp-measure"):
         # Set in the workers too; only the file preparation below is master-only.
         utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
+    if config.getoption("--ulp-variants"):
+        from . import ulp_affected
+
+        # Set in the workers too; only the truncation below is master-only.
+        ulp_affected.VARIANTS_PATH = Path(config.getoption("--ulp-variants")).absolute()
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
@@ -553,6 +565,9 @@ def pytest_configure(config):
             raise pytest.UsageError(
                 f"--ulp-measure: cannot prepare the file: {exc}"
             ) from exc
+        if config.getoption("--ulp-variants"):
+            ulp_affected.VARIANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ulp_affected.VARIANTS_PATH.write_text("")
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):

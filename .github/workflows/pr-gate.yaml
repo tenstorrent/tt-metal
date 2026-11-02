@@ -681,6 +681,25 @@ jobs:
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
+  # LLK SFPU ULP PR check (llk-sfpu-ulp-pr-check.yaml): fails a change that makes a
+  # Wormhole SFPU op less accurate, or loosens an SFPU accuracy budget. Not gated on
+  # find-changed-files, which misses some of the sweep's include roots.
+  llk-sfpu-ulp-pr-check:
+    needs: [resolve-docker-pull-refs, build-docker-images]
+    if: >-
+      ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name == 'merge_group' ||
+         (github.event_name == 'pull_request' && !github.event.pull_request.draft))
+      }}
+    permissions:
+      contents: read
+      issues: read
+    uses: ./.github/workflows/llk-sfpu-ulp-pr-check.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -706,6 +725,7 @@ jobs:
       - llk-smoke-tests
       - llk-quasar-tests
       - llk-hardware-free-tests
+      - llk-sfpu-ulp-pr-check
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -723,6 +743,7 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests,
+            llk-sfpu-ulp-pr-check
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

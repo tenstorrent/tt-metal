@@ -178,6 +178,11 @@ fp16 subnormals the pack does not reproduce.
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
   --head <new>` lists every cell a change loosens, judged under the architecture the
   `--head` file's name says (`--arch` to name it).
+- **CI.** PR Gate's `llk-sfpu-ulp-pr-check` sweeps the Wormhole cells a change can move
+  (its kernel builds differently, or its row changed) and fails one that measures worse
+  than its row. It also fails a loosened budget unless the PR changes only the tables and
+  has the `ulp-budget-raise-approved` label. A new cell is never a loosening. Every cell,
+  on both cards, runs nightly (`llk-sfpu-ulp-sweep.yaml`); Blackhole is nightly only.
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -275,6 +280,7 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 | `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
 | `python_tests/helpers/ulp_domains.py` | the `domains` list and the rule that draws it; `Problem` and `TableError` |
 | `python_tests/helpers/ulp_budget_diff.py` | the PR guard and the headroom report |
+| `python_tests/helpers/ulp_affected.py` | the cells a change can move, for PR Gate's sweep |
 
 ## Notes on the table
 

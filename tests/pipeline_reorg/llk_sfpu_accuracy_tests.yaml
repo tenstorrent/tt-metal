@@ -1,0 +1,28 @@
+# LLK SFPU accuracy, nightly: the exhaustive ULP sweep, every cell, on each card with a table
+# (tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_{wh,bh}.yaml, by CHIP_ARCH).
+# Run only by .github/workflows/llk-sfpu-ulp-sweep.yaml (llk-e2e.yaml calls it; dispatch it to
+# sweep a branch). Fails if pytest fails a gated cell over its figure, or if `headroom` finds a
+# tolerance cell past what its row records. PR Gate runs the same check over the Wormhole cells
+# a change can move (llk_sfpu_ulp_pr_gate_tests.yaml).
+# 9-11 min on wh_n150_civ2 and 3.6 on a p100a (2026-10); no variant took over 6 s.
+
+- name: llk_sfpu_ulp_sweep
+  split_group: 1
+  team: llk
+  budget_type: e2e
+  coverage: false
+  cmd: |
+    set -uo pipefail
+    cd tests/python_tests
+    status=0
+    pytest -q -n auto --dist=worksteal --timeout=120 --ulp-measure=ulp_measurements.jsonl \
+      test_unary_sfpu_ulp.py || status=$?
+    python3 -m helpers.ulp_budget_diff headroom --measured ulp_measurements.jsonl \
+      --out "${GITHUB_STEP_SUMMARY:-/dev/null}" || status=$?
+    exit "$status"
+  skus:
+    wh_n150_civ2:
+      timeout: 25
+    bh_p150b_civ2:
+      timeout: 25
+  owner_id: U09UC143684 # Nemanja Divnic

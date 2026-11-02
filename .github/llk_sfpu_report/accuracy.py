@@ -59,7 +59,7 @@ def _sweep_stats(d):
     from helpers.format_config import DataFormat
     from helpers.llk_params import ApproximationMode, MathOperation
     from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance, ulp_stats
-    from helpers.ulp_sweep import measurable_mask, nonfinite_failures
+    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, ranked_mask
 
     in_fmt, out_fmt = DataFormat[d["in"]], DataFormat[d["out"]]
     src, golden, result = d["src"], torch.as_tensor(d["golden"]), d["result"]
@@ -70,7 +70,9 @@ def _sweep_stats(d):
     # The Dest width decides which inputs reach the SFPU as subnormals (flushed), so
     # the sweep's own masking needs it, as the nightly ULP sweep passes it.
     dest = DestAccumulation[d["dest_acc"]]
-    mask = measurable_mask(src, golden, result, in_fmt, output_format=out_fmt, dest_acc=dest)
+    # Ranked as the sweep ranks: measurable lanes within the op's claim, which the
+    # non-finite column below already reads.
+    mask = ranked_mask(MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt, dest)
     if d.get("binary"):
         # A lane is measurable only if both operands are.
         mask = mask & measurable_mask(d["src_b"], golden, result, in_fmt, output_format=out_fmt, dest_acc=dest)

@@ -1,0 +1,70 @@
+name: "LLK SFPU ULP sweep"
+
+# Nightly (called from llk-e2e.yaml); dispatch it to sweep a branch. Every SFPU ULP sweep cell on
+# a Wormhole and a Blackhole card, each held to its own table
+# (tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml). PR Gate runs only the Wormhole cells a
+# change can move (llk-sfpu-ulp-pr-check.yaml); this covers Blackhole, and changes to the golden
+# or harness alone.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - run: pip3 install PyYAML
+      - id: matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
+          enabled-skus: ALL_SKUS_IN_TESTS
+          sku-config: ./.github/sku_config.yaml
+
+  ulp-sweep:
+    needs: [load-test-matrix, build-images]
+    strategy:
+      fail-fast: false
+      matrix:
+        # An empty matrix (a SKU dropped from sku_config.yaml) fails here instead of skipping.
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    env:
+      CHIP_ARCH: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole' || 'blackhole' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Run the sweep
+        shell: bash
+        working-directory: tt_metal/tt-llk
+        run: |
+          (cd tests && ./setup_testing_env.sh)
+          ${{ matrix.test-group.cmd }}
+      - if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ulp-sweep-${{ env.CHIP_ARCH }}
+          path: tt_metal/tt-llk/tests/python_tests/ulp_measurements.jsonl
