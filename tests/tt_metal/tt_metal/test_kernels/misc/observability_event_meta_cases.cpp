@@ -6,8 +6,8 @@
 // tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_compile.cpp, one case per
 // OBSERVABILITY_EVENT_META_CASE. Case 0 is valid in every profiler mode; every other case breaks exactly one rule of
 // hostdev/observability_event_meta.h and must fail to compile under the streaming profiler, with its own message. The
-// zone macros take only their fixed library types, so a case with a metadata type of its own places its event through
-// the metadata API, TT_OBSERVABILITY_EVENT, directly.
+// zone macros publish through DevicePublish, so every case that breaks a rule places its event through the metadata
+// API, TT_OBSERVABILITY_EVENT, directly.
 
 #include <cstdint>
 
@@ -141,7 +141,10 @@ void kernel_main() {
 
 #elif OBSERVABILITY_EVENT_META_CASE == 7  // an empty name
 
-void kernel_main() { DeviceZoneScopedN(""); }
+void kernel_main() {
+    TT_EVENT_DESCRIPTOR_DEFINE_ID(event, "");
+    (void)event::descriptor_id();
+}
 
 #elif OBSERVABILITY_EVENT_META_CASE == 8  // a type in an anonymous namespace
 
@@ -169,7 +172,8 @@ void kernel_main() {
 
 void kernel_main() {
     const uint32_t color = get_arg_val<uint32_t>(0);
-    DeviceZoneScopedNC("x", color);
+    TT_OBSERVABILITY_EVENT(event, ::tt::observability_event::ZoneColorMeta{"x", color});
+    (void)event::descriptor_id();
 }
 
 #elif OBSERVABILITY_EVENT_META_CASE == 11  // more than kMaxFields fields
@@ -188,7 +192,10 @@ void kernel_main() {
 #define DEM_S10 "0123456789"
 #define DEM_S100 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10
 #define DEM_S1000 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100
-void kernel_main() { DeviceZoneScopedN(DEM_S1000 DEM_S1000 DEM_S100); }
+void kernel_main() {
+    TT_EVENT_DESCRIPTOR_DEFINE_ID(event, DEM_S1000 DEM_S1000 DEM_S100);
+    (void)event::descriptor_id();
+}
 
 #else
 #error "unknown OBSERVABILITY_EVENT_META_CASE"

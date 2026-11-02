@@ -298,8 +298,9 @@ void JitBuildEnv::init(
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData event compiled; PROFILE_STREAMING makes
-        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
-        // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
+        // api/debug/kernel_profiler.hpp select the streaming markers (kernel_profiler_streaming.hpp) instead of
+        // the DRAM producer, and DevicePublish write its records on the SPSC ring. No DRAM options (dispatch cores,
+        // trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "

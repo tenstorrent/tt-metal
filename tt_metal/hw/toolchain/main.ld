@@ -27,6 +27,15 @@ OUTPUT_ARCH(riscv)
 #define TT_OBSERVABILITY_EVENT_META_VMA 0x6700000
 #define TT_OBSERVABILITY_EVENT_IDS_VMA 0x6800000
 
+/* Fake VMAs for the streaming profiler's call-site sections below (internal/debug/device_publish_impl.h). All three are
+   (INFO), so they are non-ALLOC, never appear in a PT_LOAD and are never placed on the device; the host resolves the
+   pointers they hold by subtracting the section's own sh_addr (llrt/call_sites.cpp). Each only needs a defined base so
+   that the link-time pointers between them are well-formed. They sit at least 1 MB apart and clear of the device memory
+   map, continuing the ladder the .device_print_strings sections started at 0x6400000. */
+#define DEVICE_PUBLISH_DESCRIPTOR_CONTENTS_VMA 0x6900000
+#define DEVICE_PUBLISH_DESCRIPTORS_VMA 0x6A00000
+#define DEVICE_PUBLISH_STRINGS_VMA 0x6B00000
+
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_BRISC_LOCAL_SIZE
@@ -201,6 +210,24 @@ SECTIONS
   }
   ASSERT(__tt_observability_event_ids_end - __tt_observability_event_ids_start < 0xFFFF,
          "more KERNEL_PROFILER events in one image than the 16-bit descriptor id space holds")
+
+  /* What DevicePublish's call-site descriptors point at: texts, field codes, argument and packet layout tables,
+     metadata values and samples. */
+  .device_publish_descriptor_contents DEVICE_PUBLISH_DESCRIPTOR_CONTENTS_VMA (INFO) :
+  {
+    KEEP(*(.device_publish_descriptor_contents))
+    . = ALIGN(4);
+  }
+  /* One descriptor per call site, zones' and DevicePublish records' alike. */
+  .device_publish_descriptors DEVICE_PUBLISH_DESCRIPTORS_VMA (INFO) :
+  {
+    KEEP(*(.device_publish_descriptors))
+  }
+  /* Each String's hash and its text, which the host looks the String up by. */
+  .device_publish_strings DEVICE_PUBLISH_STRINGS_VMA (INFO) :
+  {
+    KEEP(*(.device_publish_strings))
+  }
 
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
