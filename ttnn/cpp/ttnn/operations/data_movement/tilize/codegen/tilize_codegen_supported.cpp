@@ -36,16 +36,24 @@ constexpr int kWidthAxis = -1;
 constexpr int kHeightAxis = -2;
 constexpr size_t kMinRank = 2;
 
-constexpr uint32_t kCompactReaderMaxWt = 8;
-constexpr uint32_t kBatchedWriteTiles = 4;
 constexpr uint32_t kDoubleBuffered = 2;
 constexpr uint32_t kSingleBuffered = 1;
+constexpr uint32_t kMinColumnBlocks = 2;
+
+// Route and split tunings below are performance choices, not correctness limits.
+// Widest tile row, in tiles, that the compact reader takes; wider rows use the chunked reader.
+constexpr uint32_t kCompactReaderMaxWt = 8;
+// Tiles per writer batch on a core that holds at most one tile row.
+constexpr uint32_t kBatchedWriteTiles = 4;
 // A column split needs at least this many tiles per row to amortize its extra reader geometry.
 constexpr uint32_t kColumn2DMinWt = 3;
-constexpr uint32_t kMinColumnBlocks = 2;
+// Few-row DRAM split: narrowest column block, in bytes per stick, one core reads.
 constexpr uint32_t kMinCoreColBytes = 1024;
+// Few-row DRAM split: smallest per-stick read fragment a tile row is cut into.
 constexpr uint32_t kMinFragmentBytes = 256;
+// Few-row DRAM split: cores the cut aims to occupy; more would only read narrower fragments.
 constexpr uint32_t kTargetCores = 24;
+// Few-row DRAM split: a cut onto fewer cores than this keeps the full grid split instead.
 constexpr uint32_t kMinSplitCores = 5;
 
 std::optional<uint32_t> row_major_element_size(DataType dtype) {
@@ -83,7 +91,8 @@ uint32_t column_blocks(uint32_t wt, uint32_t max_blocks) {
     return 1;
 }
 
-// Narrow DRAM fragments read inefficiently, so a few-row DRAM tensor gets wide blocks on few cores.
+// Narrow DRAM fragments read inefficiently, so a few-row DRAM tensor gets wide blocks on few cores. A cut onto
+// fewer than kMinSplitCores cores keeps the full grid; L1 input or a conversion is bounded only by the grid.
 uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t grid_cores, bool fragment_limited) {
     const uint32_t grid_blocks = grid_cores / g.tile_rows;
     if (!fragment_limited) {
@@ -92,7 +101,7 @@ uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t
     const uint32_t fragment_bytes = tt::constants::TILE_WIDTH * elem_size;
     const uint32_t align_tiles = std::max(1u, tt::tt_metal::hal::get_dram_alignment() / fragment_bytes);
     const uint32_t col_units = tt::div_up(g.wt, align_tiles);
-    const uint32_t min_units = std::max(1u, tt::div_up(kMinCoreColBytes / fragment_bytes, align_tiles));
+    const uint32_t min_units = tt::div_up(kMinCoreColBytes / fragment_bytes, align_tiles);
     const uint32_t wide_blocks = std::max(1u, col_units / min_units);
     const uint32_t row_bytes = g.wt * fragment_bytes;
     const uint32_t fragment_blocks =
@@ -117,6 +126,11 @@ std::optional<Geometry> analyze(
     if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated() || input.device() == nullptr) {
         return std::nullopt;
     }
+    // Shared by routing, the forced entry and the primitive's validate, so none of them runs the kernels on an
+    // architecture they were not validated on.
+    if (!codegen_supported_on_arch(input)) {
+        return std::nullopt;
+    }
     if (input.layout() != Layout::ROW_MAJOR || input.is_sharded() || output_mem_config.is_sharded()) {
         return std::nullopt;
     }
@@ -124,6 +138,7 @@ std::optional<Geometry> analyze(
         return std::nullopt;
     }
 
+    // Tile size, page count and row pitch below are 32x32 quantities; a transposed tile would also permute datums.
     if (!is_default_tile(input.tensor_spec().tile())) {
         return std::nullopt;
     }

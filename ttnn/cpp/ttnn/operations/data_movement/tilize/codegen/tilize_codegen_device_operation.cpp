@@ -17,8 +17,8 @@ namespace {
 
 namespace codegen = ttnn::operations::data_movement::tilize_codegen;
 
-// Answering the support question for a host tensor would dereference a null device, so the structural
-// preconditions are asserted first.
+// Asserted before the support check so a host or unallocated input gets native's error message rather than
+// "not supported".
 void require_allocated_device_input(const Tensor& input) {
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
@@ -67,7 +67,6 @@ Tensor tilize_codegen(
     tt::tt_metal::DataType output_dtype,
     bool use_multicore,
     bool use_low_perf,
-    bool preserve_logical_shape,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const codegen::TilizeCodegenPlan& plan) {
     require_allocated_device_input(input);
@@ -77,7 +76,6 @@ Tensor tilize_codegen(
             .output_dtype = output_dtype,
             .use_multicore = use_multicore,
             .use_low_perf = use_low_perf,
-            .preserve_logical_shape = preserve_logical_shape,
             .sub_core_grids = sub_core_grids,
             .plan = plan},
         TilizeCodegenTensorArgs{.input = input});

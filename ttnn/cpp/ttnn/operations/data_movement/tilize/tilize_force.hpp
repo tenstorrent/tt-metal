@@ -13,7 +13,8 @@
 namespace ttnn::operations::data_movement::detail {
 
 // Verification-only: `ttnn.tilize` picks native or codegen itself, so these pin the choice. Bound only
-// under `ttnn._ttnn.operations.data_movement`; use `ttnn::tilize` everywhere else.
+// under `ttnn._ttnn.operations.data_movement`, and this header stays out of the installed api file set;
+// use `ttnn::tilize` everywhere else.
 
 ttnn::Tensor tilize_force_native(
     const ttnn::Tensor& input_tensor,

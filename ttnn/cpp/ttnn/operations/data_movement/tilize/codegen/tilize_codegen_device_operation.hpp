@@ -27,7 +27,6 @@ struct TilizeCodegenOperationAttributes {
     tt::tt_metal::DataType output_dtype;
     bool use_multicore = true;
     bool use_low_perf = false;
-    bool preserve_logical_shape = false;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
     ttnn::operations::data_movement::tilize_codegen::TilizeCodegenPlan plan;
 };
@@ -55,7 +54,6 @@ Tensor tilize_codegen(
     tt::tt_metal::DataType output_dtype,
     bool use_multicore,
     bool use_low_perf,
-    bool preserve_logical_shape,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const ttnn::operations::data_movement::tilize_codegen::TilizeCodegenPlan& plan);
 

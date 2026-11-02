@@ -175,25 +175,24 @@ ttnn::Tensor tilize_force_codegen(
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
         TT_FATAL(
+            codegen_supported_on_arch(normalized_input),
+            "tilize_force_codegen is only supported on Wormhole B0 and Blackhole. This entry never falls back to "
+            "native. Use ttnn::tilize if you want the case routed.");
+        TT_FATAL(
             supported_by_codegen(normalized_input, output_mem_config, dtype),
             "tilize_force_codegen invoked for a case the codegen implementation does not support. This entry never "
             "falls back to native. Use ttnn::tilize if you want the case routed.");
         const auto plan = plan_codegen(normalized_input, output_mem_config, dtype);
         TT_FATAL(
             plan.has_value(),
-            "tilize_force_codegen invoked for a case the codegen implementation does not support (requires "
-            "ROW_MAJOR interleaved input and output in the default 32x32 tile, dtype bfloat16, float32, uint32, "
-            "int32 or uint16 (bfloat16 may convert to int32), tile-aligned height and width, and a column-chunked "
-            "CB plan that fits the L1 free now). This entry never falls back to native, because a forced leg that "
-            "quietly served native would make any comparison against native vacuous. Use ttnn::tilize if you want "
-            "the case routed.");
+            "tilize_force_codegen: the codegen CB plan does not fit the L1 free now. This entry never falls back to "
+            "native. Use ttnn::tilize if you want the case routed.");
         return ttnn::prim::tilize_codegen(
             normalized_input,
             output_mem_config,
             dtype,
             /*use_multicore=*/true,
             /*use_low_perf=*/false,
-            /*preserve_logical_shape=*/false,
             /*sub_core_grids=*/std::nullopt,
             *plan);
     };
@@ -237,14 +236,7 @@ ttnn::Tensor tilize(
             if (const auto plan = plan_codegen(normalized_input, output_mem_config, dtype);
                 plan.has_value() && !is_demoted(normalized_input, output_mem_config, dtype)) {
                 return ttnn::prim::tilize_codegen(
-                    normalized_input,
-                    output_mem_config,
-                    dtype,
-                    use_multicore,
-                    use_low_perf,
-                    /*preserve_logical_shape=*/false,
-                    sub_core_grids,
-                    *plan);
+                    normalized_input, output_mem_config, dtype, use_multicore, use_low_perf, sub_core_grids, *plan);
             }
         }
         return tilize_native(
