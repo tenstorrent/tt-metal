@@ -256,6 +256,17 @@ class Qwen36DecoderLayer:
             )
         else:
             self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl, layer_num=layer_num)
+        # BONSAI_NATIVE site ffnorm: the decode ff RMSNorm runs fused into the exact-ternary MLP's input prep
+        self._ff_gamma = None
+        if getattr(getattr(self, "feed_forward", None), "native", None) is not None:
+            from models.demos.blackhole.bonsai2.native.a3 import op as _a3op
+            from models.demos.blackhole.bonsai2.native.a3.linear import sites as _sites
+
+            if "ffnorm" in _sites():
+                self._ff_gamma = _a3op.norm_gamma(
+                    mesh_device, state_dict[f"layers.{layer_num}.post_attention_layernorm.weight"]
+                )
+                self._norm_eps = args.norm_eps
 
     def _make_norm(
         self,
@@ -490,8 +501,16 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        fuse_ff = self._ff_gamma is not None and mode == "decode"
+        h = ttnn.add(x, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG) if fuse_ff else ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
+
+        if fuse_ff:  # norm + Hadamard prep in one op (bonsai2/native/a3/kernels/rmsprep_kernel.cpp)
+            ff_output = self.feed_forward.native.forward_residual(h, self._ff_gamma, self._norm_eps)
+            output = ttnn.add(h, ff_output)
+            ttnn.deallocate(h)
+            ttnn.deallocate(ff_output)
+            return output
 
         if sharded_norm:
             ff_input = sharded_decode_norm(
