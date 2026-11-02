@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-11-02 03:57: the paged sparse attention gathers K on both NoCs: served c1 1 M 434.1 -> 427.6 s
+
+The attributed 1 M chunk profiles put the paged keys' cost at +0.17 s per 16 K chunk (free pass 6.50 vs 6.33 s with the
+whole-prefix copy; +15 ms per DSA layer-chunk, all inside the attention bucket). The paged op's K gather (32 x 128 B
+reads per 4-token pool out of the tiled cache) ran on the reader's NoC alone; the stock op splits its gather between
+the reader and the writer. `custom_ops/paged_sparse_sdpa` now does the same: the writer gathers the odd tiles of every
+pool on its NoC per chunk request from the reader (cb_kreq: base, groups, the chunk's L1, the index row's L1, is_last)
+and acks through cb_kack; the reader gathers the even tiles and zero-fills after the ack. Bit-identical to the stock op
+on chip 25 (4/4); 1 M cache x 256 queries 9.2 -> 8.3 ms, so the split helps less than 2x: the 128 B pool reads are
+DRAM-small-read bound, not NoC-issue bound. Served c1 1 M needle: 427.6 s against 434.1 s (chunks ~100 ms faster),
+memory flat, no handshake stall over 64 chunks x 11 layers. The served single-user 1 M ladder now reads 494.8 (chain,
+copy) -> 443.0 (plan kernel, copy, 5 MB from OOM) -> 456.9 (plan, paged, 4096) -> 434.1 (+ the device ring) -> 427.6 s
+(+ the dual-NoC gather), -13.6 % memory-safe.
+
 ### 2026-11-02 02:27: the capstone in two rounds: 3 h 55 min for 32 x 1 M, then all 32 repeats restored and answered in 145 s
 
 `served_8x4_needle1m_32_apc_r2` (32 x 1 038 673-token needle prompts submitted together, 256 tokens with `ignore_eos`,
