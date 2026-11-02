@@ -31,7 +31,28 @@ KERNEL = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_kernel.cpp
 AVOID = frozenset({(0, 0)})
 
 
+def worker_cores_rect(device, workers_per_bank: int):
+    """Workers as two exact rectangles (logical cols 0-1 and 7-8, rows 1-8; 32 cores at 4 per bank),
+    each bank taking the rows nearest its optimal reader. A scattered set is many rectangles for the
+    dispatcher; this tests whether that is the ~7 us gap before every A3 op in the traced profile."""
+    assert workers_per_bank == 4
+    primary = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    blocks = {"L": [(x, y) for y in range(1, 9) for x in (0, 1)], "R": [(x, y) for y in range(1, 9) for x in (7, 8)]}
+    out = []
+    for b, c in sorted(enumerate(primary), key=lambda t: t[1].y):
+        free = blocks["L" if c.x < 4 else "R"]
+        pick = sorted(free, key=lambda p: (abs(p[1] - c.y), p[0]))[:4]
+        for sub, (x, y) in enumerate(pick):
+            free.remove((x, y))
+            out.append((ttnn.CoreCoord(x, y), b, sub))
+    return out
+
+
 def worker_cores(device, workers_per_bank: int, avoid=AVOID):
+    import os
+
+    if os.environ.get("BONSAI_A3_RECT", "1") == "1" and workers_per_bank == 4:  # default; =0 for the scattered set
+        return worker_cores_rect(device, workers_per_bank)
     """[(core, bank, sub)] -- the optimal reader per bank, plus a neighbour per extra worker."""
     primary = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     grid = device.compute_with_storage_grid_size()
@@ -384,7 +405,7 @@ KERNEL_V2 = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_v2_kern
 def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: bool = True, n_real: int = 0):
     """cache=False when x8 is a fresh allocation: a cached descriptor would re-bind a freed buffer."""
     if not cache:
-        ttnn.generic_op([x8, w, s, out], _v2_prog(x8, w, s, out, workers, gu, k, n_real))
+        ttnn.generic_op([x8, _t(w), s, out], _v2_prog(x8, w, s, out, workers, gu, k, n_real))
         return out
     """x8: masked_input_buffer filled by prep(). w/s: from weights_for_device().
     out: L1 interleaved, [.., 32, N] 32x32 tiles (row 0 written, rest zero) or [1, 1, 1, N] 1x32 tiles.
@@ -394,7 +415,7 @@ def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: 
         if len(_progs) > 256:  # outputs are fresh allocations, so keys churn; descriptors don't bind them
             _progs.clear()
         _progs[key] = _v2_prog(x8, w, s, out, workers, gu, k, n_real)
-    ttnn.generic_op([x8, w, s, out], _progs[key])
+    ttnn.generic_op([x8, _t(w), s, out], _progs[key])
     return out
 
 
@@ -410,9 +431,10 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
     assert 3 + cols * s_tiles <= 8, "DST full-sync fp32 holds 8 tiles"
     banks = device.dram_grid_size().x
     wpb = len(workers) // banks
-    cols_per_core = w.memory_config().shard_spec.shape[1] // 32 // wpb
+    packed = isinstance(w, PackedW)
+    cols_per_core = (w.cols_per_bank if packed else w.memory_config().shard_spec.shape[1] // 32) // wpb
     pcn = cols_per_core // cols
-    tile_bytes = w.get_tile().get_tile_size(w.dtype)
+    tile_bytes = PackedW.TILE_BYTES if packed else w.get_tile().get_tile_size(w.dtype)
     page, pages = get_max_page_size_and_num_pages(device, 32, tile_bytes)
     grid = core_set([c for c, _, _ in workers])
     out_tile32 = out.get_tile().tile_shape[0] == 32
@@ -425,7 +447,9 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
             buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
 
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, x8),
-           cb(1, w.dtype, 3 * 32, w.get_tile()),
+           ttnn.CBDescriptor(total_size=3 * 32 * tile_bytes, core_ranges=grid, format_descriptors=[
+               ttnn.CBFormatDescriptor(buffer_index=1, data_format=ttnn.DataType.BFLOAT2_B, page_size=tile_bytes,
+                                       tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])))]),
            cb(2, ttnn.float32, 2 * cols * s_tiles, ttnn.Tile([32, 32])),
            cb(4, ttnn.bfloat16, 2, ttnn.Tile([1, 32])),
            cb(5, ttnn.bfloat16, 1, ttnn.Tile([32, 32]))]
@@ -436,7 +460,8 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
             vc = (vc + 1) & 0x3
         seen.append((core, bank))
         vcs.append((core, vc))
-    common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu)), ("tm_is_active_core", 1)]
+    common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu)), ("tm_is_active_core", 1),
+              ("tm_shared_exp", int(packed))]
     modes = [ttnn.UnpackToDestMode.Default] * 64
     modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
@@ -463,37 +488,101 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
     return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
 
 
-def weights_for_device(device, codes_kn, scales_gn, cache=None):
+class PackedW:
+    """bfp2 code tiles without the exponent section (A2b): 256 B each, every exponent forced to
+    127 (+-1.0) in the unpacker. Raw bytes, laid out per DRAM bank exactly as the bank-shuffled
+    Bfp2_b tensor (column-major K-sticks); `t` is a uint32 row-major tensor height-sharded so each
+    bank's bytes are contiguous in that bank."""
+
+    TILE_BYTES = 256
+
+    def __init__(self, t, k, n, banks):
+        self.t, self.k, self.n = t, k, n
+        self.cols_per_bank = n // 32 // banks
+        self.dtype = ttnn.DataType.BFLOAT2_B
+        self.shape = (k, n)
+
+    def buffer_address(self):
+        return self.t.buffer_address()
+
+
+def _t(w):
+    return w.t if isinstance(w, PackedW) else w
+
+
+def pack_shared_exp(codes_kn, banks):
+    """codes [K, N] in {-1,0,1} -> uint32 [banks * rows, 256] of 256 B tiles, per bank: for each of
+    its N-tiles, the K-tiles in order (the DRAM-streaming stick order)."""
+    import numpy as np
+
+    from models.demos.blackhole.bonsai2.native.bfp2 import pack_tiles
+
+    k, n = codes_kn.shape
+    kt, nt = k // 32, n // 32
+    pnb = nt // banks
+    c = np.asarray(codes_kn, dtype=np.int8).reshape(kt, 32, banks, pnb, 32)
+    c = c.transpose(2, 3, 0, 1, 4).reshape(-1, 32, 32)  # bank, n_local, k: tiles in stream order
+    data = pack_tiles(c, shared_exp=True).reshape(banks, -1)  # [banks, pnb * kt * 256] bytes
+    return data.view(np.uint32).reshape(-1, 256)
+
+
+def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=None):
     """codes [K, N] in {-1,0,1}, scales [K/128, N] -> (w bfp2, s fp32) DRAM width-sharded, bank-shuffled.
-    cache: path prefix; host tensors are dumped/loaded there (the conversion is the slow part)."""
+    codes_kn may instead be a callable returning (codes, scales); it is only called on a cache miss,
+    so a warm load never decodes the GGUF. cache: path prefix for the host .tensorbin files (written
+    once, never rewritten: other worktrees hardlink them)."""
     import os
 
+    import numpy as np
     import torch
 
+    if shared_exp is None:  # A2b 256 B code tiles by default; BONSAI_A2B=0 for the 320 B Bfp2_b tiles
+        shared_exp = os.environ.get("BONSAI_A2B", "1") == "1"
     banks = device.dram_grid_size().x
-    k, n = codes_kn.shape
+    rows = {}
 
-    def host(name, build, dtype):
+    def get():
+        if not rows:
+            c, sc = codes_kn() if callable(codes_kn) else (codes_kn, scales_gn)
+            rows["c"], rows["s"] = c, sc
+        return rows["c"], rows["s"]
+
+    def host(name, build, dtype, layout=ttnn.TILE_LAYOUT):
         path = f"{cache}.{name}.tensorbin" if cache else None
         if path and os.path.exists(path):
             return ttnn.load_tensor(path)
-        t = ttnn.from_torch(build(), dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        t = ttnn.from_torch(build(), dtype=dtype, layout=layout)
         if path:
             ttnn.dump_tensor(path, t)
         return t
 
-    w = host("w", lambda: shuffle_for_banks(torch.as_tensor(codes_kn, dtype=torch.float32).reshape(1, 1, k, n), banks),
-             ttnn.DataType.BFLOAT2_B)
-    srows = None
+    def build_w():
+        c = torch.as_tensor(get()[0], dtype=torch.float32)
+        return shuffle_for_banks(c.reshape(1, 1, *c.shape), banks)
 
     def build_s():
-        sr = scale_rows(torch.as_tensor(scales_gn, dtype=torch.float32))
+        sr = scale_rows(torch.as_tensor(get()[1], dtype=torch.float32))
         return shuffle_for_banks(sr.reshape(1, 1, *sr.shape), banks)
 
     s = host("s", build_s, ttnn.float32)
-    s_rows = s.shape[-2]
-    return (ttnn.to_device(w, device, memory_config=weight_mem(device, k, n)),
-            ttnn.to_device(s, device, memory_config=weight_mem(device, s_rows, n)))
+    n = s.shape[-1]
+    s_dev = ttnn.to_device(s, device, memory_config=weight_mem(device, s.shape[-2], n))
+    if shared_exp:
+        def build_p():
+            c = get()[0]
+            return torch.from_numpy(pack_shared_exp(np.asarray(c), banks).view(np.int32))
+
+        p = host("w256", build_p, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        rows = p.shape[-2] // banks
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM,
+                                ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0),
+                                                                                 ttnn.CoreCoord(banks - 1, 0))}),
+                                               [rows, 256], ttnn.ShardOrientation.ROW_MAJOR))
+        k = rows * banks * 1024 // PackedW.TILE_BYTES * 32 * 32 // n  # tiles * 1024 values / N
+        return PackedW(ttnn.to_device(p, device, memory_config=mem), k, n, banks), s_dev
+    w = host("w", build_w, ttnn.DataType.BFLOAT2_B)
+    k = w.shape[-2]
+    return ttnn.to_device(w, device, memory_config=weight_mem(device, k, n)), s_dev
 
 
 def interleave_cols(a, b):

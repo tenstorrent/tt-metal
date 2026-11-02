@@ -57,7 +57,7 @@ class _FusedDistRMSNorm(RMSNorm):
         return out if len(shape) == 4 else ttnn.reshape(out, shape)
 
 
-def sharded_decode_norm(norm, x, args, output_mem_config):
+def sharded_decode_norm(norm, x, args, output_mem_config, keep_sharded=False):
     """Single-chip decode RMSNorm on the sharded multi-core program. The interleaved rms_norm runs a one-tile-row
     input on one core (~80 us at dim 5120); this reshards to the attn norm grid and back to output_mem_config."""
     cfg = args.get_norm_config("attn", Mode.DECODE)
@@ -65,6 +65,8 @@ def sharded_decode_norm(norm, x, args, output_mem_config):
     y_sh = norm(x_sh, mode=Mode.DECODE, in_sharded=True, out_sharded=True, norm_config=cfg)
     if x_sh is not x:
         ttnn.deallocate(x_sh)
+    if keep_sharded:  # QWEN36_1C_MLP_DRAMSHARD: the DRAM-sharded gate/up consume this shard as is
+        return y_sh
     y = ttnn.sharded_to_interleaved(y_sh, output_mem_config)
     ttnn.deallocate(y_sh)
     return y
@@ -180,7 +182,14 @@ class Qwen36DecoderLayer:
 
         if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
             # Exact-ternary projections from the PQ2_0 GGUF (bonsai2/native/a3), decode only.
-            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear, attn_qkv_rows, gdn_in_rows, sites
+            from models.demos.blackhole.bonsai2.native.a3.linear import (
+                TernaryLinear,
+                attn_qkv_rows,
+                attn_qkv_shape,
+                gdn_in_rows,
+                gdn_in_shape,
+                sites,
+            )
             from models.demos.blackhole.bonsai2.native.a3.mlp import shared_for
 
             _sh = shared_for(mesh_device)
@@ -193,7 +202,11 @@ class Qwen36DecoderLayer:
                     self.attention.weights = dataclasses.replace(
                         self.attention.weights,
                         fused_qkv=TernaryLinear(
-                            _sh, f"blk.{layer_num}.attn_qkv_fused", _cache, rows=attn_qkv_rows(_sh, layer_num)
+                            _sh,
+                            f"blk.{layer_num}.attn_qkv_fused",
+                            _cache,
+                            rows=lambda: attn_qkv_rows(_sh, layer_num),
+                            shape=attn_qkv_shape(_sh, layer_num),
                         ),
                     )
                 if "attn_o" in sites():
@@ -212,7 +225,11 @@ class Qwen36DecoderLayer:
                     import torch
 
                     self.attention._native_in = TernaryLinear(
-                        _sh, f"blk.{layer_num}.gdn_in", _cache, rows=gdn_in_rows(_sh, layer_num)
+                        _sh,
+                        f"blk.{layer_num}.gdn_in",
+                        _cache,
+                        rows=lambda: gdn_in_rows(_sh, layer_num),
+                        shape=gdn_in_shape(_sh, layer_num),
                     )
                     _g = substate(state_dict, f"layers.{layer_num}.linear_attn")
                     _ab = torch.cat([_g["in_proj_a.weight"], _g["in_proj_b.weight"]], 0)  # [2*Nv, dim], bf16 in the GGUF
@@ -477,7 +494,13 @@ class Qwen36DecoderLayer:
         ttnn.deallocate(attn_output)
 
         if sharded_norm:
-            ff_input = sharded_decode_norm(self.ffn_norm, h, self.args, ttnn.L1_MEMORY_CONFIG)
+            ff_input = sharded_decode_norm(
+                self.ffn_norm,
+                h,
+                self.args,
+                ttnn.L1_MEMORY_CONFIG,
+                keep_sharded=getattr(self.feed_forward, "_dramshard_1c", False),
+            )
         else:
             ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 

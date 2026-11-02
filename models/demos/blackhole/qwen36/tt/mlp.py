@@ -9,6 +9,8 @@ reduce-scatters on meshes with a dim-1 shape (e.g. P150x4), fracturing hidden.
 import os
 from dataclasses import dataclass
 
+from loguru import logger
+
 import ttnn
 
 
@@ -154,11 +156,26 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
 
     # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy) unless the all-bfp4 experiment is on.
     _down_dtype = ttnn.bfloat4_b if os.environ.get("QWEN36_1C_ALL_BFP4") == "1" else ttnn.bfloat8_b
-    return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
-        w2=load("down_proj", _down_dtype),
-        w3=load("up_proj", ttnn.bfloat4_b),
-    )
+    w1, w3 = load("gate_proj", ttnn.bfloat4_b), load("up_proj", ttnn.bfloat4_b)
+    if _mlp_dramshard_1c():
+        # Re-lay the cached interleaved weights out width-sharded over the DRAM banks (no new cache files;
+        # the cache keeps one interleaved copy and as_tensor ignores a sharded memcfg on reload).
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        w1, w3 = (_to_dram_sharded(w, tpc.create_dram_sharded_mem_config(w.shape[-2], w.shape[-1])) for w in (w1, w3))
+    return MLPWeights(w1=w1, w2=load("down_proj", _down_dtype), w3=w3)
+
+
+def _mlp_dramshard_1c():
+    """QWEN36_1C_MLP_DRAMSHARD=1: single-chip decode gate/up as DRAM-sharded matmuls (weights width-sharded
+    over the DRAM banks, x width-sharded in L1), the config Agent A measured at 133 us vs 170 in-layer (bfp4)."""
+    return os.environ.get("QWEN36_1C_MLP_DRAMSHARD") == "1"
+
+
+def _to_dram_sharded(w, memcfg):
+    ws = ttnn.to_memory_config(w, memcfg)
+    ttnn.deallocate(w)
+    return ws
 
 
 def _down_decode_progcfg(n, dtype=None):
@@ -183,6 +200,30 @@ def _down_decode_progcfg(n, dtype=None):
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
+    )
+
+
+def _gateup_prefill_progcfg(s, k, n, force=False):
+    """QWEN36_1C_PF_GATEUP=1: single-chip prefill gate/up (S > 512) on an 8x10 2D-mcast grid, whole per-core N
+    in one out block, out_block_h=1, in0_block_w=4 -- Agent C's config (agentC .../a3/prefill.py wide_pc):
+    [2048,5120]x[5120,17408] 3.80 ms vs 12.12 on ttnn's auto config. None at S <= 512, where auto wins, unless force: ttnn's auto config
+    rejects a DRAM-sharded weight (QWEN36_1C_MLP_DRAMSHARD), and this config takes it as is (PCC 1.0)."""
+    gx, gy = 8, 10
+    pcn = -(-n // ttnn.TILE_SIZE // gx)
+    if (s <= 512 and not force) or (k // ttnn.TILE_SIZE) % 4 or pcn > 68:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=max(d for d in (1, 2, 4) if pcn % d == 0),
+        out_block_h=1,
+        out_block_w=pcn,
+        per_core_M=-(-s // ttnn.TILE_SIZE // gy),
+        per_core_N=pcn,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
     )
 
 
@@ -241,6 +282,30 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        self._dramshard_1c = self.num_devices == 1 and _mlp_dramshard_1c()
+        if self._dramshard_1c:
+            from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+            k, n = self.weights.w1.shape[-2], self.weights.w1.shape[-1]
+            # x on the same 32-core width shard the sharded decode norm produces, so no reshard is needed.
+            self._act_shard_1c = tpc.create_activation_shard_config(k)
+            pc = tpc.create_dram_sharded_matmul_program_config(1, k, n)
+            workers = int(os.environ.get("QWEN36_1C_MLP_DRAMSHARD_WORKERS", "2"))
+
+            def dpc(act):
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=pc.in0_block_w,
+                    per_core_M=pc.per_core_M,
+                    per_core_N=pc.per_core_N,
+                    fused_activation=act,
+                    num_workers_per_dram_bank=workers,
+                )
+
+            # SiLU is NOT fused into the w1 matmul: there it acts on the fp32 accumulator, while the 1D path
+            # applies it to the bf16 output, and that alone moved top-1 93.55 -> 92.97. It rides on the
+            # gate*up mul instead (input_tensor_a_activations), bit-exact with the 1D path
+            # (test_mlp_dramshard_equiv.py) and no extra op.
+            self._w1_dpc = self._w3_dpc = dpc(None)
 
     def forward(self, x, mode=None):
         from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
@@ -269,11 +334,47 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
+        if self._dramshard_1c and T <= 1:
+            x_sh = x if x.memory_config() == self._act_shard_1c else ttnn.to_memory_config(x, self._act_shard_1c)
+            if not getattr(Qwen36MLP, "_dramshard_logged", False):
+                Qwen36MLP._dramshard_logged = True
+                logger.info(f"QWEN36_1C_MLP_DRAMSHARD: x reshard {'skipped' if x_sh is x else 'needed'}: {x.memory_config()}")
+            shmc = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            w1_out = ttnn.linear(x_sh, w.w1, compute_kernel_config=ckc, program_config=self._w1_dpc, memory_config=shmc)
+            w3_out = ttnn.linear(x_sh, w.w3, compute_kernel_config=ckc, program_config=self._w3_dpc, memory_config=shmc)
+            if x_sh is not x:
+                ttnn.deallocate(x_sh)
+            hidden_sh = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=w1_out.memory_config(),
+            )
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+            hidden = ttnn.sharded_to_interleaved(hidden_sh, mc)
+            ttnn.deallocate(hidden_sh)
+        elif (
+            T > 1
+            and (os.environ.get("QWEN36_1C_PF_GATEUP") == "1" or self._dramshard_1c)
+            and (
+                pf_pc := _gateup_prefill_progcfg(
+                    x.shape[-2], w.w1.shape[-2], w.w1.shape[-1], force=self._dramshard_1c
+                )
+            )
+            is not None
+        ):
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, memory_config=mc, program_config=pf_pc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, program_config=pf_pc)
+            hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+        else:
+            w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
         down_pc = None
         if (
             T > 1

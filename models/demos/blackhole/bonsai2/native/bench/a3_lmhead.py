@@ -46,7 +46,8 @@ def main() -> int:
             kind, layer = args.name.split(":")[0], int(args.name.split(":")[1])
             codes, scales = (gdn_in_rows if kind == "gdn_in" else attn_qkv_rows)(sh, layer)
             cache_name = f"blk.{layer}.gdn_in" if kind == "gdn_in" else f"blk.{layer}.attn_qkv_fused"
-            lin = TernaryLinear(sh, cache_name, args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG, rows=(codes, scales))
+            lin = TernaryLinear(sh, cache_name, args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG,
+                                rows=lambda: (codes, scales), shape=codes.shape)
             w = codes.astype(np.float64) * np.repeat(scales.astype(np.float64), 128, 1)
         else:
             lin = TernaryLinear(sh, args.name, args.cache, out_mem=ttnn.DRAM_MEMORY_CONFIG)

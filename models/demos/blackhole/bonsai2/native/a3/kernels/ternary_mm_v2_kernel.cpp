@@ -50,6 +50,17 @@ constexpr bool gu = get_named_compile_time_arg_val("tm_gu") == 1;
 constexpr uint32_t cols = gu ? 2 : 1;                                   // weight columns per output tile
 constexpr uint32_t kt = num_g * 32;
 constexpr uint32_t cols_per_core = pcn * cols;
+// A2b: code tiles are 256 B (no exponent section); the unpacker forces every exponent to 127 (+-1.0).
+constexpr bool shared_exp = get_named_compile_time_arg_val("tm_shared_exp") == 1;
+
+#if defined(COMPILE_FOR_TRISC)
+inline void force_shared_exp() {
+    if constexpr (shared_exp) {
+        UNPACK((cfg_reg_rmw_tensix<UNP0_FORCED_SHARED_EXP_shared_exp_RMW>(127)));
+        UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Force_shared_exp_RMW>(1)));
+    }
+}
+#endif
 
 #if defined(COMPILE_FOR_TRISC) && defined(TRISC_MATH)
 // sfpi units per 64-row DST tile slot; face f starts at unit 8 f. Unit 2q is rows 4q..4q+3 of a
@@ -215,6 +226,7 @@ void kernel_main() {
     deepseek_compute_kernel_init();
     if constexpr (is_active) {
         custom_mm_block_init<false, CustomMmDestLayout::Default, true>(cb_in0, cb_in1, cb_out);
+        force_shared_exp();
         cb_wait_front(cb_in0, kt);
         for (uint32_t n = 0; n < pcn; ++n) {
             tile_regs_acquire();
@@ -227,6 +239,7 @@ void kernel_main() {
             cb_pop_front(cb_s, cols * s_tiles);
             reconfig_full_operand<SrcOrder::Reverse>(cb_in0, cb_in1);
             custom_mm_block_init_short<false, CustomMmDestLayout::Default>(cb_in0, cb_in1, cb_out);
+            force_shared_exp();
             MATH((sfpu_section([] { zero_slots(3); })));
             Groups<num_g, 1, 3>::run();
             if constexpr (gu) {

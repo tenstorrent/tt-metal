@@ -21,28 +21,33 @@ from .mlp import Shared
 
 
 class TernaryLinear:
-    def __init__(self, shared: Shared, name: str, cache_dir=None, out_mem=ttnn.L1_MEMORY_CONFIG, rows=None):
-        """name: GGUF tensor (and cache key). rows: optional (codes [N, K], scales [N, K/128]) already
-        reordered by the caller (e.g. the GDN v-head regrouping); the GGUF tensor is not read then."""
+    def __init__(self, shared: Shared, name: str, cache_dir=None, out_mem=ttnn.L1_MEMORY_CONFIG, rows=None, shape=None):
+        """name: GGUF tensor (and cache key). rows: optional callable returning (codes [N, K],
+        scales [N, K/128]) already reordered by the caller (e.g. the GDN v-head regrouping), with
+        shape = (N, K). The GGUF codes are only decoded on a cache miss."""
         from models.demos.blackhole.bonsai2.native.gguf_ternary import read_ternary
 
         self.sh = shared
         self.out_mem = out_mem
         if rows is None:
-            t = read_ternary(shared.gguf, name)
-            rows = (t.codes, t.scales)
-        codes_nk, scales_ng = rows
-        n, k = codes_nk.shape
+            rows = lambda: (lambda t: (t.codes, t.scales))(read_ternary(shared.gguf, name))  # noqa: E731
+            shape = tuple(shared.gguf.tensors[name].shape)
+        n, k = shape
         self.n, self.k = n, k
         assert k in shared.m, f"no Hadamard tensor for width {k}"
         per = 32 * len(shared.workers)  # output columns per round over all workers
         n_pad = -(-n // per) * per
-        codes = np.zeros((k, n_pad), np.float32)
-        codes[:, :n] = codes_nk.T
-        scales = np.zeros((k // 128, n_pad), np.float32)
-        scales[:, :n] = scales_ng.T
+
+        def build():
+            codes_nk, scales_ng = rows()
+            codes = np.zeros((k, n_pad), np.float32)
+            codes[:, :n] = codes_nk.T
+            scales = np.zeros((k // 128, n_pad), np.float32)
+            scales[:, :n] = scales_ng.T
+            return codes, scales
+
         cache = os.path.join(cache_dir, name) if cache_dir else None
-        self.w, self.s = a3.weights_for_device(shared.device, codes, scales, cache)
+        self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache)
 
     def forward(self, x, out_mem=None):
         sh = self.sh
@@ -74,6 +79,17 @@ def sites():
     if v is None:
         return VALIDATED
     return WIRED if v == "all" else set(v.split(","))
+
+
+def gdn_in_shape(shared: Shared, layer: int):
+    g = shared.gguf.tensors
+    return (g[f"blk.{layer}.attn_qkv.weight"].shape[0] + g[f"blk.{layer}.attn_gate.weight"].shape[0],
+            g[f"blk.{layer}.attn_qkv.weight"].shape[1])
+
+
+def attn_qkv_shape(shared: Shared, layer: int):
+    g = shared.gguf.tensors
+    return (sum(g[f"blk.{layer}.attn_{p}.weight"].shape[0] for p in "qkv"), g[f"blk.{layer}.attn_q.weight"].shape[1])
 
 
 def gdn_in_rows(shared: Shared, layer: int):
