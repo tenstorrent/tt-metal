@@ -115,6 +115,14 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input;
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH,
+            "Pad supports only 32x32 tiles, got {}x{}",
+            tile_shape[0],
+            tile_shape[1]);
+    }
     auto logical_rank = input_tensor.logical_shape().rank();
     auto padded_rank = input_tensor.padded_shape().rank();
     TT_FATAL(logical_rank == padded_rank, "ttnn.pad: logical and padded shapes must have the same rank");
