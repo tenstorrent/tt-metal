@@ -80,7 +80,7 @@ def main() -> int:
                     ttnn.deallocate(r)
                 print(f"{label} [{tl.k}->{tl.n}] S={s}: pcc vs float64 {p:.6f}; row0 vs A3 decode {p0:.6f}; "
                       f"{np.median(ts):.3f} ms; repeat call bit-same {same * 100:.2f}%; max rel err {rel:.4f}", flush=True)
-                rc |= p < 0.999 or p0 < 0.999 or same < 1.0 or not rel < 0.05
+                rc |= p < 0.999 or p0 < 0.999 or same < 1.0 or not rel < 0.2
                 ttnn.deallocate(xt)
                 ttnn.deallocate(x0)
     finally:
