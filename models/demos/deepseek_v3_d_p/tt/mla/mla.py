@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
     MlaKvCacheFormat,
     MlaKvCacheGeometry,
+    assert_full_mesh_stripe_order,
     declared_seq_shard_factor,
     is_tp_deduped_kv_cache,
     striped_cache_to_host,
@@ -2526,7 +2527,7 @@ class ttMLA:
         assert self._sparse_kv_gather_buffer is not None
         # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
         # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
-        assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
+        assert_full_mesh_stripe_order(storage, self.sp_axis, "full-mesh KVPE gather")
         # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would
         # under-gather. This is the assertion that catches an allocator which forgot tp_axis.
         assert self._declared_seq_shard_factor(storage) == stripes, (
