@@ -184,6 +184,8 @@ def test_mx_print_and_item(dtype):
     x = torch.full((32, 32), 0.5, dtype=torch.float32)
     tt_tensor = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
+    # The print profile is process-wide. A test that ran before in this worker can leave it set to "empty".
+    ttnn.set_printoptions(profile="short")
     assert "0.5000" in str(tt_tensor)
     assert ttnn.from_torch(x[:1, :1], dtype=dtype, layout=ttnn.TILE_LAYOUT).item() == 0.5
     assert tt_tensor.to_list()[3][7] == 0.5
