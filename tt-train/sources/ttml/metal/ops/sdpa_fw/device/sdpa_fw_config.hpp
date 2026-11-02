@@ -164,8 +164,8 @@ uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config);
 bool may_split(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape);
 uint32_t effective_num_cores(const SDPAForwardProgramConfig& config, uint32_t grid_cores);
 
-// make_schedule for config on a grid of grid_cores: the config's cores, but no more than the pieces the
-// items can be cut into. What the program factory builds; the tests and the benchmark reproduce it.
+// make_schedule for config on a grid of grid_cores, on all of the config's cores (the idle ones are dropped).
+// What the program factory builds; the tests and the benchmark reproduce it.
 SDPAForwardSchedule schedule_for(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,

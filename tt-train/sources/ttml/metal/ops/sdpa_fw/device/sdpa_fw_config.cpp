@@ -552,10 +552,13 @@ SDPAForwardSchedule schedule_for(
     const SDPAForwardShape& shape,
     const SDPAForwardChunks& chunks,
     uint32_t grid_cores) {
-    const uint32_t max_pieces = effective_max_pieces(config);
-    const uint32_t num_cores =
-        std::min(effective_num_cores(config, grid_cores), num_work_items(shape, chunks) * max_pieces);
-    return make_schedule(shape, chunks, num_cores, max_pieces, config.causal_pairs);
+    // All of the config's cores, even when the items (or their pieces) can not fill them: the idle trailing
+    // cores are dropped by make_schedule, and rating every chunking on one core count is what lets the pick
+    // compare them. Capping at items * max_pieces rated a one-row chunking of 16 items on 64 cores against a
+    // two-row one on 32, giving the two-row items twice the DRAM share, and the pick took them: 21 to 33%
+    // slower on device for a single head at S <= 1024.
+    return make_schedule(
+        shape, chunks, effective_num_cores(config, grid_cores), effective_max_pieces(config), config.causal_pairs);
 }
 
 namespace {
