@@ -41,3 +41,13 @@ inline constexpr bool is_dataflow_buffer_v<DataflowBuffer<Pap, Cap>> = true;
 template <>
 inline constexpr bool is_dataflow_buffer_v<DataflowBuffer> = true;
 #endif
+
+// The DataflowBuffer type to use for a given (producer, consumer) access-pattern pair.
+// On Quasar that is DataflowBuffer<Pap, Cap>. On WH/BH it is the DataflowBuffer class.
+#ifdef ARCH_QUASAR
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+using DataflowBufferFor = DataflowBuffer<Pap, Cap>;
+#else
+template <dfb::AccessPattern, dfb::AccessPattern>
+using DataflowBufferFor = DataflowBuffer;
+#endif

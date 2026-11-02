@@ -66,6 +66,10 @@ env:
   #                                  ci_run.sh needs the PR and the commits to
   #                                  compare (PR_NUMBER, HEAD_SHA, BASE_SHA), which
   #                                  that workflow's plan job resolves.
+  #   llk_hardware_free_tests.yaml   runs only through llk-hardware-free-impl.yaml,
+  #                                  which installs SFPI and runs the cmd from
+  #                                  tt_metal/tt-llk in the LLK CI image. From /work
+  #                                  the relative ./tests/run_hardware_free.sh misses.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml
@@ -73,6 +77,7 @@ env:
     llk_ttsim_weekly.yaml
     llk_ttnop_tests.yaml
     llk_sfpu_report_tests.yaml
+    llk_hardware_free_tests.yaml
 
   # TEMPORARY. Unlike UNSUPPORTED_YAMLS, the gate can dispatch these fine -- this is
   # not a compatibility exemption, and an edit to one of these yamls still scopes
@@ -165,7 +170,7 @@ jobs:
       leg-count: ${{ steps.gate.outputs.leg-count }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           # Full history: the gate diffs against the merge base with main.
@@ -219,6 +224,8 @@ jobs:
       build-inplace-wheel: true
       tracy: false
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
+      # UMD legs run binaries from build/test/umd/, which only a build-umd-tests build has.
+      build-umd-tests: ${{ contains(needs.scope.outputs.matrix, 'build/test/umd/') }}
 
   build-profiler:
     name: Build (profiler)
@@ -233,6 +240,8 @@ jobs:
       build-inplace-wheel: true
       tracy: true
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
+      # UMD legs run binaries from build/test/umd/, which only a build-umd-tests build has.
+      build-umd-tests: ${{ contains(needs.scope.outputs.matrix, 'build/test/umd/') }}
 
   fetch-ttsim:
     name: Fetch ttsim (${{ matrix.lib }})
@@ -252,7 +261,7 @@ jobs:
       queue: max
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -337,7 +346,7 @@ jobs:
         - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
-        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:rw' }}
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       # Mount the Tenstorrent device only for silicon runners. The CPU-only pools have
       # no /dev/tenstorrent, so mounting it makes the job container fail to start. Every
       # deviceless sku contains "cpu" (github_hosted_cpu, cpu_medium, cpu_medium_prio) and
@@ -358,10 +367,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # Package tests use installed binaries and runtime files. Their minimal
+          # image has no Git, so allow checkout's archive fallback without submodules.
+          submodules: ${{ !matrix.leg.gate_packages && 'recursive' || 'false' }}
           path: docker-job
 
       - name: ⬇️ Setup Job
@@ -404,7 +415,7 @@ jobs:
           # container already has /opt/tenstorrent/sfpi for the JIT-build runtime fallback
           # (see tt_metal/jit_build/build.cpp).
           shopt -s nullglob
-          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb ./pkgs/tt-metalium-validation_*.deb)
           apt install -y "${pkgs[@]}"
 
       - name: Set up tt-train

@@ -22,6 +22,11 @@ tracking: tenstorrent/tt-agentic-bringup-qb2#73.
 
 ## Serving
 
+Build tt-metal and activate its Python environment, then install the pinned tt-transformers
+package, which provides the sampler and LM head:
+`uv pip install --no-deps -r models/autoports/aleph_alpha_kolibri_1_bf16/requirements.txt`. `--no-deps` keeps
+the ttnn built from this tree; a resolving install would replace it.
+
 Serve with vLLM and the vllm-tt-plugin (it registers the `kolibri1` config type, the
 architecture, and the `kolibri1` reasoning and tool-call parsers). The tt-inference-server
 catalog entry `kolibri_1_qb2` carries the full recipe; the essential settings are
