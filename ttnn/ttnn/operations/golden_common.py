@@ -30,7 +30,7 @@ def golden_to_output_dtype(tensor, dtype):
 
     if dtype is None or not isinstance(tensor, torch.Tensor):
         return tensor
-    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b):
         # Block floats share one exponent per 16 values, so small values beside large ones lose precision;
         # round-trip through host packing to model the stored values.
         return ttnn.Tensor(tensor=tensor.contiguous(), data_type=dtype, layout=ttnn.TILE_LAYOUT).to_torch()
