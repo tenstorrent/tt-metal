@@ -174,8 +174,8 @@ class PagedSparseSdpa:
             cb(CB_CTRL, CTRL_PAGE_BYTES, 2),
             cb(CB_COL_IDENTITY, TILE_BYTES, 1),
             cb(CB_RECIP_SCRATCH, TILE_BYTES, 1),
-            cb(CB_KREQ, 32, 2),  # unused under PAGED
-            cb(CB_KACK, 16, 2),  # unused under PAGED
+            cb(CB_KREQ, 32, 2),  # the reader's per-chunk gather request to the writer (the dual-NoC split)
+            cb(CB_KACK, 16, 2),  # the writer's ack: its odd-tile half landed
         ]
 
         reader_ct = [
@@ -193,11 +193,16 @@ class PagedSparseSdpa:
             Skt,
             int(blocks_per_seq),
             self.pool,
+            CB_KREQ,
+            CB_KACK,
         ]
         for t in (q, cache, indices):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        # the writer gathers the odd tiles of every pool on its NoC (the dual-NoC split of the stock op)
         writer_ct = [H, S, vDHt, CB_OUT_RM, CB_SCALE, CB_COL_IDENTITY, CB_NEGINF, 2]
+        writer_ct += [CB_KREQ, CB_KACK, DHt, Skt, int(blocks_per_seq), self.pool]
         writer_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
+        writer_ct += ttnn.TensorAccessorArgs(cache).get_compile_time_args()
         # the DST-bound primitives hold qsb query tile-rows: the largest divisor of Sqt <= 8 (no fp32 accumulation)
         qsb = next(d for d in range(min(Sqt, 8), 0, -1) if Sqt % d == 0)
         compute_ct = [
@@ -218,7 +223,13 @@ class PagedSparseSdpa:
             reader_rt[core.x][core.y] = [
                 tok_start, tok_count, q.buffer_address(), cache.buffer_address(), indices.buffer_address(), int(slot_block0)
             ]  # fmt: skip
-            writer_rt[core.x][core.y] = [tok_start, tok_count, out.buffer_address()]
+            writer_rt[core.x][core.y] = [
+                tok_start,
+                tok_count,
+                out.buffer_address(),
+                cache.buffer_address(),
+                int(slot_block0),
+            ]
             compute_rt[core.x][core.y] = [tok_start, tok_count]
 
         kernels = [

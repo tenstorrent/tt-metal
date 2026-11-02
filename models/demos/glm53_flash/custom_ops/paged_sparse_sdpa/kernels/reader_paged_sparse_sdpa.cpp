@@ -13,6 +13,10 @@
 // after the gather, exactly the stock reader's zero fill. The chunk's boundary mask tile (cols >= nv % 32 of the
 // straddling key tile) is built as in the stock reader. Pages: cache tile (block, t) = page block*DHt + t; the
 // user's pages are contiguous (identity page table): physical block = slot_block0 + id / 32.
+// Dual-NoC gather (as the stock reader / writer split): the gather is NoC-transaction bound (32 x 128 B reads per
+// pool), so every chunk's tiles are split between the two data-movement RISCs: this reader gathers the even tiles t
+// of every pool on its NoC and hands the chunk (base, groups, dst, idx L1) to the writer through cb_kreq, which
+// gathers the odd tiles on ITS NoC into the same cb_k_in L1 and acks through cb_kack; the zero fill waits for both.
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
@@ -24,7 +28,28 @@ constexpr uint32_t sentinel = 0xFFFFFFFFu;
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
 
 namespace rct {
-enum : uint32_t { H = 0, S, TOPK, K_CHUNK, K_DIM, CB_Q_RM, CB_K_IN, CB_MASK_PART, CB_IDX, CB_CTRL, DHT, SKT, BLOCKS_PER_SEQ, POOL, END };
+enum : uint32_t {
+    H = 0,
+    S,
+    TOPK,
+    K_CHUNK,
+    K_DIM,
+    CB_Q_RM,
+    CB_K_IN,
+    CB_MASK_PART,
+    CB_IDX,
+    CB_CTRL,
+    DHT,
+    SKT,
+    BLOCKS_PER_SEQ,
+    POOL,
+    CB_KREQ,
+    CB_KACK,
+    END
+};
+}
+namespace kreq {  // the chunk request the reader hands the writer (one cb_kreq page)
+enum : uint32_t { BASE = 0, N_GROUPS, DST_L1, IDX_L1, IS_LAST, WORDS };
 }
 
 void kernel_main() {
@@ -42,6 +67,8 @@ void kernel_main() {
     constexpr uint32_t Skt = get_compile_time_arg_val(rct::SKT);  // tile rows per chunk (k_chunk / 32)
     constexpr uint32_t blocks_per_seq = get_compile_time_arg_val(rct::BLOCKS_PER_SEQ);
     constexpr uint32_t P = get_compile_time_arg_val(rct::POOL);  // tokens per pool (4): the run length
+    constexpr uint32_t cb_kreq = get_compile_time_arg_val(rct::CB_KREQ);
+    constexpr uint32_t cb_kack = get_compile_time_arg_val(rct::CB_KACK);
     constexpr auto q_args = TensorAccessorArgs<rct::END>();
     constexpr auto cache_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto idx_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
@@ -65,6 +92,7 @@ void kernel_main() {
 
     Noc noc;
     experimental::CB q_cb(cb_q_rm), k_cb(cb_k_in), mask_part_cb(cb_mask_part), idx_cb(cb_idx), ctrl_cb(cb_ctrl);
+    experimental::CB kreq_cb(cb_kreq), kack_cb(cb_kack);  // the dual-NoC K-gather handoff to the writer
     const auto q = TensorAccessor(q_args, q_addr);
     const auto cache = TensorAccessor(cache_args, cache_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
@@ -123,6 +151,17 @@ void kernel_main() {
             // the gather: one 4-row pool per group g (chunk rows P*g .. P*g+P-1); the group's rows past `valid` are
             // over-read (their ids may be sentinels) and zeroed below
             const uint32_t n_groups = (valid + P - 1) / P;
+            kreq_cb.reserve_back(1);  // the writer gathers the odd tiles of every group on its NoC
+            {
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                rq[kreq::BASE] = base;
+                rq[kreq::N_GROUPS] = n_groups;
+                rq[kreq::DST_L1] = dst;
+                rq[kreq::IDX_L1] = idx_l1;
+                rq[kreq::IS_LAST] = chunk == n_active - 1 ? 1u : 0u;
+            }
+            kreq_cb.push_back(1);
             for (uint32_t g = 0; g < n_groups; ++g) {
                 const uint32_t r = g * P;  // chunk-local destination row
                 const uint32_t id0 = idx_ptr[base + r];
@@ -135,7 +174,7 @@ void kernel_main() {
                 const uint32_t rt = r / tt::constants::TILE_HEIGHT;
                 const uint32_t doff = face_off(r % tt::constants::TILE_HEIGHT);
                 const uint32_t pblock = slot_block0 + block;
-                for (uint32_t t = 0; t < DHt; ++t) {
+                for (uint32_t t = 0; t < DHt; t += 2) {  // the even tiles; the writer gathers the odd ones
                     const uint32_t page = pblock * DHt + t;
                     const uint32_t dtile = dst + (rt * DHt + t) * tile_bytes;
                     for (uint32_t half = 0; half < 2; ++half) {
@@ -149,6 +188,8 @@ void kernel_main() {
                 }
             }
             noc.async_read_barrier();
+            kack_cb.wait_front(1);  // the writer's half landed (its own barrier precedes the ack)
+            kack_cb.pop_front(1);
             // zero rows [valid, k_chunk) in L1 (the sentinel suffix; the masked keys must be finite), plus any group
             // skipped above: whole tiles for fully empty tile rows, face runs for the straddling one
             if (valid < k_chunk) {
