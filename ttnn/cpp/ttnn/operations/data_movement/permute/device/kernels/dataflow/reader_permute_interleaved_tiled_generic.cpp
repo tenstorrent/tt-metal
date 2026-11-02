@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
     // An aligned window of read_alignment bytes plus room for one line past its end.
-    uint32_t bounce_window = 0;
+    [[maybe_unused]] uint32_t bounce_window = 0;
     if constexpr (bounce_in_scratchpad) {
         const uint32_t bounce_base =
             Scratchpad<uint32_t>(*scratch::get_token_if_present<"bounce">()).get_base_address();
