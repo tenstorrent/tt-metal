@@ -175,7 +175,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp";
     uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     std::vector<uint32_t> args = {clk_mhz * 500000};  // .5 seconds
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     auto create_eth_kernels = [&](bool is_active) {
         std::set<CoreRange> eth_core_ranges;

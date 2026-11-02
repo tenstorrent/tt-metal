@@ -37,7 +37,7 @@ from helpers.golden_generators import (
     UntilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
+from helpers.llk_params import DestAccumulation, TopKSortDirection
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -48,7 +48,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TOPK,
 )
-from helpers.utils import _RECORD_TEST_ORDER, passed_test
+from helpers.utils import _RECORD_TEST_ORDER, passed_test, result_tensor
 
 NUM_STAGES = 2  # Values and Indices stage
 
@@ -340,7 +340,7 @@ def run_topk_quasar_case(
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     res_tensor = transform_result_tensor_to_right_form(
         res_tensor, formats, K, input_dimensions
