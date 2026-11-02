@@ -100,3 +100,72 @@ def test_sparse_split(mesh_device, pdt):
             f"max abs {float((o - r0).abs().max()):.5f}, ref max {float(r0.abs().max()):.3f}"
         )
         assert worst > 0.999 or os.environ.get("SS_DBG", "0") != "0"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param(DP, id="plain")], indirect=True)
+@pytest.mark.parametrize("topk", [640, 128])
+@torch.no_grad()
+def test_sparse_split_stress(mesh_device, topk):
+    """Repeated calls of the cached program with a fresh random valid count per row every iteration (stale semaphore / CB state, partially valid chunks, topk 128 / 640)."""
+    md = mesh_device
+    S, R, D, H = 4, 20000, 512, 32
+    iters = int(os.environ.get("SS_ITERS", "40"))
+    g = torch.Generator().manual_seed(5)
+    kv_t = (torch.randn(1, 1, R, D, generator=g) * 0.7).to(torch.float8_e4m3fn).float()
+    up = lambda t, dt, lay: ttnn.from_torch(
+        t,
+        device=md,
+        dtype=dt,
+        layout=lay,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+    )
+    kv = up(kv_t, ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT)
+    sink = up(torch.randn(1, 1, 1, H, generator=g).to(torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+    ckc = ttnn.init_device_compute_kernel_config(
+        md.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    scale = 512**-0.5
+    worst = 1.0
+    for it in range(iters):
+        q_t = (torch.randn(1, H, S, D, generator=g) * (1 + 6 * (it % 3))).to(torch.bfloat16)
+        qp = q_t.permute(0, 2, 1, 3).clone()
+        qp[:, :, 9:, :] = float("nan")
+        idx_t = torch.full((1, 1, S, topk), -1, dtype=torch.int32)
+        for r in range(S):
+            nv = int(torch.randint(1, topk + 1, (1,), generator=g))
+            idx_t[0, 0, r, :nv] = torch.randperm(R, generator=g)[:nv]
+        q = up(q_t, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        qt = up(qp, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        idx = up(idx_t, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        ref = ttnn.to_torch(
+            ttnn.get_device_tensors(
+                ttnn.transformer.sparse_sdpa(
+                    q,
+                    kv,
+                    idx,
+                    D,
+                    kv_format=ttnn.transformer.SparseKVFormat.FP8_E4M3,
+                    scale=scale,
+                    k_chunk_size=128,
+                    compute_kernel_config=ckc,
+                    attention_sink=sink,
+                )
+            )[0]
+        ).float()
+        out = ttnn.to_torch(
+            ttnn.get_device_tensors(SS.sparse_sdpa_split(qt, kv, idx, D, scale, 128, 5, ckc, sink))[0]
+        ).float()
+        p = min(pcc(out[0, 1:9, r], ref[0, 1:9, r]) for r in range(S))
+        worst = min(worst, p)
+        if p < 0.999:
+            print(
+                f"SS_STRESS BAD it={it} topk={topk} pcc={p:.5f} nv={[int((idx_t[0,0,r]>=0).sum()) for r in range(S)]}"
+            )
+    print(f"SS_STRESS topk={topk} worst PCC over {iters} iterations: {worst:.6f}")
+    assert worst > 0.999
