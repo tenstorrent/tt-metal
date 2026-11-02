@@ -1414,3 +1414,128 @@ def test_where_rejects_scalar_not_representable_in_int_tensor(device, expect_err
             ttnn.where(tt_c, tt_t, scalar)
         else:
             ttnn.where(tt_c, scalar, tt_t)
+
+
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+@pytest.mark.parametrize("scalar", [16777217, 123456789, -2147483647, 1000000001, 2147483647])
+def test_ttnn_where_int32_big_scalar_exact(device, scalar, variant):
+    """Scalars past float32's 24 bit mantissa used to get rounded through a float before packing."""
+    torch.manual_seed(0)
+    C = (torch.arange(32 * 32).reshape(1, 1, 32, 32) % 2).to(torch.int32)
+    T = (torch.arange(32 * 32).reshape(1, 1, 32, 32) * 7 % 1000 - 500).to(torch.int32)
+    if variant == "TTS":
+        golden = torch.where(C.bool(), T, scalar)
+    else:
+        golden = torch.where(C.bool(), scalar, T)
+
+    tt_c = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        result = ttnn.where(tt_c, tt_t, scalar)
+    else:
+        result = ttnn.where(tt_c, scalar, tt_t)
+
+    assert torch.equal(ttnn.to_torch(result), golden)
+
+
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+@pytest.mark.parametrize("scalar", [16777217, 123456789, 3000000001, 4294967295])
+def test_ttnn_where_uint32_big_scalar_exact(device, scalar, variant):
+    """Same contract as the int32 case, over the full uint32 range."""
+    torch.manual_seed(0)
+    C = (torch.arange(32 * 32).reshape(1, 1, 32, 32) % 2).to(torch.int32)
+    T = (torch.arange(32 * 32).reshape(1, 1, 32, 32) * 7 % 1000).to(torch.int64)
+    if variant == "TTS":
+        golden = torch.where(C.bool(), T, scalar)
+    else:
+        golden = torch.where(C.bool(), scalar, T)
+
+    tt_c = ttnn.from_torch(C, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(T.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        result = ttnn.where(tt_c, tt_t, scalar)
+    else:
+        result = ttnn.where(tt_c, scalar, tt_t)
+
+    assert torch.equal(ttnn.to_torch(result).to(torch.int64), golden)
+
+
+@pytest.mark.parametrize("scalar_pair", [(16777217, 123456789), (-2147483647, 1000000001)])
+def test_ttnn_where_tss_int32_big_scalar_exact(device, scalar_pair):
+    s_true, s_false = scalar_pair
+    C = torch.ones((1, 1, 32, 32), dtype=torch.int32)
+    golden = torch.where(C.bool(), s_true, s_false)
+
+    tt_c = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.where(tt_c, s_true, s_false)
+
+    assert ttnn.to_torch(result).dtype == torch.int32
+    assert torch.equal(ttnn.to_torch(result), golden)
+
+
+def test_ttnn_where_tss_uint32_big_scalar_exact(device):
+    C = torch.ones((1, 1, 32, 32), dtype=torch.int32)
+    golden = torch.where(C.bool(), 3000000001, 16777217)
+
+    tt_c = ttnn.from_torch(C, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.where(tt_c, 3000000001, 16777217)
+
+    assert ttnn.to_torch(result).dtype == torch.uint32
+    assert torch.equal(ttnn.to_torch(result).to(torch.int64), golden)
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, scalar_pair",
+    [
+        (ttnn.int32, (2**31, 5)),
+        (ttnn.int32, (5, 2**31)),
+        (ttnn.uint32, (4294967296, 5)),
+        (ttnn.uint32, (-1, 5)),
+    ],
+)
+def test_where_rejects_tss_int_scalar_out_of_int_range(device, expect_error, ttnn_dtype, scalar_pair):
+    """TSS used to fall back to float here, rounding the value and flipping the output dtype."""
+    C = torch.ones((1, 1, 32, 32), dtype=torch.int32)
+    tt_c = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    s_true, s_false = scalar_pair
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        ttnn.where(tt_c, s_true, s_false)
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, scalar",
+    [
+        (ttnn.int32, 2**31),
+        (ttnn.int32, 4294967295),
+        (ttnn.uint32, -1),
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+def test_where_rejects_int_scalar_out_of_int_range(device, expect_error, ttnn_dtype, scalar, variant):
+    """Out of range ints must still fail loudly, now caught before anything gets packed."""
+    shape = (1, 1, 32, 32)
+    tt_c = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_t = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        if variant == "TTS":
+            ttnn.where(tt_c, tt_t, scalar)
+        else:
+            ttnn.where(tt_c, scalar, tt_t)
+
+
+def test_ttnn_where_float_tensor_big_int_scalar(device):
+    """A float tensor keeps torch's behavior: the int goes through float32."""
+    torch.manual_seed(0)
+    C = torch.ones((1, 1, 32, 32), dtype=torch.int32)
+    T = torch.randn((1, 1, 32, 32), dtype=torch.float32)
+    golden = torch.where(C.bool(), T, 16777217)
+
+    tt_c = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.where(tt_c, tt_t, 16777217)
+
+    assert torch.equal(ttnn.to_torch(result), golden)
