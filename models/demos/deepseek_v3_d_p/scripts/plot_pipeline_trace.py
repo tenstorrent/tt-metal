@@ -211,7 +211,9 @@ def main():
         Patch(facecolor="white", edgecolor="grey", label="idle / waiting (white gap)"),
     ]
     if any(e for r in ranks for *_, e in bars[r]):
-        handles.append(Patch(facecolor="grey", hatch="//", edgecolor="black", label="last rank: compute estimated (median)"))
+        handles.append(
+            Patch(facecolor="grey", hatch="//", edgecolor="black", label="last rank: compute estimated (median)")
+        )
     ax.legend(handles=handles, loc="upper left", fontsize=8, framealpha=0.9)
     ax.set_yticks(ranks)
     ax.set_yticklabels([f"rank {r}" for r in ranks])

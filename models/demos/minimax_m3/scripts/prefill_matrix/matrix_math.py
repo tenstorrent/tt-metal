@@ -50,7 +50,9 @@ class AckLedger:
         """Last-ack time of chunk ``c``."""
         with self._cond:
             if not self._cond.wait_for(lambda: c in self.ends, timeout=timeout_s):
-                raise TimeoutError(f"chunk c={c} not fully acked after {timeout_s:.0f} s ({len(self.ends)} chunks done)")
+                raise TimeoutError(
+                    f"chunk c={c} not fully acked after {timeout_s:.0f} s ({len(self.ends)} chunks done)"
+                )
             return self.ends[c]
 
 
