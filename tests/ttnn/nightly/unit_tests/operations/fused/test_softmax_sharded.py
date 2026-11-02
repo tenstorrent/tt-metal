@@ -448,12 +448,11 @@ def test_scale_mask_softmax_in_place_offset_shard_grid(device, origin, grid_dims
 
     num_cores = grid_dims[0] * grid_dims[1]
     shard_shape = [32, 64]
-    input_shape = (1, 1, shard_shape[0] * num_cores, shard_shape[1])
+    # One batch per core, one [1, 1, 1, W] mask per batch (same layout as test_softmax above).
+    input_shape = (num_cores, 1, shard_shape[0], shard_shape[1])
     scale = 0.5
     input_tensor = torch.randn(input_shape).bfloat16().float()
-    attention_mask = torch.where(torch.rand(1, 1, 32, 64) > 0.5, torch.tensor(0.0), torch.tensor(-float("inf")))
-    attention_mask[..., 0] = 0.0
-    attention_mask = attention_mask.repeat(1, 1, num_cores, 1)
+    attention_mask = (torch.rand(num_cores, 1, 1, shard_shape[1]) > 0.5).float()
 
     sharded_mem_config = _offset_height_sharded_config(origin, grid_dims, shard_shape, shard_orient)
     in_t = ttnn.from_torch(
@@ -472,7 +471,7 @@ def test_scale_mask_softmax_in_place_offset_shard_grid(device, origin, grid_dims
         block_h=1,
         block_w=2,
     )
-    out_t = ttnn.scale_mask_softmax_in_place(in_t, scale, mask_t, program_config=program_config)
+    out_t = ttnn.scale_mask_softmax_in_place(in_t, scale, mask_t, program_config=program_config, is_causal_mask=False)
     tt_output = ttnn.to_torch(ttnn.to_memory_config(out_t, ttnn.DRAM_MEMORY_CONFIG))
 
     golden = torch.softmax(input_tensor * scale + attention_mask, dim=-1)
