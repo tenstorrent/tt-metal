@@ -158,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(POLLUTER_NUM_FACES, formats_array[run].math);
+        llk_test_pack_mode_v<false, TILIZE>>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, POLLUTER_NUM_FACES), formats_array[run].math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[run].math, formats_array[run].math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();

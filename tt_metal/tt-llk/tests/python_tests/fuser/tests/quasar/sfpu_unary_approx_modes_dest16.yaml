@@ -11,7 +11,7 @@ dest_acc: false
 operands:
   - name: "input_A"
     dims: [32, 32]
-    format: [Float16_b, Float16]
+    format: [Float16_b]
     stimuli:
       include:
         - [-8.0, -3.01]

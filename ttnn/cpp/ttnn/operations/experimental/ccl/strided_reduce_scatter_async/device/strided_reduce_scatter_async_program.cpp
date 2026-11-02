@@ -634,20 +634,22 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     }
 
     // Kernel Runtime Args
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
     const auto num_full_size_channels = num_workers_per_direction;
     constexpr auto num_header_only_channels = 0;
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there; its addresses are offsets until the mux publishes the map's base.
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
         0,
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
+        /*base_l1_address=*/0);
+    if (!mux_core_range_set.empty()) {
+        mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
+    }
 
     // Kernel push order is mux, reader, writer, reduce. The fused workload override keys on those indices.
     const auto mux_kernel_id = static_cast<KernelHandle>(program.kernels.size());
