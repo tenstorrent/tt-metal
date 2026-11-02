@@ -55,6 +55,9 @@ struct SDPAForwardChunks {
     uint32_t Sq_chunk_t;
     uint32_t Sk_chunk_t;
     uint32_t heads_per_item;
+    // False when the split units' circular buffers do not fit L1 beside the smallest chunking the knobs allow
+    // (wide heads: D >= 704 at d_v = d_qk with nothing pinned, 1.3 MB budget): the schedule then never cuts.
+    bool allow_split = true;
 
     uint32_t rows() const {
         return Sq_chunk_t * heads_per_item;
@@ -164,8 +167,9 @@ uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config);
 bool may_split(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape);
 uint32_t effective_num_cores(const SDPAForwardProgramConfig& config, uint32_t grid_cores);
 
-// make_schedule for config on a grid of grid_cores, on all of the config's cores (the idle ones are dropped).
-// What the program factory builds; the tests and the benchmark reproduce it.
+// make_schedule for config on a grid of grid_cores, on all of the config's cores (the idle ones are dropped);
+// one piece when chunks.allow_split is false. What the program factory builds; the tests and the benchmark
+// reproduce it.
 SDPAForwardSchedule schedule_for(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
@@ -173,7 +177,8 @@ SDPAForwardSchedule schedule_for(
     uint32_t grid_cores);
 
 // Cheap knob checks for validate: each set knob must divide its axis, and the config must fit l1_budget_bytes
-// with every unset chunk size at its one-tile floor (the smallest chunking the pick can reach). Throws otherwise.
+// with every unset chunk size at its one-tile floor (the smallest chunking the pick can reach), without the
+// split units' CBs: resolve_chunks drops the cuts when those do not fit beside the floor. Throws otherwise.
 void check_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
