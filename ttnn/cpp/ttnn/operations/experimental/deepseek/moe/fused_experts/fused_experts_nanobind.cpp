@@ -116,9 +116,9 @@ void bind_fused_experts(nb::module_& mod) {
             shared_down_weights: The shared expert's down, [Is, H], DRAM ND-sharded [32, 64].
             shared_swiglu_limit: Clamp limit for the shared expert's SwiGLU. Defaults to
                 ``swiglu_limit``; ``float("inf")`` leaves it unclamped.
-            router_weight: The learned router's [H, E] gate, TILE, resident in L1: ND-sharded
-                [H, 32] (one 32-expert tile column per shard), ROW_MAJOR, ROUND_ROBIN_1D over
-                exactly the router cores. Given (with ``router_bias``) instead of any routing
+            router_weight: The learned router's [H, E] gate, TILE, ND-sharded [H, 32] (one 32-expert
+                tile column per shard): in L1 ROW_MAJOR, ROUND_ROBIN_1D over exactly the router
+                cores, or in DRAM, which those cores stream. Given (with ``router_bias``) instead of any routing
                 tensor, the op runs the router itself on those cores -- the first
                 min(12, E / 32) cores of the first grid row below the expert grid, core c holding
                 tile columns c, c + 12, ...: each computes sqrt(softplus(x @ gate)) for its experts

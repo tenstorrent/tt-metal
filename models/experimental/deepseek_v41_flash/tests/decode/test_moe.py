@@ -8,6 +8,7 @@ largest router bias (~57), so it is the one the bf16 ranking is most likely to g
 The routed experts are bfloat4_b, the shared expert bfloat8_b. ``test_moe_decode_s5`` feeds the same
 kind of tokens as ``S``-row ROW_MAJOR blocks, ``hidden`` ``[1, S, 1, D]`` (DSpark's parallel verify):
 one ``fused_experts`` call over the rows' union of experts, and the shared expert's own projections.
+``test_moe_decode_image`` decodes alternating text and image tokens, the image ones ranked with ``bias_vl``.
 
 ``test_moe_decode_tp`` decodes the same tokens tensor-parallel: TP4 on a 1x4 submesh (the decode stages'
 layout) and TP12 on a 3x4 submesh, each chip holding an ``I / TP`` slice of every expert and the partials
@@ -19,7 +20,9 @@ from all 8 DRAM banks (``whole_k`` is the layout prefill also reads). Tokens aft
     python -m tracy -p -r -v -m pytest models/experimental/deepseek_v41_flash/tests/decode/test_moe.py -k "tp12 and banked"
 
 ``fused_router`` has ``fused_experts`` run the router on the grid row below its experts (one op for the whole
-routed MoE); ``own_router`` runs it as its own ops and hands the op the score and ranking rows.
+routed MoE), streaming the gate from DRAM as the full model does; ``fused_router_l1`` keeps the gate resident in
+the router cores' L1 instead (it fits only one layer per device); ``own_router`` runs the router as its own ops and
+hands the op the score and ranking rows.
 
 The converted ttnn weights (~8.5 GB per layer) are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``,
 default ``../cache``, per checkpoint).
@@ -67,9 +70,9 @@ def _snapshot():
 @pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("layer", (2, 39))
-@pytest.mark.parametrize("fused_router", (True, False), ids=("fused_router", "own_router"))
+@pytest.mark.parametrize("router", ("fused_router", "fused_router_l1", "own_router"))
 @torch.no_grad()
-def test_moe_decode(device, layer, fused_router):
+def test_moe_decode(device, layer, router):
     snapshot = _snapshot()
     config = load_config(snapshot)
     loader = DeepseekV4WeightLoader(snapshot)
@@ -79,9 +82,16 @@ def test_moe_decode(device, layer, fused_router):
     experts = DeepSeekV41PreloadedExperts(
         config, expert_provider(loader, layer), device, dtype=ttnn.bfloat4_b, cache=cache
     )
-    moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache)
-    assert moe.fused_router or not fused_router, "this layer's fused_experts cannot run the router"
-    moe.fused_router = fused_router
+    moe = DeepSeekV41SparseMoeBlock(
+        config,
+        moe_weights(loader, layer),
+        device,
+        experts,
+        cache=cache,
+        resident_router_gate=router == "fused_router_l1",
+    )
+    assert moe.fused_router or router == "own_router", "this layer's fused_experts cannot run the router"
+    moe.fused_router = router != "own_router"
 
     torch.manual_seed(0)
     hidden = torch.randn(NUM_TOKENS, config.hidden_size)
@@ -102,6 +112,58 @@ def test_moe_decode(device, layer, fused_router):
         outs.append(ttnn.to_torch(out).reshape(-1).float())
         _, pcc = comp_pcc(expected[t], outs[-1], PCC)
         logger.info(f"layer {layer} token {t}: PCC {pcc}")
+
+    passing, pcc = comp_pcc(expected, torch.stack(outs), PCC)
+    logger.info(f"layer {layer}: PCC {pcc}")
+    assert passing, f"layer {layer}: PCC {pcc} < {PCC}"
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("layer", (39,))
+@pytest.mark.parametrize("router", ("fused_router", "own_router"))
+@torch.no_grad()
+def test_moe_decode_image(device, layer, router):
+    """Every other token is an image token, which the router ranks with ``bias_vl``."""
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    reference = reference_moe(load_reference(snapshot), snapshot, loader, layer)
+    assert reference.gate.bias_vl is not None, "the reference has no bias_vl (vision_n_layers == 0?)"
+
+    cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.ffn")
+    experts = DeepSeekV41PreloadedExperts(
+        config, expert_provider(loader, layer), device, dtype=ttnn.bfloat4_b, cache=cache
+    )
+    moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache)
+    assert moe.fused_router or router == "own_router", "this layer's fused_experts cannot run the router"
+    moe.fused_router = router != "own_router"
+
+    torch.manual_seed(0)
+    hidden = torch.randn(NUM_TOKENS, config.hidden_size)
+    in_image = torch.arange(NUM_TOKENS) % 2 == 1
+    expected = reference(hidden.reshape(NUM_TOKENS, 1, -1), in_image.reshape(NUM_TOKENS, 1)).reshape(NUM_TOKENS, -1)
+    hidden_config = width_sharded_l1_config(1, config.hidden_size, device, tile_height=1)
+    outs = []
+    for t in range(NUM_TOKENS):
+        out = moe.decode_static(
+            ttnn.from_torch(
+                hidden[t].reshape(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=hidden_config,
+            ),
+            image_mask=ttnn.from_torch(
+                in_image[t].to(torch.int32).reshape(1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            ),
+        )
+        outs.append(ttnn.to_torch(out).reshape(-1).float())
+        _, pcc = comp_pcc(expected[t], outs[-1], PCC)
+        logger.info(f"layer {layer} token {t} ({'image' if in_image[t] else 'text'}): PCC {pcc}")
 
     passing, pcc = comp_pcc(expected, torch.stack(outs), PCC)
     logger.info(f"layer {layer}: PCC {pcc}")
@@ -161,9 +223,9 @@ def test_moe_decode_s5(device, layer):
 @pytest.mark.parametrize("tp_size", tuple(TP_SUBMESHES), ids=lambda tp: f"tp{tp}")
 @pytest.mark.parametrize("balance_dram_banks", (False, True), ids=("whole_k", "banked"))
 @pytest.mark.parametrize("layer", (39,))
-@pytest.mark.parametrize("fused_router", (True, False), ids=("fused_router", "own_router"))
+@pytest.mark.parametrize("router", ("fused_router", "fused_router_l1", "own_router"))
 @torch.no_grad()
-def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer, fused_router):
+def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer, router):
     from tracy import signpost
 
     if tuple(mesh_device.shape) != PARENT_MESH:
@@ -184,9 +246,17 @@ def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer, fused_ro
         tp_size=tp_size,
         balance_dram_banks=balance_dram_banks,
     )
-    moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache, tp_size=tp_size)
-    assert moe.fused_router or not fused_router, "this layer's fused_experts cannot run the router"
-    moe.fused_router = fused_router
+    moe = DeepSeekV41SparseMoeBlock(
+        config,
+        moe_weights(loader, layer),
+        device,
+        experts,
+        cache=cache,
+        tp_size=tp_size,
+        resident_router_gate=router == "fused_router_l1",
+    )
+    assert moe.fused_router or router == "own_router", "this layer's fused_experts cannot run the router"
+    moe.fused_router = router != "own_router"
     logger.info(f"TP{tp_size}: I per chip {experts.intermediate} (unpadded {config.moe_intermediate_size // tp_size})")
 
     torch.manual_seed(0)

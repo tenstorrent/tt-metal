@@ -133,8 +133,8 @@ struct tensor_args_t {
 
     // The learned router, run inside the op (6-expert path, one replicated token row): scores =
     // sqrt(softplus(x @ router_weight)), ranked on scores + router_bias. `router_weight` is [H, E]
-    // TILE, resident in L1 on the router cores, ND-sharded [H, 32] round-robin so each shard is one
-    // 32-expert tile column; `router_bias` is
+    // TILE, ND-sharded [H, 32] so each shard is one 32-expert tile column: in L1, round-robin over the
+    // router cores, or in DRAM, which they stream; `router_bias` is
     // the [1, 1, 1, E] bfloat16 ROW_MAJOR bias row, DRAM interleaved. Both or neither are given.
     std::optional<Tensor> router_weight;
     std::optional<Tensor> router_bias;
