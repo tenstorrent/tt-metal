@@ -9,7 +9,6 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -28,8 +27,8 @@ namespace ttnn::prim {
 
 namespace {
 
-constexpr const char* kStickReaderPath =
-    "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_stick_interleaved_unified.cpp";
+constexpr const char* kChunkedReaderPath =
+    "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_tilize_rm_chunked.cpp";
 constexpr const char* kCompactReaderPath =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_tilize_rm_specialized.cpp";
 constexpr const char* kComputePath = "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/compute_tilize.cpp";
@@ -48,16 +47,7 @@ constexpr uint32_t kCbOut = tt::CBIndex::c_16;
 // Tiles the conversion kernel holds in DEST at once; fits the fp32 half-sync DEST.
 constexpr uint32_t kTypecastBlockTiles = 4;
 
-constexpr uint32_t kStickReaderModeTileRow = 1;
-constexpr uint32_t kSeqIdentity = 0;
-// Placeholders for named args in unselected branches of the shared reader; the JIT build needs every name
-// to exist. `elem_size` stays real: the unselected pad branch instantiates fill_with_val<elem_size>.
-constexpr uint32_t kUnusedNamedArg = 0;
-constexpr uint32_t kReaderBatch = 1;
-constexpr uint32_t kReaderSticksPerBarrier = 4;
-constexpr uint32_t kReaderHoistCbWritePtr = 0;
-
-constexpr uint32_t kFloat32ElemSize = 4;
+constexpr uint32_t k32BitElemSize = 4;
 constexpr int kWidthAxis = -1;
 
 CBDescriptor make_cb(
@@ -95,9 +85,9 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     const tt::DataFormat out_format = datatype_to_dataformat_converter(out_dtype);
     const uint32_t elem_size = input.element_size();
     const uint32_t stick_bytes = input.padded_shape()[kWidthAxis] * elem_size;
-    const uint32_t dram_alignment = hal::get_dram_alignment();
-    const uint32_t in_cb_page_size = tt::round_up(tt::tile_size(format), dram_alignment);
-    const uint32_t out_cb_page_size = tt::round_up(tt::tile_size(out_format), dram_alignment);
+    // Same tile sizes the gate budgets with; every admitted format's tile is already DRAM-aligned.
+    const uint32_t in_cb_page_size = tt::tile_size(format);
+    const uint32_t out_cb_page_size = tt::tile_size(out_format);
     const uint32_t in_page_size = in_buf->aligned_page_size();
     const uint32_t out_page_size = out_buf->aligned_page_size();
     const bool column_2d = geometry.route == ttnn::operations::data_movement::tilize_codegen::TilizeRoute::Column2D;
@@ -106,12 +96,12 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     CoreRangeSet core_range;
     CoreRangeSet cg1;
     CoreRangeSet cg2;
-    uint32_t tiles_per_core_1 = 0;
-    uint32_t tiles_per_core_2 = 0;
+    uint32_t rows_per_core_1 = 0;
+    uint32_t rows_per_core_2 = 0;
     if (column_2d) {
         core_range = num_cores_to_corerangeset(geometry.tile_rows * geometry.num_col_blocks, grid, /*row_wise=*/true);
     } else {
-        std::tie(std::ignore, core_range, cg1, cg2, tiles_per_core_1, tiles_per_core_2) =
+        std::tie(std::ignore, core_range, cg1, cg2, rows_per_core_1, rows_per_core_2) =
             split_work_to_cores(grid, geometry.tile_rows, /*row_wise=*/true);
     }
 
@@ -122,8 +112,8 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     }
     desc.cbs.push_back(make_cb(kCbOut, out_format, plan.cb_out_depth, out_cb_page_size, core_range));
 
-    const bool shared_stick_reader = !column_2d && !compact_reader;
-    KernelDescriptor stick_reader;
+    const bool chunked_reader = !column_2d && !compact_reader;
+    KernelDescriptor chunked;
     KernelDescriptor reader;
     reader.core_ranges = core_range;
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -140,28 +130,12 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
         TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
         reader.emplace_common_runtime_args({in_buf});
     } else {
-        stick_reader.kernel_source = kStickReaderPath;
-        stick_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        stick_reader.core_ranges = core_range;
-        stick_reader.config = ReaderConfigDescriptor{};
-        TensorAccessorArgs(*in_buf).append_to(stick_reader.compile_time_args);
-        stick_reader.named_compile_time_args = {
-            {"mode", kStickReaderModeTileRow},
-            {"cb_id", kCbIn},
-            {"stick_bytes", stick_bytes},
-            {"aligned_page_size", in_page_size},
-            {"seq_id", kSeqIdentity},
-            {"batch", kReaderBatch},
-            {"nabatch", kReaderSticksPerBarrier},
-            {"hoist_cb_write_ptr", kReaderHoistCbWritePtr},
-            {"elem_size", elem_size},
-            {"tile_height", kUnusedNamedArg},
-            {"tile_row_shift_bits", kUnusedNamedArg},
-            {"num_pages_in_row", kUnusedNamedArg},
-            {"unpadded_X_bytes", kUnusedNamedArg},
-            {"valid_last_page_bytes", kUnusedNamedArg},
-            {"page_size", kUnusedNamedArg},
-        };
+        chunked.kernel_source = kChunkedReaderPath;
+        chunked.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        chunked.core_ranges = core_range;
+        chunked.config = ReaderConfigDescriptor{};
+        chunked.compile_time_args = {kCbIn, in_page_size};
+        TensorAccessorArgs(*in_buf).append_to(chunked.compile_time_args);
     }
 
     KernelDescriptor writer;
@@ -172,7 +146,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
 
-    const bool wide_dtype = elem_size == kFloat32ElemSize || tensor_return_value.element_size() == kFloat32ElemSize;
+    const bool wide_dtype = elem_size == k32BitElemSize || tensor_return_value.element_size() == k32BitElemSize;
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (dtype == DataType::FLOAT32) {
         unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
@@ -201,11 +175,13 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     };
 
     if (column_2d) {
+        // Row-wise core order, matching num_cores_to_corerangeset above: core i owns tile row
+        // i / num_col_blocks and column block i % num_col_blocks.
+        constexpr uint32_t one_row = 1;
         const auto cores = corerange_to_cores(core_range, std::nullopt, true);
         for (uint32_t i = 0; i < cores.size(); ++i) {
             const uint32_t tile_row = i / geometry.num_col_blocks;
             const uint32_t col_block = i % geometry.num_col_blocks;
-            const uint32_t one_row = 1;
             const uint32_t first_stick = tile_row * TILE_HEIGHT;
             const uint32_t col_byte_offset = col_block * geometry.block_wt * TILE_WIDTH * elem_size;
             const uint32_t block_tiles = geometry.block_wt;
@@ -231,7 +207,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
             if (compact_reader) {
                 reader.emplace_runtime_args(core, {rows, first_stick});
             } else {
-                stick_reader.emplace_runtime_args(
+                chunked.emplace_runtime_args(
                     core,
                     {in_buf,
                      rows,
@@ -246,10 +222,10 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
             assigned += rows;
         }
     };
-    emit_group(cg1, tiles_per_core_1);
-    emit_group(cg2, tiles_per_core_2);
+    emit_group(cg1, rows_per_core_1);
+    emit_group(cg2, rows_per_core_2);
 
-    desc.kernels.push_back(std::move(shared_stick_reader ? stick_reader : reader));
+    desc.kernels.push_back(std::move(chunked_reader ? chunked : reader));
     desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));
     return desc;

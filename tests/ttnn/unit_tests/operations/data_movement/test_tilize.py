@@ -1300,7 +1300,7 @@ _CODEGEN_TORCH_DTYPES = {
 
 
 # Shapes cover each codegen route: few tile columns (compact row reader), many tile rows with a
-# wide row (shared stick reader), and few tile rows with a wide row (rows split across cores).
+# wide row (chunked stick reader), and few tile rows with a wide row (rows split across cores).
 @pytest.mark.parametrize(
     "shape",
     [(1, 1, 64, 64), (2, 3, 32, 96), (1, 1, 1024, 320), (1, 1, 32, 1024), (2, 64, 512)],
