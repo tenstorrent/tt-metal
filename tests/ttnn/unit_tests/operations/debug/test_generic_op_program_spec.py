@@ -737,6 +737,17 @@ def test_mesh_form(device):
     assert device.num_program_cache_entries() == entries
 
 
+def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):
+    class MeshRunArgsIgnoringWrites(E.MeshProgramRunArgs):
+        def __setattr__(self, name, value):
+            pass
+
+    _, a, b, out = inputs(device)
+    _, run_args = mul_program(a, b, out)
+    mesh_run_args = MeshRunArgsIgnoringWrites(programs=[(mesh_range(device), run_args)])
+    assert mesh_run_args.programs[0][1].tensor_args["a"] is a
+
+
 def test_mesh_form_checks_its_ranges(device, expect_error):
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
