@@ -71,33 +71,39 @@ void kernel_main() {
     // Done first, since the compute kernel's first step needs decay.
     if constexpr (gb_fused) {
         const uint32_t BH = get_arg_val<uint32_t>(10);
+        // The four source tiles go to four scratch slots under one barrier (was one round trip each).
         CircularBuffer scr(cb_gbscr);
         const CoreLocalMem<volatile uint32_t> sp(scr.get_write_ptr());
-        auto elem = [&](const auto& acc, uint32_t col) -> uint32_t {
-            const uint32_t c = col % 32;
-            noc.async_read(acc, scr, tb, {.page_id = col / 32}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            return sp[(c / 16) * 256 + (c % 16)];
-        };
-        const uint32_t a = elem(d_acc, h), b = elem(d_acc, BH + h);
-        const uint32_t neg_a = elem(b_acc, h), dt = elem(b_acc, BH + h);
         constexpr uint32_t words = 1024;  // fp32 32x32 tile
-        auto put = [&](uint32_t cb_id, std::initializer_list<uint32_t> vals) {
-            CircularBuffer cb(cb_id);
-            const uint32_t n = static_cast<uint32_t>(vals.size());
-            cb.reserve_back(n);
-            const CoreLocalMem<volatile uint32_t> w(cb.get_write_ptr());
-            for (uint32_t i = 0; i < n * words; i++) {
-                w[i] = 0;
-            }
-            uint32_t j = 0;
-            for (uint32_t v : vals) {
-                w[j++ * words] = v;
-            }
-            cb.push_back(n);
+        const uint32_t cols[4] = {h, BH + h, h, BH + h};  // a, b (a|b row); -exp(A_log), dt_bias (constants row)
+        for (uint32_t i = 0; i < 4; i++) {
+            noc.async_read(i < 2 ? d_acc : b_acc, scr, tb, {.page_id = cols[i] / 32}, {.offset_bytes = i * tb});
+        }
+        noc.async_read_barrier();
+        auto elem = [&](uint32_t i) -> uint32_t {
+            const uint32_t c = cols[i] % 32;
+            return sp[i * words + (c / 16) * 256 + (c % 16)];
         };
-        put(cb_decay, {a, dt, neg_a});
-        put(cb_beta, {b});
+        const uint32_t a = elem(0), b = elem(1), neg_a = elem(2), dt = elem(3);
+        // Only what the compute kernel reads must be set: decay is consumed as a broadcast scalar ([0,0]) and its
+        // raw inputs are elementwise, so their [0,0] alone matters; beta is consumed down its COLUMN 0 (one scale per
+        // row, and rows 1-31 meet the zero padding of v - vread), so column 0 of the raw b tile must be finite.
+        // Zeroing those 32 words instead of whole tiles saves ~4000 RISC stores per call.
+        CircularBuffer cd(cb_decay), cbb(cb_beta);
+        cd.reserve_back(3);
+        const CoreLocalMem<volatile uint32_t> wd(cd.get_write_ptr());
+        wd[0] = a;
+        wd[words] = dt;
+        wd[2 * words] = neg_a;
+        cd.push_back(3);
+        cbb.reserve_back(1);
+        const CoreLocalMem<volatile uint32_t> wb(cbb.get_write_ptr());
+        for (uint32_t r = 0; r < 16; r++) {
+            wb[r * 16] = 0;        // face 0, column 0, rows 0-15
+            wb[512 + r * 16] = 0;  // face 2, column 0, rows 16-31
+        }
+        wb[0] = b;
+        cbb.push_back(1);
     }
 
     // initial state S (once) — host always provides it (zeros if absent). In ring mode the block

@@ -130,7 +130,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         add_cb(cb::beta, 1);   // raw b, same form
         add_cb(cb::gdec, 1);
         add_cb(cb::gbeta, 1);
-        add_cb(cb::gbscr, 1);
+        add_cb(cb::gbscr, 4);
     } else {
         add_cb(cb::decay, 1, T > 1 ? 2 : 1);
         add_cb(cb::beta, 1, T > 1 ? 2 : 1);
