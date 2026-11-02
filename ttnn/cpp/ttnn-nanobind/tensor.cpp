@@ -73,6 +73,20 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         Note: ``reduce_max`` and elementwise ``add``/``sub`` are unaffected by this setting.
         Elementwise ``mul`` and ``reduce_average``/``sum`` do respect this setting.
     )doc");
+    export_enum<tt::tt_metal::SfpuMode>(m_tensor, "SfpuMode", R"doc(
+        Selects which SFPU instruction sequence an operation runs, on two independent axes.
+
+        - ``PreciseStrict``: the accurate algorithm; NaN, +-inf, +-0 and out-of-domain inputs follow the
+          op's documented contract.
+        - ``ApproximateStrict``: a faster, less accurate algorithm; special values as ``PreciseStrict``.
+        - ``PreciseRelaxed``: the accurate algorithm without special-value guards. The caller guarantees
+          in-domain inputs; results outside the domain are unspecified.
+        - ``ApproximateRelaxed``: the fastest sequence; same input guarantee as ``PreciseRelaxed``.
+
+        Ops that accept it take it as the ``sfpu_mode`` keyword argument (currently ``ttnn.softsign``,
+        ``ttnn.exp2`` and ``ttnn.reciprocal``; also ``ttnn.UnaryWithParam`` for those ops).
+        Supported on Wormhole and Blackhole.
+    )doc");
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     // export_enum<ShardMode>(m_tensor);

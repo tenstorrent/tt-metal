@@ -58,4 +58,16 @@ enum class UnpackMode : uint8_t { UnpackToSrc, UnpackToDest };
  */
 enum class Precision : uint8_t { Approximate, Precise };
 
+/**
+ * Selects which instruction sequence an SFPU operation runs, on two independent axes:
+ *   Precise / Approximate — the accurate algorithm, or a faster, less accurate one.
+ *   Strict  / Relaxed     — Strict meets the op's documented contract for NaN, +-inf, +-0 and
+ *                           out-of-domain inputs; Relaxed is for callers who guarantee in-domain
+ *                           inputs, and leaves boundary results unspecified.
+ * Host mirror of ckernel::SfpuMode (tt_metal/tt-llk/common/sfpu_mode.h). The two are matched by
+ * enumerator name and value when a mode is lowered into kernel source, so never rename or
+ * renumber one without the other.
+ */
+enum class SfpuMode : uint8_t { PreciseStrict = 0, ApproximateStrict = 1, PreciseRelaxed = 2, ApproximateRelaxed = 3 };
+
 }  // namespace tt::tt_metal

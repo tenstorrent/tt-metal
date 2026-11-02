@@ -457,7 +457,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
+        // SFPU_MODE_OVERRIDE selects the mode-typed API; without it, the legacy APPROX_MODE call.
+#ifdef SFPU_MODE_OVERRIDE
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<SFPU_MODE_OVERRIDE, is_fp32_dest_acc_en>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
@@ -599,7 +604,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
+        // SFPU_MODE_OVERRIDE selects the mode-typed API; without it, the legacy APPROX_MODE call.
+#ifdef SFPU_MODE_OVERRIDE
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<SFPU_MODE_OVERRIDE>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<APPROX_MODE>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
@@ -628,7 +638,9 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-#ifdef ARCH_WORMHOLE
+#if defined(SFPU_MODE_OVERRIDE)
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<SFPU_MODE_OVERRIDE, is_fp32_dest_acc_en>);
+#elif defined(ARCH_WORMHOLE)
         constexpr bool round_to_bf16 = !APPROX_MODE && !is_fp32_dest_acc_en;
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, round_to_bf16>);
 #else
@@ -888,7 +900,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
+#ifdef SFPU_MODE_OVERRIDE
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (SFPU_MODE_OVERRIDE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+#else
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+#endif
     }
     // VectorMode::RC: params drives 4 face iterations with 2×SETRWC between each —
     // the lambda processes 8 rows per face, giving 32 total.
@@ -1051,7 +1067,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
+#ifdef SFPU_MODE_OVERRIDE
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal, (SFPU_MODE_OVERRIDE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+#else
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -1273,7 +1293,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
+#ifdef SFPU_MODE_OVERRIDE
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (SFPU_MODE_OVERRIDE, ITERATIONS), dst_index, vector_mode);
+#else
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {

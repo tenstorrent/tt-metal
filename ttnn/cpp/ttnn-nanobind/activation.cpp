@@ -51,6 +51,22 @@ void py_module(nb::module_& mod) {
             [](UnaryWithParam* t, std::pair<UnaryOpType, bool> arg) {
                 new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};
             })
+        // An op with an SFPU instruction-sequence selector, e.g. UnaryWithParam(UnaryOpType.SOFTSIGN,
+        // SfpuMode.ApproximateRelaxed). The mode travels as params[0], which unary_op_utils lowers to
+        // <op>_tile<SfpuMode>. Ops without a mode-typed kernel API are refused here rather than at JIT time.
+        // noconvert, and registered after the numeric overloads: nanobind would otherwise convert a bool or
+        // int to SfpuMode, and UnaryWithParam(EXP, False) would land here instead of on (UnaryOpType, float).
+        .def(
+            "__init__",
+            [](UnaryWithParam* t, UnaryOpType op_type, tt::tt_metal::SfpuMode sfpu_mode) {
+                TT_FATAL(
+                    ttnn::operations::unary::utils::supports_sfpu_mode(op_type),
+                    "UnaryWithParam: {} does not take an SfpuMode (supported: SOFTSIGN, EXP2, RECIP)",
+                    op_type);
+                new (t) UnaryWithParam{op_type, static_cast<float>(sfpu_mode)};
+            },
+            nb::arg("op_type"),
+            nb::arg("sfpu_mode").noconvert())
         .def_ro("op_type", &UnaryWithParam::op_type)
         // Python comparison goldens read fused activation parameters from this vector.
         // Register nanobind's vector caster so parameterized POWER goldens remain accessible.

@@ -542,6 +542,32 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class SfpuMode(Enum):
+    """Mirrors ckernel::SfpuMode (tt-llk/common/sfpu_mode.h): bit 0 approximate, bit 1 relaxed."""
+
+    PreciseStrict = 0
+    ApproximateStrict = 1
+    PreciseRelaxed = 2
+    ApproximateRelaxed = 3
+
+    @property
+    def cpp_enum_value(self):
+        return f"ckernel::SfpuMode::{self.name}"
+
+    @property
+    def is_approximate(self) -> bool:
+        return bool(self.value & 0b01)
+
+    @property
+    def is_strict(self) -> bool:
+        return not self.value & 0b10
+
+    @property
+    def approximation_mode(self) -> "ApproximationMode":
+        """The legacy axis this mode's precision half corresponds to (for accuracy contracts)."""
+        return ApproximationMode.Yes if self.is_approximate else ApproximationMode.No
+
+
 class SfpuImpl(Enum):
     """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
