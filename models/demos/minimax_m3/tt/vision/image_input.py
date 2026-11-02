@@ -50,8 +50,8 @@ def check_image_input(pixel_values: torch.Tensor, grid_thw: torch.Tensor, patch_
     grid_thw an integer tensor (1, 3) [[1, h, w]] with h and w positive multiples of 2. patch_dim is the number of
     values per patch in the model's vision config (MiniMaxM3VisionConfig.patch_dim, 1176).
 
-    M3VLVisionModel.forward_tower runs it before any device work, as the device checks neither that the rows match the
-    grid nor that the values are finite.
+    M3VLVisionModel.push_pixel_values runs it before any device work, as the device checks neither that the rows match
+    the grid nor that the values are finite.
     """
     if not isinstance(pixel_values, torch.Tensor) or not isinstance(grid_thw, torch.Tensor):
         raise ValueError(

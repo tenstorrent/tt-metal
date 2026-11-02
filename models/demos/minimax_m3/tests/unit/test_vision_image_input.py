@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of M3VLVisionModel's input, which forward_tower checks with check_image_input
-(tt/vision/image_input.py) before any device work, and of num_tokens, which check_image_input uses. No device. The
-tests check that:
-  - forward_tower, and forward through it, raise ValueError for input that is not one image, before any ttnn call;
+Host-side checks of M3VLVisionModel's input, which push_pixel_values checks with check_image_input
+(tt/vision/image_input.py) before any device work, of num_tokens, which check_image_input uses, and of how forward
+splits at the upload. No device. The tests check that:
+  - push_pixel_values, and forward_tower and forward through it, raise ValueError for input that is not one image,
+    before any ttnn call;
   - a good image's pixel values go to the device as bf16 whatever the weights' dtype;
+  - forward runs the modules in order, each on the output of the one before, and makes the calls of
+    push_pixel_values, then those of forward_device on its upload, which stays allocated;
   - num_tokens counts the vision tokens of one image's grid in each form it takes, and rejects the grids that
     check_image_input stops before it calls num_tokens.
 
@@ -70,8 +73,9 @@ MODEL_BAD_INPUTS = {
 
 @pytest.mark.parametrize("case", MODEL_BAD_INPUTS)
 def test_vision_model_rejects_bad_input(case, expect_error, monkeypatch):
-    """M3VLVisionModel.forward_tower, and forward through it, raise ValueError for input that is not one image before
-    any ttnn call. No device: ttnn.from_torch and the modules are stand-ins that fail the test if they run.
+    """M3VLVisionModel.push_pixel_values, and forward_tower and forward through it, raise ValueError for input that is
+    not one image before any ttnn call. No device: ttnn.from_torch and the modules are stand-ins that fail the test if
+    they run.
 
     more_rows is the mismatch the device would not catch: the RoPE op gives zero q and k for the rows past the grid's
     patches. fewer_rows_4x6 has the rows of a 4 x 4 grid, which a token count of h * h would take for a 4 x 6 one.
@@ -88,7 +92,7 @@ def test_vision_model_rejects_bad_input(case, expect_error, monkeypatch):
         blocks=[],
         projector=_device_work,
     )
-    for run in (model.forward_tower, model.forward):
+    for run in (model.push_pixel_values, model.forward_tower, model.forward):
         with expect_error(ValueError, message):
             run(pixel_values, grid_thw)
 
@@ -120,6 +124,76 @@ def test_vision_model_uploads_pixels_as_bf16(dtype, expect_error, monkeypatch):
         model.forward_tower(torch.full((24, 1176), 4.0, dtype=dtype), torch.tensor([[1, 4, 6]]))
     assert weight_dtypes == [ttnn.bfloat8_b, ttnn.bfloat8_b]
     assert uploads == [(torch.bfloat16, (1, 1, 24, 1176), ttnn.bfloat16)]
+
+
+def test_vision_model_forward_device_after_upload(monkeypatch):
+    """forward of one image runs the modules in order, each on the output of the one before, and makes the calls of
+    push_pixel_values, then those of forward_device on its upload, both for the first image of a grid, which stages
+    the grid's RoPE tables, and for the next, which takes them from the cache.
+    forward_device leaves its input allocated, so calls on one upload run what forward runs for each image, and
+    forward_tower makes forward's calls up to the last block. No device: ttnn.from_torch, ttnn.to_memory_config,
+    ttnn.deallocate and the modules are stand-ins that log each call with its inputs. Each output is named after its
+    kind of call and the number of such calls before it since the log was cleared, so the logs of two models
+    compare."""
+    calls = []  # (kind, inputs) of each call since the log was cleared
+
+    def logged(kind):
+        def call(*inputs):
+            calls.append((kind, inputs))
+            return f"{kind}{sum(logged_kind == kind for logged_kind, _ in calls) - 1}"
+
+        return call
+
+    monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: logged("from_torch")(tuple(tensor.shape)))
+    monkeypatch.setattr(ttnn, "to_memory_config", logged("to_memory_config"))
+    monkeypatch.setattr(ttnn, "deallocate", logged("deallocate"))
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+
+    def build():
+        return M3VLVisionModel(
+            None,
+            CONFIG,
+            padded_head_dim=96,  # head_dim 80 in whole tiles
+            patch_embed=logged("patch_embed"),
+            pre_layrnorm=logged("pre_layrnorm"),
+            blocks=[logged("block_a"), logged("block_b")],
+            projector=logged("projector"),
+        )
+
+    def log(run):
+        calls.clear()
+        run()
+        return list(calls)
+
+    model = build()
+    forward = [log(lambda: model(ROWS, GRID)) for _ in range(2)]  # the first image of the grid, then the next
+    pushed = [sum(kind == "from_torch" for kind, _ in image) for image in forward]
+    assert pushed == [3, 1], f"pushed {pushed} tensors per image, expected the pixels and, once, cos and sin"
+    ttnn_calls = ("from_torch", "to_memory_config", "deallocate")
+    modules = [(kind, inputs[0]) for kind, inputs in forward[0] if kind not in ttnn_calls]
+    assert modules == [
+        ("patch_embed", "from_torch0"),
+        ("pre_layrnorm", "patch_embed0"),
+        ("block_a", "pre_layrnorm0"),
+        ("block_b", "block_a0"),
+        ("projector", "block_b0"),
+    ], f"the modules ran as {modules}, each with its first input"
+    assert forward[0][-2:] == [("projector", ("block_b0",)), ("deallocate", ("block_b0",))], forward[0]
+
+    model = build()
+    calls.clear()
+    x_tt = model.push_pixel_values(ROWS, GRID)
+    model.forward_device(x_tt, GRID)
+    first = list(calls)
+    upload, after_upload = first[:1], first[1:]
+    following = log(lambda: model.forward_device(x_tt, GRID))
+    assert upload == [("from_torch", ((1, 1, 16, 1176),))] and x_tt == "from_torch0", upload
+    assert upload + after_upload == forward[0], f"forward_device on the first image of the grid made {after_upload}"
+    assert upload + following == forward[1], f"forward_device on the next image of the grid made {following}"
+    assert ("deallocate", (x_tt,)) not in first + following, "forward_device freed its input"
+
+    model = build()
+    assert log(lambda: model.forward_tower(ROWS, GRID)) == forward[0][:-2]
 
 
 # id: (grid_thw, vision tokens): the grid of one image in each form num_tokens takes. h and w differ, so a count that

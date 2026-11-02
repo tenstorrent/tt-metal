@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Fixtures for the vision encoder unit tests (test_vision_*_vs_ref.py).
+Fixtures for the vision encoder unit tests (test_vision_*_vs_ref.py). tests/perf/test_vision_encoder_timing.py
+imports vision_reference from here.
 
 The tests compare the TT vision modules against the Torch reference in reference/vision.py, at the
 checkpoint's dimensions with seeded random weights, so they need no checkpoint and no HF_MODEL. Both
