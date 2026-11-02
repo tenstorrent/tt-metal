@@ -12,3 +12,5 @@
 {"event":"test_run","status":"pass","test":"test_conv2d_nhwc_sharded.py -k height (19)","note":"split gather header, output alignment, rect weight mcast, resident fallback","ts":"2026-11-02T13:41:54+00:00"}
 {"event":"test_run","status":"pass","test":"unit dir 147 passed; golden HEIGHT 100 passed; golden bf16xbf8b|HEIGHT 308 passed 0 failed","note":"final R6: L1 116k->38.8k, L2ds 165k->41.0k, L2 3x3 81k->35.7k, 1x1 25.3k->17.9k cycles","ts":"2026-11-02T14:06:11+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-02T14:31:19+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-02T15:52:55+00:00"}
+{"event":"test_run","status":"pass","test":"test_conv2d_nhwc_r8.py","detail":"22/22: unaligned C_in/C_out (R0 staged, TILE, HEIGHT, BLOCK), dilation, grouped native + block-diag","ts":"2026-11-02T16:03:33+00:00"}

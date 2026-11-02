@@ -84,12 +84,31 @@ constexpr uint32_t win_tile_rows = get_compile_time_arg_val(GATHER_CT_BASE + 28)
 // R9 (technique 3, 1x1 stride-1 TILE): the shard's tiles ARE in0 — the reader only publishes the
 // resident shard (consumer: compute's matmul on HEIGHT, the writer's act multicast on BLOCK / WIDTH).
 constexpr bool direct_in0 = get_compile_time_arg_val(GATHER_CT_BASE + 29) != 0;
-constexpr auto input_args = TensorAccessorArgs<GATHER_CT_BASE + 30>();
+// Dilation (Refinement 8): kernel tap (kh, kw) reads input (h_base + kh*DIL, w_base + kw*DIL). A
+// kernel-row band is then kW runs of tap_width at stick stride DIL (one read per tap, not per band).
+constexpr uint32_t DIL = get_compile_time_arg_val(GATHER_CT_BASE + 30);
+// R0 unaligned input sticks (Refinement 8): a DRAM stick is read into a staging slot at the DRAM read
+// alignment (stage_stride bytes, pre-zeroed once) and then copied tap_bytes wide into the window, so
+// the window's pad lanes [stick_bytes, tap_bytes) stay zero (a zero weight times a stale NaN is NaN).
+// 0 = direct DRAM -> window reads (tap_bytes a multiple of the DRAM alignment).
+constexpr uint32_t stage_stride = get_compile_time_arg_val(GATHER_CT_BASE + 31);
+constexpr uint32_t cb_stage = get_compile_time_arg_val(GATHER_CT_BASE + 32);
+constexpr uint32_t stage_row_sticks = get_compile_time_arg_val(GATHER_CT_BASE + 33);  // per staging half
+// R0: window sticks pre-zeroed once (stick_bytes < tap_bytes: pad lanes are never written).
+constexpr uint32_t window_zero_bytes = get_compile_time_arg_val(GATHER_CT_BASE + 34);
+// Byte stride of a source stick (window slot / shard stick / untilized TILE window stick). Equals
+// tap_bytes unless the source sticks are wider than the K tap (a HEIGHT shard or a TILE window wider
+// than the granule-padded C_in): then every tap is its own read, as with dilation.
+constexpr uint32_t src_bytes = get_compile_time_arg_val(GATHER_CT_BASE + 35);
+constexpr uint32_t in_row_tiles = get_compile_time_arg_val(GATHER_CT_BASE + 36);  // TILE input: tiles per tile-row
+constexpr auto input_args = TensorAccessorArgs<GATHER_CT_BASE + 37>();
 // The gather reads a contiguous stick source (resident shard + halo, or the untilized TILE window).
 constexpr bool contiguous_src = k_exchange || tile_in;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t tap_bytes = tap_width * elem_bytes;
+// A kernel-row band's kW taps are one contiguous source run (no dilation, sticks exactly one tap).
+constexpr bool taps_contiguous = DIL == 1 && src_bytes == tap_bytes;
 constexpr uint32_t band_elems = band_tiles * TILE_DIM;
 constexpr uint32_t kblock_elems = block_k_tiles * TILE_DIM;
 constexpr uint32_t im2col_row_bytes = kblock_elems * elem_bytes;
@@ -97,6 +116,24 @@ constexpr uint32_t im2col_row_bytes = kblock_elems * elem_bytes;
 // taps of a kernel row are one contiguous run of sticks: one read per kernel row).
 constexpr uint32_t dw_tap_bytes = block_n_tiles * TILE_DIM * elem_bytes;
 constexpr bool dw_full_stick = dw_tap_bytes == tap_bytes;
+// Depthwise kernel-row runs: the kW taps' sticks are contiguous (whole stick, no dilation).
+constexpr bool dw_row_runs = dw_full_stick && taps_contiguous;
+constexpr int32_t eff_kH = static_cast<int32_t>(DIL * (kH - 1) + 1);
+constexpr int32_t eff_kW = static_cast<int32_t>(DIL * (kW - 1) + 1);
+
+// In-image kernel columns of a pixel at w_base: kw in [kw_lo, kw_hi) (w_base + kw*DIL in [0, W)).
+FORCE_INLINE void in_image_taps(int32_t w_base, int32_t& kw_lo, int32_t& kw_hi) {
+    constexpr int32_t d = static_cast<int32_t>(DIL);
+    kw_lo = w_base < 0 ? (-w_base + d - 1) / d : 0;
+    const int32_t last = static_cast<int32_t>(W) - 1 - w_base;
+    kw_hi = last < 0 ? 0 : last / d + 1;
+    if (kw_hi > static_cast<int32_t>(kW)) {
+        kw_hi = kW;
+    }
+    if (kw_hi < kw_lo) {
+        kw_hi = kw_lo;
+    }
+}
 
 FORCE_INLINE int32_t clamp_i(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -124,12 +161,12 @@ struct WindowSource {
     // `bytes` starting at channel byte `chan_byte` of stick (row, w); contiguous across sticks.
     FORCE_INLINE void read(int32_t row, int32_t w, uint32_t chan_byte, uint32_t dst, uint32_t bytes) const {
         const int32_t stick = (row - row0) * win_w + (w - col_lo);
-        local_read(base + static_cast<uint32_t>(stick) * tap_bytes + chan_byte, dst, bytes);
+        local_read(base + static_cast<uint32_t>(stick) * src_bytes + chan_byte, dst, bytes);
     }
     // Address of stick (row, w_first) + chan_byte; a run of sticks [w_first, w_end) of one input
     // row is affine in w inside the window copy, so this always succeeds.
     FORCE_INLINE bool run_addr(int32_t row, int32_t w_first, int32_t, uint32_t chan_byte, uint32_t& a) const {
-        a = base + static_cast<uint32_t>((row - row0) * win_w + (w_first - col_lo)) * tap_bytes + chan_byte;
+        a = base + static_cast<uint32_t>((row - row0) * win_w + (w_first - col_lo)) * src_bytes + chan_byte;
         return true;
     }
 };
@@ -157,7 +194,7 @@ struct ShardSource {
             base = halo_base;
             idx = n_before + s - after_lo;
         }
-        return base + static_cast<uint32_t>(idx) * tap_bytes;
+        return base + static_cast<uint32_t>(idx) * src_bytes;
     }
     // A run is contiguous in each source region; split it where it crosses own_lo / own_hi.
     FORCE_INLINE void read(int32_t row, int32_t w, uint32_t chan_byte, uint32_t dst, uint32_t bytes) const {
@@ -166,7 +203,7 @@ struct ShardSource {
             uint32_t chunk = bytes;
             const int32_t region_end = s < own_lo ? own_lo : (s < own_hi ? own_hi : 0x7fffffff);
             if (region_end != 0x7fffffff) {
-                const uint32_t avail = static_cast<uint32_t>(region_end - s) * tap_bytes - chan_byte;
+                const uint32_t avail = static_cast<uint32_t>(region_end - s) * src_bytes - chan_byte;
                 chunk = avail < bytes ? avail : bytes;
             }
             local_read(addr(s) + chan_byte, dst, chunk);
@@ -194,11 +231,8 @@ template <typename Source>
 FORCE_INLINE void gather_row(
     uint64_t zeros_noc, const Source& src, uint32_t n, int32_t h_base, int32_t w_base, uint32_t k0, uint32_t dst) {
     // In-image tap columns of this pixel: kw in [kw_lo, kw_hi).
-    const int32_t kw_lo = w_base < 0 ? -w_base : 0;
-    int32_t kw_hi = static_cast<int32_t>(W) - w_base;
-    if (kw_hi > static_cast<int32_t>(kW)) {
-        kw_hi = kW;
-    }
+    int32_t kw_lo, kw_hi;
+    in_image_taps(w_base, kw_lo, kw_hi);
     const uint32_t v_lo = static_cast<uint32_t>(kw_lo) * tap_width;
     const uint32_t v_hi = kw_hi > kw_lo ? static_cast<uint32_t>(kw_hi) * tap_width : v_lo;
 
@@ -212,7 +246,7 @@ FORCE_INLINE void gather_row(
             seg_end = o + (end - c);
         }
         const uint32_t seg_dst = dst + (c - k0) * elem_bytes;
-        const int32_t h = h_base + static_cast<int32_t>(kh);
+        const int32_t h = h_base + static_cast<int32_t>(kh * DIL);
         if (h < 0 || h >= static_cast<int32_t>(H)) {
             zero_run(zeros_noc, seg_dst, (seg_end - o) * elem_bytes);
         } else {
@@ -224,13 +258,21 @@ FORCE_INLINE void gather_row(
                 if (a > o) {
                     zero_run(zeros_noc, seg_dst, (a - o) * elem_bytes);
                 }
-                // Band offset a = tap a / tap_width (stick w_base + that), channel a % tap_width.
-                src.read(
-                    static_cast<int32_t>(n * H) + h,
-                    w_base + static_cast<int32_t>(a / tap_width),
-                    (a % tap_width) * elem_bytes,
-                    seg_dst + (a - o) * elem_bytes,
-                    (b - a) * elem_bytes);
+                // Band offset a = tap a / tap_width (stick w_base + tap*DIL), channel a % tap_width.
+                // DIL > 1: the taps' sticks are not adjacent — one read per tap.
+                uint32_t x = a;
+                while (x < b) {
+                    const uint32_t tap = x / tap_width;
+                    uint32_t x_end = taps_contiguous ? b : (tap + 1) * tap_width;
+                    x_end = x_end < b ? x_end : b;
+                    src.read(
+                        static_cast<int32_t>(n * H) + h,
+                        w_base + static_cast<int32_t>(tap * DIL),
+                        (x - tap * tap_width) * elem_bytes,
+                        seg_dst + (x - o) * elem_bytes,
+                        (x_end - x) * elem_bytes);
+                    x = x_end;
+                }
                 if (b < seg_end) {
                     zero_run(zeros_noc, seg_dst + (b - o) * elem_bytes, (seg_end - b) * elem_bytes);
                 }
@@ -245,11 +287,14 @@ FORCE_INLINE void gather_row(
 // Built once per K-block; an interior pixel (whole kH x kW window in-image) then issues one read
 // per segment with no padding / clipping arithmetic (gather_row is the general path for edges).
 constexpr uint32_t dense_max_segments = (kblock_elems + band_elems - 1) / band_elems + 1;
-constexpr uint32_t max_segments = depthwise && kH * kW > dense_max_segments ? kH* kW : dense_max_segments;
+// DIL > 1: a segment is one (band, tap) piece.
+constexpr uint32_t dense_dil_segments =
+    taps_contiguous ? dense_max_segments : (kblock_elems + tap_width - 1) / tap_width + 2 * dense_max_segments;
+constexpr uint32_t max_segments = depthwise && kH * kW > dense_dil_segments ? kH* kW : dense_dil_segments;
 struct KBlockSegments {
     uint32_t count;
-    int32_t kh[max_segments];
-    int32_t tap[max_segments];
+    int32_t kh[max_segments];   // input row offset of the segment's kernel row (kh * DIL)
+    int32_t tap[max_segments];  // input column offset of its first tap (kw * DIL)
     uint32_t chan[max_segments];
     uint32_t bytes[max_segments];
     uint32_t dst[max_segments];
@@ -269,14 +314,19 @@ FORCE_INLINE void build_segments(uint32_t k0, KBlockSegments& seg) {
         }
         // Band columns >= kW * tap_width are K padding: zero-filled by the general path.
         const uint32_t real_end = seg_end < kW * tap_width ? seg_end : kW * tap_width;
-        if (o < real_end) {
+        uint32_t x = o;
+        while (x < real_end) {
+            // DIL > 1: split at tap boundaries (each tap's stick is DIL sticks from the previous).
+            uint32_t x_end = taps_contiguous ? real_end : (x / tap_width + 1) * tap_width;
+            x_end = x_end < real_end ? x_end : real_end;
             const uint32_t i = seg.count++;
-            seg.kh[i] = static_cast<int32_t>(kh);
-            seg.tap[i] = static_cast<int32_t>(o / tap_width);
-            seg.chan[i] = (o % tap_width) * elem_bytes;
-            seg.bytes[i] = (real_end - o) * elem_bytes;
-            seg.dst[i] = (c - k0) * elem_bytes;
+            seg.kh[i] = static_cast<int32_t>(kh * DIL);
+            seg.tap[i] = static_cast<int32_t>((x / tap_width) * DIL);
+            seg.chan[i] = (x % tap_width) * elem_bytes;
+            seg.bytes[i] = (x_end - x) * elem_bytes;
+            seg.dst[i] = (c - k0 + (x - o)) * elem_bytes;
             seg.span[i] = static_cast<int32_t>((seg.chan[i] + seg.bytes[i] + tap_bytes - 1) / tap_bytes);
+            x = x_end;
         }
         c += seg_end - o;
     }
@@ -288,7 +338,7 @@ FORCE_INLINE void build_segments_dw(uint32_t n_block, KBlockSegments& seg) {
     const uint32_t chan0 = n_block * dw_tap_bytes;
     seg.count = 0;
     for (uint32_t kh = 0; kh < kH; ++kh) {
-        if constexpr (dw_full_stick) {
+        if constexpr (dw_row_runs) {
             const uint32_t i = seg.count++;
             seg.kh[i] = static_cast<int32_t>(kh);
             seg.tap[i] = 0;
@@ -299,8 +349,8 @@ FORCE_INLINE void build_segments_dw(uint32_t n_block, KBlockSegments& seg) {
         } else {
             for (uint32_t kw = 0; kw < kW; ++kw) {
                 const uint32_t i = seg.count++;
-                seg.kh[i] = static_cast<int32_t>(kh);
-                seg.tap[i] = static_cast<int32_t>(kw);
+                seg.kh[i] = static_cast<int32_t>(kh * DIL);
+                seg.tap[i] = static_cast<int32_t>(kw * DIL);
                 seg.chan[i] = chan0;
                 seg.bytes[i] = dw_tap_bytes;
                 seg.dst[i] = (kh * kW + kw) * dw_tap_bytes;
@@ -316,14 +366,11 @@ template <typename Source>
 FORCE_INLINE void gather_row_dw(
     uint64_t zeros_noc, const Source& src, uint32_t n, int32_t h_base, int32_t w_base, uint32_t n_block, uint32_t dst) {
     const uint32_t chan0 = n_block * dw_tap_bytes;
-    const int32_t kw_lo = w_base < 0 ? -w_base : 0;
-    int32_t kw_hi = static_cast<int32_t>(W) - w_base;
-    if (kw_hi > static_cast<int32_t>(kW)) {
-        kw_hi = kW;
-    }
+    int32_t kw_lo, kw_hi;
+    in_image_taps(w_base, kw_lo, kw_hi);
     for (uint32_t kh = 0; kh < kH; ++kh) {
         const uint32_t row_dst = dst + kh * kW * dw_tap_bytes;
-        const int32_t h = h_base + static_cast<int32_t>(kh);
+        const int32_t h = h_base + static_cast<int32_t>(kh * DIL);
         if (h < 0 || h >= static_cast<int32_t>(H) || kw_hi <= kw_lo) {
             zero_run(zeros_noc, row_dst, kW * dw_tap_bytes);
             continue;
@@ -332,7 +379,7 @@ FORCE_INLINE void gather_row_dw(
             zero_run(zeros_noc, row_dst, static_cast<uint32_t>(kw_lo) * dw_tap_bytes);
         }
         const int32_t row = static_cast<int32_t>(n * H) + h;
-        if constexpr (dw_full_stick) {
+        if constexpr (dw_row_runs) {
             src.read(
                 row,
                 w_base + kw_lo,
@@ -341,7 +388,12 @@ FORCE_INLINE void gather_row_dw(
                 static_cast<uint32_t>(kw_hi - kw_lo) * tap_bytes);
         } else {
             for (int32_t kw = kw_lo; kw < kw_hi; ++kw) {
-                src.read(row, w_base + kw, chan0, row_dst + static_cast<uint32_t>(kw) * dw_tap_bytes, dw_tap_bytes);
+                src.read(
+                    row,
+                    w_base + kw * static_cast<int32_t>(DIL),
+                    chan0,
+                    row_dst + static_cast<uint32_t>(kw) * dw_tap_bytes,
+                    dw_tap_bytes);
             }
         }
         if (kw_hi < static_cast<int32_t>(kW)) {
@@ -397,7 +449,7 @@ FORCE_INLINE void gather_tile_row(
     uint32_t rem = pix - n * hw_out;
     uint32_t ho = rem / W_out;
     uint32_t wo = rem - ho * W_out;
-    const uint32_t step = static_cast<uint32_t>(stride) * tap_bytes;
+    const uint32_t step = static_cast<uint32_t>(stride) * src_bytes;
     uint32_t r = 0;
     while (r < TILE_DIM) {
         const uint32_t dst = dst_base + r * im2col_row_bytes;
@@ -408,7 +460,7 @@ FORCE_INLINE void gather_tile_row(
         const int32_t h_base = static_cast<int32_t>(ho) * stride - padding;
         const int32_t w_base = static_cast<int32_t>(wo) * stride - padding;
         uint32_t run = 1;
-        if (fast_ok && h_base >= 0 && h_base + static_cast<int32_t>(kH) <= static_cast<int32_t>(H) &&
+        if (fast_ok && h_base >= 0 && h_base + eff_kH <= static_cast<int32_t>(H) &&
             static_cast<int32_t>(wo) >= wo_int_lo && static_cast<int32_t>(wo) <= wo_int_hi) {
             run = static_cast<uint32_t>(wo_int_hi) + 1 - wo;
             run = run < TILE_DIM - r ? run : TILE_DIM - r;
@@ -534,7 +586,7 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
     const uint32_t num_m_blocks = get_arg_val<uint32_t>(rt_base + 3);
     const int32_t padding = static_cast<int32_t>(get_arg_val<uint32_t>(rt_base + 4));
     const int32_t stride = static_cast<int32_t>(get_arg_val<uint32_t>(rt_base + 5));
-    const int32_t dilation = static_cast<int32_t>(get_arg_val<uint32_t>(rt_base + 6));
+    constexpr int32_t dilation = static_cast<int32_t>(DIL);  // RT arg rt_base + 6 mirrors it
     // R0 depthwise: byte offset of this core's channel tiles in a DRAM input stick (else 0).
     [[maybe_unused]] const uint32_t win_chan_offset = get_arg_val<uint32_t>(rt_base + 7);
     // R4/R5 only: resident stick range, then (noc_x, noc_y) of each input shard in this column.
@@ -557,8 +609,8 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             e = e < q ? e : q;
             const uint32_t nx = get_arg_val<uint32_t>(rt_base + 10 + 2 * r);
             const uint32_t ny = get_arg_val<uint32_t>(rt_base + 11 + 2 * r);
-            const uint32_t src = shard_base + (static_cast<uint32_t>(p) - r * shard_h) * tap_bytes;
-            const uint32_t bytes = static_cast<uint32_t>(e - p) * tap_bytes;
+            const uint32_t src = shard_base + (static_cast<uint32_t>(p) - r * shard_h) * src_bytes;
+            const uint32_t bytes = static_cast<uint32_t>(e - p) * src_bytes;
             noc_async_read(get_noc_addr(nx, ny, src), dst, bytes);
             dst += bytes;
             p = e;
@@ -567,11 +619,32 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
 
     const uint32_t window_base = get_write_ptr(cb_act_window);
     const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+    // Unaligned C_in (R0): zero the lanes past each stick's data once — staging slots (copied
+    // tap_bytes wide into the window) or the window itself (direct reads write stick_bytes only).
+    auto zero_local = [&](uint32_t dst, uint32_t bytes) {
+        while (bytes > 0) {
+            const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
+            noc_async_read(zeros_noc, dst, chunk);
+            dst += chunk;
+            bytes -= chunk;
+        }
+    };
+    [[maybe_unused]] uint32_t stage_base = 0;
+    if constexpr (stage_stride > 0) {
+        stage_base = get_write_ptr(cb_stage);
+        zero_local(stage_base, 2 * stage_row_sticks * stage_stride);
+    }
+    if constexpr (window_zero_bytes > 0) {
+        zero_local(window_base, window_zero_bytes);
+    }
+    if constexpr (stage_stride > 0 || window_zero_bytes > 0) {
+        noc_async_read_barrier();
+    }
     constexpr uint32_t hw_out = H_out * W_out;
     const uint32_t m_tile_end = m_tile_start + m_tiles_this_core;
-    // Output columns whose whole kW-tap window is in-image (dilation 1): [wo_int_lo, wo_int_hi].
+    // Output columns whose whole (dilated) kW-tap window is in-image: [wo_int_lo, wo_int_hi].
     const int32_t wo_int_lo = (padding + stride - 1) / stride;
-    const int32_t wo_int_num = static_cast<int32_t>(W) - static_cast<int32_t>(kW) + padding;
+    const int32_t wo_int_num = static_cast<int32_t>(W) - eff_kW + padding;
     const int32_t wo_int_hi = wo_int_num >= 0 ? wo_int_num / stride : -1;
 
     // TILE: the untilized window as a contiguous stick source from stick `first_stick` on.
@@ -671,11 +744,13 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             const auto input = TensorAccessor(input_args, input_addr, in_tile_bytes);
             const uint32_t tr_lo = static_cast<uint32_t>(row_lo * static_cast<int32_t>(W) + col_lo) / TILE_DIM;
             const uint32_t tr_hi = static_cast<uint32_t>(row_hi * static_cast<int32_t>(W) + last_hi) / TILE_DIM;
+            // Native groups: the core's group's tile columns start at win_chan_offset.
+            const uint32_t ct0 = win_chan_offset / (TILE_DIM * elem_bytes);
             cb_reserve_back(cb_win_tiles, win_tile_rows * win_c_tiles);
             uint32_t dst = get_write_ptr(cb_win_tiles);
             for (uint32_t tr = tr_lo; tr <= tr_hi; ++tr) {
                 for (uint32_t ct = 0; ct < win_c_tiles; ++ct) {
-                    noc_async_read(input.get_noc_addr(tr * win_c_tiles + ct), dst, in_tile_bytes);
+                    noc_async_read(input.get_noc_addr(tr * in_row_tiles + ct0 + ct), dst, in_tile_bytes);
                     dst += in_tile_bytes;
                 }
             }
@@ -685,14 +760,35 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             shard_src = tile_window_src(static_cast<int32_t>(tr_lo * TILE_DIM));
         } else if constexpr (!k_exchange) {
             const auto input = TensorAccessor(input_args, input_addr);
+            [[maybe_unused]] uint32_t half = 0;
             for (int32_t row = row_lo; row <= row_hi; ++row) {
                 const int32_t c0 = row == row_lo ? col_lo : mid_lo;
                 const int32_t c1 = row == row_hi ? last_hi : mid_hi;
-                uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
+                uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * src_bytes;
                 uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
-                for (int32_t c = c0; c <= c1; ++c, ++s) {
-                    noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
-                    dst += tap_bytes;
+                if constexpr (stage_stride == 0) {
+                    for (int32_t c = c0; c <= c1; ++c, ++s) {
+                        noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
+                        dst += src_bytes;
+                    }
+                } else {
+                    // Staged: DRAM -> aligned staging half (one barrier per chunk), then local copies
+                    // into the packed window, overlapping the next chunk's DRAM reads (other half).
+                    uint32_t left = static_cast<uint32_t>(c1 - c0 + 1);
+                    while (left > 0) {
+                        const uint32_t cnt = left < stage_row_sticks ? left : stage_row_sticks;
+                        const uint32_t stg = stage_base + half * stage_row_sticks * stage_stride;
+                        for (uint32_t j = 0; j < cnt; ++j, ++s) {
+                            noc_async_read(input.get_noc_addr(s, win_chan_offset), stg + j * stage_stride, stick_bytes);
+                        }
+                        noc_async_read_barrier();
+                        for (uint32_t j = 0; j < cnt; ++j) {
+                            noc_async_read(get_noc_addr(stg + j * stage_stride), dst, tap_bytes);
+                            dst += tap_bytes;
+                        }
+                        half ^= 1;
+                        left -= cnt;
+                    }
                 }
             }
         } else {
@@ -706,7 +802,7 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             const int32_t n_after = win_hi + 1 > after_lo ? win_hi + 1 - after_lo : 0;
             shard_src = ShardSource{shard_base, window_base, own_lo, own_hi, win_lo, after_lo, n_before};
             fetch_sticks(win_lo, win_lo + n_before, window_base);
-            fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * tap_bytes);
+            fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * src_bytes);
         }
         noc_async_read_barrier();
         set_local_read_state();

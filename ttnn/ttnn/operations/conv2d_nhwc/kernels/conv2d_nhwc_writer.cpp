@@ -63,7 +63,10 @@ constexpr uint32_t MAX_WEIGHT_TRIDS = 15;  // read transaction ids 1..15
 // TILE output (Refinement 7): R0 drains tiles (page = output tile (m, n)) instead of RM rows;
 // sharded outputs are packed as tiles into the shard by compute (nothing to do here).
 constexpr bool tile_out = get_compile_time_arg_val(24) != 0;
-constexpr auto weight_args = TensorAccessorArgs<25>();
+// Refinement 8: output channels — the RM output stick is C_out wide, so the last n-slice writes only
+// its valid columns (C_out tile padding is zero in the prepared weight / bias).
+constexpr uint32_t C_out = get_compile_time_arg_val(25);
+constexpr auto weight_args = TensorAccessorArgs<26>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 // Split gather (R3): the reader's gather compile-time args follow (this instance's own window / rm
@@ -356,6 +359,10 @@ void kernel_main() {
             }
             // ---- untilize_store_block: drain bm tile-rows ----
             const uint32_t col_offset_bytes = n0 * TILE_DIM * elem_bytes;
+            // Valid output columns of this n-block (the last one may end inside a tile).
+            const uint32_t n_cols = C_out - n0 * TILE_DIM;
+            const uint32_t write_bytes =
+                (n_cols < block_n_tiles * TILE_DIM ? n_cols : block_n_tiles * TILE_DIM) * elem_bytes;
             for (uint32_t t = 0; t < block_m_tiles; ++t) {
                 cb_wait_front(cb_out_rm, block_n_tiles);
                 const uint32_t tile = t0 + t;
@@ -363,7 +370,7 @@ void kernel_main() {
                     uint32_t src = get_read_ptr(cb_out_rm);
                     uint32_t pix = tile * TILE_DIM;
                     for (uint32_t r = 0; r < TILE_DIM && pix < M; ++r, ++pix) {
-                        noc_async_write(src, output.get_noc_addr(pix, col_offset_bytes), out_row_bytes);
+                        noc_async_write(src, output.get_noc_addr(pix, col_offset_bytes), write_bytes);
                         src += out_row_bytes;
                     }
                     // Only the source slots must be drained before they are recycled; the

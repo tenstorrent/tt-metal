@@ -25,6 +25,7 @@ from .conv2d_nhwc_program_descriptor import (
     create_program_descriptor,
     is_depthwise,
     l1_cap_bytes,
+    native_groups,
     output_memory_config,
     select_blocking,
     select_blocking_sharded,
@@ -108,10 +109,14 @@ SUPPORTED = {
     "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     "bias_mode": ["with_bias", "no_bias"],
     "activation": ["none", "relu"],  # relu: packer ReLU on the final output pack (technique 4)
-    "channel_alignment": ["tile_aligned"],
+    # Refinement 8: unaligned C_in = the K tap padded to the L1 granule (zero weight rows, pad lanes
+    # zeroed in the window); unaligned C_out = zero weight / bias columns, the writer writes C_out.
+    "channel_alignment": ["tile_aligned", "c_in_unaligned", "c_out_unaligned", "both_unaligned"],
     "stride_mode": ["unit", "strided"],  # gather/window bounds are stride-parametric (verifier probe)
-    "groups_mode": ["dense", "depthwise"],  # depthwise: R11 tap-weighted DEST accumulation (C_out == C_in)
-    "dilation_mode": ["unit"],
+    # depthwise: R11 tap-weighted DEST accumulation (C_out == C_in). grouped (Refinement 8): per group
+    # on R0 when groups are whole tiles (native_groups), else a block-diagonal dense weight.
+    "groups_mode": ["dense", "depthwise", "grouped"],
+    "dilation_mode": ["unit", "dilated"],  # the gather reads each tap at stick stride `dilation`
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,  # R4: row multicast of tilized channel-slice im2col
@@ -220,13 +225,17 @@ def validate(
     _check_tile_4d(input_tensor, input_spatial, W, (W + 2 * padding - eff_k) // stride + 1)
     if bias is not None and int(bias.shape[-1]) != C_out:
         raise ValueError("conv2d_nhwc: bias C_out does not match the weight")
+    eb = _elem_bytes(input_tensor.dtype)
     geo = conv_geometry(
         C_in=C_in,
         kH=kernel_size,
         kW=kernel_size,
         groups=groups,
-        elem_bytes=_elem_bytes(input_tensor.dtype),
+        elem_bytes=eb,
         slices=channel_slices(input_tensor.memory_config()),
+        native_group=native_groups(
+            C_in=C_in, C_out=C_out, groups=groups, elem_bytes=eb, memory_layout=axes["memory_layout"]
+        ),
     )
     if int(weight_tensor.shape[-2]) != geo["K_t"] * 32:
         raise ValueError(
@@ -308,10 +317,24 @@ def prepare_conv2d_weights(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     slices = channel_slices(input_memory_config)
-    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=_elem_bytes(input_dtype), slices=slices)
+    eb = _elem_bytes(input_dtype)
+    native = native_groups(
+        C_in=C_in, C_out=C_out, groups=groups, elem_bytes=eb, memory_layout=input_memory_config.memory_layout
+    )
+    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=eb, slices=slices, native_group=native)
     tap_width, band_tiles, S = geo["tap_width"], geo["band_tiles"], geo["S"]
-    C_in_g = C_in // groups
-    w = torch_weight.float().permute(2, 3, 1, 0)  # [kH, kW, C_in_g, C_out]
+    w = torch_weight.float()
+    if groups > 1 and not native:
+        # Block-diagonal dense weight: output channel c sees only its group's input channels (the
+        # rest of K is zero) — groups x the MACs of a per-group conv (Refinement 8 changelog).
+        C_in_g, C_out_g = C_in // groups, C_out // groups
+        dense = torch.zeros(C_out, C_in, kH, kW, dtype=torch.float32)
+        for g in range(groups):
+            dense[g * C_out_g : (g + 1) * C_out_g, g * C_in_g : (g + 1) * C_in_g] = w[g * C_out_g : (g + 1) * C_out_g]
+        w = dense
+    # Native groups: [K_g, C_out] — column c's K rows are its own group's C_in/g channels.
+    C_in_g = w.shape[1]
+    w = w.permute(2, 3, 1, 0)  # [kH, kW, C_in_g, C_out]
     if S * tap_width != C_in_g:
         w = torch.nn.functional.pad(w, (0, 0, 0, S * tap_width - C_in_g))
     # [kH, kW, S, tap, C_out] -> [S, kH, kW*tap, C_out] (S == 1: the interleaved order)

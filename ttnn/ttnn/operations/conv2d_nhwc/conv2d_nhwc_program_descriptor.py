@@ -156,6 +156,10 @@ CB_ACT_SEND = 10  # R4/R5: own-slice tilized K-blocks awaiting the row multicast
 CB_ACT_WINDOW2 = 11  # R3 split gather: the writer RISC's halo window (odd m-blocks)
 CB_ACT_RM2 = 12  # R3 split gather: the writer RISC's RM im2col (odd m-blocks)
 CB_WIN_TILES = 13  # TILE input: the window's tile-rows (DRAM) / halo tile-rows (sharded) awaiting untilize
+CB_STICK_STAGE = 14  # R0 unaligned C_in: DRAM-aligned stick staging (two halves), copied into the window
+# R0 unaligned C_in: sticks per staging half (one DRAM read barrier per half; the other half's
+# window copies overlap it). Clamped to the window width.
+STAGE_ROW_STICKS = 64
 
 _ML = ttnn.TensorMemoryLayout
 K_EXCHANGE_LAYOUTS = (_ML.BLOCK_SHARDED, _ML.WIDTH_SHARDED)
@@ -215,16 +219,17 @@ def channel_slices(memory_config):
 
 def sharded_slices(memory_config, C_in):
     """(S, slice_width) the sharded program runs with: channel_slices for BLOCK / WIDTH, one
-    whole-C_in slice for HEIGHT (R3: every core holds full sticks; the prepared K order is the
-    interleaved one, which is the S = 1 slice order)."""
+    whole-stick slice for HEIGHT (R3: every core holds full sticks; the prepared K order is the
+    interleaved one, which is the S = 1 slice order). A HEIGHT shard may be wider than C_in
+    (an unaligned C_in padded to the L1 granule): slice_width is the shard's stick width."""
     if memory_config.memory_layout != _ML.HEIGHT_SHARDED:
         return channel_slices(memory_config)
     spec = memory_config.shard_spec
     if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
         raise UnsupportedAxisValue("conv2d_nhwc: HEIGHT_SHARDED input needs ROW_MAJOR shard orientation")
-    if int(spec.shape[1]) != C_in:
-        raise UnsupportedAxisValue(f"conv2d_nhwc: HEIGHT shard width {int(spec.shape[1])} != C_in {C_in}")
-    return 1, C_in
+    if int(spec.shape[1]) < C_in:
+        raise UnsupportedAxisValue(f"conv2d_nhwc: HEIGHT shard width {int(spec.shape[1])} < C_in {C_in}")
+    return 1, int(spec.shape[1])
 
 
 def height_shard_cores(memory_config, num_shards):
@@ -238,10 +243,25 @@ def is_depthwise(C_in, groups):
     return groups > 1 and groups == C_in
 
 
-def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None):
+def native_groups(*, C_in, C_out, groups, elem_bytes, memory_layout):
+    """Grouped conv run per group (R0, Refinement 8): every output-channel group is whole tiles and
+    every input-channel group starts on a DRAM read boundary, so a core whose n range lies in one
+    group reads only that group's C_in/g channels of each stick and its K is that group's
+    kH x kW x C_in/g. The prepared weight is [K_g, C_out]: column c's rows are its own group's.
+    Otherwise (sharded placements, groups that are not whole tiles) grouped convs run as a dense
+    conv over a block-diagonal weight (zero outside the group): `groups`x the MACs."""
+    if groups == 1 or is_depthwise(C_in, groups) or memory_layout != _ML.INTERLEAVED:
+        return False
+    C_in_g, C_out_g = C_in // groups, C_out // groups
+    return C_out_g % TILE == 0 and C_in_g % TILE == 0 and (C_in_g * elem_bytes) % ttnn.get_dram_alignment() == 0
+
+
+def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None, native_group=False):
     """Prepared-K geometry shared by prepare_conv2d_weights and the kernels.
 
     Interleaved: K order [kh][kw x tap_width], each kh band padded to band_tiles tiles.
+    Grouped: native_group -> tap_width is one group's channels (C_in/g); otherwise the dense
+    (block-diagonal) geometry over all C_in.
     Channel-sliced (BLOCK/WIDTH, technique 6): K order [slice][kh][kw x slice_width],
     each (slice, kh) band padded to band_tiles tiles; tap_width = the shard's stick width."""
     granule = L1_NOC_ALIGN // elem_bytes
@@ -261,7 +281,7 @@ def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None):
             "depthwise": True,
         }
     if slices is None:
-        C_in_g = C_in // groups
+        C_in_g = C_in // groups if native_group else C_in
         tap_width = _div_up(C_in_g, granule) * granule
         S = 1
     else:
@@ -338,7 +358,10 @@ def select_blocking(
     tile_in=False,
 ):
     _, _, dst_tiles, acc_dtype = compute_policy(dtype, weight_dtype)
-    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes)
+    native_group = native_groups(
+        C_in=C_in, C_out=C_out, groups=groups, elem_bytes=elem_bytes, memory_layout=_ML.INTERLEAVED
+    )
+    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes, native_group=native_group)
     tap_width, band_tiles, K_t = geo["tap_width"], geo["band_tiles"], geo["K_t"]
     H_out = (H + 2 * padding - dilation * (kH - 1) - 1) // stride + 1
     W_out = (W + 2 * padding - dilation * (kW - 1) - 1) // stride + 1
@@ -352,7 +375,9 @@ def select_blocking(
         core_m_tiles = min(M_t, max(core_m_tiles, DW_CORE_M_TILES_MIN))
     g_m = _div_up(M_t, core_m_tiles)
     n_budget = max(1, num_cores // g_m)
-    core_n_tiles = next(d for d in _divisors(N_t) if N_t // d <= n_budget)
+    # Native groups: a core's n range lies in one group (core_n_tiles divides the group's tiles).
+    group_n_tiles = (C_out // groups) // TILE if native_group else N_t
+    core_n_tiles = next((d for d in _divisors(group_n_tiles) if N_t // d <= n_budget), max(_divisors(group_n_tiles)))
     g_n = N_t // core_n_tiles
 
     T = TILE * TILE * elem_bytes  # act / out tile bytes
@@ -384,7 +409,18 @@ def select_blocking(
         return best
 
     T_in = tile_bytes(dtype)
-    c_tiles = tap_width // TILE
+    # TILE: the untilized window sticks are whole input tile columns (c_tiles x 32 channels).
+    c_tiles = _div_up(tap_width, TILE)
+    # R0 unaligned sticks: a window stick slot (tap_bytes) that is not a DRAM-read-aligned stride is
+    # filled through the staging CB; a stick shorter than its slot leaves pad lanes zeroed once.
+    stick_bytes = (tap_width if (dw or native_group) else C_in) * elem_bytes
+    tap_bytes = tap_width * elem_bytes
+    src_bytes = c_tiles * TILE * elem_bytes if tile_in else tap_bytes
+    dram_align = ttnn.get_dram_alignment()
+    staged = not tile_in and tap_bytes % dram_align != 0
+    stage_stride = _div_up(stick_bytes, dram_align) * dram_align if staged else 0
+    stage_row_sticks = min(STAGE_ROW_STICKS, W) if staged else 0
+    stage_bytes = 2 * stage_row_sticks * stage_stride
 
     def footprint(bm, bk, bn, win):
         if dw:  # bk = taps * bn: one tilized tile-row, DW_WEIGHT_DEPTH tap-weight blocks
@@ -398,7 +434,8 @@ def select_blocking(
                 + OUT_RM_DEPTH * bn * T
             )
         return (
-            win * tap_width * elem_bytes
+            win * src_bytes
+            + stage_bytes
             + (win // TILE * c_tiles * T_in if tile_in else 0)  # TILE: the window's tiles
             + ACT_RM_DEPTH * bk * T
             + bm * bk * T
@@ -455,6 +492,15 @@ def select_blocking(
     return {
         **geo,
         **_dw_plan_keys(dw, taps, bk, bn, tap_width, elem_bytes, C_in),
+        "window_stick_bytes": stick_bytes,
+        "native_group": native_group,
+        "group_n_tiles": group_n_tiles if native_group else 0,
+        "stage_stride": stage_stride,
+        "stage_row_sticks": stage_row_sticks,
+        "src_bytes": src_bytes,
+        "window_zero_bytes": window_sticks_max * tap_bytes
+        if (not staged and not tile_in and stick_bytes < tap_bytes)
+        else 0,
         "tap_width": tap_width,  # depthwise: the core's own channel tiles
         "H_out": H_out,
         "W_out": W_out,
@@ -566,7 +612,12 @@ def select_blocking_sharded(
     the largest that fits — every K-block is one multicast handshake (technique 8)."""
     _, _, dst_tiles, acc_dtype = compute_policy(dtype, weight_dtype)
     S, cw = slices
-    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes, slices=slices)
+    granule = L1_NOC_ALIGN // elem_bytes
+    # HEIGHT: the K tap is the prepared (interleaved) one — C_in rounded to the L1 granule — while a
+    # shard stick may be wider (src_bytes). BLOCK / WIDTH: the tap is the shard's slice width.
+    is_h = memory_layout == _ML.HEIGHT_SHARDED
+    geo_slices = (1, _div_up(C_in, granule) * granule) if (is_h and not is_depthwise(C_in, groups)) else slices
+    geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes, slices=geo_slices)
     tap_width, band_tiles, K_t = geo["tap_width"], geo["band_tiles"], geo["K_t"]
     slice_k_tiles = kH * band_tiles
     H_out = (H + 2 * padding - dilation * (kH - 1) - 1) // stride + 1
@@ -650,7 +701,9 @@ def select_blocking_sharded(
     # per kernel: the union of its whole m range's window and its own shard. Its own tile-rows come
     # from the resident shard (zero-copy); the rest (halo) are fetched as tiles from the owning shards.
     T_in = tile_bytes(dtype)
-    c_tiles = tap_width // TILE
+    # TILE: untilized window sticks are whole input tile columns; RM: the shard stick.
+    c_tiles = _div_up(cw, TILE)
+    src_bytes = c_tiles * TILE * elem_bytes if tile_in else cw * elem_bytes
 
     def own_range(r):
         if memory_layout == _ML.WIDTH_SHARDED:
@@ -675,7 +728,7 @@ def select_blocking_sharded(
             halo_rows = max(max(b + a for _, b, _, a in wins), 1)
             # The RM window replaces the per-block halo scratch; plus the halo tile staging.
             halo = 0
-            extra = win_rows * TILE * tap_width * elem_bytes + halo_rows * c_tiles * T_in
+            extra = win_rows * TILE * src_bytes + halo_rows * c_tiles * T_in
         else:
             extra = 0
         return extra + _footprint(bm, bk, halo, deep, roles)
@@ -692,7 +745,7 @@ def select_blocking_sharded(
                 + (nt_s * T if out_tail else 0)
             )
         return (
-            roles * (max(halo, 1) if not tile_in else 0) * tap_width * elem_bytes
+            roles * (max(halo, 1) if not tile_in else 0) * src_bytes
             + roles * rm_rows(bm, deep) * bk * T
             + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
@@ -710,6 +763,7 @@ def select_blocking_sharded(
         and stride == 1
         and dilation == 1
         and tap_width % TILE == 0
+        and src_bytes == tap_width * elem_bytes
     )
     k_divs_desc = (
         [taps * nt_s]
@@ -798,6 +852,11 @@ def select_blocking_sharded(
         **_dw_plan_keys(dw, taps, bk, bn, tap_width, elem_bytes, C_in),
         "k_exchange": True,
         "act_mcast": act_mcast,
+        "src_bytes": src_bytes,
+        "stage_stride": 0,
+        "stage_row_sticks": 0,
+        "window_zero_bytes": 0,
+        "native_group": False,
         "tap_major": tap_major,
         "tilize_w": tap_tiles if tap_major else bk,
         "act_send_depth": send_depth(bk),
@@ -1026,13 +1085,13 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             raise UnsupportedAxisValue("conv2d_nhwc: BLOCK shard grid must be a rectangle")
 
     # ---- Circular buffers (sizes derive from the knobs) ----
-    tap_bytes = p["tap_width"] * eb
+    src_bytes = p["src_bytes"]  # one window / halo stick slot
     cbs = [
         # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
         # TILE: the untilized window (compute -> reader), one tile-row = c_tiles RM tile pages.
         _cb(CB_ACT_WINDOW, act_dtype, p["T"], rm_pages(p["win_tile_rows"] * c_tiles), cores)
         if tile_in
-        else _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
+        else _cb(CB_ACT_WINDOW, act_dtype, src_bytes, p["window_sticks_max"], cores),
         _cb(CB_ACT_RM, act_dtype, p["T"], rm_pages(p["act_rm_rows"] * bk), cores),
         # Weight multicast landing slot: same address on every weight-group core (incl. sinks).
         _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * weight_block_tiles, weight_group),
@@ -1046,6 +1105,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             mcast_cores if act_mcast else cores,
         ),
     ]
+    if p["stage_stride"]:
+        cbs.append(_cb(CB_STICK_STAGE, act_dtype, p["stage_stride"], 2 * p["stage_row_sticks"], cores))
     if act_mcast:
         cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], rm_pages(p["act_send_depth"] * bm * bk), cores))
     if tile_in:
@@ -1053,7 +1114,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         cbs.append(_cb(CB_WIN_TILES, input_tensor.dtype, T_in, rm_pages(p["halo_tile_rows"] * c_tiles), cores))
     gather_roles = p.get("num_gather_roles", 1)
     if gather_roles > 1:
-        cbs.append(_cb(CB_ACT_WINDOW2, act_dtype, tap_bytes, p["window_sticks_max"], cores))
+        cbs.append(_cb(CB_ACT_WINDOW2, act_dtype, src_bytes, p["window_sticks_max"], cores))
         cbs.append(_cb(CB_ACT_RM2, act_dtype, p["T"], p["act_rm_rows"] * bk, cores))
     if kx:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_IN_SHARD, input_tensor, core_ranges=cores))
@@ -1122,6 +1183,13 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         c_tiles,
         p["win_tile_rows"],
         1 if direct_in0 else 0,
+        p["dilation"],
+        p["stage_stride"],
+        CB_STICK_STAGE,
+        p["stage_row_sticks"],
+        p["window_zero_bytes"],
+        src_bytes,
+        _div_up(p["C_in"], TILE),  # input tile columns (TILE DRAM window page index)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     # The writer carries the same gather args (its own window / rm CBs) for the split gather.
@@ -1154,6 +1222,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if p.get("weights_resident", False) else 0,
         p.get("weight_chunk_rows", 1),
         1 if tile_in else 0,
+        p["C_out"],
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -1222,6 +1291,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         n_tile_start = ni * p["core_n_tiles"]
         # R0 depthwise: the window holds only this core's channel tiles (byte offset into the stick).
         win_chan_offset = n_tile_start * TILE * eb if (dw and not kx) else 0
+        if p.get("native_group"):
+            # Native groups: the window holds the core's group's C_in/g channels of each stick.
+            win_chan_offset = (n_tile_start // p["group_n_tiles"]) * p["tap_width"] * eb
         reader_args = [
             in_addr,
             m_tile_start,
