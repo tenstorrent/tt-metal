@@ -817,42 +817,37 @@ def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_
         assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
 
 
-@pytest.mark.parametrize(
-    "op_name",
-    (
-        "add",
-        "subtract",
-        "multiply",
-        # Comparison mode never grades scalar-first div: no threshold, however impossible, fails
-        # it. That is not this PR's doing -- tensor-tensor add and div skip grading on main too --
-        # so it is marked strict, to fail the day div starts being compared and this can go.
-        pytest.param("div", marks=pytest.mark.xfail(strict=True, reason="scalar-first div is not graded")),
-    ),
-)
-def test_scalar_tensor_comparison_mode_validates(device, op_name, expect_error):
+@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
+def test_scalar_tensor_comparison_mode_validates(device, op_name, monkeypatch):
     """Comparison mode must actually grade a scalar-first call, not skip it. A golden that raises
     is caught at decorators.py and downgraded to a warning, so the op looks validated while it is
     not; comparison_mode_should_raise_exception turns that silence into a failure.
 
-    The threshold is relaxed from the 0.9999 default because bf16 add and subtract miss it against
-    their goldens for tensor-first calls too -- a pre-existing tolerance gap this test is not
-    about. What is asserted here is that the comparison runs at all, which only means something
-    once a threshold the call cannot meet is shown to fail it."""
+    An unreachable PCC threshold cannot show this: a device result bit-identical to its golden
+    passes regardless of the threshold, which scalar-first div is. So the comparison itself is
+    observed, and its record has to report a match. The threshold is relaxed from the 0.9999
+    default because bf16 add and subtract miss it against their goldens for tensor-first calls
+    too -- a pre-existing tolerance gap this test is not about."""
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
+    compare = ttnn.decorators.compare_tensors_using_pcc
+    records = []
+
+    def recording_compare(*args, **kwargs):
+        result = compare(*args, **kwargs)
+        records.extend(result)
+        return result
+
+    monkeypatch.setattr(ttnn.decorators, "compare_tensors_using_pcc", recording_compare)
     with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config(
         "comparison_mode_should_raise_exception", True
-    ):
-        # An unreachable threshold first: if this does not raise, the comparison never ran and the
-        # 0.99 call below would pass for the same reason, proving nothing.
-        with ttnn.manage_config("comparison_mode_pcc", 1.0):
-            with expect_error(RuntimeError, "Comparing output tensor 0 against CPU locally failed"):
-                getattr(ttnn, op_name)(3.14, input_tensor)
+    ), ttnn.manage_config("comparison_mode_pcc", 0.99):
+        getattr(ttnn, op_name)(3.14, input_tensor)
 
-        with ttnn.manage_config("comparison_mode_pcc", 0.99):
-            getattr(ttnn, op_name)(3.14, input_tensor)
+    assert records, f"scalar-first {op_name} was not compared against its golden"
+    assert all(record["matches"] for record in records)
 
 
 @pytest.mark.parametrize("op_name", ("add", "subtract", "multiply"))
@@ -878,6 +873,31 @@ def test_unsigned_golden_wraps_scalar_outside_operand_range(op_name, torch_dtype
 
     assert torch.equal(golden(torch_input, scalar), (torch_fn(wide, wrapped) & mask).to(torch_dtype))
     assert torch.equal(golden(scalar, torch_input), (torch_fn(wrapped, wide) & mask).to(torch_dtype))
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, mask",
+    (
+        (torch.int32, None),
+        (torch.uint16, (1 << 16) - 1),
+        (torch.uint32, (1 << 32) - 1),
+        (torch.bfloat16, None),
+    ),
+)
+@pytest.mark.parametrize("scalar", (3, 70000))
+def test_squared_difference_golden_scalar_first(torch_dtype, mask, scalar):
+    """The squared_difference golden keys its unsigned path off the tensor operand, so a scalar
+    first operand neither raises on .dtype nor changes the result: (s - x)**2 == (x - s)**2."""
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 60000, (1, 1, 32, 32)).to(torch_dtype)
+    golden = ttnn.get_golden_function(ttnn.squared_difference)
+
+    scalar_first = golden(scalar, torch_input)
+
+    assert torch.equal(scalar_first, golden(torch_input, scalar))
+    if mask is not None:
+        wide = torch_input.to(torch.int64)
+        assert torch.equal(scalar_first, ((wide - (scalar & mask)) ** 2 & mask).to(torch_dtype))
 
 
 @pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
@@ -946,7 +966,7 @@ def test_float_scalar_promotes_integer_tensor(device, ttnn_dtype, torch_dtype, s
         assert_equal(expected, output)
 
 
-@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub"))
+@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub", "squared_difference"))
 @pytest.mark.parametrize("scalar", (-(2**31) - 1, -(2**31) - 128))
 def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_name, scalar):
     """A scalar too wide for either integer arm is bound as a float, and float32 is spaced 256
@@ -964,7 +984,7 @@ def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_
     assert_equal(expected, output)
 
 
-@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub"))
+@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub", "squared_difference"))
 def test_scalar_below_the_rounding_band_is_rejected(device, op_name, expect_error):
     """One integer below the band the rounding lands outside the operand's range, and the integer
     path refuses the call rather than packing a value it would change."""
