@@ -12,14 +12,15 @@
 //
 // A tile row is two 16-column halves in different faces, 32 B each. The writer
 // NoC-writes each half straight from the tile to its place in the output page,
-// so no RISC copies the block. Every source and destination is a multiple of
-// 32 B, above the 16 B NoC write alignment of both L1 and DRAM.
+// so no RISC copies the block.
 //
 // The output is (B, Q, H*D), so query (b, q) is one page of H*D bf16 and head
 // `head` occupies bytes [head*D*2, (head+1)*D*2) of it. Writing at that offset
 // is what concatenates the heads — no post-op reshape or permute, and no
-// cross-core communication, because each block owns exactly one head. D being a
-// multiple of 16 keeps the offset 32-B aligned.
+// cross-core communication, because each block owns exactly one head. Every
+// write lands at the page base plus a multiple of HALF_NBYTES, and the
+// static_asserts below hold HALF_NBYTES against the NoC write alignment of L1
+// and DRAM, so any H works at any D % 16 == 0.
 //
 // With SPLIT_GATHER the writer also gathers part of every row-major block the
 // reader reserves; see msda_gather_rows.hpp.
@@ -90,6 +91,13 @@ constexpr uint32_t HEAD_NBYTES = D * sizeof(uint16_t);
 // Each half is written whole, so D must end on a half boundary.
 static_assert(D % HALF_COLS == 0 && D > 0, "D must be a positive multiple of 16");
 static_assert(HALF_NBYTES == HALF_COLS * sizeof(uint16_t));
+static_assert(HEAD_NBYTES % HALF_NBYTES == 0, "every head starts at a multiple of HALF_NBYTES");
+static_assert(
+    HALF_NBYTES % NOC_L1_WRITE_ALIGNMENT_BYTES == 0,
+    "output write offsets are multiples of HALF_NBYTES, so it must be a multiple of the L1 NoC write alignment");
+static_assert(
+    HALF_NBYTES % NOC_DRAM_WRITE_ALIGNMENT_BYTES == 0,
+    "output write offsets are multiples of HALF_NBYTES, so it must be a multiple of the DRAM NoC write alignment");
 static_assert(!SPLIT_GATHER || value_stick_nbytes == D * 2u, "the split gather packs unpadded D*2-byte sticks");
 static_assert(
     !SPLIT_GATHER || sizeof(fused_msda_gather::PointArgs) <= gather_mailbox_nbytes,

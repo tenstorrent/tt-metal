@@ -545,8 +545,9 @@ float32 when `reference_points` are float32.
 **Writer** (shared). Waits on `n_d_tiles` accumulated tiles and NoC-writes each
 query row straight from them: every 16-value face half (32 B) of d-tile `k` goes
 to `page_id = b*Q + q`, `offset_bytes = h*D*2 + k*64 (+32 for the high half)`.
-No RISC copies the block, and 32 B is above the 16 B NoC write alignment of L1
-and DRAM. No SCA/BEV scatter logic, ever.
+No RISC copies the block. 32 B is a multiple of the NoC write alignment of L1 and
+DRAM on every architecture (static_asserted in the writer). No SCA/BEV scatter
+logic, ever.
 With the split gather it first gathers rows `[SPLIT_ROW, 32)` of every point of
 the block. It always receives the `value` accessor and address, and reads them
 only then.
@@ -585,7 +586,7 @@ Wormhole keeps the reader-only gather; the split has not been measured there.
 | dtype | `bfloat16` (all tensors); `reference_points` may be `float32` | tile format of the FPU path; a float32 reference point keeps all 24 significant bits into `px` (whole into the SFPU per point, split exactly into three bf16 tiles for the FPU when tiled), where a bf16 point in [0, 1] would move in steps of up to 0.8 px at `W = 200` |
 | layout | `ROW_MAJOR` (all tensors) | reader/writer address by stick |
 | memory | `INTERLEAVED` only | `TensorAccessor` page indexing |
-| `D` | positive multiple of 16, and `D*2` a multiple of the device's buffer alignment when `H > 1` | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves, and the writer's per-head byte offset `h*D*2` must be a legal NoC destination. `D = 16` gives a 32-B stride, which is fine where the alignment is 32 B but is rejected where it is 64 B; `D = 32` and up are unconstrained. Validated in the program factory, not assumed. |
+| `D` | positive multiple of 16; with packed `value` and `H > 1`, `D*2` a multiple of `value`'s buffer alignment | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves. The writer's per-head output offset `h*D*2` is a multiple of 32 B, which every architecture's NoC write alignment divides (static_asserted in the writer), so any `H` works for the output. Packed `value` reads each head at `h*D*2` within one page, which must be a legal NoC read address: `D = 16` is rejected in DRAM where the read alignment is 64 B (Blackhole). Validated in the program factory, not assumed. |
 | `L` | `1 <= L <= 8` | per-level geometry is held in a fixed reader array |
 | `H_l`, `W_l` | `<= 256` | the largest extent the op is tested at. The corner word's index field holds extents up to 361, and the tiled geometry falls back to the per-point path for an extent that is not bf16-exact. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_extent_limit` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |

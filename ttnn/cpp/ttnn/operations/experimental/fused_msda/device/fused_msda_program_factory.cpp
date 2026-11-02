@@ -602,33 +602,20 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     const uint32_t ref_stick_aligned = attrs.from_offsets ? page_size_for_cb(cb_plan, ref_scratch_cb) : 0;
     const uint32_t output_page_aligned = aligned_page_size(output_page_raw, output.buffer()->buffer_type());
 
-    // The writer places head h at byte offset h * D * elem_size inside the
-    // output page, so that offset has to be a legal NoC destination address.
-    // D % 16 == 0 makes it a multiple of 32, which covers Wormhole but not a
-    // 64-byte-aligned target at D == 16. Check it rather than silently
-    // scribbling into the neighbouring head.
-    if (s.num_heads > 1) {
-        const uint32_t out_alignment = output.buffer()->buffer_type() == BufferType::DRAM
-                                           ? tt::tt_metal::hal::get_dram_alignment()
-                                           : tt::tt_metal::hal::get_l1_alignment();
+    // Packed value stores the heads back to back in one (b, s) page, so head h
+    // is read at byte offset h * D * elem_size, which must be a multiple of
+    // value's buffer alignment. Checked here, on the buffer the program reads,
+    // not in derive_shapes: the L1-fit query runs that on a value it has yet to
+    // stage. The writer's per-head output offsets need only the NoC write
+    // alignment, which writer_msda.cpp static_asserts.
+    if (s.num_heads > 1 && s.value_packed) {
         TT_FATAL(
-            value_stick_raw % out_alignment == 0,
-            "fused_msda: with num_heads > 1 the per-head output stride (head_dim * element_size = {} B) must be a "
-            "multiple of this device's output alignment ({} B). head_dim {} is too small on this architecture; use a "
-            "head_dim of at least {}",
+            value_stick_aligned == value_stick_raw,
+            "fused_msda: packed value (B, S, H*D) reads head h at byte offset h * {} B, which must be a multiple "
+            "of value's buffer alignment ({} B per head after alignment); pass value as (B, S, H, D) or place it "
+            "in L1",
             value_stick_raw,
-            out_alignment,
-            s.head_dim,
-            out_alignment / output.element_size());
-        if (s.value_packed) {
-            TT_FATAL(
-                value_stick_aligned == value_stick_raw,
-                "fused_msda: packed value (B, S, H*D) stores heads without per-head page padding, so the D-wide NoC "
-                "read ({} B aligned) must equal the raw head stick ({} B); otherwise the read would overlap the next "
-                "head",
-                value_stick_aligned,
-                value_stick_raw);
-        }
+            value_stick_aligned);
     }
 
     // ---- circular buffers (see README.md §6) ----

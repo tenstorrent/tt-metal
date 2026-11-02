@@ -41,7 +41,9 @@ enum class MSDAReferenceMode : uint8_t {
 // Shapes (all ROW_MAJOR bfloat16, INTERLEAVED):
 //   value               (B, S, H, D),  S == sum_l H_l * W_l
 //                    or (B, S, H*D)    packed (one DRAM page per (b, s);
-//                                            head h at byte offset h*D*2)
+//                                            head h at byte offset h*D*2, which
+//                                            must be a multiple of the buffer's
+//                                            alignment when H > 1)
 //   sampling_locations  (B, Q, H, L, P, 2)   canonical
 //                    or (B, Q, H, L*P*2)     packed (one DRAM page per (b,q,h);
 //                                            8x less padding and L*P fewer NoC
