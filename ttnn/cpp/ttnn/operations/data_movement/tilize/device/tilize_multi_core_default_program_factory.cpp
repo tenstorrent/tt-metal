@@ -82,10 +82,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     const KernelSpecName COMPUTE_CLIFF{"compute_cliff"};
 
     // ---- Dataflow buffers (local staging) ----
+    // On Quasar the 32 stick reads of every tile-row block are spread over four reader harts, each filling whole
+    // blocks (BLOCKED pattern, one block per thread in flight), and the writer flushes once per block instead of
+    // per tile. WH/BH keep one hart each and the one-block ring.
+    const bool neo_dm = device->arch() == tt::ARCH::QUASAR;
+    const uint32_t reader_threads = neo_dm ? 4 : 1;
     DataflowBufferSpec input_dfb{
         .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
-        .num_entries = ntiles_per_block,
+        .num_entries = ntiles_per_block * reader_threads,
         .data_format_metadata = input_data_format,
         .tile_format_metadata = operation_attributes.tile,
     };
@@ -102,14 +107,18 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
 
     KernelSpec reader{
         .unique_id = READER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-            "reader_unary_stick_layout_split_rows_multicore.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = INPUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        }},
+        .source = neo_dm ? "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+                           "reader_unary_stick_layout_split_rows_multicore_threads.cpp"
+                         : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+                           "reader_unary_stick_layout_split_rows_multicore.cpp",
+        .num_threads = reader_threads,
+        .dfb_bindings =
+            {neo_dm ? BlockedProducerOf(INPUT_DFB, "in", ntiles_per_block)
+                    : DFBBinding{
+                          .dfb_spec_name = INPUT_DFB,
+                          .accessor_name = "in",
+                          .endpoint_type = DFBEndpointType::PRODUCER,
+                      }},
         .tensor_bindings = {TensorBinding{
             .tensor_parameter_name = INPUT,
             .accessor_name = "src",
@@ -126,9 +135,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_metal2.cpp",
+        .source = neo_dm ? "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+                           "writer_tiles_batched_metal2.cpp"
+                         : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                           "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUTPUT_DFB,
             .accessor_name = "out",
@@ -138,7 +148,11 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             .tensor_parameter_name = OUTPUT,
             .accessor_name = "dst",
         }},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .compile_time_args =
+            neo_dm ? KernelSpec::CompileTimeArgs{{"tiles_per_batch", ntiles_per_block}} : KernelSpec::CompileTimeArgs{},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 neo_dm ? Group<std::string>{"num_blocks", "start_id"} : Group<std::string>{"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
@@ -237,10 +251,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
              {"block_width_size", page_size},
              {"num_full_blocks_in_row", uint32_t{1}},
              {"start_page_id", page_start_id}});
-        AddRuntimeArgsForNode(
-            writer_ra.runtime_arg_values,
-            core,
-            {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}});
+        if (neo_dm) {
+            AddRuntimeArgsForNode(
+                writer_ra.runtime_arg_values, core, {{"num_blocks", nblocks_per_core}, {"start_id", tile_start_id}});
+        } else {
+            AddRuntimeArgsForNode(
+                writer_ra.runtime_arg_values,
+                core,
+                {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}});
+        }
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += tile_height * nblocks_per_core * num_pages_in_row;
@@ -255,10 +274,17 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
              {"block_width_size", page_size},
              {"num_full_blocks_in_row", uint32_t{1}},
              {"start_page_id", page_start_id}});
-        AddRuntimeArgsForNode(
-            writer_ra.runtime_arg_values,
-            core,
-            {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}});
+        if (neo_dm) {
+            AddRuntimeArgsForNode(
+                writer_ra.runtime_arg_values,
+                core,
+                {{"num_blocks", nblocks_per_core_cliff}, {"start_id", tile_start_id}});
+        } else {
+            AddRuntimeArgsForNode(
+                writer_ra.runtime_arg_values,
+                core,
+                {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}});
+        }
     }
 
     run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra)};

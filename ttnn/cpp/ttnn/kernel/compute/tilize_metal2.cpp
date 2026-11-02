@@ -39,7 +39,10 @@ void kernel_main() {
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
-    DataflowBuffer in(dfb::in), out(dfb::out);
+    // Declared separately: the two buffers may deduce different access-pattern types (a BLOCKED producer on
+    // the input, STRIDED on the output), and one declaration must deduce a single type.
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer out(dfb::out);
 
     // Use lossless tilize for fp32 inputs to preserve exact values (fast tilize truncates fp32 → tf32)
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<dfb::in>()
