@@ -112,6 +112,16 @@ case "${MODEL}" in
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    elif [ "${VARIANT}" = _dflash ]; then
+      DFLASH=1
+      MANIFEST="${MANIFEST_DIR}/glm53_dflash.json"
+      DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
+      # Drops the 1M tail trace above: the drafter golden pairs with the adapter's 55k trace.
+      PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
+      TABLE_WAIT_DEFAULT=7200
+      # Bring-up overrides (no shared home for the checkpoint or golden yet); the ranks see only env exported here.
+      RUNNER_ENV+="${DFLASH_HF_MODEL:+ export DFLASH_HF_MODEL='${DFLASH_HF_MODEL}';}"
+      PRODUCER_ENV+="${PREFILL_DFLASH_GOLDEN_KV_DIR:+ export PREFILL_DFLASH_GOLDEN_KV_DIR='${PREFILL_DFLASH_GOLDEN_KV_DIR}';}"
     fi
     ;;
   kimi_k3)

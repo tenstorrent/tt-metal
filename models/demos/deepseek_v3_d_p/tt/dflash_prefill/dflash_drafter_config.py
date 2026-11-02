@@ -62,6 +62,8 @@ class DFlashDrafterConfig:
         rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
         dfc = dict(getattr(c, "dflash_config", None) or {})
         d = cls()  # defaults fill anything the checkpoint config omits
+        # rope_type "default" is unscaled RoPE (GLM-5.3-DFlash2), which YaRN reproduces at factor 1.
+        unscaled = rs.get("rope_type", rs.get("type")) == "default"
         return cls(
             hidden_size=c.hidden_size,
             head_dim=getattr(c, "head_dim", c.hidden_size // c.num_attention_heads),
@@ -75,7 +77,7 @@ class DFlashDrafterConfig:
             rms_norm_eps=c.rms_norm_eps,
             target_layer_ids=tuple(dfc.get("target_layer_ids", d.target_layer_ids)),
             rope_theta=float(rs.get("rope_theta") or getattr(c, "rope_theta", None) or d.rope_theta),
-            rope_factor=float(rs.get("factor", d.rope_factor)),
+            rope_factor=float(rs.get("factor", 1.0 if unscaled else d.rope_factor)),
             rope_beta_fast=float(rs.get("beta_fast", d.rope_beta_fast)),
             rope_beta_slow=float(rs.get("beta_slow", d.rope_beta_slow)),
             rope_orig_max_pos=int(rs.get("original_max_position_embeddings", d.rope_orig_max_pos)),

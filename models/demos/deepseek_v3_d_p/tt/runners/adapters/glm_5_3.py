@@ -54,6 +54,11 @@ class GLM53Adapter(MLAPrefillAdapter):
     # The deployed mode: on SC4 it cuts TTFT by about 3% against VC1 with one fabric route per chip.
     d2d_relay_default = True
 
+    # The drafter is the HF checkpoint incoai/GLM-5.3-DFlash2. There is no golden default yet, so the producer
+    # checks the drafter KV only when PREFILL_DFLASH_GOLDEN_KV_DIR is set.
+    supports_dflash = True
+    dflash_model_default = "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-DFlash2"
+
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
         (dims + the DSA ``index_*`` attrs + the ``indexer_types`` full/shared reuse map the sparse path
