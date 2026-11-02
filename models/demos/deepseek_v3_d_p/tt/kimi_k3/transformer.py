@@ -219,7 +219,22 @@ class TtKimiK3Transformer(LightweightModule):
             # Rejects a KDA last layer, which would compute a recurrence and write nothing.
             self.schedule.validate_kv_only_last_layer()
 
-        if is_first_rank:
+        if is_first_rank and first_layer_idx > 0:
+            # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity probes),
+            # standing in for a stage whose input arrives over D2D and which holds no embedding. A one-tile
+            # random table gives the same [1, 1, seq/sp, emb/tp] output (ids clamp to its last row), so the
+            # stage's memory is measured without the 0.55 GiB of real embedding weights.
+            import torch
+
+            self.embed = TtParallelEmbedding(
+                mesh_device=mesh_device,
+                vocab_size=ttnn.TILE_SIZE,
+                emb_dim=config.hidden_size,
+                torch_weight=torch.randn(ttnn.TILE_SIZE, config.hidden_size, dtype=torch.bfloat16),
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+            )
+        elif is_first_rank:
             self.embed = TtParallelEmbedding(
                 mesh_device=mesh_device,
                 vocab_size=config.vocab_size,
