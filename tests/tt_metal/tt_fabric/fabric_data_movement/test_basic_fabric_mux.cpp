@@ -499,7 +499,8 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
 
-    std::vector<tt::tt_metal::Program> program_handles(devices.size());
+    std::vector<tt::tt_metal::Program> program_handles;
+    program_handles.reserve(devices.size());
     std::vector<size_t> mux_termination_signal_addresses;
 
     const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -522,7 +523,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     };
 
     for (auto i = 0; i < devices.size(); i++) {
-        program_handles[i] = tt_metal::CreateProgram();
+        program_handles.push_back(tt_metal::CreateProgram(*devices[i]));
 
         // use logical core (0,0) for the mux kernel
         tt::tt_metal::CoreCoord mux_logical_core = worker_logical_cores[0];

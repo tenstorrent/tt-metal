@@ -535,7 +535,7 @@ std::optional<MuxDeployment> create_mux_deployment(
             test_case.forwarder_noc);
         program = std::make_shared<tt::tt_metal::Program>(desc);
     } else {
-        program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram());
+        program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram(*device));
         tt::tt_fabric::add_fabric_mux_v2_to_program(
             *program,
             *mux_config,
