@@ -45,7 +45,16 @@
 # TT_METAL_LOGS_PATH and the Inspector address are left alone, logs / watcher /
 # triage report stay at generated/{watcher,tt-triage} and the profiler under
 # generated/profiler (Tracy port 8100), and a hang resets the box with plain
-# `tt-smi -r`.
+# `tt-smi -r` - except on a Galaxy (32 cards, Exabox), see below.
+#
+# Galaxy reset: the Exabox Slurm User Guide says never to reset a Galaxy host with
+# tt-smi alone (it does not bring every link and chip back). A mesh reset on a
+# 32-card host runs the cluster's approved helper instead, `recover-hosts` with
+# HOSTS=<this host> (from /etc/profile.d/exabox-helpers.sh, interactive shells only):
+# cross-host ports down, then tt-smi -glx_reset (IPMI tray reset), recorded in the
+# cluster-health store; about 2 minutes. It skips link validation on one host, so
+# the caller's next mesh open is the check. TTPOOL_GALAXY_RESET=tt-smi brings back
+# the plain `tt-smi -r`; TTPOOL_RECOVER_CMD replaces the command (tests).
 #
 # Legacy interop: runners that predate the pool (the tt_ops_code_gen eval runner,
 # other checkouts) serialise on the single global /tmp/tt-device.lock and
@@ -70,7 +79,8 @@
 #   ttpool_reset_if_dirty           reset held card(s) if any dirty flag is present.
 #                                   Returns 1 if the reset failed.
 #   ttpool_mark_dirty / ttpool_clear_dirty
-#   ttpool_reset                    tt-smi -r on the held card(s). Returns tt-smi's rc.
+#   ttpool_reset                    tt-smi -r on the held card(s) (recover-hosts for a
+#                                   Galaxy mesh). Returns 0 on success.
 #   ttpool_publish_triage_report    ln -sfn the per-card report to the legacy path
 #                                   generated/tt-triage/triage.txt (latest hang wins).
 #   ttpool_holder_info <id>         "pid=... cmd=..." of the process holding a card's
@@ -92,6 +102,10 @@ TTPOOL_SINGLE_TRACY_BASE=8086
 TTPOOL_ACQUIRE_TIMEOUT="${TTPOOL_ACQUIRE_TIMEOUT:-0}"
 TTPOOL_LEGACY_LOCK="${TTPOOL_LEGACY_LOCK:-/tmp/tt-device.lock}"
 TTPOOL_LEGACY_DIRTY="${TTPOOL_LEGACY_DIRTY:-/tmp/tt-device.dirty}"
+TTPOOL_GALAXY_RESET="${TTPOOL_GALAXY_RESET:-recover}"   # recover | tt-smi
+TTPOOL_GALAXY_CARDS=32
+# (the helper file loads only in interactive shells: bash -ic, and sourced by name)
+TTPOOL_RECOVER_CMD="${TTPOOL_RECOVER_CMD:-source /etc/profile.d/exabox-helpers.sh && HOSTS=\$(hostname) recover-hosts}"
 _TTPOOL_DEADLINE=0
 
 _ttpool_say() { echo "${TTPOOL_LOG_PREFIX}: $*"; }
@@ -362,8 +376,31 @@ ttpool_clear_dirty() {
     return 0
 }
 
+ttpool_is_galaxy() {
+    [[ "$TTPOOL_IS_MESH" == true && "$(ttpool_card_count)" -eq "$TTPOOL_GALAXY_CARDS" ]]
+}
+
+# The Galaxy reset (see the header): recover-hosts in a login shell. Success needs
+# rc 0 and its "Reset completed successfully" line; the output goes to the
+# caller's log and to a file kept on failure.
+_ttpool_recover_galaxy() {
+    local log rc
+    log="$(mktemp "${TMPDIR:-/tmp}/ttpool-recover.XXXXXX.log")" || return 1
+    _ttpool_say "Galaxy: resetting with recover-hosts (Exabox: never tt-smi -r alone), ~2 min..."
+    bash -ic "$TTPOOL_RECOVER_CMD" < /dev/null 2>&1 | tee "$log"
+    rc=${PIPESTATUS[0]}
+    if [[ "$rc" -eq 0 ]] && grep -q "Reset completed successfully" "$log"; then
+        rm -f "$log"
+        return 0
+    fi
+    _ttpool_say "ERROR: recover-hosts failed (rc ${rc}); its output: ${log}"
+    return 1
+}
+
 ttpool_reset() {
-    if [[ "$TTPOOL_IS_MESH" == true ]]; then
+    if ttpool_is_galaxy && [[ "$TTPOOL_GALAXY_RESET" != tt-smi ]]; then
+        _ttpool_recover_galaxy
+    elif [[ "$TTPOOL_IS_MESH" == true ]]; then
         tt-smi -r   # whole box, exactly as before the pool
     else
         # shellcheck disable=SC2086
@@ -377,7 +414,7 @@ ttpool_reset_if_dirty() {
     [[ -n "$dirty" ]] || return 0
     _ttpool_say "card(s) ${dirty} marked dirty from a previous run, resetting card(s) ${TTPOOL_CARDS}..."
     if ! ttpool_reset; then
-        _ttpool_say "ERROR: tt-smi -r ${TTPOOL_CARDS} failed"
+        _ttpool_say "ERROR: reset of card(s) ${TTPOOL_CARDS} failed"
         return 1
     fi
     ttpool_clear_dirty
