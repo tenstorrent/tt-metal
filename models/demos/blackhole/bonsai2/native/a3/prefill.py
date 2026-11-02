@@ -122,9 +122,24 @@ class Rotator:
 _rot = {}
 
 
+class _Dispatch:
+    """rot.KRotator (one kernel) for big S*K, the stock Rotator for small ones. rot.py self-check, chip 3, ms:
+    17408: 0.87 vs 3.26 (S=2048), 0.63 vs 1.12 (S=640); 5120/6144 at 2048: 0.75/0.66 vs 0.99/1.17; stock wins
+    at S=128 and for 5120/6144 at 640. Same precision (PCC 0.9999986 vs float64 for both)."""
+
+    def __init__(self, device, had):
+        from .rot import KRotator
+
+        self.stock, self.kern = Rotator(device, had), KRotator(device, had)
+
+    def __call__(self, x, mem=ttnn.DRAM_MEMORY_CONFIG):
+        big = x.shape[-2] * x.shape[-1] >= 10_000_000 and os.environ.get("BONSAI_PF_KROT", "1") == "1"
+        return (self.kern if big else self.stock)(x, mem)
+
+
 def rotator(shared):
     if id(shared) not in _rot:
-        _rot[id(shared)] = Rotator(shared.device, shared.had)
+        _rot[id(shared)] = _Dispatch(shared.device, shared.had)
     return _rot[id(shared)]
 
 
