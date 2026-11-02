@@ -30,6 +30,13 @@ TABLE_TILES_PER_ROW = 2 * TILES_PER_HEAD
 K_BLOCK = 5
 ACT_DEPTH = 2
 WEIGHT_DEPTH = 2
+# R2 sender pipelining: one more cb_weight_block slot lets the N-group's sender issue the DRAM reads of
+# round k+1 before it multicasts round k (read and multicast overlap instead of adding). Taken only when
+# W is multicast, the footprint at the chosen block_m still fits CB_BUDGET_BYTES, and the modelled W stream
+# is at least PREFETCH_MIN_W_SHARE of the matmul: measured on p100a, 2x512 / 4x256 (W stream ~0.95x the
+# matmul) 41.7 -> 39.0 us, while compute-bound shapes lose 1-2.5 us (38x106 134.5 -> 137.1, ~0.45x).
+WEIGHT_DEPTH_PREFETCH = 3
+PREFETCH_MIN_W_SHARE = 0.75
 OUT_DEPTH = 2
 # Output rows alternate between the writer (NoC1) and the reader (NoC0); 1 = writer only. At 8x512 the
 # store tail is NoC1-bandwidth bound once all 108 cores finish the K-loop together.
@@ -52,6 +59,11 @@ MAX_MCAST_RECTANGLES = 3
 # Smallest N-group (= W DRAM crossings under R1) for which W is multicast (R2). Measured on p100a: at
 # grid_m = 3 (3x36 grid) the per-round handshake over 3 one-core rectangles costs more than 3 W reads.
 W_MCAST_MIN_GROUP = 4
+# R2 senders per N-group, alternating rounds (one Mcast channel each: "wmc", "wmc1"); with two, one sender
+# reads its next round while the other multicasts. Measured on p100a (Refinement 5): 2 is slower and noisy
+# on every R2 shape (2x512 39 -> 41-49 us, 8x256 59 -> 69-83 us), so 1 (the second channel attached absent).
+W_SENDERS = 1
+W_CHANNEL_PREFIXES = ("wmc", "wmc1")
 
 # Selection cost model (device ns per stream; the slowest overlapped stream binds). Fitted on p100a against
 # forced head-group runs of 12 (B, S) shapes x 5-6 candidates; it ranks the measured best first on all of them.
@@ -69,6 +81,7 @@ W_TILES = K_TILES * TILES_PER_HEAD * TOTAL_HEADS
 
 assert K_TILES % K_BLOCK == 0, "k_block must divide K' (ragged last K-block not built)"
 assert OUT_WRITE_NOCS in (1, 2)
+assert 1 <= W_SENDERS <= len(W_CHANNEL_PREFIXES)
 
 
 def _div_up(a, b):
@@ -86,6 +99,7 @@ class Blocking:
     seq_tiles: int  # St
     sb_h: int
     sb_w: int
+    weight_depth: int
 
     @property
     def n_tiles(self):
@@ -98,11 +112,11 @@ def _table_rows(block_m, seq_tiles):
     return min(block_m, seq_tiles)
 
 
-def _cb_pages(block_m, n_tiles, k_block, seq_tiles):
+def _cb_pages(block_m, n_tiles, k_block, seq_tiles, weight_depth=WEIGHT_DEPTH):
     """Page count per CB: the single source for the L1 footprint and the allocation (l1_ledger.md)."""
     pages = {
         CB_ACTIVATION_BLOCK: ACT_DEPTH * block_m * k_block,
-        CB_WEIGHT_BLOCK: WEIGHT_DEPTH * k_block * n_tiles,
+        CB_WEIGHT_BLOCK: weight_depth * k_block * n_tiles,
         CB_MATMUL_PARTIALS: block_m * n_tiles,
         CB_ROTARY_TABLE: _table_rows(block_m, seq_tiles) * TABLE_TILES_PER_ROW,
         CB_OUT_TILES: OUT_DEPTH * n_tiles,
@@ -122,8 +136,9 @@ CB_FORMATS = {
 }
 
 
-def _footprint(block_m, n_tiles, k_block, seq_tiles):
-    return sum(pages * CB_FORMATS[cb][0] for cb, pages in _cb_pages(block_m, n_tiles, k_block, seq_tiles).items())
+def _footprint(block_m, n_tiles, k_block, seq_tiles, weight_depth=WEIGHT_DEPTH):
+    pages = _cb_pages(block_m, n_tiles, k_block, seq_tiles, weight_depth)
+    return sum(count * CB_FORMATS[cb][0] for cb, count in pages.items())
 
 
 def block_m_cap(n_tiles, seq_tiles, k_block=K_BLOCK):
@@ -169,16 +184,17 @@ def _block_m(rows_max, rows_min, cap):
     return min(range(1, min(rows_max, cap) + 1), key=lambda b: (cost(b), -b))
 
 
-def _modelled_ns(compute_kernel_config, grid_m, grid_n, n_tiles, rows_max, num_blocks, w_multicast):
-    """Device-time estimate of one core assignment: the slowest of the matmul, the per-core W stream, the
-    grid-wide W DRAM traffic and the x multicast. Under R1 every M-group re-reads W, so a candidate that
+def _stream_ns(compute_kernel_config, grid_m, grid_n, n_tiles, rows_max, num_blocks, w_multicast):
+    """Device-time estimates of one core assignment's overlapped streams: the matmul, the per-core W stream,
+    the grid-wide W DRAM traffic and the x multicast. Under R1 every M-group re-reads W, so a candidate that
     loses R2 pays grid_m crossings; a large M-group pays for every x receiver."""
     phases = FIDELITY_PHASES[compute_kernel_config.math_fidelity]
-    matmul = rows_max * n_tiles * K_TILES * phases * NS_PER_TILE_PRODUCT_PHASE
-    w_core = num_blocks * n_tiles * K_TILES * NS_PER_CORE_W_TILE
-    w_dram = W_TILES * (1 if w_multicast else grid_m * num_blocks) * NS_PER_DRAM_W_TILE
-    x_mcast = rows_max * K_TILES * (grid_n - 1) * NS_PER_X_TILE_RECEIVER
-    return max(matmul, w_core, w_dram, x_mcast)
+    return {
+        "matmul": rows_max * n_tiles * K_TILES * phases * NS_PER_TILE_PRODUCT_PHASE,
+        "w_core": num_blocks * n_tiles * K_TILES * NS_PER_CORE_W_TILE,
+        "w_dram": W_TILES * (1 if w_multicast else grid_m * num_blocks) * NS_PER_DRAM_W_TILE,
+        "x_mcast": rows_max * K_TILES * (grid_n - 1) * NS_PER_X_TILE_RECEIVER,
+    }
 
 
 def select_blocking(device, batch, seq, compute_kernel_config):
@@ -203,15 +219,24 @@ def select_blocking(device, batch, seq, compute_kernel_config):
         block_m = _block_m(rows_max, mt // grid_m, cap)
         num_blocks = _div_up(rows_max, block_m)
         w_multicast = _w_multicast(grid, grid_m, grid_n, mt, block_m)
-        cost = _modelled_ns(compute_kernel_config, grid_m, grid_n, n_tiles, rows_max, num_blocks, w_multicast)
+        streams = _stream_ns(compute_kernel_config, grid_m, grid_n, n_tiles, rows_max, num_blocks, w_multicast)
         tiles_max = rows_max * n_tiles
         ingress = K_TILES * (rows_max + num_blocks * n_tiles)
-        candidates.append(((cost, tiles_max, ingress, -heads_per_core), heads_per_core, grid_m, grid_n, block_m))
+        key = (max(streams.values()), tiles_max, ingress, -heads_per_core)
+        candidates.append((key, heads_per_core, grid_m, grid_n, block_m, w_multicast, streams))
     if not candidates:
         raise RuntimeError("qkv_proj_heads_rope: no core assignment fits the compute grid")
 
-    _, heads_per_core, grid_m, grid_n, block_m = min(candidates, key=lambda c: c[0])
-    sb_h, sb_w = _subblock(block_m, TILES_PER_HEAD * heads_per_core, _dest_tiles(compute_kernel_config))
+    _, heads_per_core, grid_m, grid_n, block_m, w_multicast, streams = min(candidates, key=lambda c: c[0])
+    n_tiles = TILES_PER_HEAD * heads_per_core
+    sb_h, sb_w = _subblock(block_m, n_tiles, _dest_tiles(compute_kernel_config))
+    # block_m is sized at WEIGHT_DEPTH, so the deeper W ring never costs a smaller block.
+    prefetch = (
+        w_multicast
+        and streams["w_core"] >= PREFETCH_MIN_W_SHARE * streams["matmul"]
+        and _footprint(block_m, n_tiles, K_BLOCK, seq_tiles, WEIGHT_DEPTH_PREFETCH) <= CB_BUDGET_BYTES
+    )
+    weight_depth = WEIGHT_DEPTH_PREFETCH if prefetch else WEIGHT_DEPTH
     return Blocking(
         heads_per_core=heads_per_core,
         grid_m=grid_m,
@@ -222,6 +247,7 @@ def select_blocking(device, batch, seq, compute_kernel_config):
         seq_tiles=seq_tiles,
         sb_h=sb_h,
         sb_w=sb_w,
+        weight_depth=weight_depth,
     )
 
 
@@ -343,10 +369,11 @@ def _core_assignment(device, blocking):
     return assignment, w_multicast
 
 
-def _group_kernels(descriptor, kernel_args, runtime_args, groups, prefix, noc, first_semaphore_id, device):
-    """One KernelDescriptor + one Mcast per group, so groups may be any <= 3-rectangle core sets (Mcast
-    itself only partitions consecutive runs). Groups are disjoint, so they share semaphore IDs. The sender
-    is staggered across groups. Returns the kernels and the next free semaphore ID."""
+def _group_kernels(descriptor, kernel_args, runtime_args, groups, prefixes, noc, first_semaphore_id, device):
+    """One KernelDescriptor per group with one Mcast per channel prefix, so groups may be any <= 3-rectangle
+    core sets (Mcast itself only partitions consecutive runs). Groups are disjoint, so they share semaphore
+    IDs. Senders are staggered across groups and spread evenly across a group's channels. Returns the
+    kernels and the next free semaphore ID."""
     kernels = []
     next_id = first_semaphore_id
     for index, group in enumerate(groups):
@@ -355,16 +382,19 @@ def _group_kernels(descriptor, kernel_args, runtime_args, groups, prefix, noc, f
         for core in group:
             rt[core.x][core.y] = runtime_args[(core.x, core.y)]
         kernel = ttnn.KernelDescriptor(core_ranges=group_cores, runtime_args=rt, **kernel_args)
-        mcast = ttnn.Mcast(
-            device,
-            ttnn.McastConfig(handshake=True, noc=noc),
-            group_cores,
-            len(group),
-            ttnn.McastFixedSenderConfig(sender_index=index % len(group)),
-            ttnn.McastCoreOrder.RowMajor,
-        )
-        mcast.attach(descriptor, prefix, [kernel], first_semaphore_id)
-        next_id = mcast.next_semaphore_id()
+        next_id = first_semaphore_id
+        for channel, prefix in enumerate(prefixes):
+            sender = (index + channel * len(group) // len(prefixes)) % len(group)
+            mcast = ttnn.Mcast(
+                device,
+                ttnn.McastConfig(handshake=True, noc=noc),
+                group_cores,
+                len(group),
+                ttnn.McastFixedSenderConfig(sender_index=sender),
+                ttnn.McastCoreOrder.RowMajor,
+            )
+            mcast.attach(descriptor, prefix, [kernel], next_id)
+            next_id = mcast.next_semaphore_id()
         kernels.append(kernel)
     return kernels, next_id
 
@@ -381,7 +411,8 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
     assignment, w_multicast = _core_assignment(device, blocking)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
     cbs = [
-        _cb(index, pages, cores) for index, pages in _cb_pages(block_m, n_tiles, k_block, blocking.seq_tiles).items()
+        _cb(index, pages, cores)
+        for index, pages in _cb_pages(block_m, n_tiles, k_block, blocking.seq_tiles, blocking.weight_depth).items()
     ]
 
     last_valid_rows = input_tensor.shape[-2] % TILE
@@ -422,6 +453,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         BF16_TILE_BYTES,
         last_valid_rows,
         OUT_WRITE_NOCS,
+        blocking.weight_depth,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
@@ -498,7 +530,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         ),
         reader_rt,
         m_groups,
-        "xmc",
+        ["xmc"],
         ttnn.NOC.NOC_0,
         0,
         device,
@@ -510,17 +542,27 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         compile_time_args=writer_ct_args,
         config=ttnn.WriterConfigDescriptor(),
     )
+    w_senders = min(W_SENDERS, blocking.grid_m)
     if w_multicast:
         writers, _ = _group_kernels(
-            descriptor, writer_args, writer_rt, n_groups, "wmc", ttnn.NOC.NOC_1, next_semaphore_id, device
+            descriptor,
+            writer_args,
+            writer_rt,
+            n_groups,
+            W_CHANNEL_PREFIXES[:w_senders],
+            ttnn.NOC.NOC_1,
+            next_semaphore_id,
+            device,
         )
     else:
         rt = ttnn.RuntimeArgs()
         for (x, y), args in writer_rt.items():
             rt[x][y] = args
-        writer = ttnn.KernelDescriptor(core_ranges=cores, runtime_args=rt, **writer_args)
-        ttnn.attach_absent_mcast(writer, "wmc")
-        writers = [writer]
+        writers = [ttnn.KernelDescriptor(core_ranges=cores, runtime_args=rt, **writer_args)]
+        w_senders = 0
+    for writer in writers:
+        for prefix in W_CHANNEL_PREFIXES[w_senders:]:
+            ttnn.attach_absent_mcast(writer, prefix)
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_compute.cpp"),
         core_ranges=cores,

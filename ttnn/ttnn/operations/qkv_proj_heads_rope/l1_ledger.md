@@ -7,7 +7,7 @@ Values in brackets: 8x512 Phase 0 (`block_m = 11`, `h_c = 4`, `N_c = 8`, `k_bloc
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | cb_activation_block | `act_depth * block_m * k_block` [110] | `block_m * k_block` (one K-block being multiplied) [55] | `{token_rows: spans -> block_m, head_cols: none (x does not vary along it), head_dim_tile: none, qkv_third: none, hidden_k: streams -> k_block window}` | Float16_b (bf16 input tiles; a matmul source, not a DEST spill) | reader | compute | K-loop of each block | Capacity = 2x live set for double buffering (`act_depth`). Cannot alias cb_weight_block (concurrent: both operands of every K-block) nor cb_matmul_partials (concurrent across the K-loop; different format). Could alias cb_rotary_table / cb_out_tiles (epilogue-only lifetime) but the reader prefetches table rows during the last K-blocks, which makes them concurrent: pipelining decision. |
-| cb_weight_block | `weight_depth * k_block * N_c` [80] | `k_block * N_c` [40] | `{token_rows: none (W does not vary along it), head_cols: spans -> N_c, head_dim_tile: spans (inside N_c), qkv_third: none, hidden_k: streams -> k_block window}` | Float16_b | writer (BRISC W-reader; under R2 the N-group sender's writer fills the slot on every group core by multicast) | compute | K-loop of each block | 2x live set for double buffering. Concurrent with cb_activation_block and cb_matmul_partials (same K-loop). The bias tiles ride in K-block 4 row 4 of this CB, so no separate bias CB exists. |
+| cb_weight_block | `weight_depth * k_block * N_c` [80] | `k_block * N_c` [40] | `{token_rows: none (W does not vary along it), head_cols: spans -> N_c, head_dim_tile: spans (inside N_c), qkv_third: none, hidden_k: streams -> k_block window}` | Float16_b | writer (BRISC W-reader; under R2 the N-group sender's writer fills the slot on every group core by multicast) | compute | K-loop of each block | 2x live set for double buffering; 3x (`WEIGHT_DEPTH_PREFETCH`, Refinement 5) under R2 when the W stream nears the matmul and the footprint fits at the chosen block_m (block_m is sized at depth 2): the sender reads round j+1 into the third slot while multicasting round j. Concurrent with cb_activation_block and cb_matmul_partials (same K-loop). The bias tiles ride in K-block 4 row 4 of this CB, so no separate bias CB exists. |
 | cb_matmul_partials | `block_m * N_c` [88] | `block_m * N_c` [88] (the whole block accumulates in place across all 5 K-blocks, then the epilogue reads it) | `{token_rows: spans -> block_m, head_cols: spans -> N_c, head_dim_tile: spans (rotary reads both tiles of a head), qkv_third: none, hidden_k: none (accumulated away)}` | Float32 (fp32_dest_acc_en = True is the only supported value; partials carry the fp32 L1 accumulation across K-blocks - a 16-bit page would truncate the reduction at every K-block boundary) | compute (pack) | compute (unpack) | K-block 0 of a block through the end of that block's epilogue | Capacity == live set (no gap). Is its own L1-acc target and the matmul helper's `interm` placeholder (`out_buf == interm_buf`, legal: `matmul_block_helpers.hpp:307-314`). Cannot alias cb_out_tiles (concurrent during the epilogue; different format) nor the K-block CBs (concurrent). Pack-into-destination considered: the final destination is a bf16 head-layout tensor that needs rotary first, so the fp32 block is the irreducible hand-off. |
 | cb_rotary_table | `min(block_m, St) * 4` [44] | `min(rows, St) * 4` [44] (one slot per distinct sequence position of the block; block row r reads slot r % St) | `{token_rows: spans -> min(block_m, St) positions, head_cols: none (shared by all h_c heads of the row), head_dim_tile: spans (both d-tiles of the table row), qkv_third: none, hidden_k: none}` | Float16_b (bf16 table tiles, FPU srcB operand) | reader | compute | filled in chunks during the K-loop (after each x K-block push), consumed through the block's epilogue, popped at block end (q/k cores; allocated but unused on v cores) | Capacity == live set. Refinement 4: was 2 rows streamed per row; the table reads (72 cores on the same pages) and the RISC sign flip cost ~3.3 us/row on the post-K-loop tail, so they moved into the K-loop slack, which needs the block's slots resident. Sized by distinct positions, not rows: a per-row size shrank block_m at small St and broke R2's equal-block-count gate (4096x1 4960 -> 8286 us). Concurrent with every other CB (K-loop + epilogue). |
 | cb_out_tiles | `out_depth * N_c` [16] | `N_c` [8] (one token row of the core's heads) | `{token_rows: streams -> 1 row window (even rows), head_cols: spans -> N_c, head_dim_tile: spans (inside N_c), qkv_third: none, hidden_k: none}` | Float16_b (bf16 output; pack rounds fp32 DEST once) | compute | writer | epilogue | Capacity = 2x live set: writer drains row i while compute packs row i+2. Pack-into-destination is not available: q/k/v are interleaved tensors whose head-layout pages are scattered across banks, so a row is staged here for the NoC write. Cannot alias cb_matmul_partials (concurrent, different format). |
@@ -24,7 +24,7 @@ Inventory rule check (Rule 3, in order): (1) pack into destination - the epilogu
 | `k_block` | `5` | `k_block | K' = 25` and neither 1 nor 25 |
 | `block_m` | `1 <= block_m <= min(ceil(Mt/grid_m), block_m_cap(N_c, St))` | `_block_m`: equal block counts across M-groups first (R2 gate), then fewest blocks, then fewest nominal rows |
 | `block_m_cap(N_c, St)` | largest `block_m` with `footprint <= cb_budget_bytes`; at St >= block_m: `floor((cb_budget_bytes - 2048*(weight_depth*k_block*N_c + 2*out_depth*N_c)) / (2048*(act_depth*k_block + 4) + 4096*N_c))` -> 11 at N_c = 8; past St the table term is constant `St*4` tiles | host constant `cb_budget_bytes = 921600` (900 KiB) |
-| `act_depth`, `weight_depth`, `out_depth` | `2` | Phase 0 double buffering |
+| `act_depth`, `weight_depth`, `out_depth` | `2` (`weight_depth` 3 on W-stream-bound R2 shapes, e.g. 2x512 / 4x256 at 484 KiB) | Phase 0 double buffering; Refinement 5 sender read-ahead |
 | `OUT_WRITE_NOCS` | `{1, 2}` (2) | rows alternate between writer (NoC1) and reader (NoC0) output CBs; 1 = writer only, no cb_out_tiles_noc0 |
 | `Mt = B*ceil(S/32)` | `<= 128` (tile_aligned), `<= 4096` (any alignment) | `S % 32 == 0` and `B*S <= 4096`; `Mt` enters no capacity, only `block_m` via the `min` |
 | `cb_budget_bytes` | `921600` | must leave room for L1-resident x + q/k/v + tables (~230 KiB/core at 8x512 on 110 banks) and the firmware region within 1.5 MiB L1 |
@@ -43,8 +43,8 @@ footprint_bytes = 2048 * ( act_depth*block_m*k_block      # cb_activation_block 
 |-------------|---------|-----|-----------|
 | Mt = 128 (8x512 primary, St = 16) | 11 | 8 | 905,216 B (884 KiB) |
 | Mt = 96 (8x384, St = 12) | 8 | 8 | 720,896 B (704 KiB) |
-| Mt = 64 (4x512, St = 16) | 11 | 4 | 610,304 B (596 KiB) |
-| Mt = 32 (2x512, St = 16) | 11 | 2 | 462,848 B (452 KiB) |
+| Mt = 64 (4x512, St = 16; h_c = 4 since Refinement 5) | 6 | 8 | 598,016 B (584 KiB) |
+| Mt = 32 (2x512, St = 16; h_c = 4, `weight_depth` 3) | 3 | 8 | 495,616 B (484 KiB) |
 
 By construction `footprint_bytes <= cb_budget_bytes` for every `(block_m, N_c)` the selection function emits.
 
@@ -108,3 +108,19 @@ x in DRAM (q/k/v and tables in L1): 8x512 272.1 us (+2.5% vs x in L1; R1 was 316
 whole x path (no reads, no multicast) leaves it at 277 us (2x512: 93 -> 88 us). x is off the critical
 path; the W unicast re-read (`grid_m` = 12 DRAM crossings) is the binding resource, which is R2
 (Refinement 3).
+
+### Measured (Refinement 5: selection by modelled device time + R2 sender read-ahead, p100a, all-L1)
+
+| (B,S) | 8x512 | 16x256 | 32x128 | 8x384 | 4x512 | 8x256 | 2x512 | 4x256 |
+|-------|-------|--------|--------|-------|-------|-------|-------|-------|
+| h_c / grid / weight_depth | 4 / 12x9 / 2 | 4 / 12x9 / 2 | 4 / 12x9 / 2 | 4 / 12x9 / 2 | 4 / 12x9 / 2 | 4 / 12x9 / 2 | 4 / 12x9 / 3 | 4 / 12x9 / 3 |
+| device us | 105.8 | 105.8 | 105.9 | 78.5 | 59.2 | 59.3 | 39.2 | 38.7 |
+| Refinement 4 (before) | 106.5 | 105.4 | 105.5 | 78.7 | 123.0 | 119.3 | 82.7 | 74.1 |
+
+Mt = 64 / 32 moved from h_c = 2 / 1 (W unicast, 6 / 3 DRAM crossings, 21 / 11 MB) to h_c = 4 with R2
+(W crosses DRAM once, 3.7 MB). Ablation at 2x512 (h_c = 4, before the read-ahead, 41.9 us): all stubbed
+7.0 us; W path alone 34.1 us (W reads alone 19.9, W multicast alone 19.4, i.e. serial); stubbing W
+leaves 30.0 us; stubbing the matmul 37.7 us. One sender reads each 40-tile W K-block (~270 GB/s grid-wide,
+near the DRAM rate for 3.5 MB) and then multicasts it to 11 cores. Reading round j+1 into a third slot
+before round j's multicast cuts the W-only path to 30.8 us and the whole op to 39.2 us. 4x512 is
+matmul-bound (stubbing W: 59.5 -> 56.5 us; stubbing the matmul: 42.2 us).

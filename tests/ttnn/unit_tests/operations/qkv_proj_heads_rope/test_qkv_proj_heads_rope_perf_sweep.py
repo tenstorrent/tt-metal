@@ -24,10 +24,17 @@ HEADS = [int(h) for h in os.environ.get("QKV_SWEEP_HEADS", "1,2,3,4,6").split(",
 @pytest.mark.parametrize("heads_per_core", HEADS)
 @pytest.mark.parametrize("batch, seq", ROWS, ids=[f"{b}x{s}" for b, s in ROWS])
 def test_sweep(device, monkeypatch, batch, seq, heads_per_core):
-    monkeypatch.setattr(pd, "HEADS_PER_CORE_CANDIDATES", (heads_per_core,))
+    if heads_per_core:  # 0 = the selection function's own pick
+        monkeypatch.setattr(pd, "HEADS_PER_CORE_CANDIDATES", (heads_per_core,))
     if "QKV_SWEEP_WMIN" in os.environ:
         monkeypatch.setattr(pd, "W_MCAST_MIN_GROUP", int(os.environ["QKV_SWEEP_WMIN"]))
+    if "QKV_SWEEP_WDEPTH" in os.environ:
+        monkeypatch.setattr(pd, "WEIGHT_DEPTH_PREFETCH", int(os.environ["QKV_SWEEP_WDEPTH"]))
+    if "QKV_SWEEP_WSENDERS" in os.environ:
+        monkeypatch.setattr(pd, "W_SENDERS", int(os.environ["QKV_SWEEP_WSENDERS"]))
     x, w, b, cos, sin = make_inputs(batch, seq, seq)
     tensors = device_inputs(device, x, w, b, cos, sin)
     outputs = qkv_proj_heads_rope(*tensors)
-    check_outputs(outputs, reference(x, w, b, cos, sin))
+    # QKV_SWEEP_NOCHECK=1: ablated kernels (perf only, output is garbage by design).
+    if os.environ.get("QKV_SWEEP_NOCHECK") != "1":
+        check_outputs(outputs, reference(x, w, b, cos, sin))

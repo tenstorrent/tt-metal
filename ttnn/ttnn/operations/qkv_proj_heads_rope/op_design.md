@@ -95,17 +95,20 @@ Inputs: `Mt`, `num_cores` (from `device.compute_with_storage_grid_size()`, runti
 |------|------|
 | 1 | For each `h_c in {1,2,3,4,6,12}`: `grid_n = 36/h_c`, `grid_m = min(floor(num_cores/grid_n), Mt)`; skip if `grid_m == 0`. |
 | 2 | `rows_max = ceil(Mt/grid_m)`; `block_m <= min(rows_max, block_m_cap(2*h_c, St))` chosen by `_block_m` (Refinement 4): equal block counts across M-groups first (R2 needs aligned W rounds), then fewest blocks, then fewest nominal rows; `num_blocks = ceil(rows_max/block_m)`. |
-| 3 | `tiles_max = rows_max * 2*h_c` (critical-path output tiles); `ingress = 25*(rows_max + num_blocks*2*h_c)` tiles per core. |
-| 4 | Keep candidates with `tiles_max <= (1 + occupancy_slack) * min(tiles_max)`, `occupancy_slack = 0.05`; pick min `ingress`; ties -> larger h_c. |
+| 3 | `tiles_max = rows_max * 2*h_c` (critical-path output tiles); `ingress = 25*(rows_max + num_blocks*2*h_c)` tiles per core; `w_multicast` = whether the layout realizes R2 (`_w_multicast`). |
+| 4 | (Refinement 5) Pick min modelled device time `max(matmul, w_core, w_dram, x_mcast)` (`_stream_ns`): matmul `tiles_max*25*phases*13 ns`; per-core W stream `num_blocks*2*h_c*25*110 ns`; grid-wide W DRAM traffic `1800 tiles * (1 if R2 else grid_m*num_blocks) * 10.8 ns`; x multicast `rows_max*25*(grid_n-1)*7.1 ns`. Ties -> fewer `tiles_max`, less `ingress`, larger h_c. |
 
-Resulting Phase 0 grid on p100a (110 cores):
+The Phase 0 rule (occupancy first with 5% slack, then min ingress) assumed both multicasts. With R2 realizable only on some grids, it picked h_c = 2 / 1 for Mt = 64 / 32, which run W unicast (6 / 3 DRAM crossings) or a 36-core x group. The constants were fitted on p100a against forced-h_c runs of 12 shapes (5-6 candidates each); the model ranks the measured best first on all 12. Measured (us, h_c = 1 / 2 / 3 / 4 / 6): 4x512 135 / 123 / 173 / 59 / 329; 2x512 83 / 111 / 163 / 42 / 319; 2x64 54 / 78 / 91 / 34 / 38; 1x32 24 / 29 / 37 / 44 / 51 (grid_m = 1: h_c = 1 stays).
+
+Resulting grid on p100a (110 cores), Refinement 5:
 
 | (B,S) | Mt | h_c | grid_m x grid_n | cores | rows/core | out tiles/core (ideal) |
 |-------|----|-----|-----------------|-------|-----------|------------------------|
 | 8x512, 16x256, 32x128, 64x64, 128x32 | 128 | 4 | 12 x 9 | 108 | 11 / 10 | 88 (83.8) |
 | 8x384 | 96 | 4 | 12 x 9 | 108 | 8 | 64 (62.8) |
-| 4x512, 8x256 | 64 | 2 | 6 x 18 | 108 | 11 / 10 | 44 (41.9) |
-| 2x512, 4x256 | 32 | 1 | 3 x 36 | 108 | 11 / 10 | 22 (20.9) |
+| 4x512, 8x256 | 64 | 4 | 12 x 9 (R2) | 108 | 6 / 5 | 48 (41.9) |
+| 2x512, 4x256 | 32 | 4 | 12 x 9 (R2) | 108 | 3 / 2 | 24 (20.9) |
+| Mt = 4 .. 16 (e.g. 2x64, 4x128) | 4-16 | 4 | Mt x 9 or 12 x 9 (R2 when grid_m >= 4) | 36-108 | 1-2 | 8-16 |
 
 Core layout (Refinement 3, `_choose_layout`): every multicast group must lower to at most `MAX_MCAST_RECTANGLES` = 3 rectangles. Each channel is built as one `ttnn.Mcast` + one kernel descriptor per group (`_group_kernels`): `Mcast` only partitions consecutive runs of a sorted core list, so per-group objects let an M-group and an N-group be any small set of rectangles. Groups are disjoint, so all groups of a channel share semaphore IDs (x: 0-1 on the reader, W: 2-3 on the writer). Layout candidates, first that qualifies wins:
 1. Row-major `l = m_group*grid_n + n_group` (the R3 placement). M-groups are consecutive runs (<= 3 rectangles); N-groups qualify only for small `grid_m` (3x36: 3 one-core rectangles).
@@ -119,7 +122,7 @@ R2 (W multicast) is on when a layout qualifies, `grid_m >= W_MCAST_MIN_GROUP` (4
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
 | cb_activation_block | `act_depth` | 2 | x K-block j+1 lands while K-block j multiplies |
-| cb_weight_block | `weight_depth` | 2 | W K-block j+1 lands while K-block j multiplies |
+| cb_weight_block | `weight_depth` | 2; 3 under R2 when the modelled W stream >= `PREFETCH_MIN_W_SHARE` (0.75) x matmul and it fits (Refinement 5) | W K-block j+1 lands while K-block j multiplies; at 3 the N-group sender issues round j+1's DRAM reads before round j's multicast (after it on round 0, the fill), so read and multicast overlap: 2x512 / 4x256 41.7 -> 39.0 us |
 | cb_matmul_partials | (none: accumulator) | 1 block | in-place L1 accumulation across K-blocks requires exactly one resident block |
 | cb_rotary_table | `min(block_m, St)` (rows) | one slot per distinct sequence position of a block | Refinement 4: the reader reads a block's slots in chunks after each x K-block push, so table reads and the sign flip sit in the K-loop slack; block row r uses slot r % St |
 | cb_out_tiles | `out_depth` (rows) | 2 | writer drains row i while compute packs row i+1 |
@@ -279,7 +282,7 @@ Structural impossibilities: none beyond `feature_spec.py`'s INVALID.
 | Remainder | `Mt = B*ceil(S/32)`; first `Mt % grid_m` M-groups get `ceil(Mt/grid_m)` rows, the rest `floor` (same split as `ttnn.split_work_to_cores` on Mt over grid_m); every block is computed at nominal `block_m`, only valid rows are read (x), tabled, epilogued and written |
 | Per-row geometry | `b = r // St`, `st = r % St` (per image) |
 
-Single built regime: no runtime regime selection in Phase 0. Tests must still pin grid-dependent behavior: the acceptance test covers Mt = 1, 4, 9, 32, 64, 128, which the selection function maps to h_c = 1, 1, 1, 1, 2, 4 (grids 1x36, 3x36 with 2/1 rows, 3x36, 3x36, 6x18, 12x9), so 1-row cores, ragged M-groups and every h_c class the perf rows use execute.
+Single built regime: no runtime regime selection in Phase 0. Tests must still pin grid-dependent behavior: the acceptance test covers Mt = 1, 4, 9, 32, 64, 128, which the selection function maps to h_c = 1, 4, 4, 4, 4, 4 since Refinement 5 (grids 1x36, 4x9, 9x9, 12x9 with 3/2 rows, 12x9 with 6/5, 12x9), so 1-row cores, ragged M-groups, R1 (grid_m = 1) and R2 execute; `test_qkv_proj_heads_rope_perf_sweep.py` (QKV_SWEEP=1) forces the other h_c classes.
 
 ## Circular Buffers
 

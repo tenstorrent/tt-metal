@@ -144,7 +144,7 @@ placement x alignment).
 
 **Outcome**: 8x512 123.5 -> 106.2 us (16x256 106.6, 32x128 105.8, 8x384 78.2; 4x512 122.6, 8x256 118.8, 2x512 82.9, 4x256 73.9); every guard faster (DRAM out, 7x511, 4096x1 multi-block 4955 -> 4494). Kept: table slots read in the K-loop slack, odd output rows stored by the reader on NoC0, epilogue init hoisted per block, `block_m` keeping M-group block counts equal. Measured null: subblock shape (matmul FPU-bound, 87 us at HiFi3), 2 blocks per core (worse). Not tried: `k_block` (FPU-bound K-loop), q/k vs v split (cores finish within the store tail's spatial spread), W NoC placement (W stubbed moves < 1 us). Bottleneck now: the K-loop ends at ~88 us and the output stores take ~12-18 us after it; next is overlapping the stores with the last K-block, which needs `matmul_block` to start L1 accumulation on an existing target.
 
-### [ ] Refinement 5 - Small-token flagged rows (2048 / 1024 tokens)
+### [x] Refinement 5 - Small-token flagged rows (2048 / 1024 tokens)
 
 **Type**: perf
 
@@ -159,3 +159,5 @@ L2, occupancy slack), and attack fill/drain latency with the relevant `master.md
 **Done when**: measured device ns improves on 2x512 and 4x256 (toward 28 us) and on 4x512 / 8x256
 (toward 46 us), every flagged row beats stock, the soft precision gate holds, golden green, and no
 regression on the 4096-token rows or the guard set.
+
+**Outcome**: device us (all-L1) 4x512 123.0 -> 59.2, 8x256 119.3 -> 59.3, 2x512 82.7 -> 39.2, 4x256 74.1 -> 38.7 (stock 123.5 / 124.1 / 75.0 / 79.8, so all four beat it; targets 46 / 28 not reached). The 4096-token rows are unchanged (105.8-105.9) and 8x384 is 78.5. Guards: 7x511 189.7 -> 95.8 (moved h_c 3 -> 4), 38x106 / 77x53 / 18x225 / 8x500 flat. Small-Mt shapes are 1.8-2.9x faster (e.g. 1x512 107.5 -> 37.1). Kept: (1) the selection function ranks candidates by modelled device time, max(matmul, per-core W stream, grid-wide W DRAM crossings, x multicast receivers), fitted to 60 forced-h_c runs; it moves Mt 4-64 onto h_c = 4 with R2. (2) R2 sender read-ahead: a third `cb_weight_block` slot, gated to W-stream-bound shapes (2x512 41.7 -> 39.0). Measured, not kept: two alternating W senders per N-group (`W_SENDERS` = 2 is slower and noisy, 2x512 41-49 us, parked at 1); read-ahead issued after a CallerManaged send (40.9); read-ahead before round 0's send (+1.8 us on compute-bound rows). Bottleneck now: 4x512 is matmul-bound at HiFi3 (stubbing the matmul gives 42.2 us; 48 output tiles/core vs 41.9 ideal). 2x512 is bound by the single W sender per N-group (W path 30.8 us; stubbing W gives 30.0). Next: spread each W K-block's DRAM reads across the N-group, or find an R2 layout for 6x18 (h_c = 2 halves the per-sender W payload; a bent-strip tiling of 11x10 exists but none of the generic layout families finds it). Not done here: both are new topologies, and the remaining gap is fixed fill/drain plus the HiFi3 matmul.
