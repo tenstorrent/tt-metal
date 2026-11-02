@@ -189,6 +189,30 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
                 binding.dfb_spec_name);
         }
     }
+
+    // Quasar Int16 is MOV-only on the FPU and is not a 32-bit Dest source (llk_math_common.h).
+    // get_single_pack_src_format accepts Int16 under fp32 dest so an Int16 output can pack, and
+    // that function cannot tell an input from an output. A consumed Int16 DFB has to unpack to
+    // Dest; the default UnpackToSrc path datacopies it as ELWADD and produces bad data.
+    if (enable_32_bit_dest && arch == tt::ARCH::QUASAR) {
+        for (const auto& binding : kernel.dfb_bindings) {
+            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
+                continue;
+            }
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
+            if (!dfb_spec->data_format_metadata.has_value() ||
+                dfb_spec->data_format_metadata.value() != tt::DataFormat::Int16) {
+                continue;
+            }
+            const auto mode = unpack_modes.find(binding.dfb_spec_name);
+            TT_FATAL(
+                mode != unpack_modes.end() && mode->second == UnpackMode::UnpackToDest,
+                "Compute kernel '{}' consumes Int16 DFB '{}' with enable_32_bit_dest=true. On Quasar the FPU "
+                "cannot datacopy Int16 in a 32-bit Dest; set unpack_modes to UnpackToDest for this DFB.",
+                kernel.unique_id,
+                binding.dfb_spec_name);
+        }
+    }
 }
 
 // Validate DM kernel disable_dfb_implicit_sync_for entries.

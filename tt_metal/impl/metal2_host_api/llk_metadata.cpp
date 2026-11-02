@@ -20,8 +20,7 @@ std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch) {
     const uint32_t num_faces = tile.get_num_faces();
     const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
     const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
-    const hw_format_t format =
-        arch == tt::ARCH::QUASAR ? host_data_format_to_hw(metadata.format) : static_cast<hw_format_t>(metadata.format);
+    const hw_format_t format = host_data_format_to_hw(metadata.format, arch);
     return fmt::format(
         "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
         ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
