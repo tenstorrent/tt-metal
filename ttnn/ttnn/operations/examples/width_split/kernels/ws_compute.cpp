@@ -22,7 +22,8 @@ void kernel_main() {
 
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    init_sfpu(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
     relu_tile_init();
 
     for (uint32_t it = 0; it < kernel_iters; ++it) {

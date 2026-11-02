@@ -210,7 +210,7 @@ void kernel_main() {
             // loop and leaves DEST=0 for the masked fold below — matching the library. Odd count: unary-copy seed.
             uint32_t k = 0;
             if constexpr (full_cnt & 1u) {
-                copy_tile_init(cb_in);
+                copy_init(cb_in);
                 copy_tile(cb_in, start, 0);                  // odd: DEST = cb_in[start]
                 k = 1;
             }

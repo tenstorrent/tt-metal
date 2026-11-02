@@ -181,7 +181,7 @@ void kernel_main() {
                 //      pack_tile<true> keeps the out-of-order write pointer fixed so L1-acc lands on
                 //      the running tile; tile 0 initialises (L1-acc off), tiles 1.. accumulate.
                 cb_reserve_back(cb_interm, 1);
-                copy_tile_init(cb_in);
+                copy_init(cb_in);
                 tile_regs_acquire();
                 copy_tile(cb_in, 0, 0);
                 tile_regs_commit();
@@ -220,7 +220,7 @@ void kernel_main() {
                     // zero-CB leftover — no extra CB, no dataflow zero-fill, and W==1 falls out for free.
                     uint32_t k;
                     if constexpr (width_tiles & 1u) {
-                        copy_tile_init(cb_in);
+                        copy_init(cb_in);
                         copy_tile(cb_in, 0, 0);               // odd: DEST = cb_in[0]
                         k = 1;
                     } else {
