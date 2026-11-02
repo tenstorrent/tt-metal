@@ -30,8 +30,10 @@ TABLE_TILES_PER_ROW = 2 * TILES_PER_HEAD
 K_BLOCK = 5
 ACT_DEPTH = 2
 WEIGHT_DEPTH = 2
-TABLE_DEPTH = 2
 OUT_DEPTH = 2
+# Output rows alternate between the writer (NoC1) and the reader (NoC0); 1 = writer only. At 8x512 the
+# store tail is NoC1-bandwidth bound once all 108 cores finish the K-loop together.
+OUT_WRITE_NOCS = 2
 CB_BUDGET_BYTES = 900 * 1024
 OCCUPANCY_SLACK = 0.05
 HEADS_PER_CORE_CANDIDATES = tuple(h for h in range(1, NUM_HEADS + 1) if NUM_HEADS % h == 0)
@@ -44,6 +46,7 @@ CB_WEIGHT_BLOCK = 1
 CB_MATMUL_PARTIALS = 2
 CB_ROTARY_TABLE = 3
 CB_OUT_TILES = 4
+CB_OUT_TILES_NOC0 = 5
 
 # Rectangles one multicast group may lower to (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
 MAX_MCAST_RECTANGLES = 3
@@ -52,6 +55,7 @@ MAX_MCAST_RECTANGLES = 3
 W_MCAST_MIN_GROUP = 4
 
 assert K_TILES % K_BLOCK == 0, "k_block must divide K' (ragged last K-block not built)"
+assert OUT_WRITE_NOCS in (1, 2)
 
 
 def _div_up(a, b):
@@ -76,14 +80,18 @@ class Blocking:
 
 
 def _cb_pages(block_m, n_tiles, k_block):
-    """Page count per CB: the single source for the L1 footprint and the allocation (l1_ledger.md)."""
-    return {
+    """Page count per CB: the single source for the L1 footprint and the allocation (l1_ledger.md).
+    cb_rotary_table holds a whole block's rows so the reader can fetch them during the K-loop."""
+    pages = {
         CB_ACTIVATION_BLOCK: ACT_DEPTH * block_m * k_block,
         CB_WEIGHT_BLOCK: WEIGHT_DEPTH * k_block * n_tiles,
         CB_MATMUL_PARTIALS: block_m * n_tiles,
-        CB_ROTARY_TABLE: TABLE_DEPTH * TABLE_TILES_PER_ROW,
+        CB_ROTARY_TABLE: block_m * TABLE_TILES_PER_ROW,
         CB_OUT_TILES: OUT_DEPTH * n_tiles,
     }
+    if OUT_WRITE_NOCS == 2:
+        pages[CB_OUT_TILES_NOC0] = OUT_DEPTH * n_tiles
+    return pages
 
 
 CB_FORMATS = {
@@ -92,6 +100,7 @@ CB_FORMATS = {
     CB_MATMUL_PARTIALS: (FP32_TILE_BYTES, ttnn.float32),
     CB_ROTARY_TABLE: (BF16_TILE_BYTES, ttnn.bfloat16),
     CB_OUT_TILES: (BF16_TILE_BYTES, ttnn.bfloat16),
+    CB_OUT_TILES_NOC0: (BF16_TILE_BYTES, ttnn.bfloat16),
 }
 
 
@@ -314,6 +323,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
     cbs = [_cb(index, pages, cores) for index, pages in _cb_pages(block_m, n_tiles, k_block).items()]
 
+    last_valid_rows = input_tensor.shape[-2] % TILE
     reader_ct_args = [
         CB_ACTIVATION_BLOCK,
         CB_ROTARY_TABLE,
@@ -324,10 +334,17 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         blocking.seq_tiles,
         BF16_TILE_BYTES,
         TILES_PER_HEAD,
+        OUT_WRITE_NOCS,
+        CB_OUT_TILES_NOC0,
+        n_tiles,
+        NUM_HEADS,
+        last_valid_rows,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(sin).get_compile_time_args())
+    for output in outputs:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
 
     writer_ct_args = [
         CB_WEIGHT_BLOCK,
@@ -342,7 +359,8 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         NUM_HEADS,
         TILES_PER_HEAD,
         BF16_TILE_BYTES,
-        input_tensor.shape[-2] % TILE,
+        last_valid_rows,
+        OUT_WRITE_NOCS,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
@@ -362,6 +380,8 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         num_k_blocks,
         blocking.sb_h,
         blocking.sb_w,
+        OUT_WRITE_NOCS,
+        CB_OUT_TILES_NOC0,
     ]
 
     reader_rt = {}
@@ -383,6 +403,9 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
             row_start,
             core_rows,
             is_rotary,
+            *out_addrs,
+            third,
+            first_head,
         ]
         writer_rt[(core.x, core.y)] = [
             w_addr,

@@ -4,6 +4,8 @@
 // qkv_proj_heads_rope compute: per block, project_block (matmul_block over K' = hidden + bias tile into
 // Float32 L1-accumulated partials), then the epilogue per valid row: rotate_block on q/k cores
 // (two DEST-accumulated FPU muls per output tile), convert_block (copy + pack to bf16) on v cores.
+// Output rows alternate between cb_out_tiles (writer, NoC1) and cb_out_tiles_noc0 (reader, NoC0) when
+// out_write_nocs == 2.
 //
 // Raw call: pack_reconfig_l1_acc(0) after each block - no helper exposes the L1-acc disable
 // (matmul_block leaves it enabled after the last K-block).
@@ -29,6 +31,8 @@ void kernel_main() {
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(9);
     constexpr uint32_t sb_h = get_compile_time_arg_val(10);
     constexpr uint32_t sb_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_write_nocs = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_out_tiles_noc0 = get_compile_time_arg_val(13);
 
     const uint32_t core_rows = get_arg_val<uint32_t>(0);
     const bool is_rotary = get_arg_val<uint32_t>(1) != 0;
@@ -40,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t table_tiles_per_row = 2 * tiles_per_head;
     static_assert(block_m % sb_h == 0 && n_tiles % sb_w == 0);
     static_assert(tiles_per_head == 2, "rotate_half as a tile swap needs D/2 == one tile");
+    static_assert(out_write_nocs == 1 || out_write_nocs == 2);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_activation_block, cb_weight_block, cb_matmul_partials);
 
@@ -73,6 +78,13 @@ void kernel_main() {
         DataFormatReconfig::Enabled,
         TileAddressing::Direct,
         DestAccumulation::PerRow)>;
+    using RotaryPackNoc0 = PackTile<output(
+        cb_out_tiles_noc0,
+        ReservePolicy::PerOuter,
+        PushPolicy::PerOuter,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Direct,
+        DestAccumulation::PerRow)>;
     // convert_block: Float32 partials row -> bf16 output row.
     using ConvertCopy = CopyTile<input(
         cb_matmul_partials,
@@ -82,6 +94,24 @@ void kernel_main() {
         DataFormatReconfig::Enabled,
         TileAddressing::Offset)>;
     using ConvertPack = PackTile<output(cb_out_tiles, ReservePolicy::Upfront, PushPolicy::AtEnd)>;
+    using ConvertPackNoc0 = PackTile<output(cb_out_tiles_noc0, ReservePolicy::Upfront, PushPolicy::AtEnd)>;
+
+    // Epilogue of one valid row; the pack elements are bound to that row's output CB.
+    auto epilogue_row = [&](uint32_t row, auto rotary_pack, auto convert_pack) {
+        const uint32_t row_base = row * n_tiles;
+        if (is_rotary) {
+            cb_wait_front(cb_rotary_table, table_tiles_per_row);
+            for (uint32_t head = 0; head < heads_per_core; ++head) {
+                eltwise_chain(
+                    IterationShape::grid(tiles_per_head, 2),
+                    RotaryMulAcc{partials_dfb, table_dfb, row_base + head * tiles_per_head},
+                    rotary_pack);
+            }
+            cb_pop_front(cb_rotary_table, table_tiles_per_row);
+        } else {
+            eltwise_chain(IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
+        }
+    };
 
     for (uint32_t block_row = 0; block_row < core_rows; block_row += block_m) {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
@@ -109,20 +139,14 @@ void kernel_main() {
 
         partials.wait_front(partials_tiles);
         for (uint32_t row = 0; row < rows; ++row) {
-            const uint32_t row_base = row * n_tiles;
-            if (is_rotary) {
-                cb_wait_front(cb_rotary_table, table_tiles_per_row);
-                for (uint32_t head = 0; head < heads_per_core; ++head) {
-                    eltwise_chain(
-                        IterationShape::grid(tiles_per_head, 2),
-                        RotaryMulAcc{partials_dfb, table_dfb, row_base + head * tiles_per_head},
-                        RotaryPack{out_dfb});
+            if constexpr (out_write_nocs == 2) {
+                if (row & 1) {
+                    DataflowBuffer out_noc0_dfb(cb_out_tiles_noc0);
+                    epilogue_row(row, RotaryPackNoc0{out_noc0_dfb}, ConvertPackNoc0{out_noc0_dfb});
+                    continue;
                 }
-                cb_pop_front(cb_rotary_table, table_tiles_per_row);
-            } else {
-                eltwise_chain(
-                    IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, ConvertPack{out_dfb});
             }
+            epilogue_row(row, RotaryPack{out_dfb}, ConvertPack{out_dfb});
         }
         partials.pop_front(partials_tiles);
     }

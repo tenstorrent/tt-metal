@@ -7,3 +7,4 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-02T13:55:04+00:00"}
 {"event":"hypothesis","text":"R2: only missing piece for h_non_aligned is writer-side zeroing of rows [S%32,32) on st==St-1 output tiles before NoC write; DRAM out/tables need only SUPPORTED widening","ts":"2026-11-02T13:55:04+00:00"}
 {"event":"test_run","status":"pass","tests":"unit 25/25 + golden test_golden+test_regression 210/210","perf_8x512_ns":268150,"ts":"2026-11-02T13:58:46+00:00"}
+{"event":"test_run","status":"pass","test":"test_qkv_proj_heads_rope.py","detail":"25 passed after table prefetch + dual-NoC output stores; 8x512 123.5->107.0 us","ts":"2026-11-02T14:38:19+00:00"}

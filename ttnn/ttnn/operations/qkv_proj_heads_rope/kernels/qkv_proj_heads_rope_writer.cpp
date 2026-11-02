@@ -5,6 +5,7 @@
 // last K row) into cb_weight_block, then scatters each valid output row into q|k|v head layout.
 // R2: when the "wmc" channel is present, one core of the N-group reads each W K-block and multicasts it
 // into the same cb_weight_block slot on the rest of the group; otherwise every core reads its own (R1).
+// Output rows: every out_write_nocs-th row from cb_out_tiles (the reader stores the others on NoC0).
 
 #include <cstdint>
 #include <type_traits>
@@ -13,6 +14,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "qkv_proj_heads_rope_store.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weight_block = get_compile_time_arg_val(0);
@@ -29,7 +31,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(11);
     // S % 32: valid rows of the last tile-row of each image (0 when S is tile-aligned).
     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(12);
-    constexpr auto weight_args = TensorAccessorArgs<13>();
+    constexpr uint32_t out_write_nocs = get_compile_time_arg_val(13);
+    constexpr auto weight_args = TensorAccessorArgs<14>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto q_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -132,51 +135,11 @@ void kernel_main() {
             cb_push_back(cb_weight_block, weight_block_tiles);
         }
 
-        for (uint32_t row = 0; row < rows; ++row) {
-            const uint32_t r = row_start + block_row + row;
-            const uint32_t batch = r / seq_tiles;
-            const uint32_t st = r % seq_tiles;
-            cb_wait_front(cb_out_tiles, n_tiles);
-            uint32_t l1_addr = get_read_ptr(cb_out_tiles);
-            if constexpr (last_valid_rows != 0) {
-                // Output pad rows must be exactly 0 whatever x / table padding held.
-                if (st == seq_tiles - 1) {
-                    CircularBuffer out_tiles(cb_out_tiles);
-                    constexpr uint32_t top_face = last_valid_rows / 16;
-                    constexpr uint32_t first_row = last_valid_rows % 16;
-                    constexpr uint32_t partial_bytes = (16 - first_row) * face_row_bytes;
-                    constexpr uint32_t full_off = (top_face + 1) * 2 * face_bytes;
-                    // async_write_zeros addresses a CB from its write pointer; the tiles sit at the read
-                    // pointer (unsigned wrap keeps the delta exact).
-                    const uint32_t read_off = l1_addr - out_tiles.get_write_ptr();
-                    for (uint32_t n = 0; n < n_tiles; ++n) {
-                        const uint32_t tile_off = read_off + n * tile_bytes;
-                        const uint32_t face_off = tile_off + top_face * 2 * face_bytes + first_row * face_row_bytes;
-                        noc.async_write_zeros(out_tiles, partial_bytes, {.offset_bytes = face_off});
-                        noc.async_write_zeros(out_tiles, partial_bytes, {.offset_bytes = face_off + face_bytes});
-                        if constexpr (full_off < 4 * face_bytes) {
-                            noc.async_write_zeros(
-                                out_tiles, 4 * face_bytes - full_off, {.offset_bytes = tile_off + full_off});
-                        }
-                    }
-                    noc.write_zeros_l1_barrier();
-                }
-            }
-            for (uint32_t n = 0; n < n_tiles; ++n) {
-                const uint32_t head = first_head + n / tiles_per_head;
-                const uint32_t page =
-                    ((batch * num_heads + head) * seq_tiles + st) * tiles_per_head + n % tiles_per_head;
-                if (third == 0) {
-                    noc_async_write_page(page, q_accessor, l1_addr);
-                } else if (third == 1) {
-                    noc_async_write_page(page, k_accessor, l1_addr);
-                } else {
-                    noc_async_write_page(page, v_accessor, l1_addr);
-                }
-                l1_addr += tile_bytes;
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_out_tiles, n_tiles);
+        // Rows alternate between this kernel's output CB and the reader's (out_write_nocs == 2).
+        for (uint32_t row = 0; row < rows; row += out_write_nocs) {
+            qkv_store::
+                store_row<cb_out_tiles, n_tiles, tiles_per_head, num_heads, seq_tiles, tile_bytes, last_valid_rows>(
+                    noc, row_start + block_row + row, third, first_head, q_accessor, k_accessor, v_accessor);
         }
     }
     noc_async_write_barrier();

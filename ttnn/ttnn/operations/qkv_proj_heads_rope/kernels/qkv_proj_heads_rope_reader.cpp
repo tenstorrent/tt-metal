@@ -5,6 +5,10 @@
 // cb_activation_block, then per valid row the rotary table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
 // R3: one core of the M-group reads each x K-block and multicasts it into the same cb_activation_block
 // slot on the rest of the group (sender choice is host-side; should_send() covers fixed and rotating).
+// Table rows are read in chunks between x rounds (cb_rotary_table holds a whole block's rows), so the
+// reads and the sign flip run in the slack while compute works through the K-loop.
+// After the K-loop the reader stores every out_write_nocs-th output row from cb_out_tiles_noc0 on NoC0
+// (rows 1, 1 + out_write_nocs, ...); the writer stores the rest on NoC1.
 // The ones tile and the sin sign flip are tile-content transforms no dataflow helper provides.
 
 #include <cstdint>
@@ -13,6 +17,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "qkv_proj_heads_rope_store.hpp"
 
 namespace {
 
@@ -61,9 +66,17 @@ void kernel_main() {
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(8);
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    constexpr uint32_t out_write_nocs = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_out_tiles_noc0 = get_compile_time_arg_val(10);
+    constexpr uint32_t n_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t num_heads = get_compile_time_arg_val(12);
+    constexpr uint32_t last_valid_rows = get_compile_time_arg_val(13);
+    constexpr auto x_args = TensorAccessorArgs<14>();
     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr auto q_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t cos_addr = get_arg_val<uint32_t>(1);
@@ -71,6 +84,11 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(3);
     const uint32_t core_rows = get_arg_val<uint32_t>(4);
     const bool is_rotary = get_arg_val<uint32_t>(5) != 0;
+    const uint32_t q_addr = get_arg_val<uint32_t>(6);
+    const uint32_t k_addr = get_arg_val<uint32_t>(7);
+    const uint32_t v_addr = get_arg_val<uint32_t>(8);
+    const uint32_t third = get_arg_val<uint32_t>(9);
+    const uint32_t first_head = get_arg_val<uint32_t>(10);
     constexpr auto x_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("xmc_ct_offset"), get_named_compile_time_arg_val("xmc_rt_offset")>();
 
@@ -84,6 +102,9 @@ void kernel_main() {
     const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
     const auto cos_accessor = TensorAccessor(cos_args, cos_addr, tile_bytes);
     const auto sin_accessor = TensorAccessor(sin_args, sin_addr, tile_bytes);
+    const auto q_accessor = TensorAccessor(q_args, q_addr, tile_bytes);
+    const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
+    const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
 
     Noc noc;
     CircularBuffer activation(cb_activation_block);
@@ -121,6 +142,31 @@ void kernel_main() {
         x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
     };
 
+    // Table rows [first, last) of the block starting at tile-row first_row: one reserve, one barrier.
+    auto read_table_rows = [&](uint32_t first_row, uint32_t first, uint32_t last) {
+        if (first == last) {
+            return;
+        }
+        const uint32_t num_tiles = (last - first) * table_tiles_per_row;
+        cb_reserve_back(cb_rotary_table, num_tiles);
+        uint32_t table_addr = get_write_ptr(cb_rotary_table);
+        for (uint32_t row = first; row < last; ++row) {
+            const uint32_t lo_page = ((first_row + row) % seq_tiles) * tiles_per_head;
+            noc_async_read_page(lo_page, cos_accessor, table_addr);
+            noc_async_read_page(lo_page, sin_accessor, table_addr + tile_bytes);
+            noc_async_read_page(lo_page + 1, sin_accessor, table_addr + 2 * tile_bytes);
+            noc_async_read_page(lo_page + 1, cos_accessor, table_addr + 3 * tile_bytes);
+            table_addr += table_tiles_per_row * tile_bytes;
+        }
+        noc_async_read_barrier();
+        table_addr = get_write_ptr(cb_rotary_table);
+        for (uint32_t row = first; row < last; ++row) {
+            negate_bf16_tile<tile_bytes>(table_addr + tile_bytes);
+            table_addr += table_tiles_per_row * tile_bytes;
+        }
+        cb_push_back(cb_rotary_table, num_tiles);
+    };
+
     // Every core of an M-group has the same rows, so all walk the same rounds and CB slot sequence.
     uint32_t round = 0;
 
@@ -129,6 +175,9 @@ void kernel_main() {
         const uint32_t first_row = row_start + block_row;
 
         // Nominal block quantum keeps the ring aligned; rows past `rows` stay stale and are never consumed.
+        // A block's table rows (one cb_rotary_table fill: capacity is block_m rows) are spread over the
+        // K-blocks, each chunk read right after that K-block's x slot is pushed.
+        uint32_t table_rows_done = 0;
         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
             cb_reserve_back(cb_activation_block, act_block_tiles);
             if (x_mcast.should_send(round)) {
@@ -137,22 +186,25 @@ void kernel_main() {
                 x_receiver.receive(round);
             }
             cb_push_back(cb_activation_block, act_block_tiles);
+            if (is_rotary) {
+                const uint32_t table_rows_next = (k_blk + 1) * rows / num_k_blocks;
+                read_table_rows(first_row, table_rows_done, table_rows_next);
+                table_rows_done = table_rows_next;
+            }
         }
 
-        if (is_rotary) {
-            for (uint32_t row = 0; row < rows; ++row) {
-                const uint32_t st = (first_row + row) % seq_tiles;
-                cb_reserve_back(cb_rotary_table, table_tiles_per_row);
-                const uint32_t table_addr = get_write_ptr(cb_rotary_table);
-                const uint32_t lo_page = st * tiles_per_head;
-                noc_async_read_page(lo_page, cos_accessor, table_addr);
-                noc_async_read_page(lo_page, sin_accessor, table_addr + tile_bytes);
-                noc_async_read_page(lo_page + 1, sin_accessor, table_addr + 2 * tile_bytes);
-                noc_async_read_page(lo_page + 1, cos_accessor, table_addr + 3 * tile_bytes);
-                noc_async_read_barrier();
-                negate_bf16_tile<tile_bytes>(table_addr + tile_bytes);
-                cb_push_back(cb_rotary_table, table_tiles_per_row);
+        if constexpr (out_write_nocs > 1) {
+            for (uint32_t row = 1; row < rows; row += out_write_nocs) {
+                qkv_store::store_row<
+                    cb_out_tiles_noc0,
+                    n_tiles,
+                    tiles_per_head,
+                    num_heads,
+                    seq_tiles,
+                    tile_bytes,
+                    last_valid_rows>(noc, first_row + row, third, first_head, q_accessor, k_accessor, v_accessor);
             }
         }
     }
+    noc_async_write_barrier();
 }
