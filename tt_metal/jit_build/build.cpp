@@ -472,6 +472,13 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_gathering_enabled()) {
         this->defines_ += "-DENABLE_GATHERING ";
+        if (this->arch_ == tt::ARCH::BLACKHOLE) {
+            // Blackhole instruction gathering is incompatible with loading a replay buffer. The LLKs
+            // bracket their records with disable_gathering()/enable_gathering() (load_replay_buf);
+            // the compiler's own replay optimisation turns unrolled SFPU loops into records it never
+            // brackets, so it is off in a gathering build.
+            this->defines_ += "-mno-tt-tensix-optimize-replay ";
+        }
     }
 
     if (config.routing_fw_enabled) {

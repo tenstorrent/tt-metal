@@ -22,6 +22,7 @@ configuration. CSR 0x7c0 is write-only in this codebase (every use is
 ``csrrs zero``/``csrrc zero``), so it cannot be read back and checked at runtime.
 """
 
+import os
 import struct
 from pathlib import Path
 
@@ -429,4 +430,411 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     )
     _assert_records_bracketed(
         words, records, enable_slack_words=ENABLE_SLACK_WORDS_RUNTIME_OPERANDS
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# Every Blackhole kernel that records a replay buffer, built the way tt-metal builds kernels under
+# TT_METAL_ENABLE_GATHERING=1 (the harness honours the same variable: test_config.py adds
+# -DENABLE_GATHERING). One existing test variant per kernel is built with --compile-producer in a
+# private build directory and every record found in its math and pack ELFs must be bracketed.
+#
+# A record whose length is a runtime value (_llk_pack_block_contiguous_mop_config_) is not an
+# inline .ttinsn word: the compiler composes the REPLAY word from `lui rd, 0x4000` (the REPLAY
+# opcode in the top byte), `addi rd, rd, 1` (load_mode) and the length, and stores it to the
+# instruction buffer. Those are matched separately, with a wider window because the recorded body
+# that follows is a loop.
+RISCV_OPCODE_LUI = 0x37
+RISCV_OPCODE_OP_IMM = 0x13
+RISCV_OPCODE_STORE = 0x23
+FUNCT3_SW = 0b010
+REPLAY_OPCODE_LUI_IMM = (
+    TT_OPCODE_REPLAY << 12
+)  # lui immediate placing 0x04 in bits 31:24
+RUNTIME_RECORD_COMPOSE_WORDS = 12
+RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 32
+RUNTIME_RECORD_ENABLE_SLACK_WORDS = 256
+
+# (kernel, pytest node id relative to python_tests, ELF that must carry the record)
+GATHERING_BUILD_VARIANTS = [
+    (
+        "transpose_dest 32-bit",
+        "test_transpose_dest.py::test_transpose_dest_float[fmt_dest_acc_math_transp_unpack_to_dest:"
+        "(InputOutputFormat[A:Float32,B:Float32,out:Float32], <DestAccumulation.Yes: True>, "
+        "<Transpose.Yes: True>, True)]",
+        "math",
+    ),
+    (
+        "gcd (shared with lcm)",
+        "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_uniform[mathop:SfpuGcd-dest_acc:Yes]",
+        "math",
+    ),
+    (
+        "quant",
+        "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_quant[mathop:SfpuQuant-sign_magnitude:False]",
+        "math",
+    ),
+    (
+        "requant",
+        "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_quant[mathop:SfpuRequant-sign_magnitude:False]",
+        "math",
+    ),
+    (
+        "dequant",
+        "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_quant[mathop:SfpuDequant-sign_magnitude:False]",
+        "math",
+    ),
+    (
+        "binary bcast column (broadcast helper)",
+        "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_bcast[formats:Float16_b->Float16_b-"
+        "bcast_dim:Column-mathop:SfpuElwsub-dest_acc:No]",
+        "math",
+    ),
+    (
+        "sfpu reduce max/min float (LOADMACRO swap chain)",
+        "test_sfpu_reduce.py::test_sfpu_reduce[formats:Float16_b->Float16_b-mathop:ReduceColumn-"
+        "dest_acc:No-input_bounds:(-1000, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-"
+        "reduced_extent:15]",
+        "math",
+    ),
+    (
+        "sfpu reduce sum/avg float (tree reduce)",
+        "test_sfpu_reduce.py::test_sfpu_reduce[formats:Float16_b->Float16_b-mathop:ReduceColumn-"
+        "dest_acc:No-input_bounds:(-1000, 1000)-reduce_pool:Sum-dimension_combinations:[32, 32]-"
+        "reduced_extent:15]",
+        "math",
+    ),
+    (
+        "sfpu reduce sum/avg integer (tree reduce)",
+        "test_sfpu_reduce.py::test_sfpu_reduce[formats:Int32->Int32-mathop:ReduceColumn-dest_acc:Yes-"
+        "input_bounds:(-1000, 1000)-reduce_pool:Sum-dimension_combinations:[32, 32]-reduced_extent:1]",
+        "math",
+    ),
+    (
+        "sfpu reduce max/min signed int32 (swap chain)",
+        "test_sfpu_reduce.py::test_sfpu_reduce[formats:Int32->Int32-mathop:ReduceColumn-dest_acc:Yes-"
+        "input_bounds:(-1000, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-reduced_extent:1]",
+        "math",
+    ),
+    (
+        "sfpu reduce_custom (sdpa 4x2 subblock)",
+        "test_sfpu_reduce_sdpa.py::test_sfpu_reduce_sdpa[stimuli:default-mathop:ReduceColumn]",
+        "pack",  # the sdpa reduce runs its SFPU work on the pack thread
+    ),
+    (
+        "topk_xl",
+        "test_topk_xl.py::test_topk_xl[K:512-num_chunks:1-partial_tail:False]",
+        "math",
+    ),
+    (
+        "topk_xl unfused macro",
+        "test_topk_xl_unfused_macro.py::test_topk_xl_unfused_macro_chained[K:512-num_chunks:2]",
+        "math",
+    ),
+    (
+        # Also the canary for compiler-generated records: its scrub helper's unrolled SFPU fill
+        # loop becomes a raw record unless the gathering build passes -mno-tt-tensix-optimize-replay.
+        "topk_xl split",
+        "test_topk_xl_split.py::test_topk_xl_split[k512-chunks1-tail512-rows1-positive-bf16-seg0]",
+        "pack",  # the split sort records on the pack thread
+    ),
+    (
+        "generalized moe gate (eltwise binary reload + single-face transposes)",
+        "test_generalized_moe_gate.py::test_generalized_moe_gate_shipping_config[dest_sync:Half-num_faces:4]",
+        "math",
+    ),
+    (
+        "reduce_block_max_row (reduce_custom / reduce_runtime_custom)",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "math",
+    ),
+    (
+        "reduce_block_max_row fp32 Dest",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "math",
+    ),
+    (
+        "pack block contiguous (runtime-length record)",
+        "test_pack_tiny_tile_block.py::test_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-"
+        "tile_dims:(1, 32)-num_tiles:1]",
+        "pack",
+    ),
+    (
+        "pack fast tilize",
+        "test_fast_tilize_full.py::test_fast_tilize_full[formats:Float16_b->Bfp8_b-dest_acc:No-dimensions:(1, 3)]",
+        "pack",
+    ),
+    (
+        "exp approximate without the negative clamp (LOADMACRO record)",
+        "test_eltwise_unary_sfpu.py::test_exponential_clamp_negative[False]",
+        "math",
+    ),
+]
+
+
+RISCV_OPCODE_JAL = 0x6F
+# A recorded body is `len` Tensix instructions; the RISC-V words the compiler schedules between
+# them (MOP programming, loop control) do not count, and GCC may cross-jump a body's common tail
+# into shared code, so the walk follows unconditional jumps (jal zero). Enough slack for the
+# interleaved RISC-V code of the longest body.
+BODY_WALK_LIMIT_WORDS = 512
+
+
+def _is_tensix_word(word):
+    """Inline ``.ttinsn`` words are the only words outside the 32-bit RISC-V opcode space."""
+    return word & 0x3 != 0x3
+
+
+def _jal_zero_target(words, index, addresses):
+    """Word index of the target of ``jal zero, imm`` at ``index``, or None.
+
+    ``addresses`` is the (word address list, address -> word index map) pair of
+    ``_executable_words_with_addresses``."""
+    word = words[index]
+    if word & 0x7F != RISCV_OPCODE_JAL or (word >> 7) & 0x1F != 0:
+        return None
+    imm = (
+        ((word >> 31) & 0x1) << 20
+        | ((word >> 12) & 0xFF) << 12
+        | ((word >> 20) & 0x1) << 11
+        | ((word >> 21) & 0x3FF) << 1
+    )
+    if imm & (1 << 20):
+        imm -= 1 << 21
+    word_addresses, index_of_address = addresses
+    return index_of_address.get(word_addresses[index] + imm)
+
+
+def _walk_body(words, index, length, addresses):
+    """Index of the first word after ``length`` Tensix words following ``index``, following
+    unconditional jumps; None if the walk runs out of words or limit."""
+    seen = 0
+    position = index + 1
+    for _ in range(BODY_WALK_LIMIT_WORDS):
+        if position >= len(words):
+            return None
+        if seen == length:
+            return position
+        target = _jal_zero_target(words, position, addresses)
+        if target is not None:
+            position = target
+            continue
+        if _is_tensix_word(words[position]):
+            seen += 1
+        position += 1
+    return None
+
+
+def _runtime_replay_records(words):
+    """(index of the instruction-buffer store, None) of every REPLAY record composed at runtime."""
+    records = []
+    for i, word in enumerate(words):
+        if word & 0x7F != RISCV_OPCODE_LUI or word >> 12 != REPLAY_OPCODE_LUI_IMM:
+            continue
+        rd = (word >> 7) & 0x1F
+        addi_rd_rd_1 = RISCV_OPCODE_OP_IMM | (rd << 7) | (rd << 15) | (1 << 20)
+        window = words[i + 1 : i + RUNTIME_RECORD_COMPOSE_WORDS]
+        if addi_rd_rd_1 not in window:
+            continue  # a playback word (no load_mode bit), e.g. a MOP template operand
+        for j in range(i + 1, min(i + RUNTIME_RECORD_COMPOSE_WORDS, len(words))):
+            if (
+                words[j] & 0x7F == RISCV_OPCODE_STORE
+                and (words[j] >> 12) & 0x7 == FUNCT3_SW
+            ):
+                records.append((j, None))
+                break
+    return records
+
+
+def _unbracketed_records(
+    words, records, addresses, disable_window_words, enable_slack_words
+):
+    """The records not bracketed by disable_gathering()'s csrrs/csrrs/csrrc before and
+    enable_gathering()'s csrrc as the first cfg0 CSR op after the body (within the slack).
+    """
+    unbracketed = []
+    for index, length in records:
+        before = [
+            _cfg0_csr_op(w) for w in words[max(0, index - disable_window_words) : index]
+        ]
+        before = [op for op in before if op]
+        body_end = (
+            index + 1 if length is None else _walk_body(words, index, length, addresses)
+        )
+        if body_end is None:
+            unbracketed.append(f"record at word {index} (len {length}): body not found")
+            continue
+        after = []
+        position = body_end
+        for _ in range(enable_slack_words):
+            if position >= len(words):
+                break
+            target = _jal_zero_target(words, position, addresses)
+            if target is not None:
+                position = target
+                continue
+            op = _cfg0_csr_op(words[position])
+            if op:
+                after.append(op)
+                break
+            position += 1
+        disabled = before[-3:] == ["s", "s", "c"]
+        enabled = after[:1] == ["c"]
+        if not (disabled and enabled):
+            unbracketed.append(
+                f"record at word {index} (len {'runtime' if length is None else length}): "
+                f"disable_gathering before={disabled}, enable_gathering after={enabled}"
+            )
+    return unbracketed
+
+
+def _executable_words_with_addresses(elf_path):
+    """``_executable_words`` plus (word address list, address -> word index), for following jumps."""
+    data = elf_path.read_bytes()
+    (e_shoff,) = struct.unpack_from("<I", data, 0x20)
+    e_shentsize, e_shnum, _ = struct.unpack_from("<HHH", data, 0x2E)
+    words, word_addresses, index_of_address = [], [], {}
+    for i in range(e_shnum):
+        _, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
+            "<IIIIII", data, e_shoff + i * e_shentsize
+        )
+        SHT_PROGBITS, SHF_EXECINSTR = 1, 0x4
+        if sh_type != SHT_PROGBITS or not (sh_flags & SHF_EXECINSTR):
+            continue
+        for off in range(sh_offset, sh_offset + sh_size - 3, 4):
+            address = sh_addr + (off - sh_offset)
+            index_of_address[address] = len(words)
+            word_addresses.append(address)
+            words.append(struct.unpack_from("<I", data, off)[0])
+    assert words == _executable_words(elf_path)
+    return words, (word_addresses, index_of_address)
+
+
+def _check_elf_records(elf_path):
+    """All replay records of ``elf_path``, and the ones not bracketed."""
+    words, addresses = _executable_words_with_addresses(elf_path)
+    inline = _replay_records(words)
+    runtime = _runtime_replay_records(words)
+    unbracketed = _unbracketed_records(
+        words, inline, addresses, DISABLE_WINDOW_WORDS, ENABLE_SLACK_WORDS
+    ) + _unbracketed_records(
+        words,
+        runtime,
+        addresses,
+        RUNTIME_RECORD_DISABLE_WINDOW_WORDS,
+        RUNTIME_RECORD_ENABLE_SLACK_WORDS,
+    )
+    return inline + runtime, unbracketed
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "kernel, node_id, recording_elf",
+    GATHERING_BUILD_VARIANTS,
+    ids=[kernel for kernel, _, _ in GATHERING_BUILD_VARIANTS],
+)
+def test_kernel_replay_records_are_gathering_bracketed(
+    kernel, node_id, recording_elf, tmp_path
+):
+    """Built under TT_METAL_ENABLE_GATHERING=1, every replay record in the kernel's ELFs must sit
+    inside disable_gathering()/enable_gathering(): the record is the one known incompatibility
+    with instruction gathering, and only the binary shows whether the bracket is there.
+    """
+    import subprocess
+    import sys
+
+    python_tests = TestConfig.LLK_ROOT / "tests" / "python_tests"
+    env = dict(os.environ, TT_METAL_ENABLE_GATHERING="1", RUNNER_TEMP=str(tmp_path))
+    # No xdist: one variant, and the build directory is private to this test.
+    build = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            node_id,
+            "--compile-producer",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+        ],
+        cwd=python_tests,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert (
+        build.returncode == 0
+    ), f"{kernel}: the gathering build of {node_id} failed:\n{build.stdout[-4000:]}\n{build.stderr[-2000:]}"
+
+    elf_dirs = sorted((tmp_path / "tt-llk-build" / "sources").glob("*/*/elf"))
+    assert elf_dirs, f"{kernel}: no ELF directory produced under {tmp_path}"
+    recording_elf_records = 0
+    unbracketed = []
+    for elf_dir in elf_dirs:
+        for thread in ("unpack", "math", "pack"):
+            elf = elf_dir / f"{thread}.elf"
+            assert elf.is_file(), f"{kernel}: {elf} was not built"
+            records, bad = _check_elf_records(elf)
+            if thread == recording_elf:
+                recording_elf_records += len(records)
+            unbracketed += [f"{thread}.elf: {line}" for line in bad]
+    assert recording_elf_records, (
+        f"{kernel}: no replay record found in {recording_elf}.elf of {node_id}; the variant no "
+        "longer reaches the recording kernel, so it is not covering it"
+    )
+    assert not unbracketed, (
+        f"{kernel}: replay record(s) not bracketed by disable_gathering()/enable_gathering() with "
+        "ENABLE_GATHERING defined; record through ckernel::load_replay_buf instead of a raw "
+        "lltt::record / TTI_REPLAY:\n  " + "\n  ".join(unbracketed)
+    )
+
+
+@blackhole_only
+def test_mac_replay_records_are_gathering_bracketed():
+    """mac_init's record (no harness test drives the kernel; a build-only driver instantiates
+    the bf16 and fp32 inits) must sit inside disable_gathering()/enable_gathering()."""
+    from helpers.llk_params import DestAccumulation
+
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    configuration = TestConfig(
+        "sources/sfpu_mac_gathering_test.cpp",
+        formats,
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    # Build only: the assertions are on the binary.
+    configuration.prepare()
+    math_elf = (
+        TestConfig.ARTEFACTS_DIR
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+        / "math.elf"
+    )
+    assert math_elf.is_file(), f"math ELF was not built: {math_elf}"
+    records, unbracketed = _check_elf_records(math_elf)
+    # The compiler emits each init inline and out of line, so count the body lengths, not records.
+    assert {length for _, length in records} == {5, 6}, (
+        f"expected the fp32 (5) and bf16 (6) mac_init records in the math ELF, found lengths "
+        f"{sorted(length for _, length in records)}"
+    )
+    assert not unbracketed, (
+        "mac_init record(s) not bracketed by disable_gathering()/enable_gathering():\n  "
+        + "\n  ".join(unbracketed)
     )

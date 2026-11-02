@@ -199,8 +199,8 @@ void quant_init(const uint zero_point) {
     }
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN_2S_COMP;
-    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
+    load_replay_buf(QUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         // m = RNE(A * B + zp_hi) + RNE_MAGIC
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
         TTI_SFPNOP;  // SFPSWAP does not wait for the SFPMAD result
@@ -214,7 +214,7 @@ void quant_init(const uint zero_point) {
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
-    }
+    });
 }
 
 template <
@@ -252,8 +252,8 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         OUTPUT_FORMAT == DataFormat::Int8
             ? (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN)
             : (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN : REQUANT_REPLAY_LEN_2S_COMP);
-    lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
+    load_replay_buf(REQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         if constexpr (!INT8_INPUT) {
             // LREG0 has the input in 2's complement format. Convert to sign-magnitude before SFPCAST.
             // Skipped for INT8_INPUT since the value is non-negative after the excess-128 XOR.
@@ -274,7 +274,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
-    }
+    });
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
@@ -291,8 +291,8 @@ void dequant_init(const uint zero_point) {
     constexpr std::uint32_t REPLAY_LEN =
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
 
-    lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
+    load_replay_buf(DEQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         if constexpr (!SIGN_MAGNITUDE_FORMAT && !INT8_INPUT) {
             // Input arrives in 2's-complement bits in LREG0 (INT32_2S_COMP
             // SFPLOAD is a no-op on BH); convert to sign-magnitude so the
@@ -312,7 +312,7 @@ void dequant_init(const uint zero_point) {
         // (which reads LREG0) is similarly handled by the SFPU's implicit
         // RAW stall, so no trailing TTI_SFPNOP is required.
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*mod1*/);
-    }
+    });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>

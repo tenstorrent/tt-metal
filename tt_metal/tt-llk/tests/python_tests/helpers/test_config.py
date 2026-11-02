@@ -1429,6 +1429,15 @@ class TestConfig:
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
 
+        # The same switch tt-metal's JIT build honours: the LLK tests must run in the gathering
+        # configuration tt-metal ships. ENABLE_GATHERING leaves Blackhole instruction gathering on
+        # at boot (boot.h) and brackets every replay-buffer record with disable/enable_gathering
+        # (ckernel::load_replay_buf). The compiler's own replay optimisation turns unrolled SFPU
+        # loops into records it never brackets, so it is off in this build. Wormhole has no
+        # gathering; Quasar ignores the define.
+        if os.environ.get("TT_METAL_ENABLE_GATHERING") == "1":
+            OPTIONS_COMPILE += "-DENABLE_GATHERING -mno-tt-tensix-optimize-replay "
+
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
     def build_shared_artefacts(self):

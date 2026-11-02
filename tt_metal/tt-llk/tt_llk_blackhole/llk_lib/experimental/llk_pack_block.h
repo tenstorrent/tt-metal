@@ -103,20 +103,25 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
             0);
 
         // Enter recording mode: capture next replay_len instructions
-        lltt::record<lltt::NoExec>(0, replay_len);
-
-        // Emit instructions into replay buffer via instrn_buffer (runtime-safe)
-        for (std::uint32_t face = 0; face < num_faces; face++)
-        {
-            const bool is_last_face          = (face == num_faces - 1);
-            const std::uint32_t replay_pacrs = is_last_face ? (pacrs_per_face - 1) : pacrs_per_face;
-
-            for (std::uint32_t p = 0; p < replay_pacrs; p++)
+        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
+        ckernel::load_replay_buf(
+            0,
+            replay_len,
+            [&]
             {
-                const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
-                TT_INSN(is_last_pacr_of_face ? pacr_mod2 : pacr_mod0);
-            }
-        }
+                // Emit instructions into replay buffer via instrn_buffer (runtime-safe)
+                for (std::uint32_t face = 0; face < num_faces; face++)
+                {
+                    const bool is_last_face          = (face == num_faces - 1);
+                    const std::uint32_t replay_pacrs = is_last_face ? (pacrs_per_face - 1) : pacrs_per_face;
+
+                    for (std::uint32_t p = 0; p < replay_pacrs; p++)
+                    {
+                        const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
+                        TT_INSN(is_last_pacr_of_face ? pacr_mod2 : pacr_mod0);
+                    }
+                }
+            });
     }
 
     // --- Program MOP ---

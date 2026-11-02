@@ -212,25 +212,26 @@ inline void _build_lane_mask_col0_() {
 // No SFPNOP after step 1: SFPAND is a single-cycle op whose result the next
 // instruction reads directly (only the SFPMAD-class ops need the slot).
 inline void _record_broadcast_replay_() {
-    lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
+    load_replay_buf(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, [] {
+        // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
+        //     discarded column cannot reach col 0.
+        TTI_SFPAND(0, LREG_MASK, LREG_BCAST, 0);
 
-    // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
-    //     discarded column cannot reach col 0.
-    TTI_SFPAND(0, LREG_MASK, LREG_BCAST, 0);
+        // Stage 1: ROR by 1, add.
+        TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPNOP;
+        TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+        TTI_SFPNOP;
 
-    // Stage 1: ROR by 1, add.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
-
-    // Stage 2: ROR by 2 (ROR1 twice), add.
-    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
-    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
-    TTI_SFPNOP;
+        // Stage 2: ROR by 2 (ROR1 twice), add.
+        TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPNOP;
+        TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPNOP;
+        TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+        TTI_SFPNOP;
+    });
 }
 
 // Emit the "rotate by 4, add" tail stage inline (not in the replay buffer),
