@@ -1,0 +1,251 @@
+-- Version: 0.82.0-dev20261029+112.263dfc6757+m
+-- Metalium version: 0.82.0
+-- Build type: Release
+-- Building with Python Bindings: nanobind
+-- CMAKE_TOOLCHAIN_FILE: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+-- Overriding CCACHE_SLOPPINESS to work with PCH.
+-- ccache compression: defaulting to zstd level 3 (override with CCACHE_COMPRESS env var)
+-- ccache enabled
+-- Checking compilers
+-- Using zlib compressed debug sections
+-- Linker type: LLD
+-- Linker supports --gdb-index, enabling for Debug builds
+-- ENABLE_LIBCXX: FALSE
+-- Build shared libs: ON
+-- Build Python bindings: ON
+-- Build Programming Examples: OFF
+-- Build TT METAL Tests: OFF
+-- Build TTNN Tests: OFF
+-- Build with Unity builds: ON
+-- Build with LTO: OFF
+-- Build with Shared TTNN Sublibraries: OFF
+-- Build with LightMetal Trace Enabled: ON
+-- Build with Multihost Distributed Compute: ON
+-- CPM: Adding package blake3@1.8.4 (1.8.4 at /home/ttuser/agobeljic/tt-metal/.cpmcache/blake3/2db8f98f190bd0cc379215680a172886f862c2e5)
+-- Boost: Release build, static libraries, MPI OFF, Python OFF, testing OFF
+-- Boost: libraries included: core;container;smart_ptr;interprocess;asio;lockfree
+-- Boost.Context: architecture x86_64, binary format elf, ABI sysv, assembler gas, suffix .S, implementation fcontext
+-- CPM: Adding package Boost@1.86.0 (1.86.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/boost/1359e136761ab2d10afa1c4e21086c8d824735cd)
+CMake Deprecation Warning at .cpmcache/protobuf/ee14dfa21e7b885e829024af67b5e12a351a3175/CMakeLists.txt:2 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+-- CPM: Adding package protobuf@21.12 (v21.12 at /home/ttuser/agobeljic/tt-metal/.cpmcache/protobuf/ee14dfa21e7b885e829024af67b5e12a351a3175)
+-- CPM: Adding package yaml-cpp@0 (2f86d13775d119edbb69af52e5f566fd65c6953b at /home/ttuser/agobeljic/tt-metal/.cpmcache/yaml-cpp/0_8_0_upstream_patched)
+CMake Deprecation Warning at .cpmcache/gtest/96129d89f45386492ae46d6bb8c027bc3df5f949/CMakeLists.txt:4 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+CMake Deprecation Warning at .cpmcache/gtest/96129d89f45386492ae46d6bb8c027bc3df5f949/googlemock/CMakeLists.txt:39 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+CMake Deprecation Warning at .cpmcache/gtest/96129d89f45386492ae46d6bb8c027bc3df5f949/googletest/CMakeLists.txt:49 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+-- Found Python: /opt/ttmlir-toolchain/venv/bin/python3.12 (found version "3.12.3") found components: Interpreter
+-- CPM: Adding package GTest@1.13.0 (v1.13.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/gtest/96129d89f45386492ae46d6bb8c027bc3df5f949)
+-- CPM: Adding package reflect@1.2.6 (v1.2.6 at /home/ttuser/agobeljic/tt-metal/.cpmcache/reflect/f93e77475670eaeacf332927dfe8b50e3f3812e0)
+-- CPM: Adding package enchantum@0 (8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e at /home/ttuser/agobeljic/tt-metal/.cpmcache/enchantum/2fb7ab238e36c101b9848892ddb6382276b65837)
+-- CPM: Adding package fmt@11.1.4 (11.1.4 at /home/ttuser/agobeljic/tt-metal/.cpmcache/fmt/69912fb6b71fcb1f7e5deca191a2bb4748c4e7b6)
+-- CPM: Adding package range-v3@0.12.0 (0.12.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/range-v3/0_12_0_patched)
+-- Found Python: /opt/ttmlir-toolchain/venv/bin/python3.12 (found version "3.12.3") found components: Interpreter Development.Module Development.SABIModule
+-- CPM: Adding package nanobind@0 (86e5626728fc282637a6c338597120913dded1bb at /home/ttuser/agobeljic/tt-metal/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6)
+-- CPM: Adding package nlohmann_json@3.11.3 (v3.11.3 at /home/ttuser/agobeljic/tt-metal/.cpmcache/nlohmann_json/798e0374658476027d9723eeb67a262d0f3c8308)
+-- CPM: Adding package xtl@0.8.0 (0.8.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/xtl/0_8_0_patched)
+-- CPM: Adding package xtensor@0.26.0 (0.26.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/xtensor/0_26_0_patched)
+-- CPM: Adding package xtensor-blas@0.22.0 (0.22.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/xtensor-blas/0_22_0_patched)
+-- CPM: Adding package benchmark@1.9.1 (v1.9.1 at /home/ttuser/agobeljic/tt-metal/.cpmcache/benchmark/17a125dc196d0eea81711f65879e8410dd54303f)
+-- CPM: Adding package Taskflow@3.7.0 (v3.7.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/taskflow/52063f60902bfeb362fa4616b1394ab5efe30994)
+-- Proceeding with version: 24.3.25.0
+-- CMAKE_CXX_FLAGS:
+-- CPM: Adding package flatbuffers@24.3.25 (v24.3.25 at /home/ttuser/agobeljic/tt-metal/.cpmcache/flatbuffers/2c4062bffa52fa4157b1b4deeae73395df475fda)
+-- CPM: Adding package simd-everywhere@0.8.2 (v0.8.2 at /home/ttuser/agobeljic/tt-metal/.cpmcache/simd-everywhere/b3b426f78574ef837b17f42e86bab88314c5e4db)
+-- CPM: Adding package spdlog@1.15.2 (v1.15.2 at /home/ttuser/agobeljic/tt-metal/.cpmcache/spdlog/b1c2586bb5c35a7929362e87f62433eb68206873)
+-- tt-logger: using spdlog target spdlog::spdlog
+-- CPM: Adding package tt-logger@1.1.8 (v1.1.8 at /home/ttuser/agobeljic/tt-metal/.cpmcache/tt-logger/d2339ce68562cae34cd95f3fece7fd94eb0529b7)
+-- CPM: Adding package cadical@ (rel-2.2.1 at /home/ttuser/agobeljic/tt-metal/.cpmcache/cadical/97ca71256b069dae9efd0d0464accc9797f02b76)
+-- CPM: Adding package capnproto@0 (d135c9ca5e15219eaf131dfce1a41afdbaea9aab at /home/ttuser/agobeljic/tt-metal/.cpmcache/capnproto/d21a20bc083d846129d7ce11453a3003cc964eeb)
+-- CPM: Adding package ttexalens@0 (6f5720240b7254b25cb3d78aef81769fc12a30f9 at /home/ttuser/agobeljic/tt-metal/.cpmcache/ttexalens/a20f65d9ba149476c88937f984419ea3beedefce)
+-- CMake version: 4.3.2
+-- CPM: Adding package nanomsg@1.8.0 (v1.8.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/nanomsg/28cc32d5bdb6a858fe53b3ccf7e923957e53eada)
+INFOCPM Added flatbuffers, creating ALIAS flatbuffers::flatbuffers
+-- CPM: Adding package libuv@1.51.0 (v1.51.0 at /home/ttuser/agobeljic/tt-metal/.cpmcache/libuv/2b05484ccff8fdf26b363fb50e4830b774d7eb53)
+-- CPM: Adding package cxxopts@0 (dbf4c6a66816f6c3872b46cc6af119ad227e04e1 at /home/ttuser/agobeljic/tt-metal/.cpmcache/cxxopts/dda70ad5c1afdb5368541192bace55dbcd7872e3)
+CMake Warning at .cpmcache/cpm/CPM_0.40.2.cmake:317 (message):
+  CPM: Requires a newer version of nanobind (2.10.2) than currently included
+  (0).
+Call Stack (most recent call first):
+  .cpmcache/cpm/CPM_0.40.2.cmake:682 (cpm_check_if_package_already_added)
+  tt_metal/third_party/umd/third_party/CMakeLists.txt:190 (CPMAddPackage)
+
+
+-- CPM: Adding package umd_asio@ (asio-1-30-2 at /home/ttuser/agobeljic/tt-metal/.cpmcache/umd_asio/83a029aeca9a00050695989a093d0cc1fcd67ba8)
+--
+-- ==================== UMD configuration summary ====================
+--   CMAKE_BUILD_TYPE = Release
+--   TT_EMULE_PATH =
+--   TT_UMD_BUILD_ALL = OFF
+--   TT_UMD_BUILD_EMULE = OFF
+--   TT_UMD_BUILD_EXAMPLES = OFF
+--   TT_UMD_BUILD_JTAG = OFF
+--   TT_UMD_BUILD_PIP =
+--   TT_UMD_BUILD_PYTHON = OFF
+--   TT_UMD_BUILD_SIMULATION = ON
+--   TT_UMD_BUILD_STATIC = OFF
+--   TT_UMD_BUILD_TESTS = OFF
+--   TT_UMD_BUILD_TOOLS = ON
+--   TT_UMD_ENABLE_CLANG_TIDY = OFF
+--   TT_UMD_ENABLE_LOGGING = OFF
+--   TT_UMD_ENABLE_TRACY = OFF
+--   TT_UMD_ENABLE_UNITY_BUILD = OFF
+--   TT_UMD_UNITY_BUILD_BATCH_SIZE = 16
+-- ===================================================================
+Parsing public/common/TracyVersion.hpp file
+VERSION 0.14.1
+-- Could NOT find rocprofiler-sdk (missing: rocprofiler-sdk_DIR)
+-- TRACY_ENABLE: ON
+-- TRACY_ON_DEMAND: OFF
+-- TRACY_CALLSTACK: (not set)
+-- TRACY_PLATFORM_HEADER: (not set)
+-- TRACY_NO_CALLSTACK: OFF
+-- TRACY_NO_CALLSTACK_INLINES: OFF
+-- TRACY_ONLY_LOCALHOST: OFF
+-- TRACY_NO_BROADCAST: OFF
+-- TRACY_ONLY_IPV4: OFF
+-- TRACY_NO_CODE_TRANSFER: OFF
+-- TRACY_NO_CONTEXT_SWITCH: OFF
+-- TRACY_NO_EXIT: OFF
+-- TRACY_NO_SAMPLING: OFF
+-- TRACY_NO_WAIT_STACKS: OFF
+-- TRACY_NO_VERIFY: OFF
+-- TRACY_NO_VSYNC_CAPTURE: OFF
+-- TRACY_NO_FRAME_IMAGE: OFF
+-- TRACY_NO_SYSTEM_TRACING: OFF
+-- TRACY_PATCHABLE_NOPSLEDS: OFF
+-- TRACY_MANUAL_LIFETIME: OFF
+-- TRACY_FIBERS: OFF
+-- TRACY_NO_CRASH_HANDLER: OFF
+-- TRACY_TIMER_FALLBACK: ON
+-- TRACY_DISALLOW_HW_TIMER: OFF
+-- TRACY_LIBUNWIND_BACKTRACE: OFF
+-- TRACY_SYMBOL_OFFLINE_RESOLVE: OFF
+-- TRACY_LIBBACKTRACE_ELF_DYNLOAD_SUPPORT: OFF
+-- TRACY_DEBUGINFOD: OFF
+-- TRACY_IGNORE_MEMORY_FAULTS: OFF
+-- TRACY_OPENGL_AUTO_CALIBRATION: OFF
+-- TRACY_VERBOSE: OFF
+-- TRACY_NO_INTERNAL_MESSAGE: OFF
+-- TRACY_DEMANGLE: OFF
+Parsing public/common/TracyVersion.hpp file
+VERSION 0.14.1
+-- NO_ISA_EXTENSIONS: ON
+-- NO_LTO: OFF
+-- NO_MOLD_LINKER: OFF
+-- NO_CCACHE: ON
+-- PROJECT_VERSION: 0.14.1 CAPSTONE_VERSION: 0.14.1
+Enabling CAPSTONE_ARM_SUPPORT
+Enabling CAPSTONE_AARCH64_SUPPORT
+Enabling CAPSTONE_X86_SUPPORT
+-- CPM: Adding package capstone@6.0.0 (6.0.0-Alpha10 at /home/ttuser/agobeljic/tt-metal/.cpmcache/capstone/7c95646e7e9137cc546dfea2d352d8b5fca1f628)
+-- ZSTD VERSION: 1.5.7
+-- CMAKE_INSTALL_PREFIX: /home/ttuser/agobeljic/tt-metal/build_Release
+-- CMAKE_INSTALL_LIBDIR: lib
+-- ZSTD_LEGACY_SUPPORT defined!
+-- ZSTD_MULTITHREAD_SUPPORT is enabled
+-- CPM: Adding package zstd@1.5.7 (v1.5.7 at /home/ttuser/agobeljic/tt-metal/.cpmcache/zstd/dfd2e0b6e613dcf44911302708e636a8aee527d2)
+-- CPM: PPQSort: Adding package PackageProject.cmake@1.11.1 (v1.11.1 at /home/ttuser/agobeljic/tt-metal/.cpmcache/packageproject.cmake/39dc740304285c2e0815cb4669f337dc2af3b0a3)
+-- PPQSORT_OPTIMIZE_NATIVE: OFF
+-- CPM: Adding package PPQSort@1.0.6 (v1.0.6 at /home/ttuser/agobeljic/tt-metal/.cpmcache/ppqsort/4c03b8199ab82e44e1641275bfcb8b85acc53ce5)
+Parsing public/common/TracyVersion.hpp file
+VERSION 0.14.1
+-- NO_ISA_EXTENSIONS: ON
+-- NO_LTO: OFF
+-- NO_MOLD_LINKER: OFF
+-- NO_CCACHE: ON
+-- CPM: Adding package emsdk@0 (0dfff153dc3c596948ac088b8853006c570f2609 at /home/ttuser/agobeljic/tt-metal/.cpmcache/emsdk/de6013a6f56ddc5bd63ce157184ad7c79ea4815f)
+-- Using SFPI compiler: /home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ (tenstorrent/sfpi:7.92.0[1080]) 15.1.0
+-- TT_METAL_INSTALL_ROOT == /usr/libexec/tt-metalium
+-- Using ULFM MPI from /opt/openmpi-v5.0.7-ulfm
+-- Found Python3: /home/ttuser/.tenstorrent-venv/bin/python3 (found version "3.12.3") found components: Interpreter Development.Module Development.SABIModule
+-- Python3 include dirs: /usr/include/python3.12
+CMake Deprecation Warning at build_Release/_deps/cli11-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+-- Found Python: /opt/ttmlir-toolchain/venv/bin/python3.12 (found version "3.12.3") found components: Development Development.Module Interpreter Development.Embed
+-- Found Python3: /home/ttuser/.tenstorrent-venv/bin/python3 (found version "3.12.3") found components: Development Development.Module Interpreter Development.Embed
+-- Added TTNN::Core flatbuffers directory: /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/flatbuffers
+-- xtensor_SOURCE_DIR: /home/ttuser/agobeljic/tt-metal/.cpmcache/xtensor/0_26_0_patched
+-- xtl_SOURCE_DIR: /home/ttuser/agobeljic/tt-metal/.cpmcache/xtl/0_8_0_patched
+-- xtensor-blas_SOURCE_DIR: /home/ttuser/agobeljic/tt-metal/.cpmcache/xtensor-blas/0_22_0_patched
+-- cli11_SOURCE_DIR: /home/ttuser/agobeljic/tt-metal/build_Release/_deps/cli11-src
+-- Tokenizer text file already exists at /home/ttuser/agobeljic/tt-metal/data/gpt2-tokenizer.json, skipping download.
+-- Tokenizer text file already exists at /home/ttuser/agobeljic/tt-metal/data/tinyllama-tokenizer.json, skipping download.
+-- Shakespeare text file already exists at /home/ttuser/agobeljic/tt-metal/data/shakespeare.txt, skipping download.
+-- CPM: Adding package mnist_dataset@ (master at /home/ttuser/agobeljic/tt-metal/.cpmcache/mnist_dataset/afb84b1051a2905bc75c558b03c7eebe63570993)
+-- Tokenizer text file already exists at /home/ttuser/agobeljic/tt-metal/data/tokenizer.json, skipping download.
+-- Shakespeare text file already exists at /home/ttuser/agobeljic/tt-metal/build_Release/tt-train/tests/shakespeare.txt, skipping download.
+-- Configuring done (0.9s)
+-- Generating done (0.8s)
+-- Build files have been written to: /home/ttuser/agobeljic/tt-metal/build_Release
+[0/2] Re-checking globbed directories...
+[1/31] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/mesh_device.cpp.o
+[3/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/softmax_backward_op.cpp.o
+[4/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/mla_kv_assemble_op.cpp.o
+[5/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/unary_ops.cpp.o
+[6/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_op.cpp.o
+[7/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/optimizers/adamw/adamw.cpp.o
+[8/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/optimizers/adamw/device/adamw_device_operation.cpp.o
+[9/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/skinny_contract/skinny_contract.cpp.o
+[10/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/layernorm_op.cpp.o
+[11/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw_full_precision.cpp.o
+[12/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/tt_profiler.cpp.o
+[13/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw.cpp.o
+[14/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.cpp.o
+[15/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/rmsnorm_op.cpp.o
+[16/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/skinny_contract/device/skinny_contract_program_factory.cpp.o
+[17/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.cpp.o
+[18/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/losses.cpp.o
+[19/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/qkv_causal_conv1d_silu_op.cpp.o
+[20/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/scaled_dot_product_attention.cpp.o
+[21/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/sgd.cpp.o
+[22/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/moe_ffn_swiglu_op.cpp.o
+[23/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/optimizer_registry.cpp.o
+[24/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/optimizers/adamw/device/adamw_program_factory.cpp.o
+[25/31] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/skinny_contract/device/skinny_contract_device_operation.cpp.o
+[26/31] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[27/31] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_optimizers.cpp.o
+[28/31] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_2_cxx.cxx.o
+[29/31] Linking CXX static library tt-train/sources/ttml/libttml.a
+[30/31] Linking CXX shared library ttnn/_ttnncpp.so
+[31/31] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so
+build rc=0

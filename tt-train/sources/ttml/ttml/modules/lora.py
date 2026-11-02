@@ -55,7 +55,9 @@ def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
     return ttnn.addalpha(acc, update, scale)
 
 
-def skinny_contract(small, big, scale=1.0, transpose_out=False, big_transposed=False, small_transposed=False):
+def skinny_contract(
+    small, big, scale=1.0, transpose_out=False, big_transposed=False, small_transposed=False, grid_rows=0
+):
     """``scale * small^T @ big`` over the token dimension (``small`` ``[T, r <= 32]``, or ``[r, T]`` with
     ``small_transposed``; with ``big_transposed`` the second operand is stored ``[N, T]``).
 
@@ -69,7 +71,13 @@ def skinny_contract(small, big, scale=1.0, transpose_out=False, big_transposed=F
     cfg = lora_matmul_config()
     if big_transposed or small_transposed:  # the op's native operands (iteration 40: faster than ttnn's routes)
         return ttml.ops.metal.skinny_contract(
-            small, big, scale, transpose_out, big_transposed=big_transposed, small_transposed=small_transposed
+            small,
+            big,
+            scale,
+            transpose_out,
+            big_transposed=big_transposed,
+            small_transposed=small_transposed,
+            grid_rows=grid_rows,
         )
     if (
         transpose_out
@@ -360,6 +368,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
                 weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                 transposed_output=getattr(self, "transposed_output", False),
                 lowrank_sink=self,
+                overlap=getattr(self, "collective_overlap", None),  # iteration 47: dx's reduce-scatter hidden
+                sp_axis=self.cluster_axis,
             )
         base = _base_linear(self, x, bias_t)
         if self.gather_output:

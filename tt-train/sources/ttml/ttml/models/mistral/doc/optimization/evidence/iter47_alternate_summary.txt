@@ -1,0 +1,3 @@
+in-process alternating A/B (`O/iter47_mfu_alternate.log`, steps 3-14 after a 7-minute cool-down): overlap on (even steps) 439.3 ms mean / 435.5 best over 6 steps, off (odd steps) 443.1 / 436.4 over 6: -3.9 ms per step
+on: 438.8 437.1 435.5 439.7 441.0 443.4
+off: 448.4 443.4 451.1 436.4 437.6 441.8

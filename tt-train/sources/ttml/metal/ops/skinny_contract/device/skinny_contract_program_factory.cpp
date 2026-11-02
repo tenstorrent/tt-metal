@@ -54,17 +54,19 @@ SkinnyContractProgramFactory::cached_program_t SkinnyContractProgramFactory::cre
     const uint32_t Nt =
         (args.big_transposed ? big.padded_shape()[2] : big.padded_shape()[3]) / tt::constants::TILE_WIDTH;
     const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t grid_cores = grid.x * grid.y;
+    // iteration 47: the op may be confined to the first grid_rows core rows (a sub-device split with a collective)
+    const uint32_t rows = args.grid_rows == 0U ? grid.y : std::min<uint32_t>(args.grid_rows, grid.y);
+    const uint32_t grid_cores = grid.x * rows;
     const tt::tt_metal::CoreCoord sender_core{0, 0};
-    const tt::tt_metal::CoreRange grid_rect(sender_core, {grid.x - 1U, grid.y - 1U});
+    const tt::tt_metal::CoreRange grid_rect(sender_core, {grid.x - 1U, rows - 1U});
     const tt::tt_metal::CoreRangeSet all_cores(grid_rect);
     // the receivers: the grid rectangle without the sender
     std::vector<tt::tt_metal::CoreRange> receiver_ranges;
     if (grid.x > 1U) {
         receiver_ranges.emplace_back(tt::tt_metal::CoreCoord{1, 0}, tt::tt_metal::CoreCoord{grid.x - 1U, 0});
     }
-    if (grid.y > 1U) {
-        receiver_ranges.emplace_back(tt::tt_metal::CoreCoord{0, 1}, tt::tt_metal::CoreCoord{grid.x - 1U, grid.y - 1U});
+    if (rows > 1U) {
+        receiver_ranges.emplace_back(tt::tt_metal::CoreCoord{0, 1}, tt::tt_metal::CoreCoord{grid.x - 1U, rows - 1U});
     }
     const tt::tt_metal::CoreRangeSet receiver_cores(receiver_ranges);
     const uint32_t cols = kMaxCols;
@@ -89,7 +91,7 @@ SkinnyContractProgramFactory::cached_program_t SkinnyContractProgramFactory::cre
     const auto sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     const auto receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     const auto start_noc = device->worker_core_from_logical_core(sender_core);
-    const auto end_noc = device->worker_core_from_logical_core({grid.x - 1U, grid.y - 1U});
+    const auto end_noc = device->worker_core_from_logical_core({grid.x - 1U, rows - 1U});
     std::vector<uint32_t> reader_ct{
         Kt,
         Nt,
@@ -123,7 +125,7 @@ SkinnyContractProgramFactory::cached_program_t SkinnyContractProgramFactory::cre
     std::vector<tt::tt_metal::CoreCoord> cores;
     cores.reserve(grid_cores);
     for (uint32_t i = 0; i < grid_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / grid.y, i % grid.y};
+        const tt::tt_metal::CoreCoord core = {i / rows, i % rows};
         const uint32_t n_begin = i < work_cores ? (i * Nt) / work_cores : Nt;
         const uint32_t n_end = i < work_cores ? ((i + 1U) * Nt) / work_cores : Nt;
         const uint32_t n_count = n_end - n_begin;

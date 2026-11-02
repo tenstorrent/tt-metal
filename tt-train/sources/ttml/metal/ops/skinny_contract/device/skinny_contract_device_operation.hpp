@@ -28,6 +28,11 @@ struct SkinnyContractDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::Tensor ttml_skinny_contract(
-    const ttnn::Tensor& small_t, const ttnn::Tensor& big, float scale, bool transpose_out, bool big_transposed);
+    const ttnn::Tensor& small_t,
+    const ttnn::Tensor& big,
+    float scale,
+    bool transpose_out,
+    bool big_transposed,
+    uint32_t grid_rows);
 
 }  // namespace ttnn::prim

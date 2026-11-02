@@ -15,6 +15,8 @@ struct Params {
     bool transpose_out = false;
     bool big_transposed =
         false;  // iteration 38: big is stored [1, 1, N, T] (g^T, x^T), its tile (t, n) at page n * Kt + t
+    uint32_t grid_rows = 0U;  // iteration 47: the core rows the op may use (0: the whole grid), so it can share the
+                              // chip with a collective on the remaining rows (a sub-device split)
 };
 
 struct Inputs {

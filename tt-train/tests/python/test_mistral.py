@@ -540,6 +540,30 @@ def test_skinny_contract_matches_torch(n_cols, scale, transpose_out, big_transpo
     rep.done()
 
 
+@pytest.mark.parametrize("big_transposed", [True, False], ids=["dB-gate_up-shape", "dA-in5120-shape"])
+def test_skinny_contract_on_a_core_row_subset_is_bit_exact(big_transposed):
+    """Iteration 47: `grid_rows` confines the op to the first core rows (the compute sub-device of the collective
+    overlap window); every core still accumulates its columns over the full K in the same order, so the result
+    on 7 rows is bit-identical to the full grid's."""
+    rng = seeded(47)
+    n_cols = 16384 if big_transposed else HIDDEN
+    small_t = to_device(bf16(rng.normal(0, 1, (1, 1, 16, SEQ)))).get_value()
+    big_np = bf16(rng.normal(0, 1, (1, 1, SEQ, n_cols)))
+    big = to_device(np.ascontiguousarray(np.swapaxes(big_np, -1, -2)) if big_transposed else big_np).get_value()
+    full = to_host(
+        ttml.ops.metal.skinny_contract(
+            small_t, big, 2.0, big_transposed, big_transposed=big_transposed, small_transposed=True
+        )
+    )
+    rows = to_host(
+        ttml.ops.metal.skinny_contract(
+            small_t, big, 2.0, big_transposed, big_transposed=big_transposed, small_transposed=True, grid_rows=7
+        )
+    )
+    assert full.shape == rows.shape and np.array_equal(full, rows), "the row-subset op must match the full grid"
+    assert not np.array_equal(full, np.zeros_like(full))
+
+
 def test_fused_residual_norm_model_matches_the_block_path():
     """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
     the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number

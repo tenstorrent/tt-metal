@@ -96,6 +96,7 @@ def fused_forward(model, input, mask):
     # row-parallel layers return their reduce-scattered shard. Same bytes on the links, a quarter of the norm work.
     sp_axis = getattr(model, "sequence_parallel_axis", None)
     sp = sp_axis is not None
+    overlap = getattr(model, "collective_overlap", None)  # iteration 47
 
     def gather(t, replicated_grad=False):
         # SHARDED: the consumer is a LoRA column-parallel layer without its broadcast node, so the gather's backward
@@ -116,7 +117,9 @@ def fused_forward(model, input, mask):
     for i, block in enumerate(blocks):
         delta = block.attention(h, mask)
         residual, h = add_rmsnorm(residual, delta, block.mlp_norm)
-        delta = block.mlp(gather(h))
+        # Iteration 47: with the collective overlap the fused gate_up takes the shard, gathers it itself and
+        # reduce-scatters its input gradient inside its backward, overlapped with its adapter products.
+        delta = block.mlp(h if overlap is not None else gather(h))
         if i + 1 < len(blocks):
             residual, h = add_rmsnorm(residual, delta, blocks[i + 1].attention_norm)
             h = gather(h)
@@ -130,14 +133,18 @@ def fused_forward(model, input, mask):
     return logits
 
 
-def use_fused_residual_norm(model, sequence_parallel: bool = True) -> int:
+def use_fused_residual_norm(model, sequence_parallel: bool = True, collective_overlap: bool = True) -> int:
     """Switch the :class:`ttml.models.mistral.Mistral` inside ``model`` (or ``model`` itself) to
     :func:`fused_forward`. Every RMSNorm gamma must be frozen. Returns the number of fused norms.
 
     ``sequence_parallel`` (iteration 42, TP only): the residual stream row-sharded over the TP group, the norms on the
     shard between the reduce-scatter and the all-gather halves of each all-reduce (see :func:`fused_forward`); the
     row-parallel LoRA layers return their reduce-scattered shard and the column-parallel ones drop the broadcast
-    node (the all-gather's backward reduces their partial input gradients)."""
+    node (the all-gather's backward reduces their partial input gradients).
+
+    ``collective_overlap`` (iteration 47, TP + sequence parallel): the fused gate_up layers run the reduce-scatter of
+    their input gradient on a collective sub-device while their adapter products run on the compute rows
+    (:class:`ttml.modules.ccl_overlap.CollectiveOverlap`); the model's ``collective_overlap`` holds the manager."""
     from ttml.models.mistral import Mistral
     from ttml.modules.lora import LoraColumnParallelLinear, LoraRowParallelLinear
 
@@ -162,4 +169,17 @@ def use_fused_residual_norm(model, sequence_parallel: bool = True) -> int:
         for _, m in llama.named_modules():
             if isinstance(m, (LoraRowParallelLinear, LoraColumnParallelLinear)):
                 m.sequence_parallel = True
+        gate_ups = [
+            m
+            for name, m in llama.named_modules()
+            if name.endswith("w_gate_up")
+            and isinstance(m, LoraColumnParallelLinear)
+            and getattr(m, "lora_fused", False)
+        ]
+        if collective_overlap and gate_ups:
+            from ttml.modules.ccl_overlap import CollectiveOverlap
+
+            llama.collective_overlap = CollectiveOverlap(ttml.autograd.AutoContext.get_instance().get_device())
+            for m in gate_ups:
+                m.collective_overlap = llama.collective_overlap
     return len(norms) - 1  # the first norm stays the plain op

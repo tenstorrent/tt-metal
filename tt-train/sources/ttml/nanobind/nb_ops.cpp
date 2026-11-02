@@ -864,6 +864,7 @@ void py_module(nb::module_& m) {
             nb::arg("transpose_out") = false,
             nb::arg("big_transposed") = false,
             nb::arg("small_transposed") = false,
+            nb::arg("grid_rows") = 0U,
             "scale * small^T @ big over the token dimension (small [T, r <= 32], big [T, N]) -> [r, N], or [N, r] with "
             "transpose_out: the LoRA gradient products dB = s g^T h and dA = dh^T x on all cores, HiFi4 / fp32 acc. "
             "big_transposed: big is [N, T]; small_transposed: small is already [r, T].");

@@ -1,0 +1,31 @@
+=== iter47 harness 2026-11-02T23:12:08Z
+harness rc=0
+================== 70 passed, 2 warnings in 246.15s (0:04:06) ==================
+swiglu op tests rc=0
+============================== 35 passed in 3.37s ==============================
+=== iter47 TP=4 gradient check 2026-11-02T23:16:24Z
+tp4 rc=0
+tp 4: transposed 3, fused 2, configured 2
+PASS
+=== iter47 8 layers real weights, host loss 2026-11-02T23:17:06Z
+rc=0
+compare rc=0
+max |diff| 0.0234 (tol 0.1), mean +0.0050, signs +8/-2
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+PASS
+=== iter47 TP=4 40 layers real weights 2026-11-02T23:18:11Z
+rc=0
+step 2: DRAM allocated after forward 26.08 GiB
+step 2: DRAM allocated after backward 21.17 GiB
+step 2: DRAM allocated after the optimizer step 21.17 GiB (weights + state)
+step    2/10  loss 0.3262     448.0 ms
+step    3/10  loss 0.2520     450.1 ms
+step    4/10  loss 0.2100     453.9 ms
+step    5/10  loss 0.1514     456.3 ms
+step    6/10  loss 0.2812     448.0 ms
+step    7/10  loss 0.3672     456.6 ms
+step    8/10  loss 0.2734     455.8 ms
+step    9/10  loss 0.3320     456.0 ms
+step   10/10  loss 0.5000     453.9 ms
+40 of 40 layers, tp 4: 453.8 ms/step over 8 steps (best 448.0), 212.4 TFLOP/s, MFU 35.75%
+=== iter47 chain finished 2026-11-02T23:27:28Z

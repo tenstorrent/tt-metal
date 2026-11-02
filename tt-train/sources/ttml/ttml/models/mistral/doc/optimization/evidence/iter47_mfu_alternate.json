@@ -1,0 +1,151 @@
+{
+ "args": {
+  "model_path": "mistralai/Mistral-Small-24B-Base-2501",
+  "revision": "b0a2e4ed093c26997495ae625528f81ea04b749f",
+  "data": null,
+  "layers": 0,
+  "trace": false,
+  "trace_alternate": false,
+  "tp": 4,
+  "seq_len": 1024,
+  "batch": 1,
+  "steps": 14,
+  "warmup_steps": 2,
+  "lr": 0.0001,
+  "weight_decay": 0.0,
+  "rank": 16,
+  "alpha": 32.0,
+  "random_init": true,
+  "random_data": true,
+  "seed": 42,
+  "ccl_overlap_alternate": true,
+  "no_ccl_overlap": false,
+  "track_memory": false,
+  "mem_probe": false,
+  "no_fused_lora": false,
+  "no_allcore_rmsnorm": false,
+  "no_fused_residual_norm": false,
+  "no_transposed_weights": false,
+  "host_loss": false,
+  "loss_log": "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter47_mfu_alternate.json",
+  "data_log": null,
+  "dump_lora_init": null
+ },
+ "layers": 40,
+ "flops_per_step": 96371013058560,
+ "peak_tflops": 594.0,
+ "steps": [
+  {
+   "step": 1,
+   "loss": 11.9375,
+   "ms": 631.8413140252233,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 2,
+   "loss": 11.9375,
+   "ms": 430.54121593013406,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 3,
+   "loss": 11.9375,
+   "ms": 448.43470910564065,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 4,
+   "loss": 11.9375,
+   "ms": 438.79156513139606,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 5,
+   "loss": 11.9375,
+   "ms": 443.37074318900704,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 6,
+   "loss": 11.9375,
+   "ms": 437.13646894320846,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 7,
+   "loss": 11.9375,
+   "ms": 451.0956509038806,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 8,
+   "loss": 11.875,
+   "ms": 435.50202529877424,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 9,
+   "loss": 11.9375,
+   "ms": 436.3833167590201,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 10,
+   "loss": 11.9375,
+   "ms": 439.7399537265301,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 11,
+   "loss": 11.9375,
+   "ms": 437.5792797654867,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 12,
+   "loss": 11.9375,
+   "ms": 440.96337212249637,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  },
+  {
+   "step": 13,
+   "loss": 11.9375,
+   "ms": 441.80027628317475,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": false
+  },
+  {
+   "step": 14,
+   "loss": 12.0,
+   "ms": 443.3823060244322,
+   "trace": false,
+   "capture": false,
+   "ccl_overlap": true
+  }
+ ]
+}

@@ -70,6 +70,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--random-init", action="store_true", help="skip the checkpoint (perf runs)")
     p.add_argument("--random-data", action="store_true", help="uniform random tokens (perf runs)")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--ccl-overlap-alternate",
+        action="store_true",
+        help="iteration 47 A/B: the collective overlap on for even steps and off for odd steps in one process",
+    )
+    p.add_argument(
+        "--no-ccl-overlap",
+        action="store_true",
+        help="iteration 47: do not run the gate_up input-gradient reduce-scatter on a collective sub-device "
+        "overlapped with the adapter products",
+    )
     p.add_argument("--track-memory", action="store_true", help="print device memory after the first step")
     p.add_argument("--mem-probe", action="store_true", help="print allocated DRAM after the forward and after the step")
     p.add_argument(
@@ -203,8 +214,13 @@ def main() -> None:
     if not args.no_allcore_rmsnorm:
         norms = use_allcore_rmsnorm_backward(model)
         print(f"RMSNorm layers on the all-core backward: {len(norms)}")
+    ccl_overlap = None
     if not args.no_fused_residual_norm:
-        print(f"residual adds fused into the norms: {use_fused_residual_norm(model)}")
+        overlap = not args.no_ccl_overlap and not args.trace  # a trace cannot capture the sub-device switches
+        print(f"residual adds fused into the norms: {use_fused_residual_norm(model, collective_overlap=overlap)}")
+        mistral = next((m for _, m in model.named_modules() if isinstance(m, Mistral)), None)
+        ccl_overlap = getattr(mistral, "collective_overlap", None)
+        print(f"collective overlap (iteration 47): {'installed' if ccl_overlap is not None else 'off'}")
     print(f"composite bases on the swept 2D configs: {len(configured_bases(model, args.seq_len))} linears")
     model.train()
     params = model.parameters()
@@ -265,8 +281,12 @@ def main() -> None:
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if use_tp else None,
         )
 
+    overlap_modules = [m for _, m in model.named_modules() if getattr(m, "collective_overlap", None) is not None]
     for step in range(1, args.steps + 1):
         x_np, y_np = batcher.next(args.batch)
+        if args.ccl_overlap_alternate and ccl_overlap is not None:
+            for m in overlap_modules:  # the model and its fused gate_up layers
+                m.collective_overlap = ccl_overlap if step % 2 == 0 else None
         t0 = time.perf_counter()
         if trace_id is not None and (not args.trace_alternate or step % 2 == 0):
             # replay: refill the inputs in place, run the captured step, read the loss
@@ -313,6 +333,8 @@ def main() -> None:
             reduce_partial_lora_grads(model, mesh.axis_index("tp"))
         if args.mem_probe and step <= 2:
             print(f"step {step}: DRAM allocated after backward {dram_allocated_gib():.2f} GiB")
+        if step == 1 and ccl_overlap is not None:
+            print(f"step 1: collective overlap windows {ccl_overlap.windows}")
         ctx.reset_graph()
         optimizer.step()
         if step == capture_step:
@@ -333,6 +355,8 @@ def main() -> None:
         if step > args.warmup_steps and step != capture_step:  # the capture step carries the capture itself
             steps_ms.append(ms)
         entry = {"step": step, "loss": loss_val, "ms": ms, "trace": False, "capture": step == capture_step}
+        if args.ccl_overlap_alternate and ccl_overlap is not None:
+            entry["ccl_overlap"] = step % 2 == 0
         if host_loss is not None:
             entry["host_loss"] = host_loss
         if args.data_log:
@@ -343,6 +367,7 @@ def main() -> None:
             f"step {step:4d}/{args.steps}  loss {loss_val:.4f}"
             + (f"  host fp32 loss {host_loss:.4f}" if host_loss is not None else "")
             + f"  {ms:8.1f} ms"
+            + ("  (overlap on)" if entry.get("ccl_overlap") else "")
         )
         if args.track_memory and step == 1:
             MemoryUsageTracker.end_capture("FIRST_STEP")

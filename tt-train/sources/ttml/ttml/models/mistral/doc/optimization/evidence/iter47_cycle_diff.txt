@@ -1,0 +1,24 @@
+kernel ms per profiled 4-layer step, 46c -> 47 (iter46c_tp_ranked_ops_full.txt vs iter47_tp_ranked_ops_full.txt)
+chip 0: total 38.884 -> 39.756 (+0.872); collectives 4.148 -> 4.798 (+0.650); kernels without collectives 34.736 -> 34.958 (+0.222)
+    0.000 ->   0.858 (+0.858)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 20
+    0.000 ->   0.527 (+0.527)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 77
+    0.379 ->   0.000 (-0.379)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 110
+    1.523 ->   1.167 (-0.356)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.000 ->   0.137 (+0.137)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x5120 | 77
+    0.353 ->   0.236 (-0.117)  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+    1.384 ->   1.472 (+0.088)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.023 ->   0.049 (+0.026)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.425 ->   0.447 (+0.022)  AllGatherAsync | 1x1x5120x256 |  | 20
+chip 2: total 44.983 -> 43.222 (-1.761); collectives 10.177 -> 8.264 (-1.913); kernels without collectives 34.806 -> 34.958 (+0.152)
+    3.988 ->   2.003 (-1.985)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.000 ->   1.188 (+1.188)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 20
+    2.467 ->   1.672 (-0.795)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.000 ->   0.539 (+0.539)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 77
+    0.365 ->   0.000 (-0.365)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 110
+    0.645 ->   0.337 (-0.308)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    0.000 ->   0.139 (+0.139)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x5120 | 77
+    1.902 ->   2.014 (+0.112)  AllGatherAsync | 1x1x256x5120 |  | 20
+    0.335 ->   0.224 (-0.111)  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+    0.133 ->   0.077 (-0.056)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.114 ->   0.068 (-0.046)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.544 ->   0.516 (-0.028)  AllGatherAsync | 1x1x5120x256 |  | 20

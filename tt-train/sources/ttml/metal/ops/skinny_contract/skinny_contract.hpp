@@ -20,6 +20,7 @@ ttnn::Tensor skinny_contract(
     float scale = 1.0F,
     bool transpose_out = false,
     bool big_transposed = false,
-    bool small_transposed = false);
+    bool small_transposed = false,
+    uint32_t grid_rows = 0U);
 
 }  // namespace ttml::metal

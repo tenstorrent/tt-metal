@@ -94,9 +94,17 @@ class FusedLoraLinearT(Function):
         weight_cat_fwd=None,
         transposed_output=False,
         lowrank_sink=None,
+        overlap=None,
+        sp_axis=None,
     ):
         cfg = _compute_config()
         x_val, a_val, b_val, w_val = x.get_value(), lora_A.get_value(), lora_B.get_value(), weight_cat.get_value()
+        # Iteration 47: with the overlap, x is the sequence-parallel shard and this layer gathers it here (the raw
+        # collective) so that its backward can hand back the reduce-scattered shard gradient (the autograd engine
+        # wants the input's shape), computed on the collective sub-device while the adapter products run.
+        ctx.overlap, ctx.sp_axis = overlap, sp_axis
+        if overlap is not None:
+            x_val = ttml.core.distributed.all_gather(x_val, 2, sp_axis)
         rank = int(b_val.shape[-1])
         # Tail block = scaled B^T, zero-padded from rank to 32 rows, written into the frozen weight in place.
         bt = ttnn.transpose(b_val, -2, -1)  # [1, 1, rank, out]
@@ -244,12 +252,32 @@ class FusedLoraLinearT(Function):
             dcat_t, in_features, rank, dh_scale, int(x_val.shape[-1]) if wide else 0, a_val
         )
         ttnn.deallocate(dcat_t)
-        grad_b = skinny_contract(
-            h, grad_output, scaling, transpose_out=True, big_transposed=transposed_out
-        )  # s * g^T h -> [out, r]
-        if reduce_axis is not None:
-            s_dh = ttml.core.distributed.all_reduce(s_dh, reduce_axis)
-        grad_a = skinny_contract(s_dh, x_val)  # (s dh)^T x -> [r, in] (+ the tail columns when x is wide)
+        if ctx.overlap is not None:
+            # The window (iteration 47): dx's reduce-scatter on the collective rows while dB and dA run on the
+            # compute rows. Every program inside must fit one sub-device, so the small operands are transposed
+            # before it (the op's internal transpose would run on the full grid) and both products take the op.
+            assert reduce_axis is None, "the overlap window holds one collective: the batched gradient mode"
+            h_t = ttnn.transpose(h, -2, -1)
+            s_dh_t = ttnn.transpose(s_dh, -2, -1)
+            rows = ctx.overlap.enter()
+            dx_full = dx
+            dx = ctx.overlap.reduce_scatter(dx_full, 2, ctx.sp_axis)
+            grad_b = ttml.ops.metal.skinny_contract(
+                h_t, grad_output, scaling, True, big_transposed=transposed_out, small_transposed=True, grid_rows=rows
+            )
+            grad_a = ttml.ops.metal.skinny_contract(
+                s_dh_t, x_val, 1.0, False, big_transposed=False, small_transposed=True, grid_rows=rows
+            )
+            ctx.overlap.exit()
+            for t in (dx_full, h_t, s_dh_t):
+                ttnn.deallocate(t)
+        else:
+            grad_b = skinny_contract(
+                h, grad_output, scaling, transpose_out=True, big_transposed=transposed_out
+            )  # s * g^T h -> [out, r]
+            if reduce_axis is not None:
+                s_dh = ttml.core.distributed.all_reduce(s_dh, reduce_axis)
+            grad_a = skinny_contract(s_dh, x_val)  # (s dh)^T x -> [r, in] (+ the tail columns when x is wide)
         if wide:
             grad_a = ttnn.slice(grad_a, [0, 0, 0, 0], [1, 1, rank, in_features], [1, 1, 1, 1])
         return dx, None, grad_a, grad_b
@@ -328,6 +356,8 @@ def fused_lora_linear_t(
     weight_cat_fwd=None,
     transposed_output=False,
     lowrank_sink=None,
+    overlap=None,
+    sp_axis=None,
 ):
     in_features, out_features = shape
     return FusedLoraLinearT.apply(
@@ -345,6 +375,8 @@ def fused_lora_linear_t(
         weight_cat_fwd,
         transposed_output,
         lowrank_sink,
+        overlap,
+        sp_axis,
     )
 
 

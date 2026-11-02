@@ -57,6 +57,7 @@ ttsl::hash::hash_t SkinnyContractDeviceOperation::compute_program_hash(
         args.scale,
         args.transpose_out,
         args.big_transposed,
+        args.grid_rows,
         tensor_args.small_t.logical_shape(),
         tensor_args.big.logical_shape());
 }
@@ -66,10 +67,15 @@ ttsl::hash::hash_t SkinnyContractDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttnn::Tensor ttml_skinny_contract(
-    const ttnn::Tensor& small_t, const ttnn::Tensor& big, float scale, bool transpose_out, bool big_transposed) {
+    const ttnn::Tensor& small_t,
+    const ttnn::Tensor& big,
+    float scale,
+    bool transpose_out,
+    bool big_transposed,
+    uint32_t grid_rows) {
     using OperationType = ttml::metal::ops::skinny_contract::device::SkinnyContractDeviceOperation;
     auto attributes = OperationType::operation_attributes_t{
-        .scale = scale, .transpose_out = transpose_out, .big_transposed = big_transposed};
+        .scale = scale, .transpose_out = transpose_out, .big_transposed = big_transposed, .grid_rows = grid_rows};
     auto tensor_args = OperationType::tensor_args_t{.small_t = small_t, .big = big};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }

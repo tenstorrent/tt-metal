@@ -106,6 +106,8 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--compare", default=None)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--layers", type=int, default=1, help="decoder blocks (iteration 47: 2 exercises a block's dx)")
+    p.add_argument("--no-ccl-overlap", action="store_true", help="iteration 47: no collective overlap window")
     p.add_argument("--no-fuse", action="store_true")
     p.add_argument(
         "--no-transpose",
@@ -126,7 +128,7 @@ def main():
         ttml.open_device_mesh(mesh)
     else:
         ttml.autograd.AutoContext.get_instance().open_device()
-    config = MistralConfig.from_hf(HF, max_position_embeddings=SEQ)
+    config = MistralConfig.from_hf({**HF, "num_hidden_layers": args.layers}, max_position_embeddings=SEQ)
     if use_tp:
         config = dataclasses.replace(config, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
     model = LoraModel(Mistral(config), LoraConfig(rank=RANK, alpha=ALPHA, target_modules=TARGETS))
@@ -157,7 +159,9 @@ def main():
     print(f"RMSNorm layers on the all-core backward: {len(norms)}")
     from ttml.models.mistral.fused_residual_norm import use_fused_residual_norm
 
-    print(f"residual adds fused into the norms: {use_fused_residual_norm(model)}")
+    print(
+        f"residual adds fused into the norms: {use_fused_residual_norm(model, collective_overlap=not args.no_ccl_overlap)}"
+    )
     from ttml.modules.frozen_linear import configured_base_shape
 
     configured = [
