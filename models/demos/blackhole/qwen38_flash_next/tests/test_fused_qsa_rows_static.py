@@ -45,7 +45,7 @@ def test_score_blocks_rows_composes_the_proven_merge() -> None:
     assert "paged = ttnn.reshape(score_rows, (1, 1, rows * pages, PAGE))" in source
     merge = inspect.getsource(qsa_rows._gather_and_merge)  # the gather + merge both program 1 forms share
     assert "ttnn.all_gather(paged, dim=2, cluster_axis=cluster_axis" in merge
-    assert "qsa_block.score_merge(gathered, mask)" in merge
+    assert "qsa_block.score_merge(gathered, mask, out_rows=out_rows)" in merge
     composed = inspect.getsource(qsa_rows.score_blocks_rows_composed)
     assert "ttnn.all_reduce(score_rows, cluster_axis=cluster_axis" in composed
     assert "fast_and_approximate_mode=False" in composed
@@ -141,8 +141,11 @@ def test_score_pages_is_a_default_bitwise_data_movement_program() -> None:
     assert (
         "paged = pages(local_scores, blocks)" in fed
         and "_gather_and_merge(paged, rows, blocks // PAGE, mask, cluster_axis)" in fed
+        and "paged = pages(local_scores, blocks, live_rows)" in fed  # SG2: only the live rows are repaged
     )
-    assert "_gather_and_merge(paged, rows, pages, mask, cluster_axis)" in inspect.getsource(qsa_rows.score_blocks_rows)
+    assert "_gather_and_merge(paged, rows, pages, mask, cluster_axis, out_rows=" in inspect.getsource(
+        qsa_rows.score_blocks_rows
+    )
     kernel_source = (MODEL_DIR / "ttnn/fused/qsa_rows/kernels/score_pages.cpp").read_text(encoding="utf-8")
     assert (
         kernel_source.count("FUSED_ZONE(") == 2
@@ -164,7 +167,11 @@ def test_the_verify_path_takes_program_four_before_the_slice_when_switched_on() 
     assert hook in source
     assert (
         "self._rows_fused.score_blocks_rows_from_scores(\n"
-        "                    local_scores, chunk.indexer_neg_mask, cluster_axis=TP_AXIS, pages=self._score_pages\n"
+        "                    local_scores,\n"
+        "                    chunk.indexer_neg_mask,\n"
+        "                    cluster_axis=TP_AXIS,\n"
+        "                    pages=self._score_pages,\n"
+        "                    live_rows=gather_rows,\n"
         "                )" in source
     )
     assert (
