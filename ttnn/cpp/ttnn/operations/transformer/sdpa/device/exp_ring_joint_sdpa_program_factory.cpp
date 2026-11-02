@@ -38,7 +38,11 @@ void fabric_mux_connection_ct_args(
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
     worker_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());
+    // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
+    // status word; every other mux address is then an offset from that address.
+    worker_ct_args.push_back(
+        mux_kernel_config.is_in_program_local_l1() ? mux_kernel_config.get_l1_base_semaphore_id()
+                                                   : mux_kernel_config.get_status_address());
     worker_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
     worker_ct_args.push_back(num_workers_per_link);  // num_mux_clients
 }
@@ -1470,8 +1474,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 2}, {fabric_mux_col, 3}}
                           : std::vector<CoreCoord>{{fabric_mux_col, mid - 1}, {fabric_mux_col, mid}};
 
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t num_mux_full_size_channels = num_mux_clients_per_group;
     const uint32_t num_mux_header_only_channels = 0;
     // The caller's num_buffers_per_channel is calibrated for one channel per row; with follower
@@ -1479,13 +1481,31 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t num_mux_buffers_per_channel =
         args.num_buffers_per_channel * num_workers_per_link / num_mux_clients_per_group;
     const size_t mux_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there; its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_mux_full_size_channels,
         num_mux_header_only_channels,
         num_mux_buffers_per_channel,
         0,
         mux_buffer_size_bytes,
-        l1_unreserved_base_address);
+        /*base_l1_address=*/0);
+
+    // ---- Fabric MUX cores ----
+    std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(2 * args.num_links);
+    for (uint32_t link = 0; link < args.num_links; ++link) {
+        if (backward_coord.has_value()) {
+            mux_core_ranges.emplace_back(mux_backward_logical_cores[link]);
+        }
+        if (forward_coord.has_value()) {
+            mux_core_ranges.emplace_back(mux_forward_logical_cores[link]);
+        }
+    }
+    CoreRangeSet mux_core_range_set(mux_core_ranges);
+    if (!mux_core_ranges.empty()) {
+        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set);
+    }
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
@@ -1835,19 +1855,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     desc.kernels.push_back(std::move(writer_fabric_kernel));
     desc.kernels.push_back(std::move(compute_kernel));
 
-    // ---- Fabric MUX cores ----
-    std::vector<CoreRange> mux_core_ranges;
-    mux_core_ranges.reserve(2 * args.num_links);
-    for (uint32_t link = 0; link < args.num_links; ++link) {
-        if (backward_coord.has_value()) {
-            mux_core_ranges.emplace_back(mux_backward_logical_cores[link]);
-        }
-        if (forward_coord.has_value()) {
-            mux_core_ranges.emplace_back(mux_forward_logical_cores[link]);
-        }
-    }
-    CoreRangeSet mux_core_range_set(mux_core_ranges);
-
+    // ---- Fabric MUX kernel ----
     if (!mux_core_ranges.empty()) {
         KernelDescriptor mux_kernel{};
         mux_kernel.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";

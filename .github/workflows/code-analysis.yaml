@@ -46,21 +46,11 @@ on:
         type: boolean
         default: false
         description: "Post inline clang-tidy fix suggestions on PR diffs"
-      publish-annotations:
-        required: false
-        type: boolean
-        default: true
-        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
       check-harbor-runs-on:
         required: false
         type: string
         default: "tt-ubuntu-light"
         description: "Runner label for the Harbor health check job"
-      clang-tidy-version:
-        required: false
-        type: string
-        default: "20"
-        description: "LLVM major version of clang-tidy for the full scan"
   workflow_dispatch:
     inputs:
       architecture:
@@ -96,19 +86,6 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
-      publish-annotations:
-        required: false
-        type: boolean
-        default: true
-        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
-      clang-tidy-version:
-        required: false
-        type: choice
-        default: "20"
-        options:
-          - "20"
-          - "23"
-        description: "clang-tidy version for the full scan"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
@@ -122,7 +99,7 @@ jobs:
       api-headers-changed: ${{ steps.find-changes.outputs.tt-metalium-api-headers-changed }}
     steps:
       - name: Check out repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -207,8 +184,6 @@ jobs:
       prereq-targets: ''
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: ${{ inputs.publish-annotations || false }}
-      clang-tidy-version: ${{ inputs.clang-tidy-version || '20' }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -230,7 +205,6 @@ jobs:
       prereq-targets: ''
       scan-targets: 'tt_metal'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -251,7 +225,6 @@ jobs:
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -272,7 +245,6 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -293,7 +265,6 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   # Gate: every tt_metal public header must include exactly what it uses
   # (clang-tidy misc-include-cleaner, no missing and no unused includes). Any
@@ -333,7 +304,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Check out repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0

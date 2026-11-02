@@ -11,6 +11,11 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.utils_for_testing import assert_reshape as _assert_reshape
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 _LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 _LAYOUT_IDS = ["TILE", "RM"]
 
@@ -46,15 +51,41 @@ def _explicit_height_shard_config(device, ncores, sh, sw, buffer_type=ttnn.Buffe
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, spec)
 
 
+def _explicit_width_shard_config(device, ncores, sh, sw, buffer_type=ttnn.BufferType.L1):
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
+    spec = ttnn.ShardSpec(
+        ttnn.num_cores_to_corerangeset(ncores, compute_grid, True),
+        (sh, sw),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+
+def _explicit_block_shard_config(device, grid_h, grid_w, sh, sw, buffer_type=ttnn.BufferType.L1):
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid_w > compute_grid.x or grid_h > compute_grid.y:
+        pytest.skip(f"needs a {grid_w}x{grid_h} compute grid, device has {compute_grid.x}x{compute_grid.y}")
+    spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))}),
+        (sh, sw),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type, spec)
+
+
 def _run_quasar_slice(shape, begins, ends, step, imc, omc, device):
+    """omc=None exercises implicit output-config inheritance from the input."""
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
     ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=imc)
     result = ttnn.experimental.quasar.slice(ttnn_in, list(begins), list(ends), list(step), memory_config=omc)
 
+    expected_mc = omc if omc is not None else imc
     actual = result.memory_config()
-    assert actual.memory_layout == omc.memory_layout
-    if omc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+    assert actual.memory_layout == expected_mc.memory_layout
+    if expected_mc.is_sharded():
         assert actual.shard_spec is not None
 
     slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))
@@ -101,6 +132,37 @@ def test_quasar_slice_row_major_height_sharded_nontile_aligned(shape, begins, en
     _run_quasar_slice(shape, begins, ends, step, imc, omc, device)
 
 
+# B/W-sharded RM buffers with a shard row that isn't a multiple of the buffer alignment (12 bf16 =
+# 24B). W stays tile-aligned and width-begin is 0, so only the shard-row check routes these through
+# L1 interleaved; natively the TensorAccessor strides pages by the aligned page size while
+# `noc_async_*_sharded` reuses that same value as the per-page payload. (Issue #63277)
+def test_quasar_slice_rm_width_sharded_subaligned_shard_row_in(device):
+    imc = _explicit_width_shard_config(device, 8, 64, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), imc, L1_INTERLEAVED, device)
+
+
+def test_quasar_slice_rm_block_sharded_subaligned_shard_row_in(device):
+    imc = _explicit_block_shard_config(device, 2, 8, 32, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), imc, L1_INTERLEAVED, device)
+
+
+def test_quasar_slice_rm_width_sharded_rescaled_subaligned_shard_row(device):
+    """The inherited 16-elem (32B) shard row is aligned, but rescaling it to the sliced width gives
+    div_up(96, 8) = 12 elems = 24B, so the guard must see the post-rescale spec."""
+    imc = _explicit_width_shard_config(device, 8, 64, 16)
+    _run_quasar_slice((1, 1, 64, 128), (0, 0, 0, 0), (1, 1, 64, 96), (1, 1, 1, 1), imc, None, device)
+
+
+def test_quasar_slice_rm_width_sharded_subaligned_shard_row_out(device):
+    omc = _explicit_width_shard_config(device, 8, 32, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
+
+
+def test_quasar_slice_rm_block_sharded_subaligned_shard_row_out(device):
+    omc = _explicit_block_shard_config(device, 2, 8, 16, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
+
+
 def test_quasar_slice_tile_tensor_args(device):
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
@@ -112,6 +174,112 @@ def test_quasar_slice_tile_tensor_args(device):
     result = ttnn.experimental.quasar.slice(ttnn_in, start_t, end_t, slice_dim=2, num_devices=2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=x[:, :, 32:64, :], actual_result=got, ulp_threshold=0)
+
+
+# The tensor-args path hands output_tensor straight to the device op, so its layout check is the only guard.
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["matching_dtype", "mismatched_dtype"])
+def test_quasar_slice_tile_tensor_args_preallocated_output(device, expect_error, out_dtype):
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    start_t = ttnn.from_torch(torch.tensor([0, 0, 32, 0]), device=device)
+    end_t = ttnn.from_torch(torch.tensor([1, 1, 64, 64]), device=device)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 64]), out_dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    if out_dtype != ttnn.bfloat16:
+        with expect_error(RuntimeError, r"preallocated output tensor needs a layout"):
+            ttnn.experimental.quasar.slice(ttnn_in, start_t, end_t, slice_dim=2, num_devices=2, output_tensor=out)
+        return
+    result = ttnn.experimental.quasar.slice(ttnn_in, start_t, end_t, slice_dim=2, num_devices=2, output_tensor=out)
+    assert result.buffer_address() == out.buffer_address()
+    got = ttnn.to_torch(out.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=x[:, :, 32:64, :], actual_result=got, ulp_threshold=0)
+
+
+# A strided or non-tile-aligned-begin slice sends TILE input down the row-major path; the TILE
+# preallocated output must be filled through the retilizing copy, not paged by row by an RM factory.
+@pytest.mark.parametrize(
+    "shape, begins, ends, step, out_mc",
+    [
+        ((1, 1, 64, 64), (0, 0, 1, 0), (1, 1, 33, 32), (1, 1, 1, 1), ttnn.DRAM_MEMORY_CONFIG),
+        ((1, 3, 640, 640), (0, 0, 0, 0), (1, 3, 640, 640), (1, 1, 2, 2), ttnn.L1_MEMORY_CONFIG),
+        ((1, 3, 640, 640), (0, 0, 16, 0), (1, 3, 592, 640), (1, 1, 1, 1), ttnn.L1_MEMORY_CONFIG),
+    ],
+    ids=["unaligned_begin_small", "strided", "unaligned_begin"],
+)
+def test_quasar_slice_tile_preallocated_output_rm_only(device, shape, begins, ends, step, out_mc):
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ref = x[tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))]
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.from_torch(
+        torch.zeros(ref.shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=out_mc,
+    )
+    result = ttnn.experimental.quasar.slice(ttnn_in, list(begins), list(ends), list(step), output_tensor=out)
+    assert result.buffer_address() == out.buffer_address()
+    got = ttnn.to_torch(out.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+# The unaligned begin takes the row-major fallback, which lands in the output through ttnn::copy.
+@pytest.mark.parametrize(
+    "begins, ends",
+    [((0, 0, 32, 0), (1, 1, 64, 32)), ((0, 0, 1, 0), (1, 1, 33, 32))],
+    ids=["aligned_begin", "unaligned_begin"],
+)
+def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_error, begins, ends):
+    x = ttnn.from_torch(torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(RuntimeError, r"preallocated output tensor needs dtype"):
+        ttnn.experimental.quasar.slice(x, list(begins), list(ends), [1, 1, 1, 1], output_tensor=out)
+
+
+# The fallback returns BFLOAT16 for a BFLOAT8_B input (untilize promotes it); a preallocated output may
+# match either that result or the input.
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16_out", "bf8_out"])
+def test_quasar_slice_bfloat8_b_unaligned_begin_preallocated_output(device, out_dtype):
+    torch.manual_seed(0)
+    x = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    begins, ends, step = [0, 0, 1, 0], [1, 1, 33, 32], [1, 1, 1, 1]
+    assert ttnn.experimental.quasar.slice(x, begins, ends, step).dtype == ttnn.bfloat16
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), out_dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    result = ttnn.experimental.quasar.slice(x, begins, ends, step, output_tensor=out)
+    assert result.buffer_address() == out.buffer_address()
+    golden = ttnn.to_torch(x)[:, :, 1:33, 0:32]
+    got = ttnn.to_torch(out.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=golden, actual_result=got, ulp_threshold=0)
+
+
+def test_quasar_slice_tile_tensor_args_end_tensor_placement_keys_cache(device):
+    # The end tensor's memory config is baked into the reader's accessor, so it has to be in the key.
+    shape = (1, 1, 64, 64)
+    starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    start_t = ttnn.from_torch(torch.tensor(starts), device=device)
+    end_dram = ttnn.from_torch(torch.tensor(ends), device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    end_l1 = ttnn.from_torch(torch.tensor(ends), device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    first = ttnn.experimental.quasar.slice(ttnn_in, start_t, end_dram, slice_dim=2, num_devices=2)
+    entries_after_first = device.num_program_cache_entries()
+    second = ttnn.experimental.quasar.slice(ttnn_in, start_t, end_l1, slice_dim=2, num_devices=2)
+    assert device.num_program_cache_entries() == entries_after_first + 1
+
+    for result in (first, second):
+        got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+        assert_with_ulp(expected_result=x[:, :, 32:64, :], actual_result=got, ulp_threshold=0)
 
 
 # ---------------------------------------------------------------------------
