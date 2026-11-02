@@ -152,7 +152,7 @@ def _build(mesh_device, config, device_params, num_links, weight_cache_path, num
         num_layers=model.schedule.num_mla_layers,
         num_users=num_slots,
         tp_axis=TP_AXIS,
-        bank_aligned=True,
+        bank_aligned=False,  # paging alignment wants multiples of 8,192 tokens; this cache holds 15,360
     )
     attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS, num_slots=num_slots)
     for slot in range(num_slots):
@@ -469,7 +469,7 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
             # The users plus the traced forward's scratch slot for an empty chunk position.
             num_users=rt_config.cache_num_users,
             tp_axis=TP_AXIS,
-            bank_aligned=True,
+            bank_aligned=False,  # paging alignment wants multiples of 8,192 tokens; this cache holds 15,360
         ),
         # num_users exactly: the scratch slot is out of range for the KDA copies, which skip it on device.
         kda_states=KdaStates.allocate(
