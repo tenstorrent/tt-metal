@@ -20,15 +20,15 @@ using namespace ckernel;
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
- * @param l1_base_idx: Offset of the first tile of the run, in L1 rows one tile wide.
+ * @param l1_tile_idx: Offset of the first tile of the run, in L1 rows one tile wide.
  * @note @ref _llk_unpack_tilize_ calls this for 32x32 tiles, before the MOP that tilizes the run.
  */
 template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, const std::uint32_t l1_base_idx)
+inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
-    const std::uint32_t src_addr_offset_face_rows = l1_base_idx * tensor_shape.num_faces_c_dim;
+    const std::uint32_t src_addr_offset_face_rows = l1_tile_idx * tensor_shape.num_faces_c_dim;
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -123,7 +123,10 @@ inline void _llk_unpack_tilize_strided_mop_config_(
         tensor_shape.num_faces_r_dim == 1 || (num_faces_c_dim == 1 && tensor_shape.face_r_dim % GROUP_ROWS == 0),
         "Strided unpack tilize reads the second face row in the same face column only when it follows the first in SrcA");
 
-    const std::uint32_t replay_buf_len = num_faces_c_dim * (num_row_groups == 1 ? 1 : 2 * num_row_groups);
+    // Each group is one UNPACR_STRIDE, followed by an INC when a face column has more than one group.
+    const bool inc_after_group          = num_row_groups > 1;
+    const std::uint32_t insns_per_group = inc_after_group ? 2 : 1;
+    const std::uint32_t replay_buf_len  = num_faces_c_dim * num_row_groups * insns_per_group;
 
     // Unpacks one group of rows, then moves the source row counter by src_y_inc, where 0 resets it.
     const auto unpack_group = [buf_desc_id](const std::uint32_t src_y_inc, const bool next_face_column, const bool set_dvalid)
@@ -168,7 +171,7 @@ inline void _llk_unpack_tilize_strided_mop_config_(
                     const bool last_of_tile = last_group && (face_column == num_faces_c_dim - 1);
                     TT_INSN(unpack_group(last_of_tile ? 0 : GROUP_ROWS, last_group, last_of_tile));
                     // An INC moves L1 down after every group, and after the last one to the top of the next face column.
-                    if (num_row_groups > 1)
+                    if (inc_after_group)
                     {
                         TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, last_group ? face_column_rewind : group_l1_rows);
                     }
@@ -178,12 +181,14 @@ inline void _llk_unpack_tilize_strided_mop_config_(
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     const std::uint32_t MOP_INNER_LOOP     = block_ct_dim;
-    const std::uint32_t unpack_tile_instrn = TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+    const std::uint32_t unpack_tile_instrn =
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 
     if constexpr (EN_32BIT_DEST)
     {
-        constexpr std::uint32_t OPPOSITE_UNP                      = (UNP_SEL == p_unpacr::UNP_B) ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-        constexpr static std::uint32_t set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
+        constexpr std::uint32_t OPPOSITE_UNP = (UNP_SEL == p_unpacr::UNP_B) ? p_unpacr::UNP_A : p_unpacr::UNP_B;
+        constexpr static std::uint32_t set_opposite_dvalid_instrn =
+            TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn, set_opposite_dvalid_instrn);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
@@ -222,6 +227,8 @@ constexpr bool _llk_unpack_tilize_is_strided_(const TensorShape& tensor_shape)
  * @note On the math thread, pair with @ref _llk_math_eltwise_unary_datacopy_init_ (T1; tilize moves the tilized SrcA tile to dest); on the pack thread, pair
  * with
  *       @ref _llk_pack_init_ (T2). @ref _llk_unpack_tilize_ is the matching execute call on this thread.
+ * @note A tile with one face needs 16 row faces. A tile with two face rows needs one face column and face_r_dim a multiple of 8.
+ * @note For tile shapes other than 32x32, EN_32BIT_DEST works only with UNP_A.
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_tilize_init_(
@@ -232,8 +239,8 @@ inline void _llk_unpack_tilize_init_(
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Unsupported tile shape for unpack tilize");
     LLK_ASSERT(tensor_shape.total_num_faces() > 1 || tensor_shape.face_r_dim == FACE_R_DIM, "Unpack tilize of 1-face tiles needs 16-row faces");
 
-    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, UNP_SEL, 0);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, UNP_SEL, 0);
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, UNP_SEL, 0 /*Value*/);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, UNP_SEL, 0 /*Value*/);
 
     // Write the UNPACK_TILIZE stride fields as whole words, which also clears STRIDE_NO_WRITE left set by a strided reduce.
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
@@ -293,9 +300,10 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx, const std::uint
         {
             // SET_SRC_TILE_FACE_ROW_IDX under FACE_SEL passes only 11 bits, so the L1 position goes through the offset register.
             _llk_unpack_tilize_set_src_offset_<UNP_SEL>(tensor_shape, l1_tile_idx + x);
-            TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0);
-            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
-            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0); // Clear face counter, which the path that unpacks to dest leaves nonzero
+            TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0 /*Value*/);
+            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0 /*Value*/);
+            // Clear face counter, which the path that unpacks to dest leaves nonzero
+            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0 /*Value*/);
         }
         else
         {
@@ -303,7 +311,7 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx, const std::uint
             const std::uint32_t l1_row_idx = (l1_tile_idx + x) * tensor_shape.num_faces_c_dim;
             LLK_ASSERT(l1_row_idx < ckernel::trisc::TILE_SEL_IDX_LIMIT, "L1 row index exceeds the 18-bit SET_SRC_TILE_FACE_ROW_IDX value field");
             TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, l1_row_idx);
-            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
+            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0 /*Value*/);
         }
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
