@@ -20,7 +20,6 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
-#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -295,11 +294,6 @@ string get_l1_target_str(
     return out;
 }
 
-// Quasar's MPSC head (api/debug/ring_buffer.h). A read at +4*(inc+8) posts `inc` and returns the
-// pre-increment value, so inc == 0 reads the head without changing it.
-constexpr uint64_t watcher_ring_buf_sem_peek_addr =
-    TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
-
 // A NOC sanitize record still partially written after this many consecutive polls is reported as corruption.
 constexpr uint32_t max_partial_sanitize_polls = 3;
 
@@ -349,8 +343,6 @@ private:
     HalProgrammableCoreType programmable_core_type_;
     std::string core_str_;
     std::vector<std::byte> l1_read_buf_;
-    // Quasar MPSC head, read at snapshot time
-    uint32_t sem_head_ = 0;
     dev_msgs::mailboxes_t::ConstView mbox_data_;
     dev_msgs::launch_msg_t::ConstView launch_msg_;
     const WatcherDeviceReader& reader_;
@@ -384,7 +376,6 @@ private:
         HalProgrammableCoreType programmable_core_type,
         std::string core_str,
         std::vector<std::byte> l1_read_buf,
-        uint32_t sem_head,
         dev_msgs::Factory dev_msgs_factory,
         const WatcherDeviceReader& reader,
         DumpData& dump_data) :
@@ -392,7 +383,6 @@ private:
         programmable_core_type_(programmable_core_type),
         core_str_(std::move(core_str)),
         l1_read_buf_(std::move(l1_read_buf)),
-        sem_head_(sem_head),
         mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
         launch_msg_(get_valid_launch_message(mbox_data_)),
         reader_(reader),
@@ -674,25 +664,11 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
-    // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
-    // rest of the snapshot. Gated on the same condition as DumpRingBuffer(), the only consumer: with
-    // the ring buffer disabled the device firmware never initializes semaphore 31, so touching it at
-    // all would fault.
-    uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
-        reader.env.get_cluster().read_core(
-            &sem_head,
-            sizeof(sem_head),
-            {static_cast<size_t>(reader.device_id), virtual_coord},
-            watcher_ring_buf_sem_peek_addr);
-    }
-
     return Core(
         virtual_coord,
         programmable_core_type,
         std::move(core_str),
         std::move(l1_read_buf),
-        sem_head,
         dev_msgs_factory,
         reader,
         dump_data);
@@ -1134,8 +1110,30 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
-    // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
+    uint32_t head = rb->head;
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        // Quasar doesn't publish the head. Each slot holds its claimed position, which wraps at pos_wrap:
+        // the newest slot is the one furthest ahead of any other.
+        const uint32_t pos_wrap = (programmable_core_type_ == HalProgrammableCoreType::DISPATCH)
+                                      ? DEBUG_RING_BUFFER_DISPATCH_POS_WRAP
+                                      : DEBUG_RING_BUFFER_QUASAR_SEM_POS_WRAP;
+        std::optional<uint32_t> ref;
+        int64_t newest = 0;
+        for (uint32_t i = 0; i < capacity; i++) {
+            uint32_t write_id = rb->slots[i].write_id;
+            if (write_id == 0) {
+                continue;
+            }
+            uint32_t pos = write_id >> DEBUG_RING_BUFFER_WRITE_ID_POS_SHIFT;
+            if (!ref) {
+                ref = pos;
+            }
+            // Positions more than half a wrap ahead of ref are behind it.
+            int64_t ahead = (pos + pos_wrap - *ref) % pos_wrap;
+            newest = std::max(newest, ahead < pos_wrap / 2 ? ahead : ahead - pos_wrap);
+        }
+        head = static_cast<uint32_t>(ref.value_or(0) + newest + 1);
+    }
 
     // Check every slot: head restarts at 0 after a rewind, so a small head doesn't mean few entries.
     std::vector<uint32_t> data, thread_indices;  // newest first
@@ -1143,12 +1141,11 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     thread_indices.reserve(capacity);
     for (uint32_t i = 0; i < capacity; i++) {
         const auto& slot = rb->slots[(head - 1 - i) & mask];
-        // write_id is thread_idx + 1, so 0 means the slot was never written.
         if (slot.write_id == 0) {
             continue;
         }
         data.push_back(slot.data);
-        thread_indices.push_back(slot.write_id - 1);
+        thread_indices.push_back((slot.write_id & DEBUG_RING_BUFFER_WRITE_ID_THREAD_MASK) - 1);
     }
 
     EmitRingBuffer(FormatRingBuffer(reader_.env.get_hal(), data, thread_indices, programmable_core_type_), to_stdout);
