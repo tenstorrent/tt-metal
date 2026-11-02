@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, ulp_distance
 
 import os
 
@@ -187,3 +187,28 @@ def test_rms_norm_0d(device, x, eps, w, b, dtype):
     assert torch.allclose(
         output.reshape(1), expected, rtol=rtol, atol=atol
     ), f"x={x} eps={eps} w={w} b={b}: ttnn={output.item()!r} torch={expected.item()!r}"
+
+
+@pytest.mark.parametrize("w", [2560, 4096, 16384])
+@pytest.mark.parametrize("outliers", [False, True])
+@pytest.mark.parametrize("use_weight", [False, True])
+def test_rms_norm_default_precision(device, w, outliers, use_weight):
+    # The default compute config must stay within 1 bf16 step of the correctly rounded result.
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((1, 1, 32, w))
+    if outliers:
+        torch_input_tensor[..., torch.randperm(w)[:8]] *= 100
+    torch_input_tensor = torch_input_tensor.to(torch.bfloat16)
+    torch_weight = (torch.randn((w,)) * 0.1 + 1).to(torch.bfloat16)
+
+    x = torch_input_tensor.double()
+    expected = x / torch.sqrt((x * x).mean(-1, keepdim=True) + 1e-6)
+    if use_weight:
+        expected = expected * torch_weight.double()
+    expected = expected.to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT) if use_weight else None
+    output_tensor = ttnn.to_torch(ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight))
+
+    assert ulp_distance(expected, output_tensor).max().item() <= 1
