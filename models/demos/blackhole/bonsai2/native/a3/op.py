@@ -654,3 +654,88 @@ def interleave_cols(a, b):
 
     r, n = a.shape
     return np.stack([a.reshape(r, n // 32, 32), b.reshape(r, n // 32, 32)], axis=2).reshape(r, 2 * n)
+
+
+# ---------------------------------------------------------------------------------------------
+# Fused decode RMSNorm + prep at the 5120 sites (kernels/rmsprep_kernel.cpp).
+
+KERNEL_RMSPREP = "models/demos/blackhole/bonsai2/native/a3/kernels/rmsprep_kernel.cpp"
+
+
+def norm_gamma(device, w):
+    """(1 + w) for rmsprep: one fp32 32x32 tile per 1024-block (row t = K-tile t), [K/32, 32] in DRAM."""
+    import torch
+
+    g = (1.0 + torch.as_tensor(w, dtype=torch.float32)).reshape(-1, 32)
+    return ttnn.from_torch(g, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                           memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0):
+    """x: residual [.., 32, K] bf16 32x32 tiles (row 0 live), L1 or DRAM; g: norm_gamma; m: hadamard_tensor(K).
+    Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep."""
+    import struct
+
+    device = x.device()
+    k = x.shape[-1]
+    nb = k // 1024
+    units = [(b, r) for b in range(nb) for r in range(8)]
+    excl = {(c.x, c.y) for c, _, _ in workers}
+    grid_sz = device.compute_with_storage_grid_size()
+    cores = [ttnn.CoreCoord(i % grid_sz.x, i // grid_sz.x) for i in range(grid_sz.x * grid_sz.y)]
+    cores = [c for c in cores if (c.x, c.y) not in excl][:len(units)]
+    assert len(cores) == len(units), "one unit per core"
+    grid = core_set(cores)
+    m_page = m.get_tile().get_tile_size(m.dtype)
+    upb = len(units) // device.dram_grid_size().x
+    vxy = lambda c: (lambda v: (v.x << 16) | v.y)(device.worker_core_from_logical_core(c))  # noqa: E731
+    wxy = [vxy(c) for c, _, _ in workers]
+    cxy = [vxy(c) for c in cores]
+    fbits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]  # noqa: E731
+
+    def cb(idx, fmt, tile, ntiles):
+        size = tile.get_tile_size(fmt)
+        return ttnn.CBDescriptor(total_size=ntiles * size, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(
+            buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
+
+    t1, t32 = ttnn.Tile([1, 32]), ttnn.Tile([32, 32])
+    cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
+           cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
+           cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1)]
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=0) for i in (0, 1)]
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
+                                       math_approx_mode=False, dst_full_sync_en=True)
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[7] = ttnn.UnpackToDestMode.UnpackToDestFp32  # g = 1 + w can need more mantissa than tf32
+    cfg.unpack_to_dest_mode = modes
+    x_is_dram = x.memory_config().buffer_type == ttnn.BufferType.DRAM
+    # rstd for the MATH thread: a per-call L1 shard at the same address on every prep core
+    rb = ttnn.allocate_tensor_on_device(ttnn.TensorSpec(
+        ttnn.Shape([len(cores), 32]), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                          ttnn.ShardSpec(grid, [1, 32], ttnn.ShardOrientation.ROW_MAJOR))), device)
+    brisc = []
+    for i, (c, (b, r)) in enumerate(zip(cores, units)):
+        a = [x8.buffer_address(), b, r, rb.buffer_address(), cxy[0], int(i == 0), len(cores), nb, fbits(1.0 / k), fbits(eps), len(wxy)] + wxy
+        brisc.append((c, a + (cxy if i == 0 else [])))
+    uk = UnifiedKernelDescriptor(
+        kernel_source=KERNEL_RMSPREP,
+        core_ranges=grid,
+        ncrisc_named_compile_time_args=[("rp_x_is_dram", int(x_is_dram)), ("rp_m_page", m_page),
+                                        ("rp_units_per_bank", upb)],
+        brisc_named_compile_time_args=[("rp_debug", debug)],
+        trisc_named_compile_time_args=[("rp_tdebug", tdebug)],
+        # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
+        trisc_compute_config=cfg,
+        per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+            ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r])
+                         for c, (b, r) in zip(cores, units)],
+            brisc_args=brisc,
+            trisc_args=[(c, [rb.buffer_address()]) for c in cores],
+        ),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=sems, cbs=cbs)
+    ttnn.generic_op([x, g, m, rb, x8], prog)
+    ttnn.deallocate(rb)
+    return x8
