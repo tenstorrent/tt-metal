@@ -535,7 +535,10 @@ def setup_kv_chunk_table(
         logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
         os.remove(table_path)
 
-    if not file_export:
+    # Under the offset no collective follows to keep the ranks in step, so a slower rank's sweep of every
+    # rank's sidecar would delete a map a faster rank already wrote (DSpark probe job 169163). Each rank
+    # overwrites only its own map below instead.
+    if not file_export and os.environ.get("PREFILL_PP_LAYER_OFFSET") is None:
         remove_stale_device_map_sidecars(device_map_json_path)
 
     if os.environ.get("PREFILL_PP_LAYER_OFFSET") is not None:
