@@ -128,8 +128,9 @@ static constexpr bool PRE_SORTED_MODE = (TOP32_MODE == 1);
 static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the pre-sorted mode needs at least one whole 1024-element chunk");
 
 // Through the Metal wrappers the unpack branch is the wrapper's choice (Int32 src to Dest, the
-// rest through SrcA) while the math thread branches on unpack_to_dest; they agree only when it
-// is false, so make the other case a build error rather than a hang.
+// rest through SrcA) while the math thread branches on unpack_to_dest. For the non-Int32 formats
+// this sweep uses they agree only when it is false, so make the other case a build error rather
+// than a hang; the wrapper's Int32 (Dest) branch is therefore out of this driver's reach.
 static_assert(
     !(TOP32_VIA_WRAPPERS && !PRE_SORTED_MODE && unpack_to_dest),
     "via_wrappers mode 0 sends non-Int32 formats through SrcA; build it with unpack_to_dest=false");
@@ -151,9 +152,10 @@ static_assert(
 
 #if TOP32_VIA_WRAPPERS
 // The Metal unpack wrapper (experimental/llk_unpack_A_top32_rm_api.h) picks the branch from the
-// src format (Float32 goes through SrcA, narrowed to the Dest width) and computes each chunk's L1
-// offset from the operand's formats, read through the per-kernel Metal tables. The harness has no
-// CBs, so the tables are defined here: operand 0 is the values row, operand 1 the indices.
+// src format (Float32 goes through SrcA, narrowed to Float16_b at dest_acc=No or Tf32 at
+// dest_acc=Yes) and computes each chunk's L1 offset from the operand's formats, read through the
+// per-kernel Metal tables. The harness has no CBs, so the tables are defined here: operand 0 is
+// the values row, operand 1 the indices.
 #include "internal/circular_buffer_interface.h"
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];

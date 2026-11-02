@@ -102,8 +102,9 @@ TOP_K = 32
 # unpack-to-dest for Int32 only, so Float32 takes SrcA and is narrowed on the way in.
 #
 # bf16's 8 mantissa bits are what bound the row at 256, since indices ride in the same format
-# as the values; Float32 would not bind, but keeping one sweep makes the two branches
-# comparable cell by cell.
+# as the values. Driving the primitives, Float32 would not bind (through the wrappers at
+# dest_acc=No it is bf16 in SrcA and binds the same way); keeping one sweep makes the two
+# branches comparable cell by cell.
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
 
 # 64   one chunk, no merge across tiles at all -- phases_steps + merge + rebuild only
@@ -154,9 +155,9 @@ def _pad_to_tile(flat):
 )
 def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     is_32bit = formats.input_format.is_32_bit()
-    # Through the Metal wrappers Float32 goes through SrcA, narrowed to the Dest width (as the
-    # consumer configures its scores); driving the primitives, Float32 is too wide for SrcA and
-    # takes unpack-to-dest, which needs fp32 Dest and whole chunks.
+    # Through the Metal wrappers Float32 goes through SrcA, narrowed to Float16_b (dest_acc=No) or
+    # Tf32 (dest_acc=Yes) as the consumer configures its scores; driving the primitives, Float32 is
+    # too wide for SrcA and takes unpack-to-dest, which needs fp32 Dest and whole chunks.
     unpacks_to_dest = is_32bit and not via_wrappers
     if unpacks_to_dest:
         skip_if_32bit_input_without_dest_acc(formats, dest_acc)
