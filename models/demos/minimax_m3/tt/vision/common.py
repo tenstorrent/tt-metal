@@ -81,23 +81,33 @@ def linear(
     b: Optional[ttnn.Tensor],
     compute_kernel_config,
     activation: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
+    fused_activation: Optional[ttnn.UnaryWithParam] = None,
 ) -> ttnn.Tensor:
-    """The encoder's weight matmul: x @ w + b into DRAM, then activation, if given, as an op of its own on the result.
+    """The encoder's weight matmul: x @ w + b into DRAM, then activation, if given, on the result.
 
     w is [in, out] and b [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias put them on the device. The
-    program config is linear_program_config's for the tiles of x's and w's padded shapes.
+    program config is linear_program_config's for the tiles of x's and w's padded shapes. activation runs as an op of
+    its own on the matmul's output. fused_activation, given only with activation, is the same activation in the form a
+    program config's fused_activation takes: where linear_program_config gives a config, that config carries it and
+    activation does not run; where the helper leaves the choice to ttnn, activation runs as without it.
     """
+    assert fused_activation is None or activation is not None, "fused_activation needs activation"
+    program_config = linear_program_config(
+        x.device(), x.padded_shape[-2], w.padded_shape[-2], w.padded_shape[-1], compute_kernel_config
+    )
+    fused = fused_activation is not None and program_config is not None
+    if fused:
+        # linear_program_config builds a new config at each call, so no other matmul gets the activation.
+        program_config.fused_activation = fused_activation
     out = ttnn.linear(
         x,
         w,
         bias=b,
         compute_kernel_config=compute_kernel_config,
-        program_config=linear_program_config(
-            x.device(), x.padded_shape[-2], w.padded_shape[-2], w.padded_shape[-1], compute_kernel_config
-        ),
+        program_config=program_config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return out if activation is None else activation(out)
+    return out if activation is None or fused else activation(out)
 
 
 def linear_program_config(mesh_device, rows: int, in_features: int, out_features: int, compute_kernel_config):
