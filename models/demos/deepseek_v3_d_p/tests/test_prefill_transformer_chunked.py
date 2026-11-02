@@ -410,9 +410,7 @@ def _record_kv_cache_pcc(
     drifts under bf8_b). Under tp_shard_kv the gather flattens the TP shards into linear chip order and
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
-    cache_full, stripes = gather_cache_natural(
-        tt_kvpe_cache, mesh_device, tp_shard_kv, sp_axis
-    )  # [layers, S, kvpe]
+    cache_full, stripes = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv, sp_axis)  # [layers, S, kvpe]
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
@@ -1717,6 +1715,7 @@ def run_chunked_transformer_updated(
     tp_shard_kv=None,
     kv_cache_format=None,
     sp_axis=0,
+    chunk_size=CHUNK,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1724,8 +1723,8 @@ def run_chunked_transformer_updated(
     deterministic in-vocab pattern, so this is trace-optional. The KV cache is reused across iterations
     (each chunk overwrites the same [preload_isl, preload_isl + measured_len) region in order).
 
-    `preload_isl` (must be a multiple of CHUNK): treat the cache as already holding this many prior KV
-    tokens, so the measured chunks run at absolute KV positions [preload_isl, preload_isl + n_chunks*CHUNK)
+    `preload_isl` (must be a multiple of chunk_size): treat the cache as already holding this many prior KV
+    tokens, so the measured chunks run at absolute KV positions [preload_isl, preload_isl + n_chunks*chunk_size)
     instead of starting at 0. This lets the MLA-vs-FFN ratio be measured at a target KV depth WITHOUT first
     running chunked prefill up to that point. The prior [0, preload_isl) KVPE is preloaded from the golden
     trace (kv_post_transform, block-cyclic; see _preload_kvpe_prefix_from_trace) so the measured chunk
@@ -1861,10 +1860,10 @@ def run_chunked_transformer_updated(
     # Token tiles are [sp, 1, chunk_local]: dim 0 goes to the SP axis, the TP axis replicates.
     token_dims = (0, None) if sp_axis == 0 else (None, 0)
 
-    chunk_local = CHUNK // sp  # 640 on 8x4, 1280 on 4x4
+    chunk_local = chunk_size // sp  # 640 on 8x4; 1280 on 4x4 at 5120-token chunks, 640 at the stages' 2560
     seq_cache = seq_cache or SEQ_CACHE_NOPCC
-    assert preload_isl % CHUNK == 0, f"preload_isl ({preload_isl}) must be a multiple of CHUNK ({CHUNK})"
-    measured_len = n_chunks * CHUNK  # tokens actually run this call
+    assert preload_isl % chunk_size == 0, f"preload_isl ({preload_isl}) must be a multiple of chunk_size ({chunk_size})"
+    measured_len = n_chunks * chunk_size  # tokens actually run this call
     total_len = preload_isl + measured_len  # logical seq length: preloaded prefix + measured chunks
     assert (
         total_len <= seq_cache
@@ -1908,7 +1907,7 @@ def run_chunked_transformer_updated(
 
     logger.info(
         f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
-        f"preload_isl={preload_isl} total_len={total_len} cache={seq_cache} chunk={CHUNK} "
+        f"preload_isl={preload_isl} total_len={total_len} cache={seq_cache} chunk={chunk_size} "
         f"num_iters={num_iters}"
     )
 
@@ -1975,7 +1974,7 @@ def run_chunked_transformer_updated(
         model_cfg=variant.model_config,
         state_dict={},
         num_layers=num_layers,
-        seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
+        seq_len=chunk_size,  # per-chunk size -> MoE/FFN dispatch buffers
         max_seq_len=seq_cache,  # KV ring buffer + RoPE cos/sin cache = the caller's full cache length
         dispatch_buffer_capacity_factor=8,
         num_links=num_links,
@@ -2160,11 +2159,11 @@ def run_chunked_transformer_updated(
     # permutation has exactly one derivation.
     chunk_local_pos = []
     for c in range(n_chunks):
-        kv_actual = preload_isl + c * CHUNK
+        kv_actual = preload_isl + c * chunk_size
         positions = rotated_chip_positions(kv_actual, sp, chunk_local)
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
         chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
-        chunk_local_pos.append(flat - kv_actual)  # permutation of [0, CHUNK)
+        chunk_local_pos.append(flat - kv_actual)  # permutation of [0, chunk_size)
 
     mesh_device.enable_program_cache()
 
@@ -2187,9 +2186,9 @@ def run_chunked_transformer_updated(
         transformer.forward(
             warm_tokens,
             tt_kvpe_cache,
-            actual_isl=CHUNK,
+            actual_isl=chunk_size,
             actual_start=preload_isl,
-            actual_end=preload_isl + CHUNK,
+            actual_end=preload_isl + chunk_size,
             cache_user_id=0,
             return_intermediates=False,
             index_kv_cache=tt_index_kv_cache,
@@ -2246,8 +2245,8 @@ def run_chunked_transformer_updated(
         trace_metadata = ChunkMetadata(
             _meta1(0),
             _meta1(preload_isl),
-            _meta1(preload_isl + CHUNK),
-            _llama4_scale_buffer(transformer, CHUNK),
+            _meta1(preload_isl + chunk_size),
+            _llama4_scale_buffer(transformer, chunk_size),
         )
         host_tok = [
             ttnn.from_torch(
@@ -2263,7 +2262,7 @@ def run_chunked_transformer_updated(
             return transformer.forward(
                 trace_input,
                 tt_kvpe_cache,
-                actual_isl=CHUNK,
+                actual_isl=chunk_size,
                 actual_start=None,
                 actual_end=None,  # metadata carries the clamp; write_k rejects a host actual_end here
                 cache_user_id=0,
@@ -2312,7 +2311,7 @@ def run_chunked_transformer_updated(
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
-            kv_actual = preload_isl + c * CHUNK
+            kv_actual = preload_isl + c * chunk_size
             if use_trace:
                 ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
                 # One call: on Mistral this also refreshes the llama4 scale buffer the replay reads.
@@ -2320,10 +2319,10 @@ def run_chunked_transformer_updated(
                 # would see it. No-op for variants without one.
                 write_chunk_metadata(
                     trace_metadata,
-                    (0, kv_actual, kv_actual + CHUNK),
+                    (0, kv_actual, kv_actual + chunk_size),
                     hf_config=config,
                     mesh_device=mesh_device,
-                    chunk_size_global=CHUNK,
+                    chunk_size_global=chunk_size,
                     sp_axis=sp_axis,
                 )
                 chunk_start = time.time()
@@ -2349,16 +2348,16 @@ def run_chunked_transformer_updated(
             # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
             # host, which both costs time (so the timing table stops being a perf number) and is illegal
             # under capture. Otherwise nothing is cloned. Chunked prefill is full-chunk (all positions
-            # real) so actual_end is kv_actual + CHUNK; forward uses self.indexed_rope. The return is the
+            # real) so actual_end is kv_actual + chunk_size; forward uses self.indexed_rope. The return is the
             # intermediates dict, or None when none were requested -- no first_token: the transformer has
             # no norm / LM-head / sampling tail.
             reset_fused_ring_host_timing()
             layer_outputs = transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
-                actual_isl=CHUNK,
+                actual_isl=chunk_size,
                 actual_start=kv_actual,
-                actual_end=kv_actual + CHUNK,
+                actual_end=kv_actual + chunk_size,
                 cache_user_id=0,
                 return_intermediates=check_layer_pcc,
                 index_kv_cache=tt_index_kv_cache,
@@ -2376,11 +2375,11 @@ def run_chunked_transformer_updated(
                     # last layer's correctness is still covered, by the KVPE cache PCC below.
                     if f"layer_{i}" not in layer_outputs:
                         continue
-                    # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
+                    # host snapshot [1, chunk_size, emb] (SP-seq + TP-hidden concatenated); [0] -> [chunk_size, emb].
                     out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
-                    natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
+                    natural = torch.zeros(chunk_size, emb_dim, dtype=torch.float32)
                     natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
-                    ref = _ref_layer_slice(trace_dir, layout_layer_pcc, i, kv_actual, kv_actual + CHUNK)
+                    ref = _ref_layer_slice(trace_dir, layout_layer_pcc, i, kv_actual, kv_actual + chunk_size)
                     _, pcc = comp_pcc(ref, natural)
                     layer_min_pcc[i] = min(layer_min_pcc.get(i, 1.0), pcc)
                     logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
@@ -3070,9 +3069,14 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK],
     ids=["preload0", "preload25k", "preload50k", "preload95k"],
 )
-@pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
+# L5 is layers 0-4: the three dense layers and two MoE layers, short enough for one device-profiler capture.
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "num_layers",
+    [1, 5, 10, pytest.param(78, marks=pytest.mark.uncollect_if(pred=is_4x4))],
+    ids=["L1", "L5", "L10", "L78"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, sp_axis, chunk_size",
     [
         pytest.param(
             (8, 4),
@@ -3082,6 +3086,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
             2,
+            0,
+            CHUNK,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -3093,8 +3099,26 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM_L1_SMALL_SIZE
             ),
             2,
+            0,
+            CHUNK,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring, TP=4 on the
+        # axis-0 line, at the 4x4 stages' 2560-token chunk (640 tokens per chip, as on 8x4). Record-only: the
+        # perf gate's baselines are 8x4's.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            1,
+            CHUNK // 2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -3120,9 +3144,11 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_links,
     preload_isl,
     use_trace,
+    sp_axis,
+    chunk_size,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
-    if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
+    if preload_isl + n_chunks * chunk_size > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
     # Only the TRACED mode is gated. Untraced resolves to None (record-only, prints the table and asserts
     # nothing) because its per-chunk stddev is far wider than any band worth setting -- see
@@ -3130,6 +3156,8 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     baseline_chunk_times_s, resolved_perf_margin = glm_chunked_perf_gate(
         use_trace, num_layers, n_chunks, num_iters, preload_isl
     )
+    if chunk_size != CHUNK:
+        baseline_chunk_times_s, resolved_perf_margin = None, None
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -3147,6 +3175,8 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         preload_isl=preload_isl,
         use_trace=use_trace,
         kv_cache_format=GLM_KV_CACHE_FORMAT,
+        sp_axis=sp_axis,
+        chunk_size=chunk_size,
     )
 
 
