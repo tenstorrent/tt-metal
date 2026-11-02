@@ -200,6 +200,10 @@ device): do not improvise. Read the logs and say what happened; rerun only the f
 own command (`decide --rerun` then `resume`, `gate --unit`); call the tooling broken only with evidence from its code,
 and then fix it at the cause (selftest, BREADCRUMBS). Never move or edit the framework's records by hand, never run a
 perf pick's measurement yourself, and never start a device job while an orchestrator is running.
+Before starting the orchestrator or any device job, check that nobody else is running a device job: anyone, not a named
+user (owner, 2026-11-02). Without root, fuser / lsof cannot see other users' open files, so list their processes:
+`ps -eo user:16,pid,etime,args --no-headers | awk -v me=$USER '$1!=me' | grep -E 'pytest|python|tt-smi|tt_metal|ttnn'`
+(the node's permanent tt-fabric-manager-agent is a service, not a job); and your own: `fuser -v /dev/tenstorrent/*`.
 
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
