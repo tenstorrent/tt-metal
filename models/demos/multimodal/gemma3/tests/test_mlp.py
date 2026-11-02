@@ -45,7 +45,16 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     dtype = ttnn.bfloat8_b
     mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
 
-    model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
+    # GATE_OPT=performance exercises the perf-mode fidelity (Lever A LoFi) for the accuracy gate.
+    # Unset/other -> None -> accuracy default (unchanged CI behavior).
+    _optimizations = None
+    if os.environ.get("GATE_OPT") == "performance":
+        from models.tt_transformers.tt.model_config import DecodersPrecision
+
+        _optimizations = lambda a: DecodersPrecision.performance(a.n_layers, a.model_name)
+    model_args = Gemma3ModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True, optimizations=_optimizations
+    )
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
