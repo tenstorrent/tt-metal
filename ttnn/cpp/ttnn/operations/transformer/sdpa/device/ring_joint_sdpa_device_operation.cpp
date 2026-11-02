@@ -560,8 +560,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.sol_mode);
     if (tensor_args.sol_enabled()) {
         TT_FATAL(
-            tensor_args.sol_pooled_k.has_value() && tensor_args.sol_pooled_v.has_value(),
-            "Sol-Attn mode needs sol_block_mask, sol_pooled_k and sol_pooled_v together (sol_bias is optional)");
+            tensor_args.sol_pooled_k.has_value() == tensor_args.sol_pooled_v.has_value(),
+            "Sol-Attn mode takes sol_pooled_k and sol_pooled_v together or neither");
         TT_FATAL(!args.is_causal && !args.is_balanced, "Sol-Attn mode is non-causal only");
         TT_FATAL(!has_joint_tensors, "Sol-Attn mode does not support joint attention tensors");
         TT_FATAL(!has_latent_v, "Sol-Attn mode does not support latent-V");
@@ -586,15 +586,26 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !tensor_args.sol_resident_mode(args.sol_mode) || tensor_args.sol_bias_generated(),
             "sol_mode=resident generates its bias on device; do not pass sol_bias");
+        // Without pooled K/V the n_blocks_pad geometry comes from the mask, so the mask must be block-width.
+        if (!tensor_args.sol_pooled()) {
+            TT_FATAL(!tensor_args.sol_bias.has_value(), "no pooled K/V means no pooled step; do not pass sol_bias");
+            TT_FATAL(
+                args.sol_mode != "auto" &&
+                    !(tensor_args.sol_chunk_mode(args.sol_mode) && !tensor_args.sol_resident_mode(args.sol_mode)),
+                "no pooled K/V needs an explicit block-width sol_mode (gather | compact | pack | resident), got {}",
+                args.sol_mode);
+        }
         const auto& mask = tensor_args.sol_block_mask.value();
-        const auto& pk = tensor_args.sol_pooled_k.value();
-        const auto& pv = tensor_args.sol_pooled_v.value();
         const auto& q_shape = input_tensor_q.logical_shape();
         const auto& k_shape = tensor_args.input_k.logical_shape();
         TT_FATAL(
             mask.layout() == Layout::ROW_MAJOR && mask.dtype() == DataType::UINT32,
             "sol_block_mask must be uint32 row-major");
-        std::vector<const Tensor*> sol_tile_tensors = {&pk, &pv};
+        std::vector<const Tensor*> sol_tile_tensors;
+        if (tensor_args.sol_pooled()) {
+            sol_tile_tensors.push_back(&tensor_args.sol_pooled_k.value());
+            sol_tile_tensors.push_back(&tensor_args.sol_pooled_v.value());
+        }
         if (tensor_args.sol_bias.has_value()) {
             sol_tile_tensors.push_back(&tensor_args.sol_bias.value());
         }
@@ -613,7 +624,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             mask.buffer() != nullptr && mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "sol_block_mask must be in DRAM");
         const uint32_t nqc = tt::div_up(q_shape[2], args.get_q_chunk_size());
-        const uint32_t n_blocks_pad = pk.logical_shape()[2];
+        const uint32_t n_blocks_pad =
+            tensor_args.sol_pooled() ? tensor_args.sol_pooled_k->logical_shape()[2] : mask.logical_shape()[3];
         const uint32_t nb_pad = n_blocks_pad / args.ring_size;
         TT_FATAL(
             n_blocks_pad % (32 * args.ring_size) == 0,
@@ -621,10 +633,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             n_blocks_pad);
         TT_FATAL(
             nb_pad >= tt::div_up(k_shape[2], 64), "sol pooled blocks per shard {} < blocks in the K shard", nb_pad);
-        TT_FATAL(pk.logical_shape() == pv.logical_shape(), "sol_pooled_k and sol_pooled_v shapes differ");
-        TT_FATAL(
-            pk.logical_shape()[1] == q_shape[1] && pk.logical_shape()[3] == q_shape[3],
-            "sol_pooled_k must be [1, NH, n_blocks_pad, DH]");
+        if (tensor_args.sol_pooled()) {
+            const auto& pk = tensor_args.sol_pooled_k.value();
+            const auto& pv = tensor_args.sol_pooled_v.value();
+            TT_FATAL(pk.logical_shape() == pv.logical_shape(), "sol_pooled_k and sol_pooled_v shapes differ");
+            TT_FATAL(
+                pk.logical_shape()[1] == q_shape[1] && pk.logical_shape()[3] == q_shape[3],
+                "sol_pooled_k must be [1, NH, n_blocks_pad, DH]");
+        }
         const uint32_t nkc_local = tt::div_up(k_shape[2], args.get_k_chunk_size());
         const uint32_t nkc_pad = tt::round_up(nkc_local * args.ring_size, 32u);
         // Resident mode takes the block-form mask: its exact set is per 64-token block, like compact.
@@ -682,6 +698,33 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 input_tensor_q.padded_shape()[2],
                 rm.logical_shape(),
                 rm.padded_shape());
+        }
+        if (tensor_args.sol_block_counts.has_value()) {
+            const auto& counts = tensor_args.sol_block_counts.value();
+            TT_FATAL(
+                tensor_args.sol_gather_mode(args.sol_mode),
+                "sol_block_counts is supported in gather mode only (sol_mode {})",
+                args.sol_mode);
+            TT_FATAL(
+                counts.layout() == Layout::ROW_MAJOR && counts.dtype() == DataType::UINT32,
+                "sol_block_counts must be uint32 row-major");
+            TT_FATAL(
+                counts.buffer() != nullptr && counts.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "sol_block_counts must be in DRAM");
+            TT_FATAL(
+                counts.logical_shape().rank() == 4 && counts.logical_shape()[0] == 1 &&
+                    counts.logical_shape()[1] == 1 && counts.logical_shape()[2] == 1 &&
+                    counts.logical_shape()[3] == n_blocks_pad,
+                "sol_block_counts must be [1, 1, 1, {}], got {}",
+                n_blocks_pad,
+                counts.logical_shape());
+            // The plan page carries one bit per gathered chunk of a ring iteration (two words).
+            const uint32_t blocks_per_chunk = args.get_k_chunk_size() / 64;
+            const uint32_t max_gathered_chunks = tt::div_up(tt::div_up(k_shape[2], 64u), blocks_per_chunk);
+            TT_FATAL(
+                max_gathered_chunks <= 64,
+                "sol_block_counts: at most 64 gathered K chunks per shard ({} given)",
+                max_gathered_chunks);
         }
         // The on-device bias generator derives block lengths from the padded shard length and the live
         // logical_n; it covers at most 64 K chunks per shard like chunk mode and needs the pooled rows to
@@ -1323,19 +1366,25 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     }
     if (tensor_args.sol_enabled()) {
         input_tensors.emplace_back(tensor_args.sol_block_mask.value());
-        input_tensors.emplace_back(tensor_args.sol_pooled_k.value());
-        input_tensors.emplace_back(tensor_args.sol_pooled_v.value());
+        if (tensor_args.sol_pooled()) {
+            input_tensors.emplace_back(tensor_args.sol_pooled_k.value());
+            input_tensors.emplace_back(tensor_args.sol_pooled_v.value());
+        }
         if (tensor_args.sol_bias.has_value()) {
             input_tensors.emplace_back(tensor_args.sol_bias.value());
         }
         if (tensor_args.sol_row_max.has_value()) {
             input_tensors.emplace_back(tensor_args.sol_row_max.value());
         }
+        if (tensor_args.sol_block_counts.has_value()) {
+            input_tensors.emplace_back(tensor_args.sol_block_counts.value());
+        }
     }
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
         tensor_args.sol_enabled(),
+        tensor_args.sol_pooled(),
         tensor_args.sol_chunk_mode(args.sol_mode),
         tensor_args.sol_compact_mode(args.sol_mode),
         tensor_args.sol_pack_mode(args.sol_mode),
@@ -1343,6 +1392,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.sol_bias_generated(),
         // Presence selects the static-row-max kernel variant (sol_static_max compile-time arg + reader accessor).
         tensor_args.sol_static_max(),
+        tensor_args.sol_has_block_counts(),
         args.joint_strategy,
         args.scale,
         args.is_causal,
@@ -1518,7 +1568,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& sol_pooled_v,
     const std::optional<ttnn::Tensor>& sol_bias,
     const std::optional<ttnn::Tensor>& sol_row_max,
-    const std::string& sol_mode) {
+    const std::string& sol_mode,
+    const std::optional<ttnn::Tensor>& sol_block_counts) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1767,7 +1818,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .sol_pooled_k = sol_pooled_k,
         .sol_pooled_v = sol_pooled_v,
         .sol_bias = sol_bias,
-        .sol_row_max = sol_row_max};
+        .sol_row_max = sol_row_max,
+        .sol_block_counts = sol_block_counts};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

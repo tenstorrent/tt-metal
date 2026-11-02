@@ -3082,15 +3082,21 @@ void sdpa_ring_v2(
             q_k_loop_count = sol_n_pages + (sol_do_pooled ? sol_pooled_chunks : 0);
         }
         if constexpr (sol_enabled && !sol_chunk_mode) {
-            // ---- Sol-Attn gathered-chunk loop. Plan words from the reader: [n_gather, last_tiles, do_pooled].
+            // ---- Sol-Attn gathered-chunk loop. Plan words from the reader: [n_gather, last_tiles, do_pooled,
+            // ragged chunk bits lo, hi]. A ragged gathered chunk carries a column-bias tile row (block counts).
             CircularBuffer(cb_sol_plan).wait_front(1);
             const uint32_t sol_n_gather = ckernel::read_tile_value(cb_sol_plan, 0, 0);
             const uint32_t sol_last_tiles = ckernel::read_tile_value(cb_sol_plan, 0, 1);
             const uint32_t sol_do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, 2);
+            const uint32_t sol_ragged_lo = ckernel::read_tile_value(cb_sol_plan, 0, 3);
+            const uint32_t sol_ragged_hi = ckernel::read_tile_value(cb_sol_plan, 0, 4);
             CircularBuffer(cb_sol_plan).pop_front(1);
             const uint32_t sol_total = sol_n_gather + (sol_do_pooled ? sol_pooled_chunks : 0);
             for (uint32_t c = 0; c < sol_total; ++c) {
                 const bool is_pooled = c >= sol_n_gather;
+                const bool is_ragged =
+                    !is_pooled && ((c < 32 ? (sol_ragged_lo >> c) : (sol_ragged_hi >> (c - 32))) & 1u) != 0;
+                const bool col_bias = is_pooled || is_ragged;
                 uint32_t active_Sk_param = Sk_chunk_t;
                 if (is_pooled) {
                     if (c - sol_n_gather + 1 == sol_pooled_chunks) {
@@ -3166,7 +3172,7 @@ void sdpa_ring_v2(
                         /*apply_mask=*/false,
                         /*lw_partial_tile_idx=*/0,
                         active_Sk_param,
-                        can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !is_pooled,
+                        can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !col_bias,
                         chunk_sbw,
                         step_save_out_cb,
                         step_save_max_cb,
@@ -3184,7 +3190,7 @@ void sdpa_ring_v2(
                         chunked.kv_pad_rotation,
                         q_base_tiles,
                         {},
-                        /*apply_col_bias=*/is_pooled);
+                        /*apply_col_bias=*/col_bias);
                 }
                 if (!is_first) {
                     sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);

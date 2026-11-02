@@ -68,7 +68,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& sol_pooled_v,
     const std::optional<ttnn::Tensor>& sol_bias,
     const std::optional<ttnn::Tensor>& sol_row_max,
-    const std::string& sol_mode) {
+    const std::string& sol_mode,
+    const std::optional<ttnn::Tensor>& sol_block_counts) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -115,7 +116,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sol_pooled_v,
         sol_bias,
         sol_row_max,
-        sol_mode);
+        sol_mode,
+        sol_block_counts);
     return outputs;
 }
 
@@ -796,7 +798,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("sol_pooled_v").noconvert() = nb::none(),
         nb::arg("sol_bias").noconvert() = nb::none(),
         nb::arg("sol_row_max").noconvert() = nb::none(),
-        nb::arg("sol_mode") = "auto");
+        nb::arg("sol_mode") = "auto",
+        nb::arg("sol_block_counts").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

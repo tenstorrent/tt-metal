@@ -142,7 +142,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& sol_pooled_v = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_bias = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_row_max = std::nullopt,
-    const std::string& sol_mode = "auto");
+    const std::string& sol_mode = "auto",
+    const std::optional<ttnn::Tensor>& sol_block_counts = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

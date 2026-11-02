@@ -1132,6 +1132,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // max must be an upper bound of the scores). Resident compute therefore always runs the running max (row max
     // merged with the stored max once per chunk per piece).
     const bool sol_static_max = tensor_args.sol_static_max();
+    // Gather mode, per-block real-token counts: an accessor after the bias's, an address after the row max's, and
+    // the shard's counts after the mask row in the plan page.
+    const bool sol_has_counts = tensor_args.sol_has_block_counts();
     if (tensor_args.sol_enabled()) {
         // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
         // line back from stderr and fail when a requested mode did not resolve to the expected variant.
@@ -1220,7 +1223,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (sol_enabled) {
         // Chunk mode: mask rows are nkc_pad words, one per global K chunk (per-shard stride num_local_k_chunks).
         sol_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
-        sol_n_blocks_pad = tensor_args.sol_pooled_k->logical_shape()[2];
+        sol_n_blocks_pad = tensor_args.sol_pooled() ? tensor_args.sol_pooled_k->logical_shape()[2]
+                                                    : tensor_args.sol_block_mask->logical_shape()[3];
         sol_nb_pad = sol_n_blocks_pad / args.all_gather_operation_attributes.ring_size;
         sol_nb = tt::div_up(kv_local_padded_Nt, kSolBlockTiles);
         sol_nqc_pad = tensor_args.sol_block_mask->logical_shape()[2];
@@ -1810,13 +1814,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // from sol_pv_args otherwise.
     if (sol_enabled) {
         TensorAccessorArgs(tensor_args.sol_block_mask->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(tensor_args.sol_pooled_k->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(tensor_args.sol_pooled_v->buffer()).append_to(reader_compile_time_args);
+        // Without pooled K/V the reader's pooled slots stay in its fixed layout, filled by the mask's args; the
+        // pooled reads behind them are compiled out (sol_pooled_off).
+        const auto* sol_pk_buffer =
+            tensor_args.sol_pooled() ? tensor_args.sol_pooled_k->buffer() : tensor_args.sol_block_mask->buffer();
+        const auto* sol_pv_buffer =
+            tensor_args.sol_pooled() ? tensor_args.sol_pooled_v->buffer() : tensor_args.sol_block_mask->buffer();
+        TensorAccessorArgs(sol_pk_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(sol_pv_buffer).append_to(reader_compile_time_args);
         if (sol_static_max) {
             TensorAccessorArgs(tensor_args.sol_row_max->buffer()).append_to(reader_compile_time_args);
         }
         if (!sol_gen_bias) {
             TensorAccessorArgs(tensor_args.sol_bias->buffer()).append_to(reader_compile_time_args);
+        }
+        if (sol_has_counts) {
+            TensorAccessorArgs(tensor_args.sol_block_counts->buffer()).append_to(reader_compile_time_args);
         }
     }
 
@@ -2235,8 +2248,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // K/V CBs throttle the reader harder than this does. A second page would push the static CB region past the
     // L1 buffers the full pipeline's CCL manager pins at the largest supported shapes.
     const uint32_t cb_sol_plan =
-        sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
-                    : inactive_cb;
+        sol_enabled
+            ? allocate_cb(
+                  (sol_compact ? 128 : 64) + sol_mask_row_bytes + (sol_has_counts ? sol_nb_pad * sizeof(uint32_t) : 0u),
+                  1,
+                  tt::DataFormat::UInt32)
+            : inactive_cb;
     // Resident mode puts every chunk's plan record in one page per ring iteration, after the header (16 words) and
     // the shard slice the reader scans (sol_nb_pad words), so the reader does not wait for compute to pop a page per
     // chunk at each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row
@@ -3389,6 +3406,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other
         // mode keeps its offsets); compute ignores the tensor and keeps the running max.
         {"sol_static_max", sol_static_max ? 1u : 0u},
+        {"sol_has_counts", sol_has_counts ? 1u : 0u},
         {"cb_k_stage", cb_k_stage},
         {"cb_v_stage", cb_v_stage},
         // Blocks per packed page = blocks per K chunk, so a full page is exactly one chunk's worth of tiles and
@@ -3413,10 +3431,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_nqc_pad", sol_nqc_pad},
         {"sol_pooled_chunks", sol_pooled_chunks},
         {"sol_pooled_last_tiles", sol_pooled_last_tiles},
-        // Debug/profiling only: TT_SOL_POOLED_OFF=1 drops the pooled correction chunks (wrong numerics; isolates their
-        // cost).
+        // No pooled K/V passed: the exact step only. TT_SOL_POOLED_OFF=1 is a debug/profiling knob that drops the
+        // pooled correction chunks of a pooled run (wrong numerics; isolates their cost).
         {"sol_pooled_off",
-         (sol_enabled && std::getenv("TT_SOL_POOLED_OFF") && std::string(std::getenv("TT_SOL_POOLED_OFF")) == "1")
+         (sol_enabled && (!tensor_args.sol_pooled() ||
+                          (std::getenv("TT_SOL_POOLED_OFF") && std::string(std::getenv("TT_SOL_POOLED_OFF")) == "1")))
              ? 1u
              : 0u},
         // Debug/profiling only: TT_SOL_DRAIN_ALL=1 makes compute drain every streamed chunk in chunk mode (own kept
@@ -3696,18 +3715,30 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
         if (sol_enabled) {
             // Read by the kernel at rotated_args_base (sol excludes the rotated split and the K split).
-            // Layout (word offsets from rotated_args_base), with RM = sol_static_max ? 1 : 0:
+            // Layout (word offsets from rotated_args_base), with RM = sol_static_max ? 1 : 0 and
+            // O = RM + (sol_has_counts ? 1 : 0):
             //   +0 mask, +1 pooled K, +2 pooled V, [+3 row max, only when sol_static_max (resident only)],
-            //   +3+RM bias (0 when generated), +4+RM n_members, +5+RM my_start, then (generated bias only)
-            //   kSolLenBiasTableWords packed bf16 table, then members (start, count)...
-            // The row-max slot exists only with sol_static_max so every other mode keeps the same offsets; the
-            // reader derives RM from the named compile-time arg. Buffer entries are registered as bindings and
+            //   [+3+RM block counts, only when sol_has_counts (gather only)], +3+O bias (0 when generated),
+            //   +4+O n_members, +5+O my_start, then (generated bias only) kSolLenBiasTableWords packed bf16 table,
+            //   then members (start, count)...
+            // The optional slots exist only when their tensor does so every other mode keeps the same offsets; the
+            // reader derives RM and O from the named compile-time args. Buffer entries are registered as bindings and
             // re-patched on cache hits by the descriptor adapter (the same path as pooled K/V).
             reader_args.push_back(tensor_args.sol_block_mask->buffer());
-            reader_args.push_back(tensor_args.sol_pooled_k->buffer());
-            reader_args.push_back(tensor_args.sol_pooled_v->buffer());
+            // Raw zero words without pooled K/V: a buffer bound twice sends every cache hit down the slow
+            // descriptor rebuild.
+            if (tensor_args.sol_pooled()) {
+                reader_args.push_back(tensor_args.sol_pooled_k->buffer());
+                reader_args.push_back(tensor_args.sol_pooled_v->buffer());
+            } else {
+                reader_args.push_back(0u);
+                reader_args.push_back(0u);
+            }
             if (sol_static_max) {
                 reader_args.push_back(tensor_args.sol_row_max->buffer());
+            }
+            if (sol_has_counts) {
+                reader_args.push_back(tensor_args.sol_block_counts->buffer());
             }
             if (sol_gen_bias) {
                 reader_args.push_back(0u);

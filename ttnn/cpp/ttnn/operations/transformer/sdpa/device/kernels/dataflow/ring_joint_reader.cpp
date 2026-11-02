@@ -409,8 +409,15 @@ void kernel_main() {
     constexpr uint32_t sol_bias_args_offset =
         (sol_enabled && !sol_gen_bias) ? sol_after_pv_offset : kFirstAccessorArgOffset;
     constexpr auto sol_bias_args = TensorAccessorArgs<sol_bias_args_offset>();
+    constexpr uint32_t sol_after_bias_offset =
+        sol_gen_bias ? sol_after_pv_offset : sol_bias_args.next_compile_time_args_offset();
+    // Gather mode, per-block real-token counts: accessor after the bias's iff sol_has_counts.
+    constexpr bool sol_has_counts = get_named_compile_time_arg_val("sol_has_counts") == 1;
+    constexpr uint32_t sol_counts_args_offset =
+        (sol_enabled && sol_has_counts) ? sol_after_bias_offset : kFirstAccessorArgOffset;
+    constexpr auto sol_counts_args = TensorAccessorArgs<sol_counts_args_offset>();
     constexpr uint32_t chains_base_offset =
-        sol_enabled ? (sol_gen_bias ? sol_after_pv_offset : sol_bias_args.next_compile_time_args_offset())
+        sol_enabled ? (sol_has_counts ? sol_counts_args.next_compile_time_args_offset() : sol_after_bias_offset)
                     : pre_sol_args_offset;
 
     uint32_t argidx = 0;
@@ -568,22 +575,26 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t sol_mask_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 0) : 0;
     [[maybe_unused]] const uint32_t sol_pk_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 1) : 0;
     [[maybe_unused]] const uint32_t sol_pv_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 2) : 0;
-    // The row-max bound's address sits at +3 iff sol_static_max; everything after it shifts by one word.
+    // The row-max bound's address sits at +3 iff sol_static_max, the block counts' address after it iff
+    // sol_has_counts; everything after them shifts by one word each.
     constexpr uint32_t kSolRM = sol_static_max ? 1u : 0u;
+    constexpr uint32_t kSolOpt = kSolRM + (sol_has_counts ? 1u : 0u);
     [[maybe_unused]] const uint32_t sol_rm_addr =
         (sol_enabled && sol_static_max) ? get_arg_val<uint32_t>(rotated_args_base + 3) : 0;
+    [[maybe_unused]] const uint32_t sol_counts_addr =
+        (sol_enabled && sol_has_counts) ? get_arg_val<uint32_t>(rotated_args_base + 3 + kSolRM) : 0;
     [[maybe_unused]] const uint32_t sol_bias_addr =
-        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 3 + kSolRM) : 0;
+        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 3 + kSolOpt) : 0;
     // Chunk mode: head-chain members (q_chunk start within head, count) for the chain-wide kept union.
     [[maybe_unused]] const uint32_t sol_n_members =
-        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 4 + kSolRM) : 0;
+        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 4 + kSolOpt) : 0;
     [[maybe_unused]] const uint32_t sol_my_start =
-        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 5 + kSolRM) : 0;
+        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 5 + kSolOpt) : 0;
     // Generated bias only: packed bf16 bias-per-token-count table (sol_bias_gen::kTableWords words) precedes the
     // chain members; with a sol_bias tensor the members follow my_start directly.
-    [[maybe_unused]] const uint32_t sol_len_bias_table_base = rotated_args_base + 6 + kSolRM;
+    [[maybe_unused]] const uint32_t sol_len_bias_table_base = rotated_args_base + 6 + kSolOpt;
     [[maybe_unused]] const uint32_t sol_members_base =
-        rotated_args_base + 6 + kSolRM + (sol_gen_bias ? sol_bias_gen::kTableWords : 0u);
+        rotated_args_base + 6 + kSolOpt + (sol_gen_bias ? sol_bias_gen::kTableWords : 0u);
     constexpr uint32_t sol_nb = get_named_compile_time_arg_val("sol_nb");
     constexpr uint32_t sol_nb_pad = get_named_compile_time_arg_val("sol_nb_pad");
     constexpr uint32_t sol_n_blocks_pad = get_named_compile_time_arg_val("sol_n_blocks_pad");
@@ -909,6 +920,8 @@ void kernel_main() {
     // Sol-Attn sources: pooled K/V [1, NH, n_blocks_pad, DH] tiles, bias [1, NH, nqc_pad*32, n_blocks_pad] tiles,
     // mask [1, NH, nqc_pad, n_blocks_pad] uint32 row-major (one page per row).
     [[maybe_unused]] const auto sol_mask_reader = TensorAccessor(sol_mask_args, sol_mask_addr);
+    // Block counts [1, 1, 1, n_blocks_pad] uint32 row-major: one page, shard s at word s * nb_pad.
+    [[maybe_unused]] const auto sol_counts_reader = TensorAccessor(sol_counts_args, sol_counts_addr);
     [[maybe_unused]] const auto sol_pk_generator = PaddedAddrGenerator(
         TensorAccessor(sol_pk_args, sol_pk_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, DHt));
     [[maybe_unused]] const auto sol_pv_generator = PaddedAddrGenerator(
@@ -1073,6 +1086,44 @@ void kernel_main() {
         }
         return fill;
     };
+    // Gather mode with block counts: one tile row of column bias for a gathered chunk, 0 on real key columns and
+    // sol_prepass.NEG on columns [count, 64) of each block, identical in every row. Compute adds it to the chunk's
+    // QK^T before the max/exp, like the pooled-chunk bias.
+    [[maybe_unused]] const auto sol_push_count_bias =
+        [&](const uint32_t* block_ids, uint32_t n_blocks, CoreLocalMem<volatile uint32_t> block_counts) {
+            static_assert(!sol_has_counts || sol_bias_tile_bytes == 2048, "sol bias tiles are Float16_b 32x32");
+            constexpr uint32_t kNegBf16 = 0xC6EAu;
+            constexpr uint32_t kFaceWords = 128;
+            constexpr uint32_t kFaceRowWords = 8;
+            CircularBuffer cb_bias(cb_sol_bias);
+            cb_bias.reserve_back(Sk_chunk_t);
+            const uint32_t dst = cb_bias.get_write_ptr();
+            volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+            for (uint32_t t = 0; t < Sk_chunk_t; ++t) {
+                const uint32_t slot = t / kSolBlockTiles;
+                const uint32_t count = slot < n_blocks ? block_counts[block_ids[slot]] : kSolBlockTiles * 32;
+                const uint32_t tile_col0 = (t % kSolBlockTiles) * 32;
+                volatile tt_l1_ptr uint32_t* tile = p + t * (sol_bias_tile_bytes / sizeof(uint32_t));
+                // Faces 0/2 hold columns 0-15, faces 1/3 columns 16-31; every row is the same.
+                for (uint32_t face = 0; face < 4; ++face) {
+                    const uint32_t col0 = tile_col0 + (face & 1u) * 16;
+                    uint32_t row[kFaceRowWords];
+                    for (uint32_t w = 0; w < kFaceRowWords; ++w) {
+                        const uint32_t lo = col0 + 2 * w >= count ? kNegBf16 : 0u;
+                        const uint32_t hi = col0 + 2 * w + 1 >= count ? kNegBf16 : 0u;
+                        row[w] = lo | (hi << 16);
+                    }
+                    for (uint32_t r = 0; r < 16; ++r) {
+                        for (uint32_t w = 0; w < kFaceRowWords; ++w) {
+                            tile[face * kFaceWords + r * kFaceRowWords + w] = row[w];
+                        }
+                    }
+                }
+            }
+            // Order the RISC stores before compute reads the tiles (volatile read of the last word written).
+            (void)p[Sk_chunk_t * (sol_bias_tile_bytes / sizeof(uint32_t)) - 1];
+            cb_bias.push_back(Sk_chunk_t);
+        };
     // Pooled K/V chunks + this Q chunk's bias tile rows (both Sol modes; every core reads its own copy).
     [[maybe_unused]] const auto sol_push_pooled = [&](uint32_t nq, uint32_t q_chunk, uint32_t& kv_pushed) {
         if constexpr (sol_enabled) {
@@ -2028,19 +2079,45 @@ void kernel_main() {
                     sol_mask_row_bytes,
                     {.page_id = nq * sol_nqc_pad + q_chunk},
                     {});
+                // This shard's block counts follow the mask row in the plan page scratch.
+                const uint32_t counts_addr = mask_row_addr + sol_mask_row_bytes;
+                if constexpr (sol_has_counts) {
+                    noc.async_read(
+                        sol_counts_reader,
+                        CoreLocalMem<uint32_t>(counts_addr),
+                        sol_nb_pad * sizeof(uint32_t),
+                        {.page_id = 0, .offset_bytes = ring_id * sol_nb_pad * sizeof(uint32_t)},
+                        {});
+                }
                 noc.async_read_barrier();
                 CoreLocalMem<volatile uint32_t> mask_row(mask_row_addr);
+                CoreLocalMem<volatile uint32_t> block_counts(counts_addr);
                 const uint32_t shard_mask_base = ring_id * sol_nb_pad;
+                constexpr uint32_t blocks_per_chunk = Sk_chunk_t / kSolBlockTiles;
+                // Bit g: gathered chunk g holds a block with fewer than 64 real tokens, so compute stamps the
+                // column bias the loop below pushes for it.
+                uint32_t ragged_bits[2] = {0, 0};
+                const auto note_block = [&](uint32_t kept_index, uint32_t b) {
+                    if constexpr (sol_has_counts) {
+                        if (block_counts[b] < kSolBlockTiles * 32) {
+                            const uint32_t g = kept_index / blocks_per_chunk;
+                            ragged_bits[g / 32] |= 1u << (g % 32);
+                        }
+                    }
+                };
                 // Only FULL blocks are gathered, matching compact mode and the bias generator (block_bit_full): a set
                 // bit on a partial tail block would otherwise be computed here AND pooled by the bias -- counted
                 // twice. The producer zeroes such bits (full_row), so this is defence in depth.
                 uint32_t n_kept = 0;
                 for (uint32_t b = 0; b < sol_nb; ++b) {
-                    n_kept += (mask_row[shard_mask_base + b] != 0 && sol_block_is_full(ring_id, b)) ? 1u : 0u;
+                    if (mask_row[shard_mask_base + b] != 0 && sol_block_is_full(ring_id, b)) {
+                        note_block(n_kept, b);
+                        ++n_kept;
+                    }
                 }
-                constexpr uint32_t blocks_per_chunk = Sk_chunk_t / kSolBlockTiles;
                 const bool force_block0 = n_kept == 0;  // never leave an iteration without a chunk
                 if (force_block0) {
+                    note_block(0, 0);
                     n_kept = 1;
                 }
                 const uint32_t n_gather = (n_kept + blocks_per_chunk - 1) / blocks_per_chunk;
@@ -2048,7 +2125,8 @@ void kernel_main() {
                 plan_words[0] = n_gather;
                 plan_words[1] = last_active_tiles;
                 plan_words[2] = do_pooled;
-                plan_words[3] = 0;
+                plan_words[3] = ragged_bits[0];
+                plan_words[4] = ragged_bits[1];
                 // Publish the plan before gathering: compute needs it before its first chunk, and the K/V CBs
                 // hold only two chunks. The CB is one page: compute's pop does not touch the memory, and this
                 // reader only reserves (and overwrites) the page again at its next Q chunk, after the scan below.
@@ -2111,6 +2189,11 @@ void kernel_main() {
                         q_pushed = true;
                     }
                     first_chunk_for_q = false;
+                    if constexpr (sol_has_counts) {
+                        if ((ragged_bits[g / 32] >> (g % 32)) & 1u) {
+                            sol_push_count_bias(block_ids, blocks_here, block_counts);
+                        }
+                    }
                     // V chunk: block at slot s occupies V tile rows [2s, 2s+2) of the [Sk_chunk_t][vDHt] layout.
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);

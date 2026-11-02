@@ -17,6 +17,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -24,6 +25,7 @@ from .agmm_config import agmm_block_size
 from .sol_prepass import BLOCK as SOL_BLOCK
 from .sol_prepass import SolGeometry, SolPrepass
 from .sol_prepass_fused import SolPrepassFused
+from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -134,6 +136,7 @@ class MiniMaxH3Attention(Module):
         sol_mode: str = "gather",
         sol_fused: bool = False,
         sol_mask_reuse: int = 1,
+        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -246,6 +249,22 @@ class MiniMaxH3Attention(Module):
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
+        # VSA (video sparse attention): selected when a config is given and a geometry-bound pre-pass is set
+        # (`set_vsa_prepass`). The sequence must then be in that geometry's tile order.
+        self.vsa_config = vsa_config
+        self.vsa_prepass: VSAPrepass | None = None
+        if vsa_config is not None:
+            # Column fracturing hands device d heads [d*n_local, (d+1)*n_local), the heads of its V shard.
+            self.to_gate_compress = ColParallelLinear(
+                hidden_size,
+                self.inner_dim,
+                bias=False,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+
         # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
         # line topology WanAttention measured the unfused path faster, so match that condition.
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and tp_factor > 1
@@ -293,6 +312,11 @@ class MiniMaxH3Attention(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
+
+        if self.vsa_config is not None:
+            if "to_gate_compress.weight" not in state:
+                # The base H3 checkpoint carries no gate; a zero gate makes the coarse branch contribute nothing.
+                state["to_gate_compress.weight"] = torch.zeros(self.inner_dim, self.hidden_size)
 
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.
@@ -807,6 +831,7 @@ class MiniMaxH3Attention(Module):
     def _sol_compact_family(self) -> bool:
         """compact and pack: block mask streamed through the chains, bias generated on device."""
         return self.sol_mode in ("compact", "pack")
+
     def sol_reset_mask_reuse(self) -> None:
         """Drop the block mask held for reuse, so the next sparse call routes afresh (start of every generation)."""
         if self._sol_prepass is not None and hasattr(self._sol_prepass, "reset_mask_reuse"):
@@ -852,6 +877,29 @@ class MiniMaxH3Attention(Module):
             **op_kwargs,
         )
         return spatial_BHNE
+
+    def set_vsa_prepass(self, prepass: VSAPrepass) -> None:
+        assert self.vsa_config is not None, "set_vsa_prepass requires the attention to be built with vsa_config"
+        self.vsa_prepass = prepass
+
+    def _sparse_attention(self, q_BHNE, k_BHNE, v_BHNE, logical_n, routing: dict) -> ttnn.Tensor:
+        """Block-sparse ring attention over `routing["block_mask"]`, kept blocks only.
+
+        The Sol op in gather mode without pooled K/V, so it runs the exact step over the kept blocks only; q_chunk 64
+        makes one mask row per query tile.
+        """
+        return self._ring_attention(
+            q_BHNE,
+            k_BHNE,
+            v_BHNE,
+            logical_n,
+            self._sdpa_program_config(q_BHNE.shape[2], ring=True, q_chunk=VSA_TILE_TOKENS),
+            dict(
+                sol_block_mask=routing["block_mask"],
+                sol_block_counts=routing["block_counts"],
+                sol_mode="gather",
+            ),
+        )
 
     def _sol_resident_multipass(self, q_BHNE, k_BHNE, v_BHNE, logical_n, sol_kwargs: dict) -> ttnn.Tensor:
         """Resident mode in `_SOL_RESIDENT_PASSES` passes over contiguous 64-row-aligned ranges of the local Q rows.
@@ -981,10 +1029,17 @@ class MiniMaxH3Attention(Module):
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
 
+        block_input_1BND = spatial_1BND
+        coarse_1BND = None
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        if exp_program_config is not None:
+        if self.vsa_prepass is not None:
+            routing = self.vsa_prepass(q_BHNE, k_BHNE, v_BHNE)
+            spatial_BHNE = self._sparse_attention(q_BHNE, k_BHNE, v_BHNE, logical_n, routing)
+            coarse_1BND = routing["coarse_out"]
+            ttnn.deallocate(routing["block_mask"])
+        elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
@@ -1048,6 +1103,21 @@ class MiniMaxH3Attention(Module):
             )
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+        if coarse_1BND is not None:
+            # Gate and coarse output are both [1, 1, rows, H * D], so the gated add needs no head split.
+            gate_1BND = self.to_gate_compress(
+                block_input_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=matmul_parallel_config,
+                default_block_size=agmm_block_size(
+                    self.hidden_size, self.inner_dim // tp_factor, block_input_1BND.padded_shape[-2]
+                ),
+                force_transpose=False,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
+            )
+            spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BND, coarse_1BND)
+            ttnn.deallocate(gate_1BND)
+            ttnn.deallocate(coarse_1BND)
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when

@@ -46,6 +46,10 @@ Geometry (`sol_prepass.SolGeometry`): `S` = SP shards (ring size), `rows` = padd
 | `sol_block_mask` (gather mode, experimental) | `[1, H, nqc_pad, n_blocks_pad]` | `uint32`, ROW_MAJOR | `!= 0` means: gather global padded block `g = s*nb_pad + b` into Q chunk `qc`'s exact K/V chunks. Only full 64-token blocks may be set. The kernel tells the modes apart by the mask width (`nkc_pad` vs `n_blocks_pad`). |
 | `sol_pooled_k` | `[1, H, n_blocks_pad, D]` | `bf16`, TILE | row `s*nb_pad + b` = **mean** over the valid tokens of block `b` of shard `s` (the ragged tail block divides by its true length). Padding rows (`b >= nb`, or blocks with no valid token) are zero. |
 | `sol_pooled_v` | `[1, H, n_blocks_pad, D]` | `bf16`, TILE | same blocking, **mean** V (not the paper's sum: the kernel multiplies by the token count through the bias, see section 3). |
+
+`sol_pooled_k` and `sol_pooled_v` are optional as a pair. Without them the op runs no pooled step and takes no
+`sol_bias`: each Q chunk attends its exact blocks only (the VSA fine branch). This needs an explicit block-width
+`sol_mode` (`gather`, `compact`, `pack` or `resident`), since `n_blocks_pad` is then the mask width.
 | `sol_bias` (optional, legacy) | `[1, H, nqc_pad*32, n_blocks_pad]` | `bf16`, TILE | tile row `qc` (rows `32*qc .. 32*qc+31`, all identical) = column bias per padded block, section 3. Omit it: the kernel generates it. Kept only so the generator can be A/B-validated against it. |
 | `sol_row_max` (deprecated, ignored) | `[1, H, q_rows_pad, 32]` | `bf16`, TILE | Optional, accepted by `sol_mode="resident"` only and shape-validated, but not read: resident compute runs its own (lazy) running row max. Omit it (`sol_prepass.compute_row_max` is not needed). |
 
@@ -69,7 +73,7 @@ Rules the kernel relies on:
   `MiniMaxH3Attention._sol_tensors` returns them as the op's kwargs, which keeps them alive through the
   enqueue (see section 6).
 * **Program cache**: the op's program hash covers the mask shape, pooled shape, chunk/gather mode and whether
-  `sol_bias` is present. Values do not affect the hash; addresses are re-bound on every call.
+  the pooled tensors and `sol_bias` are present. Values do not affect the hash; addresses are re-bound on every call.
 
 ## 3. What the kernel computes from them (semantics the producer may assume)
 

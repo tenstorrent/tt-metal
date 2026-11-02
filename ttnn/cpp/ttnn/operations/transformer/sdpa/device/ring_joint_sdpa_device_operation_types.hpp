@@ -195,12 +195,13 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> logical_l_tensor;
 
     // Sol-Attn block-sparse mode. Contract: models/tt_dit/models/transformers/minimax_h3/SOL_ATTN_INTERFACE.md.
-    // The routing pre-pass produces the first three; mask + pooled K + pooled V together, or none:
+    // The routing pre-pass produces the first three; mask alone, or mask + pooled K + pooled V together:
     //   sol_block_mask  uint32 row-major [1, NH, nqc_pad, W]. Chunk mode (W = nkc_pad, global K chunks): 1 =
     //                   compute this (local Q chunk, global K chunk) exactly. Gather mode (W = n_blocks_pad,
     //                   global 64-token blocks): 1 = gather this block into the Q chunk's exact K/V chunks.
-    //   sol_pooled_k/v  bf16 tile [1, NH, n_blocks_pad, DH]: per-64-token-block mean K / mean V over the valid
-    //                   tokens, whole sequence, per-shard blocking (shard s at rows [s*nb_pad, (s+1)*nb_pad)).
+    //   sol_pooled_k/v  OPTIONAL bf16 tile [1, NH, n_blocks_pad, DH]: per-64-token-block mean K / mean V over the
+    //                   valid tokens, whole sequence, per-shard blocking (shard s at rows [s*nb_pad, (s+1)*nb_pad)).
+    //                   Absent: no pooled step and no bias; only the exact step runs (explicit sol_mode required).
     //   sol_bias        OPTIONAL bf16 tile [1, NH, nqc_pad * 32, n_blocks_pad]: per Q chunk one tile row of
     //                   column bias for the pooled logits (ln(len)/scale for approximated blocks, a large
     //                   negative for exact and padding blocks). When absent the reader generates the same
@@ -209,16 +210,23 @@ struct RingJointSDPAInputs {
     //   sol_row_max     Optional bf16 tile [1, NH, q_rows_pad, 32] (q_rows_pad = the local Q shard's padded row
     //                   count); accepted by sol_mode="resident" only and shape-validated, but ignored: resident
     //                   compute always runs its own (lazy) running row max. Omit it.
+    //   sol_block_counts OPTIONAL uint32 row-major [1, 1, 1, n_blocks_pad], gather mode only: real tokens per global
+    //                   padded block (64, 1..63, or 0). A gathered block with count < 64 has its key columns
+    //                   [count, 64) set to a large negative before the max/exp, so a block whose tail rows are
+    //                   padding attends only its real tokens.
     std::optional<Tensor> sol_block_mask;
     std::optional<Tensor> sol_pooled_k;
     std::optional<Tensor> sol_pooled_v;
     std::optional<Tensor> sol_bias;
     std::optional<Tensor> sol_row_max;
+    std::optional<Tensor> sol_block_counts;
 
     bool sol_enabled() const { return sol_block_mask.has_value(); }
+    bool sol_pooled() const { return sol_enabled() && sol_pooled_k.has_value(); }
     bool sol_bias_generated() const { return sol_enabled() && !sol_bias.has_value(); }
     // sol_row_max supplied (resident only). Only selects the reader's runtime-arg layout; compute ignores it.
     bool sol_static_max() const { return sol_enabled() && sol_row_max.has_value(); }
+    bool sol_has_block_counts() const { return sol_enabled() && sol_block_counts.has_value(); }
     // Exact-set granularity. "chunk": the mask is [1, NH, nqc_pad, nkc_pad] over K CHUNKS; the reader streams every
     // chunk through the chained path (minus chain-wide skips) and compute drains the chunks the mask drops.
     // "gather": block mask [1, NH, nqc_pad, n_blocks_pad]; the reader gathers kept blocks from DRAM (chains off).
@@ -226,7 +234,7 @@ struct RingJointSDPAInputs {
     // kept blocks inside the chunk page and compute runs a narrowed step.
     // "auto" infers chunk vs gather from the mask width.
     bool sol_mask_is_chunk_width() const {
-        return sol_enabled() && sol_block_mask->logical_shape()[3] != sol_pooled_k->logical_shape()[2];
+        return sol_pooled() && sol_block_mask->logical_shape()[3] != sol_pooled_k->logical_shape()[2];
     }
     // "resident": the K/V-once loop order: every K/V piece is streamed through a core once per ring iteration
     // (chains on, as chunk mode) and applied to each of the core's resident Q chunks, whose accumulators stay in
