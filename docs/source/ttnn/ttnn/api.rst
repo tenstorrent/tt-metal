@@ -788,6 +788,7 @@ Reports
    :template: function.rst
 
    ttnn.set_printoptions
+   ttnn.get_printoptions
 
 
 Operation Hooks

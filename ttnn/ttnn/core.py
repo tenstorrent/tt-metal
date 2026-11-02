@@ -20,6 +20,7 @@ split_work_to_cores = ttnn._ttnn.operations.core.split_work_to_cores
 grid_to_cores = ttnn._ttnn.operations.core.grid_to_cores
 
 set_printoptions = ttnn._ttnn.core.set_printoptions
+get_printoptions = ttnn._ttnn.core.get_printoptions
 
 
 def divup(a, b):

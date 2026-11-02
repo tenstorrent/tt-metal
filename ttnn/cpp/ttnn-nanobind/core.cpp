@@ -4,6 +4,8 @@
 
 #include "core.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -171,6 +173,36 @@ void py_module(nb::module_& mod) {
             >>> ttnn.set_printoptions(profile="short", sci_mode=True)
             >>> ttnn.set_printoptions(profile="short", sci_mode=None)
             >>> ttnn.set_printoptions(profile="short", precision=6)
+        )doc");
+
+    mod.def(
+        "get_printoptions",
+        []() {
+            const auto options = ttnn::get_printoptions();
+            std::string profile(enchantum::to_string(options.profile));
+            std::ranges::transform(profile, profile.begin(), [](unsigned char c) { return std::tolower(c); });
+
+            nb::object sci_mode = nb::none();
+            if (options.sci_mode != ttnn::SciMode::Default) {
+                sci_mode = nb::bool_(options.sci_mode == ttnn::SciMode::Enable);
+            }
+
+            nb::dict result;
+            result["profile"] = profile;
+            result["sci_mode"] = sci_mode;
+            result["precision"] = options.precision;
+            return result;
+        },
+        R"doc(
+        Get the print options for tensor output.
+
+        Returns:
+            dict: the keyword arguments of `ttnn.set_printoptions` (profile, sci_mode, precision).
+
+        Examples:
+            >>> saved = ttnn.get_printoptions()
+            >>> ttnn.set_printoptions(profile="full")
+            >>> ttnn.set_printoptions(**saved)
         )doc");
 
     mod.def(
