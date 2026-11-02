@@ -182,7 +182,25 @@ namespace ttnn {
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
+    const auto& view_coords = device_tensor.device_storage().get_coords();
+    if (view_coords.size() < device_tensor.device()->shape().mesh_size()) {
+        const auto& host = host_tensor.host_tensor();
+        auto view_buffer = DistributedHostBuffer::create(device_tensor.device()->get_view());
+        const bool replicate = host.buffer().shape() == tt::tt_metal::distributed::MeshShape(1, 1);
+        for (const auto& coord : view_coords) {
+            const auto host_coord = replicate ? tt::tt_metal::distributed::MeshCoordinate(0, 0) : coord;
+            if (!host.buffer().shard_coords().contains(host_coord)) {
+                continue;
+            }
+            if (auto shard = host.buffer().get_shard(host_coord)) {
+                view_buffer.emplace_shard(coord, [&]() { return *shard; });
+            }
+        }
+        auto view_host = host_tensor_from_buffer_with_topology(
+            std::move(view_buffer), host.tensor_spec(), get_tensor_topology(device_tensor.mesh_tensor()));
+        tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(
+            cq, view_host, device_tensor.device_storage().get_mesh_tensor());
+    } else if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
         cq.enqueue_write_tensor(host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {
         auto coords = tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(
