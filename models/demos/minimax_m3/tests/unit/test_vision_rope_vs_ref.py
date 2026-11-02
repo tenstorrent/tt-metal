@@ -12,7 +12,8 @@ two-image grids:
     the reference rotation bit for bit, keeps the 16 pad dims at zero and leaves q k^T as the reference's;
   - the attention computed on host from M3VLAttention's packed weights (q and k rows reordered) equals the
     reference attention;
-and that M3VLVisionModel keeps the cos and sin of a grid on device for the next images of that grid.
+and that M3VLVisionModel keeps the cos and sin of a grid in DRAM for the next images of that grid and copies them to L1
+once per forward for its blocks.
 
 These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
 
@@ -137,19 +138,32 @@ def test_vision_attention_layout_vs_ref(grid_thw):
 
 
 def test_vision_rope_tables_kept_per_grid(monkeypatch):
-    """M3VLVisionModel stages the cos and sin of a grid with its first image and gives the blocks the same tables for
-    the next images of that grid. Each image gets the tables of its own grid, also right after an image of the same
-    patch count. The model keeps the ROPE_CACHE_GRIDS grids used last, frees the two tables of the grid it drops and
-    nothing else, and stages that grid again for its next image; _stage_rope gives its caller new tables. No device:
-    ttnn.from_torch, ttnn.deallocate and the modules are stand-ins."""
-    tables, freed = [], []  # the (cos, sin) each forward gives the blocks; what ttnn.deallocate gets
+    """M3VLVisionModel stages the cos and sin of a grid with its first image and gives the blocks copies of the same
+    tables for the next images of that grid. Each image gets the tables of its own grid, also right after an image of
+    the same patch count. The model keeps the ROPE_CACHE_GRIDS grids used last, frees the two tables of the grid it
+    drops and no other cached table, and stages that grid again for its next image; _stage_rope gives its caller new
+    tables. No device: ttnn.from_torch, ttnn.to_memory_config, ttnn.deallocate and the modules are stand-ins."""
+    tables, freed = [], []  # the cached (cos, sin) whose copies each forward gives the blocks; the cached tables freed
+    copies = {}  # id of each L1 copy not freed yet -> the table it copies
 
     def block(x, cos, sin):
-        tables.append((cos, sin))
+        tables.append((copies[id(cos)], copies[id(sin)]))
         return x
 
+    def to_memory_config(tensor, memory_config):
+        copy = tensor.clone()
+        copies[id(copy)] = tensor
+        return copy
+
+    def deallocate(tensor):
+        if id(tensor) in copies:
+            del copies[id(tensor)]
+        else:
+            freed.append(tensor)
+
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor.clone())
-    monkeypatch.setattr(ttnn, "deallocate", freed.append)
+    monkeypatch.setattr(ttnn, "to_memory_config", to_memory_config)
+    monkeypatch.setattr(ttnn, "deallocate", deallocate)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
     config = ref.MiniMaxM3VisionConfig()
     model = M3VLVisionModel(
@@ -183,3 +197,54 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
     staged = model._stage_rope(torch.tensor([grids[0]]))
     assert all(table is not kept and torch.equal(table, kept) for table, kept in zip(staged, first))
     assert len(freed) == 4
+
+
+def test_vision_rope_tables_copied_to_l1(monkeypatch):
+    """One forward copies the cached cos and sin of its grid to L1 once, before the first block, gives the two copies
+    to every block and frees them after the last block. The cache keeps the two tables it uploaded to DRAM, not freed,
+    and the next image of the grid copies the same tables. No device: ttnn.from_torch, ttnn.to_memory_config,
+    ttnn.deallocate and the modules are stand-ins."""
+    uploads, calls = [], []  # (tensor, memory config) of each upload; the copies, blocks and frees in call order
+
+    def from_torch(tensor, **kwargs):
+        uploads.append((tensor.clone(), kwargs["memory_config"]))
+        return uploads[-1][0]
+
+    def to_memory_config(tensor, memory_config):
+        calls.append(("copy", tensor, memory_config, tensor.clone()))
+        return calls[-1][3]
+
+    def block(index):
+        def forward(x, cos, sin):
+            calls.append(("block", index, cos, sin))
+            return x
+
+        return forward
+
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "to_memory_config", to_memory_config)
+    monkeypatch.setattr(ttnn, "deallocate", lambda tensor: calls.append(("free", tensor)))
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    config = ref.MiniMaxM3VisionConfig()
+    blocks = [block(index) for index in range(3)]
+    model = M3VLVisionModel(
+        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=blocks
+    )
+    grid, copied = (1, 4, 6), None
+    for image in (1, 2):
+        calls.clear()
+        model.forward_tower(torch.zeros(grid[1] * grid[2], config.patch_dim), torch.tensor([grid]))
+        kinds = [call[0] for call in calls]
+        assert kinds == ["copy"] * 2 + ["block"] * len(blocks) + ["free"] * 2, f"image {image}: {kinds}"
+        (_, cos, cos_memory_config, cos_l1), (_, sin, sin_memory_config, sin_l1) = calls[:2]
+        assert cos_memory_config == ttnn.L1_MEMORY_CONFIG and sin_memory_config == ttnn.L1_MEMORY_CONFIG
+        assert all(
+            call[1] == index and call[2] is cos_l1 and call[3] is sin_l1 for index, call in enumerate(calls[2:-2])
+        ), f"image {image}: a block got other tables than the L1 copies"
+        freed = [call[1] for call in calls[-2:]]
+        assert any(t is cos_l1 for t in freed) and any(t is sin_l1 for t in freed), f"image {image}: freed {freed}"
+        cached = model._rope_cache[grid]
+        assert cos is cached[0] and sin is cached[1], f"image {image}: copied other tables than the cached ones"
+        assert [memory_config for t, memory_config in uploads if t is cos or t is sin] == [ttnn.DRAM_MEMORY_CONFIG] * 2
+        assert copied is None or (cos is copied[0] and sin is copied[1]), "the second image copied other tables"
+        copied = cached

@@ -58,15 +58,23 @@ def test_vision_tower_new_grid_on_cached_programs(
     the reference of its own grid, and no image after the first adds a program to the cache. The model keeps the RoPE
     tables of two grids here, so h8w32's tables are staged while h16w16's are still allocated, and a program that kept
     the first tables' addresses would rotate h8w32 by h16w16's positions; h32w8 frees h16w16's tables, and the last
-    image stages them again."""
+    image stages them again. Each forward copies its grid's tables to L1 for the blocks; one more small L1 tensor,
+    allocated before each image after the first and kept, puts those copies at other addresses than the image
+    before's."""
     monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.ROPE_CACHE_GRIDS", 2)
     num_layers = 2
     model = M3VLVisionModel.from_torch(
         mesh_device, vision_reference(num_layers), with_projector=False, dtype=ttnn.bfloat16
     )
     grids = ((1, 16, 16), (1, 8, 32), (1, 32, 8), (1, 16, 16))
-    cache_entries = None
+    cache_entries, held = None, []
     for i, grid_thw in enumerate(grids):
+        if i:
+            held.append(
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.L1_MEMORY_CONFIG
+                )
+            )
         acts = vision_activations(grid_thw, num_layers)
         tower_ref = acts["tower.out"]
         tower_tt = to_host(model.forward_tower(acts["pixel_values"], acts["grid_thw"]), mesh_device, tower_ref.shape)

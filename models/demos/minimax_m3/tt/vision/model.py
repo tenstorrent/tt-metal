@@ -18,10 +18,11 @@ Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
 
 There is NO post-encoder LayerNorm and NO attention windowing — the tower
 attends fully. The 3D-RoPE cos/sin depend only on `image_grid_thw`: they are
-computed on host and pushed to device with the first image of a grid, then
-kept for the next images of that grid (shared by all blocks). Weights come
-from the Torch reference (reference/vision.py): seeded random weights in the
-unit tests, the checkpoint's through loader.build_reference.
+computed on host and pushed to DRAM with the first image of a grid, then
+kept for the next images of that grid; each forward copies them to L1 once
+for all blocks. Weights come from the Torch reference (reference/vision.py):
+seeded random weights in the unit tests, the checkpoint's through
+loader.build_reference.
 """
 from __future__ import annotations
 
@@ -42,7 +43,7 @@ from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
 from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
-# The RoPE tables of the ROPE_CACHE_GRIDS (at least 1) image grids used last stay on device. 16 is not tuned to any
+# The RoPE tables of the ROPE_CACHE_GRIDS (at least 1) image grids used last stay in DRAM. 16 is not tuned to any
 # mix of image sizes. It is cheap: cos and sin of a 672x672 image, the largest that the image processor makes (2304
 # patches), take 0.88 MB of DRAM, so 14 MB for 16 such grids.
 ROPE_CACHE_GRIDS = 16
@@ -122,7 +123,7 @@ class M3VLVisionModel(LightweightModule):
         """The cos and sin tables of the grid, staged with its first image and kept for the next images of that grid.
 
         Holds the tables of the ROPE_CACHE_GRIDS grids used last and frees the two tables of the grid it drops. Only
-        forward_tower uses them, for the blocks, so no caller holds a table that this frees.
+        forward_tower uses them, to copy them to L1 for the blocks, so no caller holds a table that this frees.
         """
         key = tuple(image_grid_thw[0].tolist())
         if key in self._rope_cache:
@@ -133,6 +134,16 @@ class M3VLVisionModel(LightweightModule):
                 ttnn.deallocate(table)
         self._rope_cache[key] = self._stage_rope(image_grid_thw)
         return self._rope_cache[key]
+
+    def _rope_to_l1(self, cos: ttnn.Tensor, sin: ttnn.Tensor):
+        """L1 copies of the cached cos and sin for one forward, which the caller frees.
+
+        At 672x672 the RoPE op reads the cos and sin of each sequence tile again for each of the 16 heads, two thirds
+        of what it reads; with the tables uploaded to L1 once, so without these copies, the image ran 1.7 ms faster on
+        a P150. The cache stays in DRAM: in L1 it would hold the tables of up to ROPE_CACHE_GRIDS grids at all times,
+        in room that circular buffers need.
+        """
+        return tuple(ttnn.to_memory_config(table, ttnn.L1_MEMORY_CONFIG) for table in (cos, sin))
 
     # ------------------------------------------------------------------
     def forward_tower(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
@@ -148,9 +159,11 @@ class M3VLVisionModel(LightweightModule):
         x_tt = self._push_pixel_values(pixel_values)
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
-        cos_tt, sin_tt = self._cached_rope(image_grid_thw)
+        cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
         for blk in self.blocks:
             x_tt = blk(x_tt, cos_tt, sin_tt)
+        ttnn.deallocate(cos_tt)
+        ttnn.deallocate(sin_tt)
         return x_tt
 
     def forward(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:

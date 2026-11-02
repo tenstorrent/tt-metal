@@ -19,9 +19,9 @@ import torch
 
 import ttnn
 
-# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free while the encoder keeps
-# its tensors in DRAM. The largest K block that fits is taken, so this also sets K blocks: at 672x672 fc1 and QKV get
-# 4, which ran faster than 8 in a matmul sweep on a P150.
+# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free with no L1 tensors, less
+# the RoPE tables the blocks read from L1 (8 KiB per core at 2304 patches). The largest K block that fits is taken, so
+# this also sets K blocks: at 672x672 fc1 and QKV get 4, which ran faster than 8 in a matmul sweep on a P150.
 LINEAR_L1_BYTES = 1_000_000
 # The largest K block (in0_block_w, in tiles): in that sweep fc2 and the out projection ran slower with 16.
 LINEAR_MAX_IN0_BLOCK_W = 8
