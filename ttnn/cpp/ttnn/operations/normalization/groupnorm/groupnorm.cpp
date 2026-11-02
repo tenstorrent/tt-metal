@@ -8,7 +8,6 @@
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
-#include <cstdlib>
 #include <mutex>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
@@ -25,13 +24,10 @@ namespace {
 using ttnn::operations::normalization::compute_num_virtual_cols;
 using ttnn::operations::normalization::find_expected_dram_grid;
 
-// Stats/intermediate CB format: fp32 input uses fp32 stats, bf16 input uses bf16.
-ttnn::DataType group_norm_im_data_format(ttnn::DataType input_dtype) {
-    // EXPERIMENT (#29960): force fp32 intermediates for any input dtype. Do not commit.
-    if (std::getenv("TT_GN_FP32_IM") != nullptr) {
-        return ttnn::DataType::FLOAT32;
-    }
-    return input_dtype == ttnn::DataType::FLOAT32 ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16;
+// Stats/intermediate CB format: fp32 input uses fp32 stats; bf16 input uses bf16 unless fp32_intermediates is set.
+ttnn::DataType group_norm_im_data_format(ttnn::DataType input_dtype, bool fp32_intermediates) {
+    return (input_dtype == ttnn::DataType::FLOAT32 || fp32_intermediates) ? ttnn::DataType::FLOAT32
+                                                                          : ttnn::DataType::BFLOAT16;
 }
 
 // Validates that the requested core grid satisfies the DRAM group-norm constraints.
@@ -281,7 +277,8 @@ Tensor group_norm(
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& negative_mask,
-    bool use_welford) {
+    bool use_welford,
+    bool fp32_intermediates) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -304,7 +301,6 @@ Tensor group_norm(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
-
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
@@ -324,10 +320,30 @@ Tensor group_norm(
         nhw,
         ttnn::types::TILE_SIZE);
 
+    const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
+
+    // fp32 intermediates for bf16 input exist only on the SFPU two-pass path (#29960). The tile-reduction kernels
+    // would need their own packer/unpacker reconfigs and pass each group's partial result through the output
+    // tensor, so they are rejected here rather than silently given bf16 intermediates. fp32 input always uses fp32
+    // intermediates, so the flag changes nothing there.
+    const bool bf16_fp32_intermediates = fp32_intermediates && input_tensor.dtype() != DataType::FLOAT32;
+    if (bf16_fp32_intermediates) {
+        TT_FATAL(
+            input_tensor.dtype() == DataType::BFLOAT16,
+            "group_norm: fp32_intermediates=True requires BFLOAT16 or FLOAT32 input, got {}",
+            input_tensor.dtype());
+        TT_FATAL(use_welford, "group_norm: fp32_intermediates=True requires use_welford=True for BFLOAT16 input.");
+        TT_FATAL(
+            input_shape[2] % tile_height_align == 0,
+            "group_norm: fp32_intermediates=True requires H*W to be a multiple of the tile height for BFLOAT16 input "
+            "({} % {} != 0); non-tile-aligned inputs run on the tile-reduction path, which does not support it.",
+            input_shape[2],
+            tile_height_align);
+    }
+
     // The SFPU two-pass path transposes H*W into tile columns and cannot exclude padding rows.
     // Route non-tile-aligned inputs to the tile-reduction path, which applies the #50682 correction.
     // A new direct ttnn::prim::group_norm caller would need its own equivalent guard.
-    const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
     if (use_welford && (input_shape[2] % tile_height_align != 0)) {
         // Once per process: group_norm runs inside per-step model loops.
         static std::once_flag welford_fallback_warned;
@@ -402,6 +418,11 @@ Tensor group_norm(
     const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
+    // The fp32 intermediates (group statistics and partials) only survive if DEST is fp32 too; a user config can
+    // turn it off.
+    TT_FATAL(
+        !bf16_fp32_intermediates || std::get<2>(get_compute_kernel_config_args(arch, kernel_config_val)),
+        "group_norm: fp32_intermediates=True requires fp32_dest_acc_en=true in compute_kernel_config.");
 
     const bool core_grid_auto_selected = !core_grid.has_value();
 
@@ -499,7 +520,7 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
+            .im_data_format = group_norm_im_data_format(input_tensor.dtype(), fp32_intermediates),
             .out_data_format = out_dtype,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
@@ -600,7 +621,7 @@ Tensor group_norm(
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-        .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
+        .im_data_format = group_norm_im_data_format(input_tensor.dtype(), fp32_intermediates),
         .out_data_format = out_dtype,
         .inplace = inplace.value_or(false),
         .output_layout = device_out_layout,

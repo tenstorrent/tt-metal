@@ -26,6 +26,7 @@ Tensor group_norm(
     std::optional<int> num_out_blocks = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<Tensor>& negative_mask = std::nullopt,
-    bool use_welford = false);
+    bool use_welford = false,
+    bool fp32_intermediates = false);
 
 }  // namespace ttnn

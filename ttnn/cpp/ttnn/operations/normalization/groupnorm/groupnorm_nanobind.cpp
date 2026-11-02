@@ -67,6 +67,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
                 negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Created with ttnn.create_group_norm_input_negative_mask. Used to reduce the number of CB's used in the sharded version of the kernel. When no tensor is passed the op synthesizes the mask in L1 if and only if the program would otherwise not fit in L1.
                 use_welford (bool, optional): Defaults to `False`. If `True`, stable two-pass statistics with FP32 accumulation are used to compute the mean and variance. For non-tile-aligned ``H*W``, the operation falls back to the tile-reduction path so padding rows can be excluded correctly. The argument name is retained for compatibility.
+                fp32_intermediates (bool, optional): Defaults to `False`. If `True`, BFLOAT16 input keeps the group statistics in FLOAT32 intermediate buffers and normalizes on the SFPU in FP32, instead of rounding the mean and rstd to BFLOAT16. This brings the output error close to BFLOAT16 rounding, most noticeably for inputs with a large mean, at roughly 1.5-2x the kernel time. Requires ``use_welford=True``, ``fp32_dest_acc_en=True`` (the default with ``use_welford``) and ``H*W`` a multiple of the tile height. FLOAT32 input always uses FLOAT32 intermediates, so the flag has no effect there.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -143,7 +144,8 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("num_out_blocks") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("negative_mask") = nb::none(),
-        nb::arg("use_welford") = false);
+        nb::arg("use_welford") = false,
+        nb::arg("fp32_intermediates") = false);
     mod.def(
         "create_group_norm_input_mask",
         [](std::int64_t num_channel,

@@ -18,6 +18,9 @@ statistics_backend_values, statistics_backend_ids = (True, False), ("two_pass", 
 
 TEST_PADDING_VALUE = -42
 
+# How far above the bf16 rounding floor the fp32_intermediates=True error may be (#29960).
+FP32_INTERMEDIATES_ERR_FLOOR_FACTOR = 1.5
+
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK = [{"l1_small_size": 47000}]
 
@@ -2664,3 +2667,247 @@ def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_wel
         err_on = (out_on - ref).abs().mean().item()
         err_off = (out_off - ref).abs().mean().item()
         assert err_on < err_off, f"fp32 DEST mean abs error {err_on} is not below bf16 DEST {err_off}"
+
+
+# fp32_intermediates=True (#29960) keeps the group statistics and partials of a BFLOAT16 input in fp32 CBs. It is
+# supported only on the welford path for tile-aligned H*W with fp32 DEST. The tests below cover:
+#   - bf16 accuracy: on each welford factory (mcast, no-mcast, sharded), fp32 intermediates beat bf16 ones and come
+#     close to the bf16 rounding floor, for zero-mean and large-mean inputs.
+#   - SDXL shapes: full-size sharded group norms still fit in L1 with the larger fp32 CBs.
+#   - fp32 input: fp32_intermediates is a no-op, since fp32 input already uses fp32 intermediates.
+#   - rejection: each unsupported combination fails up front, at host runtime in ttnn.group_norm, with a specific
+#     message.
+
+
+# Helper: builds a compute_kernel_config with fp32 DEST, which fp32 intermediates require. fp32_dest_acc_en=False
+# is only for the rejection test.
+def _fp32_intermediates_kernel_config(device, fp32_dest_acc_en=True):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        # HiFi4 with fp32_dest_acc_en is avoided on Wormhole (#38306).
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+# Helper: runs welford group_norm on x of shape (N, 1, H*W, C) and returns the output as float64. path picks the
+# program factory through the input layout and grid:
+#   - "mcast": interleaved TILE input on an 8x8 grid (use with N=1).
+#   - "no_mcast": interleaved TILE input on an 8x4 grid; with N=8 every virtual row is filled, which selects the
+#     no-mcast factory.
+#   - "sharded": block-sharded input on an 8x8 grid, in sharded_layout (the output keeps the same layout).
+# weight and bias are length-C tensors, passed together. num_out_blocks only applies to the interleaved paths.
+def _run_group_norm_welford(
+    device,
+    x,
+    G,
+    path,
+    dtype,
+    fp32_intermediates,
+    weight=None,
+    bias=None,
+    num_out_blocks=None,
+    sharded_layout=ttnn.ROW_MAJOR_LAYOUT,
+):
+    N, _, HW, C = x.shape
+    compute_kernel_config = _fp32_intermediates_kernel_config(device)
+    if path == "sharded":
+        grid = ttnn.CoreGrid(y=8, x=8)
+        tt_input = ttnn.from_torch(x, dtype=dtype, layout=sharded_layout, device=device)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // 8, C // 8), ttnn.ShardOrientation.COL_MAJOR)
+        memory_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        tt_input = ttnn.interleaved_to_sharded(tt_input, memory_config, keep_l1_aligned=True)
+        gamma, beta = None, None
+        if weight is not None:
+            gamma, beta = (
+                ttnn.from_torch(
+                    ttnn.create_group_norm_weight_bias_rm(t, C, grid.y),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                )
+                for t in (weight, bias)
+            )
+        tt_output = ttnn.group_norm(
+            tt_input,
+            num_groups=G,
+            epsilon=1e-5,
+            weight=gamma,
+            bias=beta,
+            memory_config=memory_config,
+            core_grid=grid,
+            # In-place is only allowed for ROW_MAJOR.
+            inplace=sharded_layout == ttnn.ROW_MAJOR_LAYOUT,
+            compute_kernel_config=compute_kernel_config,
+            use_welford=True,
+            fp32_intermediates=fp32_intermediates,
+        )
+        tt_output = ttnn.sharded_to_interleaved(tt_output, ttnn.L1_MEMORY_CONFIG)
+    else:
+        grid = ttnn.CoreGrid(y=8, x=8) if path == "mcast" else ttnn.CoreGrid(y=8, x=4)
+        tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        gamma, beta, input_mask = None, None, None
+        if weight is not None:
+            [gamma, beta], input_mask = ttnn.dram_group_norm_params_from_torch(
+                [weight, bias], C, G, device, core_grid=grid, return_mask=True
+            )
+        tt_output = ttnn.group_norm(
+            tt_input,
+            num_groups=G,
+            epsilon=1e-5,
+            input_mask=input_mask,
+            weight=gamma,
+            bias=beta,
+            core_grid=grid,
+            inplace=False,
+            num_out_blocks=num_out_blocks,
+            compute_kernel_config=compute_kernel_config,
+            use_welford=True,
+            fp32_intermediates=fp32_intermediates,
+        )
+    return ttnn.to_torch(tt_output).double()
+
+
+# Helper: runs a BFLOAT16 x with bf16 and with fp32 intermediates, and checks that fp32 intermediates give a lower
+# error than bf16 ones and stay within FP32_INTERMEDIATES_ERR_FLOOR_FACTOR of the bf16 rounding of the exact result.
+# x is drawn from 3 * randn + offset and rounded to bf16. affine adds a random bf16 weight and bias.
+def _check_fp32_intermediates_accuracy(device, path, N, HW, C, G, offset, affine=False, **run_kwargs):
+    torch.manual_seed(0)
+    # Unit variance would put rstd near 1.0, which bf16 holds exactly, so bf16 intermediates can lose almost nothing
+    # (seen with 4 groups of 1024x256). A std of 3 puts rstd near 1/3, where bf16 rounding of rstd costs accuracy.
+    x = (3.0 * torch.randn(N, 1, HW, C) + offset).bfloat16().float()
+    weight, bias = None, None
+    if affine:
+        weight = torch.rand(C).bfloat16().float()
+        bias = torch.rand(C).bfloat16().float()
+    ref = torch.nn.functional.group_norm(
+        x.double().permute(0, 3, 1, 2),
+        G,
+        weight=None if weight is None else weight.double(),
+        bias=None if bias is None else bias.double(),
+        eps=1e-5,
+    ).permute(0, 2, 3, 1)
+
+    def err(fp32_intermediates):
+        out = _run_group_norm_welford(
+            device, x, G, path, ttnn.bfloat16, fp32_intermediates, weight=weight, bias=bias, **run_kwargs
+        )
+        return (out - ref).abs().mean().item()
+
+    err_floor = (ref.bfloat16().double() - ref).abs().mean().item()
+    err_bf16 = err(False)
+    err_fp32 = err(True)
+
+    assert err_fp32 < err_bf16, f"fp32 intermediates error {err_fp32} is not below bf16 intermediates {err_bf16}"
+    assert (
+        err_fp32 < FP32_INTERMEDIATES_ERR_FLOOR_FACTOR * err_floor
+    ), f"fp32 intermediates error {err_fp32} is not near the bf16 floor {err_floor}"
+
+
+# With bf16 intermediates the group mean and rstd are rounded to bf16 before x - mean, which costs the most when the
+# input mean is large. fp32 intermediates keep them in fp32, so this test ensures the error falls below the bf16
+# intermediates error and to within FP32_INTERMEDIATES_ERR_FLOOR_FACTOR of the bf16 rounding of the exact result
+# (#29960). Besides the base shape on each factory, the cases cover where bf16 data meets fp32 intermediates in a
+# different way:
+#   - wide_groups: 8 channel tiles per group, more than the 4-tile fp32 DEST subblock, so one group's statistics
+#     take several DEST acquires.
+#   - straddle: 24 channels per group, so groups straddle tile boundaries and use per-group masks.
+# no_mcast (16 channels per group) and straddle put several groups in one tile. Every group after the first is
+# added into cb_x through SrcB, which once truncated it to bf16; those cases catch that.
+#   - out_blocks: the per-core height is processed in several out blocks (3 of 4 tile rows is an uneven split).
+#   - affine: a bf16 weight and bias are applied to the fp32 normalized values.
+#   - tile: sharded TILE input and output instead of ROW_MAJOR.
+@pytest.mark.parametrize("offset", [0.0, 16.0], ids=["mean0", "mean16"])
+@pytest.mark.parametrize(
+    "path, N, HW, C, G, affine, num_out_blocks, sharded_layout",
+    [
+        ("mcast", 1, 1024, 1024, 32, False, None, None),
+        ("no_mcast", 8, 128, 512, 32, False, None, None),
+        ("sharded", 1, 1024, 1024, 32, False, None, ttnn.ROW_MAJOR_LAYOUT),
+        ("mcast", 1, 1024, 1024, 4, False, None, None),
+        ("no_mcast", 8, 128, 1024, 4, False, None, None),
+        ("mcast", 1, 512, 768, 32, False, None, None),
+        ("mcast", 1, 1024, 1024, 32, False, 3, None),
+        ("no_mcast", 8, 128, 512, 32, False, 2, None),
+        ("mcast", 1, 1024, 1024, 32, True, None, None),
+        ("no_mcast", 8, 128, 512, 32, True, None, None),
+        ("sharded", 1, 1024, 1024, 32, True, None, ttnn.ROW_MAJOR_LAYOUT),
+        ("sharded", 1, 1024, 1024, 32, False, None, ttnn.TILE_LAYOUT),
+    ],
+    ids=[
+        "mcast",
+        "no_mcast",
+        "sharded",
+        "mcast-wide_groups",
+        "no_mcast-wide_groups",
+        "mcast-straddle",
+        "mcast-out_blocks",
+        "no_mcast-out_blocks",
+        "mcast-affine",
+        "no_mcast-affine",
+        "sharded-affine",
+        "sharded-tile",
+    ],
+)
+def test_group_norm_fp32_intermediates_bf16_accuracy(
+    device, path, N, HW, C, G, affine, num_out_blocks, sharded_layout, offset
+):
+    run_kwargs = {"num_out_blocks": num_out_blocks}
+    if sharded_layout is not None:
+        run_kwargs["sharded_layout"] = sharded_layout
+    _check_fp32_intermediates_accuracy(device, path, N, HW, C, G, offset, affine=affine, **run_kwargs)
+
+
+# fp32 intermediate CBs take twice the L1 of bf16 ones. This test ensures full-size SDXL UNet group norms on the
+# sharded path still fit in L1 with fp32_intermediates=True, and keep the accuracy gain.
+@pytest.mark.parametrize("N, C, H, W", [(1, 1920, 64, 64), (1, 320, 128, 128)], ids=["c1920_64x64", "c320_128x128"])
+def test_group_norm_fp32_intermediates_sdxl_shapes(device, N, C, H, W):
+    _check_fp32_intermediates_accuracy(device, "sharded", N, H * W, C, 32, offset=16.0)
+
+
+# fp32 input already uses fp32 intermediates, so this test ensures fp32_intermediates=True leaves the output unchanged.
+@pytest.mark.parametrize("path", ["mcast", "sharded"])
+def test_group_norm_fp32_intermediates_noop_for_fp32_input(device, path):
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 1024, 1024) + 4.0
+    out_off = _run_group_norm_welford(device, x, 32, path, ttnn.float32, False)
+    out_on = _run_group_norm_welford(device, x, 32, path, ttnn.float32, True)
+    assert torch.equal(out_on, out_off)
+
+
+# fp32_intermediates=True with BFLOAT16 input is rejected at host runtime in ttnn.group_norm, before any program is
+# built:
+#   - legacy: use_welford=False runs the tile-reduction kernels, which have no fp32 intermediate support.
+#   - non_tile_aligned: H*W=1000 is not a multiple of 32, so the op would fall back to tile reduction.
+#   - fp32_dest_off: a user compute_kernel_config with fp32_dest_acc_en=False would round the statistics to bf16 in
+#     DEST, defeating the fp32 CBs.
+#   - bfloat8_b: only BFLOAT16 and FLOAT32 inputs are accepted.
+@pytest.mark.parametrize(
+    "dtype, HW, use_welford, fp32_dest_acc_en, message",
+    [
+        (ttnn.bfloat16, 1024, False, True, "requires use_welford=True"),
+        (ttnn.bfloat16, 1000, True, True, "multiple of the tile height"),
+        (ttnn.bfloat16, 1024, True, False, "requires fp32_dest_acc_en=true"),
+        (ttnn.bfloat8_b, 1024, True, True, "requires BFLOAT16 or FLOAT32 input"),
+    ],
+    ids=["legacy", "non_tile_aligned", "fp32_dest_off", "bfloat8_b"],
+)
+def test_group_norm_fp32_intermediates_rejected(
+    device, dtype, HW, use_welford, fp32_dest_acc_en, message, expect_error
+):
+    tt_input = ttnn.from_torch(torch.randn(1, 1, HW, 512), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.group_norm(
+            tt_input,
+            num_groups=32,
+            epsilon=1e-5,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            inplace=False,
+            compute_kernel_config=_fp32_intermediates_kernel_config(device, fp32_dest_acc_en),
+            use_welford=use_welford,
+            fp32_intermediates=True,
+        )
