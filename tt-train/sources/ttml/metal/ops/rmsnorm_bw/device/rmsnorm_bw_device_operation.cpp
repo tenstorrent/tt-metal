@@ -44,16 +44,17 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     check_shape(dL_dout_tensor, op, "dL_dout", output_shape);
     // Gated mode always writes dL_dgate; plain mode needs at least one of the other outputs.
     TT_FATAL(
-        args.outputs.da || args.outputs.dgamma || tensor_args.gate.has_value(),
-        "{}: nothing to compute: outputs.da and outputs.dgamma are false and there is no gate",
+        args.outputs.grad_input || args.outputs.grad_gamma || tensor_args.gate.has_value(),
+        "{}: nothing to compute: outputs.grad_input and outputs.grad_gamma are false and there is no gate",
         op);
     if (preallocated_da_tensor.has_value()) {
-        TT_FATAL(args.outputs.da, "{}: Preallocated dL_da given but outputs.da is false", op);
+        TT_FATAL(args.outputs.grad_input, "{}: Preallocated dL_da given but outputs.grad_input is false", op);
         check_device_tensor(preallocated_da_tensor.value(), op, "Preallocated dL_da", in_dram);
         check_shape(preallocated_da_tensor.value(), op, "Preallocated dL_da", input_tensor.logical_shape());
     }
     if (preallocated_dgamma_components_tensor.has_value()) {
-        TT_FATAL(args.outputs.dgamma, "{}: Preallocated dL_dgamma_components given but outputs.dgamma is false", op);
+        TT_FATAL(
+            args.outputs.grad_gamma, "{}: Preallocated dL_dgamma_components given but outputs.grad_gamma is false", op);
         check_device_tensor(
             preallocated_dgamma_components_tensor.value(), op, "Preallocated dL_dgamma_components", in_dram);
         check_shape(
@@ -79,7 +80,7 @@ spec_return_value_t RMSNormBackwardDeviceOperation::compute_output_specs(
     };
     spec_return_value_t output_specs(3U);
 
-    if (args.outputs.da) {
+    if (args.outputs.grad_input) {
         if (tensor_args.preallocated_da.has_value()) {
             output_specs[0] = tensor_args.preallocated_da->tensor_spec();
         } else {
@@ -88,7 +89,7 @@ spec_return_value_t RMSNormBackwardDeviceOperation::compute_output_specs(
         }
     }
 
-    if (args.outputs.dgamma) {
+    if (args.outputs.grad_gamma) {
         if (tensor_args.preallocated_dgamma_components.has_value()) {
             output_specs[1] = tensor_args.preallocated_dgamma_components->tensor_spec();
         } else {

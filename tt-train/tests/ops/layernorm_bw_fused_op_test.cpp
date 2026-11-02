@@ -225,7 +225,7 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_OneTilePerRow) {
 
 // ============================================================================
 // Program cache hits: launches on fresh tensors of already cached specs, with every earlier launch alive.
-// These call the device op directly and check the per-element dgamma/dbeta components it writes, which the
+// These call the device op directly and check the per-element dgamma components it writes, which the
 // public wrapper only returns summed over rows.
 // ============================================================================
 
@@ -234,7 +234,7 @@ namespace {
 constexpr float kEps = 1e-6F;
 constexpr float kRtol = 1.0e-3F;
 constexpr float kDxAtol = 2e-2F;
-// dgamma_components = dy * x_hat and dbeta_components = dy, element by element, held to the dgamma/dbeta tolerance.
+// dgamma_components = dy * x_hat, element by element, held to the dgamma/dbeta tolerance.
 constexpr float kComponentsAtol = 5e-2F;
 // Far outside any gradient here, so a preallocated tensor the op did not write stands out.
 constexpr float kPreallocatedSentinel = 1000.0F;
@@ -243,8 +243,7 @@ constexpr float kPreallocatedSentinel = 1000.0F;
 constexpr uint32_t kPreallocNone = 0U;
 constexpr uint32_t kPreallocDx = 1U;
 constexpr uint32_t kPreallocDgammaComponents = 2U;
-constexpr uint32_t kPreallocDbetaComponents = 4U;
-constexpr uint32_t kPreallocAll = kPreallocDx | kPreallocDgammaComponents | kPreallocDbetaComponents;
+constexpr uint32_t kPreallocAll = kPreallocDx | kPreallocDgammaComponents;
 
 struct LayerNormBwShape {
     uint32_t batch = 1U;
@@ -272,11 +271,9 @@ struct LayerNormBwLaunch {
     ttnn::Tensor dL_dout;
     std::optional<ttnn::Tensor> preallocated_dx;
     std::optional<ttnn::Tensor> preallocated_dgamma_components;
-    std::optional<ttnn::Tensor> preallocated_dbeta_components;
-    std::vector<std::optional<ttnn::Tensor>> outputs;  // [dx, dgamma_components, dbeta_components]
+    std::vector<std::optional<ttnn::Tensor>> outputs;  // [dx, dgamma_components]
     xt::xarray<float> dx_ref;
     xt::xarray<float> dgamma_components_ref;
-    xt::xarray<float> dbeta_components_ref;
 };
 
 LayerNormBwLaunch make_layernorm_bw_launch(
@@ -300,7 +297,6 @@ LayerNormBwLaunch make_layernorm_bw_launch(
     LayerNormBwLaunch launch;
     std::tie(launch.dx_ref, std::ignore, std::ignore) = layernorm_backward_reference(dy, cache);
     launch.dgamma_components_ref = dy * cache.x_hat;
-    launch.dbeta_components_ref = dy;
 
     xt::xarray<float> x_4d = x;
     x_4d.reshape({shape.batch, shape.heads, shape.seq_len, shape.features});
@@ -326,9 +322,6 @@ LayerNormBwLaunch make_layernorm_bw_launch(
     if ((preallocated & kPreallocDgammaComponents) != 0U) {
         launch.preallocated_dgamma_components = core::full(output_shape, kPreallocatedSentinel, device);
     }
-    if ((preallocated & kPreallocDbetaComponents) != 0U) {
-        launch.preallocated_dbeta_components = core::full(output_shape, kPreallocatedSentinel, device);
-    }
     return launch;
 }
 
@@ -339,9 +332,9 @@ void run_layernorm_bw(LayerNormBwLaunch& launch) {
         launch.mean,
         launch.rstd,
         launch.dL_dout,
+        /*outputs=*/{},
         launch.preallocated_dx,
-        launch.preallocated_dgamma_components,
-        launch.preallocated_dbeta_components);
+        launch.preallocated_dgamma_components);
 }
 
 void expect_close(
@@ -354,15 +347,14 @@ void expect_close(
 }
 
 void expect_layernorm_bw_launch_matches(const LayerNormBwLaunch& launch) {
-    ASSERT_EQ(launch.outputs.size(), 3U);
+    ASSERT_EQ(launch.outputs.size(), 2U);
     for (size_t i = 0; i < launch.outputs.size(); ++i) {
         ASSERT_TRUE(launch.outputs[i].has_value()) << "output " << i << " was not computed";
     }
     expect_close(launch.outputs[0].value(), launch.dx_ref, kDxAtol, "dx");
     expect_close(launch.outputs[1].value(), launch.dgamma_components_ref, kComponentsAtol, "dgamma_components");
-    expect_close(launch.outputs[2].value(), launch.dbeta_components_ref, kComponentsAtol, "dbeta_components");
-    const std::array<std::optional<ttnn::Tensor>, 3> preallocated{
-        launch.preallocated_dx, launch.preallocated_dgamma_components, launch.preallocated_dbeta_components};
+    const std::array<std::optional<ttnn::Tensor>, 2> preallocated{
+        launch.preallocated_dx, launch.preallocated_dgamma_components};
     for (size_t i = 0; i < preallocated.size(); ++i) {
         if (preallocated[i].has_value()) {
             EXPECT_EQ(launch.outputs[i]->buffer(), preallocated[i]->buffer())
@@ -390,7 +382,6 @@ std::string describe_preallocated(const uint32_t preallocated) {
     std::string description = "preallocated";
     description += (preallocated & kPreallocDx) != 0U ? " dx" : "";
     description += (preallocated & kPreallocDgammaComponents) != 0U ? " dgamma_components" : "";
-    description += (preallocated & kPreallocDbetaComponents) != 0U ? " dbeta_components" : "";
     return description;
 }
 
@@ -430,7 +421,7 @@ void run_layernorm_bw_preallocation_sequence(
 }  // namespace
 
 // On cores of both work groups, without and with every output preallocated: a hit that keeps any of the five input or
-// three output addresses of an earlier launch computes from that launch's tensors or writes into its outputs.
+// two output addresses of an earlier launch computes from that launch's tensors or writes into its outputs.
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_CacheHit_FreshLiveTensors_TwoCoreGroups) {
     run_layernorm_bw_preallocation_sequence(two_core_group_shape(), {kPreallocNone, kPreallocAll}, /*seed=*/11U);
 }
@@ -446,11 +437,7 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_CacheHit_PreallocatedOutputsAdd
     // Cached without preallocated outputs, then launches that add some or all of them and drop them again.
     run_layernorm_bw_preallocation_sequence(
         kSixTileRows,
-        {kPreallocNone,
-         kPreallocDbetaComponents,
-         kPreallocDx,
-         kPreallocDgammaComponents | kPreallocDbetaComponents,
-         kPreallocAll},
+        {kPreallocNone, kPreallocDgammaComponents, kPreallocDx, kPreallocAll},
         /*seed=*/101U);
     // Cached with a preallocated dx, then launches without it and with other subsets.
     run_layernorm_bw_preallocation_sequence(

@@ -764,7 +764,16 @@ void py_module(nb::module_& m) {
             "a head-major input [B*H,1,T,V] and a head-merged gate [B,1,T,H*V], which the output takes.");
         py_metal.def(
             "rmsnorm_bw",
-            &ttml::metal::rmsnorm_bw,
+            [](const ttnn::Tensor& input,
+               const ttnn::Tensor& gamma,
+               const ttnn::Tensor& rms,
+               const ttnn::Tensor& dL_dout,
+               bool compute_dgamma,
+               const std::optional<ttnn::Tensor>& gate,
+               bool compute_da) {
+                return ttml::metal::rmsnorm_bw(
+                    input, gamma, rms, dL_dout, gate, {.input = compute_da, .gamma = compute_dgamma});
+            },
             nb::arg("input"),
             nb::arg("gamma"),
             nb::arg("rms"),

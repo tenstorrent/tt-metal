@@ -175,8 +175,8 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     const auto& input = tensor_args.input;
     const auto& gate = tensor_args.gate;
     const bool gated = gate.has_value();
-    const bool compute_dgamma = args.outputs.dgamma;
-    const bool compute_da = args.outputs.da;
+    const bool compute_dgamma = args.outputs.grad_gamma;
+    const bool compute_da = args.outputs.grad_input;
 
     auto* device = input.device();
     tt::tt_metal::ProgramDescriptor desc;

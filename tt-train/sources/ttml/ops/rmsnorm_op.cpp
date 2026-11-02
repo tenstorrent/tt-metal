@@ -62,9 +62,8 @@ autograd::TensorPtr rmsnorm_impl(
             gamma->get_value(),
             rms,
             out->get_grad(),
-            /* compute_dgamma */ gamma->get_requires_grad(),
             get_value_or_nullopt(gate),
-            /* compute_da */ input->get_requires_grad());
+            {.input = input->get_requires_grad(), .gamma = gamma->get_requires_grad()});
         if (grads.size() != 3U) {
             throw std::runtime_error("rmsnorm_bw returned unexpected number of gradients");
         }
