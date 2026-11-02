@@ -6684,9 +6684,8 @@ def record_kernel_attempt(
     # A structural-gate rung whose candidate crashed the model (not the device) has no measurement
     # either, but refusing the row leaves the gate stuck: the cap never advances, the gate keeps
     # re-firing with the highest combined gap, and every other target (including C++ kernels) is
-    # blocked behind it indefinitely.  Observed on glm_4_7_flash: 3 chain-fuse attempts all refused
-    # here, chain gate at 0/3 cap after ~500 total optimizer attempts.  The gate's own cap bounds
-    # how many unmeasured rows can accumulate, so the risk is the same as the wedged exemption.
+    # blocked behind it indefinitely.  The gate's own cap bounds how many unmeasured rows can
+    # accumulate, so the risk is the same as the wedged exemption.
     _is_gate_rung = (kernel_kind or "").lower() in _GATE_KINDS
     if (
         not _fpv["own"]
