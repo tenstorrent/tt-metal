@@ -97,9 +97,13 @@ enum GdnSpecStepKernelOpt : uint32_t {
     // silu (with A3_HALF: same tile half) and the silu(z) gate operand -- run only on the SFPU row pairs holding the
     // user's rows (T even). Rows outside keep finite values that the one-hot placement / per-row tail ignore. Bit-identical.
     kGdnSpecOptRowsSfpu = 1u << 14,
+    // gov gdn-v2 (with NARROW_GR): the writer's a|b gate read is one contiguous read of the user's T rows per face
+    // holding a[h] / b[Nv + h] (1 request per core at Nv <= 16 instead of 2 * T): every core reads the same page.
+    kGdnSpecOptNarrowGr2 = 1u << 15,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
-                     kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc | kGdnSpecOptRowsSfpu,
+                     kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc | kGdnSpecOptRowsSfpu |
+                     kGdnSpecOptNarrowGr2,
 };
 
 struct GdnSpecStepInputs {

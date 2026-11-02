@@ -414,6 +414,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             "GDN_NEA_FP32", in.neg_exp_A.dtype() == DataType::FLOAT32 ? "1" : "0");
         if ((a.kernel_opts & kGdnSpecOptNarrowGateReads) != 0) {
             writer.compiler_options.defines.emplace("GDN_NARROW_GR", "1");  // face-row gate reads (bit-identical)
+            if ((a.kernel_opts & kGdnSpecOptNarrowGr2) != 0) {
+                writer.compiler_options.defines.emplace("GDN_NARROW_GR2", "1");  // one read per face (bit-identical)
+            }
         }
     }
     const m2::SemaphoreSpecName READY{"ready"};

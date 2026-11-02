@@ -132,6 +132,9 @@ SPEC_STEP_OPT_NARROW_SRC = 8192
 # gov gdn-v2 (kernel_opts bit 14, kGdnSpecOptRowsSfpu): the conv's SFPU tail (with A3_HALF) and silu(z) run only on the
 # SFPU row pairs holding the user's T rows (T even). Bit-identical; QWEN36_SPEC_STEP_ROWS_SFPU=1 adds it like NARROW_SRC.
 SPEC_STEP_OPT_ROWS_SFPU = 16384
+# gov gdn-v2 (kernel_opts bit 15, kGdnSpecOptNarrowGr2, with NARROW_GR): one contiguous a|b read per face holding a / b
+# (every core reads the same page). Bit-identical; QWEN36_SPEC_STEP_NARROW_GR2=1 adds it wherever NARROW_GR is on.
+SPEC_STEP_OPT_NARROW_GR2 = 32768
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3702,6 +3705,12 @@ class TPGatedDeltaNet:
             _log_spec_step_once(
                 ("narrow_src", T),
                 "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_SRC=1: row-narrow src / z reads (bit-identical)",
+            )
+        if os.environ.get("QWEN36_SPEC_STEP_NARROW_GR2", "0").strip() == "1" and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_NARROW_GR:
+            extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_GR2
+            _log_spec_step_once(
+                ("narrow_gr2", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR2=1: one gate read per face (bit-identical)",
             )
         if os.environ.get("QWEN36_SPEC_STEP_ROWS_SFPU", "0").strip() == "1" and extra.get("kernel_opts", 0):
             extra["kernel_opts"] |= SPEC_STEP_OPT_ROWS_SFPU
