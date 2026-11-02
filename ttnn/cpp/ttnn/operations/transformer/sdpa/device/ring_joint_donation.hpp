@@ -77,7 +77,8 @@ inline DonationPlan make_donation_plan(
     uint32_t ksplit_count,
     uint32_t total_q_chunks,
     uint32_t q_chunks_per_head,
-    uint32_t ring_iterations) {
+    uint32_t ring_iterations,
+    bool local_only = false) {
     DonationPlan plan;
     const uint32_t num_cores = grid_x * grid_y;
     const uint32_t slots = slot_count(ring_iterations);
@@ -137,7 +138,7 @@ inline DonationPlan make_donation_plan(
     std::sort(group_ids.begin(), group_ids.end());
     group_ids.erase(std::unique(group_ids.begin(), group_ids.end()), group_ids.end());
     const uint32_t groups_per_band = static_cast<uint32_t>(group_ids.size());
-    if (groups_per_band * ksplit_count > slots - 1) {
+    if (!local_only && groups_per_band * ksplit_count > slots - 1) {
         return plan;
     }
     // Items: within a group, heads in order; spares walk them in slot order.
@@ -148,7 +149,7 @@ inline DonationPlan make_donation_plan(
     plan.donated_slot.assign(num_cores, kNoDonatedSlot);
     for (uint32_t band = 0; band < ksplit_count; ++band) {
         for (uint32_t g = 0; g < groups_per_band; ++g) {
-            const uint32_t slot = (ksplit_count - 1 - band) * groups_per_band + g;
+            const uint32_t slot = local_only ? 0 : (ksplit_count - 1 - band) * groups_per_band + g;
             for (uint32_t h = 0; h < heads; ++h) {
                 if (group_of_row[(2 * h) / grid_x] != group_ids[g]) {
                     continue;

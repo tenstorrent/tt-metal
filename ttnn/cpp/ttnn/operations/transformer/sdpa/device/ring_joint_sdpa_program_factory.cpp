@@ -2345,7 +2345,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                   ksplit_count,
                   total_q_chunks,
                   num_q_chunks,
-                  ring_size)
+                  ring_size,
+                  std::getenv("RJ_LOCAL_DONATION") != nullptr)  // EXPERIMENT
             : ring_joint::DonationPlan{};
     const bool donation = donation_plan.enabled;
     auto is_spare = [&](uint32_t core_idx) { return donation && !donation_plan.visits[core_idx].empty(); };
@@ -3847,9 +3848,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rank_mapping,
             // The gather splits each slice like its receiver's K bands: a receiver ranked below the sender masks
             // the sender's newest slab (one Q slab of the chunk) under the dense causal skip.
-            slice_readiness
-                ? RingAttentionSliceReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? kv_region_Nt : 0u}
-                : RingAttentionSliceReadiness{});
+            slice_readiness ? RingAttentionSliceReadiness{ksplit_count, Sk_chunk_t, 0u}
+                            : RingAttentionSliceReadiness{});
     }
 
     return desc;

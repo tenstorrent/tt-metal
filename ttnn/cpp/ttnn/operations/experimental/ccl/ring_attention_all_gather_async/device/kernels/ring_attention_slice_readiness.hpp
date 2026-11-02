@@ -20,7 +20,7 @@ namespace ttnn::ring_attention_all_gather {
 
 // Parts per full slice: one marker each. More parts let a ring step start sooner after its slice starts landing, at the
 // cost of a marker, a write barrier and shorter DRAM bursts per part.
-constexpr uint32_t kReadinessParts = 4;
+constexpr uint32_t kReadinessParts = 8;
 
 // [begin, end) of chunks or rows.
 struct ChunkRange {

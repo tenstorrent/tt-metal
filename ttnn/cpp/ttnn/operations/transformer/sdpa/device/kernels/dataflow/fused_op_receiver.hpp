@@ -12,8 +12,9 @@
 #include <array>
 
 // slice_readiness: the producer sends progressive slices (bit 1 of the split-forwarding arg agrees). A compile-time
-// choice, so consumers without it carry none of its code.
-template <bool slice_readiness = false>
+// choice, so consumers without it carry none of its code. kv_window (ring_attention_kv_window.hpp): the split diametric
+// slice is progressive too, each half in parts on its own semaphore.
+template <bool slice_readiness = false, bool kv_window = false>
 struct RingSDPAOpReceiverT {
     RingIdSequencer seq;
     bool wait_for_op_signal = false;
@@ -32,6 +33,10 @@ struct RingSDPAOpReceiverT {
     bool slice_progressive[2] = {false, false};
     uint32_t slice_base[2] = {0, 0};
     uint32_t slice_parts_ready[2] = {0, 0};
+    // kv_window: the slice last returned in split_dir is the diametric one, whose other half's part p is signal
+    // split_second_half_wait + p on semaphore_ids[0].
+    bool split_progressive = false;
+    uint32_t split_dir = 0;
 
     RingSDPAOpReceiverT() {}
 
@@ -90,7 +95,12 @@ struct RingSDPAOpReceiverT {
         // also carries the local-slice pre-signal: its threshold is one signal past the pre-signal and every earlier
         // full slice's markers (push_ring_sdpa_fused_op_rt_args). Its first half arrives whole, with one marker.
         if (this->wait_for_op_signal && this->split_forwarding_enabled && ring_id == this->split_shard_id) {
-            this->slice_progressive[this->last_dir] = false;
+            if constexpr (kv_window) {
+                this->split_progressive = true;
+                this->split_dir = this->last_dir;
+            } else {
+                this->slice_progressive[this->last_dir] = false;
+            }
             Semaphore<>(this->signal_op_semaphore_ids[0]).wait_min(this->split_second_half_wait);
         }
         return ring_id;
@@ -101,6 +111,11 @@ struct RingSDPAOpReceiverT {
         static_assert(slice_readiness);
         if (this->slice_progressive[dir] && part >= this->slice_parts_ready[dir]) {
             Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(this->slice_base[dir] + part + 1);
+            if constexpr (kv_window) {
+                if (this->split_progressive && dir == this->split_dir) {
+                    Semaphore<>(this->signal_op_semaphore_ids[0]).wait_min(this->split_second_half_wait + part);
+                }
+            }
             this->slice_parts_ready[dir] = part + 1;
         }
     }

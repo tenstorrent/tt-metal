@@ -16,6 +16,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_slice_readiness.hpp"
+#include "ring_attention_kv_window.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include <algorithm>
@@ -58,6 +59,13 @@ enum CompileTimeArg : uint32_t {
     kSliceReadinessBands,
     kSliceReadinessChunkTiles,
     kSliceReadinessTruncateTiles,
+    // Rotating KV window (ring_attention_kv_window.hpp): slots per direction (0 = off), diametric slots, tile rows per
+    // slot, the consumers' progress semaphore and the scratch CB a link-0 writer polls it into.
+    kKvWindowParts,
+    kKvWindowDiamParts,
+    kKvWindowSlotRows,
+    kKvWindowProgressSem,
+    kKvWindowScratchCb,
     kNumFixedCompileTimeArgs,
 };
 
@@ -94,6 +102,19 @@ constexpr uint32_t slice_readiness_bands = get_compile_time_arg_val(kSliceReadin
 constexpr uint32_t slice_readiness_chunk_tiles = get_compile_time_arg_val(kSliceReadinessChunkTiles);
 constexpr uint32_t slice_readiness_truncate_tiles = get_compile_time_arg_val(kSliceReadinessTruncateTiles);
 constexpr bool slice_readiness_enabled = slice_readiness_bands > 0;
+constexpr uint32_t kv_window_parts = get_compile_time_arg_val(kKvWindowParts);
+constexpr uint32_t kv_window_diam_parts = get_compile_time_arg_val(kKvWindowDiamParts);
+constexpr uint32_t kv_window_slot_rows = get_compile_time_arg_val(kKvWindowSlotRows);
+constexpr uint32_t kv_window_progress_sem = get_compile_time_arg_val(kKvWindowProgressSem);
+constexpr uint32_t kv_window_scratch_cb = get_compile_time_arg_val(kKvWindowScratchCb);
+constexpr bool kv_window = kv_window_parts > 0;
+// Full slices a direction carries (its writers' local slice and full relays; the diametric half comes on top).
+constexpr uint32_t kv_window_full_slices(bool dir) {
+    return dir ? num_targets_backward_direction : num_targets_forward_direction - 1;
+}
+constexpr uint32_t kv_window_units =
+    kv_window_full_slices(direction) * ttnn::ring_attention_all_gather::kReadinessParts;
+static_assert(!kv_window || (slice_readiness_enabled && split_forwarding_enabled && fuse_op));
 static_assert(
     !slice_readiness_enabled || (output_bank_owned_schedule && !partial_readiness_enabled),
     "slice readiness needs the bank-owned schedule and excludes midpoint partial readiness");
@@ -106,7 +127,93 @@ static_assert(
     !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
     "partial readiness requires both ring directions");
 
-template <typename AddrGenType, typename FabricSender>
+// Rotating KV window (ring_attention_kv_window.hpp), writer side. A writer lands a unit only once the downstream has a
+// free slot for it: the downstream's link-0 writer of the other direction adds credits to this core's otherwise unused
+// semaphore word of the other direction, rotating units in the low half and diametric parts in the high half.
+struct KvWindowCredits {
+    uint32_t addr = 0;
+    uint32_t value() const {
+        invalidate_l1_cache();
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(this->addr);
+    }
+};
+
+// Link 0's writer also returns the credits of the other direction's window, upstream over its own fabric connection
+// (it sends toward that window's upstream). It polls the progress word of every consumer of the window: the SDPA cores
+// the gather signals and that direction's gather readers, which relay from it. A slot is free once the slowest of them
+// has moved past the unit in it.
+struct KvWindowMaster {
+    bool active = false;
+    uint32_t window_dir = 0;
+    uint32_t units = 0;  // rotating units per direction
+    uint32_t rot_sent = 0;
+    uint32_t diam_sent = 0;
+    uint32_t credit_addr = 0;  // the credit word on the upstream writers
+    uint32_t num_link_cores = 0;
+    uint32_t link_cores_arg = 0;  // runtime arg index of the window direction's worker cores, x | y << 16 each
+    uint32_t progress_addr = 0;
+    uint32_t scratch = 0;
+    uint32_t tick = 0;
+    const OpSignalerT<true>* sdpa = nullptr;
+    volatile PACKET_HEADER_TYPE* pkt_hdr = nullptr;
+    tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
+
+    bool done() const {
+        return this->rot_sent == this->units && this->diam_sent == ttnn::ring_attention_all_gather::kReadinessParts;
+    }
+
+    // Polls every consumer and returns the freed slots' credits. Cheap callers (once per packet) poll every 32nd call.
+    void service(Noc& noc, bool now = true) {
+        if (!this->active || this->done() || (!now && (++this->tick & 31) != 0)) {
+            return;
+        }
+        namespace kvw = ttnn::ring_attention_all_gather;
+        const uint32_t num_sdpa = this->sdpa->num_fused_op_cores_to_signal;
+        const uint32_t count = num_sdpa + this->num_link_cores;
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t x, y;
+            if (i < num_sdpa) {
+                x = this->sdpa->signal_core_x(i);
+                y = this->sdpa->signal_core_y(i);
+            } else {
+                const uint32_t packed = get_arg_val<uint32_t>(this->link_cores_arg + i - num_sdpa);
+                x = packed & 0xFFFF;
+                y = packed >> 16;
+            }
+            noc_async_read(get_noc_addr(x, y, this->progress_addr), this->scratch + i * L1_ALIGNMENT, sizeof(uint32_t));
+        }
+        noc_async_read_barrier();
+        uint32_t rot_free = this->units;
+        uint32_t diam_free = kvw::kReadinessParts;
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t progress = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(this->scratch + i * L1_ALIGNMENT);
+            rot_free = std::min(rot_free, kvw::kv_window_field(progress, this->window_dir));
+            diam_free = std::min(diam_free, kvw::kv_window_field(progress, 2));
+        }
+        const uint32_t rot_target = std::min(rot_free + kv_window_parts, this->units);
+        const uint32_t diam_target = std::min(diam_free + kv_window_diam_parts, kvw::kReadinessParts);
+        if (rot_target <= this->rot_sent && diam_target <= this->diam_sent) {
+            return;
+        }
+        const uint32_t credits = (rot_target - this->rot_sent) | (diam_target - this->diam_sent)
+                                                                     << kvw::kKvWindowDiamCreditShift;
+        for (uint32_t link = 0; link < this->num_link_cores; ++link) {
+            const uint32_t packed = get_arg_val<uint32_t>(this->link_cores_arg + link);
+            this->pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                safe_get_noc_addr(packed & 0xFFFF, packed >> 16, this->credit_addr, 0), credits});
+            this->connection->wait_for_empty_write_slot();
+            this->connection->send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(this->pkt_hdr), sizeof(PACKET_HEADER_TYPE));
+        }
+        this->rot_sent = rot_target;
+        this->diam_sent = diam_target;
+    }
+};
+
+constexpr auto kNoIdle = [] {};
+
+// `idle` runs while the packet CB is empty (the window's credit master keeps returning credits meanwhile).
+template <typename AddrGenType, typename FabricSender, typename IdleFn = decltype(kNoIdle)>
 FORCE_INLINE void write_bank_owned_slices(
     CircularBuffer& cb_output,
     AddrGenType& output_addrgen,
@@ -115,12 +222,18 @@ FORCE_INLINE void write_bank_owned_slices(
     uint32_t output_page_base,
     uint32_t valid_pages,
     uint32_t first_bank,
-    uint32_t bank_stride) {
+    uint32_t bank_stride,
+    const IdleFn& idle = kNoIdle) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     uint32_t first_page_offset = 0;
     uint32_t batch = 0;
     while (schedule.next_packet(first_page_offset, batch)) {
+        if constexpr (kv_window) {
+            while (!cb_output.pages_available_at_front(packet_size_in_pages)) {
+                idle();
+            }
+        }
         cb_output.wait_front(packet_size_in_pages);
         fabric_write_unidir(
             output_page_base + first_page_offset,
@@ -152,7 +265,15 @@ FORCE_INLINE void discard_bank_owned_slices(
 
 // A full slice in readiness parts (ring_attention_slice_readiness.hpp), in the reader's prefetch order: part p of every
 // input and batch-head, then a marker, for every part but the last (the caller's completion marker closes it).
-template <typename AddrGens, typename FabricSender, typename SignalFn>
+// Window mode (kv_window): part p lands packed in slot window_slot(p) of the downstream's window, after
+// before_part(p) has its credit; bank_offset / bank_stride select this direction's half of a split diametric slice.
+template <
+    typename AddrGens,
+    typename FabricSender,
+    typename SignalFn,
+    typename SlotFn,
+    typename PartFn,
+    typename IdleFn>
 FORCE_INLINE void write_slice_in_parts(
     Noc& noc,
     CircularBuffer& cb_output,
@@ -168,16 +289,30 @@ FORCE_INLINE void write_slice_in_parts(
     const std::array<uint32_t, num_inputs>& input_valid_pages,
     const std::array<uint32_t, num_inputs>& worker_link,
     uint32_t slice_tensor_rank,
-    uint32_t num_chunks) {
+    uint32_t num_chunks,
+    uint32_t bank_offset,
+    uint32_t bank_stride,
+    const SlotFn& window_slot,
+    const PartFn& before_part,
+    const IdleFn& idle) {
     for (uint32_t part = 0; part < ttnn::ring_attention_all_gather::kReadinessParts; ++part) {
+        if constexpr (kv_window) {
+            before_part(part);
+        }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t row_pages = input_tensor_Wt[input_idx];
             const uint32_t input_pages_per_batch_head = row_pages * input_tensor_Ht[input_idx];
             const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
             const uint32_t valid_rows = input_valid_pages[input_idx] / row_pages;
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t output_page_base =
+                uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + slice_tensor_rank * input_pages_per_batch_head;
+                // Window mode: the part's ranges pack from the slot's first row, in send order.
+                uint32_t slot_row = 0;
+                if constexpr (kv_window) {
+                    output_page_base = (window_slot(part) * input_batch_head_count[input_idx] + bh_idx) *
+                                       kv_window_slot_rows * row_pages;
+                }
                 for (uint32_t range = 0; range <= slice_readiness_bands; ++range) {
                     const auto rows = ttnn::ring_attention_all_gather::readiness_rows(
                         num_chunks,
@@ -190,23 +325,26 @@ FORCE_INLINE void write_slice_in_parts(
                     if (rows.end <= rows.begin) {
                         continue;
                     }
+                    const uint32_t first_page = output_page_base + (kv_window ? slot_row : rows.begin) * row_pages;
+                    slot_row += rows.end - rows.begin;
                     if (fabric_direction_connection != nullptr) {
                         write_bank_owned_slices(
                             cb_output,
                             output_addrgens[input_idx],
                             pkt_hdr,
                             *fabric_direction_connection,
-                            output_page_base + rows.begin * row_pages,
+                            first_page,
                             (rows.end - rows.begin) * row_pages,
-                            worker_link[input_idx],
-                            num_links);
+                            worker_link[input_idx] + bank_offset,
+                            bank_stride,
+                            idle);
                     } else {
                         discard_bank_owned_slices(
                             cb_output,
-                            output_page_base + rows.begin * row_pages,
+                            first_page,
                             (rows.end - rows.begin) * row_pages,
-                            worker_link[input_idx],
-                            num_links);
+                            worker_link[input_idx] + bank_offset,
+                            bank_stride);
                     }
                 }
             }
@@ -237,6 +375,8 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    // The other direction's semaphore, unused on this core: the window's credit word (kv_window).
+    [[maybe_unused]] const uint32_t kv_window_credit_sem = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, num_inputs> input_tensor_Wt;
     std::array<uint32_t, num_inputs> input_tensor_Ht;
@@ -320,6 +460,22 @@ void kernel_main() {
         arg_idx = arg_for_fab;
         op_signaler_sender = OpSignalerT<true>(arg_idx);
     }
+    // Window mode: [count, the window direction's worker cores x | y << 16] after the signaler args, link 0 only.
+    constexpr uint32_t kvw_parts = ttnn::ring_attention_all_gather::kReadinessParts;
+    [[maybe_unused]] KvWindowCredits kv_credits;
+    [[maybe_unused]] KvWindowMaster kv_master;
+    if constexpr (kv_window) {
+        kv_credits.addr = kv_window_credit_sem;
+        kv_master.num_link_cores = get_arg_val<uint32_t>(arg_idx++);
+        kv_master.link_cores_arg = arg_idx;
+        kv_master.active = kv_master.num_link_cores > 0;
+        kv_master.window_dir = direction ? 0 : 1;
+        kv_master.units = kv_window_full_slices(!direction) * kvw_parts;
+        kv_master.credit_addr = out_ready_sem;
+        kv_master.progress_addr = get_semaphore(kv_window_progress_sem);
+        kv_master.scratch = get_write_ptr(kv_window_scratch_cb);
+        kv_master.sdpa = &op_signaler_sender;
+    }
 
     Noc noc_obj;
     CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
@@ -332,6 +488,11 @@ void kernel_main() {
     cb_packet_header.reserve_back(1);
     auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
     cb_packet_header.push_back(1);
+    if constexpr (kv_window) {
+        cb_packet_header.reserve_back(1);
+        kv_master.pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
+        cb_packet_header.push_back(1);
+    }
 
     // pre-populate packet headers
     constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
@@ -348,6 +509,30 @@ void kernel_main() {
                                                    : nullptr;
     constexpr uint32_t num_targets_in_direction =
         direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
+    if constexpr (kv_window) {
+        ccl_routing_utils::fabric_set_line_unicast_route(kv_master.pkt_hdr, unicast_route_info);
+        kv_master.connection = fabric_direction_connection;
+    }
+    namespace kvw = ttnn::ring_attention_all_gather;
+    // Window mode: the master returns credits while this writer waits, for credits of its own or for packets.
+    const auto kv_idle = [&]() {
+        if constexpr (kv_window) {
+            kv_master.service(noc_obj);
+        }
+    };
+    // Unit `first_unit + part` of this direction may land once the downstream has credited it.
+    const auto kv_rot_credit = [&](uint32_t first_unit) {
+        return [&, first_unit](uint32_t part) {
+            while ((kv_credits.value() & 0xFFFF) < first_unit + part + 1) {
+                kv_idle();
+            }
+        };
+    };
+    const auto kv_rot_slot = [&](uint32_t first_unit) {
+        return [first_unit](uint32_t part) {
+            return kvw::kv_window_rot_slot(direction, first_unit + part, kv_window_parts);
+        };
+    };
 
     const uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -400,7 +585,12 @@ void kernel_main() {
                 input_valid_pages[0] / input_tensor_Wt[0],
                 slice_readiness_truncate_tiles,
                 my_tensor_rank > receiver_tensor_rank,
-                slice_readiness_chunk_tiles));
+                slice_readiness_chunk_tiles),
+            0,
+            num_links,
+            kv_rot_slot(0),
+            kv_rot_credit(0),
+            kv_idle);
     } else {
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             /**
@@ -599,8 +789,10 @@ void kernel_main() {
         const uint32_t slice_tensor_rank =
             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                 slice_transport_rank, mesh_rows, mesh_cols, snake_orientation);
-        if (slice_readiness_enabled && !is_split_forwarded_slice) {
-            // A full relayed slice in readiness parts, split as the downstream neighbor's K bands are.
+        if (slice_readiness_enabled && (kv_window || !is_split_forwarded_slice)) {
+            // A full relayed slice in readiness parts, split as the downstream neighbor's K bands are. Window mode
+            // sends the diametric half in parts too, into the downstream's diametric slots: this direction's banks of
+            // each.
             const uint32_t receiver_transport_rank =
                 direction == 1 ? (my_transport_rank + ring_size - 1) % ring_size : (my_transport_rank + 1) % ring_size;
             const uint32_t receiver_tensor_rank =
@@ -625,7 +817,24 @@ void kernel_main() {
                     input_valid_pages[0] / input_tensor_Wt[0],
                     slice_readiness_truncate_tiles,
                     slice_tensor_rank > receiver_tensor_rank,
-                    slice_readiness_chunk_tiles));
+                    slice_readiness_chunk_tiles),
+                is_split_forwarded_slice ? direction * num_links : 0,
+                is_split_forwarded_slice ? 2 * num_links : num_links,
+                [&](uint32_t part) {
+                    return is_split_forwarded_slice
+                               ? kvw::kv_window_diam_slot(part, kv_window_parts, kv_window_diam_parts)
+                               : kv_rot_slot((slice_writes + 1) * kvw_parts)(part);
+                },
+                [&](uint32_t part) {
+                    if (is_split_forwarded_slice) {
+                        while ((kv_credits.value() >> kvw::kKvWindowDiamCreditShift) < part + 1) {
+                            kv_idle();
+                        }
+                    } else {
+                        kv_rot_credit((slice_writes + 1) * kvw_parts)(part);
+                    }
+                },
+                kv_idle);
             signal_output_ready();
             slice_writes++;
             continue;
@@ -755,6 +964,16 @@ void kernel_main() {
         signal_output_ready();
 
         slice_writes++;
+    }
+
+    if constexpr (kv_window) {
+        // Return every credit the other direction's window still owes upstream, then leave this core's credit word as
+        // the launch found it: subtract exactly what this launch used (the next launch's grants may already be in).
+        while (!kv_master.done()) {
+            kv_master.service(noc_obj);
+        }
+        noc_semaphore_inc(
+            get_noc_addr(kv_credits.addr), 0u - (kv_window_units | kvw_parts << kvw::kKvWindowDiamCreditShift));
     }
 
     // Drain in-flight writes BEFORE closing the EDM connections.

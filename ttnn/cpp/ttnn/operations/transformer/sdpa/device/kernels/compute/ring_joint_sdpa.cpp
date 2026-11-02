@@ -612,12 +612,10 @@ void kernel_main() {
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 // The gather's split of this slice for this device (the reader's readiness_num_chunks).
-                const uint32_t split_chunks = slice_readiness ? ttnn::ring_attention_all_gather::readiness_split_chunks(
-                                                                    gather_slice_rows,
-                                                                    dense_causal_skip ? q_local_padded_Nt : 0,
-                                                                    ring_id > ring_index,
-                                                                    Sk_chunk_t)
-                                                              : num_valid;
+                const uint32_t split_chunks = slice_readiness
+                                                  ? ttnn::ring_attention_all_gather::readiness_split_chunks(
+                                                        gather_slice_rows, 0, ring_id > ring_index, Sk_chunk_t)
+                                                  : num_valid;
                 ksplit_k_range = ring_joint::interleaved_piece(
                     ksplit_bands(split_chunks, num_valid, step_band, ring_id), istep.piece, istep.pieces);
                 if constexpr (donation) {
