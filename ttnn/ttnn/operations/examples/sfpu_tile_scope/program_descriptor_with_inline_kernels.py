@@ -215,7 +215,7 @@ void kernel_main() {
     const VectorMode vm = static_cast<VectorMode>(vmode_val);
 
     compute_kernel_hw_startup(cb_in, cb_in, cb_out);
-    copy_tile_init(cb_in);
+    copy_init(cb_in);
     if constexpr (do_sfpu) { sfpu_init_for<func, method>(); }
 
     cb_reserve_back(cb_in, 1);
