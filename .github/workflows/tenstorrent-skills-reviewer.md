@@ -32,7 +32,7 @@ pre-agent-steps:
         CACHE_HEAD_SHA="$(tr -d '\n' < /tmp/gh-aw/agent/pr-data-head-sha.txt)"
       fi
       # Skip fetch only when cache data matches current PR head commit.
-      if [ -n "$CURRENT_HEAD_SHA" ] && [ "$CURRENT_HEAD_SHA" = "$CACHE_HEAD_SHA" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ] && [ -n "$(jq -r '.baseRefName // empty' /tmp/gh-aw/agent/pr-meta.json 2>/dev/null)" ]; then
+      if [ -n "$CURRENT_HEAD_SHA" ] && [ "$CURRENT_HEAD_SHA" = "$CACHE_HEAD_SHA" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ] && ! grep -q '^# PR diff unavailable:' /tmp/gh-aw/agent/pr-diff.patch && [ -n "$(jq -r '.baseRefName // empty' /tmp/gh-aw/agent/pr-meta.json 2>/dev/null)" ]; then
         LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)"
