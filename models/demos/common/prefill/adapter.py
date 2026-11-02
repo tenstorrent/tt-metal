@@ -163,6 +163,9 @@ class PrefillModelAdapter(ABC):
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
     verify_layer_completions: bool = False
+    # Send the D2D traffic between galaxies over the direct cables through relay cores, with the inter-mesh
+    # fabric traffic on VC0 (fabric intermesh VC disabled). TT_METAL_FABRIC_DISABLE_INTERMESH_VC overrides.
+    d2d_relay_default: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is

@@ -235,7 +235,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     if (rtoptions.get_enable_fabric_bw_telemetry() || this->arch == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
-        next_l1_addr += 32;
+        next_l1_addr += perf_telemetry_buffer_size;
     }
 
     // Allocate code profiling buffer (conditionally enabled)
@@ -252,10 +252,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     // Allocate channel trimming capture buffer (conditionally enabled)
     if (rtoptions.get_enable_channel_trimming_capture()) {
         this->datapath_usage_l1_address = next_l1_addr;
-        this->datapath_usage_buffer_size = sizeof(tt::tt_fabric::FabricDatapathUsageL1Results<
-                                                  true,
-                                                  builder_config::MAX_NUM_VCS,
-                                                  builder_config::num_max_sender_channels>);
+        this->datapath_usage_buffer_size = sizeof(ChannelTrimmingOverrides);
         next_l1_addr += this->datapath_usage_buffer_size;
         next_l1_addr = tt::align(next_l1_addr, eth_word_l1_alignment);
     } else {
@@ -298,7 +295,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         // the wider clear at an unaligned address changes how many Ethernet commands UMD issues per
         // remote write during bring-up, which shifts the Ethernet core UMD ends up using for all
         // subsequent remote reads.
-        if (this->sender_txq_id != this->receiver_txq_id) {
+        if (this->multi_txq_enabled()) {
             this->router_buffer_clear_size_words = num_words_consumed_per_counter;
         }
 
@@ -480,6 +477,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->available_buffer_memory_regions);
 
     this->channel_allocator = static_allocator;
+    // The channel buffers are the last allocated item placed below max_l1_loading_size.
+    // NOTE: If another item is placed after the channel buffers, this will need to reflect that change.
+    this->allocated_l1_end_address = static_allocator->get_channel_buffers_end_address();
 
     // Create remote channels allocator from the static allocator
     this->remote_channels_allocator = std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
@@ -487,22 +487,22 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
-        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
-        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
+        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = NocCmdBuf::WR_REG_CMD_BUF;
+        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = NocCmdBuf::RD_CMD_BUF;
         this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
-        this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        this->receiver_channel_local_write_cmd_buf_ids[i] = NocCmdBuf::WR_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
             this->receiver_channel_forwarding_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
             this->receiver_channel_local_write_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
-            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = NocCmdBuf::WR_CMD_BUF;
         }
     }
     for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
-        this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+        this->sender_channel_ack_cmd_buf_ids[i] = NocCmdBuf::AT_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
             this->sender_channel_ack_noc_ids[i] =
@@ -1469,9 +1469,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 FabricRouterDiagnosticBufferMap FabricEriscDatamoverConfig::get_telemetry_and_metadata_buffer_map() const {
     FabricRouterDiagnosticBufferMap map;
 
-    // Perf telemetry: fixed 32-byte buffer
     if (perf_telemetry_buffer_address != 0) {
-        map.perf_telemetry = {perf_telemetry_buffer_address, 32};
+        map.perf_telemetry = {perf_telemetry_buffer_address, perf_telemetry_buffer_size};
     }
 
     // Code profiling: size from timer type count
