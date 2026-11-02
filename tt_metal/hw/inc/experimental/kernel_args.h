@@ -123,7 +123,7 @@ struct CrtaArrayArg {
 template <typename T, uint32_t N>
 class ArgArrayView {
 public:
-    explicit FORCE_INLINE ArgArrayView(uintptr_t base_addr) : base_(reinterpret_cast<tt_l1_ptr T*>(base_addr)) {}
+    explicit FORCE_INLINE ArgArrayView(uintptr_t base_addr) : base_(reinterpret_cast<const tt_l1_ptr T*>(base_addr)) {}
 
     FORCE_INLINE T operator[](uint32_t index) const {
         // Watcher's own check (in get_arg_addr) covers only the whole args buffer, so an index
@@ -133,12 +133,12 @@ public:
     }
     static constexpr uint32_t size() { return N; }
 
-    // Range-for support
-    FORCE_INLINE tt_l1_ptr T* begin() const { return base_; }
-    FORCE_INLINE tt_l1_ptr T* end() const { return base_ + N; }
+    // Range-for support (read-only, like the view)
+    FORCE_INLINE const tt_l1_ptr T* begin() const { return base_; }
+    FORCE_INLINE const tt_l1_ptr T* end() const { return base_ + N; }
 
 private:
-    tt_l1_ptr T* base_;
+    const tt_l1_ptr T* base_;
 };
 
 // Called when a CTA array index is out of range. ASSERT may expand to inline asm, which a C++17
