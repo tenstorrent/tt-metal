@@ -1322,6 +1322,15 @@ struct is_std_hashable<T, std::void_t<decltype(std::declval<std::hash<T>>()(std:
 template <typename T>
 constexpr bool is_std_hashable_v = is_std_hashable<T>::value;
 
+template <typename T>
+struct is_small_vector : std::false_type {};
+
+template <typename T, std::size_t N>
+struct is_small_vector<ttsl::SmallVector<T, N>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_small_vector_v = is_small_vector<T>::value;
+
 template <typename Range>
 inline hash_t hash_sized_range(const Range& range) noexcept {
     hash_t hash = hash_objects(hash_t{0}, range.size());
@@ -1374,8 +1383,18 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing floating point of type {}: {}\n", get_type_name<T>(), object);
         }
-        // By bit pattern: std::hash gives -0.0 and +0.0 one key, but a program built with either keeps its sign.
+        // By bit pattern, as canonical_key encodes them: these hashes key the program cache, where two values are the
+        // same key only if they build the same program, and a program built with -0.0 (or one NaN payload) keeps those
+        // bits. std::hash folds -0.0 into +0.0, so for an op with its own compute_program_hash (whose cache key is the
+        // hash alone) the result's sign of zero depended on which call came first.
         return std::bit_cast<std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>>(object);
+    } else if constexpr (detail::is_small_vector_v<T>) {
+        // Ahead of the std::hash branch: std::hash<SmallVector> follows SmallVector's operator== and so folds -0.0 into
+        // +0.0, while this hash keeps the elements' bits, as it does for std::vector.
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing SmallVector of type {}\n", get_type_name<T>());
+        }
+        return hash_sized_range(object);
     } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
         // Ahead of the std::hash branch on purpose: std::hash<std::shared_ptr<T>> exists and hashes
         // the address, which would key a reflective handle on where it was allocated. Null hashes to
@@ -1676,7 +1695,17 @@ void hash_combine(std::size_t& seed, const T& value) {
 template <typename T, size_t PREALLOCATED_SIZE>
 struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
-        return static_cast<size_t>(ttsl::hash::detail::hash_sized_range(vec));
+        if constexpr (std::is_floating_point_v<T>) {
+            // operator== compares elements with ==, so -0.0 and +0.0 must hash alike here (hash_object, which keys the
+            // program cache, keeps them apart).
+            ttsl::hash::hash_t hash = ttsl::hash::detail::hash_objects(ttsl::hash::hash_t{0}, vec.size());
+            for (const T element : vec) {
+                hash = ttsl::hash::detail::hash_objects(hash, element == T{0} ? T{0} : element);
+            }
+            return static_cast<size_t>(hash);
+        } else {
+            return static_cast<size_t>(ttsl::hash::detail::hash_sized_range(vec));
+        }
     }
 };
 
