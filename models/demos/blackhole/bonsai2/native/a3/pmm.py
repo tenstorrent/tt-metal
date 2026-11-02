@@ -113,7 +113,7 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
         semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=allr, initial_value=0),
                     ttnn.SemaphoreDescriptor(id=1, core_ranges=allr, initial_value=0)],
         cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, ttnn.DataType.BFLOAT2_B, wtb, max(64, 2 * per * 32)),
-             cb(2, sfmt, stb, max(2, 2 * per)),
+             cb(2, sfmt, 4096, max(2, 2 * per)),
              cb(3, ttnn.bfloat16, xtb, 32), cb(4, ttnn.float32, 4096, per * mt), cb(16, ttnn.bfloat16, xtb, 2 * mt)])
     ttnn.generic_op([x, wt, st] + outs, prog)
     return tuple(outs) if gu else outs[0]
@@ -184,6 +184,11 @@ def _selfcheck():
                 got_all = f_new()
                 for o in (got_all if isinstance(got_all, tuple) else (got_all,)):
                     assert torch.isfinite(ttnn.to_torch(o).float()).all(), "non-finite pmm output"
+                o0 = ttnn.to_torch(got_all[0] if isinstance(got_all, tuple) else got_all).float().numpy().reshape(srows, -1)
+                r0 = xf @ (wref["gate"] if name == "gu" else wref[name]).T
+                rel = float(np.abs(o0 - r0).max() / np.abs(r0).max())  # scale-sensitive: PCC isn't (SCALE16 bug)
+                assert rel < 0.2, f"{name}: max rel err {rel}"
+                pcs.append(rel)
                 print(f"S={srows} {name}: pmm pcc vs float64 {' '.join(f'{p:.6f}' for p in pcs)}; "
                       f"ms pmm {timed(f_new):.3f} vs dequant+matmul {timed(f_old):.3f}", flush=True)
                 ttnn.deallocate(x)

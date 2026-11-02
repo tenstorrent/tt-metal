@@ -67,6 +67,7 @@ def main() -> int:
                                      layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
                 y0 = ttnn.to_torch(tl.forward(x0)).float().numpy().reshape(-1, tl.n)[0]
                 p, p0 = cpu_ref.pcc(y, ref), cpu_ref.pcc(y[0], y0)
+                rel = float(np.abs(y - ref).max() / np.abs(ref).max())  # scale-sensitive: PCC isn't (SCALE16 bug, 01:34)
                 f = lambda: pf.prefill_linear(tl, xt)  # noqa: E731
                 ttnn.deallocate(f())
                 ttnn.synchronize_device(device)
@@ -78,8 +79,8 @@ def main() -> int:
                     ts.append((time.perf_counter() - t0) * 1e3)
                     ttnn.deallocate(r)
                 print(f"{label} [{tl.k}->{tl.n}] S={s}: pcc vs float64 {p:.6f}; row0 vs A3 decode {p0:.6f}; "
-                      f"{np.median(ts):.3f} ms; repeat call bit-same {same * 100:.2f}%", flush=True)
-                rc |= p < 0.999 or p0 < 0.999 or same < 1.0
+                      f"{np.median(ts):.3f} ms; repeat call bit-same {same * 100:.2f}%; max rel err {rel:.4f}", flush=True)
+                rc |= p < 0.999 or p0 < 0.999 or same < 1.0 or not rel < 0.2
                 ttnn.deallocate(xt)
                 ttnn.deallocate(x0)
     finally:
