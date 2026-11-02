@@ -56,7 +56,8 @@
 #   --result-json-out FILE  Write the exact structured verification result here.
 #   --collect-only         Host only: validate/collect, without executing or a receipt.
 #   --stall    SECS   Log-stall seconds that mark a hang (default 180 emulator,
-#                     300 silicon). Also settable via HANG_STALL.
+#                     1800 emulator with ENABLE_WAVEFORM=1, 300 silicon). Also
+#                     settable via HANG_STALL.
 #   --verbose         Print step headers to stderr.
 #
 # Exit codes:
@@ -121,6 +122,8 @@ _vlog() { [[ "$VERBOSE" == "true" ]] && echo "[run_test] $*" >&2; return 0; }
 
 # shellcheck source=../../codegen/scripts/nng_channel.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../../codegen/scripts/nng_channel.sh"
+# shellcheck source=../../codegen/scripts/hang_stall.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../codegen/scripts/hang_stall.sh"
 
 # Activate the venv only if it exists (external setup); else use the ambient
 # python (tt-metal Docker image, deps installed system-wide).
@@ -191,11 +194,10 @@ _validate() {
   fi
 
   # Hang threshold: emulator gets the post-ready stall; silicon keeps the larger
-  # default. Explicit --stall / HANG_STALL wins.
+  # default; a waveform capture (ENABLE_WAVEFORM=1) gets a long one. Explicit
+  # --stall / HANG_STALL wins.
   if [[ -z "$STALL" ]]; then
-    if [[ -n "${HANG_STALL:-}" ]]; then STALL="$HANG_STALL"
-    elif [[ "$MODE" == "simulator" ]]; then STALL=180
-    else STALL=300; fi
+    STALL="$(llk_default_stall "$MODE")"
   fi
 
   # --collect-only / count emit node-ids relative to the pytest rootdir, so a
