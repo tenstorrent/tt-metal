@@ -1209,6 +1209,14 @@ def test_tilize_retile_dtype_conversion(
         assert_with_pcc(torch_input.to(torch.float32), torch_output.to(torch.float32), min_pcc)
 
 
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b])
+def test_tilize_rejects_tiny_tile_for_block_float_output(device, expect_error, out_dtype):
+    torch_input = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Tiny tile heights are not supported for blocked data types"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile([16, 32]), dtype=out_dtype)
+
+
 #   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a
 #   strided (every-other-row zero) pattern because the BH-specific
 #   Tile_x_dim (face_r_dim * num_faces * FACE_C_DIM, spanning the full
