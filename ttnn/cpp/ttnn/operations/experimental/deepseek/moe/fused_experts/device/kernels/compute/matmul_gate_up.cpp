@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // Per-core gate_up matmul + SwiGLU gate + down matmul (runs on every compute core).
 //
@@ -64,7 +65,8 @@
 //  13: cb_wtmp      (staging for one expert's weighted down output before the accumulate)
 //  14: num_producers (number of SwiGLU cores; each owns i_tiles/num_producers of the I dim)
 //  15: experts_block (experts per block; the activation block held in cb_act at once)
-//  16: gate_up_reserve_tiles (pages a gate_up slice occupies in cb_weights, >= the slice itself)
+//  16: gate_up_reserve_tiles (pages one gate_up push occupies in cb_weights: >= the slice itself,
+//      or one of slice / reserve K-pieces when below it)
 //  17: down_reserve_tiles    (pages a down slice occupies in cb_weights, >= the slice itself)
 //  18-22: cores_per_expert, shards_per_core, i_shards_per_core, num_expert_groups, cb_reduce
 //  23: shared_i_tiles  (6-expert path's shared expert I-tiles; 0 without one)
@@ -73,6 +75,7 @@
 //  26: cb_shared_down  (one [shared_slots, 2] slot per H-slice)
 //  27: shared_chunk_k
 //  28: shared_limit_bits (shared SwiGLU clamp limit as a float bit pattern; +inf = unclamped)
+//  29: shared_first_local (local core of a group's first shared tile)
 //
 // Runtime args:
 //   0: core_index (this core's flat grid index, x*GRID_Y + y)
@@ -108,6 +111,7 @@ void kernel_main() {
     constexpr uint32_t cb_shared_down_id = get_compile_time_arg_val(26);
     constexpr uint32_t shared_chunk_k = get_compile_time_arg_val(27);
     constexpr uint32_t shared_limit_bits = get_compile_time_arg_val(28);
+    constexpr uint32_t shared_first_local = get_compile_time_arg_val(29);
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
     const uint32_t local_idx = core_index % cores_per_expert;
@@ -116,11 +120,11 @@ void kernel_main() {
     const bool down_core = get_arg_val<uint32_t>(1) != 0xFFFFFFFFu;
     const bool is_root = expert_group == 0 && down_core;
     // 6-expert path's shared expert: the group's I-tiles are expert_group, expert_group + 6, ...,
-    // and tile j runs on local core j + 1 (see SharedExpert in fetch_gate_up.h).
+    // and tile j runs on local core j + shared_first_local (see SharedExpert in fetch_gate_up.h).
     const uint32_t shared_tiles =
         expert_group < shared_i_tiles ? (shared_i_tiles - expert_group + num_expert_groups - 1) / num_expert_groups : 0;
-    const bool shared_core = local_idx >= 1 && local_idx < 1 + shared_tiles;
-    (void)local_idx;
+    const bool shared_core = local_idx >= shared_first_local && local_idx < shared_first_local + shared_tiles;
+    const bool uses_input = swiglu_core || shared_core;
 
     constexpr uint32_t kOutTilesPerCore = 2;
     // This core's share of the SwiGLU I dim, and the gate|up tile-column width of its gate_up
@@ -128,7 +132,7 @@ void kernel_main() {
     // On the 6-expert path each core covers i_shards_per_core of those slices, so the per-matmul
     // width stays one I-tile (DST holds gate+up together).
     constexpr uint32_t swiglu_tiles =
-        num_expert_groups > 1 ? (i_tiles / (cores_per_expert * i_shards_per_core)) : (i_tiles / num_producers);
+        num_expert_groups > 1 ? (i_tiles / (num_producers * i_shards_per_core)) : (i_tiles / num_producers);
     constexpr uint32_t kShardTileCols = 2 * swiglu_tiles;
     // The gate_up ([K, 128]) and down ([I, 64] == [i_tiles, 2]) weight slots in cb_weights are waited
     // on and popped by their *_reserve_tiles page counts, which the host may have padded past the
@@ -163,7 +167,7 @@ void kernel_main() {
     matmul_init(cb_input_id, cb_weights_id);
 
     // Activation x is broadcast once and reused for every expert's gate_up matmul, in every block.
-    if (swiglu_core) {
+    if (uses_input) {
         in_cb.wait_front(k_tiles);
     }
 
@@ -175,41 +179,69 @@ void kernel_main() {
         // PHASE 1: this group's expert, i_shards_per_core I-slices (1 at TP I=512, 4 at I=2048).
         if (swiglu_core) {
             for (uint32_t s = 0; s < i_shards_per_core; ++s) {
-                w_cb.wait_front(gate_up_reserve_tiles);
-
+                DeviceZoneScopedN("FE_C_GU_MM");
                 matmul_init(cb_input_id, cb_weights_id);
                 reconfig_full_operand(cb_weights_id, cb_input_id);
                 pack_reconfig_data_format(cb_mm_id);
                 mm_cb.reserve_back(kShardTileCols);
 
-                tile_regs_acquire();
-                for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                    for (uint32_t k = 0; k < k_tiles; ++k) {
-                        matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + n, n);
+                if constexpr (kGateUpPieces > 1) {
+                    // gate -> dst n, up -> dst swiglu_tiles + n, summed over the slice's K-pieces as
+                    // each one lands.
+                    tile_regs_acquire();
+                    for (uint32_t p = 0; p < kGateUpPieces; ++p) {
+                        w_cb.wait_front(gate_up_reserve_tiles);
+                        for (uint32_t k = 0; k < kPieceK; ++k) {
+                            for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                                matmul_tiles(cb_input_id, cb_weights_id, p * kPieceK + k, k * kShardTileCols + n, n);
+                                matmul_tiles(
+                                    cb_input_id,
+                                    cb_weights_id,
+                                    p * kPieceK + k,
+                                    k * kShardTileCols + swiglu_tiles + n,
+                                    swiglu_tiles + n);
+                            }
+                        }
+                        w_cb.pop_front(gate_up_reserve_tiles);
                     }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                    pack_tile<true>(n, cb_mm_id, n);
-                }
-                tile_regs_release();
-
-                tile_regs_acquire();
-                for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                    for (uint32_t k = 0; k < k_tiles; ++k) {
-                        matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + swiglu_tiles + n, n);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                        pack_tile<true>(n, cb_mm_id, n);
                     }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                    pack_tile<true>(n, cb_mm_id, swiglu_tiles + n);
-                }
-                tile_regs_release();
+                    tile_regs_release();
+                } else {
+                    w_cb.wait_front(gate_up_reserve_tiles);
 
+                    tile_regs_acquire();
+                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                        for (uint32_t k = 0; k < k_tiles; ++k) {
+                            matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + n, n);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                        pack_tile<true>(n, cb_mm_id, n);
+                    }
+                    tile_regs_release();
+
+                    tile_regs_acquire();
+                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                        for (uint32_t k = 0; k < k_tiles; ++k) {
+                            matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + swiglu_tiles + n, n);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                        pack_tile<true>(n, cb_mm_id, swiglu_tiles + n);
+                    }
+                    tile_regs_release();
+
+                    w_cb.pop_front(gate_up_reserve_tiles);
+                }
                 mm_cb.push_back(kShardTileCols);
-                w_cb.pop_front(gate_up_reserve_tiles);
 
                 mm_cb.wait_front(kShardTileCols);
                 copy_tile_to_dst_init_short(cb_mm_id);
@@ -253,6 +285,7 @@ void kernel_main() {
         // K-chunks of its [K, 2] shard, then the same SwiGLU with the shared clamp. The writer
         // scatters the tile behind the group's routed activation.
         if (shared_core) {
+            DeviceZoneScopedN("FE_C_SHARED");
             CircularBuffer shared_w_cb(cb_shared_gate_up_id);
             constexpr uint32_t kChunkTiles = 2 * shared_chunk_k;
 
@@ -308,11 +341,14 @@ void kernel_main() {
         // the matching H-slices from the other groups. The block also carries the group's
         // shared-expert tiles after the routed i_tiles, padded to shared_slots.
         constexpr uint32_t act_tiles = i_tiles + shared_slots;
-        act_cb.wait_front(act_tiles);
+        {
+            DeviceZoneScopedN("FE_C_ACT_WAIT");
+            act_cb.wait_front(act_tiles);
+        }
         if (!down_core) {
             // The broadcast still lands here (the group rectangle spans all 9 rows); release it.
             act_cb.pop_front(act_tiles);
-            if (swiglu_core) {
+            if (uses_input) {
                 in_cb.pop_front(k_tiles);
             }
             return;
@@ -708,7 +744,7 @@ void kernel_main() {
         }
     }  // num_expert_groups == 1
 
-    if (swiglu_core) {
+    if (uses_input) {
         in_cb.pop_front(k_tiles);
     }
 }

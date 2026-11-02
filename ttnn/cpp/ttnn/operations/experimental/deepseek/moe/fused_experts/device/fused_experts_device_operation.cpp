@@ -325,12 +325,22 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             e,
             shard_shape[-1],
             kColsPerCore);
+        // A shard spans the full K dim, or an equal whole-tile piece of it (K-shards, read back to back).
+        const uint32_t k_rows = static_cast<uint32_t>(w.logical_shape()[-2]);
+        const uint32_t shard_rows = static_cast<uint32_t>(shard_shape[-2]);
         TT_FATAL(
-            static_cast<uint32_t>(shard_shape[-2]) == static_cast<uint32_t>(w.logical_shape()[-2]),
-            "fused_experts: gate_up_weights[{}] shard must span the full K dim ({} rows), got {}",
+            shard_rows % TILE_DIM == 0 && k_rows % shard_rows == 0,
+            "fused_experts: gate_up_weights[{}] shard rows ({}) must be a whole-tile divisor of the K dim ({})",
             e,
-            w.logical_shape()[-2],
-            shard_shape[-2]);
+            shard_rows,
+            k_rows);
+        TT_FATAL(
+            shard_rows == static_cast<uint32_t>(
+                              tensor_args.gate_up_weights.front().memory_config().nd_shard_spec()->shard_shape[-2]),
+            "fused_experts: gate_up_weights[{}] shard rows ({}) must match gate_up_weights[0]'s -- the readers share "
+            "one layout",
+            e,
+            shard_rows);
     }
 
     // down weights must be DRAM ND-sharded so each shard is exactly one core's [I, 64] column

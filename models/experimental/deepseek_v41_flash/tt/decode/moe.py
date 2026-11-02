@@ -42,7 +42,8 @@ DECODE_LAYOUTS = {
     "shared_down_proj": {"K": 2304, "N": 5120},
 }
 # The 6-expert path of ``fused_experts`` splits a rank's ``I`` tile-evenly over each expert's 16
-# gate_up cores (12x8 grid) or 18 (12x9).
+# gate_up cores (12x8 grid) or 18 (12x9), or puts one tile on each of the first I/32 of them when
+# there are no more tiles than cores.
 _GATE_UP_CORE_COUNTS = (_FUSED_DOWN_CORES_PER_EXPERT, _FUSED_DOWN_CORES_PER_EXPERT + 2)
 
 
@@ -113,12 +114,14 @@ class DeepSeekV41MLP(DeepSeekV4MLP):
 
 def fused_experts_config(config, system_config=None, tp_size: int = 1):
     """``(config, system_config)`` as V4's experts take them at V4.1's shapes: ``I`` zero-padded
-    to the smallest size whose per-rank tiles split evenly over 16 or 18 gate_up cores (no padding
-    at V4.1's ``I = 2304`` for TP 1, 2 or 4), and the hidden row cut over ``D / 64`` cores (see
-    :class:`DeepSeekV41PreloadedExperts`)."""
+    to the smallest size whose per-rank tiles are at most 16 or split evenly over 16 or 18 gate_up
+    cores (no padding at V4.1's ``I = 2304`` for TP 1, 2, 4, 8 or 12), and the hidden row cut over
+    ``D / 64`` cores (see :class:`DeepSeekV41PreloadedExperts`)."""
     step = _FUSED_TILE * tp_size
     padded = -(-config.moe_intermediate_size // step) * step
-    while all((padded // step) % cores for cores in _GATE_UP_CORE_COUNTS):
+    while padded // step > _FUSED_DOWN_CORES_PER_EXPERT and all(
+        (padded // step) % cores for cores in _GATE_UP_CORE_COUNTS
+    ):
         padded += step
     sys_cfg = system_config or active_system_config()
     sys_cfg = dataclasses.replace(
@@ -146,9 +149,10 @@ class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
 
     The op cuts the hidden row into 64-column DRAM shards, 80 at ``D = 5120`` (V4: 64). Its
     6-expert path splits a rank's ``I`` over 18 gate_up cores per expert (a 12x9 grid) when 16 do
-    not divide it, and runs down on 16 of them. ``I = 2304`` is 72 tiles, 36 per rank at TP2 and
-    18 at TP4, so it needs no padding; :func:`fused_experts_config` zero-pads any ``I`` that fits
-    neither (zero gate/up rows give ``silu(0) * 0 = 0`` and zero down columns add nothing).
+    not divide it, and runs down on 16 of them; a rank with at most 16 tiles uses one gate_up core
+    per tile. ``I = 2304`` is 72 tiles, 36 per rank at TP2, 18 at TP4 and 6 at TP12, so it needs no
+    padding; :func:`fused_experts_config` zero-pads any ``I`` that fits none of these (zero gate/up
+    rows give ``silu(0) * 0 = 0`` and zero down columns add nothing).
 
     ``tp_size > 1`` gives each rank of the 1xTP ``device`` an ``I / TP`` slice, as V4 does.
 
@@ -156,7 +160,17 @@ class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
     :func:`~...config.expert_provider`).
     """
 
-    def __init__(self, config, provider, device, dtype=None, cache=None, system_config=None, tp_size: int = 1):
+    def __init__(
+        self,
+        config,
+        provider,
+        device,
+        dtype=None,
+        cache=None,
+        system_config=None,
+        tp_size: int = 1,
+        balance_dram_banks: bool = False,
+    ):
         fused_config, sys_cfg = fused_experts_config(config, system_config, tp_size)
         super().__init__(
             fused_config,
@@ -166,6 +180,7 @@ class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
             cache=cache,
             system_config=sys_cfg,
             tp_size=tp_size,
+            balance_dram_banks=balance_dram_banks,
         )
 
 

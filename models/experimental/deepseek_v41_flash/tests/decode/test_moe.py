@@ -9,6 +9,15 @@ The routed experts are bfloat4_b, the shared expert bfloat8_b. ``test_moe_decode
 kind of tokens as ``S``-row ROW_MAJOR blocks, ``hidden`` ``[1, S, 1, D]`` (DSpark's parallel verify):
 one ``fused_experts`` call over the rows' union of experts, and the shared expert's own projections.
 
+``test_moe_decode_tp`` decodes the same tokens tensor-parallel: TP4 on a 1x4 submesh (the decode stages'
+layout) and TP12 on a 3x4 submesh, each chip holding an ``I / TP`` slice of every expert and the partials
+all-reduced over both mesh axes. TP12 gives each chip 6 I-tiles, which ``fused_experts``'s 6-expert path runs on
+6 of each expert's 16 gate_up cores. ``banked`` cuts the gate_up shards into K-pieces so every expert reads
+from all 8 DRAM banks (``whole_k`` is the layout prefill also reads). Tokens after the first
+``TP_WARMUP_TOKENS`` are bracketed by ``MOE_TP<tp>_START`` / ``_END`` Tracy signposts:
+
+    python -m tracy -p -r -v -m pytest models/experimental/deepseek_v41_flash/tests/decode/test_moe.py -k "tp12 and banked"
+
 The converted ttnn weights (~8.5 GB per layer) are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``,
 default ``../cache``, per checkpoint).
 
@@ -39,6 +48,10 @@ NUM_TOKENS = 16
 # DSpark's block: the token plus four drafts.
 S = 5
 NUM_BLOCKS = 3
+PARENT_MESH = (8, 4)
+TP_SUBMESHES = {4: (1, 4), 12: (3, 4)}
+# Tokens decoded before the profiled ones, so every program is built.
+TP_WARMUP_TOKENS = 4
 
 
 def _snapshot():
@@ -133,3 +146,66 @@ def test_moe_decode_s5(device, layer):
     passing, pcc = comp_pcc(expected, torch.cat(outs), PCC)
     logger.info(f"layer {layer}: PCC {pcc}")
     assert passing, f"layer {layer}: PCC {pcc} < {PCC}"
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("tp_size", tuple(TP_SUBMESHES), ids=lambda tp: f"tp{tp}")
+@pytest.mark.parametrize("balance_dram_banks", (False, True), ids=("whole_k", "banked"))
+@pytest.mark.parametrize("layer", (39,))
+@torch.no_grad()
+def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer):
+    from tracy import signpost
+
+    if tuple(mesh_device.shape) != PARENT_MESH:
+        pytest.skip(f"needs an {PARENT_MESH[0]}x{PARENT_MESH[1]} mesh, got {tuple(mesh_device.shape)}")
+    device = mesh_device.create_submesh(ttnn.MeshShape(*TP_SUBMESHES[tp_size]), ttnn.MeshCoordinate(0, 0))
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    reference = reference_moe(load_reference(snapshot), snapshot, loader, layer)
+
+    cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.ffn")
+    experts = DeepSeekV41PreloadedExperts(
+        config,
+        expert_provider(loader, layer),
+        device,
+        dtype=ttnn.bfloat4_b,
+        cache=cache,
+        tp_size=tp_size,
+        balance_dram_banks=balance_dram_banks,
+    )
+    moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache, tp_size=tp_size)
+    logger.info(f"TP{tp_size}: I per chip {experts.intermediate} (unpadded {config.moe_intermediate_size // tp_size})")
+
+    torch.manual_seed(0)
+    hidden = torch.randn(NUM_TOKENS, config.hidden_size)
+    expected = reference(hidden.reshape(NUM_TOKENS, 1, -1)).reshape(NUM_TOKENS, -1)
+    hidden_config = width_sharded_l1_config(1, config.hidden_size, device, tile_height=1)
+    outs = []
+    for t in range(NUM_TOKENS):
+        x = ttnn.from_torch(
+            hidden[t].reshape(1, 1, 1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=hidden_config,
+        )
+        profiled = t >= TP_WARMUP_TOKENS
+        if profiled:
+            signpost(f"MOE_TP{tp_size}_START")
+        out = moe.decode_static(x)
+        if profiled:
+            signpost(f"MOE_TP{tp_size}_END")
+        # Every chip holds the all-reduced row; check that they agree, then compare one.
+        copies = [ttnn.to_torch(c).reshape(-1).float() for c in ttnn.get_device_tensors(out)]
+        spread = max((c - copies[0]).abs().max().item() for c in copies)
+        outs.append(copies[0])
+        _, pcc = comp_pcc(expected[t], outs[-1], PCC)
+        logger.info(f"TP{tp_size} layer {layer} token {t}: PCC {pcc}, max abs spread over the chips {spread}")
+
+    passing, pcc = comp_pcc(expected, torch.stack(outs), PCC)
+    logger.info(f"TP{tp_size} layer {layer}: PCC {pcc}")
+    assert passing, f"TP{tp_size} layer {layer}: PCC {pcc} < {PCC}"

@@ -8,6 +8,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 
@@ -69,7 +70,8 @@ FORCE_INLINE uint32_t face_row_offset(uint32_t r, uint32_t h, uint32_t face_r_di
 //   17: split_col (first act tile of each expert that hub1 owns; == i_tiles when there is one hub)
 //   18: num_hubs  (1, or 2 for the two-hub gather/broadcast)
 //   19+: TensorAccessorArgs(output)
-//   then: shared_i_tiles (6-expert path's shared expert I-tiles; 0 without one)
+//   then: shared_i_tiles (6-expert path's shared expert I-tiles; 0 without one), shared_first_local
+//         (local core of a group's first shared tile)
 //   then (used by INPUT_RM_ROWS): rows, k_tiles, cb_input, input_tile_bytes, face_r_dim,
 //         input_row_stride (bytes between a replica's rows), cb_rm_stage, stage_chunk_tiles
 //         (32-column chunks per staged DRAM read), then TensorAccessorArgs(input)
@@ -113,15 +115,16 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<19>();
     constexpr uint32_t kSharedArg = out_args.next_compile_time_args_offset();
     constexpr uint32_t shared_i_tiles = get_compile_time_arg_val(kSharedArg);
-    constexpr uint32_t rows = get_compile_time_arg_val(kSharedArg + 1);
-    constexpr uint32_t k_tiles = get_compile_time_arg_val(kSharedArg + 2);
-    constexpr uint32_t cb_input_id = get_compile_time_arg_val(kSharedArg + 3);
-    constexpr uint32_t input_tile_bytes = get_compile_time_arg_val(kSharedArg + 4);
-    constexpr uint32_t face_r_dim = get_compile_time_arg_val(kSharedArg + 5);
-    constexpr uint32_t input_row_stride = get_compile_time_arg_val(kSharedArg + 6);
-    constexpr uint32_t cb_rm_stage_id = get_compile_time_arg_val(kSharedArg + 7);
-    constexpr uint32_t stage_chunk_tiles = get_compile_time_arg_val(kSharedArg + 8);
-    constexpr auto input_args = TensorAccessorArgs<kSharedArg + 9>();
+    constexpr uint32_t shared_first_local = get_compile_time_arg_val(kSharedArg + 1);
+    constexpr uint32_t rows = get_compile_time_arg_val(kSharedArg + 2);
+    constexpr uint32_t k_tiles = get_compile_time_arg_val(kSharedArg + 3);
+    constexpr uint32_t cb_input_id = get_compile_time_arg_val(kSharedArg + 4);
+    constexpr uint32_t input_tile_bytes = get_compile_time_arg_val(kSharedArg + 5);
+    constexpr uint32_t face_r_dim = get_compile_time_arg_val(kSharedArg + 6);
+    constexpr uint32_t input_row_stride = get_compile_time_arg_val(kSharedArg + 7);
+    constexpr uint32_t cb_rm_stage_id = get_compile_time_arg_val(kSharedArg + 8);
+    constexpr uint32_t stage_chunk_tiles = get_compile_time_arg_val(kSharedArg + 9);
+    constexpr auto input_args = TensorAccessorArgs<kSharedArg + 10>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_index = get_arg_val<uint32_t>(1);
@@ -137,7 +140,7 @@ void kernel_main() {
 
     constexpr uint32_t kOutTiles = 2;
     constexpr uint32_t swiglu_tiles =
-        num_expert_groups > 1 ? (i_tiles / (cores_per_expert * i_shards_per_core)) : (i_tiles / num_producers);
+        num_expert_groups > 1 ? (i_tiles / (num_producers * i_shards_per_core)) : (i_tiles / num_producers);
     const uint32_t local_idx = core_index % cores_per_expert;
     const uint32_t expert_group = core_index / cores_per_expert;
     const bool swiglu_core = local_idx < num_producers;
@@ -301,7 +304,11 @@ void kernel_main() {
     if constexpr (num_expert_groups > 1) {
         const uint32_t scatter_tiles = i_shards_per_core * swiglu_tiles;
         if (swiglu_core) {
-            cb_out.wait_front(scatter_tiles);
+            {
+                DeviceZoneScopedN("FE_W_SCATTER_WAIT");
+                cb_out.wait_front(scatter_tiles);
+            }
+            DeviceZoneScopedN("FE_W_SCATTER");
             noc.async_write(
                 cb_out,
                 UnicastEndpoint{},
@@ -314,12 +321,12 @@ void kernel_main() {
             bump_gather();
             cb_out.pop_front(scatter_tiles);
         }
-        // Shared-expert tile j of this group runs on local core j + 1 and lands right after the routed
-        // activation, in the last hub's range (see run_reader_loop).
+        // Shared-expert tile j of this group runs on local core j + shared_first_local and lands right
+        // after the routed activation, in the last hub's range (see run_reader_loop).
         const uint32_t shared_tiles = expert_group < shared_i_tiles
                                           ? (shared_i_tiles - expert_group + num_expert_groups - 1u) / num_expert_groups
                                           : 0u;
-        if (local_idx >= 1u && local_idx < 1u + shared_tiles) {
+        if (local_idx >= shared_first_local && local_idx < shared_first_local + shared_tiles) {
             cb_out.wait_front(1);
             noc.async_write(
                 cb_out,
@@ -328,7 +335,7 @@ void kernel_main() {
                 {.offset_bytes = 0},
                 {.noc_x = num_hubs > 1 ? hub1_noc_x : hub0_noc_x,
                  .noc_y = num_hubs > 1 ? hub1_noc_y : hub0_noc_y,
-                 .addr = act_slot_base + (i_tiles + local_idx - 1u) * act_tile_bytes});
+                 .addr = act_slot_base + (i_tiles + local_idx - shared_first_local) * act_tile_bytes});
             noc.async_write_barrier();
             bump_gather();
             cb_out.pop_front(1);
