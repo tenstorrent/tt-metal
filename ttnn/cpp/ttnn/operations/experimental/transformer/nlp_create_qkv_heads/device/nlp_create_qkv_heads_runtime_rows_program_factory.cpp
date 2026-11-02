@@ -159,9 +159,9 @@ NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::create_program_artifacts(
     ttnn::Tensor& k = std::get<1>(output);
     ttnn::Tensor& v = std::get<2>(output);
 
-    TT_ASSERT(q.buffer() != nullptr, "Output q buffer should be allocated on device!");
-    TT_ASSERT(k.buffer() != nullptr, "Output k buffer should be allocated on device!");
-    TT_ASSERT(v.buffer() != nullptr, "Output v buffer should be allocated on device!");
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
+    TT_ASSERT(k.is_allocated(), "Output k buffer should be allocated on device!");
+    TT_ASSERT(v.is_allocated(), "Output v buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

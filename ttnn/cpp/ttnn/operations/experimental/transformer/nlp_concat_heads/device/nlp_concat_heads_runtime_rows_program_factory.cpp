@@ -54,7 +54,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsRuntimeRowsProgramFactory
     const CoreRangeSet all_cores(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
     const bool head_parallel_ok = in0_c > 1;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
