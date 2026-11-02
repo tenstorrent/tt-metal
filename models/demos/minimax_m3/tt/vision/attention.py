@@ -143,7 +143,6 @@ class M3VLAttention(LightweightModule):
         self.compute_kernel_config = linear_compute_config()
         self.rope_compute_kernel_config = hifi4_compute_config()
         self.sdpa_compute_kernel_config = hifi4_compute_config()
-        self.sdpa_program_config = sdpa_program_config(mesh_device)
 
     @classmethod
     def from_torch(
@@ -226,23 +225,22 @@ class M3VLAttention(LightweightModule):
         q_heads = self._apply_rope(q_heads, cos, sin)
         k_heads = self._apply_rope(k_heads, cos, sin)
 
-        # Full (non-causal, unmasked) attention.
+        # Full (non-causal, unmasked) attention, with the heads written side by side as the output projection takes
+        # them: (1, 1, L, num_heads * padded_head_dim).
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
             k_heads,
             v_heads,
             is_causal=False,
             scale=self.scale,
-            program_config=self.sdpa_program_config,
+            program_config=sdpa_program_config(q_heads.device(), q_heads.shape[-2], self.num_heads),
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            output_concat_heads=True,
         )
         ttnn.deallocate(q_heads)
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
-        attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = linear(attn, self.wo, self.wo_bias, self.compute_kernel_config)
         ttnn.deallocate(attn)
-
-        out = linear(attn_flat, self.wo, self.wo_bias, self.compute_kernel_config)
-        ttnn.deallocate(attn_flat)
         return out

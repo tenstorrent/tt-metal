@@ -131,7 +131,7 @@ def test_vision_attention_layout_vs_ref(grid_thw):
     )
     q, k = (rotary_embedding_llama(t, cos_p.double(), sin_p.double()) for t in (q, k))
     attn_heads = F.scaled_dot_product_attention(q, k, v, scale=HEAD_DIM**-0.5)  # (heads, L, 96)
-    # nlp_concat_heads, then the output projection
+    # the heads side by side, as SDPA writes them, then the output projection
     out = attn_heads.transpose(0, 1).reshape(num_patches, -1) @ wo.double() + attn.out_proj.bias
     torch.testing.assert_close(out, expected, rtol=1e-6, atol=1e-6)
 
