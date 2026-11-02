@@ -737,13 +737,11 @@ TEST_F(UnitMeshAnyDispatchFixture, IdleCoreStaleLaunchSlot_DMDM) {
     const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     const uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
-    // Fake stale DFB config: a zeroed header (has_dm0_isr = 0, dm0_isr_ready = 0) followed by a zeroed DM1
-    // remapper blob (num_slots = 0), so pre-fix firmware takes only the harmless marker-writing path.
+    // Fake stale DFB config: a zeroed header (has_dm0_isr = 0, dm0_isr_ready = 0, no DM1 slots, no hart
+    // entries), so pre-fix firmware takes only the harmless marker-writing path.
     const uint32_t fake_config_bytes = 2 * sizeof(dfb_global_header_t);
     const uint32_t fake_config_addr = top_of_l1_scratch_addr(mesh_device, fake_config_bytes);
     std::vector<uint32_t> fake_config(fake_config_bytes / sizeof(uint32_t), 0u);
-    fake_config[offsetof(dfb_global_header_t, dm1_remapper_blob_offset) / sizeof(uint32_t)] =
-        sizeof(dfb_global_header_t);
     slow_dispatch::WriteToL1(mesh_device, core_b, fake_config_addr, fake_config);
 
     // core_b's next launch slot: keep what is there (mode stays DEV), overwrite the stale-able fields.
