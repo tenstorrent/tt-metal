@@ -81,7 +81,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool head_major_output,
     bool head_major_input,
-    bool fused_gating) {
+    bool fused_gating,
+    bool fused_l2norm) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -102,7 +103,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
 
     // Scale q (q is already L2-normed on host), then head-split + GQA-expand q,k from H to HV heads.
-    ttnn::Tensor q = ttnn::multiply(as_f32(q_in), scale);
+    // fused_l2norm (QWEN36_1C_GDN_L2, decode): q/k arrive raw; the kernel normalizes both and applies `scale` to q.
+    TT_FATAL(!fused_l2norm || T == 1, "fused_recurrent_gated_delta_rule: fused_l2norm is decode-only (T == 1)");
+    ttnn::Tensor q = fused_l2norm ? as_f32(q_in) : ttnn::multiply(as_f32(q_in), scale);
     ttnn::Tensor k = as_f32(k_in);
     // q/k keep their H query heads: the READER replicates head hv/G onto core hv, which costs one
     // integer divide per core instead of a repeat_interleave tensor. At decode that expand was two
@@ -183,7 +186,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         output_per_token_state,
         out_mem,
         kernel_cfg,
-        fused_gating);
+        fused_gating,
+        fused_l2norm,
+        fused_l2norm ? scale : 1.0f);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
     const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 

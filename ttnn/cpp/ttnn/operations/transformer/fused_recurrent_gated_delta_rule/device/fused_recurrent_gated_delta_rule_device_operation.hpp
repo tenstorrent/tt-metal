@@ -44,6 +44,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool gb_fused = false);
+    bool gb_fused = false,
+    bool fused_l2norm = false,
+    float l2_scale = 1.0f);
 
 }  // namespace ttnn::prim
