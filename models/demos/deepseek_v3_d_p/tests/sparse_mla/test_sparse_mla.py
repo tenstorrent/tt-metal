@@ -40,7 +40,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matr
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+    striped_cache_to_host,
+)
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -53,23 +58,9 @@ SPARSE_INDEX_PCC = 0.999
 SPARSE_VARIANTS = ["glm_5_2"]
 
 
-def _sp_major_chips(mesh_device, sp_axis):
-    """Mesh coordinates (a0, a1) in linear chip order sp_coord*tp + tp_coord, the order the deduped KV write
-    uses: row-major on the mesh at sp_axis=0, column-major at sp_axis=1."""
-    n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
-    if sp_axis == 0:
-        return [(a0, a1) for a0 in range(n0) for a1 in range(n1)]
-    return [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
-
-
 def _collect_kvpe_cache(cache, mesh_device, sp_axis=0):
-    # ConcatMesh2dToTensor(dims=(2, 1)): mesh axis 0 concatenates on seq, mesh axis 1 on dim 1.
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    logical = cache.unpack_host(ttnn.to_torch(cache.storage, mesh_composer=composer))
-    local = logical.shape[2] // mesh_device.shape[0]  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat(
-        [logical[:, a1, a0 * local : (a0 + 1) * local] for a0, a1 in _sp_major_chips(mesh_device, sp_axis)], dim=1
-    )  # [num_slots, sp*tp*local == seq_len_cache, kvpe]
+    # The sparse path always dedups: stripe order sp_coord*tp + tp_coord on either SP axis.
+    flat = cache.unpack_host(striped_cache_to_host(cache.storage, mesh_device, sp_axis))  # [slots, seq_len_cache, kvpe]
     return flat.unsqueeze(1)
 
 
@@ -224,22 +215,13 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
 def _cache_natural(tt_cache, mesh_device, chunk_size_global, batch_slot=0, sp_axis=0):
     """Read a block-cyclic KV/index cache back to a natural-order [S, D] tensor.
 
-    ConcatMesh2dToTensor(dims=(2, 1)) puts the SP concat on the seq dim and the TP concat on dim 1, so
-    dim 1 is indexed by tp-coord. The sparse path always dedups, so every tp-coord holds a DIFFERENT
-    1/tp slice rather than a replica: flatten them into LINEAR CHIP ORDER (L = sp_coord*tp + tp_coord --
-    the order update_padded_kv_cache(tp_axis=) writes and the full-mesh gather reconstructs), giving a
-    shard-major buffer over sp*tp stripes. blockcyclic_positions is generic in the stripe count, so the
-    un-rotation is the same call with sp*tp.
+    The sparse path always dedups, so every tp-coord holds a DIFFERENT 1/tp slice rather than a replica.
+    striped_cache_to_host returns them in stripe order (sp_coord*tp + tp_coord, the order
+    update_padded_kv_cache(tp_axis=) writes and the full-mesh gather reconstructs) on either SP axis.
+    blockcyclic_positions is generic in the stripe count, so the un-rotation is the same call with sp*tp.
     """
     n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
-    cache_sr = ttnn.to_torch(
-        tt_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    ).to(torch.bfloat16)
-    local = cache_sr.shape[2] // n0  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat(
-        [cache_sr[batch_slot, a1, a0 * local : (a0 + 1) * local] for a0, a1 in _sp_major_chips(mesh_device, sp_axis)],
-        dim=0,
-    )
+    flat = striped_cache_to_host(tt_cache, mesh_device, sp_axis)[batch_slot].to(torch.bfloat16)
     p = blockcyclic_positions(n0 * n1, chunk_size_global, flat.shape[0])
     nat = torch.empty(flat.shape[0], flat.shape[-1], dtype=torch.bfloat16)
     nat[p] = flat

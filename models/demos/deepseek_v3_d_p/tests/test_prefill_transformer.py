@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -642,15 +643,18 @@ def run_model(
 
         # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv and ref_kvpe_list is not None:
-            tt_kvpe_all = ttnn.to_torch(
-                tt_kvpe_cache.storage,
-                # SP onto the seq dim (2), TP onto dim 1, whichever mesh axis each runs on.
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=(2, 1) if sp_axis == 0 else (1, 2), mesh_shape=mesh_device.shape
-                ),
+            # A TP-deduped (sparse) cache holds a different 1/tp of each SP row per chip, in block-cyclic
+            # order; reading one column as a replica would compare the wrong rows. GLM rows score KV
+            # against the golden trace instead, so nothing reaches here with one today.
+            assert not has_indexer, (
+                "the per-layer KVPE check reads a TP-replicated cache; a sparse (TP-deduped) cache needs "
+                "test_utils.gather_cache_natural and a block-cyclic un-rotation"
+            )
+            # SP shards concatenate on the sequence dim; only one TP replica is read back.
+            # Shape: [num_layers, 1, seq_total, head_dim]
+            tt_kvpe_all_layers = ttnn.to_torch(
+                tt_kvpe_cache.storage, mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis, concat_dim=2)
             ).to(torch.bfloat16)
-            # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
-            tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
             if is_balanced:
                 tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
             kv_lora_rank = config.kv_lora_rank
