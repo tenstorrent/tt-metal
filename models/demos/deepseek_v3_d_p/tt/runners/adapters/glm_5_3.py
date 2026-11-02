@@ -105,7 +105,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             tp_axis=kv_tp_axis,
             bank_aligned=True,
         )
@@ -120,7 +120,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=num_index_layers,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
             bank_aligned=True,

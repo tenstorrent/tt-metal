@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.trace_geometry import MTPTraceG
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
-from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches, kv_cache_slots
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -138,7 +138,7 @@ class TtPrefillRuntimeConfig:
         """KV-cache slots the model addresses: num_users, plus one scratch slot for a traced packed forward.
         A capture runs every chunk position, so an empty chunk still runs attention, into slot num_users.
         The KV caches must be allocated with this many users."""
-        return self.num_users + (1 if self.forward_chunks > 1 and self.use_trace else 0)
+        return kv_cache_slots(self.num_users, forward_chunks=self.forward_chunks, use_trace=self.use_trace)
 
     @property
     def mtp_ack_levels(self) -> int:
@@ -1886,7 +1886,8 @@ class TtPrefillRuntime:
         if index_cache is not None:
             first_full = full_indexer_rank(self.hf_config, first_layer_idx)
             count_full = full_indexer_rank(self.hf_config, first_layer_idx + num_my_layers + mtp_tail) - first_full
-            slots_per_user = index_cache.shape[0] // self.config.num_users
+            # Divided by the slots allocated (a traced packed runtime's scratch slot included), not num_users.
+            slots_per_user = index_cache.shape[0] // self.config.cache_num_users
             if slots_per_user != count_full:
                 raise RuntimeError(
                     f"index cache holds {slots_per_user} layers per slot but this stage owns "
@@ -2142,7 +2143,7 @@ class TtPrefillRuntime:
             # and it is a plain ttnn.Tensor, so there is no `.storage` / `unpack_host` (bfp8_b TILE
             # dequantizes on to_torch).
             index = kv_caches.index
-            rows_per_slot = index.shape[0] // self.config.num_users
+            rows_per_slot = index.shape[0] // self.config.cache_num_users
             blocks.append(_slot_block(index, rows_per_slot).to(torch.float32))
         return blocks
 
