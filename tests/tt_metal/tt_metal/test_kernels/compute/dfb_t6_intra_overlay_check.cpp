@@ -6,7 +6,7 @@
 // detect the Quasar T6→overlay alias bug. The producer thread only pushes, the consumer thread only
 // pops, no L1 payload modification. Firmware has already programmed the ClientL capacity and the
 // remapper alias before this kernel runs. The producer is pack and the consumer unpack by default;
-// the host can move either side (or both) to trisc3, which issues the same pushes / pops.
+// the host can move either side or both to trisc3.
 //
 // The producer issues every push before the consumer is allowed to pop, so the ClientL counter is a
 // deterministic function of the tiles pushed/popped so far and the host can tell a single count from
@@ -157,7 +157,7 @@ void kernel_main() {
             WAYPOINT("PWD");
             // TEN-4746: pack only pushes here (no PACR since reserve_back), so order push_back after
             // reserve_back with a no-write dummy pack -- it writes nothing, so the overlay TC sampling
-            // below is unaffected. trisc3 has no pack op; its reserve_back already blocked the RISC.
+            // below is unaffected. On a thread that drives no packer, reserve_back itself blocks the RISC.
             ckernel::dummy_pack(dfb::out);
             dfb.push_back(num_tiles);
             WAYPOINT("PPD");
@@ -187,7 +187,7 @@ void kernel_main() {
             WAYPOINT("WTD");
             // TEN-4746: unpack only pops here (no UNPACR since wait_front), so order pop_front after
             // wait_front with a dummy unpack -- it reads nothing from L1, so the TC sampling is
-            // unaffected. trisc3 has no unpack op; its wait_front already blocked the RISC.
+            // unaffected. On a thread that drives no unpacker, wait_front itself blocks the RISC.
             ckernel::dummy_unpack(dfb::out);
             dfb.pop_front(num_tiles);
             WAYPOINT("UPD");

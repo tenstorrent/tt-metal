@@ -481,8 +481,8 @@ DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
 DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
 DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
 
-// trisc3 (the isolate-SFPU thread) as the DFB's Tensix endpoint: the producer side is host-prefilled like
-// every Tensix producer here, and the consumer side digests entries with RISC loads.
+// Tensix endpoint on trisc3. The host prefills the ring for a Tensix producer, which stamps each entry it
+// pushes with its thread id; a Tensix consumer reports per-entry digests that the host checks.
 #define DFB_TRISC3_TEST(suffix, p_type, c_type, num_p, num_c, pap_kind, cap_kind, blk, entries) \
     TEST_F(UnitMeshFixture, suffix) {                                                           \
         M2SingleDFBParams params{                                                               \
@@ -500,13 +500,13 @@ DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
         };                                                                                      \
         run_single_dfb_program_2_0(this->device(), params);                                     \
     }
-// trisc3 packs -> DM
+// trisc3 -> DM, data verified.
 DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Sx1S, TENSIX, DM, 1, 1, STRIDED, STRIDED, 0, 16)
 DFB_TRISC3_TEST(Trisc3DMTest1xDFB2Sx2S, TENSIX, DM, 2, 2, STRIDED, STRIDED, 0, 16)
 DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Sx4A, TENSIX, DM, 1, 4, STRIDED, ALL, 0, 16)
 DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Bx1B_blk4, TENSIX, DM, 1, 1, BLOCKED, BLOCKED, 4, 16)
 DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Bx2S_blk4, TENSIX, DM, 1, 2, BLOCKED, STRIDED, 4, 16)
-// DM -> trisc3 unpacks
+// DM -> trisc3, digests verified.
 DFB_TRISC3_TEST(DMTrisc3Test1xDFB1Sx1S, DM, TENSIX, 1, 1, STRIDED, STRIDED, 0, 16)
 DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Sx2S, DM, TENSIX, 2, 2, STRIDED, STRIDED, 0, 16)
 DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Sx1S, DM, TENSIX, 2, 1, STRIDED, STRIDED, 0, 16)
@@ -514,13 +514,13 @@ DFB_TRISC3_TEST(DMTrisc3Test1xDFB1Bx1B_blk4, DM, TENSIX, 1, 1, BLOCKED, BLOCKED,
 DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Bx2S_blk4, DM, TENSIX, 2, 2, BLOCKED, STRIDED, 4, 16)
 DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Sx2B_blk4, DM, TENSIX, 2, 2, STRIDED, BLOCKED, 4, 16)
 
-// DM -> dfb_in -> trisc3 -> dfb_out -> DM: one compute kernel in which trisc3 unpacks one DFB and
-// packs another with RISC copies. The output must equal the input.
+// DM -> dfb_in -> trisc3 -> dfb_out -> DM: one compute kernel in which trisc3 consumes dfb_in and produces
+// dfb_out, copying each entry word by word. The output must equal the input.
 TEST_F(UnitMeshFixture, DMTrisc3DMTest2xDFB1Sx1S) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
     }
-    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    constexpr uint32_t entry_size = 2 * 32 * 32;
     constexpr uint32_t num_entries = 8;
     const m2::NodeCoord node{0, 0};
 

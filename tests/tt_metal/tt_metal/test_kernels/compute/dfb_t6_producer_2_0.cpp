@@ -9,9 +9,8 @@
 // can't NoC-read from DRAM in this test setup, the host pre-fills the DFB's L1
 // ring directly via WriteToDeviceL1 before the program launches. The kernel
 // posts the credits that say "one tile is available", which the downstream DM
-// consumer waits on, and the producing thread (PACK, or trisc3 when the host put
-// the producer there) stamps word 0 of every entry it pushes with its thread id,
-// so the host can see which thread pushed it.
+// consumer waits on. The producing thread also stamps word 0 of every entry it
+// pushes with its thread id, so the host can see which thread pushed it.
 //
 // Flow per test invocation:
 //   1. Host pre-fills the DFB L1 ring with the input data.
@@ -53,8 +52,7 @@ void kernel_main() {
         // without modifying the payload.
         ckernel::dummy_pack(dfb::out);
         if constexpr (i_produce) {
-            // tensix_sync blocks this RISC until that pack retired, so the stores below cannot land
-            // before the space was free. On trisc3 the reserve_back already blocked the RISC.
+            // Make sure the space is free before storing: tensix_sync waits for the pack queued behind reserve_back.
             ckernel::tensix_sync();
             const uint32_t share_base = dfb.get_write_ptr() << 4;
             for (uint32_t j = 0; j < share; ++j) {

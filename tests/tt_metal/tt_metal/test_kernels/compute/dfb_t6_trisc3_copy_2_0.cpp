@@ -23,7 +23,7 @@ void kernel_main() {
         dfb_out.reserve_back(1);
         if constexpr (ckernel::TRISC_ID == 3) {
             // Both waits poll the tile counters from this RISC, so the input entry is in L1 and the output
-            // entry is free once they return. get_read_ptr / get_write_ptr are in 16 B units.
+            // entry is free once they return.
             const volatile tt_l1_ptr uint32_t* src =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(dfb_in.get_read_ptr() << 4);
             volatile tt_l1_ptr uint32_t* dst =
