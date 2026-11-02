@@ -172,6 +172,37 @@ TT_KERNEL void entry(uint32_t num_tiles) { (void)num_tiles; }
             ::testing::HasSubstr("cannot take the scoped argument 'op.num_tiles'")));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_NamesShadowingGeneratedCodeJITSmoke) {
+    // A name may match something the generated declarations refer to: a type (uint32_t), or the
+    // by-name lookups' template parameter (`name`). The generated code must still compile, and the
+    // lookups must still return the binding's token.
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+static_assert(op::uint32_t.byte_offset == 0u && op::count.byte_offset == 4u);
+static_assert(op::get_tensor_token_if_present<"name">() == &op::name);
+static_assert(tensor::get_token_if_present<"name">() == &tensor::name);
+
+void kernel_main() {
+    volatile uint32_t sink = get_arg(op::count);
+    (void)sink;
+}
+)"};
+    dm_kernel.runtime_arg_schema.runtime_arg_names = {"op.uint32_t", "op.count"};
+
+    ProgramSpec spec;
+    spec.name = "names_shadowing_generated_code";
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("t_0"), MakeMinimalTensorParameter("t_1")};
+    BindTensorParameterToKernel(spec.kernels[0], "t_0", "op.name");
+    BindTensorParameterToKernel(spec.kernels[0], "t_1", "name");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_ScopesShareABindingThroughAKernelSideAliasJITSmoke) {
     // The documented way to share a binding between scopes (tech_reports/NamedKernelArgs/scoped_names.md):
     // bind it once, in one scope, and alias it in kernel code, in a view of the other scope.

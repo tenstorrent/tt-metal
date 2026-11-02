@@ -189,11 +189,15 @@ bool any_at(DeclSite site, const vector<Entry>& entries) {
  *
  * Unscoped bindings get it in their kind's namespace, as dfb::get_token_if_present() and so on. A scope's struct holds
  * every binding kind, so it gets one per kind, each named for its kind (e.g. scope::get_dfb_token_if_present()).
+ *
+ * `enclosing` is the namespace or scope struct the tokens are declared in. Each returned token is
+ * qualified with it, since a token named `name` would otherwise be the getter's template parameter.
  */
 template <typename Entry>
 void emit_programmatic_binding_token_getter(
     ostream& content,
     DeclSite site,
+    string_view enclosing,
     string_view function_name,
     const vector<Entry>& entries,
     string_view null_binding_type) {
@@ -218,7 +222,7 @@ void emit_programmatic_binding_token_getter(
         //     return &entry_name;
         // }
         content << padding << if_kw << " (name == \"" << name << "\") {\n"
-                << inner_padding << "return &" << name << ";\n";
+                << inner_padding << "return &::" << enclosing << "::" << name << ";\n";
 
         if_kw = "} else if constexpr";
     }
@@ -382,7 +386,7 @@ constexpr string_view SCRATCHPAD_NULL_TOKEN = "::ScratchpadBindingToken";
 //
 // A scope's struct mixes names of every kind, so a member may share a name with a type that a later
 // declaration refers to, and hide it (an arg named `DFBBindingToken`, say). So every declaration
-// spells the types it refers to fully qualified: ::DFBBindingToken. (A namespace name can't be hidden
+// spells the types it refers to fully qualified: ::DFBBindingToken, ::uint32_t. (A namespace name can't be hidden
 // that way, since a name followed by :: is looked up only among namespaces and types. Namespaces are
 // qualified too, to keep the rule simple: qualify everything.)
 
@@ -561,7 +565,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const KernelB
     // Emit DFB bindings
     content << "namespace dfb {\n";
     emit_dfb_tokens(content, site, entries.dfbs);
-    emit_programmatic_binding_token_getter(content, site, "get_token_if_present", entries.dfbs, DFB_NULL_TOKEN);
+    emit_programmatic_binding_token_getter(content, site, "dfb", "get_token_if_present", entries.dfbs, DFB_NULL_TOKEN);
     content << "}  // namespace dfb\n";
 
     // Emit PrefetcherPipe bindings
@@ -579,7 +583,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const KernelB
     // Emit Tensor bindings and TensorBindingToken sequences
     content << "namespace tensor {\n";
     emit_tensor_tokens(content, site, entries.tensors);
-    emit_programmatic_binding_token_getter(content, site, "get_token_if_present", entries.tensors, TENSOR_NULL_TOKEN);
+    emit_programmatic_binding_token_getter(
+        content, site, "tensor", "get_token_if_present", entries.tensors, TENSOR_NULL_TOKEN);
     emit_tensor_binding_sequences(content, site, entries.tensor_sequences);
     content << "}  // namespace tensor\n";
 
@@ -587,7 +592,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const KernelB
     content << "namespace scratch {\n";
     emit_scratchpad_tokens(content, site, entries.scratchpads);
     emit_programmatic_binding_token_getter(
-        content, site, "get_token_if_present", entries.scratchpads, SCRATCHPAD_NULL_TOKEN);
+        content, site, "scratch", "get_token_if_present", entries.scratchpads, SCRATCHPAD_NULL_TOKEN);
     content << "}  // namespace scratch\n";
 
     write_file(path, content.str());
@@ -611,7 +616,7 @@ vector<ArgAccessor> collect_arg_accessors(const JitBuildSettings& settings) {
     // (Only uint32_t arg types are currently supported, but we later want to extend this.)
     uint32_t rta_offset = 0;
     for (const auto& name : settings.get_runtime_arg_names()) {
-        accessors.push_back({name, "::experimental::RtaArg<uint32_t>", fmt::format("{{{}}}", rta_offset)});
+        accessors.push_back({name, "::experimental::RtaArg<::uint32_t>", fmt::format("{{{}}}", rta_offset)});
         rta_offset += sizeof(uint32_t);
     }
     // Named CRTAs
@@ -619,7 +624,7 @@ vector<ArgAccessor> collect_arg_accessors(const JitBuildSettings& settings) {
     // buffer (see the vararg-offset computation in write_kernel_args_generated_header).
     uint32_t crta_offset = 0;
     for (const auto& name : settings.get_common_runtime_arg_names()) {
-        accessors.push_back({name, "::experimental::CrtaArg<uint32_t>", fmt::format("{{{}}}", crta_offset)});
+        accessors.push_back({name, "::experimental::CrtaArg<::uint32_t>", fmt::format("{{{}}}", crta_offset)});
         crta_offset += sizeof(uint32_t);
     }
 
@@ -637,7 +642,7 @@ vector<ArgAccessor> collect_arg_accessors(const JitBuildSettings& settings) {
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     for (const auto& [name, value] : cta_entries) {
-        accessors.push_back({name, "::experimental::CtaVal<uint32_t>", fmt::format("{{{}u}}", value)});
+        accessors.push_back({name, "::experimental::CtaVal<::uint32_t>", fmt::format("{{{}u}}", value)});
     }
 
     return accessors;
@@ -786,11 +791,12 @@ void write_kernel_scopes_generated_header(
         emit_tensor_tokens(content, site, bindings.tensors);
         emit_tensor_binding_sequences(content, site, bindings.tensor_sequences);
         emit_scratchpad_tokens(content, site, bindings.scratchpads);
-        emit_programmatic_binding_token_getter(content, site, SCOPED_DFB_LOOKUP_NAME, bindings.dfbs, DFB_NULL_TOKEN);
         emit_programmatic_binding_token_getter(
-            content, site, SCOPED_TENSOR_LOOKUP_NAME, bindings.tensors, TENSOR_NULL_TOKEN);
+            content, site, scope, SCOPED_DFB_LOOKUP_NAME, bindings.dfbs, DFB_NULL_TOKEN);
         emit_programmatic_binding_token_getter(
-            content, site, SCOPED_SCRATCH_LOOKUP_NAME, bindings.scratchpads, SCRATCHPAD_NULL_TOKEN);
+            content, site, scope, SCOPED_TENSOR_LOOKUP_NAME, bindings.tensors, TENSOR_NULL_TOKEN);
+        emit_programmatic_binding_token_getter(
+            content, site, scope, SCOPED_SCRATCH_LOOKUP_NAME, bindings.scratchpads, SCRATCHPAD_NULL_TOKEN);
         content << "};\n";
     }
 

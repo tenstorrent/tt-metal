@@ -70,7 +70,7 @@ The unscoped `dfb::get_token_if_present<"in">()` doesn't see scoped bindings: it
 Validation enforces all of these, with an error that names the rule.
 
 - There is one level of scope (`"a.x"`, not `"a.b.x"`). The scope and the name are each a C++ identifier.
-- Names in one scope are unique across all kinds: an argument and a DFB binding can't share a name. They also mustn't collide with the members the generator adds: the by-name lookups, and the type alias `<name>_t` of each tensor binding.
+- Names in one scope are unique across all kinds: an argument and a DFB binding can't share a name. They also mustn't collide with the scope's own name (`"op.op"`), or with the members the generator adds: the by-name lookups, and the type alias `<name>_t` of each tensor binding.
 - A scope can't be named after a namespace that the generated headers declare or use: `args`, `dfb`, `pipe`, `sem`, `scratch`, `tensor`, `sem_internal`, `binding_details`, `experimental`, `internal`, `std` or `tensor_accessor`. A clash with any other global name in device code shows up as a kernel compile error.
 - A scoped tensor binding sequence's members must be in the sequence's own scope.
 - The accessor-name length limit (`MAX_ACCESSOR_NAME_LENGTH`) applies to the whole `"<scope>.<name>"`.
@@ -87,7 +87,10 @@ struct b_view : b { static constexpr const auto& in = a::in; };
 op<b_view>();
 ```
 
-Each piece of code constructs its own device objects from its own names, as a standalone kernel would. For a shared DFB, that means one `DataflowBuffer` per scope. Two `DataflowBuffer` objects for one DFB endpoint work correctly, but can confuse the bookkeeping of device-side debug tooling.
+Each piece of code can construct its own device objects from its own names, as a standalone kernel would, with one exception for DFBs:
+
+- **On Quasar data-movement kernels with implicit sync (the default there), construct one `DataflowBuffer` per DFB endpoint and share it by reference.** Each object keeps its own running count of the tiles it has moved, and waits on the hardware counters relative to that count. So a second object would count from zero: it could read entries the first object already consumed, and would return credits a second time. Each piece of code can still take the binding token from its own scope, for the compile-time information LLK calls need.
+- **Elsewhere** (Wormhole, Blackhole, and compute kernels), the sync state lives in the shared DFB interface, so one `DataflowBuffer` per scope works. Two objects for one endpoint can confuse the bookkeeping of device-side debug tooling, though.
 
 A DFB bound in two *different* roles, produced in one scope and consumed in another, needs no alias. That's two bindings, a self-loop, wherever self-loops are allowed.
 

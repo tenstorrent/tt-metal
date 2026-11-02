@@ -10,10 +10,12 @@
 #include <gmock/gmock.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
+#include "impl/metal2_host_api/scoped_name.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
@@ -102,7 +104,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScopedNameCollidesWithGeneratedLookupFails) {
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ReservedScopeNameFails) {
-    for (const char* name : {"args.x", "dfb.x", "tensor.x", "sem_internal.x", "experimental.x"}) {
+    // Every reserved name, so the list is pinned
+    for (std::string_view scope : RESERVED_SCOPE_NAMES) {
+        const std::string name = std::string(scope) + ".x";
         SCOPED_TRACE(name);
         ProgramSpec spec = MakeMinimalValidProgramSpec();
         spec.kernels[0].runtime_arg_schema.runtime_arg_names = {name};
@@ -110,6 +114,39 @@ TEST_F(ProgramSpecTestQuasar, CPU_ReservedScopeNameFails) {
         EXPECT_THAT(
             [&] { MakeProgramFromSpec(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("uses the reserved scope name")));
+    }
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScopedNameMatchingItsScopeFails) {
+    // A C++ class can't have a member with its own name.
+    {
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"op.op"};
+
+        EXPECT_THAT(
+            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("two members named 'op' in scope 'op'")));
+    }
+    {
+        // The tensor binding's generated type alias, t_t::t_t, would take the scope's name.
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.tensor_parameters = {MakeMinimalTensorParameter("t_0")};
+        BindTensorParameterToKernel(spec.kernels[0], "t_0", "t_t.t");
+
+        EXPECT_THAT(
+            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            ::testing::ThrowsMessage<std::runtime_error>(
+                ::testing::HasSubstr("two members named 't_t' in scope 't_t'")));
+    }
+    {
+        // So would the scope's generated lookup of the same name.
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"get_dfb_token_if_present.x"};
+
+        EXPECT_THAT(
+            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+                "two members named 'get_dfb_token_if_present' in scope 'get_dfb_token_if_present'")));
     }
 }
 
