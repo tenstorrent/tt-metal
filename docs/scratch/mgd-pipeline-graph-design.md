@@ -1940,7 +1940,7 @@ planner placed none (4.2, "Speed";
 ```
                   PipelinePlacementProblem    plain data: no control plane, no PSD, no MGD
                     graph:  pipelines -> stages {name, shape in chips, core slots}
-                                         edges  {src, dst, loopback, soft}
+                                         edges  {src, dst, loopback}
                     fabric: host slices {mesh, chip range, host ranks}
                             chips {FabricNodeId, mesh coordinate}, chip links
                        ^                                          ^
@@ -1957,30 +1957,7 @@ planner placed none (4.2, "Speed";
 The mapper keeps its own state around the session. `channels_`, `R`, `record_channels` and the
 demand check (4.2, 4.3) read the session's carve and layout and never enter the problem. P5's
 `PipelinePlacementEnumerationSession` becomes `problem_from_mapper`, a `PipelinePlacementSession`,
-and that mapper-only state.
-
-```cpp
-// pipeline_builder.hpp, beside resolve_graph_layout. Every field is plain data.
-struct PipelinePlacementProblem {
-    struct Stage { std::string name; MeshShape shape; std::optional<std::uint32_t> core_slots; };
-    struct Edge  { std::string src, dst; bool loopback = false; bool soft = false; };  // soft: RELAXED (later)
-    struct Pipeline { std::vector<Stage> stages; std::vector<Edge> edges; };           // fabric edges only
-    struct HostSlice { MeshId mesh; MeshCoordinateRange chips; std::vector<MeshHostRankId> host_ranks; };
-
-    std::map<std::string, Pipeline> pipelines;               // one target component each (3.4)
-    std::vector<HostSlice> slices;                           // every mesh's host grid
-    std::map<FabricNodeId, MeshCoordinate> chip_coords;      // every chip of every slice
-    std::set<std::pair<FabricNodeId, FabricNodeId>> links;   // chip pairs the fabric routes over, both orders
-};
-
-class PipelinePlacementSession {                             // P5's solve and check, minus the mapper's state
-public:
-    PipelinePlacementSession(const PipelinePlacementProblem& problem, std::uint64_t conflict_cap);
-    PipelineLayoutResult next();                             // failure_stage pipeline_carve or pipeline_layout
-};
-
-PipelinePlacementProblem problem_from_control_plane(std::map<std::string, PipelinePlacementProblem::Pipeline>);
-```
+and that mapper-only state. The code is in "The solver code" below.
 
 #### The solve: graph, positions and constraints
 
@@ -1994,17 +1971,17 @@ The encoding of 4.1 and 4.2, in one place. Three graphs:
 
 The constraints. Every row is today's solver API; the topology solver gets no pipeline code.
 
-| Rule | How | Kind |
-|---|---|---|
-| every stage gets exactly one position | `solve_topology_mapping` maps every target node | built in |
-| no two stages take the same position | the mapping is injective | built in |
-| a stage only on positions of its own shape (no rotation, 2.1) | `add_required_constraint(stage, positions)` | hard |
-| a stage only where it fits on its own: its endpoints (one per edge, plus 2 for stage 0's H2D and D2H) fit core slots x chips | positions that fail are left out of the stage's required set, before the solver session; stage 0 is never offered a one-chip position | filter |
-| chosen positions do not overlap | `add_resource_constraint(position -> slice ids)`: at most one chosen position per slice | hard |
-| every fabric edge joins touching positions | each target edge must land on a global edge (`ConnectionValidationMode::STRICT`) | hard |
-| a tight carve uses every slice | when the stage areas add up to the slice count, one `add_cardinality_constraint(pairs covering slice s, 1)` per slice | redundant, for speed (report 5.4: 66 s to 0.59 s, 170 s to 0.32 s) |
-| RELAXED (later): an edge may go over host | `set_allow_unmatched_target_edges` (#56762) on soft edges; stage 0's outgoing edge stays hard | soft |
-| the solve stops | `conflict_cap` on the `TopologyMappingEnumerationSession`; `Auto` picks SAT because a resource constraint is present | bound |
+| Rule | How | Kind | Code step |
+|---|---|---|---|
+| every stage gets exactly one position | `solve_topology_mapping` maps every target node | built in | 11 |
+| no two stages take the same position | the mapping is injective | built in | 11 |
+| a stage only on positions of its own shape (no rotation, 2.1) | `add_required_constraint(stage, positions)` | hard | 9 |
+| a stage only where it fits on its own: its endpoints (one per edge, plus 2 for stage 0's H2D and D2H) fit core slots x chips | a stage that fails has no position, before the solver session; stage 0 is never offered a one-chip position | filter | 8, 9 |
+| chosen positions do not overlap | `add_resource_constraint(position -> slice ids)`: at most one chosen position per slice | hard | 10 |
+| every fabric edge joins touching positions | each target edge must land on a global edge (`ConnectionValidationMode::STRICT`); a repeated edge needs as many links | hard | 6, 7, 11 |
+| a tight carve uses every slice | when the stage areas add up to the slice count, one `add_cardinality_constraint(pairs covering slice s, 1)` per slice | redundant, for speed (report 5.4: 66 s to 0.59 s, 170 s to 0.32 s) | 10 |
+| RELAXED (later): an edge may go over host | `set_allow_unmatched_target_edges` (#56762) on soft edges; stage 0's outgoing edge stays hard | soft | not in the first version |
+| the solve stops | `conflict_cap` on the `TopologyMappingEnumerationSession`; `Auto` picks SAT because a resource constraint is present | bound | 11 |
 
 The benchmark ran the shape, overlap and edge rows as `topo/carve_footprint_bench.cpp` builds
 them, with completeness from the uncommitted `topo/resource_completeness.patch`; the
@@ -2013,7 +1990,468 @@ cardinality form replaces that patch (4.2).
 The solve does not see which chip carries each edge, two edges landing on one chip, core slot
 numbers, or the H2D and D2H chips. The resolver check on the chosen rectangles catches those
 (4.2, "From the chosen rectangles to the resolver call"). The pre-checks (area, lattice count,
-colour and segment tests) run before the solve, as in 4.2.
+colour and segment tests) run before the solve, as in 4.2; the code below has the area check.
+
+#### The solver code
+
+Not compiled; written against today's `topology_solver.hpp` and `pipeline_builder.cpp`. The
+header goes beside `resolve_graph_layout`. `PipelineLayoutResult`, `PipelinePlacement`,
+`PipelineSubmesh` and `SlotCoord` are 4.0's types.
+
+```cpp
+// tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp
+namespace tt::tt_fabric {
+
+// One pipeline placement problem. Plain data: no control plane, no PSD, no MGD, so blaze, the topology mapper
+// and CPU tests all build it and get the same answer from the same input.
+struct PipelinePlacementProblem {
+    struct Stage {
+        std::string name;                         // unique within its pipeline
+        std::uint32_t rows = 0, cols = 0;         // shape in chips
+        std::optional<std::uint32_t> core_slots;  // per chip; nullopt: the resolver's default
+    };
+    struct Edge {
+        std::string src, dst;
+        bool loopback = false;
+    };
+    struct Pipeline {
+        std::vector<Stage> stages;
+        std::vector<Edge> edges;  // fabric edges only; edges carried over host are left out
+    };
+    struct HostSlice {
+        MeshId mesh;
+        std::uint32_t row0 = 0, col0 = 0, rows = 0, cols = 0;  // in chips, on its mesh
+        std::vector<MeshHostRankId> host_ranks;
+    };
+    struct Chip {
+        MeshId mesh;
+        std::uint32_t row = 0, col = 0;  // on its mesh
+    };
+
+    std::map<std::string, Pipeline> pipelines;              // one target component each (3.4)
+    std::vector<HostSlice> slices;                          // every mesh's host grid
+    std::map<FabricNodeId, Chip> chips;                     // every chip of every slice
+    std::set<std::pair<FabricNodeId, FabricNodeId>> links;  // directed (exit, entry): discover_submesh_links' test
+};
+
+// Blaze's runtime caller: the fabric half read from the control plane.
+PipelinePlacementProblem problem_from_control_plane(std::map<std::string, PipelinePlacementProblem::Pipeline> pipelines);
+
+// The footprint solve, then the resolver on each carve it returns.
+class PipelinePlacementSession {
+public:
+    explicit PipelinePlacementSession(PipelinePlacementProblem problem, int conflict_cap = 0);  // 0: SAT default
+    PipelineLayoutResult next();  // a carve never returned before; failure_stage pipeline_carve or pipeline_layout
+
+private:
+    using StageIdx = std::size_t;  // into stages_, across pipelines
+    using Pos = std::size_t;       // into positions_
+
+    struct StageRef {
+        std::string pipeline;
+        std::size_t index;  // into problem_.pipelines.at(pipeline).stages
+    };
+    struct Position {  // a rectangle of whole host slices on one mesh
+        MeshId mesh;
+        std::uint32_t row0, col0, rows, cols;  // in chips
+        std::vector<std::uint32_t> slices;     // into problem_.slices
+    };
+    struct ResolverInputs {  // one pipeline's resolver arguments that do not depend on the carve
+        std::vector<std::string> stage_order;
+        std::vector<EdgeInputTuple> edges;
+        std::map<std::string, std::uint32_t> stage_chip_counts;
+        std::map<std::string, std::uint32_t> capacity_overrides;
+    };
+
+    std::vector<std::vector<detail::InternalChip>> submesh_chips(const std::vector<Pos>& slots) const;
+    detail::DirectLinks submesh_links(const std::vector<Pos>& slots) const;
+
+    PipelinePlacementProblem problem_;
+    std::vector<StageRef> stages_;
+    std::map<std::pair<std::string, std::string>, StageIdx> stage_idx_;  // (pipeline, stage name)
+    std::vector<Position> positions_;
+    std::vector<std::vector<detail::InternalChip>> position_chips_;  // slot-local (row, col), row-major
+    detail::DirectLinks position_links_;                             // keyed (p, q), directed, by chip id
+    std::map<std::string, ResolverInputs> resolver_inputs_;          // by pipeline name
+    std::optional<std::string> infeasible_;                          // why no carve can exist; next() reports it
+    std::unique_ptr<TopologyMappingEnumerationSession<StageIdx, Pos>> solver_;  // null if infeasible_
+};
+
+}  // namespace tt::tt_fabric
+```
+
+```cpp
+// tt_metal/fabric/pipeline_builder.cpp, in namespace tt::tt_fabric, after topological_sort
+namespace {
+// The resolver's default capacity: 1 pipeline-core slot per chip on 8 or more chips, 2 on fewer.
+std::uint32_t default_core_slots(std::uint32_t chips) { return chips >= 8 ? 1 : 2; }
+}  // namespace
+
+PipelinePlacementSession::PipelinePlacementSession(PipelinePlacementProblem problem, int conflict_cap) :
+    problem_(std::move(problem)) {
+    const auto& slices = problem_.slices;
+
+    // 1. Chips by mesh coordinate, and the slice each chip is in.
+    std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, FabricNodeId> chip_at;  // (mesh, row, col)
+    for (const auto& [fid, c] : problem_.chips) {
+        chip_at.emplace(std::tuple{*c.mesh, c.row, c.col}, fid);
+    }
+    std::map<FabricNodeId, std::uint32_t> slice_of;
+    for (std::uint32_t s = 0; s < slices.size(); ++s) {
+        for (auto r = slices[s].row0; r < slices[s].row0 + slices[s].rows; ++r) {
+            for (auto c = slices[s].col0; c < slices[s].col0 + slices[s].cols; ++c) {
+                slice_of.emplace(chip_at.at({*slices[s].mesh, r, c}), s);
+            }
+        }
+    }
+
+    // 2. Slice adjacency: two slices touch when a chip link joins them (a grid link or a cable).
+    std::vector<std::set<std::uint32_t>> slice_nbrs(slices.size());
+    std::map<FabricNodeId, std::vector<FabricNodeId>> links_out, links_in;
+    for (const auto& [a, b] : problem_.links) {
+        links_out[a].push_back(b);
+        links_in[b].push_back(a);
+        if (const auto sa = slice_of.at(a), sb = slice_of.at(b); sa != sb) {
+            slice_nbrs[sa].insert(sb);
+            slice_nbrs[sb].insert(sa);
+        }
+    }
+
+    // 3. Stages across pipelines, and the distinct shapes they need.
+    std::set<std::pair<std::uint32_t, std::uint32_t>> shapes;
+    for (const auto& [name, pipeline] : problem_.pipelines) {
+        for (std::size_t i = 0; i < pipeline.stages.size(); ++i) {
+            stage_idx_[{name, pipeline.stages[i].name}] = stages_.size();
+            stages_.push_back({name, i});
+            shapes.insert({pipeline.stages[i].rows, pipeline.stages[i].cols});
+        }
+    }
+
+    // 4. Positions: per mesh, every rectangle of host-grid cells whose chip extent is a stage's shape. Stages of
+    //    one shape share its positions; positions overlap, and the resource constraint keeps chosen ones apart.
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<Pos>> positions_of_shape;
+    std::map<std::uint32_t, std::vector<std::uint32_t>> slices_of_mesh;
+    for (std::uint32_t s = 0; s < slices.size(); ++s) {
+        slices_of_mesh[*slices[s].mesh].push_back(s);
+    }
+    for (const auto& [mesh, ids] : slices_of_mesh) {
+        std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint32_t> cell;  // (row0, col0) -> slice
+        std::set<std::uint32_t> row_set, col_set;
+        for (auto s : ids) {
+            cell[{slices[s].row0, slices[s].col0}] = s;
+            row_set.insert(slices[s].row0);
+            col_set.insert(slices[s].col0);
+        }
+        const std::vector<std::uint32_t> grid_rows(row_set.begin(), row_set.end());
+        const std::vector<std::uint32_t> grid_cols(col_set.begin(), col_set.end());
+        for (std::size_t r0 = 0; r0 < grid_rows.size(); ++r0) {
+            for (std::size_t r1 = r0; r1 < grid_rows.size(); ++r1) {
+                for (std::size_t c0 = 0; c0 < grid_cols.size(); ++c0) {
+                    for (std::size_t c1 = c0; c1 < grid_cols.size(); ++c1) {
+                        std::vector<std::uint32_t> covered;
+                        bool whole = true;
+                        for (auto r = r0; whole && r <= r1; ++r) {
+                            for (auto c = c0; whole && c <= c1; ++c) {
+                                const auto it = cell.find({grid_rows[r], grid_cols[c]});
+                                whole = it != cell.end();
+                                if (whole) {
+                                    covered.push_back(it->second);
+                                }
+                            }
+                        }
+                        if (!whole) {
+                            continue;
+                        }
+                        const auto& first = slices[cell.at({grid_rows[r0], grid_cols[c0]})];
+                        const auto& last = slices[cell.at({grid_rows[r1], grid_cols[c1]})];
+                        const std::uint32_t rows = last.row0 + last.rows - first.row0;
+                        const std::uint32_t cols = last.col0 + last.cols - first.col0;
+                        if (!shapes.contains({rows, cols})) {
+                            continue;
+                        }
+                        positions_of_shape[{rows, cols}].push_back(positions_.size());
+                        positions_.push_back({MeshId{mesh}, first.row0, first.col0, rows, cols, std::move(covered)});
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Each position's chips, slot-local and row-major: the resolver's chips when the position is a slot.
+    std::vector<std::map<FabricNodeId, SlotCoord>> local(positions_.size());
+    for (Pos p = 0; p < positions_.size(); ++p) {
+        auto& chips = position_chips_.emplace_back();
+        for (std::uint32_t r = 0; r < positions_[p].rows; ++r) {
+            for (std::uint32_t c = 0; c < positions_[p].cols; ++c) {
+                const auto fid = chip_at.at({*positions_[p].mesh, positions_[p].row0 + r, positions_[p].col0 + c});
+                chips.push_back({fid, r, c});
+                local[p].emplace(fid, SlotCoord{r, c});
+            }
+        }
+    }
+
+    // 6. Position graph: two positions are adjacent when they share no slice and a slice of one borders a slice
+    //    of the other. One entry per chip pair a link joins, so STRICT puts a repeated edge on as many links.
+    //    Every directed link between them is kept as a LinkPair, for the resolver.
+    std::vector<std::vector<Pos>> covering(slices.size());
+    for (Pos p = 0; p < positions_.size(); ++p) {
+        for (auto s : positions_[p].slices) {
+            covering[s].push_back(p);
+        }
+    }
+    AdjacencyGraph<Pos>::AdjacencyMap global;
+    for (Pos p = 0; p < positions_.size(); ++p) {
+        global[p];
+        const std::set<std::uint32_t> inside(positions_[p].slices.begin(), positions_[p].slices.end());
+        std::set<Pos> candidates;
+        for (auto s : inside) {
+            for (auto t : slice_nbrs[s]) {
+                if (!inside.contains(t)) {
+                    candidates.insert(covering[t].begin(), covering[t].end());
+                }
+            }
+        }
+        for (Pos q : candidates) {
+            if (std::ranges::any_of(positions_[q].slices, [&](auto s) { return inside.contains(s); })) {
+                continue;  // overlap: never both chosen, so never adjacent
+            }
+            std::set<std::pair<FabricNodeId, FabricNodeId>> chip_pairs;  // unordered
+            for (const auto& [fa, a] : local[p]) {
+                for (const auto& fb : links_out[fa]) {
+                    if (const auto b = local[q].find(fb); b != local[q].end()) {
+                        position_links_[{p, q}].push_back({a.first, a.second, b->second.first, b->second.second});
+                        chip_pairs.insert(fa < fb ? std::pair{fa, fb} : std::pair{fb, fa});
+                    }
+                }
+                for (const auto& fb : links_in[fa]) {
+                    if (local[q].contains(fb)) {
+                        chip_pairs.insert(fa < fb ? std::pair{fa, fb} : std::pair{fb, fa});
+                    }
+                }
+            }
+            global[p].insert(global[p].end(), chip_pairs.size(), q);
+        }
+    }
+
+    // 7. Target graph: every fabric edge, both ways; a repeated edge is a duplicate entry.
+    AdjacencyGraph<StageIdx>::AdjacencyMap target;
+    std::vector<std::uint32_t> endpoints(stages_.size(), 0);
+    for (StageIdx k = 0; k < stages_.size(); ++k) {
+        target[k];
+    }
+    for (const auto& [name, pipeline] : problem_.pipelines) {
+        for (const auto& e : pipeline.edges) {
+            const auto a = stage_idx_.at({name, e.src});
+            const auto b = stage_idx_.at({name, e.dst});
+            target[a].push_back(b);
+            target[b].push_back(a);
+            ++endpoints[a];
+            ++endpoints[b];
+        }
+    }
+
+    // 8. Resolver inputs, once per pipeline. stage_order[0] is the host I/O stage: 2 more endpoints (H2D, D2H).
+    for (const auto& [name, pipeline] : problem_.pipelines) {
+        auto& in = resolver_inputs_[name];
+        std::vector<std::string> names;
+        for (const auto& st : pipeline.stages) {
+            names.push_back(st.name);
+            in.stage_chip_counts[st.name] = st.rows * st.cols;
+            if (st.core_slots) {
+                in.capacity_overrides[st.name] = *st.core_slots;
+            }
+        }
+        for (const auto& e : pipeline.edges) {
+            in.edges.emplace_back(e.src, e.dst, e.loopback);
+        }
+        in.stage_order = topological_sort(names, in.edges);  // throws on a non-loopback cycle (Tier A rules it out)
+        if (!in.stage_order.empty()) {
+            endpoints[stage_idx_.at({name, in.stage_order.front()})] += 2;
+        }
+    }
+
+    // 9. Required positions: the stage's own shape, and only if its endpoints fit the shape's core slots.
+    MappingConstraints<StageIdx, Pos> constraints;
+    std::vector<std::vector<StageIdx>> takers(positions_.size());  // position -> stages that may take it
+    std::size_t min_area = 0;                                      // in host slices
+    for (StageIdx k = 0; k < stages_.size(); ++k) {
+        const auto& st = problem_.pipelines.at(stages_[k].pipeline).stages[stages_[k].index];
+        const std::uint32_t chips = st.rows * st.cols;
+        const std::uint32_t slots = st.core_slots.value_or(default_core_slots(chips));
+        const auto it = positions_of_shape.find({st.rows, st.cols});
+        if (it == positions_of_shape.end() || endpoints[k] > slots * chips) {
+            infeasible_ = fmt::format(
+                "stage {} of pipeline {} ({}x{} chips, {} endpoints, {} slots per chip) fits no position",
+                st.name, stages_[k].pipeline, st.rows, st.cols, endpoints[k], slots);
+            return;
+        }
+        std::size_t area = std::numeric_limits<std::size_t>::max();
+        for (Pos p : it->second) {
+            takers[p].push_back(k);
+            area = std::min(area, positions_[p].slices.size());
+        }
+        min_area += area;
+        constraints.add_required_constraint(k, std::set<Pos>(it->second.begin(), it->second.end()));
+    }
+
+    // 10. Area pre-check; no slice under two chosen positions; on a tight carve, every slice covered.
+    if (min_area > slices.size()) {
+        infeasible_ = fmt::format("the stages need {} host slices, the fabric has {}", min_area, slices.size());
+        return;
+    }
+    std::map<Pos, std::vector<std::uint32_t>> covers;
+    for (Pos p = 0; p < positions_.size(); ++p) {
+        covers[p] = positions_[p].slices;
+    }
+    constraints.add_resource_constraint<std::uint32_t>(covers);
+    if (min_area == slices.size()) {
+        for (std::uint32_t s = 0; s < slices.size(); ++s) {
+            MappingConstraints<StageIdx, Pos>::CardinalityPairSet pairs;
+            for (Pos p : covering[s]) {
+                for (StageIdx k : takers[p]) {
+                    pairs.insert({k, p});
+                }
+            }
+            if (pairs.empty() || !constraints.add_cardinality_constraint(pairs, 1)) {
+                infeasible_ = fmt::format("host slice {} cannot be covered, and the carve must use every slice", s);
+                return;
+            }
+        }
+    }
+
+    // 11. One solver session: every stage onto one position, injective, every target edge on a global edge.
+    solver_ = std::make_unique<TopologyMappingEnumerationSession<StageIdx, Pos>>(
+        AdjacencyGraph<StageIdx>(std::move(target)),
+        AdjacencyGraph<Pos>(std::move(global)),
+        constraints,
+        ConnectionValidationMode::STRICT,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Auto,  // SAT: a resource constraint is present
+        /*unique_shapes=*/false,            // 4.4, "Turn unique_shapes off for SAT placement"
+        conflict_cap);
+}
+
+PipelineLayoutResult PipelinePlacementSession::next() {
+    PipelineLayoutResult out;
+    auto fail = [&out](std::string stage, std::string message) {
+        out.success = false;
+        out.failure_stage = std::move(stage);
+        out.error_message = std::move(message);
+        return out;
+    };
+    if (infeasible_) {
+        return fail("pipeline_carve", *infeasible_);
+    }
+    const auto carve = solver_->next();  // never repeats a carve
+    out.solve_time = carve.stats.elapsed_time;
+    if (!carve.success) {
+        return fail("pipeline_carve", carve.error_message);  // no carve left, or the conflict cap (open question 13)
+    }
+    for (const auto& [name, in] : resolver_inputs_) {
+        std::vector<Pos> slots;  // submesh i is the position of stage_order[i]
+        for (const auto& stage : in.stage_order) {
+            slots.push_back(carve.target_to_global.at(stage_idx_.at({name, stage})));
+        }
+        PipelinePlacement placement;
+        try {
+            placement.layout = detail::resolve_pipeline_placement(
+                in.stage_order, in.edges, submesh_links(slots), in.stage_chip_counts, submesh_chips(slots),
+                in.capacity_overrides);
+        } catch (const std::exception& e) {
+            return fail("pipeline_layout", fmt::format("pipeline {}: {}", name, e.what()));
+        }
+        placement.layout.stage_order = in.stage_order;  // as resolve_graph_layout_with_connections does
+        for (Pos p : slots) {
+            auto& sub = placement.submeshes.emplace_back();
+            sub.mesh = positions_[p].mesh;
+            for (auto s : positions_[p].slices) {
+                const auto& ranks = problem_.slices[s].host_ranks;
+                sub.host_ranks.insert(sub.host_ranks.end(), ranks.begin(), ranks.end());
+            }
+            std::ranges::sort(sub.host_ranks);
+            for (const auto& chip : position_chips_[p]) {
+                sub.chips.emplace(SlotCoord{chip.row, chip.col}, chip.fid);
+            }
+        }
+        out.pipelines.emplace(name, std::move(placement));
+    }
+    out.success = true;
+    return out;
+}
+
+std::vector<std::vector<detail::InternalChip>> PipelinePlacementSession::submesh_chips(
+    const std::vector<Pos>& slots) const {
+    std::vector<std::vector<detail::InternalChip>> chips;
+    for (Pos p : slots) {
+        chips.push_back(position_chips_[p]);  // already slot-local
+    }
+    return chips;
+}
+
+detail::DirectLinks PipelinePlacementSession::submesh_links(const std::vector<Pos>& slots) const {
+    detail::DirectLinks links;
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        for (std::size_t j = 0; j < slots.size(); ++j) {
+            if (const auto it = position_links_.find({slots[i], slots[j]}); i != j && it != position_links_.end()) {
+                links[{i, j}] = it->second;  // re-keyed from positions to submesh indices
+            }
+        }
+    }
+    return links;
+}
+
+PipelinePlacementProblem problem_from_control_plane(std::map<std::string, PipelinePlacementProblem::Pipeline> pipelines) {
+    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    PipelinePlacementProblem problem{.pipelines = std::move(pipelines)};
+    for (MeshId mesh : mesh_graph.get_mesh_ids()) {
+        const std::uint32_t mesh_cols = mesh_graph.get_mesh_shape(mesh)[1];
+        for (MeshHostRankId rank : mesh_graph.get_host_ranks(mesh).values()) {
+            const MeshCoordinateRange range = mesh_graph.get_coord_range(mesh, rank);
+            const auto& lo = range.start_coord();
+            const auto& hi = range.end_coord();  // inclusive
+            problem.slices.push_back({mesh, lo[0], lo[1], hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, {rank}});
+            for (const MeshCoordinate& coord : range) {
+                problem.chips.emplace(
+                    FabricNodeId(mesh, coord[0] * mesh_cols + coord[1]),  // chip ids are row-major on the mesh
+                    PipelinePlacementProblem::Chip{mesh, coord[0], coord[1]});
+            }
+        }
+    }
+    // discover_submesh_links' test: b is a's neighbour in the direction a's routing table sends traffic to b.
+    for (const auto& [a, chip] : problem.chips) {
+        for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W,
+                         RoutingDirection::Z}) {
+            for (const auto& [mesh, ids] : pipeline_get_chip_neighbors(a, dir)) {
+                for (auto id : ids) {
+                    const FabricNodeId b(MeshId{mesh}, id);
+                    if (problem.chips.contains(b) && pipeline_get_forwarding_direction(a, b) == dir) {
+                        problem.links.insert({a, b});
+                    }
+                }
+            }
+        }
+    }
+    return problem;
+}
+```
+
+The Tier C caller builds the same problem from `logical`, the PSD and the seating's layout
+(C1, 4.1): slices from `mesh_host_grids_`, links from the mesh adjacency graphs and
+`inter_mesh_cables`. It keeps `channels_` beside the session for `record_channels`. The blaze
+binding is a thin wrapper:
+
+```cpp
+// ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.cpp, beside resolve_graph_layout
+mod.def(
+    "solve_pipeline_placement",
+    [](std::map<std::string, tt::tt_fabric::PipelinePlacementProblem::Pipeline> pipelines, int conflict_cap) {
+        tt::tt_fabric::PipelinePlacementSession session(
+            tt::tt_fabric::problem_from_control_plane(std::move(pipelines)), conflict_cap);
+        return session.next();
+    },
+    nb::arg("pipelines"),
+    nb::arg("conflict_cap") = 0);
+```
 
 #### Blaze at runtime
 
