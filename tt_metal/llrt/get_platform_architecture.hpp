@@ -27,13 +27,27 @@ inline std::string find_simulator_soc_descriptor_path(const std::filesystem::pat
 }
 
 // Declared by the simulator's soc_descriptor.yaml when it ships one, else read from the PCI device id its
-// ttsim image reports. The first probe of an image must come before any simulator is brought up.
+// ttsim image reports. The first probe of an image must come before any simulator is brought up; UMD caches
+// the answer per image, so later calls are safe once a simulator is running.
 inline tt::ARCH get_simulator_architecture(const std::filesystem::path& simulator_path) {
     const std::string soc_desc = find_simulator_soc_descriptor_path(simulator_path);
     if (!soc_desc.empty()) {
         return umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
     }
-    return umd::arch_from_pci_device_id(umd::TTSimCommunicator::read_pci_device_id(simulator_path));
+    const std::string expected_soc_desc =
+        umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(simulator_path);
+    TT_FATAL(
+        simulator_path.extension() == ".so",
+        "{} not found: an RTL simulator declares its architecture only through its SoC descriptor.",
+        expected_soc_desc);
+    const tt::ARCH arch = umd::arch_from_pci_device_id(umd::TTSimCommunicator::read_pci_device_id(simulator_path));
+    TT_FATAL(
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "Simulator {} reports {}, which has no built-in SoC descriptor. Place its soc_descriptor.yaml at {}.",
+        simulator_path.string(),
+        tt::arch_to_str(arch),
+        expected_soc_desc);
+    return arch;
 }
 
 inline tt::ARCH get_physical_architecture() {
