@@ -17,6 +17,8 @@ group's ring runs without a gap below its anchor; a third request takes the grou
 import pytest
 import torch
 
+import ttnn
+
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, verify_pass
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     DRAFTS_AT,
@@ -51,6 +53,14 @@ MAX_SEQ_LEN = 4096
 SEQ = [(7 * q * q + 3 * q + 11) % VOCAB for q in range(MAX_SEQ_LEN + 8)]  # the oracle target's sequence
 LANE = 1
 DFLASH = DFlashLayout(ring=64, block=8, heads=2, last=MAX_SEQ_LEN - 1, groups=DRAFT_GROUPS)
+
+
+@pytest.fixture(autouse=True)
+def host_events(monkeypatch):
+    """The fake lanes have no command queue: a deferred verify's events (MiMoV2ForCausalLM.verify) record and wait as
+    no-ops."""
+    monkeypatch.setattr(ttnn, "record_event", lambda *args, **kwargs: object(), raising=False)
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None, raising=False)
 
 
 def draft_of(bonus, k):
