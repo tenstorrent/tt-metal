@@ -40,6 +40,25 @@
 constexpr std::uint32_t COMPRESSED_MM_ENTRY_ADDR_MASK   = BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_MASK;
 constexpr std::uint32_t COMPRESSED_MM_ENTRY_FORMAT_MASK = BUFFER_DESCRIPTOR_TABLE_REG0_TILE_FORMAT_MASK;
 
+// Face-granular variant (llk_unpack_face_compressed_custom_mm.h), the Quasar counterpart of the Blackhole
+// face_compressed_mm: every 16x16 face of a weight tile carries its own L1 format and all-zero faces are not
+// stored. Same limitations as above. The math thread is the tile version's: every weight tile is multiplied as a
+// full four-face SrcA tile, so only the unpack side and the metadata differ.
+//
+// Weight stream layout in L1: faces in (k, c, face) order, tile after tile in row-major (k, c) order and the four
+// faces of a tile in face order (0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right), each packed as a
+// single-face MX tile, 16 B of block scales then the elements (MxInt8 272 B, MxInt4 144 B, MxInt2 80 B). Zero
+// faces take no space. The metadata addresses every face, so a face may also sit anywhere else in the stream: the
+// test keeps one all-zero MxInt2 face at the start of the stream and points every zero face at it.
+//
+// Metadata: four 32-bit words per weight tile, one per face in the same order, each the UNPACR0 ARG_FIFO mode-1
+// entry of that face with the address relative to the start of the weight stream:
+//   [27:20] face L1 format (DataFormat)
+//   [19:0]  face offset from the weight stream base, in 16 B units
+// There is no zero marker: a zero face's word addresses an all-zero face, so the unpack thread treats every face
+// alike and never branches on the metadata. The four words of a tile are one 16 B ARG_FIFO line.
+constexpr std::uint32_t COMPRESSED_FACE_MM_META_WORDS_PER_TILE = 4;
+
 // The zero-tile marker reuses format code 0 (Float32), which is never a compressed weight format.
 static_assert(static_cast<std::uint32_t>(DataFormat::Float32) == 0, "compressed_custom_mm uses format code 0 as the zero-tile marker");
 
