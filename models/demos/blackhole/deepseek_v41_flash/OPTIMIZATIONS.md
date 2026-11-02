@@ -591,6 +591,30 @@ At B=8 (`DSV41_PREFILL_UP=2`) a lone short prompt pays for an idle second slot i
 
 The APC delta / decode-output / cross-row switches of 8.25-8.27 are likewise off by default and not in the catalog (tests turn them on by environment override).
 
+## 8.29 mHC lane-parallel bundle (`DSV41_MHC_LANEPAR=1`, default off; rc5 candidate)
+
+`DSV41_MHC_LANEPAR=1` = `DSV41_MHC_FRONT_FAST` (x-first projection reader, x forwarded to the collapse cores, pipelined groups) + `DSV41_MHC_EXPAND_VALID` (valid-row expand) + 130 expand cores. Per layer (coordinator, branch `ssinghal/dsv4p1-mhcpar`): -29 / -47 / -90 us at T = 4 / 8 / 16, bit-identical. Tests (device): `tests/test_mhc_lane.py`, `test_mhc_lane_layer.py`, `test_mhc_lane_prof.py`. `DSV41_MHC_LANEFUSE` (fused expand + front) is experimental, no gain, off. Gate status: op / layer level only; the full-model gate is part of the rc5 validation.
+
+## 8.30 Static expert placement and lean MoE reduce_scatter (`DSV41_MOE_PLACE`, `DSV41_MOE_RS_MIN`; default off)
+
+`DSV41_MOE_PLACE=<json>`: per-layer expert -> chip placement (`tt/moe_place.py`; layers not in the file keep the sequential layout and the plain cache directory; a placed layer's weight cache is keyed by the permutation). With the unified prefill the router ranks permuted gate columns (relabelled ids, no extra op, LUT-gather fallback; `DSV41_MOE_PLACE_PF_RELABEL=0` turns this off, and then the in-place prefill refuses a placed layer). `DSV41_MOE_RS_MIN=1`: lean MoE reduce_scatter. Placement is NOT enabled in the rc5 all-on spec until a placement json is accepted. Tests: `tests/test_moe_place_cpu.py` (CPU), `test_moe_place_block.py`, `test_moe_place_prefill.py`, `test_moe_place_bench.py` (device).
+
+## 8.31 Cross-row paged APC, fix and warm-up (`DSV41_APC_PAGED_XROW=1`, B=8)
+
+The cross-row copy now adds the tip halo to a block the receiving row already holds (`85c36f6af83` / `560d7e55aba`), plus a live off switch (`DSV41_APC_PAGED_XROW_FILE`) and `warm_serving` warming of the xrow kernels (`DSV41_WARM_XROW`, `DSV41_WARM_XROW_SAVE`, `DSV41_WARM_XROW_LATE`). Branch `ssinghal/dsv4p1-xrow` tip 86ac240bcc8 (the xrow agent was still testing). Gate status: pending (xrow validation).
+
+## 8.32 Prefill fused glue kernels (`DSV41_FA_QPRE / KV / POST / IDS / IDXQ / IDXK / IDXP`, default off)
+
+Fused attention glue (`tt/fuse_attn.py`, kernels in `tt/fa_kernels/`): q prep, kv rope, post-attention, selected ids, indexer q / k head split + addcmul rope, local top-512 and merge post-processing. Branch `ssinghal/dsv4p1-fuseattn`: -10.8 % of the prefill window with the switches on. The RoPE variants are not bit-identical, so every switch stays default off in code (`DSV41_FA_FP32`, `DSV41_FA_ROPE_MODE` are sub-options). Tests (device): `tests/test_fuse_attn_kernels.py`, `test_fuse_ids.py`, `test_fuse_idx.py`, `test_fuse_rope_ab.py`, `test_fuse_real.py`.
+
+## 8.33 Indexer candidate all-gather in TILE layout (`DSV41_IDX_AG_TILE=1`, default off)
+
+The prefill indexer gathers its top-512 candidates in TILE layout (81 vs 233 us bf16, 125 vs 252 us uint32 at [512, 512]) and untilizes the gathered result; logits bit-identical (branch `ssinghal/dsv4p1-fusedccl`, study with collective micro-benchmarks `tests/test_fusedccl_bench.py`). In the merged tree the switch applies to the single-prefill path of the non-`DSV41_FA_IDXP` branch. `DSV41_UNI_RS=tokens` already exists and is not part of this entry.
+
+## 8.34 Padded-MoE skip (`DSV41_PF_MOE_PAD=1`, default off)
+
+Rows of idle prefill slots are routed to the sentinel expert (branch `ssinghal/dsv4p1-prefill-opt` 61f587f12d5). The prefill agent will add the dynamic chunk rule and host-table work later (re-merge its tip when reported). Pending: `ssinghal/dsv4p1-moe-place2` is merged to its current tip (1bbdc067397).
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
