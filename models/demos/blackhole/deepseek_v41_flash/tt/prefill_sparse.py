@@ -182,6 +182,11 @@ def zeros_rm(md, shape):
     return _PERSIST[key]
 
 
+def retile_on():
+    """DSV41_PF_RETILE=1 (default OFF, needs DSV41_PF_QPAD=1): q / o layout moves around sparse_sdpa as one generic_op each (tt/pf_retile.py)."""
+    return os.environ.get("DSV41_PF_RETILE", "0") == "1"
+
+
 def _qpad_buf(md, C):
     """DSV41_PF_QPAD=1 (default OFF): persistent row-major [1, 32, C, 512] bf16 buffer, zeros in heads 8..31, shared by every layer / user (the real heads are slice_written before each
     sparse_sdpa call, in queue order); None when off."""
@@ -1420,6 +1425,17 @@ class DSV41PrefillSparse:
         win = ctx.sp_win[r]
         zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM]) if qbufs is None else None
         outs = []
+        retile_res = (
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([U, LOCAL_HEADS, C, HEAD_DIM]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.md,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if retile_on() and qbufs is None and not raw and _qpad_buf(self.md, C) is not None
+            else None
+        )  # (DSV41_PF_RETILE=1 only on the layout path of the unfused glue; the DSV41_FA_QPRE / DSV41_FA_POST paths keep their own buffers)
         ids_pre = None
         if paged and FA.on(
             "DSV41_FA_IDS"
@@ -1452,6 +1468,12 @@ class DSV41PrefillSparse:
             qpad = None
             if qbufs is not None:
                 qu = qbufs[u]
+            elif retile_res is not None:  # DSV41_PF_RETILE=1: one op (tt/pf_retile.py) instead of slice + to_layout + slice_write
+                from models.demos.blackhole.deepseek_v41_flash.tt import pf_retile
+
+                qpad = _qpad_buf(self.md, C)
+                pf_retile.q_to_pad(qh, u, qpad)
+                qu = qpad
             else:
                 qu = ttnn.to_layout(
                     ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT
@@ -1485,14 +1507,21 @@ class DSV41PrefillSparse:
             if raw:
                 outs.append(o)
                 continue
-            outs.append(ttnn.to_layout(ttnn.slice(o, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.TILE_LAYOUT))
+            if retile_res is not None:
+                from models.demos.blackhole.deepseek_v41_flash.tt import pf_retile
+
+                pf_retile.o_from_pad(o, retile_res, u)
+            else:
+                outs.append(
+                    ttnn.to_layout(ttnn.slice(o, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.TILE_LAYOUT)
+                )
             ttnn.deallocate(o)
         if raw:
             _TD.put(
                 "sdpa", ids
             )  # (keeps the numbering of the DSV41_PF_LAYER_DUMP buffers; the raw outputs are not a [U,8,C,512] tensor)
             return outs
-        res = outs[0] if U == 1 else ttnn.concat(outs, dim=0)
+        res = retile_res if retile_res is not None else (outs[0] if U == 1 else ttnn.concat(outs, dim=0))
         _TD.put("sdpa", res)
         return res
 
